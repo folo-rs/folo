@@ -294,6 +294,19 @@ mod tests {
     }
 
     #[test]
+    fn analysis_clock_errors_when_the_lead_overflows_the_supported_range() {
+        // A commit dated at the very end of the representable timestamp range leaves
+        // no room for the one-hour analysis lead, so anchoring the clock fails loudly
+        // rather than wrapping into an invalid instant.
+        let error = analysis_clock(&[], &[Timestamp::MAX])
+            .expect_err("the lead past the maximum timestamp cannot be represented");
+        assert!(
+            error.to_string().contains("invalid analysis clock"),
+            "{error}"
+        );
+    }
+
+    #[test]
     #[cfg_attr(miri, ignore)]
     fn default_container_is_prefixed_and_timestamped() {
         let name = default_container();
@@ -351,6 +364,24 @@ mod tests {
             error
                 .to_string()
                 .contains("--cache only applies to --storage azure"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "std::path::absolute reads the process working directory"
+    )]
+    fn resolve_cache_reports_a_path_that_cannot_be_made_absolute() {
+        // An empty cache path has no absolute form, so the harness surfaces the
+        // resolution failure instead of panicking on the infallible-looking call.
+        // The empty path is set directly because clap rejects an empty --cache value.
+        let mut cli = Cli::parse_from(["cargo-bench-history-stress", "--storage", "azure"]);
+        cli.cache = Some(PathBuf::new());
+        let error = resolve_cache(&cli).expect_err("an empty cache path cannot be made absolute");
+        assert!(
+            error.to_string().contains("failed to resolve --cache"),
             "{error}"
         );
     }

@@ -1226,10 +1226,11 @@ mod tests {
     fn dirty_working_tree_without_recorded_dirty_runs_stays_history_mode() {
         // The reported corner case: on the base branch with a currently-dirty
         // working tree but ONLY clean runs recorded (no dirty run on the tip), mode
-        // auto-detection must look at the *data set*, not the on-disk tree, and pick
-        // history mode — so the long-range change-point detector still flags the
-        // sustained step. The old behaviour keyed off `git.is_dirty()` and wrongly
-        // fell into branch mode here.
+        // auto-detection keys off the *admitted* runs — a dirty tree with no admitted
+        // dirty run carries no branch evidence — and picks history mode, so the
+        // long-range change-point detector still flags the sustained step. The old
+        // behaviour keyed off `git.is_dirty()` alone and wrongly fell into branch
+        // mode here.
         let storage = MemoryStorage::new();
         seed_linear_step(&storage);
         let mut git = linear6_git();
@@ -1252,7 +1253,7 @@ mod tests {
         );
         assert!(
             reporter.contains("no dirty run is")
-                && reporter.contains("working-tree state is deliberately not consulted"),
+                && reporter.contains("admitted only while the working tree is currently dirty"),
             "the verbose note should explain why history mode was chosen: {:?}",
             reporter.notes()
         );

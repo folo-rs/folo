@@ -15,10 +15,11 @@ use crate::RunError;
 /// base is known) and no dirty run is recorded on that tip — is
 /// [`AnalysisMode::History`]. Anything else (commits past the merge-base, or a
 /// dirty run actually recorded on top of the base tip) is treated as an unnamed
-/// feature branch: [`AnalysisMode::Branch`]. The detection looks only at the data
-/// set, never at the on-disk working-tree state, so a dirty checkout with no dirty
-/// run stored on the tip still analyzes as history. [`AnalysisMode::Tip`] is never
-/// auto-selected.
+/// feature branch: [`AnalysisMode::Branch`]. `auto_mode` reads only these two
+/// signals; the working tree enters only indirectly, since a base-tip dirty run
+/// counts as feature-branch data only while the tree is currently dirty — a dirty
+/// checkout with no admitted dirty run still analyzes as history.
+/// [`AnalysisMode::Tip`] is never auto-selected.
 pub(crate) fn auto_mode(tip_is_merge_base: bool, dirty_tip_run_present: bool) -> AnalysisMode {
     if tip_is_merge_base && !dirty_tip_run_present {
         AnalysisMode::History

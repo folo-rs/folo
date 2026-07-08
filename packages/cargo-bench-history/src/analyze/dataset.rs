@@ -148,12 +148,13 @@ where
     let order = Arc::new(order);
     let dirty_base_exception = Arc::new(dirty_base_exception);
 
-    // Mode auto-detection keys off the *recorded data set*, not the on-disk
-    // repository state. The branch view exists to compare a feature branch's runs
-    // against its base, so it only applies when there is actually feature-branch
-    // data: commits past the merge-base, or a dirty run recorded on top of the
-    // base tip. A dirty working tree with no dirty run stored on the tip carries no
-    // such data, so it stays the long-range history view.
+    // Mode auto-detection keys off git topology and the *admitted* data set. The
+    // branch view compares a feature branch's runs against its base, so it applies
+    // only when feature-branch data is actually present: commits past the
+    // merge-base, or a dirty run admitted on top of the base tip. That base-tip
+    // dirty run is admitted only while the working tree is currently dirty (the
+    // exception in `resolve_history`), so this single signal tracks the working
+    // tree — a clean tree neither admits the run nor leaves the history view.
     let dirty_tip_run_present = candidates.iter().any(|(_, parsed)| {
         parsed.is_dirty()
             && dirty_base_exception
@@ -179,8 +180,8 @@ where
                 let mode = auto_mode(tip_is_merge_base, dirty_tip_run_present);
                 reporter.note_with(|| format!(
                 "analysis mode: {} (auto-detected because the target tip {} its own merge-base \
-                 with the base branch and {} recorded on top of it; the on-disk working-tree \
-                 state is deliberately not consulted here)",
+                 with the base branch and {} admitted on top of it; a base-tip dirty run is \
+                 admitted only while the working tree is currently dirty)",
                 mode.as_str(),
                 if tip_is_merge_base { "is" } else { "is not" },
                 if dirty_tip_run_present {

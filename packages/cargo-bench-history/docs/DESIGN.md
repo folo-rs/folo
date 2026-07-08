@@ -642,8 +642,10 @@ judgement rather than an automatic tier.
 ### 8.5 Analysis modes
 
 The same stored history answers two very different questions, so `analyze` runs in one of
-three **modes**, auto-detected from git topology and the recorded data set (never the
-on-disk working-tree state), or forced explicitly.
+three **modes**, auto-detected from git topology and the recorded runs it admits, or forced
+explicitly. Working-tree state feeds in only through the base-tip dirty exception (below),
+which admits a base-tip dirty run — and, by admitting it, selects branch mode — only while
+the tree is currently dirty.
 
 * **history** — the base-branch view: auto-selected when the analyzed tip *is* the
   merge-base with the base and no dirty run is recorded on top of it. It applies the

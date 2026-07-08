@@ -56,8 +56,15 @@ fn resolve(env_override: Option<OsString>, build: impl FnOnce() -> BuildOutput) 
             // path Cargo reports is already absolute, so this keeps both resolution paths
             // consistent. `std::path::absolute` is preferred over `canonicalize` to avoid
             // the Windows `\\?\` verbatim prefix, which need not appear in spawn argv or logs.
+            // Failing loudly beats silently caching a relative path that would break the
+            // absolute-path contract after the first `--chdir`.
             return std::path::absolute(&path)
-                .unwrap_or(path)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "MOCK_BENCH_ENGINE={} could not be resolved to an absolute path: {error}",
+                        path.display()
+                    )
+                })
                 .to_string_lossy()
                 .into_owned();
         }
