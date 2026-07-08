@@ -14,24 +14,23 @@
 //! findings the spawner-distributed production path
 //! ([`find_changes_spawned`](super::find_changes_spawned)) does.
 //!
-//! Every case is run through a 3 × 2 × 2 matrix:
+//! Every case is run through a 2 × 2 × 2 matrix:
 //!
-//! * **Analysis mode (dimension 1).** The three modes are *different detectors*, not
+//! * **Analysis mode (dimension 1).** The two modes are *different detectors*, not
 //!   one detector with a flag: [`History`](AnalysisMode::History) locates a change-point
-//!   over the whole series, [`Branch`](AnalysisMode::Branch) compares the branch's
-//!   latest regime against the base level across a merge-base split, and
-//!   [`Tip`](AnalysisMode::Tip) compares only the newest point against its recent
-//!   window. Because each inspects a different slice, the *same* series yields different
+//!   over the whole series, and [`Branch`](AnalysisMode::Branch) compares the branch's
+//!   latest regime against the base level across a merge-base split. Because each
+//!   inspects a different slice, the *same* series yields different
 //!   verdicts per mode, so mode is a curated dimension: every case states the outcome
-//!   each mode is expected to see. An obvious mid-series step is a rise to history and
-//!   branch but invisible to tip (whose window has already caught up); a lone
-//!   final-point jump is a rise to tip and branch but not a sustained historical trend.
+//!   each mode is expected to see. An obvious mid-series step is a rise to both history
+//!   and branch; a lone final-point jump is a rise to branch (a single elevated regime
+//!   past the split) but not a sustained historical trend to history.
 //!   Branch mode also needs a base side to compare against at all — a case with an empty
 //!   base side leaves it quiet.
 //! * **Polarity (dimension 2).** The codebase's only polarity lever is the metric kind,
 //!   so *higher-is-worse* is modelled with a lower-is-better metric
 //!   ([`MetricKind::InstructionCount`]) and *lower-is-worse* with the one
-//!   higher-is-better metric ([`MetricKind::L1CacheHits`]). History and tip report the
+//!   higher-is-better metric ([`MetricKind::L1CacheHits`]). History reports the
 //!   worse direction only, so a move surfaces as a finding under one polarity and is a
 //!   suppressed improvement under the other; branch reports *both* directions, so a move
 //!   is a finding under either polarity (only its classification differs). The expected
@@ -94,7 +93,7 @@ impl Polarity {
 
 /// The analysis mode a case is evaluated under — the suite's dimension-1 lever.
 ///
-/// The three modes are genuinely different detectors, so a case declares its expected
+/// The two modes are genuinely different detectors, so a case declares its expected
 /// move per mode rather than sharing one verdict across them.
 #[derive(Clone, Copy, Debug)]
 enum Mode {
@@ -102,33 +101,30 @@ enum Mode {
     History,
     /// The branch's latest regime against the base level, across a merge-base split.
     Branch,
-    /// The newest point against its recent window.
-    Tip,
 }
 
 impl Mode {
-    /// The three modes, for matrix expansion.
-    const ALL: [Self; 3] = [Self::History, Self::Branch, Self::Tip];
+    /// The two modes, for matrix expansion.
+    const ALL: [Self; 2] = [Self::History, Self::Branch];
 
     /// Whether this mode reports improvements as findings. Only branch does: history is
-    /// run here as a regressions-only drift watch (`include_improvements = false`) and
-    /// tip is a regression guard, so for those an improvement is a non-finding.
+    /// run here as a regressions-only drift watch (`include_improvements = false`), so
+    /// for it an improvement is a non-finding.
     fn reports_improvements(self) -> bool {
         matches!(self, Self::Branch)
     }
 
     /// The analysis context this mode is evaluated under. `merge_base_index` is consulted
-    /// only by branch mode; the other modes ignore it.
+    /// only by branch mode; history ignores it.
     ///
     /// `include_improvements` is set from [`reports_improvements`](Self::reports_improvements)
     /// so the context matches the mode's intended reporting semantics: branch (which
-    /// reports both directions) opts in, history and tip opt out. Branch mode ignores the
+    /// reports both directions) opts in, history opts out. Branch mode ignores the
     /// flag today, but pinning it consistently keeps the context correct if that changes.
     fn context(self, merge_base_index: Option<usize>) -> AnalysisContext {
         let mode = match self {
             Self::History => AnalysisMode::History,
             Self::Branch => AnalysisMode::Branch,
-            Self::Tip => AnalysisMode::Tip,
         };
         AnalysisContext {
             mode,
@@ -173,7 +169,7 @@ impl Outcome {
     }
 }
 
-/// One curated series — its base and branch/tip sides — and the outcome each mode is
+/// One curated series — its base and branch sides — and the outcome each mode is
 /// expected to see in it.
 struct SignalCase {
     /// Human-readable case name, surfaced in assertion failures.
@@ -181,29 +177,27 @@ struct SignalCase {
     /// The base-side (unscaled) series values, oldest-first: the commits at or before
     /// the merge-base. May be empty, which leaves branch mode without a base side to
     /// compare against, so it stays quiet. The base/branch split matters only to branch
-    /// mode; history and tip see the whole concatenated series and read these values as
+    /// mode; history sees the whole concatenated series and reads these values as
     /// ordinary leading points, indifferent to which side they came from.
     base: Vec<f64>,
-    /// The branch/tip-side (unscaled) series values, oldest-first: the commits past the
+    /// The branch-side (unscaled) series values, oldest-first: the commits past the
     /// merge-base. May be empty.
     branch: Vec<f64>,
     /// The outcome history mode's change-point detector is expected to see.
     expected_history: Outcome,
     /// The outcome branch mode is expected to see.
     expected_branch: Outcome,
-    /// The outcome tip mode is expected to see.
-    expected_tip: Outcome,
 }
 
 impl SignalCase {
-    /// The whole series, the base side followed by the branch/tip side, oldest-first.
+    /// The whole series, the base side followed by the branch side, oldest-first.
     fn values(&self) -> Vec<f64> {
         [self.base.as_slice(), self.branch.as_slice()].concat()
     }
 
     /// The first-parent merge-base split index handed to branch mode: the last base-side
     /// point, or `None` when there is no base side (branch mode then has nothing to
-    /// compare against and stays quiet). History and tip ignore it.
+    /// compare against and stays quiet). History ignores it.
     fn merge_base_index(&self) -> Option<usize> {
         self.base.len().checked_sub(1)
     }
@@ -213,7 +207,6 @@ impl SignalCase {
         match mode {
             Mode::History => self.expected_history,
             Mode::Branch => self.expected_branch,
-            Mode::Tip => self.expected_tip,
         }
     }
 }
@@ -227,15 +220,13 @@ fn run_of(value: f64, count: usize) -> Vec<f64> {
 fn cases() -> Vec<SignalCase> {
     vec![
         // An unmistakable sustained doubling halfway through. History and branch (split
-        // at the step) both see a rise; tip is quiet because its recent window already
-        // sits at the new, higher level.
+        // at the step) both see a rise.
         SignalCase {
             name: "doubling_step",
             base: run_of(100.0, 50),
             branch: run_of(200.0, 50),
             expected_history: Outcome::Rise,
             expected_branch: Outcome::Rise,
-            expected_tip: Outcome::Quiet,
         },
         // The mirror image: a sustained halving. Same mode geometry, opposite direction,
         // so it exercises the other polarity's finding path.
@@ -245,18 +236,15 @@ fn cases() -> Vec<SignalCase> {
             branch: run_of(100.0, 50),
             expected_history: Outcome::Fall,
             expected_branch: Outcome::Fall,
-            expected_tip: Outcome::Quiet,
         },
-        // A jump confined to the final commit. Tip and branch (split just before the
-        // jump) see the rise; history does not, since one trailing point is not a
-        // sustained trend.
+        // A jump confined to the final commit. Branch (split just before the jump) sees
+        // the rise; history does not, since one trailing point is not a sustained trend.
         SignalCase {
             name: "tip_spike",
             base: run_of(100.0, 99),
             branch: run_of(200.0, 1),
             expected_history: Outcome::Quiet,
             expected_branch: Outcome::Rise,
-            expected_tip: Outcome::Rise,
         },
         // The mirror image at the tip: the final commit drops.
         SignalCase {
@@ -265,7 +253,6 @@ fn cases() -> Vec<SignalCase> {
             branch: run_of(100.0, 1),
             expected_history: Outcome::Quiet,
             expected_branch: Outcome::Fall,
-            expected_tip: Outcome::Fall,
         },
         // A dead-flat line: nothing moved, so no mode and no polarity should ever flag it.
         SignalCase {
@@ -274,7 +261,6 @@ fn cases() -> Vec<SignalCase> {
             branch: run_of(100.0, 50),
             expected_history: Outcome::Quiet,
             expected_branch: Outcome::Quiet,
-            expected_tip: Outcome::Quiet,
         },
         // The same obvious doubling as the first case, but with no base side. Branch
         // mode has nothing to compare the branch against, so it must stay quiet even
@@ -285,7 +271,6 @@ fn cases() -> Vec<SignalCase> {
             branch: [run_of(100.0, 50), run_of(200.0, 50)].concat(),
             expected_history: Outcome::Rise,
             expected_branch: Outcome::Quiet,
-            expected_tip: Outcome::Quiet,
         },
     ]
 }

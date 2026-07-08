@@ -19,7 +19,6 @@ use crate::RunError;
 /// signals; the working tree enters only indirectly, since a base-tip dirty run
 /// counts as feature-branch data only while the tree is currently dirty — a dirty
 /// checkout with no admitted dirty run still analyzes as history.
-/// [`AnalysisMode::Tip`] is never auto-selected.
 pub(crate) fn auto_mode(tip_is_merge_base: bool, dirty_tip_run_present: bool) -> AnalysisMode {
     if tip_is_merge_base && !dirty_tip_run_present {
         AnalysisMode::History
@@ -41,8 +40,8 @@ pub(crate) fn since_cutoff_reason(explicit_since: bool, mode: AnalysisMode) -> &
 
 /// Resolves the effective `--since` cutoff: an explicit value always wins;
 /// otherwise history mode applies a default look-back so a scheduled trend watch
-/// does not silently widen as history accumulates, while branch and tip modes have
-/// no default (a feature branch's whole history is in scope).
+/// does not silently widen as history accumulates, while branch mode has no default
+/// (a feature branch's whole history is in scope).
 pub(crate) fn resolve_since(
     value: Option<&str>,
     mode: AnalysisMode,
@@ -74,7 +73,7 @@ fn default_history_since(now: Timestamp) -> Result<Timestamp, RunError> {
 /// Parses the `--mode` option into an explicit [`AnalysisMode`] override.
 ///
 /// `auto` (the default when omitted) resolves to `None` so the mode is detected
-/// from topology; `history`, `branch`, and `tip` force that mode.
+/// from topology; `history` and `branch` force that mode.
 pub(crate) fn parse_mode(value: Option<&str>) -> Result<Option<AnalysisMode>, RunError> {
     match value {
         None | Some("auto") => Ok(None),
@@ -82,7 +81,7 @@ pub(crate) fn parse_mode(value: Option<&str>) -> Result<Option<AnalysisMode>, Ru
             .map(Some)
             .ok_or_else(|| RunError::Analyze {
                 message: format!(
-                    "unknown analysis mode {name:?}; expected auto, history, branch, or tip"
+                    "unknown analysis mode {name:?}; expected auto, history, or branch"
                 ),
             }),
     }
@@ -263,7 +262,6 @@ mod tests {
             parse_mode(Some("branch")).unwrap(),
             Some(AnalysisMode::Branch)
         );
-        assert_eq!(parse_mode(Some("tip")).unwrap(), Some(AnalysisMode::Tip));
         let error = parse_mode(Some("weekly")).unwrap_err();
         assert!(
             error.to_string().contains("unknown analysis mode"),
@@ -282,12 +280,11 @@ mod tests {
             history,
             "2023-12-01T00:00:00Z".parse::<Timestamp>().unwrap()
         );
-        // Branch and tip modes have no default cutoff.
+        // Branch mode has no default cutoff.
         assert_eq!(
             resolve_since(None, AnalysisMode::Branch, now).unwrap(),
             None
         );
-        assert_eq!(resolve_since(None, AnalysisMode::Tip, now).unwrap(), None);
         // An explicit value always wins, even in branch mode.
         let explicit = resolve_since(Some("2024-01-01"), AnalysisMode::Branch, now)
             .unwrap()

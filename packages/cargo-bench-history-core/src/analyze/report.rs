@@ -82,7 +82,7 @@ pub struct ReportInput<'a> {
     /// checkout differs from the committed tip. False for a clean tree (the CI
     /// collection case).
     pub tip_dirty: bool,
-    /// The analysis mode the report was produced in (`history`/`branch`/`tip`).
+    /// The analysis mode the report was produced in (`history`/`branch`).
     pub mode: &'a str,
     /// Whether any finding survived — the at-a-glance signal a downstream
     /// automation reads to decide whether the report is worth surfacing.
@@ -97,7 +97,7 @@ pub struct ReportInput<'a> {
     /// entered the analysis.
     pub commit_span: Option<(&'a str, &'a str)>,
     /// Whether this analysis reports improvements. When `false` (history mode's
-    /// default regressions-only watch, and tip mode) the text and Markdown reports
+    /// default regressions-only watch) the text and Markdown reports
     /// omit the improvement tally, which would always be zero. The JSON report always
     /// carries it.
     pub report_improvements: bool,
@@ -217,7 +217,7 @@ struct JsonReport<'a> {
     tip_commit: &'a str,
     /// Whether the working tree carried uncommitted changes when the analysis ran.
     tip_dirty: bool,
-    /// The analysis mode (`history`/`branch`/`tip`).
+    /// The analysis mode (`history`/`branch`).
     mode: &'a str,
     /// Whether any finding survived — the downstream automation signal.
     notable: bool,
@@ -375,7 +375,7 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
     }
 
     // A per-commit chart is meaningful only for a history (`master`) timeline; the
-    // branch/tip modes compare against a baseline rather than walking a series.
+    // branch mode compares against a baseline rather than walking a series.
     let chart_enabled = input.mode == "history";
     for summary in input.sets {
         if summary.findings.is_empty() {
@@ -619,7 +619,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
     }
 
     // A per-commit chart is meaningful only for a history timeline, matching the
-    // text report; branch/tip modes compare against a baseline.
+    // text report; branch mode compares against a baseline.
     let chart_enabled = input.mode == "history";
     for summary in input.sets {
         if summary.findings.is_empty() {
@@ -710,7 +710,7 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
     }
 
     // A per-commit chart is meaningful only for a history timeline, matching the full
-    // reports; branch/tip modes compare against a baseline.
+    // reports; branch mode compares against a baseline.
     let chart_enabled = input.mode == "history";
     for finding in input.findings.iter().take(limit.get()) {
         push_finding_markdown(&mut lines, finding, "##", chart_enabled);

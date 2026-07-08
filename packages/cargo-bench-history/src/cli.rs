@@ -449,24 +449,22 @@ struct AnalyzeCommand {
     #[arg(long, help_heading = HEADING_FILTER)]
     no_dirty: bool,
 
-    /// Analysis mode: auto, history, branch, or tip (default: auto). `auto` infers
+    /// Analysis mode: auto, history, or branch (default: auto). `auto` infers
     /// history mode (long-range base-branch trends) from a clean base-branch
     /// checkout, and branch mode (this branch's latest state vs the base)
-    /// otherwise. Use `tip` as a fast post-merge guard that only checks whether the
-    /// base-branch tip just regressed against its recently established level,
-    /// skipping the full-history scan.
+    /// otherwise.
     #[arg(long, value_name = "MODE", help_heading = HEADING_ANALYSIS)]
     mode: Option<String>,
 
     /// In history mode, also report sustained improvements (by default only
     /// regressions are reported, since improvement over time is expected). Branch
-    /// and tip modes always report all findings, so this flag has no effect there.
+    /// mode always reports all findings, so this flag has no effect there.
     #[arg(long, help_heading = HEADING_ANALYSIS)]
     include_improvements: bool,
 
     /// In history mode, also report inactive findings: a change the current state
     /// no longer reflects (a regression that has since recovered). Hidden by
-    /// default since they need no action. Branch and tip modes always report all
+    /// default since they need no action. Branch mode always reports all
     /// findings, so this flag has no effect there.
     #[arg(long, help_heading = HEADING_ANALYSIS)]
     include_inactive: bool,
