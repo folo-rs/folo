@@ -153,14 +153,32 @@ where
     // a checkout that never fetched the base branch.
     let Some(merge_base) = merge_base else {
         let message = match base_commit_id.as_deref() {
-            Some(base) => format!(
-                "could not determine the merge-base of the target {target_ref} \
-                 ({target_commit_id}) and the base ({base}): they share no common ancestor in \
-                 the available history. This is usually a shallow clone whose depth stops short \
-                 of the branch point — fetch the full history (`git fetch --unshallow`, or set \
-                 fetch-depth: 0 on actions/checkout) or pass an explicit --base that shares \
-                 history with the target."
-            ),
+            // The base resolved, but shares no common ancestor with the target. By
+            // far the usual cause is a shallow clone whose depth stops short of the
+            // branch point, so the primary remedy is to deepen the clone — not to
+            // pick a different base. Only once the history is known-complete is a
+            // genuinely disjoint base worth calling out, and even then the deliberate
+            // `--base` a user passed is theirs to reconsider, not ours to second-guess.
+            Some(base) => {
+                let remedy = match selection.base {
+                    Some(explicit) => format!(
+                        " If the history is already complete, {explicit} is genuinely unrelated \
+                         to the target and cannot serve as its base."
+                    ),
+                    None => " If the history is already complete, the detected default branch is \
+                             unrelated to the target; name the intended base with --base or \
+                             project.default_branch."
+                        .to_owned(),
+                };
+                format!(
+                    "could not determine the merge-base of the target {target_ref} \
+                     ({target_commit_id}) and the base ({base}): they share no common ancestor \
+                     in the available history. This is almost always a shallow clone whose depth \
+                     stops short of the branch point — fetch the full history (`git fetch \
+                     --unshallow`, or set fetch-depth: 0 on actions/checkout) so the branch point \
+                     is present.{remedy}"
+                )
+            }
             None => format!(
                 "could not determine the base branch to compare {target_ref} against: no \
                  --base was given and no default branch could be resolved. Pass an explicit \
