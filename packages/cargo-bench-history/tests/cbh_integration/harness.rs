@@ -11,7 +11,7 @@ pub(crate) use cargo_bench_history::{
     Overrides, Run, RunContext, RunError, RunOutcome, SCHEMA_VERSION, ToolchainInfo,
     default_template, run, run_with_overrides,
 };
-use cargo_bench_history_core::codec;
+use cbh_codec as codec;
 pub(crate) use jiff::Timestamp;
 use nonempty::nonempty;
 pub(crate) use serial_test::serial;

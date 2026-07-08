@@ -282,7 +282,6 @@ mod commands;
 mod config_writer;
 mod dispatch;
 
-pub(crate) use cargo_bench_history_core::model;
 pub use cbh_cli::{Cli, EarlyExit};
 pub use cbh_command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
@@ -290,6 +289,7 @@ pub use cbh_command::{
     UnblessOptions,
 };
 pub use cbh_config::{ConfigError, default_template};
+pub(crate) use cbh_model as model;
 pub(crate) use cbh_run::finish_with_flush;
 pub use cbh_run::{RunError, RunOutcome};
 pub use cbh_storage::{StorageError, StorageOverride, azure_backend_from_parts};

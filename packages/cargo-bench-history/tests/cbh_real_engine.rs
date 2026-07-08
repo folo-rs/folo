@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use cargo_bench_history::{
     Cli, Command, MetricKind, Overrides, Run, RunOutcome, run_with_overrides,
 };
-use cargo_bench_history_core::codec;
+use cbh_codec as codec;
 
 /// Parses CLI arguments into the typed [`Command`], exactly as the binary does.
 fn command_from(args: &[&str]) -> Command {

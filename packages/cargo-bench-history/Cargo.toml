@@ -23,7 +23,6 @@ bin-dir = "{ bin }{ binary-ext }"
 pkg-fmt = "zip"
 
 [dependencies]
-cargo-bench-history-core = { workspace = true }
 cbh_analyze = { workspace = true }
 cbh_cli = { workspace = true }
 cbh_command = { workspace = true }
@@ -31,6 +30,7 @@ cbh_config = { workspace = true }
 cbh_diag = { workspace = true }
 cbh_engines = { workspace = true }
 cbh_git = { workspace = true }
+cbh_model = { workspace = true }
 cbh_probe = { workspace = true }
 cbh_run = { workspace = true }
 cbh_storage = { workspace = true }
@@ -58,7 +58,7 @@ azure_core = { workspace = true }
 azure_identity = { workspace = true, features = ["default"] }
 azure_storage_blob = { workspace = true, features = ["default"] }
 base64 = { workspace = true }
-cargo-bench-history-core = { path = "../cargo-bench-history-core", features = ["private-test-util"] }
+cbh_codec = { path = "../cbh_codec" }
 cbh_diag = { path = "../cbh_diag", features = ["private-test-util"] }
 cbh_git = { path = "../cbh_git", features = ["private-test-util"] }
 cbh_run = { path = "../cbh_run", features = ["private-test-util"] }
