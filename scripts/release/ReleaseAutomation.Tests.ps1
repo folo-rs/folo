@@ -77,7 +77,7 @@ Describe 'Add-GitReleaseEnableFlag (pure line-based injection)' {
     It 'is idempotent: a second pass does not duplicate the flag' {
         $once = Add-GitReleaseEnableFlag -Line $script:SourceLines -CrateName 'demo-tool'
         $twice = Add-GitReleaseEnableFlag -Line $once -CrateName 'demo-tool'
-        ($twice | Where-Object { $_ -eq 'git_release_enable = true' }).Count | Should -Be 1
+        @($twice | Where-Object { $_ -eq 'git_release_enable = true' }).Count | Should -Be 1
     }
 
     It 'forces an existing git_release_enable = false to true' {
@@ -91,13 +91,13 @@ Describe 'Add-GitReleaseEnableFlag (pure line-based injection)' {
         $result | Should -Contain 'git_release_enable = true'
         $result | Should -Not -Contain 'git_release_enable = false'
         # Replaced in place, not duplicated, and the sibling key is preserved.
-        ($result | Where-Object { $_ -match '^git_release_enable' }).Count | Should -Be 1
+        @($result | Where-Object { $_ -match '^git_release_enable' }).Count | Should -Be 1
         $result | Should -Contain 'version_group = "demo"'
     }
 
     It 'enables every requested crate in one pass' {
         $result = Add-GitReleaseEnableFlag -Line $script:SourceLines -CrateName @('demo-tool', 'pub-bin')
-        ($result | Where-Object { $_ -eq 'git_release_enable = true' }).Count | Should -Be 2
+        @($result | Where-Object { $_ -eq 'git_release_enable = true' }).Count | Should -Be 2
     }
 }
 
@@ -330,7 +330,7 @@ Describe 'Get-MissingBinaryMatrix (mocked gh release view)' {
     }
 
     It 'rethrows a gh failure that is not a missing release' {
-        # An auth/network/API error must propagate, not be treated as "no release" — otherwise
+        # An auth/network/API error must propagate, not be treated as "no release" - otherwise
         # the workflow could build an empty matrix and look successful while binaries are missing.
         $crate = [pscustomobject]@{ Name = 'api-error'; Version = '5.0.0' }
         { Get-MissingBinaryMatrix -Crate $crate -Target $script:TwoTargets } | Should -Throw '*503*'
@@ -345,7 +345,7 @@ Describe 'Get-MissingBinaryMatrix (mocked gh release view)' {
     It 'defaults to the full target set from Get-ReleaseTarget' {
         $crate = [pscustomobject]@{ Name = 'empty-release'; Version = '4.0.0' }
         $rows = Get-MissingBinaryMatrix -Crate $crate
-        $rows.Count | Should -Be (Get-ReleaseTarget).Count
+        @($rows).Count | Should -Be @(Get-ReleaseTarget).Count
     }
 
     It 'reconciles several crates in one pass' {

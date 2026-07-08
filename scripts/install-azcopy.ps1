@@ -20,7 +20,7 @@
     The default destination is the cargo bin directory. That is a deliberate, if
     pragmatic, choice: azcopy has no standard home to prefer instead, and the cargo bin
     directory is the one location this repository's developer environment guarantees is
-    already on PATH — every other tool `just install-tools` fetches lands there too.
+    already on PATH - every other tool `just install-tools` fetches lands there too.
     Override -Destination to install elsewhere, but that location must be on PATH for
     `just bench-history-stress-azure` to find azcopy.
 
@@ -46,10 +46,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
+Set-StrictMode -Version Latest
 $VerbosePreference = 'Continue'
 
 # The pinned azcopy release. Keep $AzCopyVersion and the per-platform digests in
-# $AzCopyBuilds in sync — both come from one GitHub release of azure-storage-azcopy.
+# $AzCopyBuilds in sync - both come from one GitHub release of azure-storage-azcopy.
 $script:AzCopyVersion = '10.32.4'
 
 # One entry per supported OS/architecture: the release asset name, the archive format

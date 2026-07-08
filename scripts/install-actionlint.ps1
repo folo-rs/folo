@@ -19,7 +19,7 @@
 
     The default destination is the cargo bin directory. That is a deliberate, if pragmatic,
     choice: actionlint has no standard home to prefer instead, and the cargo bin directory is
-    the one location this repository's developer environment guarantees is already on PATH —
+    the one location this repository's developer environment guarantees is already on PATH -
     every other tool `just install-tools` fetches lands there too.
 
     Idempotent: if the pinned actionlint already resolves on PATH the script does nothing
@@ -44,10 +44,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
+Set-StrictMode -Version Latest
 $VerbosePreference = 'Continue'
 
 # The pinned actionlint release. Keep $ActionlintVersion and the per-platform digests in
-# $ActionlintBuilds in sync — both come from one GitHub release of rhysd/actionlint.
+# $ActionlintBuilds in sync - both come from one GitHub release of rhysd/actionlint.
 $script:ActionlintVersion = '1.7.12'
 
 # One entry per supported OS/architecture: the release asset name, the archive format it

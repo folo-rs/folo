@@ -1,26 +1,22 @@
 [group('quality')]
 [script]
 mutants SHARD="" CAREFUL='false':
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
+    # The fiddly, easy-to-break parts of this recipe - the long platform-dependent exclusion set
+    # and the 1-based -> 0-based shard translation - live in the Pester-tested Mutants module so a
+    # stray edit is caught by a test, not by a wasted CI mutation run. See
+    # scripts/build/Mutants.psm1. The recipe keeps only the orchestration with real side effects
+    # (environment tweaks and the cargo-mutants invocation).
+    Import-Module "{{ justfile_directory() }}/scripts/build/Mutants.psm1" -Force
+
     $careful = '{{ CAREFUL }}' -eq 'true'
 
-    function Escape-Wildcards ($s) {
-        if ($IsWindows) {
-            return $s
-        }
-
-        # On Linux, PowerShell has built-in globbing that expands wildcards. Unfortunately,
-        # cargo mutants requires literal input values, globbing just breaks it. We convince
-        # PowerShell to turn off globbing by single-quoting the arguments we fear may be
-        # interpreted as wildcard glob expressions.
-        "'" + $s + "'"
-    }
-
     # Two mechanisms keep mutation runs fast and meaningful:
-    #   * Path/package exclusions (the `-e` args below) drop whole files cargo-mutants
-    #     should never mutate.
+    #   * Path/package exclusions (the `-e` args from Get-MutantsExcludeArgument) drop whole files
+    #     cargo-mutants should never mutate.
     #   * Individual tests that carry no mutation signal opt out at the test site with
     #     `#[cfg_attr(mutants, ignore = "<why>")]`. This keeps them running under normal
     #     `cargo test`/coverage while skipping them under mutation - see
@@ -28,140 +24,27 @@ mutants SHARD="" CAREFUL='false':
     #     real-engine end-to-end test). cargo-mutants defines no cfg of its own, so this
     #     recipe ensures `RUSTFLAGS` contains `--cfg mutants` below (preserving any
     #     existing flags) to drive that opt-out.
+    $mutantArgs = @(Get-MutantsExcludeArgument -IsWindowsPlatform $IsWindows -IsLinuxPlatform $IsLinux)
 
-    # Note: while cargo-mutants does theoretically support specifying these via config file, it
-    # does not support merging that static set of entries with the dynamic set of entries we
-    # determine based on the platform. So we have to specify them all here.
-    # https://github.com/sourcefrog/cargo-mutants/issues/527
-    $args = @(
-        # Parts of this package require Criterion to work and other parts are currently not tested
-        # as there is no public way to simulate a system topology for `many_cpus`.
-        "-e"
-        "many_cpus_benchmarking",
-
-        # Macros are tested via the impl package, mutations in the middle layer might not be detected.
-        "-e"
-        "linked_macros"
-
-        # We do not test facades, as they are just trivial code that forwards calls to real impls.
-        "-e"
-        (Escape-Wildcards "**/*facade.rs")
-        "-e"
-        "facade"
-
-        # We have limited coverage of platform bindings because it can be difficult to set up the
-        # right scenarios for each, given they are platform-dependent. Instead, we test higher
-        # level code using a mock platform.
-        "-e"
-        "bindings"
-
-        # This is just a different type of bindings, skipped for same reason as `bindings` above.
-        "-e"
-        (Escape-Wildcards "packages/many_cpus_impl/src/pal/linux/filesystem/**")
-
-        # These packages are literally full of synchronization primitives, so 95% of mutations
-        # will just cause tests to time out and never complete - pointless to try mutate this stuff.
-        "-e"
-        "events_once",
-        "-e"
-        "awaiter_set",
-        "-e"
-        "events"
-        
-        # All this is code only used in tests/benchmarks - we do not test this code itself.
-        "-e"
-        (Escape-Wildcards "packages/testing/**")
-        "-e"
-        (Escape-Wildcards "packages/benchmarks/**")
-
-        # The mock benchmark engine is a test-support binary (its own never-published
-        # `mock_bench_engine` package, which the integration tests spawn). It is scaffolding,
-        # not shipped code, so mutating it yields no production coverage signal - it only spawns
-        # extra subprocess-heavy test runs that time out on slower runners. Its own behavior is
-        # covered by the integration tests.
-        "-e"
-        (Escape-Wildcards "packages/mock_bench_engine/**")
-
-        # `testing.rs` is an in-workspace test utility (gated behind the `private-test-util`
-        # feature, consumed only by the shell crate's tests). It is scaffolding with no public
-        # API contract, so mutating it yields no production coverage signal. A source-level
-        # `mutants::skip` cannot apply to a file module (inner/file-module proc-macro attributes
-        # are unstable Rust), so it is excluded here instead.
-        "-e"
-        (Escape-Wildcards "packages/cargo-bench-history-core/src/testing.rs")
-
-        # Some of our systems are single-processor, yet the code may only be meaningfully testable
-        # on multi-processor systems. As a "good enough" approximation, we skip mutation testing
-        # of code that is only testable in a multi-processor system.
-        "-e",
-        (Escape-Wildcards "packages/par_bench/src/resource_usage_ext.rs")
-    )
-
-    if (!$IsWindows) {
-        $args += "-e"
-        $args += (Escape-Wildcards "**/*windows.rs")
-
-        $args += "-e"
-        $args += "windows"
-    }
-    
-    if (!$IsLinux) {
-        $args += "-e"
-        $args += (Escape-Wildcards "**/*linux.rs")
-
-        $args += "-e"
-        $args += "linux"
-    }
-
-    $args += "--jobs"
+    $mutantArgs += "--jobs"
     if ($careful) {
         # In careful mode, only one mutation is tested at a time. Combined with
         # `RUST_TEST_THREADS=1` set below, this ensures that exactly one test runs at any
         # given moment across the entire mutation testing run.
-        $args += "1"
+        $mutantArgs += "1"
     } else {
         # Experimentally determined heuristics.
-        $args += [int]([Math]::Floor([Environment]::ProcessorCount / 6)) + 1
+        $mutantArgs += [int]([Math]::Floor([Environment]::ProcessorCount / 6)) + 1
     }
 
-    # Optional sharding lets CI split mutation testing across multiple parallel runners.
-    # We accept the same 1-based "N/M" format as `miri-harder` for consistency with the
-    # existing workspace convention (so `1/8 .. 8/8` for 8 shards), and convert to
-    # cargo-mutants' native 0-based form (`0/N .. (N-1)/N`) before invoking the tool.
-    # Without a SHARD argument, cargo-mutants runs every mutant in a single job (the
-    # original behavior).
-    $shard = "{{ SHARD }}"
-    if ($shard -ne "") {
-        $parts = $shard -split "/"
-
-        if ($parts.Length -ne 2) {
-            Write-Error "Invalid SHARD value '$shard'. Expected format 'N/M'."
-            exit 1
-        }
-
-        $shardIndex = 0
-        $shardCount = 0
-        if (-not [int]::TryParse($parts[0], [ref]$shardIndex) -or -not [int]::TryParse($parts[1], [ref]$shardCount)) {
-            Write-Error "Invalid SHARD value '$shard'. N and M must be integers in 'N/M'."
-            exit 1
-        }
-
-        if ($shardCount -le 0) {
-            Write-Error "Invalid SHARD value '$shard'. M must be a positive integer in 'N/M'."
-            exit 1
-        }
-
-        if ($shardIndex -lt 1 -or $shardIndex -gt $shardCount) {
-            Write-Error "Invalid SHARD value '$shard'. N must satisfy 1 <= N <= M in 'N/M'."
-            exit 1
-        }
-
-        $args += "--shard"
-        $args += ("{0}/{1}" -f ($shardIndex - 1), $shardCount)
-    }
+    # Optional sharding lets CI split mutation testing across multiple parallel runners. We accept
+    # the same 1-based "N/M" format as `miri-harder` (so `1/8 .. 8/8` for 8 shards); the module
+    # converts it to cargo-mutants' native 0-based form. Without a SHARD argument, cargo-mutants
+    # runs every mutant in a single job (the original behavior).
+    $mutantArgs += Get-MutantsShardArgument -Spec "{{ SHARD }}"
 
     # We must use Invoke-Expression to preserve the quotes around the wildcarded arguments on Linux.
-    $expanded_args = [String]::join(" ", $args)
+    $expanded_args = [String]::join(" ", $mutantArgs)
 
     # If the user has overridden `CARGO_TARGET_DIR`, we need to un-override it here because it is
     # critical that different mutations be emitted into different target directories, otherwise
@@ -214,7 +97,7 @@ mutants SHARD="" CAREFUL='false':
     #     understand what is covered by mutation testing and how successfully.
     # --timeout - as we skip the baseline tests, we need to manually define a timeout.
     #     This needs to be long enough to run a full package test suite (for all jobs in parallel)
-    #     but short enough to call a timeout and timeout and avoid things going on forever.
+    #     but short enough to call a timeout and avoid things going on forever.
     #     This should only be reached if a mutation causes a serious issue (and may need to be
     #     skipped or the test improved).
     Invoke-Expression "cargo mutants {{ target_package }} --baseline=skip --timeout=60 --no-shuffle --caught --unviable $expanded_args"

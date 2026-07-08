@@ -5,6 +5,7 @@ clippy PROFILE='dev':
 [group('quality')]
 [script]
 coverage-measure:
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
@@ -17,7 +18,7 @@ coverage-measure:
     # cargo-bench-history integration test a redundant on-demand Cargo freshness check. The
     # engine builds into its own dedicated target directory (see `_mock-engine-path`), so
     # neither this pre-build nor any residual on-demand build relinks a binary out of the
-    # shared coverage tree while another test is spawning it — the transient "No such file or
+    # shared coverage tree while another test is spawning it - the transient "No such file or
     # directory" engine-spawn races previously seen on macOS (issue #332).
     $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
 
@@ -63,6 +64,7 @@ format-check:
 [group('quality')]
 [script]
 validate-workflows:
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
@@ -75,11 +77,47 @@ validate-workflows:
 [group('quality')]
 [script]
 validate-binstall:
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
     Import-Module ./scripts/release/BinstallValidation.psm1 -Force
 
     Invoke-BinstallValidation
+
+# Statically analyzes every PowerShell script and module under scripts/ with PSScriptAnalyzer
+# (installed and version-pinned by `just install-tools`). It runs the built-in rule set filtered by
+# the curated PSScriptAnalyzerSettings.psd1 PLUS the repo-local custom rules in
+# scripts/analyzer/FoloAnalyzerRules.psm1 - which catch classes the built-in rules miss, notably the
+# case-insensitive foreach variable-shadowing bug that once shipped a broken release. Any Error/
+# Warning finding fails the recipe; the ruleset is tuned so a clean tree has zero findings (a
+# genuine false positive is silenced with a justified SuppressMessageAttribute, not by relaxing the
+# gate). Repo-wide, not package-scoped.
+[group('quality')]
+[script]
+validate-scripts:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    $root = "{{justfile_directory()}}"
+    Import-Module PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION -Force
+
+    $results = @(Invoke-ScriptAnalyzer `
+            -Path (Join-Path $root 'scripts') `
+            -Recurse `
+            -Settings (Join-Path $root 'PSScriptAnalyzerSettings.psd1') `
+            -CustomRulePath (Join-Path $root 'scripts/analyzer/FoloAnalyzerRules.psm1') `
+            -IncludeDefaultRules)
+
+    if ($results.Count -gt 0) {
+        foreach ($finding in $results) {
+            $relative = $finding.ScriptName.Substring($root.Length).TrimStart('\', '/')
+            Write-Host ("{0}:{1} [{2}] {3}: {4}" -f $relative, $finding.Line, $finding.Severity, $finding.RuleName, $finding.Message)
+        }
+        throw "PSScriptAnalyzer reported $($results.Count) issue(s). Fix them (or add a justified SuppressMessageAttribute) so the tree stays clean."
+    }
+
+    Write-Host "PSScriptAnalyzer: no issues in scripts/."
 
 [group('quality')]
 hack:
@@ -98,6 +136,7 @@ default-features-check:
 [group('quality')]
 [script]
 careful FILTER="":
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
@@ -124,13 +163,14 @@ validate-linux:
 
 # Full validation of primary factors, as you would do in a build pipeline before a release.
 # Includes package-scoped mutation testing as its final (and by far slowest) step, since
-# uncaught mutations are a very common cause of CI failures — we catch them before pushing.
+# uncaught mutations are a very common cause of CI failures - we catch them before pushing.
 # Performs validation on the current platform, whatever that may be.
 [group('quality')]
 validate-local:
     just package="{{ package }}" format-check
     just package="{{ package }}" validate-workflows
     just package="{{ package }}" validate-binstall
+    just package="{{ package }}" validate-scripts
     just package="{{ package }}" check dev
     just package="{{ package }}" clippy dev
     just package="{{ package }}" test
@@ -155,7 +195,7 @@ validate-extra-linux:
     wsl -e bash -l -c "just package='{{ package }}' validate-extra-local"
 
 # Validation of extra factors that take potentially too long to run in regular validation.
-# Mutation testing is intentionally not here — it runs as part of `validate-local`.
+# Mutation testing is intentionally not here - it runs as part of `validate-local`.
 # Performs validation on the current platform, whatever that may be.
 [group('quality')]
 validate-extra-local:

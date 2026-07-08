@@ -17,13 +17,13 @@ runs:
     - name: Install APT packages (Linux)
       # The GitHub-hosted Ubuntu images already ship git, git-lfs, gcc, make, curl,
       # libssl-dev, pkg-config and PowerShell (apt reports them "already the newest"), so
-      # only build-essential, cmake and valgrind — plus their dependencies — are genuinely
+      # only build-essential, cmake and valgrind - plus their dependencies - are genuinely
       # installed here. Package downloads are not the bottleneck (~1s for tens of MB on the
       # Azure mirrors); the cost is the `apt-get update` index refresh and the dpkg
       # unpack/configure. cache-apt-pkgs-action restores the already-configured files from
       # an actions/cache entry and skips apt entirely on a hit, cutting this step from ~15s
       # (amd64) / ~26s (arm64) to a few seconds. The action is in upstream maintenance mode,
-      # so `@v1` only rolls forward to backward-compatible fixes within its major line —
+      # so `@v1` only rolls forward to backward-compatible fixes within its major line -
       # there is no breaking v2 to chase.
       #
       # execute_install_scripts runs each package's postinst (e.g. ldconfig) on restore so
@@ -40,7 +40,7 @@ runs:
 
     - name: Install PowerShell (Linux ARM64)
       # amd64 Ubuntu runners preinstall PowerShell, but the arm64 images do not ship a pwsh
-      # the packages.microsoft.com apt repo can satisfy — that repo only publishes amd64
+      # the packages.microsoft.com apt repo can satisfy - that repo only publishes amd64
       # packages, so `apt install powershell` fails on arm64 with "Depends: libc6:amd64 but
       # it is not installable". Microsoft instead ships arm64 PowerShell as a tarball on the
       # PowerShell GitHub releases page, which we install here. --retry-all-errors covers
@@ -68,8 +68,8 @@ runs:
     - name: Cache Rust toolchains
       # Restored BEFORE the toolchain is installed so the pinned stable, the MSRV and the
       # pinned nightly (whose profile pulls rust-src, llvm-tools-preview and miri) are all
-      # served from cache, turning every `rustup toolchain install` — the dtolnay step below
-      # and the ones inside `just install-tools` — into a no-op on a hit. rust-cache below
+      # served from cache, turning every `rustup toolchain install` - the dtolnay step below
+      # and the ones inside `just install-tools` - into a no-op on a hit. rust-cache below
       # caches ~/.cargo and ./target but never ~/.rustup, so re-installing these toolchains is
       # the single largest uncached cost of this composite.
       #
@@ -92,15 +92,17 @@ runs:
         key: rustup-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('constants.env', 'rust-toolchain.toml') }}
 
     - name: Read pinned Rust toolchain channel
-      # dtolnay/rust-toolchain cannot read rust-toolchain.toml — its channel comes from the
-      # action @rev or the `toolchain` input — so extract the pinned stable channel here and
+      # dtolnay/rust-toolchain cannot read rust-toolchain.toml - its channel comes from the
+      # action @rev or the `toolchain` input - so extract the pinned stable channel here and
       # hand it to the install step below. Parsing in PowerShell keeps it portable across the
       # Linux/macOS/Windows runners (macOS ships BSD grep, which has no -P). The version is
       # never hardcoded; rust-toolchain.toml stays the single source of truth.
       id: rust-toolchain
       shell: pwsh
       run: |
+        Set-StrictMode -Version Latest
         $ErrorActionPreference = 'Stop'
+        $PSNativeCommandUseErrorActionPreference = $true
         $match = Select-String -Path 'rust-toolchain.toml' -Pattern '^\s*channel\s*=\s*"([^"]+)"' | Select-Object -First 1
         if (-not $match) { throw 'Could not read the pinned channel from rust-toolchain.toml' }
         $channel = $match.Matches[0].Groups[1].Value
@@ -108,13 +110,13 @@ runs:
         "channel=$channel" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
     - name: Install Rust toolchain
-      # Pinned to the exact channel from rust-toolchain.toml (parsed above) via @master —
+      # Pinned to the exact channel from rust-toolchain.toml (parsed above) via @master -
       # dtolnay's documented ref for passing an explicit `toolchain`. Using @stable would
       # instead install the *latest* stable and roll it forward every ~6 weeks; because
       # Swatinem/rust-cache enumerates every installed toolchain (`rustup toolchain list`)
       # into its key, that rolling stable would silently bust the shared compilation cache on
       # each upstream release even though the workspace only ever builds with the pinned
-      # channel. Pinning it keeps the toolchain set — and thus the cache key — stable until we
+      # channel. Pinning it keeps the toolchain set - and thus the cache key - stable until we
       # deliberately bump the pin.
       uses: dtolnay/rust-toolchain@master
       with:
@@ -145,7 +147,7 @@ runs:
       # tools below (which runs install-tools).
       #
       # Keyed on OS + arch + a hash of the two install scripts, which embed both the pinned
-      # versions and their published checksums — so bumping either tool invalidates the cache
+      # versions and their published checksums - so bumping either tool invalidates the cache
       # automatically. Like rustup toolchains these are prebuilt, relocatable binaries that do not
       # link against image-specific dylibs, so the runner ImageVersion is deliberately left out of
       # the key.
@@ -169,7 +171,7 @@ runs:
       # never diverge and every tool version has a single source of truth (the recipe). Two tools
       # are trimmed here because no ordinary CI job needs them: azcopy is always skipped (only the
       # on-demand `just bench-history-stress-azure` uses it), and Azurite is skipped unless a job
-      # opts in via install-azurite (the test-azurite job does) — its emulator install is not worth
+      # opts in via install-azurite (the test-azurite job does) - its emulator install is not worth
       # the ~3 minutes on every other job.
       shell: bash
       env:
@@ -194,7 +196,7 @@ runs:
           # Prove the APT packages restored from the cache are functional. valgrind is the
           # one that matters: no PR-validation job runs it (only the nightly bench-history
           # workflow does), and a fileset-only cache restore could leave its shared
-          # libraries unregistered — so actually run it against a trivial program rather
+          # libraries unregistered - so actually run it against a trivial program rather
           # than only printing a version.
           cmake --version
           valgrind --quiet --error-exitcode=1 /bin/true

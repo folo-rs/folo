@@ -81,7 +81,7 @@ Describe 'Get-OpenIssueByTitle (mocked gh issue list)' {
         BeforeEach {
             # Reproduce the real gotcha: gh emits a note on stderr (deprecation, rate-limit, etc.)
             # while returning valid JSON on stdout and exiting 0. Write-Error lands on PowerShell's
-            # error stream (stream 2) — where a native gh's stderr also goes — so a naive `2>&1`
+            # error stream (stream 2) - where a native gh's stderr also goes - so a naive `2>&1`
             # merge would corrupt the JSON; the module must parse stdout only. `-ErrorAction
             # Continue` keeps the note non-terminating even under the suite's `$ErrorActionPreference
             # = 'Stop'`, so it stays a stream-2 write the module redirects away rather than a throw.
@@ -215,6 +215,125 @@ Describe 'Publish-RollingIssue (mocked gh)' {
             }
             { Publish-RollingIssue -Title 'Benchmark regressions detected' -Label 'bench-history' -BodyFile $script:BodyFile } |
                 Should -Throw '*could not edit issue*'
+        }
+    }
+}
+
+Describe 'Close-RollingIssue (mocked gh)' {
+    Context 'when open issues with the exact title exist' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryIssue {
+                switch ("$($args[0]) $($args[1])") {
+                    'issue list' {
+                        $global:LASTEXITCODE = 0
+                        '[{"number":7,"title":"Something else"},{"number":42,"title":"bench-history workflow failed"},{"number":43,"title":"bench-history workflow failed"}]'
+                    }
+                    'issue close' { $global:LASTEXITCODE = 0; '' }
+                    default { $global:LASTEXITCODE = 1; "unexpected: $args" }
+                }
+            }
+        }
+
+        It 'closes every matching issue and only those' {
+            Close-RollingIssue -Title 'bench-history workflow failed' -Label 'ci-failure' -Comment 'green again' | Out-Null
+            Should -Invoke gh -ModuleName BenchHistoryIssue -ParameterFilter {
+                ($args[1] -eq 'close') -and ($args -contains 42)
+            }
+            Should -Invoke gh -ModuleName BenchHistoryIssue -ParameterFilter {
+                ($args[1] -eq 'close') -and ($args -contains 43)
+            }
+            # The non-matching issue #7 is never touched.
+            Should -Invoke gh -ModuleName BenchHistoryIssue -ParameterFilter {
+                ($args[1] -eq 'close') -and ($args -contains 7)
+            } -Times 0 -Exactly
+        }
+
+        It 'closes with reason completed and the given audit comment' {
+            Close-RollingIssue -Title 'bench-history workflow failed' -Label 'ci-failure' -Comment 'green again' | Out-Null
+            Should -Invoke gh -ModuleName BenchHistoryIssue -ParameterFilter {
+                ($args[1] -eq 'close') -and ($args -contains '--reason') -and ($args -contains 'completed') -and
+                ($args -contains '--comment') -and ($args -contains 'green again')
+            }
+        }
+
+        It 'narrows the list to the given label and open state' {
+            Close-RollingIssue -Title 'bench-history workflow failed' -Label 'ci-failure' -Comment 'green again' | Out-Null
+            Should -Invoke gh -ModuleName BenchHistoryIssue -ParameterFilter {
+                ($args[1] -eq 'list') -and ($args -contains '--label') -and ($args -contains 'ci-failure') -and
+                ($args -contains '--state') -and ($args -contains 'open')
+            }
+        }
+
+        It 'returns the closed issue numbers' {
+            $closed = @(Close-RollingIssue -Title 'bench-history workflow failed' -Label 'ci-failure' -Comment 'green again')
+            $closed.Count | Should -Be 2
+            $closed | Should -Contain 42
+            $closed | Should -Contain 43
+        }
+    }
+
+    Context 'when no open issue has a matching title' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryIssue {
+                switch ("$($args[0]) $($args[1])") {
+                    'issue list' { $global:LASTEXITCODE = 0; '[{"number":7,"title":"Something else"}]' }
+                    'issue close' { $global:LASTEXITCODE = 0; '' }
+                    default { $global:LASTEXITCODE = 1; "unexpected: $args" }
+                }
+            }
+        }
+
+        It 'closes nothing and returns an empty array' {
+            $closed = @(Close-RollingIssue -Title 'bench-history workflow failed' -Label 'ci-failure' -Comment 'green again')
+            $closed.Count | Should -Be 0
+            Should -Invoke gh -ModuleName BenchHistoryIssue -ParameterFilter { $args[1] -eq 'close' } -Times 0 -Exactly
+        }
+    }
+
+    Context 'when the open-issue list is empty' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryIssue {
+                switch ("$($args[0]) $($args[1])") {
+                    'issue list' { $global:LASTEXITCODE = 0; '[]' }
+                    'issue close' { $global:LASTEXITCODE = 0; '' }
+                    default { $global:LASTEXITCODE = 1; "unexpected: $args" }
+                }
+            }
+        }
+
+        It 'closes nothing and returns an empty array' {
+            @(Close-RollingIssue -Title 'bench-history workflow failed' -Label 'ci-failure' -Comment 'green again').Count | Should -Be 0
+        }
+    }
+
+    Context 'when gh list fails' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryIssue { $global:LASTEXITCODE = 1; 'HTTP 503: Service Unavailable' }
+        }
+
+        It 'throws, surfacing the gh output' {
+            { Close-RollingIssue -Title 'bench-history workflow failed' -Label 'ci-failure' -Comment 'green again' } |
+                Should -Throw '*503*'
+        }
+    }
+
+    Context 'when gh close fails' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryIssue {
+                switch ("$($args[0]) $($args[1])") {
+                    'issue list' {
+                        $global:LASTEXITCODE = 0
+                        '[{"number":42,"title":"bench-history workflow failed"}]'
+                    }
+                    'issue close' { $global:LASTEXITCODE = 1; 'could not close issue' }
+                    default { $global:LASTEXITCODE = 1; "unexpected: $args" }
+                }
+            }
+        }
+
+        It 'throws, surfacing the gh output' {
+            { Close-RollingIssue -Title 'bench-history workflow failed' -Label 'ci-failure' -Comment 'green again' } |
+                Should -Throw '*could not close issue*'
         }
     }
 }

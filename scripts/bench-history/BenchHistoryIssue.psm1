@@ -14,16 +14,16 @@
 # (BenchHistoryIssue.Tests.ps1) exercise it against a mocked `gh` rather than only via a push to
 # `main`. The one real GitHub-touching tool (`gh`) is isolated behind small seams the tests mock.
 
-Set-StrictMode -Version 3.0
+Set-StrictMode -Version Latest
 
 function Invoke-GhCapture {
     # Runs `gh` with the given arguments, capturing stdout and stderr SEPARATELY. stderr is
-    # redirected to a temp file so it never contaminates stdout: `gh` can print warnings — e.g.
-    # deprecation or rate-limit notes — to stderr while still exiting 0, and folding those into
+    # redirected to a temp file so it never contaminates stdout: `gh` can print warnings - e.g.
+    # deprecation or rate-limit notes - to stderr while still exiting 0, and folding those into
     # stdout (a bare `2>&1`) would break the JSON/URL parsing the callers do. Returns the captured
     # stdout as a single string on success; on a non-zero exit, throws with whatever `gh` wrote
     # (stderr first, then any stdout) so the failure is never swallowed. Inspecting the exit code
-    # ourselves — rather than letting a non-zero `gh` abort — is why the native-error toggle is off.
+    # ourselves - rather than letting a non-zero `gh` abort - is why the native-error toggle is off.
     # This is the single seam the Pester suite mocks (via `Mock gh`).
     [CmdletBinding()]
     param([Parameter(Mandatory)][object[]] $Arguments)
@@ -51,7 +51,7 @@ function Invoke-GhCapture {
 function Get-OpenIssueByTitle {
     # Returns the first OPEN issue whose title equals $Title exactly, or $null when none matches.
     # The list is narrowed to $Label so only a handful of issues come back, then the exact-title
-    # match is done client-side — the same list-then-match approach the workflow's `resolve` job
+    # match is done client-side - the same list-then-match approach the workflow's `resolve` job
     # uses to find the failure-alert issue, which avoids the eventual-consistency lag of the GitHub
     # search index that a `gh issue list --search`/`gh search issues` query would hit. Isolates the
     # real `gh issue list` call so the tests can mock it.
@@ -81,7 +81,7 @@ function Publish-RollingIssue {
     # Files exactly ONE rolling issue: when an open issue with the exact $Title already exists its
     # body is updated in place (so a persisting condition never spams duplicates), otherwise a new
     # issue is created with $Label. The body is read by `gh` from $BodyFile, which may be any path
-    # (for example the runner temp dir) — this is what frees the workflow from writing scratch files
+    # (for example the runner temp dir) - this is what frees the workflow from writing scratch files
     # into the repo checkout. $Label is the comma-separated label list applied on creation; the
     # dedup search is narrowed to the first of those labels. Returns the issue URL.
     [CmdletBinding()]
@@ -116,4 +116,47 @@ function Publish-RollingIssue {
     return $text
 }
 
-Export-ModuleMember -Function Get-OpenIssueByTitle, Publish-RollingIssue
+function Close-RollingIssue {
+    # Closes EVERY open issue whose title equals $Title exactly among those carrying $Label, each
+    # with an audit $Comment. The mirror image of Publish-RollingIssue: the workflow's `resolve` job
+    # calls this once the pipeline is green again so a fixed run does not leave the rolling
+    # failure-alert issue rotting open. Closing ALL matches (not just the first) sweeps any backlog
+    # of historical duplicates in one pass - the same list-then-exact-title approach
+    # Get-OpenIssueByTitle uses, which sidesteps the search-index lag a `gh search` would hit.
+    # Returns the numbers it closed (an empty array when none were open). The real `gh` calls go
+    # through Invoke-GhCapture so the Pester suite can mock them.
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter(Mandatory)][string] $Title,
+        [Parameter(Mandatory)][string] $Label,
+        [Parameter(Mandatory)][string] $Comment,
+        [int] $Limit = 100
+    )
+
+    # `--limit` defeats the 30-result default so a backlog of historical duplicates all come back.
+    $output = Invoke-GhCapture -Arguments @(
+        'issue', 'list', '--state', 'open', '--label', $Label, '--limit', $Limit, '--json', 'number,title'
+    )
+
+    # A no-match list is the literal `[]`, which ConvertFrom-Json yields as an empty array; the
+    # @() wrappers keep a single-object result enumerable and .Count-safe under strict mode.
+    $issues = $output | ConvertFrom-Json
+    $matching = @(@($issues) | Where-Object { $_.title -eq $Title })
+
+    if ($matching.Count -eq 0) {
+        Write-Verbose "No open issue titled '$Title' labelled '$Label' to close; nothing to do."
+        return @()
+    }
+
+    $closed = foreach ($issue in $matching) {
+        Write-Verbose "Closing issue #$($issue.number) ('$Title') because the tracked condition has cleared; leaving comment: $Comment"
+        Invoke-GhCapture -Arguments @(
+            'issue', 'close', $issue.number, '--reason', 'completed', '--comment', $Comment
+        ) | Out-Null
+        $issue.number
+    }
+    return @($closed)
+}
+
+Export-ModuleMember -Function Get-OpenIssueByTitle, Publish-RollingIssue, Close-RollingIssue

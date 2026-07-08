@@ -1,6 +1,7 @@
 [group('testing')]
 [script]
 bench TARGET="":
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
@@ -21,8 +22,11 @@ bench TARGET="":
 [group('testing')]
 [script]
 bench-cg TARGET="":
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
+
+    Import-Module "{{ justfile_directory() }}/scripts/build/CallgrindBench.psm1" -Force
 
     if (-not $IsLinux) {
         Write-Error "bench-cg requires Linux (Valgrind). On Windows, invoke through WSL from the repo root: wsl -e bash -l -c 'just bench-cg'"
@@ -37,31 +41,21 @@ bench-cg TARGET="":
     $package_filter = "{{ package }}"
     $target_filter = "{{ TARGET }}"
 
-    $packages = if ($package_filter -eq "") {
-        Get-ChildItem packages -Directory | ForEach-Object { $_.Name }
-    } else {
-        # Support space-separated package lists (e.g. from cargo-delta output).
-        $package_filter -split " " | Where-Object { $_ -ne "" }
+    $targets = @(Get-CallgrindBenchTarget -PackagesRoot "packages" -PackageFilter $package_filter -TargetFilter $target_filter)
+
+    foreach ($benchTarget in $targets) {
+        Write-Host "Running $($benchTarget.Package)::$($benchTarget.Bench)" -ForegroundColor Cyan
+        cargo bench -p $($benchTarget.Package) --bench $($benchTarget.Bench) --all-features --locked
     }
 
-    $any_run = $false
-    foreach ($pkg in $packages) {
-        $benches_dir = Join-Path "packages" $pkg "benches"
-        if (-not (Test-Path $benches_dir)) { continue }
-
-        $bench_files = Get-ChildItem $benches_dir -Filter "*_cg.rs"
-        foreach ($bench_file in $bench_files) {
-            $bench_name = $bench_file.BaseName
-            if ($target_filter -ne "" -and $bench_name -ne $target_filter) { continue }
-
-            Write-Host "Running ${pkg}::${bench_name}" -ForegroundColor Cyan
-            cargo bench -p $pkg --bench $bench_name --all-features --locked
-            $any_run = $true
+    if ($targets.Count -eq 0) {
+        $scope = if ($package_filter -eq "") {
+            "the workspace"
+        } else {
+            $names = @($package_filter -split " " | Where-Object { $_ -ne "" })
+            $noun = if ($names.Count -eq 1) { "package" } else { "packages" }
+            "$noun '$package_filter'"
         }
-    }
-
-    if (-not $any_run) {
-        $scope = if ($package_filter -eq "") { "the workspace" } else { "package(s) '$package_filter'" }
         $target_clause = if ($target_filter -eq "") { "" } else { " matching target '$target_filter'" }
         Write-Host "No Callgrind benchmarks found in $scope$target_clause." -ForegroundColor Yellow
     }
@@ -74,55 +68,16 @@ miri FILTER="":
 [group('testing')]
 [script]
 miri-harder SHARD="" FILTER="":
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
-    $totalSeeds = 64
-    $shard = "{{ SHARD }}"
+    # The seed-range arithmetic (splitting the seed budget across CI shards, the final shard
+    # absorbing the remainder) lives in the Pester-tested Miri module, which shares the "N/M"
+    # shard-spec parsing with `just mutants`. See scripts/build/Miri.psm1.
+    Import-Module "{{ justfile_directory() }}/scripts/build/Miri.psm1" -Force
 
-    if ($shard -eq "") {
-        $seedRange = "..$totalSeeds"
-    } else {
-        $parts = $shard -split "/"
-
-        if ($parts.Length -ne 2) {
-            Write-Error "Invalid SHARD value '$shard'. Expected format 'N/M'."
-            exit 1
-        }
-
-        $shardIndex = 0
-        $shardCount = 0
-        if (-not [int]::TryParse($parts[0], [ref]$shardIndex) -or -not [int]::TryParse($parts[1], [ref]$shardCount)) {
-            Write-Error "Invalid SHARD value '$shard'. N and M must be integers in 'N/M'."
-            exit 1
-        }
-
-        if ($shardCount -le 0) {
-            Write-Error "Invalid SHARD value '$shard'. M must be a positive integer in 'N/M'."
-            exit 1
-        }
-
-        if ($shardIndex -lt 1 -or $shardIndex -gt $shardCount) {
-            Write-Error "Invalid SHARD value '$shard'. N must satisfy 1 <= N <= M in 'N/M'."
-            exit 1
-        }
-
-        $seedsPerShard = [math]::Floor($totalSeeds / $shardCount)
-        if ($seedsPerShard -lt 1) {
-            Write-Error "Invalid SHARD value '$shard'. Too many shards for $totalSeeds seeds."
-            exit 1
-        }
-
-        $start = ($shardIndex - 1) * $seedsPerShard
-        if ($shardIndex -eq $shardCount) {
-            # Last shard picks up any remainder from uneven division.
-            $end = $totalSeeds
-        } else {
-            $end = $shardIndex * $seedsPerShard
-        }
-        $seedRange = "$start..$end"
-    }
-
+    $seedRange = Get-MiriSeedRange -Spec "{{ SHARD }}"
     $env:MIRIFLAGS = "-Zmiri-many-seeds=$seedRange"
     Write-Host "Running miri-harder with seed range: $seedRange"
     cargo +$env:RUST_NIGHTLY miri test {{ target_package }} --no-fail-fast --all-features --lib {{ FILTER }} --locked -- --quiet
@@ -130,6 +85,7 @@ miri-harder SHARD="" FILTER="":
 [group('testing')]
 [script]
 miri-example EXAMPLE:
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
@@ -142,6 +98,7 @@ miri-example EXAMPLE:
 [group('testing')]
 [script]
 test FILTER="":
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
@@ -156,6 +113,7 @@ test FILTER="":
 [group('testing')]
 [script]
 test-scripts:
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
@@ -181,8 +139,11 @@ test-scripts:
 [group('testing')]
 [script]
 _mock-engine-path:
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
+
+    Import-Module "{{ justfile_directory() }}/scripts/build/MockBenchEngine.psm1" -Force
 
     # Nest under the ambient CARGO_TARGET_DIR (e.g. a coverage run's tree) when set, else the
     # workspace `target/`, so the isolated tree stays git-ignored and cached like everything
@@ -190,17 +151,7 @@ _mock-engine-path:
     # on-demand build resolve to the very same isolated binary.
     $engineTargetDir = Join-Path ($env:CARGO_TARGET_DIR ?? "target") "mock-engine"
     $messages = cargo +$env:RUST_MSRV build -p mock_bench_engine --target-dir $engineTargetDir --message-format=json-render-diagnostics --locked
-    $exe = $messages |
-        ForEach-Object {
-            # Tolerate non-JSON lines (e.g. rendered diagnostics or blank lines), just
-            # as the Rust-side resolver does; only parsed objects flow downstream.
-            if ([string]::IsNullOrWhiteSpace($_)) { return }
-            try { $_ | ConvertFrom-Json -ErrorAction Stop } catch { return }
-        } |
-        Where-Object { $_.reason -eq "compiler-artifact" -and $_.target.name -eq "mock_bench_engine" -and $_.executable } |
-        Select-Object -Last 1 -ExpandProperty executable
-    if (-not $exe) { throw "could not resolve the mock_bench_engine executable from cargo output" }
-    Write-Output $exe
+    Write-Output (Resolve-MockBenchEngineExecutable -CargoMessage $messages)
 
 # Run the cargo-bench-history "stress analyze" harness against LOCAL filesystem
 # storage: it seeds a giant synthetic benchmark history (default 1000 benchmarks ×
@@ -218,6 +169,7 @@ _mock-engine-path:
 [group('testing')]
 [script]
 bench-history-stress *ARGS:
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
@@ -230,7 +182,7 @@ bench-history-stress *ARGS:
 # against cloud storage.
 #
 # Requires `az login` (the harness and azcopy authenticate as your Entra user via
-# the Azure CLI) and the `azcopy` binary on PATH for the bulk upload — both are
+# the Azure CLI) and the `azcopy` binary on PATH for the bulk upload - both are
 # installed by `just install-tools`. The account defaults to
 # BENCH_HISTORY_TEST_AZURE_ACCOUNT from constants.env (shared with the test-azure job);
 # override it by passing a name as the first argument. Any further harness flags
@@ -240,6 +192,7 @@ bench-history-stress *ARGS:
 [group('testing')]
 [script]
 bench-history-stress-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_TEST_AZURE_ACCOUNT', '') *ARGS:
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
@@ -270,7 +223,7 @@ bench-history-stress-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_TEST_AZURE_
 # trust that cert by disabling certificate validation. If an emulator is already listening on
 # 127.0.0.1:10000 this recipe reuses it (which must therefore also be an HTTPS
 # `--oauth basic` emulator); otherwise it starts one (in-memory, no persisted state)
-# and stops it again when the tests finish — even on failure. BENCH_HISTORY_REQUIRE_AZURITE
+# and stops it again when the tests finish - even on failure. BENCH_HISTORY_REQUIRE_AZURITE
 # is set so an unreachable emulator is a hard error rather than a silent skip, mirroring
 # the CI job. The `azure azurite` test filter selects the Azure-backend tests by the
 # naming convention (the `storage::azure` unit tests and the `*_in_azurite` integration
@@ -278,75 +231,21 @@ bench-history-stress-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_TEST_AZURE_
 [group('testing')]
 [script]
 test-azurite:
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
+    Import-Module "{{ justfile_directory() }}/scripts/build/Azurite.psm1" -Force
+
     $blobHost = "127.0.0.1"
     $blobPort = 10000
-
-    # True when something is already accepting connections on the Azurite blob port.
-    function Test-AzuriteReachable {
-        $client = [System.Net.Sockets.TcpClient]::new()
-        try {
-            $client.Connect($blobHost, $blobPort)
-            return $true
-        } catch {
-            return $false
-        } finally {
-            $client.Dispose()
-        }
-    }
-
-    # Stop a process and (on Windows) its descendants. The Windows `.cmd` shim spawns
-    # node as a child, so killing only the shim would orphan the emulator.
-    function Stop-AzuriteProcessTree {
-        param([Parameter(Mandatory)][int] $ProcessId)
-
-        if ($IsWindows) {
-            Get-CimInstance Win32_Process -Filter "ParentProcessId = $ProcessId" -ErrorAction SilentlyContinue |
-                ForEach-Object { Stop-AzuriteProcessTree -ProcessId $_.ProcessId }
-        }
-        Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
-    }
-
-    # Generate a self-signed certificate for Azurite's HTTPS listener, written as a
-    # password-protected PFX (the cross-platform format .NET exports). Entra auth
-    # requires TLS, so `--oauth basic` only runs over HTTPS; the tests trust this cert
-    # by disabling certificate validation, so its contents (beyond being a valid cert
-    # for 127.0.0.1) do not matter. It is given a 10-year lifetime so the cached copy
-    # never needs rolling.
-    function New-AzuriteCertificate {
-        param([Parameter(Mandatory)][string] $PfxPath, [Parameter(Mandatory)][string] $Password)
-
-        $rsa = [System.Security.Cryptography.RSA]::Create(2048)
-        try {
-            $request = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
-                "CN=127.0.0.1",
-                $rsa,
-                [System.Security.Cryptography.HashAlgorithmName]::SHA256,
-                [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
-            $sanBuilder = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
-            $sanBuilder.AddIpAddress([System.Net.IPAddress]::Loopback)
-            $sanBuilder.AddDnsName("localhost")
-            $request.CertificateExtensions.Add($sanBuilder.Build())
-            $notBefore = [System.DateTimeOffset]::UtcNow.AddDays(-1)
-            $notAfter = [System.DateTimeOffset]::UtcNow.AddYears(10)
-            $certificate = $request.CreateSelfSigned($notBefore, $notAfter)
-            $pfxBytes = $certificate.Export(
-                [System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx,
-                $Password)
-            [System.IO.File]::WriteAllBytes($PfxPath, $pfxBytes)
-        } finally {
-            $rsa.Dispose()
-        }
-    }
 
     $startedByUs = $false
     $launcher = $null
     $emulatorPid = 0
     $certPassword = "azurite"
     try {
-        if (Test-AzuriteReachable) {
+        if (Test-AzuriteReachable -BlobHost $blobHost -BlobPort $blobPort) {
             Write-Host "Azurite already reachable at ${blobHost}:${blobPort}; reusing the running emulator."
         } else {
             $shim = if ($IsWindows) { "azurite-blob.cmd" } else { "azurite-blob" }
@@ -355,9 +254,9 @@ test-azurite:
                 throw "Azurite is not installed. Install it with: npm install -g azurite"
             }
 
-            # Cache the certificate under the Cargo target directory (honoring
-            # CARGO_TARGET_DIR and any `build.target-dir` config) so it is generated
-            # once and reused, and cleaned up whenever `target/` is removed.
+            # Cache the certificate under the Cargo target directory (honoring CARGO_TARGET_DIR and
+            # any `build.target-dir` config) so it is generated once and reused, and cleaned up
+            # whenever `target/` is removed.
             $targetDir = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).target_directory
             $certPath = Join-Path $targetDir "azurite/selfsigned.pfx"
             if (Test-Path $certPath) {
@@ -368,17 +267,7 @@ test-azurite:
                 New-AzuriteCertificate -PfxPath $certPath -Password $certPassword
             }
 
-            $azuriteArgs = @(
-                "--blobHost", $blobHost,
-                "--blobPort", "$blobPort",
-                "--cert", $certPath,
-                "--pwd", $certPassword,
-                "--oauth", "basic",
-                "--inMemoryPersistence",
-                "--skipApiVersionCheck",
-                "--silent",
-                "--loose"
-            )
+            $azuriteArgs = Get-AzuriteArgument -BlobHost $blobHost -BlobPort $blobPort -CertPath $certPath -Password $certPassword
 
             Write-Host "Starting Azurite blob emulator on ${blobHost}:${blobPort} (in-memory, HTTPS + OAuth)."
             $startParams = @{
@@ -392,15 +281,15 @@ test-azurite:
 
             $ready = $false
             foreach ($attempt in 1..30) {
-                if (Test-AzuriteReachable) { $ready = $true; break }
+                if (Test-AzuriteReachable -BlobHost $blobHost -BlobPort $blobPort) { $ready = $true; break }
                 Start-Sleep -Seconds 1
             }
             if (-not $ready) {
                 throw "Azurite did not become ready on ${blobHost}:${blobPort} within 30 seconds."
             }
 
-            # The launcher may be a shim that spawns the real emulator as a child, so
-            # resolve the process actually holding the port to stop it directly later.
+            # The launcher may be a shim that spawns the real emulator as a child, so resolve the
+            # process actually holding the port to stop it directly later.
             $emulatorPid = $launcher.Id
             if ($IsWindows) {
                 $listener = Get-NetTCPConnection -LocalPort $blobPort -State Listen -ErrorAction SilentlyContinue |
@@ -412,8 +301,8 @@ test-azurite:
 
         $env:BENCH_HISTORY_REQUIRE_AZURITE = "1"
         # Pin the endpoint to the emulator this recipe manages so a developer's pre-existing
-        # AZURITE_BLOB_ENDPOINT cannot redirect the tests to a different target (the recipe
-        # would then start/reuse one emulator while the tests hit another — non-hermetic).
+        # AZURITE_BLOB_ENDPOINT cannot redirect the tests to a different target (the recipe would
+        # then start/reuse one emulator while the tests hit another - non-hermetic).
         $env:AZURITE_BLOB_ENDPOINT = "https://${blobHost}:${blobPort}/devstoreaccount1"
         $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
         Write-Host "Running Azurite-backed tests against ${blobHost}:${blobPort}."
@@ -435,7 +324,7 @@ test-azurite:
 #
 # Requires `az login` (the tests authenticate as your Entra user via the Azure
 # CLI) and a deployed storage account that grants your user the `Storage Blob
-# Data Contributor` role — see infra/azure-bench-history-test/ to deploy one. The
+# Data Contributor` role - see infra/azure-bench-history-test/ to deploy one. The
 # account defaults to BENCH_HISTORY_TEST_AZURE_ACCOUNT from constants.env (shared with
 # CI); override it by passing a name: `just test-azure <account>`.
 #
@@ -446,6 +335,7 @@ test-azurite:
 [group('testing')]
 [script]
 test-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_TEST_AZURE_ACCOUNT', ''):
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
@@ -468,10 +358,11 @@ test-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_TEST_AZURE_ACCOUNT', ''):
 #
 # Benches go through `cargo test --benches` (not nextest): this invokes each bench binary's
 # main() once with `--test`, which Criterion treats as "run each bench once" and Gungraun
-# treats as its normal one-shot Valgrind run — exactly the smoke check we want here.
+# treats as its normal one-shot Valgrind run - exactly the smoke check we want here.
 [group('testing')]
 [script]
 test-benches FILTER="":
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
@@ -480,6 +371,7 @@ test-benches FILTER="":
 [group('testing')]
 [script]
 test-docs FILTER="":
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
@@ -515,182 +407,93 @@ test-docs FILTER="":
 [group('testing')]
 [script]
 run-examples:
+    Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
-    # Discover and run all stand-alone example binaries
-    $failures = @()
-    $total_count = 0
-    $success_count = 0
-    $timeout_seconds = 30
-    
-    # Determine which packages to process
-    $packages_to_process = @()
-    if ("{{ package }}" -eq "") {
-        # Get all workspace members
-        $workspace_members = Get-ChildItem -Path "packages" -Directory | Where-Object { Test-Path (Join-Path $_.FullName "Cargo.toml") }
-        $packages_to_process = $workspace_members | ForEach-Object { $_.Name }
-    } else {
-        # Support space-separated package lists (e.g. from cargo-delta output).
-        $packages_to_process = "{{ package }}".Split(" ", [StringSplitOptions]::RemoveEmptyEntries)
-    }
-    
-    Write-Host "Running examples for packages: $($packages_to_process -join ', ')"
-    Write-Host "Timeout per example: $timeout_seconds seconds"
-    Write-Host ""
-    
-    foreach ($pkg in $packages_to_process) {
-        $examples_dir = Join-Path "packages" $pkg "examples"
-        
-        # Skip packages without examples directory (early continue pattern)
-        if (-not (Test-Path $examples_dir)) {
-            Write-Host "No examples directory found for package '$pkg'" -ForegroundColor DarkGray
-            continue
-        }
-        
-        # Pre-compile all examples for this package so compilation time does not eat into the
-        # per-example execution timeout. On slow CI runners, first-time compilation can exceed the
-        # timeout even though the example itself exits instantly.
-        Write-Host "Building examples for package '$pkg'..." -ForegroundColor DarkGray
-        $env:IS_TESTING = "1"
-        cargo build --package $pkg --examples --all-features --locked
-        if ($LASTEXITCODE -ne 0) {
-            $failures += "$pkg::* (build failed)"
-            continue
-        }
+    Import-Module "{{ justfile_directory() }}/scripts/build/Examples.psm1" -Force
 
-        # Find .rs files directly in examples directory
-        $example_files = Get-ChildItem -Path $examples_dir -Filter "*.rs" | Where-Object { $_.Name -ne "mod.rs" }
-        
-        # Find subdirectories with main.rs files
-        $example_subdirs = Get-ChildItem -Path $examples_dir -Directory | Where-Object { 
-            Test-Path (Join-Path $_.FullName "main.rs") 
-        }
-        
-        # Examples that are expected to panic or fail and should be excluded from run-examples
-        $excluded_examples = @(
-            "nm_otel_console"     # This example runs an infinite loop by design
-            "nm_otel_readme"      # This example runs an infinite loop by design
-            "alloc_tracker_panic_on_alloc_demo"  # This example intentionally panics to demonstrate functionality
-        )
-        
-        # Process .rs files
-        foreach ($example_file in $example_files) {
-            $example_name = $example_file.BaseName
-            
-            # Skip excluded examples
-            if ($excluded_examples -contains $example_name) {
-                Write-Host "Skipping excluded example '$example_name' in package '$pkg'" -ForegroundColor DarkGray
-                continue
-            }
-            
-            $total_count++
-            
-            Write-Host "Running example '$example_name' in package '$pkg'..." -ForegroundColor Cyan
-            
-            try {
-                # Run the example with a timeout to prevent hanging
-                $job = Start-Job -ScriptBlock {
-                    param($pkg, $example_name)
-                    $env:IS_TESTING = "1"
-                    & cargo run --package $pkg --example $example_name --all-features --locked 2>&1
-                    return $LASTEXITCODE
-                } -ArgumentList $pkg, $example_name
-                
-                $completed = Wait-Job -Job $job -Timeout $timeout_seconds
-                
-                if ($completed) {
-                    $result = Receive-Job -Job $job
-                    $exit_code = $result[-1]  # Last item should be the exit code
-                    $output = $result[0..($result.Length-2)] -join "`n"  # All output except exit code
-                    
-                    if ($exit_code -eq 0) {
-                        Write-Host "✓ Example '$example_name' in package '$pkg' completed successfully" -ForegroundColor Green
-                        $success_count++
-                    } else {
-                        Write-Host "✗ Example '$example_name' in package '$pkg' failed with exit code $exit_code" -ForegroundColor Red
-                        if ($output.Trim() -ne "") {
-                            Write-Host "Output:" -ForegroundColor Yellow
-                            Write-Host $output -ForegroundColor DarkYellow
-                        }
-                        $failures += "$pkg::$example_name (exit code $exit_code)"
-                    }
-                } else {
-                    Write-Host "✗ Example '$example_name' in package '$pkg' timed out after $timeout_seconds seconds" -ForegroundColor Red
-                    $failures += "$pkg::$example_name (timeout)"
-                    Stop-Job -Job $job
-                }
-                
-                Remove-Job -Job $job -Force
-                
-            } catch {
-                Write-Host "✗ Example '$example_name' in package '$pkg' failed with exception: $($_.Exception.Message)" -ForegroundColor Red
-                $failures += "$pkg::$example_name (exception: $($_.Exception.Message))"
-            }
-        }
-        
-        # Process subdirectory examples
-        foreach ($example_subdir in $example_subdirs) {
-            $example_name = $example_subdir.Name
-            
-            # Skip excluded examples
-            if ($excluded_examples -contains $example_name) {
-                Write-Host "Skipping excluded example '$example_name' in package '$pkg'" -ForegroundColor DarkGray
-                continue
-            }
-            
-            $total_count++
-            
-            Write-Host "Running example '$example_name' in package '$pkg'..." -ForegroundColor Cyan
-            
-            try {
-                # Run the example with a timeout to prevent hanging
-                $job = Start-Job -ScriptBlock {
-                    param($pkg, $example_name)
-                    $env:IS_TESTING = "1"
-                    & cargo run --package $pkg --example $example_name --all-features --locked 2>&1
-                    return $LASTEXITCODE
-                } -ArgumentList $pkg, $example_name
-                
-                $completed = Wait-Job -Job $job -Timeout $timeout_seconds
-                
-                if ($completed) {
-                    $result = Receive-Job -Job $job
-                    $exit_code = $result[-1]  # Last item should be the exit code
-                    $output = $result[0..($result.Length-2)] -join "`n"  # All output except exit code
-                    
-                    if ($exit_code -eq 0) {
-                        Write-Host "✓ Example '$example_name' in package '$pkg' completed successfully" -ForegroundColor Green
-                        $success_count++
-                    } else {
-                        Write-Host "✗ Example '$example_name' in package '$pkg' failed with exit code $exit_code" -ForegroundColor Red
-                        if ($output.Trim() -ne "") {
-                            Write-Host "Output:" -ForegroundColor Yellow
-                            Write-Host $output -ForegroundColor DarkYellow
-                        }
-                        $failures += "$pkg::$example_name (exit code $exit_code)"
-                    }
-                } else {
-                    Write-Host "✗ Example '$example_name' in package '$pkg' timed out after $timeout_seconds seconds" -ForegroundColor Red
-                    $failures += "$pkg::$example_name (timeout)"
-                    Stop-Job -Job $job
-                }
-                
-                Remove-Job -Job $job -Force
-                
-            } catch {
-                Write-Host "✗ Example '$example_name' in package '$pkg' failed with exception: $($_.Exception.Message)" -ForegroundColor Red
-                $failures += "$pkg::$example_name (exception: $($_.Exception.Message))"
+    $timeoutSeconds = 30
+    $failures = @()
+    $successCount = 0
+
+    $targets = @(Get-ExampleTarget -PackagesRoot "packages" -PackageFilter "{{ package }}")
+
+    if ($targets.Count -eq 0) {
+        Write-Host "No examples found."
+        return
+    }
+
+    $exampleWord = if ($targets.Count -eq 1) { "example" } else { "examples" }
+    Write-Host "Running $($targets.Count) $exampleWord (timeout ${timeoutSeconds}s each)"
+    Write-Host ""
+
+    # Pre-compile each package's examples up front so first-time compilation does not eat into the
+    # per-example execution timeout (on slow CI runners a cold compile can exceed it). A package
+    # whose examples fail to build is recorded and its examples skipped, so one broken package does
+    # not mask the others' results. Each affected example is recorded as its own failure so the
+    # summary's total, successful and failed counts stay consistent (total = successful + failed).
+    $env:IS_TESTING = "1"
+    $buildFailed = @{}
+    foreach ($pkg in ($targets | ForEach-Object { $_.Package } | Sort-Object -Unique)) {
+        Write-Host "Building examples for package '$pkg'..." -ForegroundColor DarkGray
+        try {
+            cargo build --package $pkg --examples --all-features --locked
+        } catch {
+            Write-Host "Building examples for package '$pkg' failed" -ForegroundColor Red
+            $buildFailed[$pkg] = $true
+            foreach ($failedTarget in @($targets | Where-Object { $_.Package -eq $pkg })) {
+                $failures += "$($failedTarget.Package)::$($failedTarget.Example) (build failed)"
             }
         }
     }
-    
+
+    # Runs one example in a child job so the parent can enforce a timeout; the final pipeline value
+    # is the process exit code, which Invoke-ExampleRun peels off the captured output.
+    $cargoRunner = {
+        param($pkg, $exampleName)
+        $env:IS_TESTING = "1"
+        & cargo run --package $pkg --example $exampleName --all-features --locked 2>&1
+        return $LASTEXITCODE
+    }
+
+    foreach ($target in $targets) {
+        if ($buildFailed.ContainsKey($target.Package)) { continue }
+
+        Write-Host "Running example '$($target.Example)' in package '$($target.Package)'..." -ForegroundColor Cyan
+        $result = Invoke-ExampleRun -Package $target.Package -Example $target.Example -Command $cargoRunner -TimeoutSeconds $timeoutSeconds
+
+        switch ($result.Status) {
+            "Success" {
+                Write-Host "  OK: '$($target.Example)' in package '$($target.Package)'" -ForegroundColor Green
+                $successCount++
+            }
+            "Failed" {
+                Write-Host "  FAIL: '$($target.Example)' in package '$($target.Package)' (exit code $($result.ExitCode))" -ForegroundColor Red
+                if (-not [string]::IsNullOrWhiteSpace($result.Output)) {
+                    Write-Host "Output:" -ForegroundColor Yellow
+                    Write-Host $result.Output -ForegroundColor DarkYellow
+                }
+                $failures += "$($target.Package)::$($target.Example) (exit code $($result.ExitCode))"
+            }
+            "Timeout" {
+                Write-Host "  TIMEOUT: '$($target.Example)' in package '$($target.Package)' after ${timeoutSeconds}s" -ForegroundColor Red
+                $failures += "$($target.Package)::$($target.Example) (timeout)"
+            }
+            "Exception" {
+                Write-Host "  ERROR: '$($target.Example)' in package '$($target.Package)': $($result.Message)" -ForegroundColor Red
+                $failures += "$($target.Package)::$($target.Example) (exception: $($result.Message))"
+            }
+        }
+    }
+
     Write-Host ""
     Write-Host "Summary:" -ForegroundColor White
-    Write-Host "  Total examples: $total_count" -ForegroundColor White
-    Write-Host "  Successful: $success_count" -ForegroundColor Green
-    Write-Host "  Failed: $($failures.Count)" -ForegroundColor $(if ($failures.Count -eq 0) { "Green" } else { "Red" })
-    
+    Write-Host "  Total examples: $($targets.Count)" -ForegroundColor White
+    Write-Host "  Successful: $successCount" -ForegroundColor Green
+    $failedColor = if ($failures.Count -eq 0) { "Green" } else { "Red" }
+    Write-Host "  Failed: $($failures.Count)" -ForegroundColor $failedColor
+
     if ($failures.Count -gt 0) {
         Write-Host ""
         Write-Host "Failed examples:" -ForegroundColor Red

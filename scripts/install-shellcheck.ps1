@@ -20,12 +20,12 @@
     is baked in below and verified after download, so a tampered or corrupted archive is rejected.
     Bump the version and the digests together when upgrading; the digests are the `digest` fields of
     the pinned release's assets (visible via `gh api repos/koalaman/shellcheck/releases/tags/v<version>`,
-    where `<version>` matches $script:ShellcheckVersion — not `releases/latest`, which would show the
+    where `<version>` matches $script:ShellcheckVersion - not `releases/latest`, which would show the
     digests of whatever the newest release happens to be rather than the one this script pins).
 
     The default destination is the cargo bin directory. That is a deliberate, if pragmatic, choice:
     ShellCheck has no standard home to prefer instead, and the cargo bin directory is the one
-    location this repository's developer environment guarantees is already on PATH — every other
+    location this repository's developer environment guarantees is already on PATH - every other
     tool `just install-tools` fetches lands there too.
 
     Idempotent: if the pinned ShellCheck already resolves on PATH the script does nothing (pass
@@ -50,10 +50,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
+Set-StrictMode -Version Latest
 $VerbosePreference = 'Continue'
 
 # The pinned ShellCheck release. Keep $ShellcheckVersion and the per-platform digests in
-# $ShellcheckBuilds in sync — both come from one GitHub release of koalaman/shellcheck.
+# $ShellcheckBuilds in sync - both come from one GitHub release of koalaman/shellcheck.
 $script:ShellcheckVersion = '0.11.0'
 
 # One entry per supported OS/architecture: the release asset name, the archive format it ships as,
