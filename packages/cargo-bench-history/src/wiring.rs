@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use cbh_command::{CacheSelection, LocalStorageSelection};
 use cbh_config::Config;
+use cbh_run::rebase;
 use cbh_storage::StorageError;
 
 /// The environment variable that supplies the local-storage path for a bare
@@ -19,21 +20,6 @@ pub(crate) const CACHE_ENV_VAR: &str = "CARGO_BENCH_HISTORY_CACHE";
 /// The default configuration path, relative to the working directory.
 pub(crate) fn default_config_path() -> PathBuf {
     PathBuf::from(".cargo").join("bench_history.toml")
-}
-
-/// Joins a relative `path` onto `base`, leaving an absolute `path` unchanged.
-///
-/// In production `base` is the process working directory, so a relative path
-/// resolves exactly as the filesystem would have. Threading the base explicitly
-/// (rather than relying on the process current directory) lets tests point each
-/// command at its own workspace without a global `chdir`, so the suite need not be
-/// forced serial.
-pub(crate) fn rebase(base: &Path, path: PathBuf) -> PathBuf {
-    if path.is_absolute() {
-        path
-    } else {
-        base.join(path)
-    }
 }
 
 /// Resolves the configuration path: an explicit `--config` value or the default
@@ -272,21 +258,6 @@ mod tests {
     fn resolve_project_id_falls_back_when_directory_name_is_unavailable() {
         let config = config_with("");
         assert_eq!(resolve_project_id(&config, Path::new("/")), "project");
-    }
-
-    #[test]
-    fn rebase_joins_relative_paths_and_keeps_absolute_ones() {
-        let base = Path::new("/work/folo");
-        assert_eq!(
-            rebase(base, PathBuf::from("store")),
-            PathBuf::from("/work/folo/store")
-        );
-        let absolute = if cfg!(windows) {
-            PathBuf::from(r"C:\elsewhere\store")
-        } else {
-            PathBuf::from("/elsewhere/store")
-        };
-        assert_eq!(rebase(base, absolute.clone()), absolute);
     }
 
     #[test]

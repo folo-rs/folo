@@ -32,6 +32,7 @@ cbh_diag = { workspace = true }
 cbh_engines = { workspace = true }
 cbh_git = { workspace = true }
 cbh_probe = { workspace = true }
+cbh_run = { workspace = true }
 cbh_storage = { workspace = true }
 futures = { workspace = true }
 jiff = { workspace = true, features = ["serde"] }
@@ -61,6 +62,7 @@ base64 = { workspace = true }
 cargo-bench-history-core = { path = "../cargo-bench-history-core", features = ["private-test-util"] }
 cbh_diag = { path = "../cbh_diag", features = ["private-test-util"] }
 cbh_git = { path = "../cbh_git", features = ["private-test-util"] }
+cbh_run = { path = "../cbh_run", features = ["private-test-util"] }
 cbh_storage = { path = "../cbh_storage", features = ["private-test-util"] }
 futures = { workspace = true, features = ["executor"] }
 mock_bench_engine = { path = "../mock_bench_engine" }

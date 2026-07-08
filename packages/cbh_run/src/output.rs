@@ -4,7 +4,7 @@
 //!
 //! Text is the default and goes to standard output; `--no-text` suppresses it.
 //! `--markdown <path>` and `--json <path>` each write that format to a file. The
-//! file writes go through the [`OutputWriter`] port (mirroring the [`ConfigWriter`]
+//! file writes go through the [`OutputWriter`] port (mirroring the `ConfigWriter`
 //! used by `install`) so the orchestrators stay storage- and filesystem-agnostic:
 //! production uses [`TokioOutputWriter`], while tests drive an in-memory fake.
 //!
@@ -18,25 +18,22 @@
 //! A relative `--markdown`/`--markdown-summary`/`--json` path resolves against the
 //! working directory (the same base as `--config`), so the resolution happens at the
 //! IO edge inside [`TokioOutputWriter`].
-//!
-//! [`ConfigWriter`]: crate::config_writer::ConfigWriter
 
 use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use cargo_bench_history_core::analyze::ReportFormat;
 use cbh_diag::{Reporter, ReporterExt};
+use cbh_render::ReportFormat;
 
-use crate::RunError;
-use crate::wiring::rebase;
+use crate::{RunError, rebase};
 
 /// Which report formats a single analysis pass should emit.
 ///
 /// Built once, early in each orchestrator, so the "nothing to emit" case (text
 /// suppressed and no file requested) fails before any expensive work.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct OutputSelection<'a> {
+pub struct OutputSelection<'a> {
     /// Whether the text report to standard output is suppressed (`--no-text`).
     no_text: bool,
     /// Where to write the Markdown report, if requested (`--markdown <path>`).
@@ -59,7 +56,7 @@ impl<'a> OutputSelection<'a> {
     /// suppresses the only default output and neither file format was requested —
     /// so a run that would produce nothing is rejected up front rather than
     /// completing silently.
-    pub(crate) fn resolve(
+    pub fn resolve(
         no_text: bool,
         markdown: Option<&'a Path>,
         json: Option<&'a Path>,
@@ -88,7 +85,7 @@ impl<'a> OutputSelection<'a> {
     /// suppresses the text report and none of `--markdown`, `--markdown-summary`, or
     /// `--json` was requested — so a run that would produce nothing is rejected up
     /// front rather than completing silently.
-    pub(crate) fn resolve_analyze(
+    pub fn resolve_analyze(
         no_text: bool,
         markdown: Option<&'a Path>,
         json: Option<&'a Path>,
@@ -116,7 +113,7 @@ impl<'a> OutputSelection<'a> {
 /// This is the filesystem edge of the per-format output model: the pure
 /// orchestrators render strings and hand them here, so the report rendering stays
 /// Miri-safe and an in-memory fake can stand in under test.
-pub(crate) trait OutputWriter {
+pub trait OutputWriter {
     /// Writes `contents` to `path`, creating parent directories as needed and
     /// replacing any existing file (a re-run refreshes the report in place).
     fn write(&self, path: &Path, contents: &str) -> impl Future<Output = io::Result<()>>;
@@ -128,14 +125,15 @@ pub(crate) trait OutputWriter {
 /// is the working directory in production), so `--markdown report.md` lands beside
 /// the other working-directory-relative paths the tool accepts.
 #[derive(Clone, Debug)]
-pub(crate) struct TokioOutputWriter {
+pub struct TokioOutputWriter {
     /// The directory a relative destination path is resolved against.
     base: PathBuf,
 }
 
 impl TokioOutputWriter {
     /// Creates a writer that resolves relative paths against `base`.
-    pub(crate) fn new(base: PathBuf) -> Self {
+    #[must_use]
+    pub fn new(base: PathBuf) -> Self {
         Self { base }
     }
 }
@@ -166,7 +164,7 @@ impl OutputWriter for TokioOutputWriter {
 /// # Errors
 ///
 /// Returns [`RunError::Io`] if writing a requested file fails.
-pub(crate) async fn emit<W, F>(
+pub async fn emit<W, F>(
     selection: &OutputSelection<'_>,
     writer: &W,
     reporter: &dyn Reporter,
@@ -202,7 +200,7 @@ where
 /// # Errors
 ///
 /// Returns [`RunError::Io`] if writing the summary file fails.
-pub(crate) async fn emit_markdown_summary<W, F>(
+pub async fn emit_markdown_summary<W, F>(
     selection: &OutputSelection<'_>,
     writer: &W,
     reporter: &dyn Reporter,
@@ -239,10 +237,10 @@ async fn write_report<W: OutputWriter>(
     Ok(())
 }
 
-#[cfg(test)]
-pub(crate) use fake::MemoryOutputWriter;
+#[cfg(any(test, feature = "private-test-util"))]
+pub use fake::MemoryOutputWriter;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "private-test-util"))]
 mod fake {
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -251,21 +249,25 @@ mod fake {
     use super::{OutputWriter, io};
 
     /// An in-memory [`OutputWriter`] that records written files without touching
-    /// the filesystem, so orchestration tests run under Miri. A later write to the
-    /// same path overwrites the recorded contents, mirroring the real writer.
+    /// the filesystem, so orchestration tests run under Miri.
+    ///
+    /// A later write to the same path overwrites the recorded contents, mirroring
+    /// the real writer.
     #[derive(Debug, Default)]
-    pub(crate) struct MemoryOutputWriter {
+    pub struct MemoryOutputWriter {
         files: Mutex<HashMap<PathBuf, String>>,
     }
 
     impl MemoryOutputWriter {
         /// An empty writer.
-        pub(crate) fn new() -> Self {
+        #[must_use]
+        pub fn new() -> Self {
             Self::default()
         }
 
         /// The contents recorded for `path`, if any.
-        pub(crate) fn written(&self, path: &Path) -> Option<String> {
+        #[must_use]
+        pub fn written(&self, path: &Path) -> Option<String> {
             self.files.lock().unwrap().get(path).cloned()
         }
     }
@@ -282,9 +284,11 @@ mod fake {
 
     /// An [`OutputWriter`] whose every write fails, so the emit error path is
     /// exercised under Miri without touching the filesystem.
+    #[cfg(test)]
     #[derive(Debug, Default)]
     pub(crate) struct FailingOutputWriter;
 
+    #[cfg(test)]
     impl OutputWriter for FailingOutputWriter {
         async fn write(&self, _path: &Path, _contents: &str) -> io::Result<()> {
             Err(io::Error::other("write refused"))

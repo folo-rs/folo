@@ -1,11 +1,12 @@
-//! The result of executing a [`Command`](crate::Command): the [`RunOutcome`] a
-//! successful [`run`](crate::run) returns and the [`RunError`] it fails with.
+//! The result of executing a `Command`: the [`RunOutcome`] a successful `run` returns
+//! and the [`RunError`] it fails with.
 
 use std::error::Error;
 use std::{fmt, io};
 
-use crate::{ConfigError, StorageError};
-/// The outcome of a successful [`run`](crate::run).
+use cbh_config::ConfigError;
+use cbh_storage::StorageError;
+/// The outcome of a successful `run`.
 #[doc(hidden)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RunOutcome {
@@ -61,7 +62,7 @@ impl RunOutcome {
     }
 }
 
-/// An error from [`run`](crate::run).
+/// An error from `run`.
 #[doc(hidden)]
 #[derive(Debug)]
 pub enum RunError {
@@ -189,7 +190,7 @@ impl From<io::Error> for RunError {
 /// leave *other* machines' read-through caches stale. Surfacing it first (rather
 /// than after a `command?` that may short-circuit) guarantees the stale-cache
 /// failure is never silently dropped, even when the command itself also failed.
-pub(crate) fn finish_with_flush(
+pub fn finish_with_flush(
     command: Result<RunOutcome, RunError>,
     flush: Result<(), StorageError>,
 ) -> Result<RunOutcome, RunError> {

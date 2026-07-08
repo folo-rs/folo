@@ -1,0 +1,39 @@
+[package]
+# Cargo has its own logic for naming and expects dashes for the `cargo-bench-history`
+# binary, but its internal implementation crates use the short `cbh_` underscore prefix.
+name = "cbh_run"
+description = "Implementation crate for cargo-bench-history - do not reference directly"
+publish = true
+version = "0.0.3"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+# This is an implementation crate whose surface is documented on `cargo-bench-history`.
+doc = false
+
+[features]
+# Exposes the in-memory output-writer fake so tests in the other cargo-bench-history
+# implementation crates can drive the reporting commands without touching the filesystem.
+# Not part of any public contract.
+private-test-util = []
+
+[dependencies]
+cbh_config = { workspace = true }
+cbh_diag = { workspace = true }
+cbh_render = { workspace = true }
+cbh_storage = { workspace = true }
+tokio = { workspace = true, features = ["fs"] }
+
+[dev-dependencies]
+cbh_diag = { path = "../cbh_diag", features = ["private-test-util"] }
+futures = { workspace = true, features = ["executor"] }
+mutants = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
