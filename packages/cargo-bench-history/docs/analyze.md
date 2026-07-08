@@ -34,7 +34,7 @@ flowchart TD
 ```
 
 The cost is overwhelmingly in the **load** and secondarily in the **detect**; everything
-else is bookkeeping. Each analysis mode (`history`, `branch`, `tip`) is a separate
+else is bookkeeping. Each analysis mode (`history`, `branch`) is a separate
 invocation with its own load — there is no dataset cache across modes — and the mode is
 auto-detected once per run from git topology.
 
@@ -125,8 +125,7 @@ Detection has no cross-series state, so the series split into one balanced chunk
 identical to a sequential pass. A single available CPU (as Miri reports) yields a single
 worker over the whole input. Per series the mode selects the detector: history runs both a
 change-point and a drift detector and keeps the better fit (plus an optional recovered-spike
-pass); branch compares the branch tip's level against its base; tip guards only the newest
-point.
+pass); branch compares the branch tip's level against its base.
 
 The statistical kernels are chosen to keep the tens-of-millions-of-points path affordable —
 an in-place unstable sort for the median (no scratch buffer, and ties are bit-identical so

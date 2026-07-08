@@ -77,14 +77,13 @@ pub struct AnalysisConfig {
     /// practice, regardless of statistical significance.
     pub practical_relative: f64,
     /// How many recent base-side points form the level a branch's latest state is
-    /// compared against (branch mode), and the recent base-branch window the newest
-    /// point is compared against (tip mode).
+    /// compared against (branch mode).
     pub compare_window: usize,
     /// Minimum relative magnitude a noisy *branch* move must reach. Raised above the
     /// history floor: a feature-branch signal must be high-confidence, since we
     /// would rather miss a small move than cry wolf on a pull request.
     pub branch_practical_relative: f64,
-    /// Multiple of the per-measurement noise floor a noisy branch/tip move with too
+    /// Multiple of the per-measurement noise floor a noisy branch move with too
     /// few points to rank-test must exceed before it is trusted.
     pub branch_noise_multiple: f64,
     /// Multiple of a series' own between-commit residual scatter (median absolute
@@ -119,10 +118,9 @@ impl Default for AnalysisConfig {
 /// The mode is auto-detected by the caller from git topology and the admitted data
 /// set (a base branch whose tip is its own merge-base with no dirty run admitted on
 /// that tip is [`History`](AnalysisMode::History); commits — or an admitted dirty run
-/// — on top of the base make it [`Branch`](AnalysisMode::Branch)) and may be
-/// overridden with `--mode`. The working tree affects the choice only indirectly,
-/// through the exception that admits a base-tip dirty run while the tree is dirty.
-/// [`Tip`](AnalysisMode::Tip) is never auto-selected; it is an explicit guard mode.
+/// — on top of the base make it [`Branch`](AnalysisMode::Branch)). The working tree
+/// affects the choice only indirectly, through the exception that admits a base-tip
+/// dirty run while the tree is dirty.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AnalysisMode {
@@ -131,8 +129,6 @@ pub enum AnalysisMode {
     /// Latest-state comparison of a feature branch against its base, ignoring the
     /// intermediate stages the branch passed through.
     Branch,
-    /// Guard check of the newest point against the recent base-branch level.
-    Tip,
 }
 
 impl AnalysisMode {
@@ -142,19 +138,6 @@ impl AnalysisMode {
         match self {
             Self::History => "history",
             Self::Branch => "branch",
-            Self::Tip => "tip",
-        }
-    }
-
-    /// Parses an explicit `--mode` name, if recognized (`auto` is resolved by the
-    /// caller and is not a mode of its own).
-    #[must_use]
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "history" => Some(Self::History),
-            "branch" => Some(Self::Branch),
-            "tip" => Some(Self::Tip),
-            _ => None,
         }
     }
 }
@@ -175,13 +158,11 @@ pub struct AnalysisContext {
     /// treated as branch-side). Consulted only in [`AnalysisMode::Branch`].
     pub merge_base_index: Option<usize>,
     /// Whether improvements are reported. History mode defaults to regressions only
-    /// (scheduled drift watch); branch mode always reports both; tip mode reports
-    /// regressions only.
+    /// (scheduled drift watch); branch mode always reports both.
     pub include_improvements: bool,
     /// Whether *inactive* (recovered) findings are reported. History mode hides a
     /// change whose level has since returned to baseline unless this is set; branch
-    /// and tip modes only ever look at the latest state, so they have no inactive
-    /// findings.
+    /// mode only ever looks at the latest state, so it has no inactive findings.
     pub include_inactive: bool,
 }
 
@@ -193,13 +174,12 @@ impl AnalysisContext {
                 direction == Direction::Regression || self.include_improvements
             }
             AnalysisMode::Branch => true,
-            AnalysisMode::Tip => direction == Direction::Regression,
         }
     }
 
     /// Whether this analysis reports improvements at all. `false` for the
-    /// regressions-only cases (history mode's default drift watch, and tip mode),
-    /// where an always-zero improvement tally is noise the report omits.
+    /// regressions-only case (history mode's default drift watch), where an
+    /// always-zero improvement tally is noise the report omits.
     #[must_use]
     pub fn reports_improvements(&self) -> bool {
         self.keeps(Direction::Improvement)
@@ -274,8 +254,8 @@ pub struct Finding {
     pub flipped_at: Option<String>,
     /// Whether the change is still reflected in the latest measured state. An active
     /// finding's current level still differs from baseline; an inactive one has
-    /// since recovered (history mode only — branch and tip always look at the latest
-    /// state, so their findings are always active).
+    /// since recovered (history mode only — branch always looks at the latest
+    /// state, so its findings are always active).
     pub active: bool,
     /// Index into `series` at which the active (post-blessing) window begins; points
     /// before it are pre-blessing history, retained for charting but excluded from
@@ -866,29 +846,6 @@ fn evaluate_branch(
     )
 }
 
-/// Evaluates a series in *tip* mode: compares the newest point against the recent
-/// base-branch level. A guard for "did the latest commit regress?".
-fn evaluate_tip(series: &Series, config: &AnalysisConfig) -> Option<Candidate> {
-    let points = &series.points;
-    let n = points.len();
-    if n < 2 {
-        return None;
-    }
-    let all: Vec<&SeriesPoint> = points.iter().collect();
-    let (preceding, tip) = all.split_at(n.saturating_sub(1));
-    let before = recent(preceding, config.compare_window);
-    let commit = tip.first().and_then(|&point| owned_commit(point));
-    compare_samples(
-        series,
-        &before,
-        tip,
-        config,
-        config.practical_relative,
-        commit,
-        None,
-    )
-}
-
 /// The post-blessing window of `series` as a standalone series for detection.
 ///
 /// History-mode detection runs on this view so a blessed (re-baselined) series is
@@ -1060,7 +1017,7 @@ pub(super) fn find_changes(series: &[Series], context: &AnalysisContext) -> Vec<
 ///
 /// The [`AnalysisContext`] selects the per-series detector: history mode locates a
 /// change-point and a drift and keeps the better-fitting one; branch mode compares
-/// the branch's latest state against its base; tip mode guards the newest point.
+/// the branch's latest state against its base.
 /// Surviving candidates pass a Benjamini–Hochberg false-discovery filter at
 /// `config.fdr_q`. Findings are then filtered to the directions the mode reports and
 /// ordered by descending relative move, then method, then a stable identity
@@ -1210,7 +1167,7 @@ fn detect_range(
 /// This is pure and depends on no other series, which is what lets
 /// [`find_changes_spawned`] evaluate the series across workers. History mode locates a
 /// change-point and a drift and keeps the better-fitting one (optionally surfacing a
-/// recovered spike); branch and tip modes delegate to their dedicated detectors.
+/// recovered spike); branch mode delegates to its dedicated detector.
 /// `index` is the series' position in the analysed slice, stamped onto the candidate so
 /// the finalize tail can materialise its charting points only if it survives filtering.
 fn detect_one(index: usize, one: &Series, context: &AnalysisContext) -> Option<Candidate> {
@@ -1235,7 +1192,6 @@ fn detect_one(index: usize, one: &Series, context: &AnalysisContext) -> Option<C
             })
         }
         AnalysisMode::Branch => evaluate_branch(one, config, context.merge_base_index),
-        AnalysisMode::Tip => evaluate_tip(one, config),
     };
     candidate.map(|mut candidate| {
         candidate.source_index = index;
@@ -2032,10 +1988,10 @@ mod tests {
         assert_eq!(findings[1].latest, 150.0);
     }
 
-    // -- Branch and tip modes -------------------------------------------------
+    // -- Branch mode ----------------------------------------------------------
 
     /// Builds a Callgrind-style series from explicit `(topo_index, value, dirty)`
-    /// points, so branch/tip splits can be modelled precisely. Points are taken in
+    /// points, so branch splits can be modelled precisely. Points are taken in
     /// the given order (already topological).
     fn placed_series(points: &[(usize, f64, bool)]) -> Series {
         let points = points
@@ -2072,20 +2028,6 @@ mod tests {
                 mode: AnalysisMode::Branch,
                 config: AnalysisConfig::default(),
                 merge_base_index,
-                include_improvements: false,
-                include_inactive: false,
-            },
-        )
-    }
-
-    /// Runs the tip-mode guard with default config.
-    fn tip_changes(series: &[Series]) -> Vec<Finding> {
-        find_changes(
-            series,
-            &AnalysisContext {
-                mode: AnalysisMode::Tip,
-                config: AnalysisConfig::default(),
-                merge_base_index: None,
                 include_improvements: false,
                 include_inactive: false,
             },
@@ -2186,40 +2128,6 @@ mod tests {
         let finding = only(branch_changes(&[series], Some(2)));
         assert_eq!(finding.direction, Direction::Regression);
         assert_eq!(finding.latest, 130.0);
-    }
-
-    #[test]
-    fn tip_mode_flags_a_regression_at_the_newest_point() {
-        let series = placed_series(&[
-            (0, 100.0, false),
-            (1, 100.0, false),
-            (2, 100.0, false),
-            (3, 100.0, false),
-            (4, 130.0, false),
-        ]);
-        let finding = only(tip_changes(&[series]));
-        assert_eq!(finding.direction, Direction::Regression);
-        assert_eq!(finding.latest, 130.0);
-        assert_eq!(finding.commit.as_deref(), Some("commit4"));
-    }
-
-    #[test]
-    fn tip_mode_suppresses_an_improvement_at_the_newest_point() {
-        // Tip mode is a regression guard only; a faster tip is not reported.
-        let series = placed_series(&[
-            (0, 100.0, false),
-            (1, 100.0, false),
-            (2, 100.0, false),
-            (3, 100.0, false),
-            (4, 70.0, false),
-        ]);
-        assert!(tip_changes(&[series]).is_empty());
-    }
-
-    #[test]
-    fn tip_mode_needs_at_least_two_points() {
-        let series = placed_series(&[(0, 100.0, false)]);
-        assert!(tip_changes(&[series]).is_empty());
     }
 
     // -- Blessing (re-baselining) and recovered spikes ------------------------
@@ -2420,15 +2328,6 @@ mod tests {
     }
 
     #[test]
-    fn tip_mode_flags_a_two_point_regression() {
-        // Two points is the minimum for a tip comparison; `n < 2` must be a strict
-        // `<` (a `<=`/`==` mutant would bail on the two-point case).
-        let series = series_of(&[100.0, 130.0]);
-        let candidate = evaluate_tip(&series, &AnalysisConfig::default()).unwrap();
-        assert_eq!(candidate.finding.direction, Direction::Regression);
-    }
-
-    #[test]
     fn latest_regime_splits_a_three_point_branch_at_a_real_flip() {
         // Three points is the minimum to split; `branch.len() < 3` must be a strict
         // `<` (a `<=`/`==` mutant would keep the branch whole). The 100 -> 130 jump
@@ -2512,19 +2411,9 @@ mod tests {
     }
 
     #[test]
-    fn analysis_mode_names_round_trip() {
-        for mode in [
-            AnalysisMode::History,
-            AnalysisMode::Branch,
-            AnalysisMode::Tip,
-        ] {
-            assert_eq!(AnalysisMode::from_name(mode.as_str()), Some(mode));
-        }
+    fn analysis_mode_wire_names() {
         assert_eq!(AnalysisMode::History.as_str(), "history");
         assert_eq!(AnalysisMode::Branch.as_str(), "branch");
-        assert_eq!(AnalysisMode::Tip.as_str(), "tip");
-        assert_eq!(AnalysisMode::from_name("auto"), None);
-        assert_eq!(AnalysisMode::from_name("nonsense"), None);
     }
 
     #[test]
@@ -2552,12 +2441,11 @@ mod tests {
             include_inactive: false,
         };
         // History reports improvements only when opted in; branch always compares
-        // both directions; tip (regressions-only) never reports them. Pinning both a
-        // true and a false case keeps the flag from collapsing to a constant.
+        // both directions. Pinning both a true and a false case keeps the flag from
+        // collapsing to a constant.
         assert!(!context(AnalysisMode::History, false).reports_improvements());
         assert!(context(AnalysisMode::History, true).reports_improvements());
         assert!(context(AnalysisMode::Branch, false).reports_improvements());
-        assert!(!context(AnalysisMode::Tip, false).reports_improvements());
     }
 
     #[test]

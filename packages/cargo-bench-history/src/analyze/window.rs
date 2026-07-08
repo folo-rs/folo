@@ -1,6 +1,6 @@
-//! `--since` / `--until` window and `--mode` resolution: parsing the edges,
-//! deciding the history-mode default look-back, and testing each committer time
-//! against the resolved window.
+//! `--since` / `--until` window resolution: parsing the edges, deciding the
+//! history-mode default look-back, and testing each committer time against the
+//! resolved window.
 
 use cargo_bench_history_core::analyze::AnalysisMode;
 use jiff::civil::Date;
@@ -19,7 +19,6 @@ use crate::RunError;
 /// signals; the working tree enters only indirectly, since a base-tip dirty run
 /// counts as feature-branch data only while the tree is currently dirty — a dirty
 /// checkout with no admitted dirty run still analyzes as history.
-/// [`AnalysisMode::Tip`] is never auto-selected.
 pub(crate) fn auto_mode(tip_is_merge_base: bool, dirty_tip_run_present: bool) -> AnalysisMode {
     if tip_is_merge_base && !dirty_tip_run_present {
         AnalysisMode::History
@@ -41,8 +40,8 @@ pub(crate) fn since_cutoff_reason(explicit_since: bool, mode: AnalysisMode) -> &
 
 /// Resolves the effective `--since` cutoff: an explicit value always wins;
 /// otherwise history mode applies a default look-back so a scheduled trend watch
-/// does not silently widen as history accumulates, while branch and tip modes have
-/// no default (a feature branch's whole history is in scope).
+/// does not silently widen as history accumulates, while branch mode has no default
+/// (a feature branch's whole history is in scope).
 pub(crate) fn resolve_since(
     value: Option<&str>,
     mode: AnalysisMode,
@@ -69,23 +68,6 @@ fn default_history_since(now: Timestamp) -> Result<Timestamp, RunError> {
         .map_err(|error| RunError::Analyze {
             message: format!("default --since window is out of the representable range: {error}"),
         })
-}
-
-/// Parses the `--mode` option into an explicit [`AnalysisMode`] override.
-///
-/// `auto` (the default when omitted) resolves to `None` so the mode is detected
-/// from topology; `history`, `branch`, and `tip` force that mode.
-pub(crate) fn parse_mode(value: Option<&str>) -> Result<Option<AnalysisMode>, RunError> {
-    match value {
-        None | Some("auto") => Ok(None),
-        Some(name) => AnalysisMode::from_name(name)
-            .map(Some)
-            .ok_or_else(|| RunError::Analyze {
-                message: format!(
-                    "unknown analysis mode {name:?}; expected auto, history, branch, or tip"
-                ),
-            }),
-    }
 }
 
 /// Parses the `--since` option into an absolute lower-bound instant, if set.
@@ -252,26 +234,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_mode_resolves_auto_to_none_and_rejects_unknown() {
-        assert_eq!(parse_mode(None).unwrap(), None);
-        assert_eq!(parse_mode(Some("auto")).unwrap(), None);
-        assert_eq!(
-            parse_mode(Some("history")).unwrap(),
-            Some(AnalysisMode::History)
-        );
-        assert_eq!(
-            parse_mode(Some("branch")).unwrap(),
-            Some(AnalysisMode::Branch)
-        );
-        assert_eq!(parse_mode(Some("tip")).unwrap(), Some(AnalysisMode::Tip));
-        let error = parse_mode(Some("weekly")).unwrap_err();
-        assert!(
-            error.to_string().contains("unknown analysis mode"),
-            "{error}"
-        );
-    }
-
-    #[test]
     fn resolve_since_applies_a_default_only_in_history_mode() {
         let now = "2024-06-01T00:00:00Z".parse::<Timestamp>().unwrap();
         // History mode without an explicit value falls back to the six-month window.
@@ -282,12 +244,11 @@ mod tests {
             history,
             "2023-12-01T00:00:00Z".parse::<Timestamp>().unwrap()
         );
-        // Branch and tip modes have no default cutoff.
+        // Branch mode has no default cutoff.
         assert_eq!(
             resolve_since(None, AnalysisMode::Branch, now).unwrap(),
             None
         );
-        assert_eq!(resolve_since(None, AnalysisMode::Tip, now).unwrap(), None);
         // An explicit value always wins, even in branch mode.
         let explicit = resolve_since(Some("2024-01-01"), AnalysisMode::Branch, now)
             .unwrap()

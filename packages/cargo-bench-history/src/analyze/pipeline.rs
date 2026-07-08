@@ -182,7 +182,7 @@ where
         options.json.as_deref(),
         options.markdown_summary.as_deref(),
     )?;
-    let selection = Selection::from_analyze(options)?;
+    let selection = Selection::from_analyze(options);
     let filter = SeriesFilter {
         prefixes: &options.prefixes,
     };
@@ -197,8 +197,8 @@ where
     );
 
     let mut series = dataset.series;
-    // Re-baseline blessed series before detection (history mode only; branch and
-    // tip modes carry an empty blessing map).
+    // Re-baseline blessed series before detection (history mode only; branch
+    // mode carries an empty blessing map).
     let rebaseline_started = Instant::now();
     apply_blessings(&mut series, &dataset.blessings);
     reporter.timing(

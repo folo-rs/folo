@@ -33,7 +33,7 @@ use crate::text::count_noun;
 pub(crate) struct SelectedDataSet {
     /// The reconstructed series for the in-window runs, built with the caller's
     /// series filter and ordered by git topology. Pre-blessing: the caller applies
-    /// blessings (history mode) or leaves them unapplied (branch/tip, listings).
+    /// blessings (history mode) or leaves them unapplied (branch, listings).
     pub(crate) series: Vec<Series>,
     /// Compact per-set, per-commit run tallies, standing in for a retained copy of
     /// every loaded object (which a large history cannot afford to keep resident).
@@ -57,7 +57,7 @@ pub(crate) struct SelectedDataSet {
     /// Whether the working tree carried uncommitted changes when the analysis ran;
     /// the report annotates the tip `+ uncommitted changes` when set.
     pub(crate) tip_dirty: bool,
-    /// The resolved analysis mode (auto-detected from topology, or overridden).
+    /// The resolved analysis mode, auto-detected from the git topology.
     pub(crate) mode: AnalysisMode,
     /// First-parent topological index of the merge-base, used by branch mode to
     /// split base-side history from the branch's own commits.
@@ -66,7 +66,7 @@ pub(crate) struct SelectedDataSet {
     /// entry pairs the blessed commit's first-parent topological index and its
     /// committer date (from topology, for the report anchor) with the record;
     /// history-mode re-baselining picks, per series, the latest matching blessing.
-    /// Empty in branch and tip modes (they ignore blessings).
+    /// Empty in branch mode (it ignores blessings).
     pub(crate) blessings: HashMap<DiscriminantSet, Vec<BlessingPlacement>>,
 }
 
@@ -163,36 +163,23 @@ where
                 .unwrap_or(false)
     });
 
-    // The mode steers the analysis and the default `--since`. An explicit `--mode`
-    // overrides the auto-detection.
-    let mode =
-        match selection.mode_override {
-            Some(mode) => {
-                reporter.note_with(|| {
-                    format!(
-                        "analysis mode: {} (set explicitly via --mode, overriding auto-detection)",
-                        mode.as_str()
-                    )
-                });
-                mode
-            }
-            None => {
-                let mode = auto_mode(tip_is_merge_base, dirty_tip_run_present);
-                reporter.note_with(|| format!(
-                "analysis mode: {} (auto-detected because the target tip {} its own merge-base \
-                 with the base branch and {} admitted on top of it; a base-tip dirty run is \
-                 admitted only while the working tree is currently dirty)",
-                mode.as_str(),
-                if tip_is_merge_base { "is" } else { "is not" },
-                if dirty_tip_run_present {
-                    "a dirty run is"
-                } else {
-                    "no dirty run is"
-                },
-            ));
-                mode
-            }
-        };
+    // The mode steers the analysis and the default `--since`; it is auto-detected
+    // from the git topology and the recorded data.
+    let mode = auto_mode(tip_is_merge_base, dirty_tip_run_present);
+    reporter.note_with(|| {
+        format!(
+            "analysis mode: {} (auto-detected because the target tip {} its own merge-base \
+             with the base branch and {} admitted on top of it; a base-tip dirty run is \
+             admitted only while the working tree is currently dirty)",
+            mode.as_str(),
+            if tip_is_merge_base { "is" } else { "is not" },
+            if dirty_tip_run_present {
+                "a dirty run is"
+            } else {
+                "no dirty run is"
+            },
+        )
+    });
     let since = resolve_since(selection.since, mode, now)?;
     reporter.note_with(|| {
         format!(
@@ -360,7 +347,7 @@ where
 
     // Load the blessing sidecars on in-window commits into a per-set map. A
     // blessing on a commit outside the analyzed history (or that fails to parse) is
-    // irrelevant and skipped. Branch and tip modes ignore blessings entirely, so
+    // irrelevant and skipped. Branch mode ignores blessings entirely, so
     // only history mode pays the load.
     let mut blessings: HashMap<DiscriminantSet, Vec<BlessingPlacement>> = HashMap::new();
     if mode == AnalysisMode::History {

@@ -477,7 +477,7 @@ impl SeriesBuilder {
 /// series' `active_start` is set to the first point at or after that commit, so the
 /// detector only sees the post-blessing window while the full series is retained
 /// for charting. A series with no matching blessing is left untouched
-/// (`active_start = 0`). Branch and tip modes pass an empty map and so are
+/// (`active_start = 0`). Branch mode passes an empty map and so is
 /// unaffected.
 ///
 /// Each blessing carries the committer date of its commit (resolved from git

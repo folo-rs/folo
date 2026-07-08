@@ -248,7 +248,6 @@ fn build_options(
             Some(FULL_HISTORY_SINCE.to_owned()),
         ),
         ModeArg::Branch => (BRANCH_FEATURE, BRANCH_MAIN, None),
-        ModeArg::Tip => (BRANCH_MAIN, BRANCH_MAIN, None),
     };
     AnalyzeOptions {
         config_path: Some(config_path(workspace)),
@@ -272,7 +271,6 @@ fn build_options(
         markdown: None,
         json: Some(PathBuf::from(ANALYZE_REPORT_FILE)),
         markdown_summary: None,
-        mode: Some(mode.keyword().to_owned()),
         include_improvements: true,
         include_inactive: false,
         verbose: false,

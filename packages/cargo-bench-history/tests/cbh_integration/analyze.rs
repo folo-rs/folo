@@ -1379,69 +1379,6 @@ async fn analyze_history_mode_suppresses_improvements_by_default() {
     );
 }
 
-/// `--mode tip` overrides auto-detection (which would pick history on a clean base
-/// checkout) and runs the fast tip guard: it flags a regression at the latest
-/// commit but stays silent on an improvement, since the guard cares only about
-/// the level getting worse.
-#[tokio::test]
-#[cfg_attr(miri, ignore)]
-async fn analyze_tip_mode_flags_only_a_tip_regression() {
-    let regressing = Workspace::repo(&storage_only_config());
-    regressing.commit_dated("2024-01-01", "c1");
-    regressing.seed_callgrind("c1", 100.0);
-    regressing.commit_dated("2024-01-02", "c2");
-    regressing.seed_callgrind("c2", 100.0);
-    regressing.commit_dated("2024-01-03", "c3");
-    regressing.seed_callgrind("c3", 100.0);
-    regressing.commit_dated("2024-01-04", "c4");
-    regressing.seed_callgrind("c4", 100.0);
-    regressing.commit_dated("2024-01-05", "c5");
-    regressing.seed_callgrind("c5", 130.0);
-
-    let report = regressing.drive_json(&["analyze", "--mode", "tip"]).await;
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-    assert_eq!(
-        parsed["regressions"], 1,
-        "the tip step up must flag: {report}"
-    );
-    assert_eq!(parsed["mode"], "tip", "the override must win: {report}");
-
-    let improving = Workspace::repo(&storage_only_config());
-    improving.commit_dated("2024-01-01", "c1");
-    improving.seed_callgrind("c1", 100.0);
-    improving.commit_dated("2024-01-02", "c2");
-    improving.seed_callgrind("c2", 100.0);
-    improving.commit_dated("2024-01-03", "c3");
-    improving.seed_callgrind("c3", 100.0);
-    improving.commit_dated("2024-01-04", "c4");
-    improving.seed_callgrind("c4", 100.0);
-    improving.commit_dated("2024-01-05", "c5");
-    improving.seed_callgrind("c5", 70.0);
-
-    let report = improving.drive_json(&["analyze", "--mode", "tip"]).await;
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-    assert_eq!(
-        parsed["regressions"], 0,
-        "tip mode reports regressions only, so a drop stays silent: {report}"
-    );
-    assert_eq!(parsed["improvements"], 0, "{report}");
-}
-
-/// An unrecognized `--mode` is a clear up-front error, not a silent fallback.
-#[tokio::test]
-#[cfg_attr(miri, ignore)]
-async fn analyze_rejects_an_unknown_mode() {
-    let workspace = Workspace::repo(&storage_only_config());
-    let error = workspace
-        .drive(&["analyze", "--mode", "weekly"])
-        .await
-        .unwrap_err();
-    assert!(
-        error.to_string().contains("unknown analysis mode"),
-        "the error should name the problem: {error}"
-    );
-}
-
 /// A `--target-triple` filter restricts analysis to the matching set: the same
 /// commits host a regressing Linux series and a flat Windows series, and each
 /// triple selection sees only its own.

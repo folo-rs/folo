@@ -176,9 +176,6 @@ pub struct AnalyzeOptions {
     /// against the working directory. Analyze-only, so a large analysis still fits
     /// within a GitHub issue body.
     pub markdown_summary: Option<PathBuf>,
-    /// Analysis-mode selector (`auto`, `history`, `branch`, or `tip`), if set.
-    /// `auto` (the default) infers history vs branch mode from the git topology.
-    pub mode: Option<String>,
     /// In history mode, also report sustained improvements (regressions only by
     /// default, since improvement over time on the base branch is expected).
     pub include_improvements: bool,

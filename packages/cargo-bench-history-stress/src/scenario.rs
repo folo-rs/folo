@@ -25,10 +25,8 @@
 //!   flagged elsewhere),
 //! * family 4 — stable.
 //!
-//! Two cross-cutting steps drive the other modes: a single-point step on the
-//! latest `main` commit for `b % TIP_DIVISOR == 0` (a `tip`-mode regression that
-//! is too short-lived to confirm in `history` mode), and an elevation on the
-//! feature branch for `b % BRANCH_DIVISOR == 0` (a `branch`-mode regression).
+//! One cross-cutting step drives the other mode: an elevation on the feature
+//! branch for `b % BRANCH_DIVISOR == 0` (a `branch`-mode regression).
 
 // The synthetic values are illustrative magnitudes, not real measurements:
 // bounded small-integer index arithmetic and lossy integer/f64 conversions here
@@ -72,11 +70,6 @@ const BLESSABLE_FAMILY: usize = 3;
 /// rest keep the un-blessed step, so the two cases contrast in one run.
 const BLESSED_SET_LIMIT: usize = 3;
 
-/// Every benchmark whose index is a multiple of this gets a single-point step on
-/// the latest `main` commit — a `tip`-mode regression too short to confirm in
-/// `history` mode.
-const TIP_DIVISOR: usize = 7;
-
 /// Every benchmark whose index is a multiple of this is elevated on the feature
 /// branch — a `branch`-mode regression.
 const BRANCH_DIVISOR: usize = 3;
@@ -108,9 +101,6 @@ const STEP_IMPROVEMENT: f64 = 0.10;
 
 /// Relative size of the family-3 blessable step.
 const BLESSABLE_STEP: f64 = 0.12;
-
-/// Relative size of the single-point tip regression.
-const TIP_REGRESSION: f64 = 0.25;
 
 /// Relative size of the feature-branch regression.
 const BRANCH_REGRESSION: f64 = 0.20;
@@ -248,7 +238,7 @@ impl Scenario {
     /// Roughly half the commits do — every even index — so the analysis walks a
     /// git topology in which many commits have no stored result, exercising the
     /// "commit with no run" path that a real, sparsely-benchmarked history hits.
-    /// The tip and the blessed commit are always populated so `tip`/`branch`
+    /// The tip and the blessed commit are always populated so `history`/`branch`
     /// detection and blessing stay well-defined regardless of where the parity
     /// falls.
     pub(crate) fn commit_has_run(&self, index: usize) -> bool {
@@ -273,9 +263,8 @@ impl Scenario {
     }
 
     /// The clean instruction count for benchmark `b` in set `s` at `main` commit
-    /// index `i`. `apply_tip` includes the single-point tip step (present only on
-    /// the latest commit of the base branch, absent from a branch baseline).
-    pub(crate) fn main_clean_value(&self, b: usize, s: usize, i: usize, apply_tip: bool) -> f64 {
+    /// index `i`.
+    pub(crate) fn main_clean_value(&self, b: usize, s: usize, i: usize) -> f64 {
         let base = self.base_value(b, s);
         let count = self.commits;
         let position = if count > 1 {
@@ -295,18 +284,15 @@ impl Scenario {
             3 if i >= self.bless_index() => value += base * BLESSABLE_STEP,
             _ => {}
         }
-        if apply_tip && i + 1 == count && b.is_multiple_of(TIP_DIVISOR) {
-            value += base * TIP_REGRESSION;
-        }
         value
     }
 
     /// The clean instruction count for benchmark `b` in set `s` on the feature
-    /// branch. The baseline is the family's settled end-of-history level (without
-    /// the base branch's tip-only step); `b % BRANCH_DIVISOR == 0` benchmarks are
-    /// elevated to introduce a branch regression.
+    /// branch. The baseline is the family's settled end-of-history level;
+    /// `b % BRANCH_DIVISOR == 0` benchmarks are elevated to introduce a branch
+    /// regression.
     pub(crate) fn feature_clean_value(&self, b: usize, s: usize) -> f64 {
-        let baseline = self.main_clean_value(b, s, self.commits.saturating_sub(1), false);
+        let baseline = self.main_clean_value(b, s, self.commits.saturating_sub(1));
         if b.is_multiple_of(BRANCH_DIVISOR) {
             baseline + self.base_value(b, s) * BRANCH_REGRESSION
         } else {
@@ -491,10 +477,10 @@ mod tests {
     #[test]
     fn family_zero_drifts_monotonically_upward() {
         let s = scenario();
-        // b = 5 is family 0 (5 % 5) and not a tip benchmark (5 % 7 != 0), so the
-        // value rises purely from drift across the whole history.
+        // b = 5 is family 0 (5 % 5), so the value rises purely from drift across
+        // the whole history.
         let series: Vec<f64> = (0..s.commits)
-            .map(|i| s.main_clean_value(5, 0, i, true))
+            .map(|i| s.main_clean_value(5, 0, i))
             .collect();
         for pair in series.windows(2) {
             assert!(pair[1] > pair[0], "expected rising drift, got {series:?}");
@@ -509,9 +495,9 @@ mod tests {
         let s = scenario();
         let base = s.base_value(1, 0);
         // commits = 4 -> step when 2*i >= 4, i.e. i >= 2.
-        assert!(close(s.main_clean_value(1, 0, 1, false), base));
+        assert!(close(s.main_clean_value(1, 0, 1), base));
         assert!(close(
-            s.main_clean_value(1, 0, 2, false),
+            s.main_clean_value(1, 0, 2),
             base * (1.0 + STEP_REGRESSION)
         ));
     }
@@ -521,9 +507,9 @@ mod tests {
         let s = scenario();
         let base = s.base_value(2, 0);
         // commits = 4 -> step when 10*i >= 28, i.e. i >= 3.
-        assert!(close(s.main_clean_value(2, 0, 2, false), base));
+        assert!(close(s.main_clean_value(2, 0, 2), base));
         assert!(close(
-            s.main_clean_value(2, 0, 3, false),
+            s.main_clean_value(2, 0, 3),
             base * (1.0 - STEP_IMPROVEMENT)
         ));
     }
@@ -534,9 +520,9 @@ mod tests {
         let base = s.base_value(3, 0);
         let bless = s.bless_index();
         assert_eq!(bless, 2);
-        assert!(close(s.main_clean_value(3, 0, bless - 1, false), base));
+        assert!(close(s.main_clean_value(3, 0, bless - 1), base));
         assert!(close(
-            s.main_clean_value(3, 0, bless, false),
+            s.main_clean_value(3, 0, bless),
             base * (1.0 + BLESSABLE_STEP)
         ));
     }
@@ -546,30 +532,8 @@ mod tests {
         let s = scenario();
         let base = s.base_value(4, 0);
         for i in 0..s.commits {
-            assert!(close(s.main_clean_value(4, 0, i, true), base));
+            assert!(close(s.main_clean_value(4, 0, i), base));
         }
-    }
-
-    #[test]
-    fn tip_step_only_lands_on_the_last_commit_of_tip_benchmarks() {
-        let s = scenario();
-        // b = 0: family 0 AND a tip benchmark (0 % 7 == 0). The tip step is the
-        // gap between the apply_tip and no-tip value on the final commit only.
-        let last = s.commits - 1;
-        let base = s.base_value(0, 0);
-        let with_tip = s.main_clean_value(0, 0, last, true);
-        let without_tip = s.main_clean_value(0, 0, last, false);
-        assert!(close(with_tip - without_tip, base * TIP_REGRESSION));
-        // No tip step before the final commit.
-        assert!(close(
-            s.main_clean_value(0, 0, last - 1, true),
-            s.main_clean_value(0, 0, last - 1, false)
-        ));
-        // A non-tip benchmark (b = 1, 1 % 7 != 0) sees no tip step at all.
-        assert!(close(
-            s.main_clean_value(1, 0, last, true),
-            s.main_clean_value(1, 0, last, false)
-        ));
     }
 
     #[test]
@@ -577,12 +541,12 @@ mod tests {
         let s = scenario();
         // b = 3 is a multiple of BRANCH_DIVISOR (3); b = 1 is not.
         let base3 = s.base_value(3, 0);
-        let settled3 = s.main_clean_value(3, 0, s.commits - 1, false);
+        let settled3 = s.main_clean_value(3, 0, s.commits - 1);
         assert!(close(
             s.feature_clean_value(3, 0),
             settled3 + base3 * BRANCH_REGRESSION
         ));
-        let settled1 = s.main_clean_value(1, 0, s.commits - 1, false);
+        let settled1 = s.main_clean_value(1, 0, s.commits - 1);
         assert!(close(s.feature_clean_value(1, 0), settled1));
     }
 
@@ -668,7 +632,7 @@ mod tests {
             seed: 7,
         };
         let base = s.base_value(0, 0);
-        assert!(close(s.main_clean_value(0, 0, 0, false), base));
+        assert!(close(s.main_clean_value(0, 0, 0), base));
         let anchor = Timestamp::from_second(1_750_000_000).unwrap();
         let (main, feature) = commit_times(anchor, 1, 1);
         assert_eq!(main.len(), 1);
@@ -785,9 +749,9 @@ mod tests {
             seed: 99,
         };
         let base = s.base_value(1, 0);
-        assert!(close(s.main_clean_value(1, 0, 2, false), base));
+        assert!(close(s.main_clean_value(1, 0, 2), base));
         assert!(close(
-            s.main_clean_value(1, 0, 3, false),
+            s.main_clean_value(1, 0, 3),
             base * (1.0 + STEP_REGRESSION)
         ));
     }
