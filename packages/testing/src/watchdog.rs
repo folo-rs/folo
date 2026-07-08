@@ -4,9 +4,12 @@ use std::time::Duration;
 
 /// Runs a test with a timeout to prevent infinite hangs.
 ///
-/// This function wraps a test closure with a timeout mechanism. If the test
-/// takes longer than the timeout to complete, the process will be terminated
-/// to prevent CI/build systems from hanging.
+/// This function wraps a test closure with a timeout mechanism. The closure runs
+/// on a separate worker thread; if it does not complete within the timeout, this
+/// function panics on the calling thread so the test harness records a failure
+/// instead of letting a hung test block CI/build systems indefinitely. The
+/// timed-out worker thread is left detached — the process does not wait for it and
+/// reclaims it on exit.
 ///
 /// The timeout is 10 seconds under normal conditions and 60 seconds under
 /// Miri, where thread synchronization primitives are significantly slower.
@@ -17,7 +20,9 @@ use std::time::Duration;
 ///
 /// # Panics
 ///
-/// Panics if the test exceeds the timeout (when not in mutation testing mode).
+/// Panics on the calling thread if the wrapped closure does not complete within
+/// the timeout. When mutation testing is enabled (`MUTATION_TESTING=1`) the
+/// watchdog is disabled and the closure runs directly, so no timeout panic occurs.
 ///
 /// # Example
 ///
@@ -66,7 +71,7 @@ where
         }
         Err(mpsc::RecvTimeoutError::Timeout) => {
             // Test timed out - this indicates the test is hanging
-            panic!("Test exceeded 10-second timeout");
+            panic!("Test exceeded {}-second timeout", timeout.as_secs());
         }
         Err(mpsc::RecvTimeoutError::Disconnected) => {
             // Thread panicked, join it to get the panic
