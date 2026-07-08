@@ -2,7 +2,7 @@
 
 An **on-demand** stress harness for [`cargo-bench-history`](../cargo-bench-history)'s
 `analyze` command. It fabricates a giant synthetic benchmark history, seeds it into a
-storage backend, then times each analysis mode (`history`, `branch`, `tip`) over it.
+storage backend, then times each analysis mode (`history`, `branch`) over it.
 
 The dataset is *invented*, not measured. The point is to put the real `analyze`
 data-loading and detection path under a realistic, large-scale load so the per-mode
@@ -54,7 +54,7 @@ store the same shape plus a tight confidence band — kept well below the inject
 magnitudes — so the seeded findings still surface while the noise-aware detection path is
 exercised too. Each benchmark belongs to a *family* (`index % 5`) that fixes its
 timeline shape (gradual drift, mid-step up, step down, blessable step, stable), and a
-couple of cross-cutting rules inject `tip`-only and `branch`-only changes. The result
+cross-cutting rule injects a `branch`-only change. The result
 is that each mode reports a sensible, explainable *mix* of regressions and
 improvements rather than flagging everything or nothing. See the module docs in
 `src/scenario.rs` for the exact family/divisor math.
@@ -111,7 +111,7 @@ distorts the timings badly.
 | `--dir <PATH>` | temp dir | Local-storage root (local only). |
 | `--account <NAME>` | `$BENCH_HISTORY_TEST_AZURE_ACCOUNT` | Azure storage account (Azure only). |
 | `--container <NAME>` | `bh-stress-<unix>` | Azure container (Azure only). |
-| `--modes <list>` | `history,branch,tip` | Modes to measure (comma-separated). |
+| `--modes <list>` | `history,branch` | Modes to measure (comma-separated). |
 | `--repeat <N>` | `1` | Runs per mode (fastest is reported). |
 | `--keep` | off | Keep the seeded data instead of cleaning up. |
 | `--verbose` | off | Explanatory diagnostics on stderr. |
@@ -135,5 +135,4 @@ mode        duration   objects   series  regressions  improvements  notable
 ----        --------   -------   ------  -----------  ------------  -------
 history     240.400s     20040    20000        11400          4000      yes
 branch       81.164s     20220    20000         8119             0      yes
-tip         126.255s     20040    20000         4228             0      yes
 ```

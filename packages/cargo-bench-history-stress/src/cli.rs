@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use clap::{Parser, ValueEnum};
 
 /// Seeds a giant synthetic benchmark history into a `cargo-bench-history` storage
-/// backend, then times each analysis mode (`history`, `branch`, `tip`) over it.
+/// backend, then times each analysis mode (`history`, `branch`) over it.
 ///
 /// The dataset is fabricated, not measured: it exists purely to put the `analyze`
 /// data-loading and detection path under a realistic, large-scale load so the
@@ -64,7 +64,7 @@ pub(crate) struct Cli {
         long,
         value_enum,
         value_delimiter = ',',
-        default_value = "history,branch,tip"
+        default_value = "history,branch"
     )]
     pub(crate) modes: Vec<ModeArg>,
 
@@ -103,8 +103,6 @@ pub(crate) enum ModeArg {
     History,
     /// Feature-branch comparison of the branch tip against the base branch.
     Branch,
-    /// Fast single-commit guard comparing the latest commit to the recent level.
-    Tip,
 }
 
 impl ModeArg {
@@ -113,7 +111,6 @@ impl ModeArg {
         match self {
             Self::History => "history",
             Self::Branch => "branch",
-            Self::Tip => "tip",
         }
     }
 }

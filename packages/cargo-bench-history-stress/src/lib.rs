@@ -8,7 +8,7 @@
 //! (Callgrind on Linux only; Criterion, `alloc_tracker`, and `all_the_time` on
 //! all of {windows, linux, macos} × {x64, arm}), plus a short feature branch with
 //! dirty snapshots and a few blessings — seeds it into a configured storage
-//! backend, then times each analysis mode (`history`, `branch`, `tip`) over it.
+//! backend, then times each analysis mode (`history`, `branch`) over it.
 //! The dataset is invented, not measured: its only purpose is to put the real
 //! `analyze` data-loading and detection path under a realistic, large-scale load
 //! so the per-mode wall-clock cost can be observed against either

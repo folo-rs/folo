@@ -231,7 +231,7 @@ fn write_one(
             time,
         } => {
             let run = clean_run(scenario, set, *time, commit_id, BRANCH_MAIN, false, |b| {
-                scenario.main_clean_value(b, *s, *index, true)
+                scenario.main_clean_value(b, *s, *index)
             });
             (set.clean_key(PROJECT, commit_id), run.to_json()?)
         }

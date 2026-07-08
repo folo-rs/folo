@@ -248,7 +248,6 @@ fn build_options(
             Some(FULL_HISTORY_SINCE.to_owned()),
         ),
         ModeArg::Branch => (BRANCH_FEATURE, BRANCH_MAIN, None),
-        ModeArg::Tip => (BRANCH_MAIN, BRANCH_MAIN, None),
     };
     AnalyzeOptions {
         config_path: Some(config_path(workspace)),

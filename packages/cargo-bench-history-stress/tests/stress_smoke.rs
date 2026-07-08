@@ -45,7 +45,7 @@ fn deterministic_columns(stdout: &str) -> BTreeMap<String, Vec<String>> {
         .lines()
         .filter_map(|line| {
             let columns: Vec<&str> = line.split_whitespace().collect();
-            if columns.len() == 9 && ["history", "branch", "tip"].contains(&columns[0]) {
+            if columns.len() == 9 && ["history", "branch"].contains(&columns[0]) {
                 // Skip columns 1-3 (duration, cpu, cpu%); keep the rest.
                 let kept = columns[4..].iter().map(|c| (*c).to_owned()).collect();
                 Some((columns[0].to_owned(), kept))
@@ -58,7 +58,7 @@ fn deterministic_columns(stdout: &str) -> BTreeMap<String, Vec<String>> {
 
 #[test]
 #[cfg_attr(miri, ignore)]
-fn runs_all_three_modes_and_reports_a_table() {
+fn runs_all_modes_and_reports_a_table() {
     let output = run_stress(&[]);
     assert!(
         output.status.success(),
@@ -74,7 +74,6 @@ fn runs_all_three_modes_and_reports_a_table() {
     let rows = deterministic_columns(&stdout);
     assert!(rows.contains_key("history"), "{stdout}");
     assert!(rows.contains_key("branch"), "{stdout}");
-    assert!(rows.contains_key("tip"), "{stdout}");
 
     // Every mode loaded a non-zero number of objects and series, proving the
     // replicated key layout is what analyze actually reads.
