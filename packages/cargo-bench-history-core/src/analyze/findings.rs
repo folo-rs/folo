@@ -50,10 +50,11 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use anyspawn::Spawner;
+use cbh_stats as stats;
 use serde::Serialize;
 
 use crate::analyze::parallel::{balanced_chunk_sizes, worker_count};
-use crate::analyze::{Series, SeriesPoint, stats};
+use crate::analyze::{Series, SeriesPoint};
 use crate::model::{BenchmarkId, DiscriminantSet, MetricKind};
 
 /// Tunable parameters of the engine-aware analysis.

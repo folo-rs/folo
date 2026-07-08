@@ -32,8 +32,9 @@
 //! [`cargo-bench-history`]: https://github.com/folo-rs/folo
 
 pub mod analyze;
-pub mod codec;
 pub mod model;
+
+pub use cbh_codec as codec;
 
 #[cfg(feature = "private-test-util")]
 #[cfg_attr(docsrs, doc(cfg(feature = "private-test-util")))]

@@ -21,8 +21,9 @@ private-test-util = ["dep:thread_aware"]
 
 [dependencies]
 anyspawn = { workspace = true }
+cbh_codec = { workspace = true }
+cbh_stats = { workspace = true }
 colored = { workspace = true }
-flate2 = { workspace = true, features = ["rust_backend"] }
 foldhash = { workspace = true }
 hashbrown = { workspace = true, features = ["default-hasher", "inline-more"] }
 jiff = { workspace = true, features = ["serde"] }

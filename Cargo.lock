@@ -458,9 +458,10 @@ version = "0.0.3"
 dependencies = [
  "alloc_tracker",
  "anyspawn",
+ "cbh_codec",
+ "cbh_stats",
  "colored",
  "criterion",
- "flate2",
  "foldhash",
  "futures",
  "gungraun",
@@ -525,6 +526,20 @@ name = "cast"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
+
+[[package]]
+name = "cbh_codec"
+version = "0.0.3"
+dependencies = [
+ "flate2",
+]
+
+[[package]]
+name = "cbh_stats"
+version = "0.0.3"
+dependencies = [
+ "mutants",
+]
 
 [[package]]
 name = "cc"

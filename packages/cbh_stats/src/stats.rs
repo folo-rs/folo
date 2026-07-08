@@ -2,9 +2,9 @@
 //!
 //! Everything here is deterministic, allocation-light, and free of I/O or the
 //! wall clock, so it runs under Miri and is unit-tested with named,
-//! value-asserting cases on hand-computable inputs. The detectors in
-//! [`findings`](super::findings) compose these primitives; keeping the math
-//! isolated keeps both halves easy to reason about.
+//! value-asserting cases on hand-computable inputs. The detectors in the
+//! `cbh_analysis` crate compose these primitives; keeping the math isolated
+//! keeps both halves easy to reason about.
 
 use std::cmp::Ordering;
 use std::f64::consts;
@@ -51,7 +51,8 @@ fn pair_count(count: usize) -> usize {
 /// This copies `values` into a scratch buffer first; a caller that already owns a
 /// buffer it no longer needs in input order should call [`median_in_place`] to
 /// avoid the copy.
-pub(crate) fn median(values: &[f64]) -> Option<f64> {
+#[must_use]
+pub fn median(values: &[f64]) -> Option<f64> {
     if values.is_empty() {
         return None;
     }
@@ -71,7 +72,7 @@ pub(crate) fn median(values: &[f64]) -> Option<f64> {
 /// only depends on the sorted *values*, and two elements that compare
 /// [`Ordering::Equal`] under [`f64::total_cmp`] are bit-identical, so reordering
 /// ties cannot change the result.
-pub(crate) fn median_in_place(values: &mut [f64]) -> Option<f64> {
+pub fn median_in_place(values: &mut [f64]) -> Option<f64> {
     if values.is_empty() {
         return None;
     }
@@ -157,13 +158,13 @@ fn tie_group_sizes(values: &[f64]) -> Vec<usize> {
 
 /// A located level shift in a series.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct ChangePoint {
+pub struct ChangePoint {
     /// Index where the *after* regime begins (`points[index..]`), in `1..n`.
-    pub(crate) index: usize,
+    pub index: usize,
     /// The Pettitt `K` statistic (larger means a more pronounced split).
-    pub(crate) k_statistic: f64,
+    pub k_statistic: f64,
     /// The approximate two-sided significance of the split.
-    pub(crate) p_value: f64,
+    pub p_value: f64,
 }
 
 /// Locates the single most likely level shift with the **Pettitt** nonparametric
@@ -175,7 +176,8 @@ pub(crate) struct ChangePoint {
 /// `p ≈ 2·exp(−6K²/(n³+n²))` (clamped to `[0, 1]`). The first maximizing `t`
 /// wins, so a perfectly flat series reports a degenerate split at index 1 that the
 /// caller rejects on a zero median difference.
-pub(crate) fn pettitt(values: &[f64]) -> Option<ChangePoint> {
+#[must_use]
+pub fn pettitt(values: &[f64]) -> Option<ChangePoint> {
     let n = values.len();
     if n < 2 {
         return None;
@@ -221,7 +223,8 @@ pub(crate) fn pettitt(values: &[f64]) -> Option<ChangePoint> {
 ///
 /// Returns `1.0` (no evidence of a difference) when either sample is empty or the
 /// corrected variance is zero.
-pub(crate) fn mann_whitney_u_pvalue(left: &[f64], right: &[f64]) -> f64 {
+#[must_use]
+pub fn mann_whitney_u_pvalue(left: &[f64], right: &[f64]) -> f64 {
     let n1 = left.len();
     let n2 = right.len();
     if n1 == 0 {
@@ -264,18 +267,19 @@ pub(crate) fn mann_whitney_u_pvalue(left: &[f64], right: &[f64]) -> f64 {
 
 /// The outcome of a Mann–Kendall trend test.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct MannKendall {
+pub struct MannKendall {
     /// The `S` statistic (positive for an upward trend, negative for downward).
-    pub(crate) s: f64,
+    pub s: f64,
     /// The two-sided significance of the trend.
-    pub(crate) p_value: f64,
+    pub p_value: f64,
 }
 
 /// The **Mann–Kendall** test for a monotonic trend in `values` (time order is the
 /// slice order), tie-corrected with a continuity correction on `Z`.
 ///
 /// Returns `S = 0` and `p = 1.0` for fewer than three points or zero variance.
-pub(crate) fn mann_kendall(values: &[f64]) -> MannKendall {
+#[must_use]
+pub fn mann_kendall(values: &[f64]) -> MannKendall {
     let n = values.len();
     if n < 3 {
         return MannKendall {
@@ -326,7 +330,8 @@ pub(crate) fn mann_kendall(values: &[f64]) -> MannKendall {
 /// The slope is the median of all pairwise slopes; the intercept is the median of
 /// `value_i − slope·i`, so the fitted endpoints are `intercept` and
 /// `intercept + slope·(n−1)`.
-pub(crate) fn theil_sen_line(values: &[f64]) -> Option<(f64, f64)> {
+#[must_use]
+pub fn theil_sen_line(values: &[f64]) -> Option<(f64, f64)> {
     let n = values.len();
     if n < 2 {
         return None;
@@ -358,7 +363,8 @@ pub(crate) fn theil_sen_line(values: &[f64]) -> Option<(f64, f64)> {
 /// and rejects every hypothesis of rank `≤ k` (the step-up property: an
 /// intermediate rank that fails its own threshold is still rejected when a later
 /// rank passes).
-pub(crate) fn benjamini_hochberg(p_values: &[f64], q: f64) -> Vec<bool> {
+#[must_use]
+pub fn benjamini_hochberg(p_values: &[f64], q: f64) -> Vec<bool> {
     let m = p_values.len();
     if m == 0 {
         return Vec::new();

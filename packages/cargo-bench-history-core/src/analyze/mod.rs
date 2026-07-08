@@ -17,7 +17,6 @@ pub(crate) mod selection;
 pub(crate) mod series;
 #[cfg(test)]
 mod signal_validation;
-pub(crate) mod stats;
 
 pub use discriminant::{DiscriminantSetQuery, FacetFilter, StorageKey, parse_key};
 pub use findings::{
