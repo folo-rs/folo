@@ -21,9 +21,9 @@
         # and results to the console, so Write-Host is a deliberate choice, not an oversight.
         'PSAvoidUsingWriteHost'
 
-        # This repo standardizes on UTF-8 *without* a BOM. Scripts are kept ASCII-only (hyphens,
-        # not em-dashes), so this rule would not normally fire; the suppression is a safety net so
-        # a stray non-ASCII character can never force a churny, cross-platform-undesirable BOM.
+        # This repo standardizes on UTF-8 *without* a BOM. Scripts are kept ASCII-only, so this rule
+        # would not normally fire; the suppression is a safety net so a stray non-ASCII character can
+        # never force a churny, cross-platform-undesirable BOM.
         'PSUseBOMForUnicodeEncodedFile'
     )
 }
