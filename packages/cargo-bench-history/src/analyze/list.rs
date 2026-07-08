@@ -19,7 +19,10 @@ use anyspawn::Spawner;
 use cbh_config::{Config, load_config};
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
-use cbh_run::{OutputSelection, OutputWriter, TokioOutputWriter, emit};
+use cbh_run::{
+    OutputSelection, OutputWriter, TokioOutputWriter, cache_env, emit, resolve_cache_path,
+    resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
+};
 use cbh_storage::{Storage, StorageFacade, resolve_storage};
 use jiff::Timestamp;
 use serde::Serialize;
@@ -31,10 +34,6 @@ use super::{
     facet_filtered_candidates, resolve_facets, resolve_now, select_dataset,
 };
 use crate::model::{BlessingRecord, DiscriminantSet};
-use crate::wiring::{
-    cache_env, resolve_cache_path, resolve_config_path, resolve_local_path, resolve_project_id,
-    resolve_repo, storage_env,
-};
 use crate::{ListOptions, ListSubject, RunError, RunOutcome};
 
 /// The real `list`: load configuration, wire the configured storage and git

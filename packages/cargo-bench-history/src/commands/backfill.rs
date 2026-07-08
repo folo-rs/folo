@@ -35,13 +35,13 @@ use cbh_diag::{StderrReporter, count_noun};
 use cbh_engines::FsBenchOutputSource;
 use cbh_git::{GitHistory, SystemGitHistory, TokioBenchRunner, capture};
 use cbh_probe::SystemProbe;
+use cbh_run::{
+    resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
+};
 use cbh_storage::{Storage, build_storage, project_objects_prefix};
 use tick::Clock;
 
 use super::collect::{CollectDeps, CollectSummary, default_bench_command, run_engines};
-use crate::wiring::{
-    resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
-};
 use crate::{BackfillOptions, CollectOptions, RunError, RunOutcome, finish_with_flush};
 
 /// Read access to a repository's commit topology plus the worktree lifecycle a

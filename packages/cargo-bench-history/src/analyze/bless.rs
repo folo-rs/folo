@@ -22,6 +22,9 @@ use std::path::Path;
 use cbh_config::{Config, load_config};
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
+use cbh_run::{
+    resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
+};
 use cbh_storage::{Storage, build_storage};
 use jiff::Timestamp;
 use tick::Clock;
@@ -31,9 +34,6 @@ use super::{
     resolve_base_ref, resolve_facets, resolve_now,
 };
 use crate::model::BlessingRecord;
-use crate::wiring::{
-    resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
-};
 use crate::{BlessOptions, RunError, RunOutcome, UnblessOptions, finish_with_flush};
 
 /// The real `bless`: load configuration, wire the configured storage and git

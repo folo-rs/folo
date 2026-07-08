@@ -24,7 +24,10 @@ use std::path::Path;
 use cbh_config::{Config, load_config};
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
-use cbh_run::{OutputSelection, OutputWriter, TokioOutputWriter, emit};
+use cbh_run::{
+    OutputSelection, OutputWriter, TokioOutputWriter, cache_env, emit, resolve_cache_path,
+    resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
+};
 use cbh_storage::{Storage, StorageFacade, resolve_storage};
 use jiff::Timestamp;
 use serde::Serialize;
@@ -36,10 +39,6 @@ use super::{
     resolve_facets, resolve_history, resolve_now, window_excludes,
 };
 use crate::model::DiscriminantSet;
-use crate::wiring::{
-    cache_env, resolve_cache_path, resolve_config_path, resolve_local_path, resolve_project_id,
-    resolve_repo, storage_env,
-};
 use crate::{PruneOptions, RunError, RunOutcome, finish_with_flush};
 
 /// Which objects a prune pass deletes.

@@ -1,37 +1,41 @@
-//! Shared wiring that several commands build their real adapters from: locating
-//! the configuration file, resolving the project identity, and constructing the
-//! configured storage backend.
+//! Command input resolution shared across the run edge: locating the configuration
+//! file and repository, reading the storage/cache environment variables, and turning
+//! the parsed `--local`/`--cache` selections into concrete paths.
 
 use std::path::{Path, PathBuf};
 
 use cbh_command::{CacheSelection, LocalStorageSelection};
 use cbh_config::Config;
-use cbh_run::rebase;
 use cbh_storage::StorageError;
+
+use crate::rebase;
 
 /// The environment variable that supplies the local-storage path for a bare
 /// `--local` (given with no value): `CARGO_BENCH_HISTORY_STORAGE`.
-pub(crate) const STORAGE_ENV_VAR: &str = "CARGO_BENCH_HISTORY_STORAGE";
+pub const STORAGE_ENV_VAR: &str = "CARGO_BENCH_HISTORY_STORAGE";
 
 /// The environment variable that supplies the cache directory for a bare
 /// `--cache` (given with no value): `CARGO_BENCH_HISTORY_CACHE`.
-pub(crate) const CACHE_ENV_VAR: &str = "CARGO_BENCH_HISTORY_CACHE";
+pub const CACHE_ENV_VAR: &str = "CARGO_BENCH_HISTORY_CACHE";
 
 /// The default configuration path, relative to the working directory.
-pub(crate) fn default_config_path() -> PathBuf {
+#[must_use]
+pub fn default_config_path() -> PathBuf {
     PathBuf::from(".cargo").join("bench_history.toml")
 }
 
 /// Resolves the configuration path: an explicit `--config` value or the default
 /// `.cargo/bench_history.toml`, taken relative to `workspace_dir`.
-pub(crate) fn resolve_config_path(workspace_dir: &Path, explicit: Option<&Path>) -> PathBuf {
+#[must_use]
+pub fn resolve_config_path(workspace_dir: &Path, explicit: Option<&Path>) -> PathBuf {
     let path = explicit.map_or_else(default_config_path, Path::to_path_buf);
     rebase(workspace_dir, path)
 }
 
 /// Resolves the repository directory the `analyze`-family commands query: an
 /// explicit `--repo` (relative to `workspace_dir`) or `workspace_dir` itself.
-pub(crate) fn resolve_repo(workspace_dir: &Path, repo: Option<&Path>) -> PathBuf {
+#[must_use]
+pub fn resolve_repo(workspace_dir: &Path, repo: Option<&Path>) -> PathBuf {
     repo.map_or_else(
         || workspace_dir.to_path_buf(),
         |repo| rebase(workspace_dir, repo.to_path_buf()),
@@ -53,7 +57,8 @@ pub(crate) fn resolve_repo(workspace_dir: &Path, repo: Option<&Path>) -> PathBuf
 /// end-to-end test, and forcing the parallel mutation run to reach that slow test
 /// just to kill a no-signal IO edge is what times it out.
 #[cfg_attr(test, mutants::skip)]
-pub(crate) fn storage_env() -> Option<String> {
+#[must_use]
+pub fn storage_env() -> Option<String> {
     std::env::var(STORAGE_ENV_VAR).ok()
 }
 
@@ -69,7 +74,7 @@ pub(crate) fn storage_env() -> Option<String> {
 ///
 /// Returns [`StorageError::Config`] if a bare `--local` was given but
 /// [`STORAGE_ENV_VAR`] is unset or empty.
-pub(crate) fn resolve_local_path(
+pub fn resolve_local_path(
     selection: Option<&LocalStorageSelection>,
     env: Option<&str>,
 ) -> Result<Option<PathBuf>, StorageError> {
@@ -97,7 +102,8 @@ pub(crate) fn resolve_local_path(
 /// `std::env::var` read with no signal beyond the IO edge, and
 /// [`resolve_cache_path`] carries all the logic that stays under mutation.
 #[cfg_attr(test, mutants::skip)]
-pub(crate) fn cache_env() -> Option<String> {
+#[must_use]
+pub fn cache_env() -> Option<String> {
     std::env::var(CACHE_ENV_VAR).ok()
 }
 
@@ -114,7 +120,7 @@ pub(crate) fn cache_env() -> Option<String> {
 ///
 /// Returns [`StorageError::Config`] if a bare `--cache` was given but
 /// [`CACHE_ENV_VAR`] is unset or empty.
-pub(crate) fn resolve_cache_path(
+pub fn resolve_cache_path(
     selection: Option<&CacheSelection>,
     env: Option<&str>,
 ) -> Result<Option<PathBuf>, StorageError> {
@@ -133,7 +139,8 @@ pub(crate) fn resolve_cache_path(
 }
 
 /// Resolves the project identity: explicit config value, else the directory name.
-pub(crate) fn resolve_project_id(config: &Config, workspace_dir: &Path) -> String {
+#[must_use]
+pub fn resolve_project_id(config: &Config, workspace_dir: &Path) -> String {
     if let Some(id) = &config.project.id {
         return id.clone();
     }

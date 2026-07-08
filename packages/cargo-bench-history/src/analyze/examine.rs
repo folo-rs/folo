@@ -25,7 +25,10 @@ use anyspawn::Spawner;
 use cbh_config::{Config, load_config};
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
-use cbh_run::{OutputSelection, OutputWriter, TokioOutputWriter, emit};
+use cbh_run::{
+    OutputSelection, OutputWriter, TokioOutputWriter, cache_env, emit, resolve_cache_path,
+    resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
+};
 use cbh_storage::{Storage, StorageFacade, resolve_storage};
 use jiff::Timestamp;
 use serde::Serialize;
@@ -36,10 +39,6 @@ use super::{
     dirty_base_exception_warning, empty_history_hint, format_value, resolve_now, select_dataset,
 };
 use crate::model::{BenchmarkIdPrefix, DiscriminantSet, MetricKind};
-use crate::wiring::{
-    cache_env, resolve_cache_path, resolve_config_path, resolve_local_path, resolve_project_id,
-    resolve_repo, storage_env,
-};
 use crate::{ExamineOptions, RunError, RunOutcome};
 
 /// How many leading characters of a commit title the text and Markdown tables

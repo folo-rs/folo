@@ -5,9 +5,9 @@ use std::path::Path;
 
 use cbh_config::default_template;
 use cbh_diag::{Reporter, ReporterExt, StderrReporter};
+use cbh_run::resolve_config_path;
 
 use crate::config_writer::{ConfigWriter, TokioConfigWriter};
-use crate::wiring::resolve_config_path;
 use crate::{InstallOptions, RunError, RunOutcome};
 
 /// Executes the `install` command against the real filesystem.
@@ -77,11 +77,11 @@ mod tests {
     use std::path::PathBuf;
 
     use cbh_diag::RecordingReporter;
+    use cbh_run::default_config_path;
     use futures::executor::block_on;
 
     use super::*;
     use crate::config_writer::MemoryConfigWriter;
-    use crate::wiring::default_config_path;
 
     /// Tests pass an empty base so `resolve_config_path` leaves the relative
     /// configuration key untouched, keeping the in-memory writer keys relative.

@@ -23,6 +23,7 @@ doc = false
 private-test-util = []
 
 [dependencies]
+cbh_command = { workspace = true }
 cbh_config = { workspace = true }
 cbh_diag = { workspace = true }
 cbh_render = { workspace = true }

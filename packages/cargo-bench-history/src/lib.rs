@@ -282,7 +282,6 @@ mod analyze;
 mod commands;
 mod config_writer;
 mod dispatch;
-mod wiring;
 
 pub(crate) use cargo_bench_history_core::model;
 pub use cbh_cli::{Cli, EarlyExit};
