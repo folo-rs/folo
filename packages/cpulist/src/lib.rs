@@ -53,10 +53,10 @@
 
 mod emit;
 mod error;
+mod item;
 mod parse;
 
 pub use emit::*;
 pub use error::*;
+pub(crate) use item::Item;
 pub use parse::*;
-
-pub(crate) type Item = u32;
