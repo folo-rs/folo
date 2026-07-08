@@ -57,10 +57,7 @@
 //! On non-Windows non-Linux platforms (e.g. mac OS), the package will not uphold the processor
 //! locality guarantees, but will otherwise function correctly as a worker pool.
 
-/// Justification for `.expect()` on mutex lock: we guarantee that we never
-/// panic while holding any of our mutexes, so they can never be poisoned.
-pub(crate) const NEVER_POISONED: &str = "we never panic while holding this lock";
-
+mod constants;
 mod join_handle;
 mod metrics;
 mod pool;
@@ -70,6 +67,7 @@ mod scheduler;
 mod task;
 mod worker;
 
+pub(crate) use constants::NEVER_POISONED;
 pub use join_handle::*;
 pub(crate) use pool::PoolInner;
 pub use pool::*;

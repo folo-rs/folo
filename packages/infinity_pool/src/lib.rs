@@ -133,13 +133,10 @@
 //!
 //! [casting]: define_pooled_dyn_cast
 
-/// Justification for `.expect()` on mutex lock: we guarantee that we never
-/// panic while holding any of our mutexes, so they can never be poisoned.
-pub(crate) const NEVER_POISONED: &str = "we never panic while holding this lock";
-
 mod blind;
 mod builders;
 mod cast;
+mod constants;
 mod drop_policy;
 mod handles;
 mod opaque;
@@ -149,6 +146,7 @@ mod thread_safety_types;
 
 pub use blind::*;
 pub use builders::*;
+pub(crate) use constants::NEVER_POISONED;
 pub use drop_policy::*;
 pub use handles::*;
 pub use opaque::*;

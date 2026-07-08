@@ -290,11 +290,8 @@
 //!
 //! [1]: https://crates.io/crates/oneshot
 
-/// Justification for `.expect()` on mutex lock: we guarantee that we never
-/// panic while holding any of our mutexes, so they can never be poisoned.
-pub(crate) const NEVER_POISONED: &str = "we never panic while holding this lock";
-
 mod backtrace;
+mod constants;
 mod core;
 mod disconnected;
 mod lake;
@@ -304,6 +301,7 @@ pub use core::*;
 
 #[cfg(debug_assertions)]
 pub(crate) use backtrace::*;
+pub(crate) use constants::NEVER_POISONED;
 pub use disconnected::*;
 pub use lake::*;
 pub use pool::*;
