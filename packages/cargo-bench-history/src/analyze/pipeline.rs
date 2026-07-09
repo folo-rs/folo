@@ -1668,7 +1668,10 @@ mod tests {
         assert!(message.contains("--unshallow"), "{message}");
         // The deliberately chosen base is named and reported as unrelated, without
         // suggesting the user pick a different --base value.
-        assert!(message.contains("master is genuinely unrelated"), "{message}");
+        assert!(
+            message.contains("master is genuinely unrelated"),
+            "{message}"
+        );
         assert!(!message.contains("name the intended base"), "{message}");
     }
 

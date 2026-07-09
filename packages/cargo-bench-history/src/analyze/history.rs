@@ -165,18 +165,18 @@ where
                         " If the history is already complete, {explicit} is genuinely unrelated \
                          to the target and cannot serve as its base."
                     ),
-                    None => " If the history is already complete, the detected default branch is \
-                             unrelated to the target; name the intended base with --base or \
+                    None => " If the history is already complete, the base branch is unrelated to \
+                             the target; name the intended base with --base or \
                              project.default_branch."
                         .to_owned(),
                 };
                 format!(
                     "could not determine the merge-base of the target {target_ref} \
-                     ({target_commit_id}) and the base ({base}): they share no common ancestor \
-                     in the available history. This is almost always a shallow clone whose depth \
-                     stops short of the branch point — fetch the full history (`git fetch \
-                     --unshallow`, or set fetch-depth: 0 on actions/checkout) so the branch point \
-                     is present.{remedy}"
+                     ({target_commit_id}) and the base commit {base}: they share no common \
+                     ancestor in the available history. This is almost always a shallow clone \
+                     whose depth stops short of the branch point — fetch the full history (`git \
+                     fetch --unshallow`, or set fetch-depth: 0 on actions/checkout) so the branch \
+                     point is present.{remedy}"
                 )
             }
             None => format!(
