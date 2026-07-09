@@ -80,8 +80,8 @@ fn sample_run_json(result_count: usize) -> Vec<u8> {
             ]);
             let metrics = vec![
                 Metric::new(MetricKind::InstructionCount, 1_234.0),
-                Metric::new(MetricKind::L1CacheHits, 9_876.0),
-                Metric::new(MetricKind::EstimatedCycles, 4_321.0),
+                Metric::new(MetricKind::ConditionalBranches, 9_876.0),
+                Metric::new(MetricKind::IndirectBranches, 4_321.0),
                 Metric::new(MetricKind::WallTime, 26.9).with_dispersion(
                     Some(0.47),
                     Some(26.6),

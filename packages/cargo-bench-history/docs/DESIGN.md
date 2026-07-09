@@ -27,11 +27,16 @@ gated). No engine is exempt from run-to-run noise.
   regression-line slope when Criterion sampled linearly, else the mean) with a standard
   deviation and bootstrap confidence interval. It records no timestamp, commit, machine,
   or package, so the tool supplies all run context.
-* **Callgrind (via Gungraun)** — simulated instruction counts and cache/branch events.
+* **Callgrind (via Gungraun)** — simulated instruction and branch-execution counts.
   Hardware-independent but not exact: a CPU simulator is low-noise, yet its counts still
-  drift by a few percent run to run. Its machine-readable summary is the one output that
-  must be opted into with an environment variable — the narrow "special need" that justifies
-  `collect` existing at all.
+  drift by a few percent run to run. Only the build-stable events are tracked — the
+  instruction count (`Ir`) and the two branch-execution counts (`Bc`, `Bi`). Gungraun also
+  emits cache-simulation counts (`L1hits`/`LLhits`/`RamHits`), the derived `EstimatedCycles`,
+  and the branch-misprediction counts (`Bcm`/`Bim`), but those are **not** parsed or
+  persisted: at microbenchmark magnitudes they track binary layout rather than the code under
+  test, so they cannot be compared across builds (see §8). Its machine-readable summary is the
+  one output that must be opted into with an environment variable — the narrow "special need"
+  that justifies `collect` existing at all.
 * **`alloc_tracker`** — heap allocations (bytes and counts). Hardware-independent but not
   deterministic: warmup and buffer-resize allocations are amortized over a Criterion-chosen
   iteration count, so the per-iteration figures jitter. It prefers a warmup-robust slope and
@@ -575,6 +580,19 @@ version, and Criterion scheduling a different iteration count when background lo
 the measured number without the code under test changing, so no metric is reproducible commit
 to commit.
 
+For the Callgrind engine this layout-sensitivity is decisive at microbenchmark scale, and it
+is why only a subset of its events is persisted. The instruction count (`Ir`) and the two
+branch-execution counts (`Bc`, `Bi`) are stable enough to compare across builds: they count
+*what the code did*. The cache-simulation counts (`L1hits`/`LLhits`/`RamHits`), the derived
+`EstimatedCycles` (a weighted sum of the cache tiers), and the branch-misprediction counts
+(`Bcm`/`Bim`) instead reflect *where the code and data landed in memory* — which cache line,
+which page, which branch-predictor slot — and so swing by tens of percent between two builds
+of identical source. This was confirmed empirically: the same commit measured from two
+different checkout paths kept `Ir` and `Bc` bit-for-bit identical while `RamHits`, `Bcm`, and
+`EstimatedCycles` all moved. Those six events are therefore never parsed or persisted; a
+stored `Run` written before this policy that still lists them is read leniently, dropping the
+now-unknown metric kinds rather than failing.
+
 Engines differ only in *how much* dispersion they expose, and the gating adapts per point
 rather than per engine. Most points carry an explicit bootstrap confidence interval:
 Criterion, `all_the_time`, and `alloc_tracker` all record one on every operation they emit.
@@ -584,8 +602,8 @@ additional veto that can only *suppress* a candidate the other gates would repor
 create one); the gates' *primary* noise check needs no interval at all: it is the series' own
 residual scatter about its fitted model, which covers every engine uniformly.
 
-Every metric is lower-is-better except cache *hits* (higher is better); the higher cache
-tiers are miss-escalation costs, so polarity keys off the metric, not just its category.
+Every persisted metric is lower-is-better, so a rise is always a regression and a fall an
+improvement; there is no per-metric polarity for the analysis to key off.
 
 ### 8.1 Findings: change-points and drift
 
@@ -641,12 +659,13 @@ All of this math lives in a pure, Miri-safe statistics crate (`cbh_stats`), unit
 with named, value-asserting cases on hand-computable inputs rather than threshold-mutation
 guards, so the whole detector is verifiable without real-time delays.
 
-### 8.4 Ranking and polarity
+### 8.4 Ranking
 
 Findings rank by descending relative delta, then by method, then a deterministic identity
 tie-break. There is **no severity classification** — a finding's magnitude is conveyed by
 its relative-change percent, and which findings warrant action is left to human or agent
-judgement rather than an automatic tier.
+judgement rather than an automatic tier. Direction is uniform: every persisted metric is
+lower-is-better, so a rise is a regression and a fall an improvement.
 
 ### 8.5 Analysis modes
 

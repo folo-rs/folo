@@ -381,6 +381,25 @@ Two important caveats:
    ordering effects do not show up. Multithreaded behavior must be covered
    by Criterion + `par_bench`.
 
+### Only a subset is comparable across builds
+
+The caveats above describe run-to-run stability *within a single build*. A
+stronger warning applies when comparing across *different* builds (different
+checkout path, tool versions, or codegen runs), which is what historical
+tracking with `cargo-bench-history` does: only **Instructions** and the two
+**branch-executed** counts (`Bc`, `Bi`) survive that comparison. They count
+*what the code did*.
+
+The cache counts (`L1/LL/RAM hits`), **Estimated cycles** (a weighted sum of
+them), and the **misprediction** counts (`Bcm`, `Bim`) instead depend on *where
+code and data landed in memory* — cache line, page, and branch-predictor slot
+assignments that shift with binary layout. At microbenchmark magnitudes that
+layout changes between builds of identical source (an embedded build path, a
+tool-version bump, or nondeterministic codegen is enough), so these metrics can
+swing by tens of percent without any code change. They are meaningful only for
+run-to-run comparison within one build, which is why `cargo-bench-history` does
+not persist them — it stores only Instructions and `Bc`/`Bi`.
+
 ### Cross-validate design decisions against Criterion
 
 Callgrind is excellent for *spotting* a delta and *attributing* it to a

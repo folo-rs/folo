@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
-use crate::{BenchmarkId, Metric, RunContext};
+use crate::{BenchmarkId, Metric, MetricKind, RunContext};
 
 /// Schema version of the stored [`Run`] JSON.
 ///
@@ -71,12 +71,57 @@ impl Run {
 /// [`MetricKind`]: crate::MetricKind
 pub type MetricList = SmallVec<[Metric; 2]>;
 
+/// Deserializes the metric list, silently dropping any metric whose `kind` is not
+/// one the tool tracks.
+///
+/// Stored history predates the removal of the build-layout-volatile Callgrind
+/// metrics (cache hits per tier, estimated cycles, branch misses), so run files
+/// written by an older tool can still carry those kinds. Rather than fail the whole
+/// run parse on an unknown-variant error — which would break `analyze`, `list`, and
+/// `examine` over any such history — the unknown metrics are skipped, matching the
+/// current policy of never persisting them again.
+fn deserialize_metrics<'de, D>(deserializer: D) -> Result<MetricList, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Vec::<RawMetric>::deserialize(deserializer)?;
+    Ok(raw.into_iter().filter_map(RawMetric::into_metric).collect())
+}
+
+/// A metric as it appears on disk, with the kind left as its raw wire name so an
+/// unknown kind can be recognized and dropped rather than aborting the parse.
+#[derive(Deserialize)]
+struct RawMetric {
+    kind: String,
+    value: f64,
+    #[serde(default)]
+    std_dev: Option<f64>,
+    #[serde(default)]
+    interval_low: Option<f64>,
+    #[serde(default)]
+    interval_high: Option<f64>,
+}
+
+impl RawMetric {
+    /// Converts to a [`Metric`], or `None` when the kind is not one the tool tracks.
+    fn into_metric(self) -> Option<Metric> {
+        Some(Metric {
+            kind: MetricKind::from_name(&self.kind)?,
+            value: self.value,
+            std_dev: self.std_dev,
+            interval_low: self.interval_low,
+            interval_high: self.interval_high,
+        })
+    }
+}
+
 /// A single benchmark case: a stable identity plus its measured metrics.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct BenchmarkResult {
     /// Stable identity of the benchmark case (its series key).
     pub id: BenchmarkId,
     /// Metrics captured for this case in this run.
+    #[serde(deserialize_with = "deserialize_metrics")]
     pub metrics: MetricList,
 }
 
@@ -143,7 +188,7 @@ mod tests {
             BenchmarkId::new(nonempty!["pkg".to_owned(), "case".to_owned()]),
             vec![
                 Metric::new(MetricKind::InstructionCount, 10.0),
-                Metric::new(MetricKind::L1CacheHits, 20.0),
+                Metric::new(MetricKind::ConditionalBranches, 20.0),
             ],
         );
 
@@ -167,8 +212,8 @@ mod tests {
         // result carries at most one metric per `MetricKind`.
         const KINDS: [MetricKind; 3] = [
             MetricKind::InstructionCount,
-            MetricKind::L1CacheHits,
-            MetricKind::EstimatedCycles,
+            MetricKind::ConditionalBranches,
+            MetricKind::IndirectBranches,
         ];
         for count in [1_usize, 2, 3] {
             let metrics: Vec<Metric> = KINDS
@@ -187,5 +232,27 @@ mod tests {
             assert_eq!(parsed, result);
             assert_eq!(parsed.metrics.len(), count);
         }
+    }
+
+    #[test]
+    fn unknown_metric_kinds_are_dropped_on_read() {
+        // Legacy history can still carry metric kinds the tool no longer tracks (the
+        // build-layout-volatile Callgrind events). Reading must skip them rather than
+        // fail the whole run parse, so analysis over old data keeps working.
+        let result = BenchmarkResult::new(
+            BenchmarkId::new(nonempty!["pkg".to_owned(), "case".to_owned()]),
+            vec![Metric::new(MetricKind::InstructionCount, 10.0)],
+        );
+        let mut value: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&result).unwrap()).unwrap();
+        value
+            .get_mut("metrics")
+            .and_then(serde_json::Value::as_array_mut)
+            .unwrap()
+            .push(serde_json::json!({ "kind": "estimated_cycles", "value": 907.0 }));
+
+        let parsed: BenchmarkResult = serde_json::from_value(value).unwrap();
+        let kinds: Vec<MetricKind> = parsed.metrics.iter().map(|metric| metric.kind).collect();
+        assert_eq!(kinds, vec![MetricKind::InstructionCount]);
     }
 }

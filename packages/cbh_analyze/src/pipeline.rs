@@ -359,8 +359,8 @@ mod tests {
     }
 
     /// A stored result set whose single record carries two metrics (`Ir` and
-    /// `EstimatedCycles`), so its partition reconstructs two distinct series.
-    fn two_metric_set(effective: i64, commit: &str, ir: f64, cycles: f64) -> Run {
+    /// `ConditionalBranches`), so its partition reconstructs two distinct series.
+    fn two_metric_set(effective: i64, commit: &str, ir: f64, branches: f64) -> Run {
         let time = ts(effective);
         let context = RunContext::new(
             time,
@@ -381,7 +381,7 @@ mod tests {
             ]),
             vec![
                 Metric::new(MetricKind::InstructionCount, ir),
-                Metric::new(MetricKind::EstimatedCycles, cycles),
+                Metric::new(MetricKind::ConditionalBranches, branches),
             ],
         );
         Run::new(context, vec![record])

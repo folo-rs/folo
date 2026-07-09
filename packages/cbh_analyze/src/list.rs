@@ -932,7 +932,7 @@ mod tests {
             ]),
             vec![
                 Metric::new(MetricKind::InstructionCount, 100.0),
-                Metric::new(MetricKind::EstimatedCycles, 100.0),
+                Metric::new(MetricKind::ConditionalBranches, 100.0),
             ],
         );
         Run::new(context, vec![record])
