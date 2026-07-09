@@ -4,6 +4,7 @@
 use std::error::Error;
 use std::{fmt, io};
 
+use cbh_analyze::AnalyzeError;
 use cbh_config::ConfigError;
 use cbh_storage::StorageError;
 /// The outcome of a successful `run`.
@@ -178,24 +179,19 @@ impl From<io::Error> for RunError {
     }
 }
 
-/// Finishes a mutating command by combining its `command` outcome with the
-/// result of the post-command cache-invalidation `flush`, giving a failed flush
-/// precedence over the command's own outcome.
-///
-/// The flush is armed only when a delete or overwrite reached the shared cloud
-/// backend during this command, so it is `Ok` in the common case and this simply
-/// returns `command` unchanged. When it *does* fail, a mutation already reached
-/// the cloud but its invalidation marker did not — a cross-machine
-/// cache-correctness hazard that is invisible at the failing command and would
-/// leave *other* machines' read-through caches stale. Surfacing it first (rather
-/// than after a `command?` that may short-circuit) guarantees the stale-cache
-/// failure is never silently dropped, even when the command itself also failed.
-pub fn finish_with_flush(
-    command: Result<RunOutcome, RunError>,
-    flush: Result<(), StorageError>,
-) -> Result<RunOutcome, RunError> {
-    flush?;
-    command
+impl From<AnalyzeError> for RunError {
+    fn from(error: AnalyzeError) -> Self {
+        // The analyze family produces only this subset of run failures; each maps
+        // to the identically-worded aggregate variant, so folding one in leaves
+        // the message a user sees unchanged.
+        match error {
+            AnalyzeError::Config(error) => Self::Config(error),
+            AnalyzeError::Storage(error) => Self::Storage(error),
+            AnalyzeError::Analyze { message } => Self::Analyze { message },
+            AnalyzeError::Bless { message } => Self::Bless { message },
+            AnalyzeError::Io(error) => Self::Io(error),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -318,6 +314,38 @@ mod tests {
     }
 
     #[test]
+    fn analyze_error_folds_into_the_matching_run_error() {
+        // Each `AnalyzeError` variant folds into the identically-worded aggregate
+        // variant, so a command's failure reads the same wherever it now lives.
+        assert!(matches!(
+            RunError::from(AnalyzeError::Config(ConfigError::new("bad"))),
+            RunError::Config(_)
+        ));
+        assert!(matches!(
+            RunError::from(AnalyzeError::Storage(StorageError::NotFound {
+                key: "k".to_owned(),
+            })),
+            RunError::Storage(_)
+        ));
+        assert!(matches!(
+            RunError::from(AnalyzeError::Analyze {
+                message: "m".to_owned(),
+            }),
+            RunError::Analyze { .. }
+        ));
+        assert!(matches!(
+            RunError::from(AnalyzeError::Bless {
+                message: "m".to_owned(),
+            }),
+            RunError::Bless { .. }
+        ));
+        assert!(matches!(
+            RunError::from(AnalyzeError::Io(io::Error::other("broken pipe"))),
+            RunError::Io(_)
+        ));
+    }
+
+    #[test]
     fn completed_outcome_is_successful() {
         assert!(
             RunOutcome::Completed {
@@ -384,81 +412,6 @@ mod tests {
             }
             .stdout_text(),
             None
-        );
-    }
-
-    // A distinct command failure, so a test can tell whether the command error or
-    // the flush error came back out of `finish_with_flush`.
-    fn command_failure() -> RunError {
-        RunError::Bless {
-            message: "a bless precondition failed".to_owned(),
-        }
-    }
-
-    // A distinct flush failure (a `StorageError`, surfaced as `RunError::Storage`),
-    // so it is unambiguously different from `command_failure`.
-    fn flush_failure() -> StorageError {
-        StorageError::NotFound {
-            key: "cache-epoch".to_owned(),
-        }
-    }
-
-    #[test]
-    fn finish_with_flush_returns_the_outcome_when_both_succeed() {
-        let outcome = finish_with_flush(
-            Ok(RunOutcome::Completed {
-                message: "done".to_owned(),
-            }),
-            Ok(()),
-        )
-        .expect("both succeeded");
-        assert_eq!(
-            outcome,
-            RunOutcome::Completed {
-                message: "done".to_owned(),
-            }
-        );
-    }
-
-    #[test]
-    fn finish_with_flush_surfaces_a_flush_failure_after_a_successful_command() {
-        // The command stored data that reached the cloud, but the invalidation
-        // marker write failed — the flush error must not be swallowed just because
-        // the command itself succeeded.
-        let error = finish_with_flush(
-            Ok(RunOutcome::Completed {
-                message: "done".to_owned(),
-            }),
-            Err(flush_failure()),
-        )
-        .expect_err("the flush failed");
-        assert!(
-            matches!(error, RunError::Storage(_)),
-            "expected the flush error, got {error:?}"
-        );
-    }
-
-    #[test]
-    fn finish_with_flush_returns_the_command_error_when_the_flush_succeeds() {
-        let error =
-            finish_with_flush(Err(command_failure()), Ok(())).expect_err("the command failed");
-        assert!(
-            matches!(error, RunError::Bless { .. }),
-            "expected the command error, got {error:?}"
-        );
-    }
-
-    #[test]
-    fn finish_with_flush_prefers_the_flush_failure_over_a_failed_command() {
-        // The regression guard: a delete/overwrite reached the cloud (arming the
-        // marker) *and* the command later failed. The flush failure — which leaves
-        // other machines' caches stale — must take precedence rather than being
-        // silently dropped by the command's own early return.
-        let error = finish_with_flush(Err(command_failure()), Err(flush_failure()))
-            .expect_err("both failed");
-        assert!(
-            matches!(error, RunError::Storage(_)),
-            "expected the flush error to win, got {error:?}"
         );
     }
 }

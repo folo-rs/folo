@@ -26,7 +26,6 @@ cbh_git = { workspace = true }
 cbh_model = { workspace = true }
 cbh_probe = { workspace = true }
 cbh_render = { workspace = true }
-cbh_run = { workspace = true }
 cbh_storage = { workspace = true }
 futures = { workspace = true }
 jiff = { workspace = true, features = ["serde"] }
@@ -39,7 +38,6 @@ tick = { workspace = true, features = ["tokio"] }
 cbh_detect = { path = "../cbh_detect", features = ["private-test-util"] }
 cbh_diag = { path = "../cbh_diag", features = ["private-test-util"] }
 cbh_git = { path = "../cbh_git", features = ["private-test-util"] }
-cbh_run = { path = "../cbh_run", features = ["private-test-util"] }
 cbh_storage = { path = "../cbh_storage", features = ["private-test-util"] }
 futures = { workspace = true, features = ["executor"] }
 mutants = { workspace = true }

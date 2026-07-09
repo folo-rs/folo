@@ -27,8 +27,7 @@ use cbh_config::{
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
 use cbh_model::{BlessingRecord, StorageKey};
-use cbh_run::{RunError, RunOutcome, finish_with_flush};
-use cbh_storage::{Storage, build_storage};
+use cbh_storage::{Storage, build_storage, finish_with_flush};
 use jiff::Timestamp;
 use tick::Clock;
 
@@ -36,6 +35,7 @@ use super::{
     AutoFacets, Selection, detect_auto_facets, facet_filtered_candidates, resolve_base_ref,
     resolve_facets, resolve_now,
 };
+use crate::AnalyzeError;
 
 /// The real `bless`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
@@ -48,7 +48,7 @@ pub async fn bless(
     options: &BlessOptions,
     workspace_dir: &Path,
     clock_override: Option<Clock>,
-) -> Result<RunOutcome, RunError> {
+) -> Result<String, AnalyzeError> {
     let reporter = StderrReporter::new(options.verbose);
 
     let config_path = resolve_config_path(workspace_dir, options.config_path.as_deref());
@@ -91,7 +91,7 @@ pub async fn bless(
 pub async fn unbless(
     options: &UnblessOptions,
     workspace_dir: &Path,
-) -> Result<RunOutcome, RunError> {
+) -> Result<String, AnalyzeError> {
     let reporter = StderrReporter::new(options.verbose);
 
     let config_path = resolve_config_path(workspace_dir, options.config_path.as_deref());
@@ -140,7 +140,7 @@ pub(crate) async fn bless_with<G, S>(
     now: Timestamp,
     tool_version: &str,
     reporter: &dyn Reporter,
-) -> Result<RunOutcome, RunError>
+) -> Result<String, AnalyzeError>
 where
     G: GitHistory,
     S: Storage,
@@ -150,7 +150,7 @@ where
         // whole commit.
         Vec::new()
     } else if options.prefixes.is_empty() {
-        return Err(RunError::Bless {
+        return Err(AnalyzeError::Bless {
             message: "at least one benchmark-id prefix is required (or pass --all); for example \
                       `bless all_the_time/read_cell`"
                 .to_owned(),
@@ -168,17 +168,17 @@ where
     // outright with no `--force` escape hatch.
     let base = resolve_base_ref(git, config, options.base.as_deref())
         .await?
-        .ok_or_else(|| RunError::Bless {
+        .ok_or_else(|| AnalyzeError::Bless {
             message: "could not determine the base branch; specify it with --base".to_owned(),
         })?;
     let on_base = git
         .merge_base(&head, &base)
         .await
-        .map_err(RunError::Io)?
+        .map_err(AnalyzeError::Io)?
         .as_deref()
         == Some(head.as_str());
     if !on_base {
-        return Err(RunError::Bless {
+        return Err(AnalyzeError::Bless {
             message: format!(
                 "the context commit {short} is not on the base branch {}; blessings are only \
                  allowed on the base branch, since a feature-branch blessing would not survive \
@@ -194,7 +194,7 @@ where
     // an accidental uncommitted edit does not block blessing an already-recorded
     // clean run. The warning is only relevant when blessing the checked-out commit.
     let working_tree_dirty =
-        options.context.is_none() && git.is_dirty().await.map_err(RunError::Io)?;
+        options.context.is_none() && git.is_dirty().await.map_err(AnalyzeError::Io)?;
 
     let selection = Selection::from_bless(options);
     let facets = resolve_facets(&selection, Some(auto))?;
@@ -205,7 +205,7 @@ where
         .map(|(_, parsed)| parsed)
         .collect();
     if clean_at_head.is_empty() {
-        return Err(RunError::Bless {
+        return Err(AnalyzeError::Bless {
             message: format!(
                 "no stored result at the context commit {short}; record a run there before \
                  blessing (a blessing accepts an existing data point)"
@@ -225,7 +225,7 @@ where
         storage
             .put_overwrite(&bless_key, json.as_bytes())
             .await
-            .map_err(RunError::Storage)?;
+            .map_err(AnalyzeError::Storage)?;
         reporter.note_with(|| format!("blessed set {} at {bless_key}", parsed.set));
         sets = sets.saturating_add(1);
     }
@@ -247,7 +247,7 @@ where
         },
         count_noun(sets, "discriminant set"),
     );
-    Ok(RunOutcome::Completed { message })
+    Ok(message)
 }
 
 /// Storage- and git-generic `unbless`: delete every blessing recorded at the
@@ -260,7 +260,7 @@ pub(crate) async fn unbless_with<G, S>(
     options: &UnblessOptions,
     auto: &AutoFacets,
     reporter: &dyn Reporter,
-) -> Result<RunOutcome, RunError>
+) -> Result<String, AnalyzeError>
 where
     G: GitHistory,
     S: Storage,
@@ -280,7 +280,7 @@ where
 
     let mut removed = 0_usize;
     for key in &blessings_at_head {
-        storage.delete(key).await.map_err(RunError::Storage)?;
+        storage.delete(key).await.map_err(AnalyzeError::Storage)?;
         reporter.note_with(|| format!("removed blessing {key}"));
         removed = removed.saturating_add(1);
     }
@@ -293,17 +293,17 @@ where
             count_noun(removed, "blessing")
         )
     };
-    Ok(RunOutcome::Completed { message })
+    Ok(message)
 }
 
 /// Resolves a context ref (for example `HEAD` or a commit ID) to a full commit
 /// commit ID, mapping an unresolvable ref (not a repository, or an unknown ref) to a
 /// clear blessing error.
-async fn resolve_commit<G: GitHistory>(git: &G, reference: &str) -> Result<String, RunError> {
+async fn resolve_commit<G: GitHistory>(git: &G, reference: &str) -> Result<String, AnalyzeError> {
     git.resolve(reference)
         .await
-        .map_err(RunError::Io)?
-        .ok_or_else(|| RunError::Bless {
+        .map_err(AnalyzeError::Io)?
+        .ok_or_else(|| AnalyzeError::Bless {
             message: format!(
                 "could not resolve {reference}; run this inside a git repository (or pass --repo) \
                  and check the ref exists"
@@ -411,7 +411,7 @@ mod tests {
         storage: &MemoryStorage,
         git: &FakeGitHistory,
         options: &BlessOptions,
-    ) -> Result<String, RunError> {
+    ) -> Result<String, AnalyzeError> {
         block_on(bless_with(
             git,
             storage,
@@ -423,10 +423,6 @@ mod tests {
             "0.0.1",
             &RecordingReporter::new(),
         ))
-        .map(|outcome| match outcome {
-            RunOutcome::Completed { message } => message,
-            RunOutcome::Analyzed { .. } => panic!("bless returns a Completed outcome"),
-        })
     }
 
     #[test]
@@ -463,7 +459,7 @@ mod tests {
         let storage = MemoryStorage::new();
         block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes())).unwrap();
         let error = drive_bless(&storage, &master_git(), &bless_options(&[])).unwrap_err();
-        assert!(matches!(error, RunError::Bless { .. }), "{error:?}");
+        assert!(matches!(error, AnalyzeError::Bless { .. }), "{error:?}");
         assert!(error.to_string().contains("prefix"), "{error}");
     }
 
@@ -483,7 +479,7 @@ mod tests {
             .mark_default("master");
 
         let error = drive_bless(&storage, &git, &bless_options(&["all_the_time"])).unwrap_err();
-        assert!(matches!(error, RunError::Bless { .. }), "{error:?}");
+        assert!(matches!(error, AnalyzeError::Bless { .. }), "{error:?}");
         assert!(error.to_string().contains("base branch"), "{error}");
         // The message names both the current commit and the base ref via
         // `short_commit_id`, so both must appear verbatim.
@@ -588,7 +584,7 @@ mod tests {
             context: Some("c1".to_owned()),
             ..UnblessOptions::default()
         };
-        let outcome = block_on(unbless_with(
+        let message = block_on(unbless_with(
             &git,
             &storage,
             "folo",
@@ -598,10 +594,6 @@ mod tests {
             &RecordingReporter::new(),
         ))
         .unwrap();
-        let message = match outcome {
-            RunOutcome::Completed { message } => message,
-            RunOutcome::Analyzed { .. } => panic!("unbless returns a Completed outcome"),
-        };
         assert!(message.contains("at commit c1"), "{message}");
         assert!(stored_blessings(&storage).is_empty(), "sidecar deleted");
     }
@@ -613,7 +605,7 @@ mod tests {
         block_on(storage.put(&clean_key("c1"), clean_run_json("c1", 1000).as_bytes())).unwrap();
         let error =
             drive_bless(&storage, &master_git(), &bless_options(&["all_the_time"])).unwrap_err();
-        assert!(matches!(error, RunError::Bless { .. }), "{error:?}");
+        assert!(matches!(error, AnalyzeError::Bless { .. }), "{error:?}");
         assert!(error.to_string().contains("no stored result"), "{error}");
     }
 
@@ -625,7 +617,7 @@ mod tests {
         drive_bless(&storage, &git, &bless_options(&["all_the_time/read_cell"])).unwrap();
         assert_eq!(stored_blessings(&storage).len(), 1, "blessed once");
 
-        let outcome = block_on(unbless_with(
+        let message = block_on(unbless_with(
             &git,
             &storage,
             "folo",
@@ -635,10 +627,6 @@ mod tests {
             &RecordingReporter::new(),
         ))
         .unwrap();
-        let message = match outcome {
-            RunOutcome::Completed { message } => message,
-            RunOutcome::Analyzed { .. } => panic!("unbless returns a Completed outcome"),
-        };
         assert!(message.contains("Removed"), "{message}");
         assert!(stored_blessings(&storage).is_empty(), "sidecar deleted");
     }
@@ -647,7 +635,7 @@ mod tests {
     fn unbless_reports_when_there_is_nothing_to_remove() {
         let storage = MemoryStorage::new();
         block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes())).unwrap();
-        let outcome = block_on(unbless_with(
+        let message = block_on(unbless_with(
             &master_git(),
             &storage,
             "folo",
@@ -657,10 +645,6 @@ mod tests {
             &RecordingReporter::new(),
         ))
         .unwrap();
-        let message = match outcome {
-            RunOutcome::Completed { message } => message,
-            RunOutcome::Analyzed { .. } => panic!("unbless returns a Completed outcome"),
-        };
         assert!(message.contains("No blessings"), "{message}");
     }
 
@@ -672,7 +656,7 @@ mod tests {
         let error =
             drive_bless(&storage, &git, &bless_options(&["all_the_time/read_cell"])).unwrap_err();
         match error {
-            RunError::Bless { message } => {
+            AnalyzeError::Bless { message } => {
                 assert!(message.contains("could not resolve HEAD"), "{message}");
             }
             other => panic!("expected a bless error, got {other:?}"),
@@ -694,7 +678,7 @@ mod tests {
         let error =
             drive_bless(&storage, &git, &bless_options(&["all_the_time/read_cell"])).unwrap_err();
         match error {
-            RunError::Bless { message } => {
+            AnalyzeError::Bless { message } => {
                 assert!(
                     message.contains("could not determine the base branch"),
                     "{message}"

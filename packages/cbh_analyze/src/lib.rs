@@ -1,6 +1,14 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![doc(hidden)]
+#![expect(
+    clippy::exhaustive_enums,
+    clippy::exhaustive_structs,
+    reason = "this crate's `pub` items form an internal handoff boundary between the \
+              cargo-bench-history sub-crates rather than a stable public API, so \
+              exhaustive matching and construction of its value types by those \
+              in-workspace consumers is intended"
+)]
 
 //! Implementation crate for [`cargo-bench-history`]; do not depend on this directly.
 //!
@@ -27,6 +35,7 @@
 
 mod bless;
 mod dataset;
+mod error;
 mod examine;
 mod facets;
 mod history;
@@ -34,6 +43,7 @@ mod list;
 mod load;
 mod pipeline;
 mod prune;
+mod report;
 mod selection;
 mod window;
 
@@ -41,6 +51,7 @@ pub use bless::{bless, unbless};
 pub(crate) use cbh_detect::{Series, SeriesFilter, apply_blessings};
 pub(crate) use cbh_render::{ReportFormat, format_value};
 pub(crate) use dataset::{empty_history_hint, select_dataset};
+pub use error::AnalyzeError;
 pub use examine::execute as examine;
 pub(crate) use facets::{AutoFacets, resolve_facets};
 pub(crate) use history::{
@@ -52,5 +63,7 @@ pub(crate) use load::{RunIndex, facet_filtered_candidates};
 pub use pipeline::execute as analyze;
 pub(crate) use pipeline::{detect_auto_facets, resolve_now};
 pub use prune::execute as prune;
+pub use report::RenderedReports;
+pub(crate) use report::ReportRequest;
 pub(crate) use selection::Selection;
 pub(crate) use window::{WindowEdge, parse_since, parse_until, window_excludes};

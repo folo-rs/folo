@@ -5,13 +5,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::AnalyzeError;
 use anyspawn::Spawner;
 use cbh_config::Config;
 use cbh_detect::{AnalysisMode, BlessingPlacement, Series, SeriesFilter};
 use cbh_diag::{Reporter, ReporterExt, count_noun};
 use cbh_git::GitHistory;
 use cbh_model::{BenchmarkIdPrefix, BlessingRecord, DiscriminantSet, StorageKey};
-use cbh_run::RunError;
 use cbh_storage::Storage;
 use jiff::Timestamp;
 
@@ -85,7 +85,7 @@ pub(crate) async fn select_dataset<G, S>(
     now: Timestamp,
     reporter: &dyn Reporter,
     spawner: &Spawner,
-) -> Result<SelectedDataSet, RunError>
+) -> Result<SelectedDataSet, AnalyzeError>
 where
     G: GitHistory,
     S: Storage + Clone + 'static,
@@ -368,10 +368,10 @@ where
         // Phase 2 — fetch and deserialize concurrently, then restore storage-key
         // order (`buffer_unordered` completes out of order).
         let mut fetched = load_objects_concurrently(storage, to_fetch, |key, bytes| {
-            let text = String::from_utf8(bytes).map_err(|error| RunError::Analyze {
+            let text = String::from_utf8(bytes).map_err(|error| AnalyzeError::Analyze {
                 message: format!("stored blessing {key} is not valid UTF-8: {error}"),
             })?;
-            BlessingRecord::from_json(&text).map_err(|error| RunError::Analyze {
+            BlessingRecord::from_json(&text).map_err(|error| AnalyzeError::Analyze {
                 message: format!("stored blessing {key} is not a valid blessing record: {error}"),
             })
         })

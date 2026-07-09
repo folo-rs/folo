@@ -438,7 +438,6 @@ dependencies = [
  "cbh_git",
  "cbh_model",
  "cbh_probe",
- "cbh_run",
  "cbh_storage",
  "futures",
  "jiff",
@@ -520,7 +519,6 @@ dependencies = [
  "cbh_model",
  "cbh_probe",
  "cbh_render",
- "cbh_run",
  "cbh_storage",
  "futures",
  "jiff",
@@ -663,20 +661,6 @@ dependencies = [
  "rasciigraph",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "cbh_run"
-version = "0.0.3"
-dependencies = [
- "cbh_config",
- "cbh_diag",
- "cbh_render",
- "cbh_storage",
- "futures",
- "mutants",
- "tempfile",
- "tokio",
 ]
 
 [[package]]
