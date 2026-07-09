@@ -389,6 +389,15 @@ base baseline plus the branch's own clean and dirty snapshots). Membership is pu
 topological, so a dirty snapshot taken on a shared base commit is excluded from an official
 view until it is committed.
 
+Because that split is topological, the merge-base must be knowable. If the base ref cannot
+be resolved (no `--base`, no configured or detected default branch), or it shares no common
+ancestor with the target — typically a **shallow clone** whose fetched depth stops short of
+the branch point, or a checkout that never fetched the base branch — `analyze` **errors**
+and points at the fix (deepen the clone with `git fetch --unshallow` / `fetch-depth: 0`, or
+pass an explicit `--base`) rather than silently treating the incomplete history as a
+base-branch view. The tool has no requirement to support shallow or otherwise anomalous
+history; an unknown topology is reported, not guessed around.
+
 There is one carve-out to the clean-only base rule, for the common "first impressions"
 case where a user runs `analyze` on the base branch with uncommitted changes (for instance
 an untracked config file, so every stored run landed as a dirty snapshot on the base tip).
@@ -645,7 +654,9 @@ The same stored history answers two very different questions, so `analyze` runs 
 two **modes**, auto-detected from git topology and the recorded runs it admits. There is no
 flag to force a mode; the topology alone decides. Working-tree state feeds in only through
 the base-tip dirty exception (below), which admits a base-tip dirty run — and, by admitting
-it, selects branch mode — only while the tree is currently dirty.
+it, selects branch mode — only while the tree is currently dirty. Auto-detection relies on a
+known merge-base: an undeterminable one is a hard error (see the base-resolution rule above),
+never a silent fall-through to history.
 
 * **history** — the base-branch view: auto-selected when the analyzed tip *is* the
   merge-base with the base and no dirty run is recorded on top of it. It applies the

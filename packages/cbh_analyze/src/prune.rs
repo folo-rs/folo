@@ -368,8 +368,9 @@ where
 /// removal. When pruning the base branch itself (`tip_is_merge_base`), every
 /// selected commit is eligible. Otherwise only the context branch's own commits —
 /// those strictly after the merge-base — are eligible, so base-branch history is
-/// preserved. A `None` merge-base means no base ancestry is shared, so every
-/// commit is the context branch's own.
+/// preserved. A `None` merge-base index means the merge-base is off the target's
+/// first-parent line (an off-chain merge-base), so no first-parent commit is
+/// base-side and every one is the context branch's own.
 fn commit_is_eligible(
     index: usize,
     merge_base_index: Option<usize>,
@@ -1534,7 +1535,8 @@ mod tests {
         // On the base branch (tip is its own merge-base), every commit is eligible.
         assert!(commit_is_eligible(0, Some(3), true));
         assert!(commit_is_eligible(3, Some(3), true));
-        // With no shared base ancestry, every commit is the context's own.
+        // An off-chain merge-base (no first-parent split point) leaves every
+        // first-parent commit as the context's own.
         assert!(commit_is_eligible(0, None, false));
         assert!(commit_is_eligible(5, None, false));
     }
