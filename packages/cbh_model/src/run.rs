@@ -87,15 +87,24 @@ fn deserialize_metrics<'de, D>(deserializer: D) -> Result<MetricList, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let raw = SmallVec::<[RawMetric; 2]>::deserialize(deserializer)?;
+    let raw = SmallVec::<[RawMetric<'de>; 2]>::deserialize(deserializer)?;
     Ok(raw.into_iter().filter_map(RawMetric::into_metric).collect())
 }
 
 /// A metric as it appears on disk, with the kind left as its raw wire name so an
 /// unknown kind can be recognized and dropped rather than aborting the parse.
+///
+/// The kind is borrowed straight from the input JSON (a `&str` tied to the
+/// deserializer input): it is only needed transiently to resolve a [`MetricKind`]
+/// before this raw form is discarded, so borrowing avoids a `String` allocation per
+/// metric on the read path. The stored kind names are a fixed vocabulary of unescaped
+/// identifiers, so the borrow always succeeds against the `serde_json::from_str` input
+/// backing every run decode.
+///
+/// [`MetricKind`]: crate::MetricKind
 #[derive(Deserialize)]
-struct RawMetric {
-    kind: String,
+struct RawMetric<'a> {
+    kind: &'a str,
     value: f64,
     #[serde(default)]
     std_dev: Option<f64>,
@@ -105,12 +114,12 @@ struct RawMetric {
     interval_high: Option<f64>,
 }
 
-impl RawMetric {
+impl RawMetric<'_> {
     /// Converts to a [`Metric`], or `None` when the kind is not one of the kinds the
     /// tool tracks.
     fn into_metric(self) -> Option<Metric> {
         Some(Metric {
-            kind: MetricKind::from_name(&self.kind)?,
+            kind: MetricKind::from_name(self.kind)?,
             value: self.value,
             std_dev: self.std_dev,
             interval_low: self.interval_low,
@@ -255,7 +264,10 @@ mod tests {
             .unwrap()
             .push(serde_json::json!({ "kind": "estimated_cycles", "value": 907.0 }));
 
-        let parsed: BenchmarkResult = serde_json::from_value(value).unwrap();
+        // Decode through `from_str` (the production run-file path), where the borrowed
+        // `&str` kind is read straight from the input rather than an owned `Value`.
+        let json = serde_json::to_string(&value).unwrap();
+        let parsed: BenchmarkResult = serde_json::from_str(&json).unwrap();
         let kinds: Vec<MetricKind> = parsed.metrics.iter().map(|metric| metric.kind).collect();
         assert_eq!(kinds, vec![MetricKind::InstructionCount]);
     }
