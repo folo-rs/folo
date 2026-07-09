@@ -29,7 +29,7 @@ mod git_history;
 mod process;
 
 pub use git::parse_git_info;
-#[cfg(feature = "private-test-util")]
+#[cfg(any(test, feature = "private-test-util"))]
 #[cfg_attr(docsrs, doc(cfg(feature = "private-test-util")))]
 pub use git_history::FakeGitHistory;
 pub use git_history::{FirstParentCommit, GitHistory, SystemGitHistory};

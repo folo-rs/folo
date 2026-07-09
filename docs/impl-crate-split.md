@@ -569,8 +569,11 @@ deferring their documentation. Concrete files to study:
 - `packages/cbh_detect/src/lib.rs` — `#![doc(hidden)]` root that re-exports
   every type flat from the crate root.
 - `packages/cbh_detect/src/testing.rs` — the `synchronous_spawner` helper,
-  gated `#[cfg(any(test, feature = "private-test-util"))]`, that in-workspace
-  tests inject in place of the production Tokio spawner.
+  gated `#[cfg(feature = "private-test-util")]` (feature-only rather than the
+  `any(test, …)` form used elsewhere, because the helper pulls in the optional
+  `thread_aware` dependency that only the feature enables; the crate's own test
+  that uses it is likewise feature-gated), that in-workspace tests inject in
+  place of the production Tokio spawner.
 - `packages/cargo-bench-history/Cargo.toml` — the consuming CLI (a binary, not a
   thin re-export). Its regular `[dependencies]` omit every `private-test-util`
   feature, so the test-only surface never reaches production builds; separate

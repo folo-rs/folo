@@ -221,11 +221,11 @@ fn format_elapsed(elapsed: Duration) -> String {
     }
 }
 
-#[cfg(feature = "private-test-util")]
+#[cfg(any(test, feature = "private-test-util"))]
 #[cfg_attr(docsrs, doc(cfg(feature = "private-test-util")))]
 pub use test_support::RecordingReporter;
 
-#[cfg(feature = "private-test-util")]
+#[cfg(any(test, feature = "private-test-util"))]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod test_support {
     use std::cell::RefCell;

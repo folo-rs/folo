@@ -5,8 +5,8 @@
 //! `analyze` command in `DESIGN.md`). This module defines the [`GitHistory`] port
 //! for that — a real adapter
 //! that shells out to `git` (with the command output parsed by pure, unit-tested
-//! helpers) and an in-memory fake (in `#[cfg(test)]`) that models a canned commit
-//! graph so the query logic is testable without a real repository.
+//! helpers) and an in-memory fake that models a canned commit graph so the query
+//! logic is testable without a real repository.
 
 use std::future::Future;
 use std::io;
@@ -272,10 +272,10 @@ fn branch_from_symbolic_ref(stdout: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-#[cfg(feature = "private-test-util")]
+#[cfg(any(test, feature = "private-test-util"))]
 pub use fake::FakeGitHistory;
 
-#[cfg(feature = "private-test-util")]
+#[cfg(any(test, feature = "private-test-util"))]
 mod fake {
     use std::collections::HashMap;
     use std::future::{Future, ready};

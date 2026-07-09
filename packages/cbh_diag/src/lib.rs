@@ -20,7 +20,7 @@
 mod report;
 mod text;
 
-#[cfg(feature = "private-test-util")]
+#[cfg(any(test, feature = "private-test-util"))]
 #[cfg_attr(docsrs, doc(cfg(feature = "private-test-util")))]
 pub use report::RecordingReporter;
 pub use report::{Notes, Reporter, ReporterExt, StderrReporter};

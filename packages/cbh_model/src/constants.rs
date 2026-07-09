@@ -13,7 +13,7 @@
 ///
 /// It is the first segment of a partition prefix
 /// (`{STORAGE_VERSION}/{project}/{OBJECTS_SEGMENT}/{engine}/{triple}/{machine}`)
-/// and the value that `parse_key` (in the analysis layer) requires before it
+/// and the value that `parse_key` requires before it
 /// accepts a key, so the writer and reader share a single source of truth for the
 /// layout version.
 pub const STORAGE_VERSION: &str = "v1";
