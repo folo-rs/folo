@@ -41,6 +41,42 @@ async fn analyze_detects_regression_in_seeded_history() {
     assert!(report.contains("instruction_count"), "{report}");
 }
 
+/// History written by an older tool can carry metric kinds since dropped (the
+/// build-layout-volatile Callgrind events). `analyze` must skip those kinds and keep
+/// folding the retained ones rather than aborting the whole run on an unknown-variant
+/// parse error — the exact failure a stored `conditional_branch_misses` metric caused
+/// on the real history. The `instruction_count` regression must still surface.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn analyze_tolerates_legacy_metric_kinds_in_stored_history() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind_with_legacy_metric("c1", 100.0);
+    workspace.commit_dated("2024-01-02", "c2");
+    workspace.seed_callgrind_with_legacy_metric("c2", 100.0);
+    workspace.commit_dated("2024-01-03", "c3");
+    workspace.seed_callgrind_with_legacy_metric("c3", 100.0);
+    workspace.commit_dated("2024-01-04", "c4");
+    workspace.seed_callgrind_with_legacy_metric("c4", 130.0);
+    workspace.commit_dated("2024-01-05", "c5");
+    workspace.seed_callgrind_with_legacy_metric("c5", 130.0);
+    workspace.commit_dated("2024-01-06", "c6");
+    workspace.seed_callgrind_with_legacy_metric("c6", 130.0);
+
+    let outcome = workspace.drive(&["analyze"]).await.unwrap();
+    let RunOutcome::Analyzed {
+        report,
+        regressions,
+        ..
+    } = outcome
+    else {
+        panic!("expected an analyzed outcome, got {outcome:?}");
+    };
+    assert_eq!(regressions, 1);
+    assert!(report.contains("nm::observe/pull"), "{report}");
+    assert!(report.contains("instruction_count"), "{report}");
+}
+
 /// A rising Criterion `wall_time` history is flagged as a regression, proving the
 /// analyzer reconstructs series across a machine-keyed partition too.
 #[tokio::test]
