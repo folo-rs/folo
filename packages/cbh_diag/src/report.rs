@@ -326,6 +326,15 @@ mod tests {
     }
 
     #[test]
+    fn reporter_ext_timing_forwards_to_the_sink() {
+        // `ReporterExt::timing` is the guarded, crate-facing entry point; it must
+        // forward to the sink's `emit_timing` rather than silently drop the stage.
+        let reporter = RecordingReporter::new();
+        reporter.timing("find_changes (git walk)", Duration::from_millis(7));
+        assert!(reporter.timed("find_changes"));
+    }
+
+    #[test]
     fn format_elapsed_uses_seconds_at_or_above_one_second() {
         assert_eq!(format_elapsed(Duration::from_secs(1)), "1.000 s");
         assert_eq!(format_elapsed(Duration::from_millis(2500)), "2.500 s");

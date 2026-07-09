@@ -374,6 +374,28 @@ mod tests {
     }
 
     #[test]
+    fn is_synthetic_is_false_for_a_machine_keyed_set() {
+        // A machine-dependent engine carries a real fingerprint, so the set is not
+        // synthetic even though synthetic sets share the same type.
+        let set =
+            DiscriminantSet::new(Engine::AllTheTime, "x86_64-pc-windows-msvc", Some("abc123"));
+        assert!(!set.is_synthetic());
+    }
+
+    #[test]
+    fn display_formats_engine_triple_and_machine_key() {
+        let set = DiscriminantSet::new(Engine::Criterion, "x86_64-pc-windows-msvc", Some("abc123"));
+        assert_eq!(set.to_string(), "criterion/x86_64-pc-windows-msvc/abc123");
+
+        // A synthetic set renders the literal `synthetic` machine segment.
+        let synthetic = DiscriminantSet::new(Engine::AllocTracker, "x86_64-pc-windows-msvc", None);
+        assert_eq!(
+            synthetic.to_string(),
+            "alloc_tracker/x86_64-pc-windows-msvc/synthetic"
+        );
+    }
+
+    #[test]
     fn clean_key_is_named_by_commit() {
         let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", None);
         assert_eq!(

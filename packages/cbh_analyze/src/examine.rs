@@ -1013,4 +1013,13 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn escape_cell_backslash_escapes_pipes() {
+        // A commit title containing a pipe would otherwise open extra Markdown
+        // table columns, so each pipe must be backslash-escaped.
+        assert_eq!(escape_cell("feat: parse a|b"), "feat: parse a\\|b");
+        // Text with no pipe passes through byte-for-byte.
+        assert_eq!(escape_cell("plain title"), "plain title");
+    }
 }
