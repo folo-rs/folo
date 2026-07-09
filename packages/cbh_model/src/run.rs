@@ -72,7 +72,7 @@ impl Run {
 pub type MetricList = SmallVec<[Metric; 2]>;
 
 /// Deserializes the metric list, silently dropping any metric whose `kind` is not
-/// one the tool tracks.
+/// one of the kinds the tool tracks.
 ///
 /// Stored history predates the removal of the build-layout-volatile Callgrind
 /// metrics (cache hits per tier, estimated cycles, branch misses), so run files
@@ -80,11 +80,14 @@ pub type MetricList = SmallVec<[Metric; 2]>;
 /// run parse on an unknown-variant error — which would break `analyze`, `list`, and
 /// `examine` over any such history — the unknown metrics are skipped, matching the
 /// current policy of never persisting them again.
+///
+/// The raw list is kept inline in a `SmallVec` matching [`MetricList`]'s capacity so
+/// the common one- or two-metric case stays allocation-free on this hot read path.
 fn deserialize_metrics<'de, D>(deserializer: D) -> Result<MetricList, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let raw = Vec::<RawMetric>::deserialize(deserializer)?;
+    let raw = SmallVec::<[RawMetric; 2]>::deserialize(deserializer)?;
     Ok(raw.into_iter().filter_map(RawMetric::into_metric).collect())
 }
 
@@ -103,7 +106,8 @@ struct RawMetric {
 }
 
 impl RawMetric {
-    /// Converts to a [`Metric`], or `None` when the kind is not one the tool tracks.
+    /// Converts to a [`Metric`], or `None` when the kind is not one of the kinds the
+    /// tool tracks.
     fn into_metric(self) -> Option<Metric> {
         Some(Metric {
             kind: MetricKind::from_name(&self.kind)?,
