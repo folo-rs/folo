@@ -54,8 +54,8 @@ use cbh_model::{BenchmarkId, DiscriminantSet, MetricKind};
 use cbh_stats as stats;
 use serde::Serialize;
 
-use crate::analyze::parallel::{balanced_chunk_sizes, worker_count};
-use crate::analyze::{Series, SeriesPoint};
+use crate::detect::parallel::{balanced_chunk_sizes, worker_count};
+use crate::detect::{Series, SeriesPoint};
 
 /// Tunable parameters of the engine-aware analysis.
 #[derive(Clone, Copy, Debug)]
@@ -1217,7 +1217,7 @@ mod tests {
     use nonempty::nonempty;
 
     use super::*;
-    use crate::analyze::{Blessing, SeriesPoint};
+    use crate::detect::{Blessing, SeriesPoint};
 
     /// Builds a Callgrind-style series carrying `values` in topological order, with
     /// no dispersion (no confidence interval).

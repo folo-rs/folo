@@ -1,4 +1,4 @@
-# cbh_analysis
+# cbh_detect
 
 Implementation crate for [`cargo-bench-history`](https://github.com/folo-rs/folo). Do
 not depend on this directly — it carries the I/O-free analysis engine (timeline

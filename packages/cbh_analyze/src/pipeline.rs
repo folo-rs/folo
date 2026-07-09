@@ -10,11 +10,11 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyspawn::Spawner;
-use cbh_analysis::{
-    AnalysisConfig, AnalysisContext, Series, SeriesFilter, apply_blessings, find_changes_spawned,
-};
 use cbh_command::AnalyzeOptions;
 use cbh_config::{Config, load_config};
+use cbh_detect::{
+    AnalysisConfig, AnalysisContext, Series, SeriesFilter, apply_blessings, find_changes_spawned,
+};
 use cbh_diag::{Reporter, ReporterExt, StderrReporter};
 use cbh_git::{GitHistory, SystemGitHistory};
 use cbh_model::DiscriminantSet;
@@ -544,7 +544,7 @@ mod tests {
     /// An inline spawner that runs the detection's blocking tasks on the calling
     /// thread, so `analyze_with` needs no Tokio runtime under `block_on` or Miri.
     fn spawner() -> Spawner {
-        cbh_analysis::testing::synchronous_spawner()
+        cbh_detect::testing::synchronous_spawner()
     }
 
     /// A throwaway in-memory output writer for tests that assert on the returned

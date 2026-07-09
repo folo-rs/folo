@@ -41,7 +41,7 @@ orchestration — time comes from the injected `tick::Clock` (`new_tokio` in pro
 Do **not** spawn ad-hoc threads (`std::thread::scope`, `map_parallel`-style helpers) for
 compute. Route every parallel pass through the injected `anyspawn::Spawner` that
 `analyze_with` threads through: production injects the Tokio blocking pool, tests inject
-`cbh_analysis::testing::synchronous_spawner` (exposed by the `private-test-util`
+`cbh_detect::testing::synchronous_spawner` (exposed by the `private-test-util`
 feature), so the work stays runtime-agnostic and Miri-safe.
 New per-series logic must be side-effect-free. Flow and rationale: [`docs/analyze.md`](docs/analyze.md).
 

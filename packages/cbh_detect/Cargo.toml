@@ -1,7 +1,7 @@
 [package]
 # Cargo has its own logic for naming and expects dashes for the `cargo-bench-history`
 # binary, but its internal implementation crates use the short `cbh_` underscore prefix.
-name = "cbh_analysis"
+name = "cbh_detect"
 description = "Implementation crate for cargo-bench-history - do not reference directly"
 publish = true
 version = "0.0.3"

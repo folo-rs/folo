@@ -6,7 +6,7 @@
 //! its merge-base with the base ref, this pure logic decides, for each commit in
 //! topological order, whether it is *base-side* (only clean runs count) or
 //! *target-side* (clean and dirty runs count). The async git calls live in
-//! [`analyze`](super); keeping the split here pure keeps it Miri-testable.
+//! [`detect`](super); keeping the split here pure keeps it Miri-testable.
 
 /// One commit selected for analysis, in oldest-first topological position.
 #[derive(Clone, Debug, Eq, PartialEq)]

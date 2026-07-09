@@ -60,8 +60,8 @@ use std::sync::Arc;
 use cbh_model::{BenchmarkId, DiscriminantSet, MetricKind};
 use nonempty::nonempty;
 
-use crate::analyze::findings::find_changes;
-use crate::analyze::{AnalysisConfig, AnalysisContext, AnalysisMode, Series, SeriesPoint};
+use crate::detect::findings::find_changes;
+use crate::detect::{AnalysisConfig, AnalysisContext, AnalysisMode, Series, SeriesPoint};
 
 /// How a rise in the measured metric is judged.
 ///

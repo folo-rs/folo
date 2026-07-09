@@ -550,7 +550,7 @@ Concrete files to study:
 ### `cbh_*` (private-use impl crates, no shell)
 
 The `cargo-bench-history` CLI is split into a family of small `cbh_*` packages —
-the pure, I/O-free `cbh_model`, `cbh_codec`, `cbh_stats`, `cbh_analysis`, and
+the pure, I/O-free `cbh_model`, `cbh_codec`, `cbh_stats`, `cbh_detect`, and
 `cbh_render`, plus the extracted IO adapters and orchestration (`cbh_git`,
 `cbh_storage`, `cbh_probe`, `cbh_engines`, `cbh_run`, …). Each is a private-use
 package treated as an impl crate directly, with no companion `_impl` shell (see
@@ -564,11 +564,11 @@ crates.io so they can be released in lockstep with the CLI, and the doc-hidden
 marking discourages external dependents even though there is no re-export shell
 deferring their documentation. Concrete files to study:
 
-- `packages/cbh_analysis/Cargo.toml` — declares
+- `packages/cbh_detect/Cargo.toml` — declares
   `private-test-util = ["dep:thread_aware"]` and `[lib] doc = false`.
-- `packages/cbh_analysis/src/lib.rs` — `#![doc(hidden)]` root that re-exports
+- `packages/cbh_detect/src/lib.rs` — `#![doc(hidden)]` root that re-exports
   every type flat from the crate root.
-- `packages/cbh_analysis/src/testing.rs` — the `synchronous_spawner` helper,
+- `packages/cbh_detect/src/testing.rs` — the `synchronous_spawner` helper,
   gated `#[cfg(any(test, feature = "private-test-util"))]`, that in-workspace
   tests inject in place of the production Tokio spawner.
 - `packages/cargo-bench-history/Cargo.toml` — the consuming CLI (a binary, not a

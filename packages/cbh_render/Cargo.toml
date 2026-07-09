@@ -17,7 +17,7 @@ rust-version.workspace = true
 doc = false
 
 [dependencies]
-cbh_analysis = { workspace = true }
+cbh_detect = { workspace = true }
 cbh_model = { workspace = true }
 colored = { workspace = true }
 rasciigraph = { workspace = true, features = ["color"] }

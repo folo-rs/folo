@@ -6,7 +6,7 @@
 //! into [`RunPoints`] instead of the full [`Run`](cbh_model::Run) shrinks that
 //! transient per-object footprint: it keeps only, per result, the benchmark id and
 //! the metric fields that
-//! [`SeriesBuilder::push`](crate::analyze::SeriesBuilder::push) actually folds
+//! [`SeriesBuilder::push`](crate::detect::SeriesBuilder::push) actually folds
 //! into points — dropping the run context (environment, toolchain, commit,
 //! timestamps) and each metric's standard deviation. The commit a point is
 //! labelled with comes from the storage key (its commit directory segment), not
@@ -86,7 +86,7 @@ pub struct ResultPoints {
 /// Drops the standard deviation the fold never consults; the point estimate and
 /// confidence-interval bounds are all it carries into a [`SeriesPoint`].
 ///
-/// [`SeriesPoint`]: crate::analyze::SeriesPoint
+/// [`SeriesPoint`]: crate::detect::SeriesPoint
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
 pub struct MetricPoint {
     /// What kind of quantity this is (governs unit and comparison semantics).

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyspawn::Spawner;
-use cbh_analysis::{
+use cbh_detect::{
     DiscriminantSetQuery, RunPoints, SeriesBuilder, balanced_chunk_sizes, worker_count,
 };
 use cbh_diag::{Reporter, ReporterExt, count_noun};

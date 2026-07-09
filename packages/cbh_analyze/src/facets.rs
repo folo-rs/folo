@@ -2,7 +2,7 @@
 //! / `--machine-key` selectors and the auto-detected `AutoFacets` into the
 //! `FacetFilter`s the object listing applies, and describing them for the verbose trail.
 
-use cbh_analysis::{DiscriminantSetQuery, FacetFilter};
+use cbh_detect::{DiscriminantSetQuery, FacetFilter};
 use cbh_model::Engine;
 use cbh_run::RunError;
 use nonempty::NonEmpty;
@@ -110,7 +110,7 @@ fn parse_engine(name: Option<&str>) -> Result<Option<Engine>, RunError> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use cbh_analysis::{DiscriminantSetQuery, FacetFilter};
+    use cbh_detect::{DiscriminantSetQuery, FacetFilter};
     use nonempty::nonempty;
 
     use super::*;

@@ -3,7 +3,7 @@
 //! Everything here is deterministic, allocation-light, and free of I/O or the
 //! wall clock, so it runs under Miri and is unit-tested with named,
 //! value-asserting cases on hand-computable inputs. The detectors in the
-//! `cbh_analysis` crate compose these primitives; keeping the math isolated
+//! `cbh_detect` crate compose these primitives; keeping the math isolated
 //! keeps both halves easy to reason about.
 
 use std::cmp::Ordering;

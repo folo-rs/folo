@@ -18,9 +18,9 @@ doc = false
 
 [dependencies]
 anyspawn = { workspace = true, features = ["tokio"] }
-cbh_analysis = { workspace = true }
 cbh_command = { workspace = true }
 cbh_config = { workspace = true }
+cbh_detect = { workspace = true }
 cbh_diag = { workspace = true }
 cbh_git = { workspace = true }
 cbh_model = { workspace = true }
@@ -36,7 +36,7 @@ serde_json = { workspace = true }
 tick = { workspace = true, features = ["tokio"] }
 
 [dev-dependencies]
-cbh_analysis = { path = "../cbh_analysis", features = ["private-test-util"] }
+cbh_detect = { path = "../cbh_detect", features = ["private-test-util"] }
 cbh_diag = { path = "../cbh_diag", features = ["private-test-util"] }
 cbh_git = { path = "../cbh_git", features = ["private-test-util"] }
 cbh_run = { path = "../cbh_run", features = ["private-test-util"] }

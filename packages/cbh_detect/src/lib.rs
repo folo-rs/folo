@@ -21,13 +21,13 @@
 //! around it.
 //!
 //! Every type is re-exported flat from the crate root, so consumers write
-//! `cbh_analysis::Finding` rather than reaching into a submodule.
+//! `cbh_detect::Finding` rather than reaching into a submodule.
 //!
 //! [`cargo-bench-history`]: https://github.com/folo-rs/folo
 
-mod analyze;
+mod detect;
 
-pub use analyze::*;
+pub use detect::*;
 
 #[cfg(feature = "private-test-util")]
 #[cfg_attr(docsrs, doc(cfg(feature = "private-test-util")))]

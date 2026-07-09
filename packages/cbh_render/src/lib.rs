@@ -15,7 +15,7 @@
 //! (owning `ReportFormat` and the sparkline plotting). Split out of
 //! `cargo-bench-history` so the `colored` and `rasciigraph` presentation
 //! dependencies are confined here, away from the I/O-free detectors in
-//! `cbh_analysis`.
+//! `cbh_detect`.
 //!
 //! [`cargo-bench-history`]: https://github.com/folo-rs/folo
 

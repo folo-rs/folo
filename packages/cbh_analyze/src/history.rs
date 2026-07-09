@@ -4,8 +4,8 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use cbh_analysis::select_commits;
 use cbh_config::Config;
+use cbh_detect::select_commits;
 use cbh_diag::{Reporter, ReporterExt, count_noun};
 use cbh_git::GitHistory;
 use cbh_run::RunError;

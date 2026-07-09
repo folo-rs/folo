@@ -27,7 +27,7 @@ use hashbrown::HashTable;
 use hashbrown::hash_table::Entry;
 use jiff::Timestamp;
 
-use crate::analyze::run_points::RunPoints;
+use crate::detect::run_points::RunPoints;
 
 /// A single observation in a series.
 ///

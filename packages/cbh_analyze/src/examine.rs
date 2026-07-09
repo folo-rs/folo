@@ -531,7 +531,7 @@ mod tests {
     /// An inline spawner that runs the load tasks on the calling thread, so the
     /// tests need no Tokio runtime under `block_on` or Miri.
     fn spawner() -> Spawner {
-        cbh_analysis::testing::synchronous_spawner()
+        cbh_detect::testing::synchronous_spawner()
     }
 
     /// A run with one benchmark carrying a single instruction-count metric of the

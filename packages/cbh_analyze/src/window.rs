@@ -2,7 +2,7 @@
 //! history-mode default look-back, and testing each committer time against the
 //! resolved window.
 
-use cbh_analysis::AnalysisMode;
+use cbh_detect::AnalysisMode;
 use cbh_run::RunError;
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
@@ -192,7 +192,7 @@ fn instant_before(span: Span, flag: &str, now: Timestamp) -> Result<Timestamp, R
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use cbh_analysis::AnalysisMode;
+    use cbh_detect::AnalysisMode;
     use cbh_run::RunError;
     use jiff::Timestamp;
 

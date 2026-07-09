@@ -6,7 +6,7 @@
 //! the `cbh_render` crate turns the findings into a rendered report.
 //!
 //! Every public type is re-exported flat from this module, so consumers write
-//! `crate::analyze::Finding` rather than reaching into a submodule.
+//! `crate::detect::Finding` rather than reaching into a submodule.
 
 pub(crate) mod discriminant;
 pub(crate) mod findings;

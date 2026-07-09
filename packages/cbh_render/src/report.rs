@@ -11,7 +11,7 @@
 
 use std::num::NonZero;
 
-use cbh_analysis::{Direction, Finding, FindingMethod, SeriesValue, short_commit};
+use cbh_detect::{Direction, Finding, FindingMethod, SeriesValue, short_commit};
 use cbh_model::{BenchmarkId, DiscriminantSet};
 use colored::{Color, Colorize};
 use rasciigraph::{Config, plot_colored, plot_many_colored};

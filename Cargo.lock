@@ -508,32 +508,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
-name = "cbh_analysis"
-version = "0.0.3"
-dependencies = [
- "anyspawn",
- "cbh_model",
- "cbh_stats",
- "foldhash",
- "futures",
- "hashbrown 0.17.1",
- "jiff",
- "mutants",
- "nonempty",
- "serde",
- "serde_json",
- "smallvec",
- "thread_aware",
-]
-
-[[package]]
 name = "cbh_analyze"
 version = "0.0.3"
 dependencies = [
  "anyspawn",
- "cbh_analysis",
  "cbh_command",
  "cbh_config",
+ "cbh_detect",
  "cbh_diag",
  "cbh_git",
  "cbh_model",
@@ -588,6 +569,25 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml",
+]
+
+[[package]]
+name = "cbh_detect"
+version = "0.0.3"
+dependencies = [
+ "anyspawn",
+ "cbh_model",
+ "cbh_stats",
+ "foldhash",
+ "futures",
+ "hashbrown 0.17.1",
+ "jiff",
+ "mutants",
+ "nonempty",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "thread_aware",
 ]
 
 [[package]]
@@ -653,7 +653,7 @@ dependencies = [
 name = "cbh_render"
 version = "0.0.3"
 dependencies = [
- "cbh_analysis",
+ "cbh_detect",
  "cbh_model",
  "colored",
  "mutants",

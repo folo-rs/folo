@@ -30,14 +30,6 @@ name = "cargo-bench-history"
 version_group = "cargo-bench-history"
 
 [[package]]
-name = "cbh_analysis"
-
-# One of the `cargo-bench-history` implementation crates (see docs/impl-crate-split.md):
-# doc-hidden, "do not depend on directly", released in lockstep with the CLI so the
-# published set can never drift. The workspace Cargo.toml pins it with `=`.
-version_group = "cargo-bench-history"
-
-[[package]]
 name = "cbh_analyze"
 
 # One of the `cargo-bench-history` implementation crates (see docs/impl-crate-split.md):
@@ -71,6 +63,14 @@ version_group = "cargo-bench-history"
 
 [[package]]
 name = "cbh_config"
+
+# One of the `cargo-bench-history` implementation crates (see docs/impl-crate-split.md):
+# doc-hidden, "do not depend on directly", released in lockstep with the CLI so the
+# published set can never drift. The workspace Cargo.toml pins it with `=`.
+version_group = "cargo-bench-history"
+
+[[package]]
+name = "cbh_detect"
 
 # One of the `cargo-bench-history` implementation crates (see docs/impl-crate-split.md):
 # doc-hidden, "do not depend on directly", released in lockstep with the CLI so the
