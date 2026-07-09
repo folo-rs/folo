@@ -2,11 +2,12 @@
 //! history-mode default look-back, and testing each committer time against the
 //! resolved window.
 
-use crate::AnalyzeError;
 use cbh_detect::AnalysisMode;
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use jiff::{Span, Timestamp};
+
+use crate::AnalyzeError;
 
 /// Auto-detects the analysis mode from the resolved topology and recorded data.
 ///
@@ -192,11 +193,11 @@ fn instant_before(span: Span, flag: &str, now: Timestamp) -> Result<Timestamp, A
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use crate::AnalyzeError;
     use cbh_detect::AnalysisMode;
     use jiff::Timestamp;
 
     use super::*;
+    use crate::AnalyzeError;
 
     fn ts(seconds: i64) -> Timestamp {
         Timestamp::from_second(seconds).unwrap()

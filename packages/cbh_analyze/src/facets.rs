@@ -2,12 +2,12 @@
 //! / `--machine-key` selectors and the auto-detected `AutoFacets` into the
 //! `FacetFilter`s the object listing applies, and describing them for the verbose trail.
 
-use crate::AnalyzeError;
 use cbh_detect::{DiscriminantSetQuery, FacetFilter};
 use cbh_model::Engine;
 use nonempty::NonEmpty;
 
 use super::selection::Selection;
+use crate::AnalyzeError;
 
 /// The current machine's auto-detected facet values, used as the default when a
 /// query facet is omitted (see the *Discriminant set & query facets* section of

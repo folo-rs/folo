@@ -4,7 +4,6 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use crate::AnalyzeError;
 use cbh_config::Config;
 use cbh_detect::select_commits;
 use cbh_diag::{Reporter, ReporterExt, count_noun};
@@ -12,6 +11,7 @@ use cbh_git::GitHistory;
 use jiff::Timestamp;
 
 use super::selection::Selection;
+use crate::AnalyzeError;
 
 /// How the base-branch dirty-tip exception is gated.
 ///

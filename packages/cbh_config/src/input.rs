@@ -170,9 +170,8 @@ pub fn resolve_project_id(config: &Config, workspace_dir: &Path) -> String {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use crate::parse_config;
-
     use super::*;
+    use crate::parse_config;
 
     fn config_with(extra: &str) -> Config {
         let text = format!("[storage.azure]\naccount = \"a\"\ncontainer = \"c\"\n\n{extra}");

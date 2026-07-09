@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::AnalyzeError;
 use anyspawn::Spawner;
 use cbh_config::Config;
 use cbh_detect::{AnalysisMode, BlessingPlacement, Series, SeriesFilter};
@@ -24,6 +23,7 @@ use super::selection::Selection;
 use super::window::{
     WindowEdge, auto_mode, parse_until, resolve_since, since_cutoff_reason, window_excludes,
 };
+use crate::AnalyzeError;
 
 /// The data an analysis (or listing) draws on, plus the bookkeeping needed to
 /// explain an empty outcome and warn about ephemeral data.

@@ -6,7 +6,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::AnalyzeError;
 use anyspawn::Spawner;
 use cbh_detect::{
     DiscriminantSetQuery, RunPoints, SeriesBuilder, balanced_chunk_sizes, worker_count,
@@ -19,6 +18,7 @@ use cbh_storage::{Storage, project_objects_prefix};
 use futures::{StreamExt as _, TryStreamExt as _};
 
 use super::facets::describe_facets;
+use crate::AnalyzeError;
 
 /// One commit's run tally within a discriminant set, the granularity the report
 /// summaries and the `list runs` breakdown need.
