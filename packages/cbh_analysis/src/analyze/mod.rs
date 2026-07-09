@@ -17,7 +17,7 @@ pub(crate) mod series;
 #[cfg(test)]
 mod signal_validation;
 
-pub use discriminant::{DiscriminantSetQuery, FacetFilter, StorageKey, parse_key};
+pub use discriminant::{DiscriminantSetQuery, FacetFilter};
 pub use findings::{
     AnalysisConfig, AnalysisContext, AnalysisMode, Direction, Finding, FindingMethod, SeriesValue,
     find_changes_spawned, short_commit,

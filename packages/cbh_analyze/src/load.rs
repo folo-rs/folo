@@ -8,11 +8,12 @@ use std::time::Instant;
 
 use anyspawn::Spawner;
 use cbh_analysis::{
-    DiscriminantSetQuery, RunPoints, SeriesBuilder, StorageKey, balanced_chunk_sizes, parse_key,
-    worker_count,
+    DiscriminantSetQuery, RunPoints, SeriesBuilder, balanced_chunk_sizes, worker_count,
 };
 use cbh_diag::{Reporter, ReporterExt, count_noun};
-use cbh_model::{BenchmarkIdPrefix, DiscriminantSet, STORAGE_VERSION, sanitize_segment};
+use cbh_model::{
+    BenchmarkIdPrefix, DiscriminantSet, STORAGE_VERSION, StorageKey, parse_key, sanitize_segment,
+};
 use cbh_run::RunError;
 use cbh_storage::{Storage, project_objects_prefix};
 use futures::{StreamExt as _, TryStreamExt as _};

@@ -211,6 +211,97 @@ impl fmt::Display for DiscriminantSet {
     }
 }
 
+/// The components a storage key decomposes into.
+///
+/// A storage key references one of three kinds of object in a commit directory:
+/// a clean run (`clean.json`), a dirty snapshot (`dirty-<unix>.json`), or a
+/// blessing sidecar (`bless-<unix>.json`). The [`file`](Self::file) segment
+/// distinguishes them; [`is_dirty`](Self::is_dirty) and
+/// [`is_bless`](Self::is_bless) classify it.
+///
+/// This is the inverse of the key-construction methods above ([`clean_key`],
+/// [`dirty_key`], [`bless_key`]): [`parse_key`] recovers this decomposition from a
+/// stored object's key so `analyze` can group objects into comparable series.
+///
+/// [`clean_key`]: DiscriminantSet::clean_key
+/// [`dirty_key`]: DiscriminantSet::dirty_key
+/// [`bless_key`]: DiscriminantSet::bless_key
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StorageKey {
+    /// The (sanitized) project segment.
+    pub project: String,
+    /// The discriminant set the key belongs to.
+    pub set: DiscriminantSet,
+    /// The commit directory segment (full commit ID, or `unknown`).
+    pub commit: String,
+    /// The file segment (`clean.json`, `dirty-<unix>.json`, or `bless-<unix>.json`).
+    pub file: String,
+}
+
+impl StorageKey {
+    /// Whether the key names a dirty (uncommitted-tree) snapshot.
+    #[must_use]
+    pub fn is_dirty(&self) -> bool {
+        self.file.starts_with("dirty-")
+    }
+
+    /// Whether the key names a blessing sidecar rather than a stored run.
+    #[must_use]
+    pub fn is_bless(&self) -> bool {
+        self.file.starts_with("bless-")
+    }
+
+    /// The blessing sidecar key for this set's commit directory, issued at
+    /// `issued_unix`.
+    #[must_use]
+    pub fn bless_key(&self, issued_unix: i64) -> String {
+        self.set.bless_key(&self.project, &self.commit, issued_unix)
+    }
+}
+
+/// Parses a storage object key into its components.
+///
+/// Keys have the form
+/// `{STORAGE_VERSION}/{project}/{OBJECTS_SEGMENT}/{engine}/{triple}/{machine_key}/{commit}/{file}`
+/// — exactly eight non-empty segments, with the fixed `objects` segment directly
+/// under the project. Any key that does not match that shape exactly (wrong
+/// version, missing `objects` segment, too few or too many segments, or an empty
+/// segment) is ignored (returns `None`) rather than misattributed — so a
+/// per-project metadata sibling such as the cache-invalidation marker is skipped.
+#[must_use]
+pub fn parse_key(key: &str) -> Option<StorageKey> {
+    let parts: Vec<&str> = key.split('/').collect();
+    let [
+        version,
+        project,
+        objects,
+        engine,
+        target_triple,
+        machine_key,
+        commit,
+        file,
+    ] = parts.as_slice()
+    else {
+        return None;
+    };
+    if *version != STORAGE_VERSION || *objects != OBJECTS_SEGMENT {
+        return None;
+    }
+    if parts.iter().any(|segment| segment.is_empty()) {
+        return None;
+    }
+    Some(StorageKey {
+        project: (*project).to_owned(),
+        set: DiscriminantSet {
+            engine: (*engine).to_owned(),
+            target_triple: (*target_triple).to_owned(),
+            machine_key: (*machine_key).to_owned(),
+        },
+        commit: (*commit).to_owned(),
+        file: (*file).to_owned(),
+    })
+}
+
 /// Replaces every character that is not safe in a single path segment with `_`,
 /// mapping an otherwise-empty or all-dots result to `_`.
 ///
@@ -398,5 +489,70 @@ mod tests {
         );
         // Exactly the eight canonical key segments survive sanitization.
         assert_eq!(object.split('/').count(), 8);
+    }
+
+    #[test]
+    fn parse_key_decomposes_a_clean_key() {
+        let parsed = parse_key(
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/clean.json",
+        )
+        .unwrap();
+        assert_eq!(parsed.project, "folo");
+        assert_eq!(parsed.set.engine, "callgrind");
+        assert_eq!(parsed.set.target_triple, "x86_64-unknown-linux-gnu");
+        assert_eq!(parsed.set.machine_key, "synthetic");
+        assert_eq!(parsed.commit, "abc123");
+        assert_eq!(parsed.file, "clean.json");
+        assert!(!parsed.is_dirty());
+        assert!(!parsed.is_bless());
+    }
+
+    #[test]
+    fn parse_key_recognizes_a_dirty_snapshot() {
+        let parsed = parse_key(
+            "v1/folo/objects/criterion/x86_64-pc-windows-msvc/m1/abc123/dirty-1700000000.json",
+        )
+        .unwrap();
+        assert!(parsed.is_dirty());
+        assert_eq!(parsed.set.target_triple, "x86_64-pc-windows-msvc");
+        assert_eq!(parsed.set.machine_key, "m1");
+    }
+
+    #[test]
+    fn parse_key_recognizes_a_blessing_sidecar() {
+        let parsed = parse_key(
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/bless-1700000000.json",
+        )
+        .unwrap();
+        assert!(parsed.is_bless());
+        assert!(!parsed.is_dirty());
+        assert_eq!(parsed.commit, "abc123");
+    }
+
+    #[test]
+    fn bless_key_targets_the_sets_commit_directory() {
+        let parsed = parse_key(
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/clean.json",
+        )
+        .unwrap();
+        assert_eq!(
+            parsed.bless_key(1_700_000_000),
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/bless-1700000000.json"
+        );
+    }
+
+    #[test]
+    fn parse_key_rejects_malformed_keys() {
+        // Wrong (unrecognized) storage version, even with an otherwise valid shape.
+        assert!(parse_key("v2/folo/objects/callgrind/t/m/c/f.json").is_none());
+        // Missing the fixed `objects` segment (the pre-objects v1 shape).
+        assert!(parse_key("v1/folo/callgrind/t/m/c/f.json").is_none());
+        // A different literal in the objects position.
+        assert!(parse_key("v1/folo/data/callgrind/t/m/c/f.json").is_none());
+        // Structurally malformed keys at the recognized version.
+        assert!(parse_key("v1/folo/objects/callgrind/t/m/f.json").is_none());
+        assert!(parse_key("v1/folo/objects/callgrind/t/m/c/sub/f.json").is_none());
+        assert!(parse_key("v1/folo/objects/callgrind/t//c/f.json").is_none());
+        assert!(parse_key("v1/folo/objects/callgrind/t/m/c/").is_none());
     }
 }

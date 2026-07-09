@@ -11,12 +11,11 @@
 
 use std::num::NonZero;
 
+use cbh_analysis::{Direction, Finding, FindingMethod, SeriesValue, short_commit};
+use cbh_model::{BenchmarkId, DiscriminantSet};
 use colored::{Color, Colorize};
 use rasciigraph::{Config, plot_colored, plot_many_colored};
 use serde::Serialize;
-
-use crate::analyze::{Direction, Finding, FindingMethod, SeriesValue, short_commit};
-use crate::model::{BenchmarkId, DiscriminantSet};
 
 /// Height, in rows, of a history-mode finding chart.
 const CHART_HEIGHT: u32 = 4;
@@ -910,10 +909,10 @@ fn format_percent(relative_delta: f64) -> String {
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
+    use cbh_model::MetricKind;
     use nonempty::nonempty;
 
     use super::*;
-    use crate::model::MetricKind;
 
     fn discriminant_set() -> DiscriminantSet {
         DiscriminantSet {

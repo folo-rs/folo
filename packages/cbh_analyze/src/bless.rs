@@ -23,7 +23,7 @@ use cbh_command::{BlessOptions, UnblessOptions};
 use cbh_config::{Config, load_config};
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
-use cbh_model::BlessingRecord;
+use cbh_model::{BlessingRecord, StorageKey};
 use cbh_run::{
     RunError, RunOutcome, finish_with_flush, resolve_config_path, resolve_local_path,
     resolve_project_id, resolve_repo, storage_env,
@@ -33,8 +33,8 @@ use jiff::Timestamp;
 use tick::Clock;
 
 use super::{
-    AutoFacets, Selection, StorageKey, detect_auto_facets, facet_filtered_candidates,
-    resolve_base_ref, resolve_facets, resolve_now,
+    AutoFacets, Selection, detect_auto_facets, facet_filtered_candidates, resolve_base_ref,
+    resolve_facets, resolve_now,
 };
 
 /// The real `bless`: load configuration, wire the configured storage and git

@@ -18,17 +18,16 @@ use std::collections::hash_map::Entry as MapEntry;
 use std::hash::BuildHasher;
 use std::sync::Arc;
 
+use cbh_model::{
+    BenchmarkId, BenchmarkIdPrefix, BlessingRecord, DiscriminantSet, MetricKind, Run, StorageKey,
+};
 use foldhash::fast::RandomState;
 use foldhash::{HashMap as FoldHashMap, HashMapExt};
 use hashbrown::HashTable;
 use hashbrown::hash_table::Entry;
 use jiff::Timestamp;
 
-use crate::analyze::StorageKey;
 use crate::analyze::run_points::RunPoints;
-use crate::model::{
-    BenchmarkId, BenchmarkIdPrefix, BlessingRecord, DiscriminantSet, MetricKind, Run,
-};
 
 /// A single observation in a series.
 ///
@@ -520,13 +519,12 @@ mod tests {
     )]
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
+    use cbh_model::{
+        BenchmarkResult, EnvironmentInfo, GitInfo, Metric, RunContext, ToolchainInfo, parse_key,
+    };
     use nonempty::NonEmpty;
 
     use super::*;
-    use crate::analyze::parse_key;
-    use crate::model::{
-        BenchmarkResult, EnvironmentInfo, GitInfo, Metric, RunContext, ToolchainInfo,
-    };
 
     fn ts(seconds: i64) -> Timestamp {
         Timestamp::from_second(seconds).unwrap()

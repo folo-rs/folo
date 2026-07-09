@@ -19,9 +19,6 @@
 //!
 //! [`cargo-bench-history`]: https://github.com/folo-rs/folo
 
-use cbh_analysis as analyze;
-use cbh_model as model;
-
 mod report;
 
 pub use report::*;

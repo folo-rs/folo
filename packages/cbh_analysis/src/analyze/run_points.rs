@@ -3,7 +3,7 @@
 //! The parallel object loader fans the per-object parse + fold across cores: each
 //! worker parses one object at a time into [`RunPoints`] and folds it straight into
 //! its own `SeriesBuilder`, dropping the parsed run before the next. Deserializing
-//! into [`RunPoints`] instead of the full [`Run`](crate::model::Run) shrinks that
+//! into [`RunPoints`] instead of the full [`Run`](cbh_model::Run) shrinks that
 //! transient per-object footprint: it keeps only, per result, the benchmark id and
 //! the metric fields that
 //! [`SeriesBuilder::push`](crate::analyze::SeriesBuilder::push) actually folds
@@ -18,10 +18,9 @@
 //! parse is still worth keeping; see the load section of `cargo-bench-history`'s
 //! `docs/analyze.md`.)
 
+use cbh_model::{BenchmarkId, MetricKind, Run};
 use serde::Deserialize;
 use smallvec::SmallVec;
-
-use crate::model::{BenchmarkId, MetricKind, Run};
 
 /// A stored run reduced to the data the series fold reads.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -78,7 +77,7 @@ pub struct ResultPoints {
     pub id: BenchmarkId,
     /// The fold-relevant projection of each captured metric. Inline up to two, as
     /// the noisy single-metric engines are the common case, matching
-    /// [`MetricList`](crate::model::MetricList).
+    /// [`MetricList`](cbh_model::MetricList).
     pub metrics: SmallVec<[MetricPoint; 2]>,
 }
 
@@ -109,13 +108,11 @@ mod tests {
     )]
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
+    use cbh_model::{BenchmarkResult, EnvironmentInfo, GitInfo, Metric, RunContext, ToolchainInfo};
     use nonempty::nonempty;
     use smallvec::smallvec;
 
     use super::*;
-    use crate::model::{
-        BenchmarkResult, EnvironmentInfo, GitInfo, Metric, RunContext, ToolchainInfo,
-    };
 
     fn sample_run() -> Run {
         let context = RunContext::new(

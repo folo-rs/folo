@@ -6,11 +6,11 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyspawn::Spawner;
-use cbh_analysis::{AnalysisMode, BlessingPlacement, Series, SeriesFilter, StorageKey};
+use cbh_analysis::{AnalysisMode, BlessingPlacement, Series, SeriesFilter};
 use cbh_config::Config;
 use cbh_diag::{Reporter, ReporterExt, count_noun};
 use cbh_git::GitHistory;
-use cbh_model::{BenchmarkIdPrefix, BlessingRecord, DiscriminantSet};
+use cbh_model::{BenchmarkIdPrefix, BlessingRecord, DiscriminantSet, StorageKey};
 use cbh_run::RunError;
 use cbh_storage::Storage;
 use jiff::Timestamp;

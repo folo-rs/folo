@@ -2,11 +2,11 @@
 //! `analyze` perform once per stored object.
 //!
 //! These are optimization candidates rather than known hot spots: building a
-//! qualified benchmark identity, sanitizing a path segment, and assembling a
-//! storage key are each invoked per benchmark result and per stored
-//! object, so a regression here scales with history size. Benchmarking them now
-//! (while the implementations are simple) gives a baseline to measure any future
-//! optimization against.
+//! qualified benchmark identity, sanitizing a path segment, assembling a storage
+//! key, and parsing one back into its components are each invoked per benchmark
+//! result or per stored object, so a regression here scales with history size.
+//! Benchmarking them now (while the implementations are simple) gives a baseline
+//! to measure any future optimization against.
 
 #![allow(
     missing_docs,
@@ -15,7 +15,7 @@
 
 use std::hint::black_box;
 
-use cbh_model::{BenchmarkId, DiscriminantSet, Engine, sanitize_segment};
+use cbh_model::{BenchmarkId, DiscriminantSet, Engine, parse_key, sanitize_segment};
 use criterion::{Criterion, criterion_group, criterion_main};
 use nonempty::nonempty;
 
@@ -53,6 +53,12 @@ fn storage_key(c: &mut Criterion) {
                 black_box("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
             ))
         });
+    });
+
+    let key = "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/\
+               deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/clean.json";
+    group.bench_function("parse_key", |b| {
+        b.iter(|| black_box(parse_key(black_box(key))));
     });
 
     group.finish();

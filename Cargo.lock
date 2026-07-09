@@ -514,7 +514,6 @@ dependencies = [
  "anyspawn",
  "cbh_model",
  "cbh_stats",
- "criterion",
  "foldhash",
  "futures",
  "hashbrown 0.17.1",
