@@ -23,19 +23,130 @@ publish_timeout = "45m"
 [[package]]
 name = "cargo-bench-history"
 
-# cargo-bench-history and cargo-bench-history-core are logically the same package
-# split into two crates for cargotechnical reasons (see docs/impl-crate-split.md).
-# They must always be released at the same version; the workspace Cargo.toml
-# additionally pins cargo-bench-history-core with `=` so the CLI and its core can
-# never end up at mismatched versions.
+# `cargo-bench-history` is released in lockstep with its implementation crates
+# (the `cbh_*` crates below, see docs/impl-crate-split.md). The workspace Cargo.toml
+# pins each impl crate with `=` so the CLI and its internals can never end up at
+# mismatched versions.
 version_group = "cargo-bench-history"
 
 [[package]]
-name = "cargo-bench-history-core"
+name = "cbh_analyze"
 
-# See the `cargo-bench-history` entry above. `cargo-bench-history-core` carries the
-# pure, I/O-free logic the CLI depends on; its version number keeps the pair in
-# lockstep and the workspace Cargo.toml pins it with `=`.
+# One of the `cargo-bench-history` implementation crates (see docs/impl-crate-split.md):
+# doc-hidden, "do not depend on directly", released in lockstep with the CLI so the
+# published set can never drift. The workspace Cargo.toml pins it with `=`.
+version_group = "cargo-bench-history"
+
+[[package]]
+name = "cbh_cli"
+
+# One of the `cargo-bench-history` implementation crates (see docs/impl-crate-split.md):
+# doc-hidden, "do not depend on directly", released in lockstep with the CLI so the
+# published set can never drift. The workspace Cargo.toml pins it with `=`.
+version_group = "cargo-bench-history"
+
+[[package]]
+name = "cbh_codec"
+
+# One of the `cargo-bench-history` implementation crates (see docs/impl-crate-split.md):
+# doc-hidden, "do not depend on directly", released in lockstep with the CLI so the
+# published set can never drift. The workspace Cargo.toml pins it with `=`.
+version_group = "cargo-bench-history"
+
+[[package]]
+name = "cbh_command"
+
+# One of the `cargo-bench-history` implementation crates (see docs/impl-crate-split.md):
+# doc-hidden, "do not depend on directly", released in lockstep with the CLI so the
+# published set can never drift. The workspace Cargo.toml pins it with `=`.
+version_group = "cargo-bench-history"
+
+[[package]]
+name = "cbh_config"
+
+# One of the `cargo-bench-history` implementation crates (see docs/impl-crate-split.md):
+# doc-hidden, "do not depend on directly", released in lockstep with the CLI so the
+# published set can never drift. The workspace Cargo.toml pins it with `=`.
+version_group = "cargo-bench-history"
+
+[[package]]
+name = "cbh_detect"
+
+# One of the `cargo-bench-history` implementation crates (see docs/impl-crate-split.md):
+# doc-hidden, "do not depend on directly", released in lockstep with the CLI so the
+# published set can never drift. The workspace Cargo.toml pins it with `=`.
+version_group = "cargo-bench-history"
+
+[[package]]
+name = "cbh_diag"
+
+# One of the `cargo-bench-history` implementation crates (see docs/impl-crate-split.md):
+# doc-hidden, "do not depend on directly", released in lockstep with the CLI so the
+# published set can never drift. The workspace Cargo.toml pins it with `=`.
+version_group = "cargo-bench-history"
+
+[[package]]
+name = "cbh_engines"
+
+# One of the `cargo-bench-history` implementation crates (see docs/impl-crate-split.md):
+# doc-hidden, "do not depend on directly", released in lockstep with the CLI so the
+# published set can never drift. The workspace Cargo.toml pins it with `=`.
+version_group = "cargo-bench-history"
+
+[[package]]
+name = "cbh_git"
+
+# One of the `cargo-bench-history` implementation crates (see docs/impl-crate-split.md):
+# doc-hidden, "do not depend on directly", released in lockstep with the CLI so the
+# published set can never drift. The workspace Cargo.toml pins it with `=`.
+version_group = "cargo-bench-history"
+
+[[package]]
+name = "cbh_model"
+
+# One of the `cargo-bench-history` implementation crates (see docs/impl-crate-split.md):
+# doc-hidden, "do not depend on directly", released in lockstep with the CLI so the
+# published set can never drift. The workspace Cargo.toml pins it with `=`.
+version_group = "cargo-bench-history"
+
+[[package]]
+name = "cbh_probe"
+
+# One of the `cargo-bench-history` implementation crates (see docs/impl-crate-split.md):
+# doc-hidden, "do not depend on directly", released in lockstep with the CLI so the
+# published set can never drift. The workspace Cargo.toml pins it with `=`.
+version_group = "cargo-bench-history"
+
+[[package]]
+name = "cbh_render"
+
+# One of the `cargo-bench-history` implementation crates (see docs/impl-crate-split.md):
+# doc-hidden, "do not depend on directly", released in lockstep with the CLI so the
+# published set can never drift. The workspace Cargo.toml pins it with `=`.
+version_group = "cargo-bench-history"
+
+[[package]]
+name = "cbh_run"
+
+# One of the `cargo-bench-history` implementation crates (see docs/impl-crate-split.md):
+# doc-hidden, "do not depend on directly", released in lockstep with the CLI so the
+# published set can never drift. The workspace Cargo.toml pins it with `=`.
+version_group = "cargo-bench-history"
+
+[[package]]
+name = "cbh_stats"
+
+# One of the `cargo-bench-history` implementation crates (see docs/impl-crate-split.md):
+# doc-hidden, "do not depend on directly", released in lockstep with the CLI so the
+# published set can never drift. The workspace Cargo.toml pins it with `=`.
+version_group = "cargo-bench-history"
+
+[[package]]
+name = "cbh_storage"
+
+# One of the `cargo-bench-history` implementation crates (see docs/impl-crate-split.md):
+# doc-hidden, "do not depend on directly", released in lockstep with the CLI so the
+# published set can never drift. The workspace Cargo.toml pins it with `=`.
 version_group = "cargo-bench-history"
 
 [[package]]

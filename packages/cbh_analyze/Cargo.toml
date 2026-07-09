@@ -1,0 +1,49 @@
+[package]
+# Cargo has its own logic for naming and expects dashes for the `cargo-bench-history`
+# binary, but its internal implementation crates use the short `cbh_` underscore prefix.
+name = "cbh_analyze"
+description = "Implementation crate for cargo-bench-history - do not reference directly"
+publish = true
+version = "0.0.3"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+# This is an implementation crate whose surface is documented on `cargo-bench-history`.
+doc = false
+
+[dependencies]
+anyspawn = { workspace = true, features = ["tokio"] }
+cbh_command = { workspace = true }
+cbh_config = { workspace = true }
+cbh_detect = { workspace = true }
+cbh_diag = { workspace = true }
+cbh_git = { workspace = true }
+cbh_model = { workspace = true }
+cbh_probe = { workspace = true }
+cbh_render = { workspace = true }
+cbh_run = { workspace = true }
+cbh_storage = { workspace = true }
+futures = { workspace = true }
+jiff = { workspace = true, features = ["serde"] }
+nonempty = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tick = { workspace = true, features = ["tokio"] }
+
+[dev-dependencies]
+cbh_detect = { path = "../cbh_detect", features = ["private-test-util"] }
+cbh_diag = { path = "../cbh_diag", features = ["private-test-util"] }
+cbh_git = { path = "../cbh_git", features = ["private-test-util"] }
+cbh_run = { path = "../cbh_run", features = ["private-test-util"] }
+cbh_storage = { path = "../cbh_storage", features = ["private-test-util"] }
+futures = { workspace = true, features = ["executor"] }
+mutants = { workspace = true }
+tick = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

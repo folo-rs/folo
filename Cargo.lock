@@ -423,56 +423,36 @@ checksum = "8ae3f5d315924270530207e2a68396c3cc547f6dca3fbdca317cfb1a51edb593"
 name = "cargo-bench-history"
 version = "0.0.3"
 dependencies = [
- "all_the_time",
- "alloc_tracker",
- "anyspawn",
  "async-trait",
  "azure_core",
  "azure_identity",
  "azure_storage_blob",
  "base64",
- "cargo-bench-history-core",
- "clap",
+ "cbh_analyze",
+ "cbh_cli",
+ "cbh_codec",
+ "cbh_command",
+ "cbh_config",
+ "cbh_diag",
+ "cbh_engines",
+ "cbh_git",
+ "cbh_model",
+ "cbh_probe",
+ "cbh_run",
+ "cbh_storage",
  "futures",
  "jiff",
- "many_cpus",
  "mimalloc",
  "mock_bench_engine",
  "mutants",
  "nonempty",
  "reqwest",
- "serde",
  "serde_json",
  "serial_test",
- "sha2",
  "tempfile",
  "testing",
  "tick",
  "tokio",
- "toml",
-]
-
-[[package]]
-name = "cargo-bench-history-core"
-version = "0.0.3"
-dependencies = [
- "alloc_tracker",
- "anyspawn",
- "colored",
- "criterion",
- "flate2",
- "foldhash",
- "futures",
- "gungraun",
- "hashbrown 0.17.1",
- "jiff",
- "mutants",
- "nonempty",
- "rasciigraph",
- "serde",
- "serde_json",
- "smallvec",
- "thread_aware",
 ]
 
 [[package]]
@@ -481,7 +461,8 @@ version = "0.0.0"
 dependencies = [
  "all_the_time",
  "cargo-bench-history",
- "cargo-bench-history-core",
+ "cbh_codec",
+ "cbh_model",
  "clap",
  "futures",
  "jiff",
@@ -525,6 +506,208 @@ name = "cast"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
+
+[[package]]
+name = "cbh_analyze"
+version = "0.0.3"
+dependencies = [
+ "anyspawn",
+ "cbh_command",
+ "cbh_config",
+ "cbh_detect",
+ "cbh_diag",
+ "cbh_git",
+ "cbh_model",
+ "cbh_probe",
+ "cbh_render",
+ "cbh_run",
+ "cbh_storage",
+ "futures",
+ "jiff",
+ "mutants",
+ "nonempty",
+ "serde",
+ "serde_json",
+ "tick",
+]
+
+[[package]]
+name = "cbh_cli"
+version = "0.0.3"
+dependencies = [
+ "cbh_command",
+ "cbh_model",
+ "clap",
+ "mutants",
+]
+
+[[package]]
+name = "cbh_codec"
+version = "0.0.3"
+dependencies = [
+ "alloc_tracker",
+ "cbh_model",
+ "criterion",
+ "flate2",
+ "gungraun",
+ "nonempty",
+]
+
+[[package]]
+name = "cbh_command"
+version = "0.0.3"
+dependencies = [
+ "cbh_model",
+ "mutants",
+]
+
+[[package]]
+name = "cbh_config"
+version = "0.0.3"
+dependencies = [
+ "serde",
+ "tempfile",
+ "tokio",
+ "toml",
+]
+
+[[package]]
+name = "cbh_detect"
+version = "0.0.3"
+dependencies = [
+ "anyspawn",
+ "cbh_model",
+ "cbh_stats",
+ "foldhash",
+ "futures",
+ "hashbrown 0.17.1",
+ "jiff",
+ "mutants",
+ "nonempty",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "thread_aware",
+]
+
+[[package]]
+name = "cbh_diag"
+version = "0.0.3"
+dependencies = [
+ "mutants",
+]
+
+[[package]]
+name = "cbh_engines"
+version = "0.0.3"
+dependencies = [
+ "all_the_time",
+ "alloc_tracker",
+ "cbh_diag",
+ "cbh_model",
+ "jiff",
+ "mutants",
+ "nonempty",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "cbh_git"
+version = "0.0.3"
+dependencies = [
+ "cbh_model",
+ "futures",
+ "jiff",
+ "mutants",
+ "tokio",
+]
+
+[[package]]
+name = "cbh_model"
+version = "0.0.3"
+dependencies = [
+ "criterion",
+ "jiff",
+ "nonempty",
+ "serde",
+ "serde_json",
+ "smallvec",
+]
+
+[[package]]
+name = "cbh_probe"
+version = "0.0.3"
+dependencies = [
+ "cbh_git",
+ "cbh_model",
+ "many_cpus",
+ "mutants",
+ "sha2",
+ "tokio",
+]
+
+[[package]]
+name = "cbh_render"
+version = "0.0.3"
+dependencies = [
+ "cbh_detect",
+ "cbh_model",
+ "colored",
+ "mutants",
+ "nonempty",
+ "rasciigraph",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "cbh_run"
+version = "0.0.3"
+dependencies = [
+ "cbh_command",
+ "cbh_config",
+ "cbh_diag",
+ "cbh_render",
+ "cbh_storage",
+ "futures",
+ "mutants",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "cbh_stats"
+version = "0.0.3"
+dependencies = [
+ "mutants",
+]
+
+[[package]]
+name = "cbh_storage"
+version = "0.0.3"
+dependencies = [
+ "async-trait",
+ "azure_core",
+ "azure_identity",
+ "azure_storage_blob",
+ "base64",
+ "cbh_codec",
+ "cbh_config",
+ "cbh_diag",
+ "cbh_model",
+ "futures",
+ "jiff",
+ "mutants",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "tempfile",
+ "tokio",
+]
 
 [[package]]
 name = "cc"

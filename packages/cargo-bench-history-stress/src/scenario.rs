@@ -44,7 +44,7 @@
               behavior is intentional and cannot misbehave for the sizes used here"
 )]
 
-use cargo_bench_history_core::model::{BenchmarkId, DiscriminantSet, Engine, Metric, MetricKind};
+use cbh_model::{BenchmarkId, DiscriminantSet, Engine, Metric, MetricKind};
 use jiff::Timestamp;
 use nonempty::nonempty;
 

@@ -1,0 +1,23 @@
+[package]
+# Cargo expects dashes for the `cargo-bench-history` binary, but its internal
+# implementation crates use the short `cbh_` underscore prefix.
+name = "cbh_stats"
+description = "Implementation crate for cargo-bench-history - do not reference directly"
+publish = true
+version = "0.0.3"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+# This is an implementation crate whose surface is documented on `cargo-bench-history`.
+doc = false
+
+[dev-dependencies]
+mutants = { workspace = true }
+
+[lints]
+workspace = true

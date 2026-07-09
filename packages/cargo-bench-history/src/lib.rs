@@ -1,7 +1,6 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![expect(
-    clippy::exhaustive_enums,
     clippy::exhaustive_structs,
     reason = "this crate's `pub` items form a handoff boundary between lib.rs and \
               the in-crate binary plus integration tests, used only inside this \
@@ -279,41 +278,23 @@
 //! account name baked into the committed `.cargo/bench_history.toml` and the per-push
 //! consumer at <https://github.com/folo-rs/folo/blob/main/.github/workflows/bench-history.yml>.
 
-mod analyze;
-mod bench;
-mod bench_output;
-mod cli;
-mod command;
 mod commands;
-mod config;
 mod config_writer;
 mod dispatch;
-mod git;
-mod git_history;
-mod host;
-mod machine;
-mod outcome;
-mod output;
-mod probe;
-mod process;
-mod report;
-mod storage;
-mod text;
-mod wiring;
 
-pub(crate) use cargo_bench_history_core::model;
-pub use cli::{Cli, EarlyExit};
-pub use command::{
+pub use cbh_cli::{Cli, EarlyExit};
+pub use cbh_command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
     ExamineOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection, PruneOptions,
     UnblessOptions,
 };
-pub use config::{ConfigError, default_template};
+pub use cbh_config::{ConfigError, default_template};
+pub(crate) use cbh_model as model;
+pub(crate) use cbh_run::finish_with_flush;
+pub use cbh_run::{RunError, RunOutcome};
+pub use cbh_storage::{StorageError, StorageOverride, azure_backend_from_parts};
 pub use dispatch::{Overrides, run, run_with_overrides};
 pub use model::{
     BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, EnvironmentProvider, GitInfo,
     Metric, MetricKind, Run, RunContext, SCHEMA_VERSION, ToolchainInfo,
 };
-pub(crate) use outcome::finish_with_flush;
-pub use outcome::{RunError, RunOutcome};
-pub use storage::{StorageError, StorageOverride, azure_backend_from_parts};

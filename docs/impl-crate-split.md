@@ -160,7 +160,9 @@ hide a companion crate**: the consumer is the application itself, not a thin
 re-export library, so there is no narrow re-export list and no re-export smoke
 test, and the `-core` package need not mark itself `#![doc(hidden)]` /
 `[lib] doc = false` / "do not depend on this directly" (it has no public-shell
-twin to defer documentation to). What carries over is:
+twin to defer documentation to). A *published* private-use impl crate may still
+opt into those markings — to discourage external dependents on crates.io — as the
+`cbh_*` family does; nothing *forces* it to. What carries over is:
 
 - The internal-helper convention: a `private-test-util` Cargo feature (the
   `private-*` prefix in general) that gates
@@ -177,7 +179,7 @@ twin to defer documentation to). What carries over is:
   `[workspace.dependencies]` keep the pair from ever drifting apart, exactly as
   for a `foo`/`foo_impl` pair (see "Versioning" above).
 
-See `cargo-bench-history-core` under "Canonical examples" for a worked instance.
+See the `cbh_*` crates under "Canonical examples" for a worked instance.
 
 ## Where each kind of artifact lives
 
@@ -459,8 +461,8 @@ boundary. The two patterns coexist:
 ## Canonical examples
 
 The full `foo`/`foo_impl` split has been applied to three crate pairs in this
-workspace. A fourth example shows the simplified, shell-less form a private-use
-package takes.
+workspace. A fourth example shows the simplified, shell-less form private-use
+packages take.
 
 ### `nm` / `nm_impl`
 
@@ -545,32 +547,41 @@ Concrete files to study:
 - `release-plz.toml` — `version_group = "many_cpus"` entries for `many_cpus`
   and `many_cpus_impl`.
 
-### `cargo-bench-history-core` (private-use, no shell)
+### `cbh_*` (private-use impl crates, no shell)
 
-A private-use package treated as an impl crate directly, with no companion
-`_impl` shell (see "Private-use packages need no separate shell"). It holds the
-data model and pure analysis logic for the `cargo-bench-history` CLI, split out
-so that fast, I/O-free part can be unit- and mutation-tested cheaply. Concrete
-files to study:
+The `cargo-bench-history` CLI is split into a family of small `cbh_*` packages —
+the pure, I/O-free `cbh_model`, `cbh_codec`, `cbh_stats`, `cbh_detect`, and
+`cbh_render`, plus the extracted IO adapters and orchestration (`cbh_git`,
+`cbh_storage`, `cbh_probe`, `cbh_engines`, `cbh_run`, …). Each is a private-use
+package treated as an impl crate directly, with no companion `_impl` shell (see
+"Private-use packages need no separate shell"): the CLI and its sibling impl
+crates consume them directly, so there is nothing to wrap or hide behind a thin
+re-export twin.
 
-- `packages/cargo-bench-history-core/Cargo.toml` — declares
-  `private-test-util = ["dep:thread_aware"]`. No `[lib] doc = false` and no
-  re-export list: the CLI consumes it directly, so there is nothing to wrap or
-  hide.
-- `packages/cargo-bench-history-core/src/lib.rs` —
-  `#[cfg(feature = "private-test-util")] pub mod testing;` gates the internal
-  test/bench surface behind the feature.
-- `packages/cargo-bench-history-core/src/testing.rs` — the
-  `synchronous_spawner` helper that in-workspace tests inject in place of the
-  production Tokio spawner.
-- `packages/cargo-bench-history/Cargo.toml` — the consuming shell (a CLI
-  binary, not a thin re-export). Its regular dependency
-  `cargo-bench-history-core = { workspace = true }` omits the feature, so the
-  test-only spawner never reaches production builds; a `[dev-dependencies]`
-  entry with `features = ["private-test-util"]` activates it for the shell's
-  own tests.
-- `Cargo.toml` (workspace) + `release-plz.toml` — the lockstep machinery still
-  applies: `cargo-bench-history-core` is pinned `=0.0.1` in
+Unlike the minimal private-use form, these crates *are* `#![doc(hidden)]` /
+`[lib] doc = false` / "do not depend on this directly". They are published to
+crates.io so they can be released in lockstep with the CLI, and the doc-hidden
+marking discourages external dependents even though there is no re-export shell
+deferring their documentation. Concrete files to study:
+
+- `packages/cbh_detect/Cargo.toml` — declares
+  `private-test-util = ["dep:thread_aware"]` and `[lib] doc = false`.
+- `packages/cbh_detect/src/lib.rs` — `#![doc(hidden)]` root that re-exports
+  every type flat from the crate root.
+- `packages/cbh_detect/src/testing.rs` — the `synchronous_spawner` helper,
+  gated `#[cfg(feature = "private-test-util")]` (feature-only rather than the
+  `any(test, …)` form used elsewhere, because the helper pulls in the optional
+  `thread_aware` dependency that only the feature enables; the crate's own test
+  that uses it is likewise feature-gated), that in-workspace tests inject in
+  place of the production Tokio spawner.
+- `packages/cargo-bench-history/Cargo.toml` — the consuming CLI (a binary, not a
+  thin re-export). Its regular `[dependencies]` omit every `private-test-util`
+  feature, so the test-only surface never reaches production builds; separate
+  `[dev-dependencies]` entries with `features = ["private-test-util"]` (on
+  `cbh_run`, `cbh_git`, `cbh_storage`, `cbh_diag`) activate it for the shell's own
+  tests.
+- `Cargo.toml` (workspace) + `release-plz.toml` — the lockstep machinery applies
+  to every crate in the family: each `cbh_*` package is pinned `=0.0.3` in
   `[workspace.dependencies]` and shares `version_group = "cargo-bench-history"`
-  with the CLI, so the published pair can never drift to mismatched versions.
+  with the CLI, so the published set can never drift to mismatched versions.
 

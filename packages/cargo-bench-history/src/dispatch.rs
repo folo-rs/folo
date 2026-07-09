@@ -3,9 +3,9 @@
 
 use std::path::PathBuf;
 
+use cbh_storage::StorageOverride;
 use tick::Clock;
 
-use crate::storage::StorageOverride;
 use crate::{Command, RunError, RunOutcome, commands};
 
 /// Test-only overrides for [`run_with_overrides`].
@@ -84,7 +84,7 @@ pub async fn run_with_overrides(
         None => std::env::current_dir().map_err(RunError::Io)?,
     };
     let workspace_dir = workspace_dir.as_path();
-    let storage_override = storage_override.map(|o| o.0);
+    let storage_override = storage_override.map(StorageOverride::into_facade);
     match command {
         Command::Collect(options) => {
             commands::collect(

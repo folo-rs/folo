@@ -1,0 +1,41 @@
+[package]
+# Cargo has its own logic for naming and expects dashes for the `cargo-bench-history`
+# binary, but its internal implementation crates use the short `cbh_` underscore prefix.
+name = "cbh_codec"
+description = "Implementation crate for cargo-bench-history - do not reference directly"
+publish = true
+version = "0.0.3"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+# This is an implementation crate whose surface is documented on `cargo-bench-history`.
+doc = false
+
+[dependencies]
+flate2 = { workspace = true, features = ["rust_backend"] }
+
+[dev-dependencies]
+alloc_tracker = { path = "../alloc_tracker" }
+cbh_model = { path = "../cbh_model" }
+criterion = { workspace = true }
+nonempty = { workspace = true }
+
+# Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
+[[bench]]
+name = "cbh_codec"
+harness = false
+
+[[bench]]
+name = "cbh_codec_cg"
+harness = false
+
+[lints]
+workspace = true

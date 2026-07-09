@@ -1,0 +1,37 @@
+[package]
+# Cargo has its own logic for naming and expects dashes for the `cargo-bench-history`
+# binary, but its internal implementation crates use the short `cbh_` underscore prefix.
+name = "cbh_git"
+description = "Implementation crate for cargo-bench-history - do not reference directly"
+publish = true
+version = "0.0.3"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+# This is an implementation crate whose surface is documented on `cargo-bench-history`.
+doc = false
+
+[features]
+# Internal-only API surface for in-workspace tests: the in-memory `FakeGitHistory` that
+# other crates' tests (and this crate's own tests) inject in place of the real `git`
+# adapter, so the query logic is testable without a repository. Never forwarded by the
+# shell crate, so end-user builds never see it. See docs/impl-crate-split.md for the
+# `test-util` vs `private-test-util` distinction.
+private-test-util = []
+
+[dependencies]
+cbh_model = { workspace = true }
+jiff = { workspace = true }
+tokio = { workspace = true, features = ["process"] }
+
+[dev-dependencies]
+futures = { workspace = true, features = ["executor"] }
+mutants = { workspace = true }
+
+[lints]
+workspace = true

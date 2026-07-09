@@ -1,0 +1,45 @@
+[package]
+# Cargo has its own logic for naming and expects dashes for the `cargo-bench-history`
+# binary, but its internal implementation crates use the short `cbh_` underscore prefix.
+name = "cbh_detect"
+description = "Implementation crate for cargo-bench-history - do not reference directly"
+publish = true
+version = "0.0.3"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+# This is an implementation crate whose surface is documented on `cargo-bench-history`.
+doc = false
+
+[features]
+# Internal-only API surface for in-workspace tests: the `testing::synchronous_spawner`
+# the `cargo-bench-history` shell crate's tests (and this crate's own tests) inject in
+# place of the production Tokio spawner, so neither needs a Tokio runtime. Never
+# forwarded by the shell crate, so end-user builds never see it. See
+# docs/impl-crate-split.md for the `test-util` vs `private-test-util` distinction.
+private-test-util = ["dep:thread_aware"]
+
+[dependencies]
+anyspawn = { workspace = true }
+cbh_model = { workspace = true }
+cbh_stats = { workspace = true }
+foldhash = { workspace = true }
+hashbrown = { workspace = true, features = ["default-hasher", "inline-more"] }
+jiff = { workspace = true, features = ["serde"] }
+nonempty = { workspace = true, features = ["serialize"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+smallvec = { workspace = true, features = ["serde"] }
+thread_aware = { workspace = true, optional = true, features = ["derive"] }
+
+[dev-dependencies]
+futures = { workspace = true, features = ["executor"] }
+mutants = { workspace = true }
+
+[lints]
+workspace = true
