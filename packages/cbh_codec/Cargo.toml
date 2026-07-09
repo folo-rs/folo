@@ -21,7 +21,7 @@ flate2 = { workspace = true, features = ["rust_backend"] }
 
 [dev-dependencies]
 alloc_tracker = { path = "../alloc_tracker" }
-cbh_model = { workspace = true }
+cbh_model = { path = "../cbh_model" }
 criterion = { workspace = true }
 nonempty = { workspace = true }
 
