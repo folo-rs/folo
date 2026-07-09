@@ -14,7 +14,8 @@ rust-version.workspace = true
 [dependencies]
 all_the_time = { workspace = true }
 cargo-bench-history = { path = "../cargo-bench-history", default-features = false }
-cargo-bench-history-core = { workspace = true }
+cbh_codec = { workspace = true }
+cbh_model = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 jiff = { workspace = true, features = ["serde"] }
 mimalloc = { workspace = true }

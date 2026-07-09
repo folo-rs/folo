@@ -2,8 +2,8 @@
 //! `analyze` perform once per stored object.
 //!
 //! These are optimization candidates rather than known hot spots: building a
-//! qualified benchmark identity, sanitizing a path segment, assembling a storage
-//! key, and parsing one back are each invoked per benchmark result and per stored
+//! qualified benchmark identity, sanitizing a path segment, and assembling a
+//! storage key are each invoked per benchmark result and per stored
 //! object, so a regression here scales with history size. Benchmarking them now
 //! (while the implementations are simple) gives a baseline to measure any future
 //! optimization against.
@@ -15,8 +15,7 @@
 
 use std::hint::black_box;
 
-use cargo_bench_history_core::analyze::parse_key;
-use cargo_bench_history_core::model::{BenchmarkId, DiscriminantSet, Engine, sanitize_segment};
+use cbh_model::{BenchmarkId, DiscriminantSet, Engine, sanitize_segment};
 use criterion::{Criterion, criterion_group, criterion_main};
 use nonempty::nonempty;
 
@@ -24,7 +23,7 @@ criterion_group!(benches, identity, storage_key);
 criterion_main!(benches);
 
 fn identity(c: &mut Criterion) {
-    let mut group = c.benchmark_group("cbh_core_model/identity");
+    let mut group = c.benchmark_group("cbh_model/identity");
 
     let id = BenchmarkId::new(nonempty![
         "fast_time".to_owned(),
@@ -40,7 +39,7 @@ fn identity(c: &mut Criterion) {
 }
 
 fn storage_key(c: &mut Criterion) {
-    let mut group = c.benchmark_group("cbh_core_model/storage_key");
+    let mut group = c.benchmark_group("cbh_model/storage_key");
 
     group.bench_function("sanitize_segment", |b| {
         b.iter(|| black_box(sanitize_segment(black_box("x86_64-unknown-linux-gnu"))));
@@ -54,12 +53,6 @@ fn storage_key(c: &mut Criterion) {
                 black_box("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
             ))
         });
-    });
-
-    let key = "v1/folo/callgrind/x86_64-unknown-linux-gnu/synthetic/\
-               deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/clean.json";
-    group.bench_function("parse_key", |b| {
-        b.iter(|| black_box(parse_key(black_box(key))));
     });
 
     group.finish();

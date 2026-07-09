@@ -15,7 +15,7 @@
 //! The I/O-free analysis engine: the timeline reconstruction, series building, and
 //! change-point detectors that turn already-loaded result sets and git topology
 //! (passed in as plain data) into detected findings. Split out of
-//! `cargo-bench-history-core` so this deterministic, Miri-safe analysis math is
+//! `cargo-bench-history` so this deterministic, Miri-safe analysis math is
 //! cheap to mutation-test in isolation. The `cbh_render` crate turns the findings
 //! into a rendered report, and the `cargo-bench-history` shell wires storage and git
 //! around it.

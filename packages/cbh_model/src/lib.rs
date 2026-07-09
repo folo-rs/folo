@@ -15,7 +15,7 @@
 //! results (each a stable identity plus its measured metrics), the run context that
 //! situates it in time and against a commit, and the comparability rules that
 //! partition runs into independently comparable series. Split out of
-//! `cargo-bench-history-core` so this I/O-free data model is cheap to
+//! `cargo-bench-history` so this I/O-free data model is cheap to
 //! mutation-test in isolation.
 //!
 //! Every type is re-exported flat from the crate root, so consumers write

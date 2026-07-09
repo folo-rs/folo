@@ -12,7 +12,7 @@
 //!
 //! Pure statistical primitives (medians, the Pettitt change-point test,
 //! Mann–Whitney, Mann–Kendall, Theil–Sen, Benjamini–Hochberg) for the analysis
-//! detectors, split out of `cargo-bench-history-core` so this deterministic,
+//! detectors, split out of `cargo-bench-history` so this deterministic,
 //! I/O-free, Miri-safe math is cheap to mutation-test in isolation. The
 //! `cbh_analysis` detectors compose these primitives.
 //!

@@ -10,8 +10,8 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::thread;
 
-use cargo_bench_history_core::codec;
-use cargo_bench_history_core::model::{
+use cbh_codec as codec;
+use cbh_model::{
     BenchmarkIdPrefix, BenchmarkResult, BlessingRecord, DiscriminantSet, Engine, EnvironmentInfo,
     GitInfo, Run, RunContext, ToolchainInfo,
 };
@@ -368,7 +368,7 @@ fn i64_from(value: usize) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use cargo_bench_history_core::model::{DiscriminantSet, Engine};
+    use cbh_model::{DiscriminantSet, Engine};
     use jiff::Timestamp;
 
     use super::*;

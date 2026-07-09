@@ -1,6 +1,6 @@
 //! Callgrind benchmarks for the storage codec.
 //!
-//! Paired with `cbh_core_codec.rs` (the Criterion benches for the same two
+//! Paired with `cbh_codec.rs` (the Criterion benches for the same two
 //! operations) which measures the codec under wall-clock timing. These benches
 //! isolate the per-call instruction count of `compress` and `decompress` so a
 //! regression — or the future 0-allocation reusable-compressor tuning — can be
@@ -48,8 +48,8 @@ fn main() {
 mod linux {
     use std::hint::black_box;
 
-    use cargo_bench_history_core::codec;
-    use cargo_bench_history_core::model::{
+    use cbh_codec as codec;
+    use cbh_model::{
         BenchmarkId, BenchmarkResult, EnvironmentInfo, GitInfo, Metric, MetricKind, Run,
         RunContext, ToolchainInfo,
     };

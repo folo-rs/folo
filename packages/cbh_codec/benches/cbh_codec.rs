@@ -23,8 +23,8 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use alloc_tracker::{Allocator, Session};
-use cargo_bench_history_core::codec;
-use cargo_bench_history_core::model::{
+use cbh_codec as codec;
+use cbh_model::{
     BenchmarkId, BenchmarkResult, EnvironmentInfo, GitInfo, Metric, MetricKind, Run, RunContext,
     ToolchainInfo,
 };
@@ -98,10 +98,10 @@ fn sample_run_json(result_count: usize) -> Vec<u8> {
 }
 
 fn compress(c: &mut Criterion, allocs: &Session) {
-    let mut group = c.benchmark_group("cbh_core_codec/compress");
+    let mut group = c.benchmark_group("cbh_codec/compress");
     for (name, result_count) in [("small", SMALL_RESULTS), ("large", LARGE_RESULTS)] {
         let payload = sample_run_json(result_count);
-        let op = allocs.operation(format!("cbh_core_codec/compress/{name}"));
+        let op = allocs.operation(format!("cbh_codec/compress/{name}"));
         group.bench_function(name, |b| {
             b.iter_custom(|iters| {
                 let _span = op.measure_thread().iterations(iters);
@@ -117,10 +117,10 @@ fn compress(c: &mut Criterion, allocs: &Session) {
 }
 
 fn decompress(c: &mut Criterion, allocs: &Session) {
-    let mut group = c.benchmark_group("cbh_core_codec/decompress");
+    let mut group = c.benchmark_group("cbh_codec/decompress");
     for (name, result_count) in [("small", SMALL_RESULTS), ("large", LARGE_RESULTS)] {
         let compressed = codec::compress(&sample_run_json(result_count));
-        let op = allocs.operation(format!("cbh_core_codec/decompress/{name}"));
+        let op = allocs.operation(format!("cbh_codec/decompress/{name}"));
         group.bench_function(name, |b| {
             b.iter_custom(|iters| {
                 let _span = op.measure_thread().iterations(iters);

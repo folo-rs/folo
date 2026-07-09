@@ -19,5 +19,23 @@ doc = false
 [dependencies]
 flate2 = { workspace = true, features = ["rust_backend"] }
 
+[dev-dependencies]
+alloc_tracker = { path = "../alloc_tracker" }
+cbh_model = { workspace = true }
+criterion = { workspace = true }
+nonempty = { workspace = true }
+
+# Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gungraun = { workspace = true, features = ["default"] }
+
+[[bench]]
+name = "cbh_codec"
+harness = false
+
+[[bench]]
+name = "cbh_codec_cg"
+harness = false
+
 [lints]
 workspace = true

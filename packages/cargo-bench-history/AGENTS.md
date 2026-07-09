@@ -2,9 +2,11 @@
 
 An async-by-default Tokio application. **All pure logic** (parsing, mapping, comparability,
 key derivation, analysis, message formatting) stays **synchronous**; async is pushed only to
-the IO edges. The code is **two crates**: this shell (CLI + IO adapters) and the pure,
-I/O-free `cargo-bench-history-core` (data model, analysis, codec), which also acts as the
-impl crate for in-workspace tests/benches.
+the IO edges. The code is a **shell crate** (this CLI + wiring) plus a family of small,
+doc-hidden `cbh_*` implementation crates — the pure, I/O-free data model, statistics,
+analysis, codec, and rendering, plus the extracted IO adapters (git, storage, probes,
+engines) — released in lockstep with the shell. Several expose a `private-test-util`
+feature carrying in-workspace test/bench utilities.
 
 > **This file is agent instructions, not a design doc.** The *what* and *why* — data model,
 > storage/comparability rules, command semantics, analysis algorithms, architecture — live in
@@ -39,8 +41,8 @@ orchestration — time comes from the injected `tick::Clock` (`new_tokio` in pro
 Do **not** spawn ad-hoc threads (`std::thread::scope`, `map_parallel`-style helpers) for
 compute. Route every parallel pass through the injected `anyspawn::Spawner` that
 `analyze_with` threads through: production injects the Tokio blocking pool, tests inject
-`cargo_bench_history_core::testing::synchronous_spawner` (reached via core's
-`private-test-util` dev-dependency feature), so the work stays runtime-agnostic and Miri-safe.
+`cbh_analysis::testing::synchronous_spawner` (exposed by the `private-test-util`
+feature), so the work stays runtime-agnostic and Miri-safe.
 New per-series logic must be side-effect-free. Flow and rationale: [`docs/analyze.md`](docs/analyze.md).
 
 ## Selection lockstep (analyze / list / prune / examine)
@@ -82,7 +84,7 @@ not conclusion-only** (see `docs/standalone-binaries.md`). Tests use the `#[cfg(
 
 ## Storage & engines (essentials)
 
-* Object bodies are **gzip** at the `Storage` boundary via `cargo_bench_history_core::codec`;
+* Object bodies are **gzip** at the `Storage` boundary via `cbh_codec`;
   callers hand/receive plain JSON. `MemoryStorage` deliberately stays **plaintext** (keeps the
   Miri `analyze` suite fast) — do not compress it.
 * The backend is chosen at run time by `--local` / configured cloud (never a local path in the
@@ -157,7 +159,7 @@ DESIGN + `storage/azure.rs`.
 
 `cargo-bench-history-stress` (sibling package) is an on-demand scaling experiment for
 `analyze` with **zero production-code coupling**: it writes objects in the exact storage key
-layout + gzip body (via `core::codec`) and reads them back through the public
+layout + gzip body (via `cbh_codec`) and reads them back through the public
 `run_with_overrides` entry — so if you change the on-disk key layout or the JSON report's
 top-level fields, update its `seed.rs`/`report.rs` in lockstep. Run via
 `just bench-history-stress[-azure]`; dataset shape is in its `README.md`.

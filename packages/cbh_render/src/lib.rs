@@ -13,7 +13,7 @@
 //!
 //! Renders the analysis findings into the tool's terminal and Markdown output
 //! (owning `ReportFormat` and the sparkline plotting). Split out of
-//! `cargo-bench-history-core` so the `colored` and `rasciigraph` presentation
+//! `cargo-bench-history` so the `colored` and `rasciigraph` presentation
 //! dependencies are confined here, away from the I/O-free detectors in
 //! `cbh_analysis`.
 //!

@@ -628,7 +628,7 @@ report with false positives. Because no engine is exempt from noise, **every** c
 p-value enters a single **Benjamini–Hochberg** false-discovery-rate procedure — there is no
 bypass — and only survivors are reported.
 
-All of this math lives in a pure, Miri-safe statistics module in the core crate, unit-tested
+All of this math lives in a pure, Miri-safe statistics crate (`cbh_stats`), unit-tested
 with named, value-asserting cases on hand-computable inputs rather than threshold-mutation
 guards, so the whole detector is verifiable without real-time delays.
 
@@ -737,13 +737,16 @@ never by the enumerating commands, and the retained-count is a fixed policy of t
 
 ## 9. Architecture
 
-The tool is **two crates**: a **shell** (the CLI binary and its library) and a **core**
-library it depends on. The split follows the workspace's impl-crate pattern — a private-use
-core extraction treated as the impl crate. All **pure, I/O-free** logic — the stored data
-model, comparability and partitioning, the analysis math and rendering, and the shared
-compression codec — lives in core so it can be exercised by a fast, Miri-friendly,
-cheap-to-mutation-test in-process suite, while everything that touches the outside world —
-storage, git, process, filesystem, and the CLI — stays in the shell.
+The tool is a **shell** (the CLI binary and its library) plus a family of small, private-use
+`cbh_*` **implementation crates** it depends on, following the workspace's impl-crate pattern
+— each a private-use extraction treated as the impl crate directly, with no separate `_impl`
+shell. Responsibilities are split roughly one per crate so each is independently and cheaply
+mutation-tested. All **pure, I/O-free** logic — the stored data model, comparability and
+partitioning, the statistics and analysis math and rendering, and the shared compression
+codec — lives in leaf crates exercised by a fast, Miri-friendly, cheap-to-mutation-test
+in-process suite, while everything that touches the outside world — storage, git, process,
+filesystem, engine parsing, and the CLI — is factored into its own crate too, with the binary
+shell wiring them together.
 
 **Async ports and adapters.** The app is async by default on the Tokio runtime, but pure
 logic stays synchronous — parse, map, comparability, series, findings, format — and is the
@@ -783,7 +786,7 @@ map lives in [`analyze.md`](analyze.md).
 *Considered and not adopted for the fan-out:* a data-parallelism library whose transitive
 dependency trips Miri's aliasing model (forcing an ugly conditional-compilation serial
 fallback), and short-lived per-call worker threads (which litter the profiler and tie the
-core to OS-thread spawning instead of the host's runtime). The injected spawner is
+tool to OS-thread spawning instead of the host's runtime). The injected spawner is
 Miri-clean and runtime-agnostic with no conditional compilation.
 
 **Companion crates.** The fake benchmark engine the integration tests launch is a separate

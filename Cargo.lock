@@ -456,26 +456,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "cargo-bench-history-core"
-version = "0.0.3"
-dependencies = [
- "alloc_tracker",
- "cbh_analysis",
- "cbh_codec",
- "cbh_model",
- "cbh_render",
- "criterion",
- "gungraun",
- "nonempty",
-]
-
-[[package]]
 name = "cargo-bench-history-stress"
 version = "0.0.0"
 dependencies = [
  "all_the_time",
  "cargo-bench-history",
- "cargo-bench-history-core",
+ "cbh_codec",
+ "cbh_model",
  "clap",
  "futures",
  "jiff",
@@ -527,6 +514,7 @@ dependencies = [
  "anyspawn",
  "cbh_model",
  "cbh_stats",
+ "criterion",
  "foldhash",
  "futures",
  "hashbrown 0.17.1",
@@ -577,7 +565,12 @@ dependencies = [
 name = "cbh_codec"
 version = "0.0.3"
 dependencies = [
+ "alloc_tracker",
+ "cbh_model",
+ "criterion",
  "flate2",
+ "gungraun",
+ "nonempty",
 ]
 
 [[package]]
@@ -637,6 +630,7 @@ dependencies = [
 name = "cbh_model"
 version = "0.0.3"
 dependencies = [
+ "criterion",
  "jiff",
  "nonempty",
  "serde",

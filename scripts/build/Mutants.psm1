@@ -76,7 +76,7 @@ function Get-MutantsExcludeArgument {
         # `testing.rs` is an in-workspace test utility (gated behind the `private-test-util`
         # feature, consumed only by the shell crate's tests). It is scaffolding with no public
         # API contract, so mutating it yields no production coverage signal.
-        '-e', (protect 'packages/cargo-bench-history-core/src/testing.rs'),
+        '-e', (protect 'packages/cbh_analysis/src/testing.rs'),
 
         # Some of our systems are single-processor, yet the code may only be meaningfully testable
         # on multi-processor systems. As a "good enough" approximation, we skip mutation testing

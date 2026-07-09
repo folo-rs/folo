@@ -23,5 +23,12 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 smallvec = { workspace = true, features = ["serde"] }
 
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "cbh_model"
+harness = false
+
 [lints]
 workspace = true

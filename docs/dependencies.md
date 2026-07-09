@@ -31,7 +31,7 @@ Some packages are logically one package split into multiple crates for
 cargotechnical reasons (see [impl-crate-split.md](impl-crate-split.md)). Examples:
 `linked` + `linked_macros` + `linked_macros_impl`, `many_cpus` + `many_cpus_impl`,
 `nm` + `nm_impl`, `nm_otel` + `nm_otel_impl`, and `cargo-bench-history` +
-`cargo-bench-history-core`.
+its `cbh_*` implementation crates.
 
 Such crates must always be released at the same version. Enforce this in two
 places, and keep both in sync:
@@ -45,7 +45,7 @@ places, and keep both in sync:
   crate can never resolve a mismatched version of its internal companion.
 
 For example, `many_cpus` is referenced as `version = "2.4.9"` while
-`many_cpus_impl` is referenced as `version = "=2.4.9"`; likewise
-`cargo-bench-history-core` is `version = "=0.0.1"` because `cargo-bench-history`
-depends on it.
+`many_cpus_impl` is referenced as `version = "=2.4.9"`; likewise each `cbh_*`
+implementation crate is referenced with an exact `=` pin because
+`cargo-bench-history` depends on it.
 
