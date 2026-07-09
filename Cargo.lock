@@ -565,6 +565,8 @@ dependencies = [
 name = "cbh_config"
 version = "0.0.3"
 dependencies = [
+ "cbh_command",
+ "mutants",
  "serde",
  "tempfile",
  "tokio",
@@ -667,7 +669,6 @@ dependencies = [
 name = "cbh_run"
 version = "0.0.3"
 dependencies = [
- "cbh_command",
  "cbh_config",
  "cbh_diag",
  "cbh_render",

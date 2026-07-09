@@ -17,11 +17,13 @@ rust-version.workspace = true
 doc = false
 
 [dependencies]
+cbh_command = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["fs"] }
 toml = { workspace = true, features = ["parse", "serde"] }
 
 [dev-dependencies]
+mutants = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
 

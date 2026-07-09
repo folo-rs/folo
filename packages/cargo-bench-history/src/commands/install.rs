@@ -3,9 +3,8 @@
 
 use std::path::Path;
 
-use cbh_config::default_template;
+use cbh_config::{default_template, resolve_config_path};
 use cbh_diag::{Reporter, ReporterExt, StderrReporter};
-use cbh_run::resolve_config_path;
 
 use crate::config_writer::{ConfigWriter, TokioConfigWriter};
 use crate::{InstallOptions, RunError, RunOutcome};
@@ -76,8 +75,8 @@ fn install_message(path: &Path, written: bool) -> String {
 mod tests {
     use std::path::PathBuf;
 
+    use cbh_config::default_config_path;
     use cbh_diag::RecordingReporter;
-    use cbh_run::default_config_path;
     use futures::executor::block_on;
 
     use super::*;

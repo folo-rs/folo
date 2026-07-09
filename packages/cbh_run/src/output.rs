@@ -23,10 +23,11 @@ use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use cbh_config::rebase;
 use cbh_diag::{Reporter, ReporterExt};
 use cbh_render::ReportFormat;
 
-use crate::{RunError, rebase};
+use crate::RunError;
 
 /// Which report formats a single analysis pass should emit.
 ///

@@ -2,7 +2,7 @@
 //! and where its benchmark history is stored.
 
 use std::error::Error;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::{fmt, io};
 
 use serde::Deserialize;
@@ -100,10 +100,11 @@ pub struct AzureStorageConfig {
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError::Parse`] if the text is not valid TOML or does not match
+/// Returns a [`ConfigError`] if the text is not valid TOML or does not match
 /// the configuration schema.
 pub fn parse_config(text: &str) -> Result<Config, ConfigError> {
-    toml::from_str(text).map_err(|error| ConfigError::Parse(error.to_string()))
+    toml::from_str(text)
+        .map_err(|error| ConfigError::new(format!("failed to parse configuration: {error}")))
 }
 
 /// Loads and parses the configuration file at `path`.
@@ -117,9 +118,9 @@ pub fn parse_config(text: &str) -> Result<Config, ConfigError> {
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError::Read`] if the file cannot be read (an explicit `--config`
-/// that does not exist, or any non-"not found" I/O error), or [`ConfigError::Parse`]
-/// if its contents are not a valid configuration.
+/// Returns a [`ConfigError`] if the file cannot be read (an explicit `--config`
+/// that does not exist, or any non-"not found" I/O error), or if its contents
+/// are not a valid configuration.
 pub async fn load_config(path: &Path, explicit: bool) -> Result<Config, ConfigError> {
     let text = match tokio::fs::read_to_string(path).await {
         Ok(text) => text,
@@ -127,10 +128,10 @@ pub async fn load_config(path: &Path, explicit: bool) -> Result<Config, ConfigEr
             return Ok(Config::default());
         }
         Err(error) => {
-            return Err(ConfigError::Read {
-                path: path.to_path_buf(),
-                message: error.to_string(),
-            });
+            return Err(ConfigError::new(format!(
+                "failed to read configuration at {}: {error}",
+                path.display()
+            )));
         }
     };
     parse_config(&text)
@@ -143,33 +144,29 @@ pub fn default_template() -> &'static str {
 }
 
 /// An error encountered while loading configuration.
+///
+/// Carries a single human-readable message rather than categorizing failures:
+/// the construction sites (a file read, a TOML parse, an unresolvable
+/// `--local`/`--cache` selection) each bake their context into the message, and
+/// nothing downstream branches on a kind.
 #[derive(Debug)]
-pub enum ConfigError {
-    /// The configuration file could not be read.
-    Read {
-        /// The path that could not be read.
-        path: PathBuf,
-        /// The underlying I/O error, rendered as text.
-        message: String,
-    },
-    /// The configuration text could not be parsed.
-    Parse(String),
+pub struct ConfigError {
+    message: String,
+}
+
+impl ConfigError {
+    /// Creates a configuration error carrying `message`.
+    #[must_use]
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
 }
 
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Read { path, message } => {
-                write!(
-                    f,
-                    "failed to read configuration at {}: {message}",
-                    path.display()
-                )
-            }
-            Self::Parse(message) => {
-                write!(f, "failed to parse configuration: {message}")
-            }
-        }
+        f.write_str(&self.message)
     }
 }
 
@@ -257,9 +254,7 @@ container = \"history\"
             "[storage.azure]\naccount = \"a\"\ncontainer = \"c\"\naccount_key = \"a2V5\"\n",
         )
         .unwrap_err();
-        let ConfigError::Parse(message) = error else {
-            panic!("expected a parse error, got {error:?}");
-        };
+        let message = error.to_string();
         assert!(
             message.contains("account_key"),
             "unexpected parse error: {message}"
@@ -273,9 +268,7 @@ container = \"history\"
             "[storage.azure]\naccount = \"a\"\ncontainer = \"c\"\nsas_token = \"sig=x\"\n",
         )
         .unwrap_err();
-        let ConfigError::Parse(message) = error else {
-            panic!("expected a parse error, got {error:?}");
-        };
+        let message = error.to_string();
         assert!(
             message.contains("sas_token"),
             "unexpected parse error: {message}"
@@ -337,9 +330,7 @@ key = \"ci-pool-a\"
         // leftover `[storage.local]` table is not silently ignored the way a wholly
         // unknown section is: it fails to parse, pointing the user at `--local`.
         let error = parse_config("[storage.local]\npath = \"x\"\n").unwrap_err();
-        let ConfigError::Parse(message) = error else {
-            panic!("expected a parse error, got {error:?}");
-        };
+        let message = error.to_string();
         assert!(
             message.contains("unknown variant `local`"),
             "unexpected parse error: {message}"
@@ -347,20 +338,9 @@ key = \"ci-pool-a\"
     }
 
     #[test]
-    fn config_error_display_includes_message() {
-        let error = ConfigError::Parse("boom".to_owned());
-        assert_eq!(error.to_string(), "failed to parse configuration: boom");
-    }
-
-    #[test]
-    fn read_error_display_includes_path() {
-        let error = ConfigError::Read {
-            path: PathBuf::from("/tmp/x.toml"),
-            message: "not found".to_owned(),
-        };
-        let rendered = error.to_string();
-        assert!(rendered.contains("x.toml"), "{rendered}");
-        assert!(rendered.contains("not found"), "{rendered}");
+    fn config_error_display_is_the_message() {
+        let error = ConfigError::new("boom");
+        assert_eq!(error.to_string(), "boom");
     }
 
     #[tokio::test]
@@ -389,7 +369,12 @@ key = \"ci-pool-a\"
         // An explicitly requested file that does not exist is an error.
         let error = load_config(&path, true).await.unwrap_err();
 
-        assert!(matches!(error, ConfigError::Read { .. }));
+        let message = error.to_string();
+        assert!(
+            message.contains("failed to read configuration"),
+            "{message}"
+        );
+        assert!(message.contains("absent.toml"), "{message}");
     }
 
     #[tokio::test]

@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn config_error_is_displayed_and_sourced() {
-        let error = RunError::from(ConfigError::Parse("bad".to_owned()));
+        let error = RunError::from(ConfigError::new("bad"));
         assert!(error.to_string().contains("configuration error"));
         assert!(error.source().is_some());
     }
