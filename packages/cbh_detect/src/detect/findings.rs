@@ -40,11 +40,9 @@
 //! floor and residual-scatter check, and is suppressed when a single step on the
 //! same series already explains at least as much movement.
 //!
-//! Polarity: most metrics are "lower is better" (instruction counts, cycle
-//! estimates, branch counts, allocations, wall time), so a rise is a
-//! [`Direction::Regression`] and a fall is a [`Direction::Improvement`]. L1 cache
-//! *hits* invert that — more hits means fewer, costlier misses (see
-//! [`MetricKind::higher_is_better`]).
+//! Polarity: every metric is lower-is-better (instruction counts, branch counts,
+//! allocations, wall and processor time), so a rise is a
+//! [`Direction::Regression`] and a fall is a [`Direction::Improvement`].
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -331,21 +329,14 @@ fn owned_commit(point: &SeriesPoint) -> Option<String> {
     point.commit.as_deref().map(str::to_owned)
 }
 
-/// The direction of a change, given the signed delta from the baseline and the
-/// metric's `kind`.
+/// The direction of a change, given the signed delta from the baseline.
 ///
-/// For a lower-is-better metric a positive delta is a regression; for a
-/// higher-is-better metric (L1 cache hits) the polarity is inverted (see
-/// [`MetricKind::higher_is_better`]). The caller only reaches this with a non-zero
-/// delta, so the exact zero case never arises in practice; it is defined as an
-/// improvement so the classification is total.
-fn direction_of(delta: f64, kind: MetricKind) -> Direction {
-    let worse = if kind.higher_is_better() {
-        delta < 0.0
-    } else {
-        delta > 0.0
-    };
-    if worse {
+/// Every metric is lower-is-better, so a positive delta is a regression and a
+/// negative one an improvement. The caller only reaches this with a non-zero delta,
+/// so the exact zero case never arises in practice; it is defined as an improvement
+/// so the classification is total.
+fn direction_of(delta: f64) -> Direction {
+    if delta > 0.0 {
         Direction::Regression
     } else {
         Direction::Improvement
@@ -550,7 +541,7 @@ fn evaluate_change_point(
             id: series.id.clone(),
             kind: series.kind,
             method: FindingMethod::ChangePoint,
-            direction: direction_of(delta, series.kind),
+            direction: direction_of(delta),
             baseline,
             latest,
             delta,
@@ -622,7 +613,7 @@ fn evaluate_drift(series: &Series, values: &[f64], config: &AnalysisConfig) -> O
             id: series.id.clone(),
             kind: series.kind,
             method: FindingMethod::Drift,
-            direction: direction_of(delta, series.kind),
+            direction: direction_of(delta),
             baseline,
             latest,
             delta,
@@ -798,7 +789,7 @@ fn compare_samples(
             id: series.id.clone(),
             kind: series.kind,
             method: FindingMethod::ChangePoint,
-            direction: direction_of(delta, series.kind),
+            direction: direction_of(delta),
             baseline,
             latest,
             delta,
@@ -978,7 +969,7 @@ fn evaluate_resolved_spike(
             id: series.id.clone(),
             kind: series.kind,
             method: FindingMethod::ChangePoint,
-            direction: direction_of(deviation, series.kind),
+            direction: direction_of(deviation),
             baseline,
             latest: level,
             delta: deviation,
@@ -1405,71 +1396,18 @@ mod tests {
     }
 
     #[test]
-    fn direction_of_respects_polarity() {
-        assert_eq!(
-            direction_of(1.0, MetricKind::InstructionCount),
-            Direction::Regression
-        );
-        assert_eq!(
-            direction_of(-1.0, MetricKind::InstructionCount),
-            Direction::Improvement
-        );
-        // L1 hits invert: more cheap L1 accesses improve, fewer regress.
-        assert_eq!(
-            direction_of(1.0, MetricKind::L1CacheHits),
-            Direction::Improvement
-        );
-        assert_eq!(
-            direction_of(-1.0, MetricKind::L1CacheHits),
-            Direction::Regression
-        );
-        // The slower cache tiers are expensive: more LL/RAM hits regress, like any
-        // lower-is-better metric.
-        assert_eq!(
-            direction_of(1.0, MetricKind::LastLevelCacheHits),
-            Direction::Regression
-        );
-        assert_eq!(
-            direction_of(1.0, MetricKind::RamHits),
-            Direction::Regression
-        );
-        assert_eq!(
-            direction_of(-1.0, MetricKind::RamHits),
-            Direction::Improvement
-        );
-    }
-
-    #[test]
-    fn allocation_and_processor_time_metrics_are_lower_is_better() {
-        // The `alloc_tracker` and `all_the_time` metrics all improve as they
-        // shrink, so more bytes / allocations / processor time is a regression.
-        for kind in [
-            MetricKind::AllocatedBytes,
-            MetricKind::AllocationCount,
-            MetricKind::ProcessorTime,
-        ] {
-            assert!(!kind.higher_is_better());
-            assert_eq!(direction_of(1.0, kind), Direction::Regression);
-            assert_eq!(direction_of(-1.0, kind), Direction::Improvement);
-        }
+    fn direction_of_flags_a_rise_as_a_regression() {
+        // Every metric is lower-is-better, so a positive delta is a regression and a
+        // negative one an improvement.
+        assert_eq!(direction_of(1.0), Direction::Regression);
+        assert_eq!(direction_of(-1.0), Direction::Improvement);
     }
 
     #[test]
     fn direction_of_classifies_a_zero_delta_as_an_improvement() {
         // The classification is total: a zero delta (never reached in practice) is
-        // defined as an improvement for every polarity.
-        assert_eq!(
-            direction_of(0.0, MetricKind::InstructionCount),
-            Direction::Improvement
-        );
-        assert_eq!(
-            direction_of(0.0, MetricKind::L1CacheHits),
-            Direction::Improvement
-        );
-        assert_eq!(
-            direction_of(0.0, MetricKind::LastLevelCacheHits),
-            Direction::Improvement
-        );
+        // defined as an improvement.
+        assert_eq!(direction_of(0.0), Direction::Improvement);
     }
 
     #[test]
@@ -1711,26 +1649,12 @@ mod tests {
     }
 
     #[test]
-    fn l1_hit_drop_is_a_regression() {
-        // L1 hits are higher-is-better, so a drop in L1 hits is a regression
-        // (the access shifted to a slower tier).
-        let series = series_with(
-            &[100.0, 100.0, 100.0, 70.0, 70.0, 70.0],
-            MetricKind::L1CacheHits,
-            &[],
-        );
-        let finding = only(changes(&[series]));
-        assert!(finding.is_regression());
-        assert_eq!(finding.delta, -30.0);
-    }
-
-    #[test]
-    fn ram_hit_rise_is_a_regression() {
-        // RAM hits are the expensive tier (lower-is-better), so a rise in RAM
-        // hits is a regression.
+    fn branch_count_rise_is_a_regression() {
+        // Branch-execution counts are lower-is-better, so a sustained rise is a
+        // regression.
         let series = series_with(
             &[70.0, 70.0, 70.0, 100.0, 100.0, 100.0],
-            MetricKind::RamHits,
+            MetricKind::ConditionalBranches,
             &[],
         );
         let finding = only(changes(&[series]));

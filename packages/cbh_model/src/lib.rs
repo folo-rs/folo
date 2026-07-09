@@ -34,9 +34,7 @@ mod run;
 pub use benchmark_id::{BenchmarkId, BenchmarkIdPrefix, EmptyBenchmarkIdPrefix};
 pub use bless::{BLESS_SCHEMA_VERSION, BlessingRecord};
 pub use comparability::{DiscriminantSet, Engine, StorageKey, parse_key, sanitize_segment};
-pub use constants::{
-    L1_HITS_EVENT, LL_HITS_EVENT, OBJECTS_SEGMENT, RAM_HITS_EVENT, STORAGE_VERSION,
-};
+pub use constants::{OBJECTS_SEGMENT, STORAGE_VERSION};
 pub use context::{
     EnvironmentInfo, EnvironmentProvider, GitInfo, RunContext, ToolchainInfo, detect_environment,
 };

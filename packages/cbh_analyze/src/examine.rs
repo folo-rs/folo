@@ -562,7 +562,7 @@ mod tests {
 
     /// A run whose one benchmark carries two metrics, so the partition reconstructs
     /// two distinct series (only one of which any single `--metric` selects).
-    fn two_metric_run(effective: i64, commit: &str, ir: f64, cycles: f64) -> Run {
+    fn two_metric_run(effective: i64, commit: &str, ir: f64, branches: f64) -> Run {
         let time = Timestamp::from_second(effective).unwrap();
         let context = RunContext::new(
             time,
@@ -583,7 +583,7 @@ mod tests {
             ]),
             vec![
                 Metric::new(MetricKind::InstructionCount, ir),
-                Metric::new(MetricKind::EstimatedCycles, cycles),
+                Metric::new(MetricKind::ConditionalBranches, branches),
             ],
         );
         Run::new(context, vec![record])
@@ -850,14 +850,14 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         let points = parsed["sets"][0]["points"].as_array().unwrap();
         assert_eq!(points.len(), 1);
-        // The instruction-count value, not the estimated-cycles one.
+        // The instruction-count value, not the conditional-branches one.
         assert_eq!(points[0]["value"], 100.0);
 
-        let cycles = ExamineOptions {
-            metric: "estimated_cycles".to_owned(),
+        let branches = ExamineOptions {
+            metric: "conditional_branches".to_owned(),
             ..options()
         };
-        let report = examine_json(&storage, &git, &cycles);
+        let report = examine_json(&storage, &git, &branches);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["sets"][0]["points"][0]["value"], 250.0);
     }

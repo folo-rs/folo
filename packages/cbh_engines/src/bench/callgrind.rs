@@ -10,9 +10,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use cbh_model::{
-    BenchmarkId, BenchmarkResult, L1_HITS_EVENT, LL_HITS_EVENT, Metric, MetricKind, RAM_HITS_EVENT,
-};
+use cbh_model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
 use nonempty::NonEmpty;
 use serde::Deserialize;
 
@@ -126,19 +124,21 @@ fn package_name_from_dir(package_dir: &str) -> Option<String> {
 
 /// Maps a Callgrind event-kind name to the metric category the tool tracks.
 ///
-/// Returns `None` for events that are not tracked (derived rates, raw cache
-/// reads/writes, totals) so they are skipped rather than misclassified.
+/// Only the events that stay stable across builds are tracked: retired
+/// instructions (`Ir`) and executed branch counts (`Bc`, `Bi`). Everything else
+/// Gungraun emits is skipped so it is never persisted — the derived rates, raw
+/// cache reads/writes, and totals, but also, deliberately, the cache-simulation and
+/// branch-misprediction events (`L1hits`/`LLhits`/`RamHits`, `EstimatedCycles`,
+/// `Bcm`, `Bim`). Those last are not merely unclassified: at microbenchmark
+/// magnitudes their values track binary layout (embedded build paths, section
+/// sizes, code/data placement) rather than the code under test, so they cannot be
+/// compared build to build across a history. See the crate design notes for the
+/// evidence.
 fn classify(event_kind: &str) -> Option<MetricKind> {
     match event_kind {
         "Ir" => Some(MetricKind::InstructionCount),
-        "EstimatedCycles" => Some(MetricKind::EstimatedCycles),
-        L1_HITS_EVENT => Some(MetricKind::L1CacheHits),
-        LL_HITS_EVENT => Some(MetricKind::LastLevelCacheHits),
-        RAM_HITS_EVENT => Some(MetricKind::RamHits),
         "Bc" => Some(MetricKind::ConditionalBranches),
-        "Bcm" => Some(MetricKind::ConditionalBranchMisses),
         "Bi" => Some(MetricKind::IndirectBranches),
-        "Bim" => Some(MetricKind::IndirectBranchMisses),
         _ => None,
     }
 }
@@ -291,20 +291,19 @@ mod tests {
         let record = parse_callgrind_summary(SINGLE_FIXTURE).unwrap();
 
         assert_eq!(metric(&record, MetricKind::InstructionCount).value, 36.0);
-        assert_eq!(metric(&record, MetricKind::EstimatedCycles).value, 193.0);
-        // Cache tiers and branch kinds each map to a distinct kind.
-        let _ = metric(&record, MetricKind::L1CacheHits);
-        let _ = metric(&record, MetricKind::RamHits);
-        let _ = metric(&record, MetricKind::ConditionalBranches);
-        let _ = metric(&record, MetricKind::IndirectBranchMisses);
+        // Executed conditional and indirect branch counts each map to a distinct kind.
+        assert_eq!(metric(&record, MetricKind::ConditionalBranches).value, 4.0);
+        assert_eq!(metric(&record, MetricKind::IndirectBranches).value, 2.0);
     }
 
     #[test]
     fn skips_untracked_events() {
         let record = parse_callgrind_summary(SINGLE_FIXTURE).unwrap();
-        // Only the nine canonical tracked events survive; derived rates (`L1HitRate`),
-        // raw cache reads (`Dr`), and totals (`TotalRW`) are dropped.
-        assert_eq!(record.metrics.len(), 9, "{:?}", record.metrics);
+        // Only the three tracked events survive. The fixture still carries the
+        // cache-simulation and branch-misprediction events (`EstimatedCycles`,
+        // `L1hits`, `LLhits`, `RamHits`, `Bcm`, `Bim`), derived rates (`L1HitRate`),
+        // raw cache reads (`Dr`), and totals (`TotalRW`) — all dropped.
+        assert_eq!(record.metrics.len(), 3, "{:?}", record.metrics);
     }
 
     #[test]
@@ -315,14 +314,8 @@ mod tests {
 
         let mut expected = vec![
             MetricKind::InstructionCount,
-            MetricKind::EstimatedCycles,
-            MetricKind::L1CacheHits,
-            MetricKind::LastLevelCacheHits,
-            MetricKind::RamHits,
             MetricKind::ConditionalBranches,
-            MetricKind::ConditionalBranchMisses,
             MetricKind::IndirectBranches,
-            MetricKind::IndirectBranchMisses,
         ];
         expected.sort_unstable();
         assert_eq!(kinds, expected);

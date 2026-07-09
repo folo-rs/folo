@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 /// A single measured quantity.
 ///
 /// The [`kind`](Self::kind) fully determines the metric's meaning, including its
-/// unit (see [`MetricKind::as_unit`]) and its comparison polarity (see
-/// [`MetricKind::higher_is_better`]). A benchmark result carries at most one
-/// metric of each kind.
+/// unit (see [`MetricKind::as_unit`]). Every kind is lower-is-better, so a rise is
+/// always a regression and a fall an improvement. A benchmark result carries at
+/// most one metric of each kind.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Metric {
     /// What kind of quantity this is (governs unit and comparison semantics).
@@ -66,8 +66,17 @@ impl Metric {
 /// The category of a [`Metric`], which fully determines its unit and how it is
 /// compared over time.
 ///
-/// Each kind has exactly one unit (see [`as_unit`](Self::as_unit)) and one
-/// comparison polarity (see [`higher_is_better`](Self::higher_is_better)).
+/// Each kind has exactly one unit (see [`as_unit`](Self::as_unit)) and is
+/// lower-is-better: a rise is a regression, a fall an improvement.
+///
+/// Only the Callgrind metrics that stay stable across builds are modelled —
+/// instruction and branch-execution counts. The cache-simulation and
+/// branch-misprediction events (cache hits at each tier, estimated cycles, branch
+/// misses) are deliberately absent: at the small magnitudes typical of
+/// microbenchmarks their values track binary layout (embedded build paths,
+/// section sizes, code/data placement) rather than code behaviour, so they cannot
+/// be compared build to build across a history. See the crate design notes for
+/// the evidence.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MetricKind {
@@ -79,26 +88,10 @@ pub enum MetricKind {
     ProcessorTime,
     /// Retired instruction count (Callgrind); low-noise but not exact.
     InstructionCount,
-    /// Estimated CPU cycles from the Callgrind cache model; low-noise but not
-    /// exact.
-    EstimatedCycles,
-    /// Accesses served by the L1 cache (Callgrind); the cheap outcome, so higher
-    /// is better.
-    L1CacheHits,
-    /// Accesses served by the last-level cache (Callgrind); an L1 miss escalating
-    /// to slower memory, so lower is better.
-    LastLevelCacheHits,
-    /// Accesses served by main memory (Callgrind); the most expensive tier, so
-    /// lower is better.
-    RamHits,
     /// Executed conditional branches (Callgrind); low-noise but not exact.
     ConditionalBranches,
-    /// Mispredicted conditional branches (Callgrind); low-noise but not exact.
-    ConditionalBranchMisses,
     /// Executed indirect branches (Callgrind); low-noise but not exact.
     IndirectBranches,
-    /// Mispredicted indirect branches (Callgrind); low-noise but not exact.
-    IndirectBranchMisses,
     /// Bytes allocated per iteration (`alloc_tracker`); hardware-independent but
     /// not deterministic (warmup and buffer-resize allocations jitter the
     /// per-iteration figure).
@@ -114,18 +107,12 @@ impl MetricKind {
     /// The single source of truth for enumerating the kinds — used to list the
     /// valid names when a name lookup fails (see [`from_name`](Self::from_name))
     /// and to exercise every kind in tests.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 7] = [
         Self::WallTime,
         Self::ProcessorTime,
         Self::InstructionCount,
-        Self::EstimatedCycles,
-        Self::L1CacheHits,
-        Self::LastLevelCacheHits,
-        Self::RamHits,
         Self::ConditionalBranches,
-        Self::ConditionalBranchMisses,
         Self::IndirectBranches,
-        Self::IndirectBranchMisses,
         Self::AllocatedBytes,
         Self::AllocationCount,
     ];
@@ -138,14 +125,8 @@ impl MetricKind {
             Self::WallTime => "wall_time",
             Self::ProcessorTime => "processor_time",
             Self::InstructionCount => "instruction_count",
-            Self::EstimatedCycles => "estimated_cycles",
-            Self::L1CacheHits => "l1_cache_hits",
-            Self::LastLevelCacheHits => "last_level_cache_hits",
-            Self::RamHits => "ram_hits",
             Self::ConditionalBranches => "conditional_branches",
-            Self::ConditionalBranchMisses => "conditional_branch_misses",
             Self::IndirectBranches => "indirect_branches",
-            Self::IndirectBranchMisses => "indirect_branch_misses",
             Self::AllocatedBytes => "allocated_bytes",
             Self::AllocationCount => "allocation_count",
         }
@@ -166,27 +147,10 @@ impl MetricKind {
             Self::WallTime | Self::ProcessorTime => "ns",
             Self::AllocatedBytes => "bytes",
             Self::InstructionCount
-            | Self::EstimatedCycles
-            | Self::L1CacheHits
-            | Self::LastLevelCacheHits
-            | Self::RamHits
             | Self::ConditionalBranches
-            | Self::ConditionalBranchMisses
             | Self::IndirectBranches
-            | Self::IndirectBranchMisses
             | Self::AllocationCount => "count",
         }
-    }
-
-    /// Whether a *rise* in this metric is an improvement.
-    ///
-    /// Only L1 cache hits are higher-is-better: an access served by L1 is the
-    /// cheap outcome. Every other kind (times, instruction and cycle counts,
-    /// last-level and RAM hits, branch counts and misses, allocations) is
-    /// lower-is-better.
-    #[must_use]
-    pub fn higher_is_better(self) -> bool {
-        matches!(self, Self::L1CacheHits)
     }
 }
 
@@ -231,18 +195,7 @@ mod tests {
         assert_eq!(MetricKind::ProcessorTime.as_unit(), "ns");
         assert_eq!(MetricKind::AllocatedBytes.as_unit(), "bytes");
         assert_eq!(MetricKind::InstructionCount.as_unit(), "count");
-        assert_eq!(MetricKind::L1CacheHits.as_unit(), "count");
-    }
-
-    #[test]
-    fn only_l1_cache_hits_is_higher_is_better() {
-        assert!(MetricKind::L1CacheHits.higher_is_better());
-        for kind in MetricKind::ALL
-            .into_iter()
-            .filter(|kind| *kind != MetricKind::L1CacheHits)
-        {
-            assert!(!kind.higher_is_better(), "{kind:?}");
-        }
+        assert_eq!(MetricKind::ConditionalBranches.as_unit(), "count");
     }
 
     #[test]

@@ -247,8 +247,8 @@ mod tests {
                     Some(1.1),
                 ),
                 Metric::new(MetricKind::InstructionCount, 2.0),
-                Metric::new(MetricKind::EstimatedCycles, 3.0),
-                Metric::new(MetricKind::RamHits, 4.0),
+                Metric::new(MetricKind::ConditionalBranches, 3.0),
+                Metric::new(MetricKind::IndirectBranches, 4.0),
             ],
         );
         let single_metric = BenchmarkResult::new(
@@ -264,7 +264,10 @@ mod tests {
             4,
             "the metric list spilled past inline capacity must survive projection"
         );
-        assert_eq!(from_run.results()[0].metrics[3].kind, MetricKind::RamHits);
+        assert_eq!(
+            from_run.results()[0].metrics[3].kind,
+            MetricKind::IndirectBranches
+        );
         assert_eq!(from_run.results()[0].metrics[3].value, 4.0);
         assert_eq!(from_run.results()[1].metrics.len(), 1);
 

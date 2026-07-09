@@ -14,7 +14,7 @@
 //! findings the spawner-distributed production path
 //! ([`find_changes_spawned`](super::find_changes_spawned)) does.
 //!
-//! Every case is run through a 2 × 2 × 2 matrix:
+//! Every case is run through a 2 × 2 matrix:
 //!
 //! * **Analysis mode (dimension 1).** The two modes are *different detectors*, not
 //!   one detector with a flag: [`History`](AnalysisMode::History) locates a change-point
@@ -27,19 +27,16 @@
 //!   past the split) but not a sustained historical trend to history.
 //!   Branch mode also needs a base side to compare against at all — a case with an empty
 //!   base side leaves it quiet.
-//! * **Polarity (dimension 2).** The codebase's only polarity lever is the metric kind,
-//!   so *higher-is-worse* is modelled with a lower-is-better metric
-//!   ([`MetricKind::InstructionCount`]) and *lower-is-worse* with the one
-//!   higher-is-better metric ([`MetricKind::L1CacheHits`]). History reports the
-//!   worse direction only, so a move surfaces as a finding under one polarity and is a
-//!   suppressed improvement under the other; branch reports *both* directions, so a move
-//!   is a finding under either polarity (only its classification differs). The expected
-//!   verdict is derived from the per-mode move via this reporting contract.
-//! * **Absolute scale (dimension 3).** Every case is analysed both as-is and scaled up
+//! * **Absolute scale (dimension 2).** Every case is analysed both as-is and scaled up
 //!   by a large constant. All of the analysis is relative, so the absolute scale must
 //!   not change the verdict: the as-is verdict is checked against the case's
 //!   expectation, and every scaled verdict is checked against that as-is reference, so
 //!   a scale-sensitivity regression fails here.
+//!
+//! Both directions are still exercised without a polarity dimension: every metric is
+//! lower-is-better, so a curated rise is a regression (reported by every mode) and a
+//! curated fall is an improvement (reported only by branch mode, which surfaces both
+//! directions). That is how the suite still pins the improvement-suppression contract.
 //!
 //! The check itself is deliberately coarse — "did the analysis report any finding?" —
 //! because these inputs are chosen so the *presence* of a finding is the whole
@@ -62,34 +59,6 @@ use nonempty::nonempty;
 
 use crate::detect::findings::find_changes;
 use crate::detect::{AnalysisConfig, AnalysisContext, AnalysisMode, Series, SeriesPoint};
-
-/// How a rise in the measured metric is judged.
-///
-/// This is the suite's dimension-2 lever. Both variants map to a metric kind that
-/// differs only in polarity — which direction of change counts as "worse" — so a case's
-/// detection is identical under both and only the reported direction changes.
-#[derive(Clone, Copy, Debug)]
-enum Polarity {
-    /// A rise is a regression (lower-is-better metric).
-    HigherIsWorse,
-    /// A rise is an improvement (higher-is-better metric).
-    LowerIsWorse,
-}
-
-impl Polarity {
-    /// The two polarities, for matrix expansion.
-    const ALL: [Self; 2] = [Self::HigherIsWorse, Self::LowerIsWorse];
-
-    /// The metric kind that realises this polarity.
-    fn metric_kind(self) -> MetricKind {
-        match self {
-            // Lower-is-better: a rise is a regression.
-            Self::HigherIsWorse => MetricKind::InstructionCount,
-            // The sole higher-is-better metric: a rise is an improvement.
-            Self::LowerIsWorse => MetricKind::L1CacheHits,
-        }
-    }
-}
 
 /// The analysis mode a case is evaluated under — the suite's dimension-1 lever.
 ///
@@ -136,13 +105,12 @@ impl Mode {
     }
 }
 
-/// The outcome a mode's detector is expected to see in a case — the hand-curated,
-/// polarity-independent judgment about the raw series shape.
+/// The outcome a mode's detector is expected to see in a case — the hand-curated
+/// judgment about the raw series shape.
 ///
-/// Combined with a [`Polarity`] and the mode's reporting contract this yields the
-/// expected finding verdict: the raw rise/fall is classified as a regression or an
-/// improvement by the metric's polarity, and reported only when the mode surfaces that
-/// direction.
+/// Combined with the mode's reporting contract this yields the expected finding verdict.
+/// Every metric is lower-is-better, so a rise is classified as a regression and a fall as
+/// an improvement; the improvement is reported only when the mode surfaces that direction.
 #[derive(Clone, Copy, Debug)]
 enum Outcome {
     /// The values step up.
@@ -154,17 +122,15 @@ enum Outcome {
 }
 
 impl Outcome {
-    /// Whether this move surfaces as a finding under `polarity` in `mode`.
-    fn is_finding(self, polarity: Polarity, mode: Mode) -> bool {
-        match (self, polarity) {
-            (Self::Quiet, _) => false,
-            // Classified a regression (worse) — every mode reports it.
-            (Self::Rise, Polarity::HigherIsWorse) | (Self::Fall, Polarity::LowerIsWorse) => true,
-            // Classified an improvement (better) — reported only where the mode reports
-            // both directions.
-            (Self::Rise, Polarity::LowerIsWorse) | (Self::Fall, Polarity::HigherIsWorse) => {
-                mode.reports_improvements()
-            }
+    /// Whether this move surfaces as a finding in `mode`.
+    fn is_finding(self, mode: Mode) -> bool {
+        match self {
+            Self::Quiet => false,
+            // A rise is a regression (lower-is-better) — every mode reports it.
+            Self::Rise => true,
+            // A fall is an improvement — reported only where the mode reports both
+            // directions.
+            Self::Fall => mode.reports_improvements(),
         }
     }
 }
@@ -229,7 +195,7 @@ fn cases() -> Vec<SignalCase> {
             expected_branch: Outcome::Rise,
         },
         // The mirror image: a sustained halving. Same mode geometry, opposite direction,
-        // so it exercises the other polarity's finding path.
+        // so it exercises the improvement-reporting path (surfaced only by branch mode).
         SignalCase {
             name: "halving_step",
             base: run_of(200.0, 50),
@@ -254,7 +220,7 @@ fn cases() -> Vec<SignalCase> {
             expected_history: Outcome::Quiet,
             expected_branch: Outcome::Fall,
         },
-        // A dead-flat line: nothing moved, so no mode and no polarity should ever flag it.
+        // A dead-flat line: nothing moved, so no mode should ever flag it.
         SignalCase {
             name: "flat_line",
             base: run_of(100.0, 50),
@@ -335,32 +301,30 @@ fn curated_signals_match_expected_verdicts() {
         let values = case.values();
         for mode in Mode::ALL {
             let context = mode.context(case.merge_base_index());
-            for polarity in Polarity::ALL {
-                let expected = case.expected_outcome(mode).is_finding(polarity, mode);
-                let kind = polarity.metric_kind();
+            let expected = case.expected_outcome(mode).is_finding(mode);
+            // Every metric is lower-is-better; a curated fall only surfaces where the
+            // mode reports improvements. Instruction count is a representative kind.
+            let kind = MetricKind::InstructionCount;
 
-                // Dimensions 1 & 2: the as-is verdict under this mode and polarity
-                // matches the hand-picked expectation.
-                let reference = raises_finding(&values, kind, &context);
+            // Dimension 1: the as-is verdict under this mode matches the hand-picked
+            // expectation.
+            let reference = raises_finding(&values, kind, &context);
+            assert_eq!(
+                reference, expected,
+                "case '{}' mode={mode:?}: expected finding={expected}, got {reference}",
+                case.name,
+            );
+
+            // Dimension 2: scaling the whole series by any constant leaves the verdict
+            // unchanged, because every comparison the analysis makes is relative.
+            for scale in scale_multiples {
+                let scaled_verdict = raises_finding(&scaled(&values, scale), kind, &context);
                 assert_eq!(
-                    reference, expected,
-                    "case '{}' mode={mode:?} polarity={polarity:?}: \
-                     expected finding={expected}, got {reference}",
+                    scaled_verdict, reference,
+                    "case '{}' mode={mode:?}: scaling by {scale} changed the verdict \
+                     (absolute scale must not matter)",
                     case.name,
                 );
-
-                // Dimension 3: scaling the whole series by any constant leaves the
-                // verdict unchanged, because every comparison the analysis makes is
-                // relative.
-                for scale in scale_multiples {
-                    let scaled_verdict = raises_finding(&scaled(&values, scale), kind, &context);
-                    assert_eq!(
-                        scaled_verdict, reference,
-                        "case '{}' mode={mode:?} polarity={polarity:?}: scaling by {scale} \
-                         changed the verdict (absolute scale must not matter)",
-                        case.name,
-                    );
-                }
             }
         }
     }

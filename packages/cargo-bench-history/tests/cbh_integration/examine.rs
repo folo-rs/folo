@@ -146,7 +146,7 @@ async fn examine_selects_only_the_named_metric() {
         "c1",
         vec![
             Metric::new(MetricKind::InstructionCount, 100.0),
-            Metric::new(MetricKind::L1CacheHits, 42.0),
+            Metric::new(MetricKind::ConditionalBranches, 42.0),
         ],
     );
 
@@ -156,17 +156,17 @@ async fn examine_selects_only_the_named_metric() {
             "--benchmark",
             "nm/nm::observe/pull",
             "--metric",
-            "l1_cache_hits",
+            "conditional_branches",
         ])
         .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
-    assert_eq!(parsed["metric"], "l1_cache_hits", "{message}");
+    assert_eq!(parsed["metric"], "conditional_branches", "{message}");
     let points = parsed["sets"][0]["points"].as_array().unwrap();
     assert_eq!(points.len(), 1, "{message}");
     assert_eq!(
         points[0]["value"].as_f64().unwrap(),
         42.0,
-        "the l1_cache_hits value, not the instruction count: {message}"
+        "the conditional_branches value, not the instruction count: {message}"
     );
 }
 
