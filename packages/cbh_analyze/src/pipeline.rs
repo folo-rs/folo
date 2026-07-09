@@ -45,6 +45,11 @@ use crate::{AnalyzeError, RenderedReports, ReportRequest};
 ///
 /// Returns the rendered reports for the requested formats plus the regression
 /// count; the shell writes the files and prints the text report.
+// Thin real-adapter wiring: loads config from disk, builds the configured storage,
+// and shells out via `SystemGitHistory`/`detect_auto_facets` before delegating every
+// decision to the mutation-tested `analyze_with`. In-crate tests cannot drive these
+// real adapters deterministically; the binary's integration tests cover this edge.
+#[cfg_attr(test, mutants::skip)]
 pub async fn execute(
     options: &AnalyzeOptions,
     workspace_dir: &Path,

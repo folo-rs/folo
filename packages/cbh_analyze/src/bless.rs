@@ -44,6 +44,11 @@ use crate::AnalyzeError;
 /// time: `None` reads the runtime wall clock (`Clock::new_tokio`) in production,
 /// while tests inject a frozen clock (`Clock::new_frozen_at`) so the recorded time
 /// is deterministic.
+// Thin real-adapter wiring: loads config from disk, builds the configured storage,
+// and shells out via `SystemGitHistory`/`detect_auto_facets` before delegating every
+// decision to the mutation-tested `bless_with`. In-crate tests cannot drive these real
+// adapters deterministically; the binary's integration tests cover this edge.
+#[cfg_attr(test, mutants::skip)]
 pub async fn bless(
     options: &BlessOptions,
     workspace_dir: &Path,
@@ -88,6 +93,11 @@ pub async fn bless(
 
 /// The real `unbless`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
+// Thin real-adapter wiring: loads config from disk, builds the configured storage,
+// and shells out via `SystemGitHistory`/`detect_auto_facets` before delegating every
+// decision to the mutation-tested `unbless_with`. In-crate tests cannot drive these
+// real adapters deterministically; the binary's integration tests cover this edge.
+#[cfg_attr(test, mutants::skip)]
 pub async fn unbless(
     options: &UnblessOptions,
     workspace_dir: &Path,

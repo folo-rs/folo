@@ -42,6 +42,11 @@ use crate::{AnalyzeError, RenderedReports, ReportRequest};
 /// `clock_override` injects the [`tick::Clock`] the shared selection anchors its
 /// "now" to (see [`analyze`](super::analyze)); production passes `None` for the
 /// runtime wall clock.
+// Thin real-adapter wiring: loads config from disk, builds the configured storage,
+// and shells out via `SystemGitHistory`/`detect_auto_facets` before delegating every
+// decision to the mutation-tested `list_with`. In-crate tests cannot drive these real
+// adapters deterministically; the binary's integration tests cover this edge.
+#[cfg_attr(test, mutants::skip)]
 pub async fn execute(
     options: &ListOptions,
     workspace_dir: &Path,
