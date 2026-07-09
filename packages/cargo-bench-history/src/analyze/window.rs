@@ -11,14 +11,16 @@ use crate::RunError;
 
 /// Auto-detects the analysis mode from the resolved topology and recorded data.
 ///
-/// An official base-branch view — the target's tip *is* its own merge-base (or no
-/// base is known) and no dirty run is recorded on that tip — is
+/// An official base-branch view — the target's tip *is* its own merge-base with
+/// the base and no dirty run is recorded on that tip — is
 /// [`AnalysisMode::History`]. Anything else (commits past the merge-base, or a
 /// dirty run actually recorded on top of the base tip) is treated as an unnamed
 /// feature branch: [`AnalysisMode::Branch`]. `auto_mode` reads only these two
 /// signals; the working tree enters only indirectly, since a base-tip dirty run
 /// counts as feature-branch data only while the tree is currently dirty — a dirty
-/// checkout with no admitted dirty run still analyzes as history.
+/// checkout with no admitted dirty run still analyzes as history. The merge-base
+/// is always known here: an undeterminable one is a hard error in `resolve_history`,
+/// never a silent fallback to this mode.
 pub(crate) fn auto_mode(tip_is_merge_base: bool, dirty_tip_run_present: bool) -> AnalysisMode {
     if tip_is_merge_base && !dirty_tip_run_present {
         AnalysisMode::History

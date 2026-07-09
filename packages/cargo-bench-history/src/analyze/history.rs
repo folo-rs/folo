@@ -61,18 +61,22 @@ pub(crate) struct ResolvedHistory {
     /// dirty-tree exception, which triggers the ephemeral-data warning.
     pub(crate) dirty_base_exception: HashMap<String, bool>,
     /// First-parent topological index of the merge-base, used by branch mode to
-    /// split base-side history from the branch's own commits. `None` when no base
-    /// is known or the merge-base is off the analyzed chain.
+    /// split base-side history from the branch's own commits. `None` when the
+    /// merge-base is off the target's first-parent line (an off-chain merge-base);
+    /// a merge-base that cannot be determined at all is a hard error, not `None`.
     pub(crate) merge_base_index: Option<usize>,
-    /// Whether the target's tip *is* its own merge-base with the base (or no base
-    /// is known): the signal that this is an official base-branch view.
+    /// Whether the target's tip *is* its own merge-base with the base: the signal
+    /// that this is an official base-branch view rather than a feature branch.
     pub(crate) tip_is_merge_base: bool,
 }
 
 /// Resolves the git topology for a selection: the target ref's first-parent
 /// ancestry, the merge-base with the base ref, and the per-commit dirty-admission
 /// flags. Requires a repository — an unresolvable target ref is an error rather
-/// than an empty success.
+/// than an empty success, and so is a merge-base that cannot be determined (the
+/// base ref does not resolve, or it shares no common ancestor with the target),
+/// rather than silently falling back to a base-branch (history) view of the
+/// incomplete topology.
 pub(crate) async fn resolve_history<G>(
     git: &G,
     config: &Config,
@@ -141,6 +145,51 @@ where
         ));
     });
 
+    // The analysis is a comparison against the base branch: it splits the target's
+    // first-parent line at the merge-base. A merge-base we cannot determine leaves
+    // no topology to split on, and guessing a mode from the incomplete history would
+    // silently mislead — so refuse and say how to supply the missing history. The
+    // usual cause is a shallow clone whose depth stops short of the branch point, or
+    // a checkout that never fetched the base branch.
+    let Some(merge_base) = merge_base else {
+        let message = match base_commit_id.as_deref() {
+            // The base resolved, but shares no common ancestor with the target. By
+            // far the usual cause is a shallow clone whose depth stops short of the
+            // branch point, so the primary remedy is to deepen the clone — not to
+            // pick a different base. Only once the history is known-complete is a
+            // genuinely disjoint base worth calling out, and even then the deliberate
+            // `--base` a user passed is theirs to reconsider, not ours to second-guess.
+            Some(base) => {
+                let remedy = match selection.base {
+                    Some(explicit) => format!(
+                        " If the history is already complete, {explicit} is genuinely unrelated \
+                         to the target and cannot serve as its base."
+                    ),
+                    None => " If the history is already complete, the base branch is unrelated to \
+                             the target; name the intended base with --base or \
+                             project.default_branch."
+                        .to_owned(),
+                };
+                format!(
+                    "could not determine the merge-base of the target {target_ref} \
+                     ({target_commit_id}) and the base commit {base}: they share no common \
+                     ancestor in the available history. This is almost always a shallow clone \
+                     whose depth stops short of the branch point — fetch the full history (`git \
+                     fetch --unshallow`, or set fetch-depth: 0 on actions/checkout) so the branch \
+                     point is present.{remedy}"
+                )
+            }
+            None => format!(
+                "could not determine the base branch to compare {target_ref} against: no \
+                 --base was given and no default branch could be resolved. Pass an explicit \
+                 --base, set project.default_branch, or make the default branch available \
+                 (a shallow clone or a checkout that never fetched the base branch is the \
+                 usual cause)."
+            ),
+        };
+        return Err(RunError::Analyze { message });
+    };
+
     // The base-branch dirty-tip exception: `analyze`/`list` admit a base-side tip's
     // dirty runs only when the working tree is currently dirty (`--no-dirty` skips
     // both the probe and the exception); `prune` admits them unconditionally so it
@@ -167,7 +216,7 @@ where
 
     let selected = select_commits(
         &ancestry,
-        merge_base.as_deref(),
+        Some(merge_base.as_str()),
         !selection.no_dirty,
         dirty_tip_exception,
     );
@@ -186,15 +235,12 @@ where
         .collect();
 
     // The merge-base's topological position (when it is on the analyzed chain)
-    // splits base-side history from the branch's own commits in branch mode.
-    let merge_base_index = merge_base
-        .as_deref()
-        .and_then(|base| order.get(base).copied());
-    // The target's tip is its own merge-base (or no base is known) exactly when
-    // this is an official base-branch view rather than a feature branch.
-    let tip_is_merge_base = merge_base
-        .as_deref()
-        .is_none_or(|base| base == target_commit_id);
+    // splits base-side history from the branch's own commits in branch mode. It is
+    // absent only when the merge-base is off the target's first-parent line.
+    let merge_base_index = order.get(&merge_base).copied();
+    // The target's tip is its own merge-base exactly when this is an official
+    // base-branch view rather than a feature branch.
+    let tip_is_merge_base = merge_base == target_commit_id;
 
     Ok(ResolvedHistory {
         target_ref: target_ref.to_owned(),
