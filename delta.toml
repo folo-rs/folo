@@ -8,9 +8,14 @@ file_exclude_patterns = ["target", "mutants.out", "mutants.out.old", "**/.*"]
 # all crates in the workspace are considered impacted. This is used
 # for files that affect the entire workspace, such as configuration
 # files, workflow definitions and the build system itself.
+#
+# The workspace-root Cargo.toml and Cargo.lock are deliberately omitted: ordinary
+# dependency-management edits touch them constantly yet rarely affect every crate, so
+# treating them as trip wires would force a full-workspace run on almost every PR and
+# defeat delta scoping. Genuinely cross-cutting manifest changes (e.g. a shared
+# [workspace.dependencies] bump) are still caught by the push-to-main backstop, which
+# always validates the full workspace regardless of delta.
 trip_wire_patterns = [
-    "Cargo.toml",
-    "Cargo.lock",
     "rust-toolchain.toml",
     "clippy.toml",
     "unstable-rustfmt.toml",

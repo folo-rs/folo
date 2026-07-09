@@ -13,8 +13,15 @@ Only those packages are validated.
 
 Certain files are designated as "trip wires" (see `delta.toml`). If any trip wire file is
 changed, all packages are validated regardless. Trip wires include workspace-wide configuration
-files (`Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, etc.), workflow definitions and the
-build system itself.
+files (`rust-toolchain.toml`, `clippy.toml`, etc.), workflow definitions and the build system
+itself.
+
+The workspace-root `Cargo.toml` and `Cargo.lock` are intentionally *not* trip wires: routine
+dependency edits touch them constantly but rarely affect every package, so tripping the whole
+workspace on each one would defeat delta scoping. Genuinely cross-cutting manifest changes are
+still caught by the push-to-main backstop, which always validates the full workspace. (Per-package
+`Cargo.toml` files were never trip wires - the pattern only matched the root manifest - and
+continue to scope to their own package.)
 
 ## Local usage
 
