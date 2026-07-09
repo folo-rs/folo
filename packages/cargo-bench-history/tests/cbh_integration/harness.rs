@@ -1,5 +1,6 @@
 pub(crate) use std::cell::RefCell;
 pub(crate) use std::collections::HashMap;
+use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 pub(crate) use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Stdio};
@@ -97,14 +98,14 @@ fn build_base_template() -> tempfile::TempDir {
     let template = tempfile::tempdir().unwrap();
     let root = template.path();
     run_git(root, &["init", "-b", "master"]);
-    std::fs::write(
+    fs::write(
         root.join(".git").join("info").join("exclude"),
         "/.cargo/\n/store/\n/target/\n",
     )
     .unwrap();
     run_git(root, &["commit", "--allow-empty", "-m", "root"]);
     let git_dir = root.join(".git");
-    if let Ok(entries) = std::fs::read_dir(git_dir.join("hooks")) {
+    if let Ok(entries) = fs::read_dir(git_dir.join("hooks")) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().is_some_and(|ext| ext == "sample") {
@@ -120,7 +121,7 @@ fn build_base_template() -> tempfile::TempDir {
 /// an optimization: a file that cannot be removed (already absent on some git version,
 /// say) only leaves the copy marginally larger and is never an error.
 fn remove_best_effort(path: &Path) {
-    match std::fs::remove_file(path) {
+    match fs::remove_file(path) {
         Ok(()) | Err(_) => {}
     }
 }
@@ -128,15 +129,15 @@ fn remove_best_effort(path: &Path) {
 /// Recursively copies the directory tree at `src` into `dst`, creating `dst` and any
 /// missing parents. Used to clone the base template's `.git` into a fresh workspace.
 fn copy_dir_all(src: &Path, dst: &Path) {
-    std::fs::create_dir_all(dst).unwrap();
-    for entry in std::fs::read_dir(src).unwrap() {
+    fs::create_dir_all(dst).unwrap();
+    for entry in fs::read_dir(src).unwrap() {
         let entry = entry.unwrap();
         let from = entry.path();
         let to = dst.join(entry.file_name());
         if entry.file_type().unwrap().is_dir() {
             copy_dir_all(&from, &to);
         } else {
-            std::fs::copy(&from, &to).unwrap();
+            fs::copy(&from, &to).unwrap();
         }
     }
 }
@@ -420,8 +421,8 @@ impl Workspace {
             inject_local: true,
         };
         let cargo_dir = workspace.root().join(".cargo");
-        std::fs::create_dir_all(&cargo_dir).unwrap();
-        std::fs::write(cargo_dir.join("bench_history.toml"), config).unwrap();
+        fs::create_dir_all(&cargo_dir).unwrap();
+        fs::write(cargo_dir.join("bench_history.toml"), config).unwrap();
         workspace
     }
 
@@ -469,8 +470,8 @@ impl Workspace {
             inject_local: true,
         };
         let path = workspace.root().join(relative);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, config).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, config).unwrap();
         workspace
     }
 
@@ -599,11 +600,11 @@ impl Workspace {
     pub(crate) fn head_commit_id(&self) -> String {
         self.flush_git();
         let git_dir = self.root().join(".git");
-        if let Ok(head) = std::fs::read_to_string(git_dir.join("HEAD")) {
+        if let Ok(head) = fs::read_to_string(git_dir.join("HEAD")) {
             let head = head.trim();
             if let Some(reference) = head.strip_prefix("ref: ") {
                 // `refs/heads/<branch>` uses `/`, which the Windows path APIs accept.
-                if let Ok(commit_id) = std::fs::read_to_string(git_dir.join(reference)) {
+                if let Ok(commit_id) = fs::read_to_string(git_dir.join(reference)) {
                     let commit_id = commit_id.trim();
                     if commit_id.len() == 40 {
                         return commit_id.to_owned();
@@ -747,7 +748,7 @@ impl Workspace {
     /// takes the next synthetic committer date, keeping the timeline monotonic and
     /// in-window like the surrounding empty commits.
     pub(crate) fn commit_with_file(&self, message: &str, relative: &str, contents: &str) -> String {
-        std::fs::write(self.root().join(relative), contents).unwrap();
+        fs::write(self.root().join(relative), contents).unwrap();
         self.git(&["add", relative]);
         let second = self.graph.borrow_mut().next_undated_second();
         self.git_at(&["commit", "-m", message], second);
@@ -788,12 +789,12 @@ impl Workspace {
     /// Writes an untracked file at `relative`, leaving the working tree dirty (it
     /// is neither committed nor git-ignored).
     pub(crate) fn make_dirty(&self, relative: &str) {
-        std::fs::write(self.root().join(relative), "uncommitted\n").unwrap();
+        fs::write(self.root().join(relative), "uncommitted\n").unwrap();
     }
 
     /// Reads a file relative to the workspace root, if it exists.
     pub(crate) fn read(&self, relative: &str) -> Option<String> {
-        std::fs::read_to_string(self.root().join(relative)).ok()
+        fs::read_to_string(self.root().join(relative)).ok()
     }
 
     /// Drives a command with `args` against this workspace.
@@ -927,7 +928,7 @@ impl Workspace {
                     .map(|component| component.as_os_str().to_string_lossy().into_owned())
                     .collect::<Vec<_>>()
                     .join("/");
-                let raw = std::fs::read(&path).unwrap();
+                let raw = fs::read(&path).unwrap();
                 let json = String::from_utf8(codec::decompress(&raw).unwrap()).unwrap();
                 let set = Run::from_json(&json).unwrap();
                 (key, set)
@@ -957,8 +958,45 @@ impl Workspace {
         for part in key.split('/') {
             path.push(part);
         }
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, codec::compress(set.to_json().unwrap().as_bytes())).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, codec::compress(set.to_json().unwrap().as_bytes())).unwrap();
+    }
+
+    /// Writes arbitrary `json` to `key`, compressed exactly as [`seed`](Self::seed)
+    /// does. Used to plant objects a current [`Run`] can no longer express — notably
+    /// a run carrying a metric kind the tool has since dropped — so the read path is
+    /// exercised against legacy on-disk data.
+    pub(crate) fn seed_raw_json(&self, key: &str, json: &str) {
+        let mut path = self.root().join("store");
+        for part in key.split('/') {
+            path.push(part);
+        }
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, codec::compress(json.as_bytes())).unwrap();
+    }
+
+    /// Seeds a Callgrind result set for commit `label` that carries a valid `Ir`
+    /// metric plus a `conditional_branch_misses` metric — one of the
+    /// build-layout-volatile kinds dropped from the tool. A current [`Run`] cannot
+    /// represent that kind, so the object is planted as raw JSON, reproducing history
+    /// written by an older tool.
+    pub(crate) fn seed_callgrind_with_legacy_metric(&self, label: &str, value: f64) {
+        let commit_id = self.commit_id(label);
+        let observed = self.committer_time(&commit_id);
+        let key = format!(
+            "v1/testproj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit_id}/clean.json"
+        );
+        let mut object: serde_json::Value = serde_json::from_str(
+            &ir_result_set(observed.as_second(), &commit_id, value)
+                .to_json()
+                .unwrap(),
+        )
+        .unwrap();
+        object["results"][0]["metrics"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({ "kind": "conditional_branch_misses", "value": 3.0 }));
+        self.seed_raw_json(&key, &serde_json::to_string(&object).unwrap());
     }
 
     /// Seeds one Callgrind result set with an `Ir` value for the previously created
@@ -1537,7 +1575,7 @@ pub(crate) fn storage_only_config_with_id(id: &str) -> String {
 }
 
 pub(crate) fn collect_json_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {

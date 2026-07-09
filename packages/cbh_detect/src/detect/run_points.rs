@@ -13,7 +13,12 @@
 //! the run payload, so the projection carries no git fields at all. Serde ignores
 //! the unmentioned JSON fields, so a run still parses unchanged; only the discarded
 //! parts are never
-//! materialized. (The leaner element trims overall peak only marginally — peak is
+//! materialized. Metric kinds the tool no longer tracks (the build-layout-volatile
+//! Callgrind events dropped in the metric cull) are skipped rather than failing the
+//! parse, matching [`cbh_model`'s lenient run read](cbh_model::MetricList) — the
+//! same stored files feed both paths, so a single legacy object must not abort the
+//! whole history analysis. (The leaner element trims overall peak only marginally —
+//! peak is
 //! set by the per-worker builders coexisting during the merge — but the lighter
 //! parse is still worth keeping; see the load section of `cargo-bench-history`'s
 //! `docs/analyze.md`.)
@@ -78,7 +83,70 @@ pub struct ResultPoints {
     /// The fold-relevant projection of each captured metric. Inline up to two, as
     /// the noisy single-metric engines are the common case, matching
     /// [`MetricList`](cbh_model::MetricList).
+    #[serde(deserialize_with = "deserialize_metric_points")]
     pub metrics: SmallVec<[MetricPoint; 2]>,
+}
+
+/// Deserializes the metric-point list, silently dropping any metric whose `kind`
+/// is not one of the kinds the tool tracks.
+///
+/// This mirrors [`cbh_model`'s lenient run read][run]: stored history predates the
+/// removal of the build-layout-volatile Callgrind metrics (cache hits per tier,
+/// estimated cycles, branch misses), so run files written by an older tool can
+/// still carry those kinds. The lean analyze/examine projection parses those same
+/// files, so it must drop the unknown kinds too — failing the whole run parse on an
+/// unknown-variant error would abort the entire history analysis over any such data.
+///
+/// The raw list is kept inline in a `SmallVec` matching the projection's capacity so
+/// the common one- or two-metric case stays allocation-free on this hot read path.
+///
+/// [run]: cbh_model::MetricList
+fn deserialize_metric_points<'de, D>(
+    deserializer: D,
+) -> Result<SmallVec<[MetricPoint; 2]>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = SmallVec::<[RawMetricPoint<'de>; 2]>::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(RawMetricPoint::into_point)
+        .collect())
+}
+
+/// A metric point as it appears on disk, with the kind left as its raw wire name so
+/// an unknown kind can be recognized and dropped rather than aborting the parse.
+///
+/// The kind is borrowed straight from the input JSON (a `&str` tied to the
+/// deserializer input): it is only needed transiently to resolve a [`MetricKind`]
+/// before this raw form is discarded, so borrowing avoids a `String` allocation per
+/// metric on the read path. The stored kind names are a fixed vocabulary of unescaped
+/// identifiers, so the borrow always succeeds against the [`from_json`] input backing
+/// every run decode. The persisted `std_dev` the fold never reads is left unmentioned
+/// and thus ignored.
+///
+/// [`from_json`]: RunPoints::from_json
+#[derive(Deserialize)]
+struct RawMetricPoint<'a> {
+    kind: &'a str,
+    value: f64,
+    #[serde(default)]
+    interval_low: Option<f64>,
+    #[serde(default)]
+    interval_high: Option<f64>,
+}
+
+impl RawMetricPoint<'_> {
+    /// Converts to a [`MetricPoint`], or `None` when the kind is not one of the
+    /// kinds the tool tracks.
+    fn into_point(self) -> Option<MetricPoint> {
+        Some(MetricPoint {
+            kind: MetricKind::from_name(self.kind)?,
+            value: self.value,
+            interval_low: self.interval_low,
+            interval_high: self.interval_high,
+        })
+    }
 }
 
 /// A metric reduced to the fields the series fold reads.
@@ -195,6 +263,33 @@ mod tests {
         // A payload that is not a serialized run must surface a parse error rather
         // than silently yielding an empty or partial projection.
         RunPoints::from_json("not valid json").unwrap_err();
+    }
+
+    #[test]
+    fn from_json_drops_unknown_metric_kinds() {
+        // Legacy history can still carry metric kinds the tool no longer tracks (the
+        // build-layout-volatile Callgrind events removed in the metric cull). The
+        // lean analyze/examine projection must skip them rather than fail the whole
+        // run parse, matching the full-`Run` read path — otherwise a single old
+        // object aborts the entire history analysis.
+        let mut value: serde_json::Value =
+            serde_json::from_str(&sample_run().to_json().unwrap()).unwrap();
+        value["results"][0]["metrics"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({ "kind": "conditional_branch_misses", "value": 5.0 }));
+
+        let json = serde_json::to_string(&value).unwrap();
+        let points = RunPoints::from_json(&json).unwrap();
+        let kinds: Vec<MetricKind> = points.results()[0]
+            .metrics
+            .iter()
+            .map(|metric| metric.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![MetricKind::WallTime, MetricKind::InstructionCount]
+        );
     }
 
     #[test]
