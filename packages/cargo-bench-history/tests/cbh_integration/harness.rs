@@ -976,18 +976,23 @@ impl Workspace {
     }
 
     /// Seeds a Callgrind result set for commit `label` that carries a valid `Ir`
-    /// metric plus a `conditional_branch_misses` metric — one of the
+    /// metric at `ir_value` plus a `conditional_branch_misses` metric — one of the
     /// build-layout-volatile kinds dropped from the tool. A current [`Run`] cannot
     /// represent that kind, so the object is planted as raw JSON, reproducing history
     /// written by an older tool.
-    pub(crate) fn seed_callgrind_with_legacy_metric(&self, label: &str, value: f64) {
+    pub(crate) fn seed_callgrind_with_legacy_metric(&self, label: &str, ir_value: f64) {
+        // The dropped metric's value is irrelevant to the read path under test (it is
+        // discarded on parse), so any fixed figure standing in for real Callgrind
+        // output serves.
+        const LEGACY_METRIC_VALUE: f64 = 3.0;
+
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
         let key = format!(
             "v1/testproj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit_id}/clean.json"
         );
         let mut object: serde_json::Value = serde_json::from_str(
-            &ir_result_set(observed.as_second(), &commit_id, value)
+            &ir_result_set(observed.as_second(), &commit_id, ir_value)
                 .to_json()
                 .unwrap(),
         )
@@ -995,7 +1000,10 @@ impl Workspace {
         object["results"][0]["metrics"]
             .as_array_mut()
             .unwrap()
-            .push(serde_json::json!({ "kind": "conditional_branch_misses", "value": 3.0 }));
+            .push(serde_json::json!({
+                "kind": "conditional_branch_misses",
+                "value": LEGACY_METRIC_VALUE,
+            }));
         self.seed_raw_json(&key, &serde_json::to_string(&object).unwrap());
     }
 
