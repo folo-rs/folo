@@ -1681,6 +1681,18 @@ mod tests {
             20.0,
             &config,
         ));
+        // The falling mirror of that overlap: the same two levels recur on both sides,
+        // so only 0.75 of the pairs move in the fall's (complementary) direction and it
+        // is likewise rejected. Unlike the clean fall above — whose superiority of 0
+        // leaves `1 − superiority` indistinguishable from other arithmetic — this pins
+        // the fall branch at a fractional superiority (0.25), so the complementary
+        // `1 − 0.25 = 0.75 < 0.85` is exercised as a genuine subtraction.
+        assert!(!regimes_are_separated(
+            &[30.0, 30.0, 30.0, 10.0],
+            &[10.0, 10.0, 10.0, 30.0],
+            -20.0,
+            &config,
+        ));
     }
 
     #[test]
