@@ -427,8 +427,8 @@ fn note_best_of_selections(
     if runs <= 1 {
         return;
     }
-    for selection in selections {
-        reporter.note_with(|| {
+    reporter.if_enabled(|notes| {
+        for selection in selections {
             let samples = selection
                 .samples
                 .iter()
@@ -442,14 +442,14 @@ fn note_best_of_selections(
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!(
+            notes.note(&format!(
                 "{engine} {}/{}: best-of samples {samples} (kept run {})",
                 selection.id,
                 selection.kind.as_str(),
                 selection.chosen_run.saturating_add(1),
-            )
-        });
-    }
+            ));
+        }
+    });
 }
 
 /// Builds the benchmark command line: the base command followed by the cargo
