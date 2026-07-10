@@ -32,6 +32,10 @@ cargo bench-history install
 # locally. Drop --local to store in the cloud backend from the config file.
 cargo bench-history collect --local=./bench-history
 
+# On a noisy runner, run the suite a few times and keep the best (minimum) value
+# per metric, since benchmark interference only ever makes a case slower.
+cargo bench-history collect --local=./bench-history --best-of 3
+
 # Bootstrap history by benching a range of past commits, so analysis has a
 # trend to work with (a single run on its own has nothing to compare against).
 cargo bench-history backfill --local=./bench-history <from-commit> <to-commit>

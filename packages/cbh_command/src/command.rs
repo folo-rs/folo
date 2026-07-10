@@ -1,6 +1,7 @@
 //! The parsed command model the binary and tests operate on: the [`Command`]
 //! enum and its per-subcommand option structs.
 
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use cbh_model::BenchmarkIdPrefix;
@@ -70,7 +71,7 @@ pub enum Command {
 
 /// Options for the `collect` command.
 #[doc(hidden)]
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CollectOptions {
     /// Path to the configuration file, if overridden.
     pub config_path: Option<PathBuf>,
@@ -112,9 +113,33 @@ pub struct CollectOptions {
     pub passthrough: Vec<String>,
     /// Emit detailed diagnostic notes to standard error describing each step.
     pub verbose: bool,
+    /// Run the whole suite this many times and store, per metric, the best
+    /// (minimum) observed value (`--best-of`). One reproduces a plain single run.
+    pub best_of: NonZeroUsize,
 }
 
-/// Options for the `install` command.
+impl Default for CollectOptions {
+    fn default() -> Self {
+        Self {
+            config_path: None,
+            repo: None,
+            local: None,
+            packages: Vec::new(),
+            excludes: Vec::new(),
+            benches: Vec::new(),
+            features: Vec::new(),
+            all_features: false,
+            no_default_features: false,
+            machine_key: None,
+            no_store: false,
+            overwrite: false,
+            skip_existing: false,
+            passthrough: Vec::new(),
+            verbose: false,
+            best_of: NonZeroUsize::MIN,
+        }
+    }
+}
 #[doc(hidden)]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct InstallOptions {
@@ -401,7 +426,7 @@ pub struct PruneOptions {
 
 /// Options for the `backfill` command.
 #[doc(hidden)]
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BackfillOptions {
     /// Path to the configuration file, if overridden.
     pub config_path: Option<PathBuf>,
@@ -441,6 +466,34 @@ pub struct BackfillOptions {
     pub passthrough: Vec<String>,
     /// Emit detailed diagnostic notes to standard error describing each step.
     pub verbose: bool,
+    /// Run the whole suite this many times per commit and store, per metric, the
+    /// best (minimum) observed value (`--best-of`). One reproduces a plain single
+    /// run.
+    pub best_of: NonZeroUsize,
+}
+
+impl Default for BackfillOptions {
+    fn default() -> Self {
+        Self {
+            config_path: None,
+            repo: None,
+            local: None,
+            from: String::new(),
+            to: String::new(),
+            packages: Vec::new(),
+            excludes: Vec::new(),
+            benches: Vec::new(),
+            features: Vec::new(),
+            all_features: false,
+            no_default_features: false,
+            machine_key: None,
+            overwrite: false,
+            ignore_errors: false,
+            passthrough: Vec::new(),
+            verbose: false,
+            best_of: NonZeroUsize::MIN,
+        }
+    }
 }
 
 /// Options for the `bless` command.

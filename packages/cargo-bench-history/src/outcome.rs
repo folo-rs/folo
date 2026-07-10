@@ -90,6 +90,14 @@ pub enum RunError {
         /// Human-readable description of the parse failure.
         message: String,
     },
+    /// A `--best-of` run measured a different set of cases or metrics across its
+    /// repetitions, so the per-metric minimum is not well defined.
+    Inconsistent {
+        /// The engine whose repeated harvests disagreed.
+        engine: String,
+        /// Human-readable description of the cross-run mismatch.
+        message: String,
+    },
     /// A result is already stored for this run's identity (same partition and
     /// commit) and the run did not request an overwrite.
     Duplicate {
@@ -132,6 +140,10 @@ impl fmt::Display for RunError {
                 write!(f, "engine {engine:?} has an invalid command: {message}")
             }
             Self::Parse { message } => write!(f, "failed to parse benchmark output: {message}"),
+            Self::Inconsistent { engine, message } => write!(
+                f,
+                "engine {engine:?} produced inconsistent results across --best-of runs: {message}"
+            ),
             Self::Duplicate { key } => write!(
                 f,
                 "a result is already stored for this run at {key}; pass --overwrite to replace it"
@@ -153,6 +165,7 @@ impl Error for RunError {
             Self::Engine { .. }
             | Self::Command { .. }
             | Self::Parse { .. }
+            | Self::Inconsistent { .. }
             | Self::Duplicate { .. }
             | Self::Analyze { .. }
             | Self::Backfill { .. }
@@ -251,6 +264,18 @@ mod tests {
         assert!(command.source().is_none());
         assert!(parse.to_string().contains("bad"));
         assert!(command.to_string().contains("empty"));
+    }
+
+    #[test]
+    fn inconsistent_error_is_displayed_and_has_no_source() {
+        let error = RunError::Inconsistent {
+            engine: "criterion".to_owned(),
+            message: "benchmark case 'a/b' is missing from run 2".to_owned(),
+        };
+        assert!(error.to_string().contains("--best-of runs"), "{error}");
+        assert!(error.to_string().contains("criterion"), "{error}");
+        assert!(error.to_string().contains("missing from run 2"), "{error}");
+        assert!(error.source().is_none());
     }
 
     #[test]

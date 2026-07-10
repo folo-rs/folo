@@ -26,7 +26,7 @@ use tick::Clock;
 
 use crate::model::{
     BenchmarkResult, DiscriminantSet, Engine, EnvironmentInfo, GitInfo, Run, RunContext,
-    ToolchainInfo, detect_environment,
+    ToolchainInfo, detect_environment, min_per_metric,
 };
 use crate::{CollectOptions, LocalStorageSelection, RunError, RunOutcome, finish_with_flush};
 
@@ -265,15 +265,24 @@ where
     Ok(RunOutcome::Completed { message })
 }
 
-/// Runs the benchmark command once and harvests every engine's output.
+/// Runs the benchmark command `--best-of` times and harvests every engine's output.
 ///
 /// This is the storage-aware core shared by the `collect` command and `backfill`:
 /// the former wraps the summary in a human-readable message, the latter maps it
-/// to a per-commit outcome. The benchmark command (`cargo bench` in production)
-/// is run a single time with the union of every engine's injected environment;
-/// each engine is then identified by which output tree it populated. An engine
-/// that produced no output (for example Callgrind off Linux, where its benches
-/// compile to no-ops) simply contributes nothing.
+/// to a per-commit outcome. The benchmark command (`cargo bench` in production) is
+/// run `options.best_of` times, each time with the union of every engine's
+/// injected environment; each engine is identified by which output tree it
+/// populated. An engine that produced no output (for example Callgrind off Linux,
+/// where its benches compile to no-ops) simply contributes nothing.
+///
+/// With `--best-of N` the whole suite runs `N` times and each metric is reduced to
+/// its minimum across the runs (see [`min_per_metric`]), so a transient slowdown
+/// on one run is discarded rather than stored. Every run must measure the same set
+/// of cases and metrics; a mismatch fails the collection ([`RunError::Inconsistent`]).
+/// The stored run takes its timeline position and dirty-snapshot key from the
+/// first run's start, and the git/toolchain/hardware context is probed once after
+/// the runs finish (it does not change between them). `N == 1` reproduces a plain
+/// single run.
 pub(crate) async fn run_engines<R, P, O, S>(
     options: &CollectOptions,
     deps: &CollectDeps<'_, R, P, O, S>,
@@ -286,7 +295,7 @@ where
 {
     let argv = build_bench_argv(deps.bench_command, options)?;
 
-    // The benchmark command runs once with the union of every engine's injected
+    // The benchmark command runs with the union of every engine's injected
     // environment plus `CARGO_TARGET_DIR` pinned to the directory the harvest
     // scans, so engine output always lands where it is collected from — notably
     // when an ambient `CARGO_TARGET_DIR` (such as the one `cargo llvm-cov` sets)
@@ -308,21 +317,63 @@ where
         format!("injected environment: {rendered_env}")
     });
 
-    let run_start = deps.clock.system_time();
-    let status = deps.runner.run_benches(&argv, &env).await?;
-    if !status.success {
-        return Err(RunError::Engine {
-            engine: BENCH_COMMAND_LABEL.to_owned(),
-            code: status.code,
+    let runs = options.best_of.get();
+    if runs > 1 {
+        deps.reporter.note_with(|| {
+            format!(
+                "best-of collection: running the suite {runs} times and keeping the minimum \
+                 value per metric, so a transient slowdown on any single run is discarded"
+            )
         });
     }
-    deps.reporter.note_with(|| {
-        format!(
-            "benchmark command finished; harvesting output modified at or after {} \
-         (older files are treated as stale leftovers)",
-            timestamp_from(run_start)
-        )
-    });
+
+    // One bucket per engine (parallel to `Engine::ALL`), each collecting that
+    // engine's harvested records from every run so they can be reduced together.
+    let mut per_engine: Vec<Vec<Vec<BenchmarkResult>>> = Engine::ALL
+        .iter()
+        .map(|_| Vec::with_capacity(runs))
+        .collect();
+    let mut first_run_start: Option<SystemTime> = None;
+
+    for run_number in 1..=runs {
+        let run_start = deps.clock.system_time();
+        if first_run_start.is_none() {
+            first_run_start = Some(run_start);
+        }
+        if runs > 1 {
+            deps.reporter.note_with(|| {
+                format!(
+                    "best-of run {run_number}/{runs}: invoking {}",
+                    argv.join(" ")
+                )
+            });
+        }
+
+        let status = deps.runner.run_benches(&argv, &env).await?;
+        if !status.success {
+            return Err(RunError::Engine {
+                engine: BENCH_COMMAND_LABEL.to_owned(),
+                code: status.code,
+            });
+        }
+        deps.reporter.note_with(|| {
+            format!(
+                "benchmark command finished; harvesting output modified at or after {} \
+             (older files are treated as stale leftovers)",
+                timestamp_from(run_start)
+            )
+        });
+
+        for (bucket, engine) in per_engine.iter_mut().zip(Engine::ALL) {
+            let records = harvest_records(deps, engine, run_start).await?;
+            bucket.push(records);
+        }
+    }
+
+    // At least one run always executes (`best_of` is non-zero), so a first start
+    // was recorded. It stamps the stored run's observation time and dirty-snapshot
+    // second; later runs share the same commit, so their starts do not matter.
+    let run_start = first_run_start.expect("best-of runs the suite at least once");
 
     let rustc = deps.probe.toolchain().await?;
     let shared = SharedContext {
@@ -337,8 +388,15 @@ where
     let mut harvested = 0_usize;
     let mut labels = Vec::new();
 
-    for engine in Engine::ALL {
-        let summary = harvest_engine(options, deps, &shared, engine, run_start).await?;
+    for (bucket, engine) in per_engine.iter().zip(Engine::ALL) {
+        let combined = min_per_metric(bucket).map_err(|error| RunError::Inconsistent {
+            engine: engine.to_string(),
+            message: error.to_string(),
+        })?;
+        note_best_of_selections(deps.reporter, engine, runs, &combined.selections);
+
+        let summary =
+            store_engine(options, deps, &shared, engine, combined.results, run_start).await?;
         if summary.stored {
             stored = stored.saturating_add(1);
         }
@@ -353,6 +411,45 @@ where
         harvested,
         labels,
     })
+}
+
+/// Emits the per-metric best-of provenance: the samples seen and which run won.
+///
+/// Only meaningful when more than one run was taken, so it is a no-op for a plain
+/// single run. The chosen sample is bracketed so the reasoning behind each stored
+/// value can be reconstructed from the verbose log.
+fn note_best_of_selections(
+    reporter: &dyn Reporter,
+    engine: Engine,
+    runs: usize,
+    selections: &[crate::model::Selection],
+) {
+    if runs <= 1 {
+        return;
+    }
+    for selection in selections {
+        reporter.note_with(|| {
+            let samples = selection
+                .samples
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    if index == selection.chosen_run {
+                        format!("[{value}]")
+                    } else {
+                        value.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "{engine} {}/{}: best-of samples {samples} (kept run {})",
+                selection.id,
+                selection.kind.as_str(),
+                selection.chosen_run.saturating_add(1),
+            )
+        });
+    }
 }
 
 /// Builds the benchmark command line: the base command followed by the cargo
@@ -419,25 +516,44 @@ fn build_bench_argv(
     Ok(argv)
 }
 
-/// Harvests one engine's output and (unless suppressed) stores the result set.
-async fn harvest_engine<R, P, O, S>(
-    options: &CollectOptions,
+/// Harvests and parses one engine's output for a single run.
+///
+/// The front half of storing an engine's results, split out so the `--best-of`
+/// loop can gather each run's records before they are reduced together. Producing
+/// no fresh output yields an empty vector (the steady state for an engine that
+/// does not apply here).
+async fn harvest_records<R, P, O, S>(
     deps: &CollectDeps<'_, R, P, O, S>,
-    shared: &SharedContext,
     engine: Engine,
     run_start: SystemTime,
-) -> Result<EngineSummary, RunError>
+) -> Result<Vec<BenchmarkResult>, RunError>
 where
-    R: BenchRunner,
-    P: EnvironmentProbe,
     O: BenchOutputSource,
-    S: Storage,
 {
     let harvest = deps
         .output
         .collect(engine, run_start, deps.reporter)
         .await?;
-    let records = parse_harvest(&harvest, deps.reporter)?;
+    parse_harvest(&harvest, deps.reporter)
+}
+
+/// Stores one engine's reduced result set (unless suppressed).
+///
+/// The back half of collecting an engine: given the records to persist (already
+/// reduced across the `--best-of` runs), it builds the run context and storage
+/// key and writes the object. `run_start` is the first run's start, which stamps
+/// the observation time and any dirty-snapshot second.
+async fn store_engine<R, P, O, S>(
+    options: &CollectOptions,
+    deps: &CollectDeps<'_, R, P, O, S>,
+    shared: &SharedContext,
+    engine: Engine,
+    records: Vec<BenchmarkResult>,
+    run_start: SystemTime,
+) -> Result<EngineSummary, RunError>
+where
+    S: Storage,
+{
     let count = records.len();
 
     // An engine that produced no fresh output contributes nothing. Off Linux the
@@ -784,8 +900,14 @@ fn target_root_from(configured: Option<std::ffi::OsString>, base: &Path) -> Path
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
+    #![allow(
+        clippy::float_cmp,
+        reason = "best-of stores exact input values, so comparisons are exact"
+    )]
 
+    use std::collections::HashMap;
     use std::io;
+    use std::num::NonZeroUsize;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -2359,5 +2481,431 @@ mod tests {
             }
             other => panic!("expected command error, got {other:?}"),
         }
+    }
+
+    // --- best-of-N orchestration ---------------------------------------------
+
+    /// Builds a `NonZeroUsize` for a test `--best-of` count.
+    fn best_of(n: usize) -> NonZeroUsize {
+        NonZeroUsize::new(n).expect("test best-of counts are non-zero")
+    }
+
+    /// A single-operation `all_the_time` harvest whose stored value is `slope`.
+    ///
+    /// The adapter maps `slope_processor_time_nanos` straight to the metric value,
+    /// so authoring a slope lets a test pin exactly what value a run contributes.
+    fn all_the_time_output(slope: f64) -> FakeOutput {
+        FakeOutput {
+            time: vec![RawOperationFile {
+                path: PathBuf::from("all_the_time/read_cell.json"),
+                content: format!(
+                    "{{\"operation\":\"read_cell\",\"total_iterations\":4,\
+                     \"total_processor_time_nanos\":80000000,\"span_count\":1,\
+                     \"slope_processor_time_nanos\":{slope}}}"
+                ),
+            }],
+            ..FakeOutput::default()
+        }
+    }
+
+    /// An output source that hands out a different [`FakeOutput`] per invocation,
+    /// so `--best-of` runs can be given distinct per-run measurements.
+    ///
+    /// Each engine advances its own cursor through `runs`, mirroring how the real
+    /// harvest scans the freshly produced tree once per engine per run. Requesting
+    /// more runs than were supplied is a test-author error and panics.
+    struct SequencedOutput {
+        runs: Vec<FakeOutput>,
+        cursors: Arc<Mutex<HashMap<Engine, usize>>>,
+    }
+
+    impl SequencedOutput {
+        fn new(runs: Vec<FakeOutput>) -> Self {
+            Self {
+                runs,
+                cursors: Arc::default(),
+            }
+        }
+    }
+
+    impl BenchOutputSource for SequencedOutput {
+        async fn collect(
+            &self,
+            engine: Engine,
+            since: SystemTime,
+            reporter: &dyn Reporter,
+        ) -> io::Result<Harvest> {
+            let index = {
+                let mut cursors = self.cursors.lock().unwrap();
+                let cursor = cursors.entry(engine).or_insert(0);
+                let index = *cursor;
+                *cursor = cursor.saturating_add(1);
+                index
+            };
+            let output = self
+                .runs
+                .get(index)
+                .expect("a sequenced test must supply one output per requested run");
+            output.collect(engine, since, reporter).await
+        }
+    }
+
+    /// A runner that succeeds until a chosen 1-based invocation, then reports a
+    /// non-zero exit, to prove `--best-of` aborts fail-fast on any failing run.
+    struct FailOnNthRunner {
+        fail_on: usize,
+        calls: Arc<Mutex<usize>>,
+    }
+
+    impl FailOnNthRunner {
+        fn new(fail_on: usize) -> Self {
+            Self {
+                fail_on,
+                calls: Arc::default(),
+            }
+        }
+
+        fn call_count(&self) -> usize {
+            *self.calls.lock().unwrap()
+        }
+    }
+
+    impl BenchRunner for FailOnNthRunner {
+        async fn run_benches(
+            &self,
+            _argv: &[String],
+            _env: &[(String, String)],
+        ) -> io::Result<EngineStatus> {
+            let mut calls = self.calls.lock().unwrap();
+            *calls = calls.saturating_add(1);
+            let this_call = *calls;
+            Ok(EngineStatus {
+                success: this_call != self.fail_on,
+                code: (this_call == self.fail_on).then_some(101),
+            })
+        }
+    }
+
+    /// Drives `execute_collect` over arbitrary runner and output doubles.
+    ///
+    /// The other `drive*` helpers pin the concrete [`FakeRunner`]/[`FakeOutput`];
+    /// the best-of tests need a per-run runner or output, so this variant is
+    /// generic over both ports while keeping the rest of the wiring fixed. The
+    /// frozen clock hands every run the same start, which is fine because the fake
+    /// output ignores the harvest cutoff.
+    fn drive_best_of<R, O>(
+        options: &CollectOptions,
+        runner: &R,
+        probe: &FakeProbe,
+        output: &O,
+        storage: &MemoryStorage,
+        reporter: &dyn Reporter,
+    ) -> Result<RunOutcome, RunError>
+    where
+        R: BenchRunner,
+        O: BenchOutputSource,
+    {
+        let now = SystemTime::UNIX_EPOCH
+            .checked_add(Duration::from_secs(FROZEN_UNIX))
+            .unwrap();
+        let clock = Clock::new_frozen_at(now);
+        let env = |_name: &str| None::<String>;
+        let bench_command = mock_bench_command();
+        let deps = CollectDeps {
+            runner,
+            probe,
+            output,
+            storage: Some(storage),
+            clock: &clock,
+            env: &env,
+            project_id: "folo",
+            tool_version: "0.0.1",
+            target_root: Path::new("target"),
+            bench_command: &bench_command,
+            reporter,
+        };
+        block_on(execute_collect(options, &deps))
+    }
+
+    /// Reads the single stored object back as a [`Run`], failing if there is not
+    /// exactly one.
+    fn only_stored_run(storage: &MemoryStorage) -> Run {
+        let keys = storage.keys();
+        assert_eq!(
+            keys.len(),
+            1,
+            "expected exactly one stored object: {keys:?}"
+        );
+        let bytes = block_on(storage.get(&keys[0])).unwrap();
+        Run::from_json(&String::from_utf8(bytes).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn best_of_runs_the_suite_n_times_and_stores_the_minimum_value() {
+        // Three runs measure the same case at 30, 10 and 20 ns; the stored value is
+        // the minimum (10), discarding the two slower, interference-perturbed runs.
+        let runner = FakeRunner::succeeding();
+        let probe = FakeProbe::new();
+        let output = SequencedOutput::new(vec![
+            all_the_time_output(30.0),
+            all_the_time_output(10.0),
+            all_the_time_output(20.0),
+        ]);
+        let storage = MemoryStorage::new();
+        let reporter = StderrReporter::new(false);
+        let options = CollectOptions {
+            best_of: best_of(3),
+            ..CollectOptions::default()
+        };
+
+        drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap();
+
+        assert_eq!(
+            runner.calls.lock().unwrap().len(),
+            3,
+            "the suite must run once per best-of count"
+        );
+
+        let run = only_stored_run(&storage);
+        assert_eq!(run.results.len(), 1);
+        assert_eq!(run.results[0].metrics.len(), 1);
+        assert_eq!(run.results[0].metrics[0].value, 10.0);
+    }
+
+    #[test]
+    fn best_of_selects_each_metric_independently() {
+        // Two cases, each minimized on its own: read_cell wins on run 2 (5 < 30),
+        // write_cell wins on run 1 (7 < 40), so a stored result blends metrics from
+        // different physical runs.
+        fn two_ops(read: f64, write: f64) -> FakeOutput {
+            FakeOutput {
+                time: vec![
+                    RawOperationFile {
+                        path: PathBuf::from("all_the_time/read_cell.json"),
+                        content: format!(
+                            "{{\"operation\":\"read_cell\",\
+                             \"slope_processor_time_nanos\":{read}}}"
+                        ),
+                    },
+                    RawOperationFile {
+                        path: PathBuf::from("all_the_time/write_cell.json"),
+                        content: format!(
+                            "{{\"operation\":\"write_cell\",\
+                             \"slope_processor_time_nanos\":{write}}}"
+                        ),
+                    },
+                ],
+                ..FakeOutput::default()
+            }
+        }
+
+        let runner = FakeRunner::succeeding();
+        let probe = FakeProbe::new();
+        let output = SequencedOutput::new(vec![two_ops(30.0, 7.0), two_ops(5.0, 40.0)]);
+        let storage = MemoryStorage::new();
+        let reporter = StderrReporter::new(false);
+        let options = CollectOptions {
+            best_of: best_of(2),
+            ..CollectOptions::default()
+        };
+
+        drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap();
+
+        let run = only_stored_run(&storage);
+        let mut values: Vec<(String, f64)> = run
+            .results
+            .iter()
+            .map(|result| (result.id.to_string(), result.metrics[0].value))
+            .collect();
+        values.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            values,
+            vec![
+                ("read_cell".to_owned(), 5.0),
+                ("write_cell".to_owned(), 7.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn best_of_reports_provenance_of_the_kept_sample() {
+        // The verbose log must explain each choice: that a best-of pass is running,
+        // each invocation, and — per metric — the samples seen and which run
+        // supplied the kept minimum, with the winner bracketed.
+        let runner = FakeRunner::succeeding();
+        let probe = FakeProbe::new();
+        let output =
+            SequencedOutput::new(vec![all_the_time_output(30.0), all_the_time_output(10.0)]);
+        let storage = MemoryStorage::new();
+        let reporter = RecordingReporter::new();
+        let options = CollectOptions {
+            best_of: best_of(2),
+            ..CollectOptions::default()
+        };
+
+        drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap();
+
+        assert!(
+            reporter.contains("best-of collection: running the suite 2 times"),
+            "expected an announcement of the best-of pass, got {:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains("best-of run 1/2"),
+            "expected a per-run note, got {:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains("best-of samples 30, [10] (kept run 2)"),
+            "expected a provenance note naming the kept sample, got {:?}",
+            reporter.notes()
+        );
+    }
+
+    #[test]
+    fn a_single_run_emits_no_best_of_notes() {
+        // With the default single run there is nothing to choose, so none of the
+        // best-of verbose notes appear — the guards that suppress them at `N == 1`
+        // must hold.
+        let runner = FakeRunner::succeeding();
+        let probe = FakeProbe::new();
+        let output = all_the_time_output(20.0);
+        let storage = MemoryStorage::new();
+        let reporter = RecordingReporter::new();
+
+        drive_best_of(
+            &CollectOptions::default(),
+            &runner,
+            &probe,
+            &output,
+            &storage,
+            &reporter,
+        )
+        .unwrap();
+
+        assert!(
+            !reporter.contains("best-of collection"),
+            "a single run must not announce a best-of pass, got {:?}",
+            reporter.notes()
+        );
+        assert!(
+            !reporter.contains("best-of run"),
+            "a single run must not emit per-run best-of notes, got {:?}",
+            reporter.notes()
+        );
+        assert!(
+            !reporter.contains("best-of samples"),
+            "a single run has no samples to choose between, got {:?}",
+            reporter.notes()
+        );
+    }
+
+    #[test]
+    fn best_of_fails_fast_when_any_run_fails() {
+        // The second of three runs exits non-zero, so collection aborts there
+        // (never reaching a third run) and stores nothing.
+        let runner = FailOnNthRunner::new(2);
+        let probe = FakeProbe::new();
+        let output = SequencedOutput::new(vec![
+            all_the_time_output(30.0),
+            all_the_time_output(10.0),
+            all_the_time_output(20.0),
+        ]);
+        let storage = MemoryStorage::new();
+        let reporter = StderrReporter::new(false);
+        let options = CollectOptions {
+            best_of: best_of(3),
+            ..CollectOptions::default()
+        };
+
+        let error =
+            drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap_err();
+
+        match error {
+            RunError::Engine { engine, code } => {
+                assert_eq!(engine, "cargo bench");
+                assert_eq!(code, Some(101));
+            }
+            other => panic!("expected an engine failure, got {other:?}"),
+        }
+        assert_eq!(
+            runner.call_count(),
+            2,
+            "the run after the failure must not start"
+        );
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn best_of_rejects_a_case_missing_from_a_later_run() {
+        // Run 1 measures read_cell but run 2 does not, so the runs did not exercise
+        // the same work: a hard error that stores nothing.
+        let runner = FakeRunner::succeeding();
+        let probe = FakeProbe::new();
+        let output = SequencedOutput::new(vec![all_the_time_output(10.0), FakeOutput::default()]);
+        let storage = MemoryStorage::new();
+        let reporter = StderrReporter::new(false);
+        let options = CollectOptions {
+            best_of: best_of(2),
+            ..CollectOptions::default()
+        };
+
+        let error =
+            drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap_err();
+
+        match error {
+            RunError::Inconsistent { engine, message } => {
+                assert_eq!(engine, Engine::AllTheTime.to_string());
+                assert!(message.contains("read_cell"), "{message}");
+            }
+            other => panic!("expected an inconsistency error, got {other:?}"),
+        }
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn best_of_with_no_store_runs_every_time_but_stores_nothing() {
+        let runner = FakeRunner::succeeding();
+        let probe = FakeProbe::new();
+        let output =
+            SequencedOutput::new(vec![all_the_time_output(30.0), all_the_time_output(10.0)]);
+        let storage = MemoryStorage::new();
+        let reporter = StderrReporter::new(false);
+        let options = CollectOptions {
+            best_of: best_of(2),
+            no_store: true,
+            ..CollectOptions::default()
+        };
+
+        let outcome =
+            drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap();
+
+        assert_eq!(runner.calls.lock().unwrap().len(), 2);
+        assert!(storage.keys().is_empty());
+        let RunOutcome::Completed { message } = outcome else {
+            panic!("expected completion");
+        };
+        assert!(message.contains("nothing stored"), "{message}");
+    }
+
+    #[test]
+    fn best_of_one_stores_the_single_run_unchanged() {
+        // `--best-of 1` is the default single run: the lone sample is stored as-is,
+        // with no minimization to perform.
+        let runner = FakeRunner::succeeding();
+        let probe = FakeProbe::new();
+        let output = all_the_time_output(20.0);
+        let storage = MemoryStorage::new();
+        let reporter = StderrReporter::new(false);
+        let options = CollectOptions {
+            best_of: best_of(1),
+            ..CollectOptions::default()
+        };
+
+        drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap();
+
+        assert_eq!(runner.calls.lock().unwrap().len(), 1);
+        let run = only_stored_run(&storage);
+        assert_eq!(run.results[0].metrics[0].value, 20.0);
     }
 }

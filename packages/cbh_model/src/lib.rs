@@ -23,6 +23,7 @@
 //!
 //! [`cargo-bench-history`]: https://github.com/folo-rs/folo
 
+mod aggregate;
 mod benchmark_id;
 mod bless;
 mod comparability;
@@ -31,6 +32,7 @@ mod context;
 mod metric;
 mod run;
 
+pub use aggregate::{AggregateError, Combined, Selection, min_per_metric};
 pub use benchmark_id::{BenchmarkId, BenchmarkIdPrefix, EmptyBenchmarkIdPrefix};
 pub use bless::{BLESS_SCHEMA_VERSION, BlessingRecord};
 pub use comparability::{DiscriminantSet, Engine, StorageKey, parse_key, sanitize_segment};
