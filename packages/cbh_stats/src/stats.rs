@@ -217,52 +217,129 @@ pub fn pettitt(values: &[f64]) -> Option<ChangePoint> {
     })
 }
 
-/// The two-sided p-value of the **Mann–Whitney U** test that `left` and `right`
-/// are drawn from the same distribution, via the tie- and continuity-corrected
-/// normal approximation.
+/// The Mann–Whitney U statistics of two samples, ranked jointly once.
 ///
-/// Returns `1.0` (no evidence of a difference) when either sample is empty or the
-/// corrected variance is zero.
+/// Both the significance p-value and the probability-of-superiority effect size
+/// derive from the same joint ranking, so a caller that needs both — as the
+/// change-point and branch-comparison gates do — pays for the sort and allocation
+/// a single time via [`MannWhitneyU::new`] instead of ranking the data twice.
+/// Read [`two_sided_p_value`] for significance and [`superiority`] for effect
+/// size.
+///
+/// [`two_sided_p_value`]: MannWhitneyU::two_sided_p_value
+/// [`superiority`]: MannWhitneyU::superiority
+#[derive(Clone, Copy, Debug)]
+pub struct MannWhitneyU {
+    /// The size of the `left` sample, as `f64`.
+    n1: f64,
+    /// The size of the `right` sample, as `f64`.
+    n2: f64,
+    /// U for `left`: the `(left, right)` pairs with `left > right`, ties as one half.
+    u1: f64,
+    /// U for `right`, the complement `n1·n2 − u1`.
+    u2: f64,
+    /// Σ(t³ − t) over the tie groups, for the variance's tie correction.
+    tie_term: f64,
+}
+
+impl MannWhitneyU {
+    /// Ranks `left` and `right` jointly and captures their U statistics.
+    ///
+    /// Returns `None` when either sample is empty, since a rank comparison needs
+    /// points on both sides.
+    #[must_use]
+    pub fn new(left: &[f64], right: &[f64]) -> Option<Self> {
+        let n1 = left.len();
+        let n2 = right.len();
+        if n1 == 0 || n2 == 0 {
+            return None;
+        }
+        let mut combined = Vec::with_capacity(n1.saturating_add(n2));
+        combined.extend_from_slice(left);
+        combined.extend_from_slice(right);
+        let ranks = average_ranks(&combined);
+
+        let rank_sum_left: f64 = ranks.iter().take(n1).sum();
+        let n1_f = count_to_f64(n1);
+        let n2_f = count_to_f64(n2);
+
+        // `u1 = R_left − n1·(n1+1)/2` counts the `(left, right)` pairs with `left >
+        // right` (ties as one half); the complementary `u2` counts `right > left`.
+        let u1 = rank_sum_left - n1_f * (n1_f + 1.0) / 2.0;
+        let u2 = n1_f * n2_f - u1;
+
+        let tie_term: f64 = tie_group_sizes(&combined)
+            .into_iter()
+            .map(|size| {
+                let t = count_to_f64(size);
+                t * t * t - t
+            })
+            .sum();
+
+        Some(Self {
+            n1: n1_f,
+            n2: n2_f,
+            u1,
+            u2,
+            tie_term,
+        })
+    }
+
+    /// The two-sided p-value that the samples are drawn from the same distribution,
+    /// via the tie- and continuity-corrected normal approximation.
+    ///
+    /// Returns `1.0` (no evidence of a difference) when the corrected variance is
+    /// zero, as happens when every observation ties.
+    #[must_use]
+    pub fn two_sided_p_value(&self) -> f64 {
+        let n_f = self.n1 + self.n2;
+        let u = self.u1.min(self.u2);
+        let mean_u = self.n1 * self.n2 / 2.0;
+        let variance =
+            (self.n1 * self.n2 / 12.0) * ((n_f + 1.0) - self.tie_term / (n_f * (n_f - 1.0)));
+        if variance <= 0.0 {
+            return 1.0;
+        }
+
+        // Continuity-corrected z; `u` is the smaller statistic so `mean_u - u >= 0`.
+        let z = ((mean_u - u) - 0.5).max(0.0) / variance.sqrt();
+        two_sided_p_from_z(z)
+    }
+
+    /// The **probability of superiority** — the common-language effect size.
+    ///
+    /// This is the chance that a value drawn at random from `right` exceeds one
+    /// drawn at random from `left`, counting ties as one half. It is
+    /// `U_right / (n_left · n_right)`, ranging from `0` (every `right` value below
+    /// every `left` value) through `0.5` (the two samples fully interleave) to `1`
+    /// (every `right` value above every `left` value).
+    ///
+    /// This is the *effect-size* companion to [`two_sided_p_value`]: the p-value
+    /// says whether the two samples differ, and this says *how far apart* they are.
+    /// Crucially it does **not** drift toward an extreme as the samples grow — two
+    /// heavily overlapping populations keep a superiority near `0.5` however many
+    /// points are sampled, whereas their difference becomes ever more
+    /// "statistically significant". A separation gate therefore needs this, not the
+    /// p-value, to tell a genuine level shift from a long but jittery series that
+    /// merely oscillates between two levels.
+    ///
+    /// [`two_sided_p_value`]: MannWhitneyU::two_sided_p_value
+    #[must_use]
+    pub fn superiority(&self) -> f64 {
+        self.u2 / (self.n1 * self.n2)
+    }
+}
+
+/// The two-sided p-value of the **Mann–Whitney U** test that `left` and `right`
+/// are drawn from the same distribution.
+///
+/// A convenience over [`MannWhitneyU`] for callers that need only the significance
+/// and not the effect size; returns `1.0` (no evidence of a difference) when
+/// either sample is empty. See [`MannWhitneyU::two_sided_p_value`] for the
+/// approximation used.
 #[must_use]
 pub fn mann_whitney_u_pvalue(left: &[f64], right: &[f64]) -> f64 {
-    let n1 = left.len();
-    let n2 = right.len();
-    if n1 == 0 {
-        return 1.0;
-    }
-    if n2 == 0 {
-        return 1.0;
-    }
-    let mut combined = Vec::with_capacity(n1.saturating_add(n2));
-    combined.extend_from_slice(left);
-    combined.extend_from_slice(right);
-    let ranks = average_ranks(&combined);
-
-    let rank_sum_left: f64 = ranks.iter().take(n1).sum();
-    let n1_f = count_to_f64(n1);
-    let n2_f = count_to_f64(n2);
-    let n_f = n1_f + n2_f;
-
-    let u1 = rank_sum_left - n1_f * (n1_f + 1.0) / 2.0;
-    let u2 = n1_f * n2_f - u1;
-    let u = u1.min(u2);
-    let mean_u = n1_f * n2_f / 2.0;
-
-    let tie_term: f64 = tie_group_sizes(&combined)
-        .into_iter()
-        .map(|size| {
-            let t = count_to_f64(size);
-            t * t * t - t
-        })
-        .sum();
-    let variance = (n1_f * n2_f / 12.0) * ((n_f + 1.0) - tie_term / (n_f * (n_f - 1.0)));
-    if variance <= 0.0 {
-        return 1.0;
-    }
-
-    // Continuity-corrected z; `u` is the smaller statistic so `mean_u - u >= 0`.
-    let z = ((mean_u - u) - 0.5).max(0.0) / variance.sqrt();
-    two_sided_p_from_z(z)
+    MannWhitneyU::new(left, right).map_or(1.0, |mann_whitney| mann_whitney.two_sided_p_value())
 }
 
 /// The outcome of a Mann–Kendall trend test.
@@ -525,6 +602,74 @@ mod tests {
         // tie-term, variance, and continuity arithmetic all have to be exact.
         let p = mann_whitney_u_pvalue(&[3.0, 4.0, 4.0, 5.0], &[1.0, 2.0, 2.0, 3.0]);
         close(p, 0.039_608_571_971_576_41, 1e-9);
+    }
+
+    #[test]
+    fn mann_whitney_superiority_is_one_when_right_dominates() {
+        // Every `right` value exceeds every `left` value: all 3×3 pairs favour
+        // `right`, so the probability of superiority is exactly 1.
+        let s = MannWhitneyU::new(&[1.0, 2.0, 3.0], &[4.0, 5.0, 6.0])
+            .unwrap()
+            .superiority();
+        assert_eq!(s, 1.0);
+    }
+
+    #[test]
+    fn mann_whitney_superiority_is_zero_when_right_is_dominated() {
+        // The mirror image: no `right` value exceeds any `left` value, so the
+        // probability of superiority is exactly 0.
+        let s = MannWhitneyU::new(&[4.0, 5.0, 6.0], &[1.0, 2.0, 3.0])
+            .unwrap()
+            .superiority();
+        assert_eq!(s, 0.0);
+    }
+
+    #[test]
+    fn mann_whitney_superiority_counts_ties_as_one_half() {
+        // Identical samples: every pair is a tie, each counting one half, so the
+        // probability of superiority is exactly 0.5 — the "indistinguishable" value.
+        let s = MannWhitneyU::new(&[5.0, 5.0], &[5.0, 5.0])
+            .unwrap()
+            .superiority();
+        assert_eq!(s, 0.5);
+    }
+
+    #[test]
+    fn mann_whitney_superiority_measures_partial_overlap() {
+        // `right` = {2, 4} against `left` = {1, 3}: pairs (2>1), (4>1), (4>3) favour
+        // right and (2<3) favours left, so 3 of 4 pairs favour right → 0.75. This is
+        // the interleaving case a stationary-but-noisy series produces.
+        let s = MannWhitneyU::new(&[1.0, 3.0], &[2.0, 4.0])
+            .unwrap()
+            .superiority();
+        assert_eq!(s, 0.75);
+    }
+
+    #[test]
+    fn mann_whitney_superiority_does_not_drift_with_sample_size() {
+        // The effect size is invariant to how many times each level is sampled: two
+        // fully interleaved two-level populations keep a superiority of 0.5 whether
+        // sampled 2 or 20 times each, even though the *p-value* would grow
+        // significant. This is exactly why a separation gate needs the effect size,
+        // not the p-value.
+        let small = MannWhitneyU::new(&[10.0, 20.0], &[10.0, 20.0])
+            .unwrap()
+            .superiority();
+        let large_left: Vec<f64> = [10.0, 20.0].iter().copied().cycle().take(20).collect();
+        let large_right = large_left.clone();
+        let large = MannWhitneyU::new(&large_left, &large_right)
+            .unwrap()
+            .superiority();
+        assert_eq!(small, 0.5);
+        assert_eq!(large, 0.5);
+    }
+
+    #[test]
+    fn mann_whitney_empty_sample_is_none() {
+        // A rank comparison needs points on both sides; an empty sample yields no
+        // statistics at all, so neither the p-value nor the effect size exists.
+        assert!(MannWhitneyU::new(&[], &[1.0, 2.0]).is_none());
+        assert!(MannWhitneyU::new(&[1.0, 2.0], &[]).is_none());
     }
 
     #[test]
