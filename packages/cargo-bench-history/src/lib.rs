@@ -70,16 +70,19 @@
 //!
 //! ## `collect`
 //!
-//! Executes the workspace benches once with `cargo bench`, harvests every
-//! supported engine's machine-readable output, and stores one result set per
-//! engine. There is nothing to configure about engines: the run enables the
-//! combined environment the engines need and detects each engine from the output
+//! Executes the workspace benches with `cargo bench`, harvests every supported
+//! engine's machine-readable output, and stores one result set per engine. There
+//! is nothing to configure about engines: the run enables the combined
+//! environment the engines need and detects each engine from the output
 //! it produces (off Linux the Callgrind benches compile to no-ops, so only the
 //! host-runnable engines are stored). Re-running the same clean commit is refused
 //! as a duplicate unless `--overwrite` replaces the stored result; `--no-store`
-//! harvests and reports without writing. A run is positioned on the timeline by
-//! where its commit sits in git history (first-parent topology), resolved live at
-//! analyze time — never by when the benchmarks happened to execute.
+//! harvests and reports without writing. `--best-of N` reruns the whole suite `N`
+//! times and keeps the minimum value per metric — a noise-reduction pass for
+//! jittery runners, where interference only ever makes a case slower. A run is
+//! positioned on the timeline by where its commit sits in git history
+//! (first-parent topology), resolved live at analyze time — never by when the
+//! benchmarks happened to execute.
 //!
 //! ## `install`
 //!

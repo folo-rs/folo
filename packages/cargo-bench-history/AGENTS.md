@@ -94,9 +94,9 @@ not conclusion-only** (see `docs/standalone-binaries.md`). Tests use the `#[cfg(
   point carries a confidence interval (`criterion`, `all_the_time`, and `alloc_tracker` all
   record one on every operation) or is a single value (`callgrind`, plus any legacy mean-only
   file the adapter still tolerates). An interval is only ever an extra veto that can suppress
-  a candidate finding, never create one. `collect`/`backfill` invoke `cargo bench` once and
-  harvest whatever ran; `--engine` is an `analyze` facet, not a collect flag. Details:
-  DESIGN §1.
+  a candidate finding, never create one. `collect`/`backfill` invoke `cargo bench` (once, or
+  `--best-of N` times keeping the per-metric minimum) and harvest whatever ran; `--engine` is
+  an `analyze` facet, not a collect flag. Details: DESIGN §1, §7.1.
 
 ## Testing
 

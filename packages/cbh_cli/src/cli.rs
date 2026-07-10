@@ -7,6 +7,7 @@
 //! groups are factored into [`clap::Args`] structs and `#[command(flatten)]`ed
 //! into each subcommand so the same option means the same thing everywhere.
 
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use cbh_command::{
@@ -370,6 +371,13 @@ struct CollectCommand {
     #[arg(long, help_heading = HEADING_ENV, conflicts_with = "overwrite")]
     skip_existing: bool,
 
+    /// Run the whole suite this many times and keep, per metric, the best
+    /// (minimum) observed value — a noise-reduction pass for jittery runners.
+    /// Every run must produce the same benchmark cases and the same metrics
+    /// per case or collection fails.
+    #[arg(long = "best-of", value_name = "N", default_value_t = NonZeroUsize::MIN, help_heading = HEADING_ENV)]
+    best_of: NonZeroUsize,
+
     /// Arguments after `--` forwarded verbatim to `cargo bench` after the scope
     /// flags.
     #[arg(last = true, value_name = "ARGS")]
@@ -394,6 +402,7 @@ impl CollectCommand {
             skip_existing: self.skip_existing,
             passthrough: self.passthrough,
             verbose: self.env.verbose,
+            best_of: self.best_of,
         }
     }
 }
@@ -816,6 +825,13 @@ struct BackfillCommand {
     #[arg(long, help_heading = HEADING_ENV)]
     ignore_errors: bool,
 
+    /// Run the whole suite this many times per commit and keep, per metric, the
+    /// best (minimum) observed value — a noise-reduction pass for jittery runners.
+    /// Every run must produce the same benchmark cases and the same metrics
+    /// per case or collection fails.
+    #[arg(long = "best-of", value_name = "N", default_value_t = NonZeroUsize::MIN, help_heading = HEADING_ENV)]
+    best_of: NonZeroUsize,
+
     /// Arguments after `--` forwarded verbatim to `cargo bench` after the scope
     /// flags.
     #[arg(last = true, value_name = "ARGS")]
@@ -841,6 +857,7 @@ impl BackfillCommand {
             ignore_errors: self.ignore_errors,
             passthrough: self.passthrough,
             verbose: self.env.verbose,
+            best_of: self.best_of,
         }
     }
 }
@@ -1052,6 +1069,30 @@ mod tests {
         };
         assert!(options.all_features);
         assert!(options.features.is_empty());
+    }
+
+    #[test]
+    fn collect_best_of_defaults_to_one_and_parses_a_value() {
+        let Command::Collect(options) = parse(&["collect"]) else {
+            panic!("expected collect command");
+        };
+        assert_eq!(
+            options.best_of.get(),
+            1,
+            "--best-of defaults to a single run"
+        );
+
+        let Command::Collect(options) = parse(&["collect", "--best-of", "5", "--no-store"]) else {
+            panic!("expected collect command");
+        };
+        assert_eq!(options.best_of.get(), 5);
+        assert!(options.no_store, "--best-of coexists with --no-store");
+    }
+
+    #[test]
+    fn collect_best_of_rejects_zero() {
+        let parsed = Cli::from_args(&["cargo-bench-history"], &["collect", "--best-of", "0"]);
+        assert!(parsed.is_err(), "--best-of 0 must be rejected");
     }
 
     #[test]
@@ -1836,6 +1877,33 @@ mod tests {
             panic!("expected backfill command");
         };
         assert!(!options.verbose);
+    }
+
+    #[test]
+    fn backfill_best_of_defaults_to_one_and_parses_a_value() {
+        let Command::Backfill(options) = parse(&["backfill", "abc123", "def456"]) else {
+            panic!("expected backfill command");
+        };
+        assert_eq!(
+            options.best_of.get(),
+            1,
+            "--best-of defaults to a single run"
+        );
+
+        let Command::Backfill(options) = parse(&["backfill", "abc123", "def456", "--best-of", "3"])
+        else {
+            panic!("expected backfill command");
+        };
+        assert_eq!(options.best_of.get(), 3);
+    }
+
+    #[test]
+    fn backfill_best_of_rejects_zero() {
+        let parsed = Cli::from_args(
+            &["cargo-bench-history"],
+            &["backfill", "abc123", "def456", "--best-of", "0"],
+        );
+        assert!(parsed.is_err(), "--best-of 0 must be rejected");
     }
 
     #[test]

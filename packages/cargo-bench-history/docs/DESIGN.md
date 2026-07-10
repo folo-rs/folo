@@ -339,7 +339,7 @@ that names the three.
 
 ### 7.1 `collect`
 
-`collect` invokes the workspace's benches once with `cargo bench` and harvests whichever
+`collect` invokes the workspace's benches with `cargo bench` and harvests whichever
 engines produced output — there is no engine configuration. It enables the combined
 environment every supported engine needs (only Callgrind needs an opt-in variable; the
 others auto-emit) and then inspects each output tree to see which engines actually ran.
@@ -352,6 +352,23 @@ relative target path would be resolved there by an engine that honours it and sc
 output away from the workspace-rooted harvest. Harvest is scoped to files modified at or
 after the run start, so stale cases from earlier runs are never re-ingested and whatever
 subset actually ran is exactly what is stored.
+
+`--best-of N` reruns the whole suite `N` times (default `1`) and stores, per metric, the
+**minimum** observed value. Benchmark interference on a shared CI runner is one-sided — it
+only ever makes a case *slower* — and the runs are spaced apart in wall-clock time (each
+`cargo bench` takes many seconds), so a transient slowdown is unlikely to hit the same case
+in every run; the minimum discards it. The winning sample is stored **wholesale** (its own
+confidence interval travels with it), so a stored result may blend metrics selected from
+different physical runs — accepted, since each metric is judged on its own timeline. Because
+the runs must be reducible metric-by-metric, every run must measure the **same set of cases
+and the same metrics per case**; any cross-run mismatch is a hard error that fails the whole
+collection rather than being papered over. The stored run takes its observation time and
+dirty-snapshot key from the **first** run's start (the git/toolchain/hardware context is
+probed once, after the runs, and does not change between them), and any non-zero `cargo
+bench` exit still aborts fail-fast. `N == 1` reproduces a plain single run. Two caveats
+remain: a runner that is slow for the *entire* job is not corrected by the minimum, and
+Callgrind's deterministic counts make min-of-N a (costly) no-op for that engine — but the
+single `cargo bench` interface cannot select engines, so both are accepted.
 
 `collect` always persists — there is no separate publish step (`--no-store` runs without
 writing, for dry runs). A clean point writes the deterministic clean key, refused by
@@ -454,7 +471,8 @@ commits that already have a stored result are listed once up front and **skipped
 their benches run**, making backfill resumable and cheap to re-issue; overwrite regenerates
 them. A build or bench failure stops by default (or, with a flag, is recorded and skipped
 with an end-of-run summary), while infrastructure failures always abort since continuing
-cannot produce correct data.
+cannot produce correct data. `--best-of N` carries through to each commit's `collect`, so a
+backfill can apply the same min-of-N noise reduction (§7.1) uniformly across the range.
 
 ### 7.5 `list`
 

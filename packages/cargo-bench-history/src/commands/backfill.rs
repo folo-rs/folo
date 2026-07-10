@@ -541,6 +541,7 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
             skip_existing: false,
             passthrough: self.options.passthrough.clone(),
             verbose: self.options.verbose,
+            best_of: self.options.best_of,
         };
         let deps = CollectDeps {
             runner: &runner,
