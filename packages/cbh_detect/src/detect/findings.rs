@@ -93,6 +93,18 @@ pub struct AnalysisConfig {
     /// run-to-run wobble. It composes with (and is independent of) the optional
     /// confidence-interval veto available on dispersion-reporting engines.
     pub residual_noise_multiple: f64,
+    /// Minimum **probability of superiority** (Mann–Whitney common-language effect
+    /// size) the two regimes of a level shift must reach for the shift to be trusted:
+    /// the fraction of after-vs-before commit pairs that move in the finding's
+    /// direction. It is the *effect-size* companion to the rank test's *significance*
+    /// gate, and closes a hole the significance gate cannot: a rank test grows
+    /// "significant" with sample size even for two heavily overlapping regimes, so a
+    /// long but stationary series that merely oscillates between two levels — noisy
+    /// yet stable — otherwise reads as a change-point. A genuine step scores ~1 here;
+    /// bimodal jitter scores near ½. Because a move that already clears the residual
+    /// gate is well-separated in practice, this only ever *suppresses* a candidate the
+    /// median-based gates were fooled by, never creates one.
+    pub min_regime_separation: f64,
 }
 
 impl Default for AnalysisConfig {
@@ -108,6 +120,7 @@ impl Default for AnalysisConfig {
             branch_practical_relative: 0.05,
             branch_noise_multiple: 2.0,
             residual_noise_multiple: 3.0,
+            min_regime_separation: 0.85,
         }
     }
 }
@@ -447,6 +460,39 @@ fn exceeds_residual_noise(delta: f64, residual: Option<f64>, config: &AnalysisCo
     }
 }
 
+/// Whether the two regimes of a `delta`-signed level shift are *separated enough*
+/// to be distinct populations, rather than two windows onto one noisy distribution.
+///
+/// A rank test's p-value proves only that the regimes *differ*, and it grows more
+/// significant with sample size even for a heavily overlapping move — so a long but
+/// stationary series that oscillates between two levels (noisy yet stable) passes
+/// the significance gate. This gate adds the effect-size the significance test
+/// lacks: the Mann–Whitney probability of superiority (the chance a random `after`
+/// point exceeds a random `before` one), oriented in the move's direction, must
+/// reach `config.min_regime_separation`. A genuine step scores ~1; bimodal jitter
+/// scores near ½ and is rejected. A missing effect size (an empty sample) is treated
+/// as no evidence of overlap, so the move is trusted.
+fn regimes_are_separated(
+    before: &[f64],
+    after: &[f64],
+    delta: f64,
+    config: &AnalysisConfig,
+) -> bool {
+    match stats::mann_whitney_superiority(before, after) {
+        // `superiority` is P(after > before); a fall is judged by the complementary
+        // P(before > after), so both directions are measured against the same floor.
+        Some(superiority) => {
+            let directional = if delta >= 0.0 {
+                superiority
+            } else {
+                1.0 - superiority
+            };
+            directional >= config.min_regime_separation
+        }
+        None => true,
+    }
+}
+
 /// Chooses between a change-point and a drift candidate for the same series.
 ///
 /// When both detectors fire, the data is described as whichever model fits it
@@ -485,8 +531,10 @@ fn arbitrate(
 /// at least `min_regime` points (persistence). The move must then be confirmed by a
 /// significant Mann–Whitney rank-sum difference between the regimes, clear the
 /// practical-magnitude floor, stand above the series' own between-commit residual
-/// scatter, and — when the engine reports per-point confidence intervals — separate
-/// the two regimes' intervals.
+/// scatter, separate the two regimes as populations (the Mann–Whitney effect-size
+/// gate that rejects a noisy-but-stable series whose levels interleave), and — when
+/// the engine reports per-point confidence intervals — separate the two regimes'
+/// intervals.
 fn evaluate_change_point(
     series: &Series,
     values: &[f64],
@@ -521,6 +569,9 @@ fn evaluate_change_point(
         return None;
     }
     if !exceeds_residual_noise(delta, step_model_residual(values, tau), config) {
+        return None;
+    }
+    if !regimes_are_separated(before, after, delta, config) {
         return None;
     }
     let before_points: Vec<&SeriesPoint> = points.iter().take(tau).collect();
@@ -718,7 +769,8 @@ fn latest_regime<'a>(
 /// own between-commit residual scatter (the primary, series-intrinsic noise gate,
 /// which for a single-run engine like Callgrind is the only dispersion available).
 /// It must then either — when both samples have at least two points — pass a
-/// significant Mann–Whitney difference, or — when a sample is too small to
+/// significant Mann–Whitney difference *and* separate the two samples as populations
+/// (the Mann–Whitney effect-size gate), or — when a sample is too small to
 /// rank-test — rest on that residual gate alone. Where the engine additionally
 /// reports per-point confidence intervals, the two samples' intervals must also be
 /// disjoint; this is an extra veto that can only *suppress* a candidate the other
@@ -756,6 +808,9 @@ fn compare_samples(
     let effective_p = if before_values.len() >= 2 && after_values.len() >= 2 {
         let mann_whitney = stats::mann_whitney_u_pvalue(&before_values, &after_values);
         if mann_whitney >= config.change_alpha {
+            return None;
+        }
+        if !regimes_are_separated(&before_values, &after_values, delta, config) {
             return None;
         }
         if let (Some(before_ci), Some(after_ci)) = (regime_interval(before), regime_interval(after))
@@ -1599,6 +1654,58 @@ mod tests {
             ..AnalysisConfig::default()
         };
         assert!(evaluate_change_point(&series, &values_of(&series), &config).is_none());
+    }
+
+    #[test]
+    fn regimes_are_separated_rejects_interleaved_levels() {
+        let config = AnalysisConfig::default();
+        // A clean rise: every after-point exceeds every before-point (superiority 1).
+        assert!(regimes_are_separated(
+            &[10.0, 11.0, 12.0],
+            &[20.0, 21.0, 22.0],
+            10.0,
+            &config,
+        ));
+        // A clean fall: judged by the complementary direction, still fully separated.
+        assert!(regimes_are_separated(
+            &[20.0, 21.0, 22.0],
+            &[10.0, 11.0, 12.0],
+            -10.0,
+            &config,
+        ));
+        // Two levels that recur on both sides: only 0.75 of the after-vs-before pairs
+        // move in the rise's direction, below the 0.85 floor, so it is not separated.
+        assert!(!regimes_are_separated(
+            &[10.0, 10.0, 10.0, 30.0],
+            &[30.0, 30.0, 30.0, 10.0],
+            20.0,
+            &config,
+        ));
+    }
+
+    #[test]
+    fn change_point_across_interleaved_regimes_is_suppressed() {
+        // The real-world series that motivated the separation gate: a wall-time metric
+        // that oscillates between ~13 and ~25-29 throughout its whole history, so no
+        // commit marks a real level shift. Pettitt aligns the split with each side's
+        // dominant mode, collapsing the median-absolute residual so the residual gate
+        // is fooled and (before this gate) a spurious "regression via change point"
+        // was emitted. The regimes overlap heavily (probability of superiority ~0.72),
+        // so the separation gate rejects it. Dropping the separation floor to zero
+        // admits the split again, proving that gate is the sole reason it is silent.
+        let values = vec![
+            13.26, 14.33, 13.14, 24.97, 13.2, 24.97, 13.17, 25.39, 25.54, 13.18, 13.83, 25.45,
+            25.02, 25.0, 13.2, 13.22, 13.24, 13.21, 13.15, 24.97, 26.78, 13.24, 28.98, 10.5, 10.53,
+            26.76, 26.74, 13.58, 13.54, 28.86, 14.15, 13.5, 26.77, 25.38, 25.0, 13.97, 26.81,
+            25.54, 13.62, 13.57,
+        ];
+        let series = series_of(&values);
+        let permissive = AnalysisConfig {
+            min_regime_separation: 0.0,
+            ..AnalysisConfig::default()
+        };
+        assert!(evaluate_change_point(&series, &values, &permissive).is_some());
+        assert!(evaluate_change_point(&series, &values, &AnalysisConfig::default()).is_none());
     }
 
     #[test]

@@ -630,13 +630,26 @@ The same gates run for every engine; only their inputs differ. Pettitt *locates*
 (its analytic p-value is too conservative on short series to gate on), and a change-point is
 reported only when all of these hold: a **Mann–Whitney** rank test finds the two regimes
 statistically distinguishable; the move clears a **practical-magnitude floor**, so a
-statistically-real but trivial wobble stays silent; and the move stands above the series'
+statistically-real but trivial wobble stays silent; the move stands above the series'
 own **residual scatter** about the fitted step — the median-absolute-residual gate that is
-the primary noise check for *every* engine, in place of trusting a value as exact. Where the
-points carry confidence intervals, non-overlap of the regime intervals is an *additional*
-veto — it can only *suppress* a candidate the other gates would report (declaring the move
-noise when the intervals overlap), never manufacture a finding; where they do not, the
-residual gate stands alone.
+the primary noise check for *every* engine, in place of trusting a value as exact; and the
+two regimes are **well-separated populations**, not merely distinguishable ones. That last
+gate is an *effect-size* check — the Mann–Whitney **probability of superiority**, the share
+of after-vs-before pairs that move in the finding's direction — and it must clear a floor
+(`min_regime_separation`, default 0.85). It is a deliberate complement to the two robust
+gates above, which share a **50% breakdown point**: a *stationary but very noisy* series
+whose value oscillates between two levels defeats them, because Pettitt aligns the split
+with the dominant level on each side, leaving under half of each regime "off-level" so the
+median residual collapses toward zero and the p-value shrinks with sample size regardless of
+overlap. The probability of superiority does not drift with sample size, so it stays low
+(the regimes overlap heavily) and vetoes the spurious step while leaving every genuine level
+shift — where it sits near 1.0 — untouched. Where the points carry confidence intervals,
+non-overlap of the regime intervals is an *additional* veto — it can only *suppress* a
+candidate the other gates would report (declaring the move noise when the intervals overlap),
+never manufacture a finding; where they do not, the residual and separation gates stand
+alone. The same separation gate guards the branch-comparison detector, which likewise
+contrasts two regimes; the resolved-spike detector needs no such gate — its
+recover-to-baseline shape does not arise from a stationary oscillation in the first place.
 
 Drift mirrors this: Mann–Kendall establishes the trend, Theil–Sen sizes it, and the total
 movement must clear the practical floor and exceed the residual scatter about the fitted

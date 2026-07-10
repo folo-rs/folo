@@ -43,12 +43,15 @@
 //! question. Detector internals, confidence, and magnitude are covered by the
 //! finer-grained unit tests in [`findings`](super::findings).
 //!
-//! The analysis treats every metric as noise-aware, so the curated series carry no
-//! within-regime dispersion (each regime is a run of identical values) and every step
-//! is large and well above the practical-magnitude floors. That keeps the verdict
-//! unambiguous under the noisy gates: a step between two zero-variance regimes is
-//! maximally significant, so detection turns purely on the mode's slice and floor
-//! rather than on any noise model.
+//! Most curated series carry no within-regime dispersion (each regime is a run of
+//! identical values) and every step is large and well above the practical-magnitude
+//! floors, so a step between two zero-variance regimes is maximally significant and
+//! detection turns purely on the mode's slice and floor rather than on any noise model.
+//! One case deliberately breaks that mould: a *stationary but very noisy* series whose
+//! value oscillates between two levels throughout. A human reading its chart answers
+//! "noisy, but nothing changed" without hesitation, so it is exactly the kind of
+//! obvious-answer input this suite exists to pin — and it guards the noise gates against
+//! reading structured jitter as a step.
 
 #![cfg_attr(coverage_nightly, coverage(off))]
 
@@ -238,18 +241,36 @@ fn cases() -> Vec<SignalCase> {
             expected_history: Outcome::Rise,
             expected_branch: Outcome::Quiet,
         },
+        // A stationary but very noisy real-world series (a wall-time metric whose value
+        // oscillates between ~13 and ~25-29 across its whole history). A human reads the
+        // chart as "noisy, nothing changed", yet a naive change-point split lands on the
+        // dominant mode of each side and — because the median-absolute residual then
+        // collapses — used to be reported as a regression. The regime-separation gate
+        // rejects it: the two levels overlap far too much to be distinct populations.
+        // History sees the whole series and must stay quiet; branch has no branch side.
+        SignalCase {
+            name: "stationary_bimodal_noise",
+            base: vec![
+                13.26, 14.33, 13.14, 24.97, 13.2, 24.97, 13.17, 25.39, 25.54, 13.18, 13.83, 25.45,
+                25.02, 25.0, 13.2, 13.22, 13.24, 13.21, 13.15, 24.97, 26.78, 13.24, 28.98, 10.5,
+                10.53, 26.76, 26.74, 13.58, 13.54, 28.86, 14.15, 13.5, 26.77, 25.38, 25.0, 13.97,
+                26.81, 25.54, 13.62, 13.57,
+            ],
+            branch: Vec::new(),
+            expected_history: Outcome::Quiet,
+            expected_branch: Outcome::Quiet,
+        },
     ]
 }
 
-/// Builds a noise-free series carrying `values` in topological order, tagged with
-/// `kind`.
+/// Builds a curated series carrying `values` in topological order, tagged with `kind`.
 ///
-/// The points carry no confidence intervals and each curated regime is a run of
-/// identical values, so the series has zero within-regime dispersion. The analysis is
-/// noise-aware for every metric, but a step between two zero-variance regimes is
-/// unambiguous under those gates, so the verdict turns on the mode and the step
-/// magnitude rather than on a noise model.
-fn noise_free_series(values: &[f64], kind: MetricKind) -> Series {
+/// The points carry no explicit confidence intervals. Most curated regimes are runs of
+/// identical values, so the series has zero within-regime dispersion and a step between
+/// two such regimes is unambiguous under the noise-aware gates; the verdict then turns on
+/// the mode and the step magnitude. The stationary-noise case is the exception — its
+/// values genuinely scatter — and it exists precisely to exercise those gates.
+fn curated_series(values: &[f64], kind: MetricKind) -> Series {
     let points = values
         .iter()
         .enumerate()
@@ -280,7 +301,7 @@ fn noise_free_series(values: &[f64], kind: MetricKind) -> Series {
 /// Runs the serial detection oracle on a single series under `context` and reports
 /// whether it raised any finding.
 fn raises_finding(values: &[f64], kind: MetricKind, context: &AnalysisContext) -> bool {
-    let series = noise_free_series(values, kind);
+    let series = curated_series(values, kind);
     let findings = find_changes(&[series], context);
     !findings.is_empty()
 }
