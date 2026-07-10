@@ -50,9 +50,13 @@ jobs:
         platform: [ubuntu-latest, windows-latest, ubuntu-24.04-arm, windows-11-arm]
 
     runs-on: ${{ matrix.platform }}
-    # Generous ceiling: the suite already takes a while and grows as benchmarks are
-    # added; the matrix runs in parallel, so a high cap only bounds a genuinely stuck
-    # run rather than the expected duration.
+    # 360 minutes is GitHub's hard per-job ceiling for hosted runners, so this is as
+    # high as the cap can go. `--best-of 3` (see the gh-collect-bench-history recipe)
+    # runs the suite three times, roughly tripling the benchmark portion; a single run
+    # sits around 60-75 min, so even the ~3x worst case stays well under the ceiling.
+    # The matrix runs in parallel, so the cap only bounds a genuinely stuck run rather
+    # than the expected duration. If the suite ever grows enough that 3x approaches six
+    # hours, shard the benchmarks across jobs rather than trying to raise this further.
     timeout-minutes: 360
 
     # `id-token: write` lets cargo-bench-history mint short-lived GitHub OIDC tokens

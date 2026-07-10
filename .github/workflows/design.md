@@ -88,6 +88,11 @@ and analysis reads only that key: the GitHub-hosted runner pool may hold differe
 machines, so fingerprinting would fork the series on every SKU change and let unrelated
 machines pollute the data set, whereas one fixed key keeps a single series (accepting the
 pool's jitter) that a deliberate blessing absorbs across a genuine hardware migration.
+To blunt that jitter rather than merely accept it, collection runs the whole suite several
+times per commit and keeps, per metric, the minimum sample: runner interference is one-sided
+(a contended host only ever makes a benchmark slower) and the repeats are spaced apart in
+time, so the minimum is the reading least perturbed by transient noise. This trades a
+proportionally longer collection job for a more stable series.
 A downstream analysis job reads the accumulated
 history and files a single rolling, advisory issue when it detects a notable regression;
 regressions never fail the run. Because a GitHub issue body is size-capped and a large

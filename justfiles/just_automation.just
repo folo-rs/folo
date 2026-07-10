@@ -13,14 +13,19 @@
 # a different SKU. Pinning keeps every push on one series (accepting the jitter a heterogeneous
 # pool causes); a genuine hardware migration is absorbed by blessing the resulting step change.
 # Deterministic engines (Callgrind, allocation/time counters) are hardware-independent and
-# ignore the key. `--skip-existing` makes a re-run on an unchanged commit a no-op append (each
+# ignore the key. `--best-of 3` counteracts the same runner noise from the other direction: the
+# suite runs three times and each metric keeps its minimum sample, since benchmark interference
+# on a shared runner is one-sided (it only ever makes a case slower) and the runs are spaced far
+# enough apart in time that a transient slowdown is unlikely to hit every one. This roughly
+# triples the wall-clock benchmark portion of the collect job (see bench-history.yml's
+# `timeout-minutes`). `--skip-existing` makes a re-run on an unchanged commit a no-op append (each
 # already-stored object is skipped, not overwritten), so a re-triggered run of an
 # already-collected commit never bumps the cache-invalidation marker the `analyze` job's
 # read-through cache depends on - a re-run of the same commit is not "better" data, so there is
 # nothing to replace.
 [group('automation')]
 gh-collect-bench-history:
-    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- collect --workspace --exclude benchmarks --machine-key github --skip-existing --verbose
+    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- collect --workspace --exclude benchmarks --machine-key github --best-of 3 --skip-existing --verbose
 
 # Analyzes the collected history for regressions across ALL engines and target triples, but
 # only the `github` machine key - the fixed key `gh-collect-bench-history` stamps on the
