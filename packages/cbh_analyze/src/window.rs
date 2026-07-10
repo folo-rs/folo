@@ -3,10 +3,11 @@
 //! resolved window.
 
 use cbh_detect::AnalysisMode;
-use cbh_run::RunError;
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use jiff::{Span, Timestamp};
+
+use crate::AnalyzeError;
 
 /// Auto-detects the analysis mode from the resolved topology and recorded data.
 ///
@@ -47,7 +48,7 @@ pub(crate) fn resolve_since(
     value: Option<&str>,
     mode: AnalysisMode,
     now: Timestamp,
-) -> Result<Option<Timestamp>, RunError> {
+) -> Result<Option<Timestamp>, AnalyzeError> {
     if value.is_some() {
         return parse_since(value, now);
     }
@@ -62,11 +63,11 @@ const HISTORY_DEFAULT_LOOKBACK_MONTHS: i32 = 6;
 
 /// The instant [`HISTORY_DEFAULT_LOOKBACK_MONTHS`] before `now`, anchored with
 /// calendar-correct zoned arithmetic (months have no fixed length).
-fn default_history_since(now: Timestamp) -> Result<Timestamp, RunError> {
+fn default_history_since(now: Timestamp) -> Result<Timestamp, AnalyzeError> {
     now.to_zoned(TimeZone::UTC)
         .checked_sub(Span::new().months(HISTORY_DEFAULT_LOOKBACK_MONTHS))
         .map(|zoned| zoned.timestamp())
-        .map_err(|error| RunError::Analyze {
+        .map_err(|error| AnalyzeError::Analyze {
             message: format!("default --since window is out of the representable range: {error}"),
         })
 }
@@ -78,7 +79,7 @@ fn default_history_since(now: Timestamp) -> Result<Timestamp, RunError> {
 pub(crate) fn parse_since(
     value: Option<&str>,
     now: Timestamp,
-) -> Result<Option<Timestamp>, RunError> {
+) -> Result<Option<Timestamp>, AnalyzeError> {
     parse_instant(value, "--since", now)
 }
 
@@ -89,7 +90,7 @@ pub(crate) fn parse_since(
 pub(crate) fn parse_until(
     value: Option<&str>,
     now: Timestamp,
-) -> Result<Option<Timestamp>, RunError> {
+) -> Result<Option<Timestamp>, AnalyzeError> {
     parse_instant(value, "--until", now)
 }
 
@@ -149,7 +150,7 @@ fn parse_instant(
     value: Option<&str>,
     flag: &str,
     now: Timestamp,
-) -> Result<Option<Timestamp>, RunError> {
+) -> Result<Option<Timestamp>, AnalyzeError> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -167,7 +168,7 @@ fn parse_instant(
     if let Ok(span) = value.parse::<Span>() {
         return Ok(Some(instant_before(span, flag, now)?));
     }
-    Err(RunError::Analyze {
+    Err(AnalyzeError::Analyze {
         message: format!(
             "invalid {flag} value {value:?}; expected an RFC 3339 timestamp, a YYYY-MM-DD \
              date, or a relative duration such as \"6 months\" or \"30 days ago\""
@@ -180,11 +181,11 @@ fn parse_instant(
 ///
 /// Calendar units (months, years) have no fixed length, so the subtraction is
 /// anchored to `now`'s UTC zoned datetime rather than to a bare duration.
-fn instant_before(span: Span, flag: &str, now: Timestamp) -> Result<Timestamp, RunError> {
+fn instant_before(span: Span, flag: &str, now: Timestamp) -> Result<Timestamp, AnalyzeError> {
     now.to_zoned(TimeZone::UTC)
         .checked_sub(span.abs())
         .map(|zoned| zoned.timestamp())
-        .map_err(|error| RunError::Analyze {
+        .map_err(|error| AnalyzeError::Analyze {
             message: format!("{flag} duration is out of the representable range: {error}"),
         })
 }
@@ -193,10 +194,10 @@ fn instant_before(span: Span, flag: &str, now: Timestamp) -> Result<Timestamp, R
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use cbh_detect::AnalysisMode;
-    use cbh_run::RunError;
     use jiff::Timestamp;
 
     use super::*;
+    use crate::AnalyzeError;
 
     fn ts(seconds: i64) -> Timestamp {
         Timestamp::from_second(seconds).unwrap()
@@ -339,6 +340,6 @@ mod tests {
     fn since_rejects_garbage() {
         let now: Timestamp = "2024-06-01T00:00:00Z".parse().unwrap();
         let error = parse_since(Some("not-a-date"), now).unwrap_err();
-        assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
+        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
     }
 }

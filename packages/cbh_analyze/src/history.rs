@@ -8,10 +8,10 @@ use cbh_config::Config;
 use cbh_detect::select_commits;
 use cbh_diag::{Reporter, ReporterExt, count_noun};
 use cbh_git::GitHistory;
-use cbh_run::RunError;
 use jiff::Timestamp;
 
 use super::selection::Selection;
+use crate::AnalyzeError;
 
 /// How the base-branch dirty-tip exception is gated.
 ///
@@ -82,7 +82,7 @@ pub(crate) async fn resolve_history<G>(
     selection: &Selection<'_>,
     policy: DirtyTipPolicy,
     reporter: &dyn Reporter,
-) -> Result<ResolvedHistory, RunError>
+) -> Result<ResolvedHistory, AnalyzeError>
 where
     G: GitHistory,
 {
@@ -90,8 +90,8 @@ where
     // history, not from stored timestamps. An unresolvable target ref means there
     // is no repository here (or the branch does not exist), which is an error.
     let target_ref = selection.context.unwrap_or("HEAD");
-    let Some(target_commit_id) = git.resolve(target_ref).await.map_err(RunError::Io)? else {
-        return Err(RunError::Analyze {
+    let Some(target_commit_id) = git.resolve(target_ref).await.map_err(AnalyzeError::Io)? else {
+        return Err(AnalyzeError::Analyze {
             message: format!(
                 "this command requires a git repository: could not resolve {target_ref:?}. \
                  Run inside a repository (or pass --repo / --context)."
@@ -104,7 +104,7 @@ where
     let first_parent = git
         .first_parent(&target_commit_id)
         .await
-        .map_err(RunError::Io)?;
+        .map_err(AnalyzeError::Io)?;
     reporter.timing(
         "git.first_parent ancestry walk (target's first-parent line)",
         first_parent_started.elapsed(),
@@ -128,7 +128,7 @@ where
         Some(base) => git
             .merge_base(&target_commit_id, base)
             .await
-            .map_err(RunError::Io)?,
+            .map_err(AnalyzeError::Io)?,
         None => None,
     };
 
@@ -186,7 +186,7 @@ where
                  usual cause)."
             ),
         };
-        return Err(RunError::Analyze { message });
+        return Err(AnalyzeError::Analyze { message });
     };
 
     // The base-branch dirty-tip exception: `analyze`/`list` admit a base-side tip's
@@ -196,7 +196,7 @@ where
     // is reused for the report's tip annotation, so `analyze` never runs it twice.
     let working_tree_dirty = match policy {
         DirtyTipPolicy::WhenWorkingTreeDirty if !selection.no_dirty => {
-            git.is_dirty().await.map_err(RunError::Io)?
+            git.is_dirty().await.map_err(AnalyzeError::Io)?
         }
         _ => false,
     };
@@ -273,24 +273,24 @@ pub(crate) async fn resolve_base_ref<G: GitHistory>(
     git: &G,
     config: &Config,
     base: Option<&str>,
-) -> Result<Option<String>, RunError> {
+) -> Result<Option<String>, AnalyzeError> {
     if let Some(base) = base {
         return git
             .resolve(base)
             .await
-            .map_err(RunError::Io)?
+            .map_err(AnalyzeError::Io)?
             .map(Some)
-            .ok_or_else(|| RunError::Analyze {
+            .ok_or_else(|| AnalyzeError::Analyze {
                 message: format!("could not resolve --base {base:?}"),
             });
     }
     if let Some(default) = config.project.default_branch.as_deref()
-        && let Some(resolved) = git.resolve(default).await.map_err(RunError::Io)?
+        && let Some(resolved) = git.resolve(default).await.map_err(AnalyzeError::Io)?
     {
         return Ok(Some(resolved));
     }
-    if let Some(name) = git.default_branch().await.map_err(RunError::Io)?
-        && let Some(resolved) = git.resolve(&name).await.map_err(RunError::Io)?
+    if let Some(name) = git.default_branch().await.map_err(AnalyzeError::Io)?
+        && let Some(resolved) = git.resolve(&name).await.map_err(AnalyzeError::Io)?
     {
         return Ok(Some(resolved));
     }
@@ -307,14 +307,18 @@ pub(crate) async fn resolve_base_name<G: GitHistory>(
     git: &G,
     config: &Config,
     base: Option<&str>,
-) -> Result<Option<String>, RunError> {
+) -> Result<Option<String>, AnalyzeError> {
     if let Some(base) = base {
         return Ok(Some(base.to_owned()));
     }
     if let Some(default) = config.project.default_branch.as_deref()
-        && git.resolve(default).await.map_err(RunError::Io)?.is_some()
+        && git
+            .resolve(default)
+            .await
+            .map_err(AnalyzeError::Io)?
+            .is_some()
     {
         return Ok(Some(default.to_owned()));
     }
-    git.default_branch().await.map_err(RunError::Io)
+    git.default_branch().await.map_err(AnalyzeError::Io)
 }

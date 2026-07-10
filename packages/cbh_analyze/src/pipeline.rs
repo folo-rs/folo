@@ -11,7 +11,10 @@ use std::time::Instant;
 
 use anyspawn::Spawner;
 use cbh_command::AnalyzeOptions;
-use cbh_config::{Config, load_config};
+use cbh_config::{
+    Config, cache_env, load_config, resolve_cache_path, resolve_config_path, resolve_local_path,
+    resolve_project_id, resolve_repo, storage_env,
+};
 use cbh_detect::{
     AnalysisConfig, AnalysisContext, Series, SeriesFilter, apply_blessings, find_changes_spawned,
 };
@@ -20,11 +23,6 @@ use cbh_git::{GitHistory, SystemGitHistory};
 use cbh_model::DiscriminantSet;
 use cbh_probe::{EnvironmentProbe, SystemProbe, resolve_machine_key};
 use cbh_render::{DEFAULT_SUMMARY_LIMIT, ReportInput, SetSummary, render, render_markdown_summary};
-use cbh_run::{
-    OutputSelection, OutputWriter, RunError, RunOutcome, TokioOutputWriter, cache_env, emit,
-    emit_markdown_summary, resolve_cache_path, resolve_config_path, resolve_local_path,
-    resolve_project_id, resolve_repo, storage_env,
-};
 use cbh_storage::{Storage, StorageFacade, resolve_storage};
 use jiff::Timestamp;
 use tick::Clock;
@@ -33,6 +31,7 @@ use super::dataset::{empty_history_hint, select_dataset};
 use super::facets::AutoFacets;
 use super::history::dirty_base_exception_warning;
 use super::selection::Selection;
+use crate::{AnalyzeError, RenderedReports, ReportRequest};
 
 /// The real `analyze`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
@@ -43,12 +42,20 @@ use super::selection::Selection;
 /// single anchor drives both the history-mode default `--since` look-back and the
 /// resolution of any relative `--since`/`--until` duration, so the whole window is
 /// deterministic under a frozen clock.
+///
+/// Returns the rendered reports for the requested formats plus the regression
+/// count; the shell writes the files and prints the text report.
+// Thin real-adapter wiring: loads config from disk, builds the configured storage,
+// and shells out via `SystemGitHistory`/`detect_auto_facets` before delegating every
+// decision to the mutation-tested `analyze_with`. In-crate tests cannot drive these
+// real adapters deterministically; the binary's integration tests cover this edge.
+#[cfg_attr(test, mutants::skip)]
 pub async fn execute(
     options: &AnalyzeOptions,
     workspace_dir: &Path,
     clock_override: Option<Clock>,
     storage_override: Option<StorageFacade>,
-) -> Result<RunOutcome, RunError> {
+) -> Result<(RenderedReports, usize), AnalyzeError> {
     // Per-object notes follow `--verbose`; stage timings are emitted under either
     // `--verbose` or the programmatic `timing` flag (the stress harness sets the
     // latter alone to see the load breakdown without the per-object flood).
@@ -85,9 +92,6 @@ pub async fn execute(
     // the analysis shares the ambient Tokio worker threads rather than spawning its
     // own short-lived ones.
     let spawner = Spawner::new_tokio();
-    // Relative `--markdown`/`--json` paths resolve against the workspace directory
-    // (the working directory in production), the same base as `--config`.
-    let writer = TokioOutputWriter::new(workspace_dir.to_path_buf());
     let outcome = analyze_with(
         &git,
         &storage,
@@ -98,7 +102,6 @@ pub async fn execute(
         now,
         &reporter,
         color,
-        &writer,
         &spawner,
     )
     .await;
@@ -135,9 +138,9 @@ fn should_colorize(is_terminal: bool, no_color: bool) -> bool {
 /// query analyzes every engine. Tests drive the generic orchestrators directly
 /// with deterministic [`AutoFacets`] instead of calling this.
 #[cfg_attr(test, mutants::skip)] // Probes the host environment; the facet resolution it feeds is tested.
-pub(crate) async fn detect_auto_facets() -> Result<AutoFacets, RunError> {
+pub(crate) async fn detect_auto_facets() -> Result<AutoFacets, AnalyzeError> {
     let probe = SystemProbe::default();
-    let toolchain = probe.toolchain().await.map_err(RunError::Io)?;
+    let toolchain = probe.toolchain().await.map_err(AnalyzeError::Io)?;
     let hardware = probe.hardware().await;
     Ok(AutoFacets {
         triple: toolchain.host.unwrap_or_default(),
@@ -155,7 +158,7 @@ pub(crate) async fn detect_auto_facets() -> Result<AutoFacets, RunError> {
     clippy::too_many_arguments,
     reason = "analyze orchestration wires several injected ports plus the rendering color flag"
 )]
-pub(crate) async fn analyze_with<G, S, W>(
+pub(crate) async fn analyze_with<G, S>(
     git: &G,
     storage: &S,
     project_id: &str,
@@ -165,15 +168,13 @@ pub(crate) async fn analyze_with<G, S, W>(
     now: Timestamp,
     reporter: &dyn Reporter,
     color: bool,
-    writer: &W,
     spawner: &Spawner,
-) -> Result<RunOutcome, RunError>
+) -> Result<(RenderedReports, usize), AnalyzeError>
 where
     G: GitHistory,
     S: Storage + Clone + 'static,
-    W: OutputWriter,
 {
-    let output = OutputSelection::resolve_analyze(
+    let request = ReportRequest::resolve_analyze(
         options.no_text,
         options.markdown.as_deref(),
         options.json.as_deref(),
@@ -274,22 +275,13 @@ where
         warning: warning.as_deref(),
     };
     let render_started = Instant::now();
-    let report = emit(&output, writer, reporter, |format| {
-        render(&input, format, color)
-    })
-    .await?;
-    // The condensed summary is analyze-only and not one of the three shared formats,
-    // so it renders and writes through its own edge alongside the full reports.
-    emit_markdown_summary(&output, writer, reporter, || {
-        render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT)
-    })
-    .await?;
+    let rendered = request.render_analyze(
+        |format| render(&input, format, color),
+        || render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT),
+    );
     reporter.timing("report render", render_started.elapsed());
 
-    Ok(RunOutcome::Analyzed {
-        report,
-        regressions,
-    })
+    Ok((rendered, regressions))
 }
 
 #[cfg(test)]
@@ -297,7 +289,7 @@ where
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     use cbh_config::{Config, parse_config};
     use cbh_diag::RecordingReporter;
@@ -306,7 +298,6 @@ mod tests {
         BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, BlessingRecord, EnvironmentInfo, GitInfo,
         Metric, MetricKind, Run, RunContext, ToolchainInfo, sanitize_segment,
     };
-    use cbh_run::MemoryOutputWriter;
     use cbh_storage::{MemoryStorage, Storage};
     use futures::executor::block_on;
     use jiff::Timestamp;
@@ -547,17 +538,10 @@ mod tests {
         cbh_detect::testing::synchronous_spawner()
     }
 
-    /// A throwaway in-memory output writer for tests that assert on the returned
-    /// text report (or on the verbose trail) rather than on written files.
-    fn writer() -> MemoryOutputWriter {
-        MemoryOutputWriter::new()
-    }
-
-    /// Runs `analyze_with` requesting the JSON report into an in-memory writer,
-    /// returning the JSON text, the regression count, and the recording reporter so
-    /// a test can assert on the machine-readable report and the verbose trail
-    /// together. The text report is suppressed, so the JSON is the only rendered
-    /// output.
+    /// Runs `analyze_with` requesting the JSON report, returning the JSON text, the
+    /// regression count, and the recording reporter so a test can assert on the
+    /// machine-readable report and the verbose trail together. The text report is
+    /// suppressed, so the JSON is the only rendered output.
     fn analyze_json(
         git: &FakeGitHistory,
         storage: &MemoryStorage,
@@ -569,8 +553,7 @@ mod tests {
         options.markdown = None;
         options.json = Some(PathBuf::from("report.json"));
         let reporter = RecordingReporter::new();
-        let writer = MemoryOutputWriter::new();
-        let outcome = block_on(analyze_with(
+        let (rendered, regressions) = block_on(analyze_with(
             git,
             storage,
             project,
@@ -580,17 +563,12 @@ mod tests {
             now_anchor(),
             &reporter,
             false,
-            &writer,
             &spawner(),
         ))
         .unwrap();
-        let regressions = match outcome {
-            RunOutcome::Analyzed { regressions, .. } => regressions,
-            RunOutcome::Completed { .. } => 0,
-        };
-        let report = writer
-            .written(Path::new("report.json"))
-            .expect("the JSON report was written to the requested path");
+        let report = rendered
+            .json
+            .expect("the JSON report was rendered for the requested path");
         (report, regressions, reporter)
     }
 
@@ -620,7 +598,6 @@ mod tests {
             now_anchor(),
             &reporter,
             false,
-            &writer(),
             &spawner(),
         ))
         .unwrap();
@@ -631,7 +608,7 @@ mod tests {
         );
     }
 
-    /// Runs `analyze_with` and unwraps the rendered report and regression count.
+    /// Runs `analyze_with` and unwraps the rendered text report and regression count.
     fn analyze(
         git: &FakeGitHistory,
         storage: &MemoryStorage,
@@ -639,8 +616,7 @@ mod tests {
         options: &AnalyzeOptions,
     ) -> (String, usize) {
         let reporter = RecordingReporter::new();
-        let writer = writer();
-        let outcome = block_on(analyze_with(
+        let (rendered, regressions) = block_on(analyze_with(
             git,
             storage,
             project,
@@ -650,18 +626,10 @@ mod tests {
             now_anchor(),
             &reporter,
             false,
-            &writer,
             &spawner(),
         ))
         .unwrap();
-        match outcome {
-            RunOutcome::Analyzed {
-                report,
-                regressions,
-                ..
-            } => (report, regressions),
-            RunOutcome::Completed { message } => (message, 0),
-        }
+        (rendered.text.unwrap_or_default(), regressions)
     }
 
     #[test]
@@ -679,11 +647,10 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
-            &writer(),
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
+        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
         assert!(
             error.to_string().contains("requires a git repository"),
             "{error}"
@@ -754,7 +721,6 @@ mod tests {
             now_anchor(),
             &reporter,
             false,
-            &writer(),
             &spawner(),
         ))
         .unwrap();
@@ -778,7 +744,6 @@ mod tests {
             now_anchor(),
             &reporter,
             false,
-            &writer(),
             &spawner(),
         ))
         .unwrap();
@@ -818,7 +783,6 @@ mod tests {
             now_anchor(),
             &reporter,
             false,
-            &writer(),
             &spawner(),
         ))
         .unwrap();
@@ -849,7 +813,7 @@ mod tests {
     }
 
     /// Drives history-mode analyze expecting the blessing load to fail.
-    fn analyze_blessing_error(storage: &MemoryStorage) -> RunError {
+    fn analyze_blessing_error(storage: &MemoryStorage) -> AnalyzeError {
         block_on(analyze_with(
             &linear6_git(),
             storage,
@@ -860,7 +824,6 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
-            &writer(),
             &spawner(),
         ))
         .unwrap_err()
@@ -877,7 +840,7 @@ mod tests {
         block_on(storage.put(&bless_key, &[0xff, 0xfe, 0x00])).unwrap();
         let error = analyze_blessing_error(&storage);
         match error {
-            RunError::Analyze { message } => {
+            AnalyzeError::Analyze { message } => {
                 assert!(message.contains("is not valid UTF-8"), "{message}");
             }
             other => panic!("expected an analyze error, got {other:?}"),
@@ -894,7 +857,7 @@ mod tests {
         block_on(storage.put(&bless_key, b"{ not a blessing record")).unwrap();
         let error = analyze_blessing_error(&storage);
         match error {
-            RunError::Analyze { message } => {
+            AnalyzeError::Analyze { message } => {
                 assert!(
                     message.contains("is not a valid blessing record"),
                     "{message}"
@@ -932,7 +895,6 @@ mod tests {
             now_anchor(),
             &reporter,
             false,
-            &writer(),
             &spawner(),
         ))
         .unwrap();
@@ -1565,11 +1527,10 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
-            &writer(),
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
+        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
         let message = error.to_string();
         assert!(
             message.contains("could not determine the base branch"),
@@ -1611,11 +1572,10 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
-            &writer(),
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
+        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
         let message = error.to_string();
         assert!(message.contains("no common ancestor"), "{message}");
         assert!(message.contains("--unshallow"), "{message}");
@@ -1656,11 +1616,10 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
-            &writer(),
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
+        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
         let message = error.to_string();
         assert!(message.contains("--unshallow"), "{message}");
         // The deliberately chosen base is named and reported as unrelated, without
@@ -1701,14 +1660,15 @@ mod tests {
     }
 
     #[test]
-    fn analyzed_outcome_is_always_successful() {
+    fn a_flagged_regression_still_yields_a_successful_analysis() {
         // The exit code no longer depends on findings: even a flagged regression
-        // yields a successful outcome (the signal lives in the report JSON).
+        // yields a successful (Ok) analysis (the signal lives in the report JSON).
+        // The shell maps this into an always-successful `RunOutcome`.
         let storage = MemoryStorage::new();
         seed_linear_step(&storage);
         let git = linear6_git();
 
-        let outcome = block_on(analyze_with(
+        let (_, regressions) = block_on(analyze_with(
             &git,
             &storage,
             "folo",
@@ -1718,11 +1678,10 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
-            &writer(),
             &spawner(),
         ))
-        .unwrap();
-        assert!(outcome.is_success(), "findings must never fail the build");
+        .expect("a flagged regression must not fail the analysis");
+        assert_eq!(regressions, 1, "the seeded step is a flagged regression");
     }
 
     #[test]
@@ -1765,11 +1724,10 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
-            &writer(),
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
+        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
     }
 
     #[test]
@@ -1788,11 +1746,10 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
-            &writer(),
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
+        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
     }
 
     #[test]
@@ -1815,11 +1772,10 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
-            &writer(),
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
+        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
         assert!(error.to_string().contains("no output selected"), "{error}");
     }
 
@@ -1841,11 +1797,10 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
-            &writer(),
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
+        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
     }
 
     #[test]
@@ -1867,11 +1822,10 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
-            &writer(),
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
+        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
         assert!(error.to_string().contains("--base"), "{error}");
     }
 
@@ -1900,8 +1854,7 @@ mod tests {
             json: Some(PathBuf::from("report.json")),
             ..options()
         };
-        let writer = writer();
-        block_on(analyze_with(
+        let (rendered, _) = block_on(analyze_with(
             &git,
             &storage,
             "folo",
@@ -1911,13 +1864,10 @@ mod tests {
             now_anchor(),
             &RecordingReporter::new(),
             false,
-            &writer,
             &spawner(),
         ))
         .unwrap();
-        let report = writer
-            .written(Path::new("report.json"))
-            .expect("the JSON report was written");
+        let report = rendered.json.expect("the JSON report was rendered");
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         // c1's dirty run is base-side (excluded); c0, c1 clean and f1 clean load.
         assert_eq!(

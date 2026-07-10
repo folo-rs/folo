@@ -17,15 +17,13 @@ use std::path::Path;
 
 use anyspawn::Spawner;
 use cbh_command::{ListOptions, ListSubject};
-use cbh_config::{Config, load_config};
+use cbh_config::{
+    Config, cache_env, load_config, resolve_cache_path, resolve_config_path, resolve_local_path,
+    resolve_project_id, resolve_repo, storage_env,
+};
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
 use cbh_model::{BlessingRecord, DiscriminantSet};
-use cbh_run::{
-    OutputSelection, OutputWriter, RunError, RunOutcome, TokioOutputWriter, cache_env, emit,
-    resolve_cache_path, resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo,
-    storage_env,
-};
 use cbh_storage::{Storage, StorageFacade, resolve_storage};
 use jiff::Timestamp;
 use serde::Serialize;
@@ -36,6 +34,7 @@ use super::{
     detect_auto_facets, dirty_base_exception_warning, empty_history_hint,
     facet_filtered_candidates, resolve_facets, resolve_now, select_dataset,
 };
+use crate::{AnalyzeError, RenderedReports, ReportRequest};
 
 /// The real `list`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
@@ -43,12 +42,17 @@ use super::{
 /// `clock_override` injects the [`tick::Clock`] the shared selection anchors its
 /// "now" to (see [`analyze`](super::analyze)); production passes `None` for the
 /// runtime wall clock.
+// Thin real-adapter wiring: loads config from disk, builds the configured storage,
+// and shells out via `SystemGitHistory`/`detect_auto_facets` before delegating every
+// decision to the mutation-tested `list_with`. In-crate tests cannot drive these real
+// adapters deterministically; the binary's integration tests cover this edge.
+#[cfg_attr(test, mutants::skip)]
 pub async fn execute(
     options: &ListOptions,
     workspace_dir: &Path,
     clock_override: Option<Clock>,
     storage_override: Option<StorageFacade>,
-) -> Result<RunOutcome, RunError> {
+) -> Result<RenderedReports, AnalyzeError> {
     let reporter = StderrReporter::new(options.verbose);
 
     let config_path = resolve_config_path(workspace_dir, options.config_path.as_deref());
@@ -75,7 +79,6 @@ pub async fn execute(
     // The object-load and detection work shares the ambient Tokio worker threads
     // (mirrors `analyze::execute`).
     let spawner = Spawner::new_tokio();
-    let writer = TokioOutputWriter::new(workspace_dir.to_path_buf());
     let outcome = list_with(
         &git,
         &storage,
@@ -85,7 +88,6 @@ pub async fn execute(
         &auto,
         now,
         &reporter,
-        &writer,
         &spawner,
     )
     .await;
@@ -100,7 +102,7 @@ pub async fn execute(
     clippy::too_many_arguments,
     reason = "mirrors the analyze selection pipeline, which threads the same injected ports"
 )]
-pub(crate) async fn list_with<G, S, W>(
+pub(crate) async fn list_with<G, S>(
     git: &G,
     storage: &S,
     project_id: &str,
@@ -109,21 +111,19 @@ pub(crate) async fn list_with<G, S, W>(
     auto: &AutoFacets,
     now: Timestamp,
     reporter: &dyn Reporter,
-    writer: &W,
     spawner: &Spawner,
-) -> Result<RunOutcome, RunError>
+) -> Result<RenderedReports, AnalyzeError>
 where
     G: GitHistory,
     S: Storage + Clone + 'static,
-    W: OutputWriter,
 {
-    let output = OutputSelection::resolve(
+    let request = ReportRequest::resolve(
         options.no_text,
         options.markdown.as_deref(),
         options.json.as_deref(),
     )?;
     if options.all && options.subject != ListSubject::Blessings {
-        return Err(RunError::Analyze {
+        return Err(AnalyzeError::Analyze {
             message: "--all applies only to `list blessings`, where it widens the view from \
                       the current commit to the most recent blessing of every benchmark in \
                       the window; it has no meaning for `list runs` or `list discriminants`"
@@ -148,22 +148,16 @@ where
                 .collect();
             sets.sort();
             sets.dedup();
-            let message = emit(&output, writer, reporter, |format| {
-                render_discriminants(&sets, format)
-            })
-            .await?;
-            Ok(RunOutcome::Completed { message })
+            Ok(request.render(|format| render_discriminants(&sets, format)))
         }
         ListSubject::Blessings => {
             let (head_label, entries) = list_blessings(
                 git, storage, project_id, config, options, auto, now, reporter, spawner,
             )
             .await?;
-            let message = emit(&output, writer, reporter, |format| {
+            Ok(request.render(|format| {
                 render_blessings(project_id, options.all, &head_label, &entries, format)
-            })
-            .await?;
-            Ok(RunOutcome::Completed { message })
+            }))
         }
         ListSubject::Runs => {
             let filter = SeriesFilter::default();
@@ -188,11 +182,9 @@ where
                 .included_dirty_base_exception
                 .then(dirty_base_exception_warning);
 
-            let message = emit(&output, writer, reporter, |format| {
+            Ok(request.render(|format| {
                 render_listing(&listing, format, hint.as_deref(), warning.as_deref())
-            })
-            .await?;
-            Ok(RunOutcome::Completed { message })
+            }))
         }
     }
 }
@@ -543,7 +535,7 @@ async fn list_blessings<G, S>(
     now: Timestamp,
     reporter: &dyn Reporter,
     spawner: &Spawner,
-) -> Result<(String, Vec<BlessingEntry>), RunError>
+) -> Result<(String, Vec<BlessingEntry>), AnalyzeError>
 where
     G: GitHistory,
     S: Storage + Clone + 'static,
@@ -577,7 +569,7 @@ async fn blessings_at_head<G, S>(
     selection: &Selection<'_>,
     auto: &AutoFacets,
     reporter: &dyn Reporter,
-) -> Result<(String, Vec<BlessingEntry>), RunError>
+) -> Result<(String, Vec<BlessingEntry>), AnalyzeError>
 where
     G: GitHistory,
     S: Storage,
@@ -585,8 +577,8 @@ where
     let head = git
         .resolve("HEAD")
         .await
-        .map_err(RunError::Io)?
-        .ok_or_else(|| RunError::Analyze {
+        .map_err(AnalyzeError::Io)?
+        .ok_or_else(|| AnalyzeError::Analyze {
             message: "this command requires a git repository: could not resolve HEAD. \
                       Run inside a repository (or pass --repo)."
                 .to_owned(),
@@ -597,18 +589,18 @@ where
     // The blessed commit is HEAD; its committer date comes from git topology, so
     // the sidecar itself need not carry a denormalized copy. A single-commit read
     // dates HEAD without walking its first-parent ancestry.
-    let head_commit_time = git.committer_time("HEAD").await.map_err(RunError::Io)?;
+    let head_commit_time = git.committer_time("HEAD").await.map_err(AnalyzeError::Io)?;
 
     let mut entries = Vec::new();
     for (key, parsed) in candidates {
         if !(parsed.is_bless() && parsed.commit == head) {
             continue;
         }
-        let bytes = storage.get(&key).await.map_err(RunError::Storage)?;
-        let text = String::from_utf8(bytes).map_err(|error| RunError::Analyze {
+        let bytes = storage.get(&key).await.map_err(AnalyzeError::Storage)?;
+        let text = String::from_utf8(bytes).map_err(|error| AnalyzeError::Analyze {
             message: format!("stored object {key} is not valid UTF-8: {error}"),
         })?;
-        let record = BlessingRecord::from_json(&text).map_err(|error| RunError::Analyze {
+        let record = BlessingRecord::from_json(&text).map_err(|error| AnalyzeError::Analyze {
             message: format!("stored object {key} is not a valid blessing: {error}"),
         })?;
         reporter.note_with(|| format!("blessing {key}"));
@@ -640,7 +632,7 @@ async fn blessings_across_window<G, S>(
     now: Timestamp,
     reporter: &dyn Reporter,
     spawner: &Spawner,
-) -> Result<(String, Vec<BlessingEntry>), RunError>
+) -> Result<(String, Vec<BlessingEntry>), AnalyzeError>
 where
     G: GitHistory,
     S: Storage + Clone + 'static,
@@ -879,7 +871,6 @@ mod tests {
         BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, GitInfo, Metric,
         MetricKind, Run, RunContext, ToolchainInfo,
     };
-    use cbh_run::MemoryOutputWriter;
     use cbh_storage::{MemoryStorage, Storage};
     use futures::executor::block_on;
     use jiff::Timestamp;
@@ -1164,15 +1155,9 @@ mod tests {
         git
     }
 
-    /// A throwaway in-memory output writer for list tests that assert on the
-    /// returned text message rather than on written files.
-    fn writer() -> MemoryOutputWriter {
-        MemoryOutputWriter::new()
-    }
-
-    /// Drives `list_with` and unwraps the rendered message.
+    /// Drives `list_with` and unwraps the rendered text message.
     fn list(storage: &MemoryStorage, git: &FakeGitHistory, options: &ListOptions) -> String {
-        let outcome = block_on(list_with(
+        let rendered = block_on(list_with(
             git,
             storage,
             "folo",
@@ -1181,26 +1166,22 @@ mod tests {
             &auto(),
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
-            &writer(),
             &spawner(),
         ))
         .unwrap();
-        match outcome {
-            RunOutcome::Completed { message } => message,
-            RunOutcome::Analyzed { .. } => panic!("list returns a Completed outcome"),
-        }
+        rendered
+            .text
+            .expect("list renders the text report by default")
     }
 
-    /// Drives `list_with` requesting the JSON report into an in-memory writer and
-    /// returns the JSON text. The text report is suppressed so the JSON file is
-    /// the only rendered output.
+    /// Drives `list_with` requesting the JSON report and returns the JSON text. The
+    /// text report is suppressed so the JSON is the only rendered output.
     fn list_json(storage: &MemoryStorage, git: &FakeGitHistory, options: &ListOptions) -> String {
         let mut options = options.clone();
         options.no_text = true;
         options.markdown = None;
         options.json = Some(PathBuf::from("report.json"));
-        let writer = MemoryOutputWriter::new();
-        block_on(list_with(
+        let rendered = block_on(list_with(
             git,
             storage,
             "folo",
@@ -1209,17 +1190,16 @@ mod tests {
             &auto(),
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
-            &writer,
             &spawner(),
         ))
         .unwrap();
-        writer
-            .written(Path::new("report.json"))
-            .expect("the JSON report was written to the requested path")
+        rendered
+            .json
+            .expect("the JSON report was rendered for the requested path")
     }
 
-    /// Drives `list_with` requesting the Markdown report into an in-memory writer
-    /// and returns the Markdown text.
+    /// Drives `list_with` requesting the Markdown report and returns the Markdown
+    /// text.
     fn list_markdown(
         storage: &MemoryStorage,
         git: &FakeGitHistory,
@@ -1229,8 +1209,7 @@ mod tests {
         options.no_text = true;
         options.json = None;
         options.markdown = Some(PathBuf::from("report.md"));
-        let writer = MemoryOutputWriter::new();
-        block_on(list_with(
+        let rendered = block_on(list_with(
             git,
             storage,
             "folo",
@@ -1239,13 +1218,12 @@ mod tests {
             &auto(),
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
-            &writer,
             &spawner(),
         ))
         .unwrap();
-        writer
-            .written(Path::new("report.md"))
-            .expect("the Markdown report was written to the requested path")
+        rendered
+            .markdown
+            .expect("the Markdown report was rendered for the requested path")
     }
 
     #[test]
@@ -1330,11 +1308,10 @@ mod tests {
             &auto(),
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
-            &writer(),
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
+        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
     }
 
     #[test]
@@ -1390,12 +1367,11 @@ mod tests {
             &auto(),
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
-            &writer(),
             &spawner(),
         ))
         .unwrap_err();
         match error {
-            RunError::Analyze { message } => {
+            AnalyzeError::Analyze { message } => {
                 assert!(message.contains("no output selected"), "{message}");
             }
             other => panic!("unexpected error: {other:?}"),
@@ -1473,12 +1449,11 @@ mod tests {
             &auto(),
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
-            &writer(),
             &spawner(),
         ))
         .unwrap_err();
         match error {
-            RunError::Analyze { message } => {
+            AnalyzeError::Analyze { message } => {
                 assert!(message.contains("--all"), "{message}");
                 assert!(message.contains("list blessings"), "{message}");
             }
@@ -1665,7 +1640,7 @@ mod tests {
     }
 
     /// Drives `list blessings` expecting the load to fail, returning the error.
-    fn list_blessings_error(storage: &MemoryStorage, git: &FakeGitHistory) -> RunError {
+    fn list_blessings_error(storage: &MemoryStorage, git: &FakeGitHistory) -> AnalyzeError {
         let opts = ListOptions {
             subject: ListSubject::Blessings,
             ..options()
@@ -1679,7 +1654,6 @@ mod tests {
             &auto(),
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
-            &writer(),
             &spawner(),
         ))
         .unwrap_err()
@@ -1691,7 +1665,7 @@ mod tests {
         // No commits: HEAD does not resolve.
         let error = list_blessings_error(&storage, &FakeGitHistory::new());
         match error {
-            RunError::Analyze { message } => {
+            AnalyzeError::Analyze { message } => {
                 assert!(message.contains("could not resolve HEAD"), "{message}");
             }
             other => panic!("expected an analyze error, got {other:?}"),
@@ -1705,7 +1679,7 @@ mod tests {
         block_on(storage.put(&bless_key("c3", 100), &[0xff, 0xfe, 0x00])).unwrap();
         let error = list_blessings_error(&storage, &linear_git());
         match error {
-            RunError::Analyze { message } => {
+            AnalyzeError::Analyze { message } => {
                 assert!(message.contains("is not valid UTF-8"), "{message}");
             }
             other => panic!("expected an analyze error, got {other:?}"),
@@ -1718,7 +1692,7 @@ mod tests {
         block_on(storage.put(&bless_key("c3", 100), b"{ not a blessing record")).unwrap();
         let error = list_blessings_error(&storage, &linear_git());
         match error {
-            RunError::Analyze { message } => {
+            AnalyzeError::Analyze { message } => {
                 assert!(message.contains("is not a valid blessing"), "{message}");
             }
             other => panic!("expected an analyze error, got {other:?}"),

@@ -29,6 +29,7 @@ mod azure;
 mod caching;
 mod error;
 mod facade;
+mod flush;
 mod github_oidc;
 mod keys;
 mod local;
@@ -43,6 +44,7 @@ pub use error::StorageError;
 pub use facade::{
     StorageFacade, StorageOverride, azure_backend_from_parts, build_storage, resolve_storage,
 };
+pub use flush::finish_with_flush;
 pub use keys::project_objects_prefix;
 pub(crate) use keys::{cache_epoch_key, is_plain_segment, validate_key};
 pub use local::LocalStorage;

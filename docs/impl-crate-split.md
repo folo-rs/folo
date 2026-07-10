@@ -552,7 +552,7 @@ Concrete files to study:
 The `cargo-bench-history` CLI is split into a family of small `cbh_*` packages —
 the pure, I/O-free `cbh_model`, `cbh_codec`, `cbh_stats`, `cbh_detect`, and
 `cbh_render`, plus the extracted IO adapters and orchestration (`cbh_git`,
-`cbh_storage`, `cbh_probe`, `cbh_engines`, `cbh_run`, …). Each is a private-use
+`cbh_storage`, `cbh_probe`, `cbh_engines`, …). Each is a private-use
 package treated as an impl crate directly, with no companion `_impl` shell (see
 "Private-use packages need no separate shell"): the CLI and its sibling impl
 crates consume them directly, so there is nothing to wrap or hide behind a thin
@@ -578,7 +578,7 @@ deferring their documentation. Concrete files to study:
   thin re-export). Its regular `[dependencies]` omit every `private-test-util`
   feature, so the test-only surface never reaches production builds; separate
   `[dev-dependencies]` entries with `features = ["private-test-util"]` (on
-  `cbh_run`, `cbh_git`, `cbh_storage`, `cbh_diag`) activate it for the shell's own
+  `cbh_git`, `cbh_storage`, `cbh_diag`) activate it for the shell's own
   tests.
 - `Cargo.toml` (workspace) + `release-plz.toml` — the lockstep machinery applies
   to every crate in the family: each `cbh_*` package is pinned `=0.0.3` in

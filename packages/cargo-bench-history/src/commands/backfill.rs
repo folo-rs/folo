@@ -30,14 +30,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use cbh_config::load_config;
+use cbh_config::{
+    load_config, resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo,
+    storage_env,
+};
 use cbh_diag::{StderrReporter, count_noun};
 use cbh_engines::FsBenchOutputSource;
 use cbh_git::{GitHistory, SystemGitHistory, TokioBenchRunner, capture};
 use cbh_probe::SystemProbe;
-use cbh_run::{
-    resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,
-};
 use cbh_storage::{Storage, build_storage, project_objects_prefix};
 use tick::Clock;
 

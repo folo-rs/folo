@@ -14,11 +14,11 @@ use cbh_diag::{Reporter, ReporterExt, count_noun};
 use cbh_model::{
     BenchmarkIdPrefix, DiscriminantSet, STORAGE_VERSION, StorageKey, parse_key, sanitize_segment,
 };
-use cbh_run::RunError;
 use cbh_storage::{Storage, project_objects_prefix};
 use futures::{StreamExt as _, TryStreamExt as _};
 
 use super::facets::describe_facets;
+use crate::AnalyzeError;
 
 /// One commit's run tally within a discriminant set, the granularity the report
 /// summaries and the `list runs` breakdown need.
@@ -165,7 +165,7 @@ pub(crate) async fn facet_filtered_candidates<S: Storage>(
     project_id: &str,
     facets: &DiscriminantSetQuery,
     reporter: &dyn Reporter,
-) -> Result<Vec<(String, StorageKey)>, RunError> {
+) -> Result<Vec<(String, StorageKey)>, AnalyzeError> {
     // The listing prefix must use the same sanitized project segment that
     // `DiscriminantSet` writes its storage keys under. A project id containing a
     // character that sanitizes (a space, `/`, a non-ASCII letter, ...) is stored
@@ -182,7 +182,7 @@ pub(crate) async fn facet_filtered_candidates<S: Storage>(
     });
 
     let list_started = Instant::now();
-    let keys = storage.list(&prefix).await.map_err(RunError::Storage)?;
+    let keys = storage.list(&prefix).await.map_err(AnalyzeError::Storage)?;
     reporter.timing("storage.list(prefix) round-trip", list_started.elapsed());
     reporter.note_with(|| format!("storage returned {}", count_noun(keys.len(), "object key")));
 
@@ -245,10 +245,10 @@ pub(crate) async fn load_objects_concurrently<S, T, F>(
     storage: &S,
     keys: Vec<(String, StorageKey)>,
     parse: F,
-) -> Result<Vec<(String, StorageKey, T)>, RunError>
+) -> Result<Vec<(String, StorageKey, T)>, AnalyzeError>
 where
     S: Storage,
-    F: Fn(&str, Vec<u8>) -> Result<T, RunError>,
+    F: Fn(&str, Vec<u8>) -> Result<T, AnalyzeError>,
 {
     let parse = &parse;
     futures::stream::iter(keys)
@@ -266,12 +266,12 @@ async fn fetch_one<S, T, F>(
     key: String,
     parsed: StorageKey,
     parse: &F,
-) -> Result<(String, StorageKey, T), RunError>
+) -> Result<(String, StorageKey, T), AnalyzeError>
 where
     S: Storage,
-    F: Fn(&str, Vec<u8>) -> Result<T, RunError>,
+    F: Fn(&str, Vec<u8>) -> Result<T, AnalyzeError>,
 {
-    let bytes = storage.get(&key).await.map_err(RunError::Storage)?;
+    let bytes = storage.get(&key).await.map_err(AnalyzeError::Storage)?;
     let value = parse(&key, bytes)?;
     Ok((key, parsed, value))
 }
@@ -324,7 +324,7 @@ pub(crate) async fn fold_runs_chunked<S>(
     order: &Arc<HashMap<String, usize>>,
     dirty_base_exception: &Arc<HashMap<String, bool>>,
     prefixes: Arc<[BenchmarkIdPrefix]>,
-) -> Result<WorkerFold, RunError>
+) -> Result<WorkerFold, AnalyzeError>
 where
     S: Storage + Clone + 'static,
 {
@@ -352,11 +352,11 @@ where
             let mut run_index = RunIndex::new();
             let mut admitted: Vec<(String, bool)> = Vec::with_capacity(chunk.len());
             for (rank, key, parsed) in chunk {
-                let bytes = storage.get(&key).await.map_err(RunError::Storage)?;
-                let text = str::from_utf8(&bytes).map_err(|error| RunError::Analyze {
+                let bytes = storage.get(&key).await.map_err(AnalyzeError::Storage)?;
+                let text = str::from_utf8(&bytes).map_err(|error| AnalyzeError::Analyze {
                     message: format!("stored object {key} is not valid UTF-8: {error}"),
                 })?;
-                let run = RunPoints::from_json(text).map_err(|error| RunError::Analyze {
+                let run = RunPoints::from_json(text).map_err(|error| AnalyzeError::Analyze {
                     message: format!("stored object {key} is not a valid result set: {error}"),
                 })?;
                 let topo_index = order
@@ -381,7 +381,7 @@ where
                 admitted.push((key, is_exception));
                 // `run` is dropped here; only the extracted (compact) points are kept.
             }
-            Ok::<WorkerFold, RunError>(WorkerFold {
+            Ok::<WorkerFold, AnalyzeError>(WorkerFold {
                 builder,
                 run_index,
                 admitted,

@@ -22,16 +22,14 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use cbh_command::PruneOptions;
-use cbh_config::{Config, load_config};
+use cbh_config::{
+    Config, cache_env, load_config, resolve_cache_path, resolve_config_path, resolve_local_path,
+    resolve_project_id, resolve_repo, storage_env,
+};
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
 use cbh_model::DiscriminantSet;
-use cbh_run::{
-    OutputSelection, OutputWriter, RunError, RunOutcome, TokioOutputWriter, cache_env, emit,
-    finish_with_flush, resolve_cache_path, resolve_config_path, resolve_local_path,
-    resolve_project_id, resolve_repo, storage_env,
-};
-use cbh_storage::{Storage, StorageFacade, resolve_storage};
+use cbh_storage::{Storage, StorageFacade, finish_with_flush, resolve_storage};
 use jiff::Timestamp;
 use serde::Serialize;
 use tick::Clock;
@@ -41,6 +39,7 @@ use super::{
     detect_auto_facets, facet_filtered_candidates, parse_since, parse_until, resolve_base_name,
     resolve_facets, resolve_history, resolve_now, window_excludes,
 };
+use crate::{AnalyzeError, RenderedReports, ReportRequest};
 
 /// Which objects a prune pass deletes.
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -57,12 +56,12 @@ impl Scope {
     /// Resolves the deletion scope from the `--clean`/`--dirty`/`--all` switches.
     /// The CLI requires exactly one of them; setting both `clean` and `dirty`
     /// (what `--all` expands to) deletes everything.
-    fn from_options(options: &PruneOptions) -> Result<Self, RunError> {
+    fn from_options(options: &PruneOptions) -> Result<Self, AnalyzeError> {
         match (options.clean, options.dirty) {
             (true, true) => Ok(Self::All),
             (false, true) => Ok(Self::Dirty),
             (true, false) => Ok(Self::Clean),
-            (false, false) => Err(RunError::Analyze {
+            (false, false) => Err(AnalyzeError::Analyze {
                 message: "specify which runs to delete: --clean (clean runs and their \
                           blessings), --dirty (dirty snapshots), or --all (both)"
                     .to_owned(),
@@ -87,12 +86,17 @@ impl Scope {
 /// `clock_override` injects the [`tick::Clock`] that anchors a relative
 /// `--since`/`--until` bound (see [`resolve_now`](super::resolve_now)); production
 /// passes `None` for the runtime wall clock.
+// Thin real-adapter wiring: loads config from disk, builds the configured storage,
+// and shells out via `SystemGitHistory`/`detect_auto_facets` before delegating every
+// decision to the mutation-tested `prune_with`. In-crate tests cannot drive these real
+// adapters deterministically; the binary's integration tests cover this edge.
+#[cfg_attr(test, mutants::skip)]
 pub async fn execute(
     options: &PruneOptions,
     workspace_dir: &Path,
     clock_override: Option<Clock>,
     storage_override: Option<StorageFacade>,
-) -> Result<RunOutcome, RunError> {
+) -> Result<RenderedReports, AnalyzeError> {
     let reporter = StderrReporter::new(options.verbose);
 
     let config_path = resolve_config_path(workspace_dir, options.config_path.as_deref());
@@ -115,7 +119,6 @@ pub async fn execute(
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
     let auto = detect_auto_facets().await?;
 
-    let writer = TokioOutputWriter::new(workspace_dir.to_path_buf());
     let now = resolve_now(clock_override);
     let result = prune_with(
         &git,
@@ -126,7 +129,6 @@ pub async fn execute(
         &auto,
         now,
         &reporter,
-        &writer,
     )
     .await;
     // Flush the cache-invalidation marker even on a partial failure: any delete that
@@ -146,7 +148,7 @@ pub async fn execute(
     clippy::too_many_arguments,
     reason = "prune orchestration wires several injected ports alongside its options and facets"
 )]
-pub(crate) async fn prune_with<G, S, W>(
+pub(crate) async fn prune_with<G, S>(
     git: &G,
     storage: &S,
     project_id: &str,
@@ -155,14 +157,12 @@ pub(crate) async fn prune_with<G, S, W>(
     auto: &AutoFacets,
     now: Timestamp,
     reporter: &dyn Reporter,
-    writer: &W,
-) -> Result<RunOutcome, RunError>
+) -> Result<RenderedReports, AnalyzeError>
 where
     G: GitHistory,
     S: Storage,
-    W: OutputWriter,
 {
-    let output = OutputSelection::resolve(
+    let request = ReportRequest::resolve(
         options.no_text,
         options.markdown.as_deref(),
         options.json.as_deref(),
@@ -192,7 +192,7 @@ where
         let base = resolve_base_name(git, config, selection.base)
             .await?
             .unwrap_or_else(|| target_ref.clone());
-        return Err(RunError::Analyze {
+        return Err(AnalyzeError::Analyze {
             message: format!(
                 "this will delete benchmark history of the {base} branch, which is the base \
                  branch. Confirm with --prune-base if this is correct."
@@ -351,17 +351,13 @@ where
             for commit in &set.commits {
                 for key in &commit.keys {
                     reporter.note_with(|| format!("deleting {key}"));
-                    storage.delete(key).await.map_err(RunError::Storage)?;
+                    storage.delete(key).await.map_err(AnalyzeError::Storage)?;
                 }
             }
         }
     }
 
-    let message = emit(&output, writer, reporter, |format| {
-        render_plan(&plan, format, options.dry_run)
-    })
-    .await?;
-    Ok(RunOutcome::Completed { message })
+    Ok(request.render(|format| render_plan(&plan, format, options.dry_run)))
 }
 
 /// Whether a commit at `index` (its first-parent position) is eligible for
@@ -704,7 +700,6 @@ mod tests {
         BenchmarkId, BenchmarkResult, EnvironmentInfo, GitInfo, Metric, MetricKind, Run,
         RunContext, ToolchainInfo,
     };
-    use cbh_run::MemoryOutputWriter;
     use cbh_storage::{MemoryStorage, Storage};
     use futures::executor::block_on;
     use jiff::Timestamp;
@@ -854,12 +849,6 @@ mod tests {
         git
     }
 
-    /// A throwaway in-memory output writer for prune tests that assert on the
-    /// returned text message rather than on written files.
-    fn writer() -> MemoryOutputWriter {
-        MemoryOutputWriter::new()
-    }
-
     /// A fixed analysis anchor for prune tests. These exercise absolute or
     /// unset `--since`/`--until` windows, so the exact instant is immaterial; it
     /// only stands in for the clock reading `prune::execute` supplies in production.
@@ -871,7 +860,7 @@ mod tests {
 
     /// Drives `prune_with` and unwraps the rendered message.
     fn prune(storage: &MemoryStorage, git: &FakeGitHistory, options: &PruneOptions) -> String {
-        let outcome = block_on(prune_with(
+        let rendered = block_on(prune_with(
             git,
             storage,
             "folo",
@@ -880,25 +869,21 @@ mod tests {
             &auto(),
             now(),
             &RecordingReporter::new(),
-            &writer(),
         ))
         .unwrap();
-        match outcome {
-            RunOutcome::Completed { message } => message,
-            RunOutcome::Analyzed { .. } => panic!("prune returns a Completed outcome"),
-        }
+        rendered
+            .text
+            .expect("prune renders the text report by default")
     }
 
-    /// Drives `prune_with` requesting the JSON report into an in-memory writer and
-    /// returns the JSON text. The text report is suppressed so the JSON file is
-    /// the only rendered output.
+    /// Drives `prune_with` requesting the JSON report and returns the JSON text.
+    /// The text report is suppressed so the JSON is the only rendered output.
     fn prune_json(storage: &MemoryStorage, git: &FakeGitHistory, options: &PruneOptions) -> String {
         let mut options = options.clone();
         options.no_text = true;
         options.markdown = None;
         options.json = Some(PathBuf::from("report.json"));
-        let writer = MemoryOutputWriter::new();
-        block_on(prune_with(
+        let rendered = block_on(prune_with(
             git,
             storage,
             "folo",
@@ -907,16 +892,15 @@ mod tests {
             &auto(),
             now(),
             &RecordingReporter::new(),
-            &writer,
         ))
         .unwrap();
-        writer
-            .written(Path::new("report.json"))
-            .expect("the JSON report was written to the requested path")
+        rendered
+            .json
+            .expect("the JSON report was rendered for the requested path")
     }
 
-    /// Drives `prune_with` requesting the Markdown report into an in-memory writer
-    /// and returns the Markdown text.
+    /// Drives `prune_with` requesting the Markdown report and returns the Markdown
+    /// text.
     fn prune_markdown(
         storage: &MemoryStorage,
         git: &FakeGitHistory,
@@ -926,8 +910,7 @@ mod tests {
         options.no_text = true;
         options.json = None;
         options.markdown = Some(PathBuf::from("report.md"));
-        let writer = MemoryOutputWriter::new();
-        block_on(prune_with(
+        let rendered = block_on(prune_with(
             git,
             storage,
             "folo",
@@ -936,12 +919,11 @@ mod tests {
             &auto(),
             now(),
             &RecordingReporter::new(),
-            &writer,
         ))
         .unwrap();
-        writer
-            .written(Path::new("report.md"))
-            .expect("the Markdown report was written to the requested path")
+        rendered
+            .markdown
+            .expect("the Markdown report was rendered for the requested path")
     }
 
     #[test]
@@ -959,7 +941,6 @@ mod tests {
             &auto(),
             now(),
             &reporter,
-            &writer(),
         ))
         .unwrap();
         assert!(
@@ -1139,11 +1120,10 @@ mod tests {
             &auto(),
             now(),
             &RecordingReporter::new(),
-            &writer(),
         ))
         .unwrap_err();
         match error {
-            RunError::Analyze { message } => {
+            AnalyzeError::Analyze { message } => {
                 assert!(message.contains("--clean"), "{message}");
                 assert!(message.contains("--dirty"), "{message}");
                 assert!(message.contains("--all"), "{message}");
@@ -1177,11 +1157,10 @@ mod tests {
             &auto(),
             now(),
             &RecordingReporter::new(),
-            &writer(),
         ))
         .unwrap_err();
         match error {
-            RunError::Analyze { message } => {
+            AnalyzeError::Analyze { message } => {
                 assert!(message.contains("no output selected"), "{message}");
             }
             other => panic!("unexpected error: {other:?}"),
@@ -1239,11 +1218,10 @@ mod tests {
             &auto(),
             now(),
             &RecordingReporter::new(),
-            &writer(),
         ))
         .unwrap_err();
         match error {
-            RunError::Analyze { message } => {
+            AnalyzeError::Analyze { message } => {
                 assert!(message.contains("--prune-base"), "{message}");
                 assert!(
                     message.contains("master"),
@@ -1343,11 +1321,10 @@ mod tests {
             &auto(),
             now(),
             &RecordingReporter::new(),
-            &writer(),
         ))
         .unwrap_err();
         match error {
-            RunError::Analyze { message } => {
+            AnalyzeError::Analyze { message } => {
                 assert!(message.contains("requires a git repository"), "{message}");
             }
             other => panic!("unexpected error: {other:?}"),

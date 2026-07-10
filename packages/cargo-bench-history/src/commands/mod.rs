@@ -4,8 +4,9 @@
 mod backfill;
 mod collect;
 mod install;
+mod reporting;
 
 pub(crate) use backfill::execute as backfill;
-pub(crate) use cbh_analyze::{analyze, bless, examine, list, prune, unbless};
 pub(crate) use collect::execute as collect;
 pub(crate) use install::execute as install;
+pub(crate) use reporting::{analyze, bless, examine, list, prune, unbless};

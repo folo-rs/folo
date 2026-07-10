@@ -23,15 +23,13 @@ use std::path::Path;
 
 use anyspawn::Spawner;
 use cbh_command::ExamineOptions;
-use cbh_config::{Config, load_config};
+use cbh_config::{
+    Config, cache_env, load_config, resolve_cache_path, resolve_config_path, resolve_local_path,
+    resolve_project_id, resolve_repo, storage_env,
+};
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
 use cbh_model::{BenchmarkIdPrefix, DiscriminantSet, MetricKind};
-use cbh_run::{
-    OutputSelection, OutputWriter, RunError, RunOutcome, TokioOutputWriter, cache_env, emit,
-    resolve_cache_path, resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo,
-    storage_env,
-};
 use cbh_storage::{Storage, StorageFacade, resolve_storage};
 use jiff::Timestamp;
 use serde::Serialize;
@@ -41,6 +39,7 @@ use super::{
     AutoFacets, ReportFormat, Selection, Series, SeriesFilter, detect_auto_facets,
     dirty_base_exception_warning, empty_history_hint, format_value, resolve_now, select_dataset,
 };
+use crate::{AnalyzeError, RenderedReports, ReportRequest};
 
 /// How many leading characters of a commit title the text and Markdown tables
 /// keep. The truncation is a readability convenience of those renderings; the JSON
@@ -53,12 +52,17 @@ const TITLE_LIMIT: usize = 50;
 /// `clock_override` injects the [`tick::Clock`] the shared selection anchors its
 /// "now" to (see [`analyze`](super::analyze)); production passes `None` for the
 /// runtime wall clock.
+// Thin real-adapter wiring: loads config from disk, builds the configured storage,
+// and shells out via `SystemGitHistory`/`detect_auto_facets` before delegating every
+// decision to the mutation-tested `examine_with`. In-crate tests cannot drive these
+// real adapters deterministically; the binary's integration tests cover this edge.
+#[cfg_attr(test, mutants::skip)]
 pub async fn execute(
     options: &ExamineOptions,
     workspace_dir: &Path,
     clock_override: Option<Clock>,
     storage_override: Option<StorageFacade>,
-) -> Result<RunOutcome, RunError> {
+) -> Result<RenderedReports, AnalyzeError> {
     let reporter = StderrReporter::new(options.verbose);
 
     let config_path = resolve_config_path(workspace_dir, options.config_path.as_deref());
@@ -85,7 +89,6 @@ pub async fn execute(
     // The object-load work shares the ambient Tokio worker threads (mirrors
     // `analyze::execute`).
     let spawner = Spawner::new_tokio();
-    let writer = TokioOutputWriter::new(workspace_dir.to_path_buf());
     let outcome = examine_with(
         &git,
         &storage,
@@ -95,7 +98,6 @@ pub async fn execute(
         &auto,
         now,
         &reporter,
-        &writer,
         &spawner,
     )
     .await;
@@ -110,7 +112,7 @@ pub async fn execute(
     clippy::too_many_arguments,
     reason = "mirrors the analyze selection pipeline, which threads the same injected ports"
 )]
-pub(crate) async fn examine_with<G, S, W>(
+pub(crate) async fn examine_with<G, S>(
     git: &G,
     storage: &S,
     project_id: &str,
@@ -119,15 +121,13 @@ pub(crate) async fn examine_with<G, S, W>(
     auto: &AutoFacets,
     now: Timestamp,
     reporter: &dyn Reporter,
-    writer: &W,
     spawner: &Spawner,
-) -> Result<RunOutcome, RunError>
+) -> Result<RenderedReports, AnalyzeError>
 where
     G: GitHistory,
     S: Storage + Clone + 'static,
-    W: OutputWriter,
 {
-    let output = OutputSelection::resolve(
+    let request = ReportRequest::resolve(
         options.no_text,
         options.markdown.as_deref(),
         options.json.as_deref(),
@@ -140,10 +140,11 @@ where
     // The benchmark identity scopes the series load coarsely (a prefix of the
     // qualified id); the exact `id == benchmark` narrowing happens after series
     // reconstruction. An unmatched id is not an error — it yields an empty pivot.
-    let prefix =
-        BenchmarkIdPrefix::new(options.benchmark.clone()).map_err(|_empty| RunError::Analyze {
+    let prefix = BenchmarkIdPrefix::new(options.benchmark.clone()).map_err(|_empty| {
+        AnalyzeError::Analyze {
             message: "--benchmark must not be empty".to_owned(),
-        })?;
+        }
+    })?;
     let prefixes = [prefix];
     let filter = SeriesFilter {
         prefixes: &prefixes,
@@ -189,23 +190,19 @@ where
         .included_dirty_base_exception
         .then(dirty_base_exception_warning);
 
-    let message = emit(&output, writer, reporter, |format| {
-        render_pivot(&pivot, format, hint.as_deref(), warning.as_deref())
-    })
-    .await?;
-    Ok(RunOutcome::Completed { message })
+    Ok(request.render(|format| render_pivot(&pivot, format, hint.as_deref(), warning.as_deref())))
 }
 
 /// Parses the `--metric` value into a [`MetricKind`], rejecting an unknown name
 /// with the list of valid names.
-fn parse_metric(name: &str) -> Result<MetricKind, RunError> {
+fn parse_metric(name: &str) -> Result<MetricKind, AnalyzeError> {
     MetricKind::from_name(name).ok_or_else(|| {
         let valid = MetricKind::ALL
             .iter()
             .map(|kind| kind.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        RunError::Analyze {
+        AnalyzeError::Analyze {
             message: format!("unknown metric {name:?}; expected one of: {valid}"),
         }
     })
@@ -491,7 +488,7 @@ fn append_hint_and_warning(lines: &mut Vec<String>, hint: Option<&str>, warning:
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     use cbh_config::Config;
     use cbh_diag::RecordingReporter;
@@ -500,7 +497,6 @@ mod tests {
         BenchmarkId, BenchmarkResult, EnvironmentInfo, GitInfo, Metric, MetricKind, Run,
         RunContext, ToolchainInfo,
     };
-    use cbh_run::MemoryOutputWriter;
     use cbh_storage::{MemoryStorage, Storage};
     use futures::executor::block_on;
     use jiff::Timestamp;
@@ -624,15 +620,9 @@ mod tests {
         git
     }
 
-    /// A throwaway in-memory output writer for tests that assert on the returned
-    /// text message rather than on written files.
-    fn writer() -> MemoryOutputWriter {
-        MemoryOutputWriter::new()
-    }
-
     /// Drives `examine_with` and unwraps the rendered text message.
     fn examine(storage: &MemoryStorage, git: &FakeGitHistory, options: &ExamineOptions) -> String {
-        let outcome = block_on(examine_with(
+        let rendered = block_on(examine_with(
             git,
             storage,
             "folo",
@@ -641,18 +631,16 @@ mod tests {
             &auto(),
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
-            &writer(),
             &spawner(),
         ))
         .unwrap();
-        match outcome {
-            RunOutcome::Completed { message } => message,
-            RunOutcome::Analyzed { .. } => panic!("examine returns a Completed outcome"),
-        }
+        rendered
+            .text
+            .expect("examine renders the text report by default")
     }
 
-    /// Drives `examine_with` requesting the JSON report into an in-memory writer and
-    /// returns the JSON text (the text report is suppressed).
+    /// Drives `examine_with` requesting the JSON report and returns the JSON text
+    /// (the text report is suppressed).
     fn examine_json(
         storage: &MemoryStorage,
         git: &FakeGitHistory,
@@ -662,8 +650,7 @@ mod tests {
         options.no_text = true;
         options.markdown = None;
         options.json = Some(PathBuf::from("report.json"));
-        let writer = MemoryOutputWriter::new();
-        block_on(examine_with(
+        let rendered = block_on(examine_with(
             git,
             storage,
             "folo",
@@ -672,17 +659,16 @@ mod tests {
             &auto(),
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
-            &writer,
             &spawner(),
         ))
         .unwrap();
-        writer
-            .written(Path::new("report.json"))
-            .expect("the JSON report was written to the requested path")
+        rendered
+            .json
+            .expect("the JSON report was rendered for the requested path")
     }
 
-    /// Drives `examine_with` requesting the Markdown report into an in-memory writer
-    /// and returns the Markdown text.
+    /// Drives `examine_with` requesting the Markdown report and returns the Markdown
+    /// text.
     fn examine_markdown(
         storage: &MemoryStorage,
         git: &FakeGitHistory,
@@ -692,8 +678,7 @@ mod tests {
         options.no_text = true;
         options.json = None;
         options.markdown = Some(PathBuf::from("report.md"));
-        let writer = MemoryOutputWriter::new();
-        block_on(examine_with(
+        let rendered = block_on(examine_with(
             git,
             storage,
             "folo",
@@ -702,13 +687,12 @@ mod tests {
             &auto(),
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
-            &writer,
             &spawner(),
         ))
         .unwrap();
-        writer
-            .written(Path::new("report.md"))
-            .expect("the Markdown report was written to the requested path")
+        rendered
+            .markdown
+            .expect("the Markdown report was rendered for the requested path")
     }
 
     #[test]
@@ -911,12 +895,11 @@ mod tests {
             &auto(),
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
-            &writer(),
             &spawner(),
         ))
         .unwrap_err();
         match error {
-            RunError::Analyze { message } => {
+            AnalyzeError::Analyze { message } => {
                 assert!(message.contains("unknown metric"), "{message}");
                 assert!(message.contains("instruction_count"), "{message}");
             }
@@ -966,11 +949,10 @@ mod tests {
             &auto(),
             Timestamp::from_second(0).unwrap(),
             &RecordingReporter::new(),
-            &writer(),
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, RunError::Analyze { .. }), "{error:?}");
+        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
     }
 
     #[test]
@@ -1002,7 +984,7 @@ mod tests {
     #[test]
     fn parse_metric_lists_every_valid_name_on_error() {
         let error = parse_metric("bogus").unwrap_err();
-        let RunError::Analyze { message } = error else {
+        let AnalyzeError::Analyze { message } = error else {
             panic!("expected an Analyze error");
         };
         for kind in MetricKind::ALL {

@@ -1,14 +1,18 @@
-//! Command input resolution shared across the run edge: locating the configuration
-//! file and repository, reading the storage/cache environment variables, and turning
-//! the parsed `--local`/`--cache` selections into concrete paths.
+//! Command input resolution: locating the configuration file and repository,
+//! reading the storage/cache environment variables, and turning the parsed
+//! `--local`/`--cache` selections into concrete paths.
+//!
+//! This lives alongside the parsed [`Config`] because it is all *input*
+//! resolution — the layer that turns raw command-line selections and the ambient
+//! environment into the paths and identity a command runs against. An
+//! unresolvable `--local`/`--cache` selection is reported as a [`ConfigError`],
+//! the same currency as a malformed configuration file.
 
 use std::path::{Path, PathBuf};
 
 use cbh_command::{CacheSelection, LocalStorageSelection};
-use cbh_config::Config;
-use cbh_storage::StorageError;
 
-use crate::rebase;
+use crate::{Config, ConfigError};
 
 /// The environment variable that supplies the local-storage path for a bare
 /// `--local` (given with no value): `CARGO_BENCH_HISTORY_STORAGE`.
@@ -17,6 +21,22 @@ pub const STORAGE_ENV_VAR: &str = "CARGO_BENCH_HISTORY_STORAGE";
 /// The environment variable that supplies the cache directory for a bare
 /// `--cache` (given with no value): `CARGO_BENCH_HISTORY_CACHE`.
 pub const CACHE_ENV_VAR: &str = "CARGO_BENCH_HISTORY_CACHE";
+
+/// Joins a relative `path` onto `base`, leaving an absolute `path` unchanged.
+///
+/// In production `base` is the process working directory, so a relative path
+/// resolves exactly as the filesystem would have. Threading the base explicitly
+/// (rather than relying on the process current directory) lets tests point each
+/// command at its own workspace without a global `chdir`, so the suite need not be
+/// forced serial.
+#[must_use]
+pub fn rebase(base: &Path, path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        path
+    } else {
+        base.join(path)
+    }
+}
 
 /// The default configuration path, relative to the working directory.
 #[must_use]
@@ -72,22 +92,20 @@ pub fn storage_env() -> Option<String> {
 ///
 /// # Errors
 ///
-/// Returns [`StorageError::Config`] if a bare `--local` was given but
+/// Returns a [`ConfigError`] if a bare `--local` was given but
 /// [`STORAGE_ENV_VAR`] is unset or empty.
 pub fn resolve_local_path(
     selection: Option<&LocalStorageSelection>,
     env: Option<&str>,
-) -> Result<Option<PathBuf>, StorageError> {
+) -> Result<Option<PathBuf>, ConfigError> {
     match selection {
         None => Ok(None),
         Some(LocalStorageSelection::Path(path)) => Ok(Some(path.clone())),
         Some(LocalStorageSelection::FromEnv) => match env {
             Some(value) if !value.is_empty() => Ok(Some(PathBuf::from(value))),
-            _ => Err(StorageError::Config {
-                message: format!(
-                    "--local was given without a path and {STORAGE_ENV_VAR} is unset or empty"
-                ),
-            }),
+            _ => Err(ConfigError::new(format!(
+                "--local was given without a path and {STORAGE_ENV_VAR} is unset or empty"
+            ))),
         },
     }
 }
@@ -118,22 +136,20 @@ pub fn cache_env() -> Option<String> {
 ///
 /// # Errors
 ///
-/// Returns [`StorageError::Config`] if a bare `--cache` was given but
+/// Returns a [`ConfigError`] if a bare `--cache` was given but
 /// [`CACHE_ENV_VAR`] is unset or empty.
 pub fn resolve_cache_path(
     selection: Option<&CacheSelection>,
     env: Option<&str>,
-) -> Result<Option<PathBuf>, StorageError> {
+) -> Result<Option<PathBuf>, ConfigError> {
     match selection {
         None => Ok(None),
         Some(CacheSelection::Path(path)) => Ok(Some(path.clone())),
         Some(CacheSelection::FromEnv) => match env {
             Some(value) if !value.is_empty() => Ok(Some(PathBuf::from(value))),
-            _ => Err(StorageError::Config {
-                message: format!(
-                    "--cache was given without a path and {CACHE_ENV_VAR} is unset or empty"
-                ),
-            }),
+            _ => Err(ConfigError::new(format!(
+                "--cache was given without a path and {CACHE_ENV_VAR} is unset or empty"
+            ))),
         },
     }
 }
@@ -154,13 +170,27 @@ pub fn resolve_project_id(config: &Config, workspace_dir: &Path) -> String {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use cbh_config::parse_config;
-
     use super::*;
+    use crate::parse_config;
 
     fn config_with(extra: &str) -> Config {
         let text = format!("[storage.azure]\naccount = \"a\"\ncontainer = \"c\"\n\n{extra}");
         parse_config(&text).unwrap()
+    }
+
+    #[test]
+    fn rebase_joins_relative_paths_and_keeps_absolute_ones() {
+        let base = Path::new("/work/folo");
+        assert_eq!(
+            rebase(base, PathBuf::from("store")),
+            PathBuf::from("/work/folo/store")
+        );
+        let absolute = if cfg!(windows) {
+            PathBuf::from(r"C:\elsewhere\store")
+        } else {
+            PathBuf::from("/elsewhere/store")
+        };
+        assert_eq!(rebase(base, absolute.clone()), absolute);
     }
 
     #[test]
@@ -188,9 +218,7 @@ mod tests {
     #[test]
     fn resolve_local_path_errors_when_env_unset() {
         let error = resolve_local_path(Some(&LocalStorageSelection::FromEnv), None).unwrap_err();
-        let StorageError::Config { message } = error else {
-            panic!("expected a config error, got {error:?}");
-        };
+        let message = error.to_string();
         assert!(message.contains(STORAGE_ENV_VAR), "{message}");
     }
 
@@ -198,7 +226,7 @@ mod tests {
     fn resolve_local_path_treats_empty_env_as_unset() {
         let error =
             resolve_local_path(Some(&LocalStorageSelection::FromEnv), Some("")).unwrap_err();
-        assert!(matches!(error, StorageError::Config { .. }), "{error:?}");
+        assert!(error.to_string().contains(STORAGE_ENV_VAR), "{error}");
     }
 
     #[test]
@@ -226,16 +254,14 @@ mod tests {
     #[test]
     fn resolve_cache_path_errors_when_env_unset() {
         let error = resolve_cache_path(Some(&CacheSelection::FromEnv), None).unwrap_err();
-        let StorageError::Config { message } = error else {
-            panic!("expected a config error, got {error:?}");
-        };
+        let message = error.to_string();
         assert!(message.contains(CACHE_ENV_VAR), "{message}");
     }
 
     #[test]
     fn resolve_cache_path_treats_empty_env_as_unset() {
         let error = resolve_cache_path(Some(&CacheSelection::FromEnv), Some("")).unwrap_err();
-        assert!(matches!(error, StorageError::Config { .. }), "{error:?}");
+        assert!(error.to_string().contains(CACHE_ENV_VAR), "{error}");
     }
 
     #[test]

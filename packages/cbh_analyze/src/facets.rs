@@ -4,10 +4,10 @@
 
 use cbh_detect::{DiscriminantSetQuery, FacetFilter};
 use cbh_model::Engine;
-use cbh_run::RunError;
 use nonempty::NonEmpty;
 
 use super::selection::Selection;
+use crate::AnalyzeError;
 
 /// The current machine's auto-detected facet values, used as the default when a
 /// query facet is omitted (see the *Discriminant set & query facets* section of
@@ -52,7 +52,7 @@ fn resolve_facet(values: &[String], auto: Option<&str>) -> FacetFilter {
 pub(crate) fn resolve_facets(
     selection: &Selection<'_>,
     auto: Option<&AutoFacets>,
-) -> Result<DiscriminantSetQuery, RunError> {
+) -> Result<DiscriminantSetQuery, AnalyzeError> {
     let engine = resolve_facet(selection.engine, None);
     if let FacetFilter::Explicit(values) = &engine {
         for value in values.iter() {
@@ -93,12 +93,12 @@ fn describe_filter(filter: &FacetFilter) -> Option<String> {
 }
 
 /// Parses an `--engine` facet value into an [`Engine`], if set.
-fn parse_engine(name: Option<&str>) -> Result<Option<Engine>, RunError> {
+fn parse_engine(name: Option<&str>) -> Result<Option<Engine>, AnalyzeError> {
     match name {
         None => Ok(None),
         Some(name) => Engine::from_name(name)
             .map(Some)
-            .ok_or_else(|| RunError::Analyze {
+            .ok_or_else(|| AnalyzeError::Analyze {
                 message: format!(
                     "unknown engine {name:?}; expected one of: criterion, callgrind, \
                      alloc_tracker, all_the_time"
