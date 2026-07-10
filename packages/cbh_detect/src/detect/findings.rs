@@ -470,18 +470,18 @@ fn exceeds_residual_noise(delta: f64, residual: Option<f64>, config: &AnalysisCo
 /// lacks: the Mann–Whitney probability of superiority (the chance a random `after`
 /// point exceeds a random `before` one), oriented in the move's direction, must
 /// reach `config.min_regime_separation`. A genuine step scores ~1; bimodal jitter
-/// scores near ½ and is rejected. A missing effect size (an empty sample) is treated
-/// as no evidence of overlap, so the move is trusted.
+/// scores near ½ and is rejected. Missing statistics (`None`, from an empty sample)
+/// are treated as no evidence of overlap, so the move is trusted.
 fn regimes_are_separated(
-    before: &[f64],
-    after: &[f64],
+    mann_whitney: Option<stats::MannWhitneyU>,
     delta: f64,
     config: &AnalysisConfig,
 ) -> bool {
-    match stats::mann_whitney_superiority(before, after) {
+    match mann_whitney {
         // `superiority` is P(after > before); a fall is judged by the complementary
         // P(before > after), so both directions are measured against the same floor.
-        Some(superiority) => {
+        Some(mann_whitney) => {
+            let superiority = mann_whitney.superiority();
             let directional = if delta >= 0.0 {
                 superiority
             } else {
@@ -561,7 +561,8 @@ fn evaluate_change_point(
     }
     let relative_delta = relative_delta_of(delta, baseline);
 
-    let mann_whitney = stats::mann_whitney_u_pvalue(before, after);
+    let mann_whitney_u = stats::MannWhitneyU::new(before, after);
+    let mann_whitney = mann_whitney_u.map_or(1.0, |ranked| ranked.two_sided_p_value());
     if mann_whitney >= config.change_alpha {
         return None;
     }
@@ -571,7 +572,7 @@ fn evaluate_change_point(
     if !exceeds_residual_noise(delta, step_model_residual(values, tau), config) {
         return None;
     }
-    if !regimes_are_separated(before, after, delta, config) {
+    if !regimes_are_separated(mann_whitney_u, delta, config) {
         return None;
     }
     let before_points: Vec<&SeriesPoint> = points.iter().take(tau).collect();
@@ -806,11 +807,12 @@ fn compare_samples(
         return None;
     }
     let effective_p = if before_values.len() >= 2 && after_values.len() >= 2 {
-        let mann_whitney = stats::mann_whitney_u_pvalue(&before_values, &after_values);
+        let mann_whitney_u = stats::MannWhitneyU::new(&before_values, &after_values);
+        let mann_whitney = mann_whitney_u.map_or(1.0, |ranked| ranked.two_sided_p_value());
         if mann_whitney >= config.change_alpha {
             return None;
         }
-        if !regimes_are_separated(&before_values, &after_values, delta, config) {
+        if !regimes_are_separated(mann_whitney_u, delta, config) {
             return None;
         }
         if let (Some(before_ci), Some(after_ci)) = (regime_interval(before), regime_interval(after))
@@ -1661,23 +1663,20 @@ mod tests {
         let config = AnalysisConfig::default();
         // A clean rise: every after-point exceeds every before-point (superiority 1).
         assert!(regimes_are_separated(
-            &[10.0, 11.0, 12.0],
-            &[20.0, 21.0, 22.0],
+            stats::MannWhitneyU::new(&[10.0, 11.0, 12.0], &[20.0, 21.0, 22.0]),
             10.0,
             &config,
         ));
         // A clean fall: judged by the complementary direction, still fully separated.
         assert!(regimes_are_separated(
-            &[20.0, 21.0, 22.0],
-            &[10.0, 11.0, 12.0],
+            stats::MannWhitneyU::new(&[20.0, 21.0, 22.0], &[10.0, 11.0, 12.0]),
             -10.0,
             &config,
         ));
         // Two levels that recur on both sides: only 0.75 of the after-vs-before pairs
         // move in the rise's direction, below the 0.85 floor, so it is not separated.
         assert!(!regimes_are_separated(
-            &[10.0, 10.0, 10.0, 30.0],
-            &[30.0, 30.0, 30.0, 10.0],
+            stats::MannWhitneyU::new(&[10.0, 10.0, 10.0, 30.0], &[30.0, 30.0, 30.0, 10.0]),
             20.0,
             &config,
         ));
@@ -1688,11 +1687,13 @@ mod tests {
         // the fall branch at a fractional superiority (0.25), so the complementary
         // `1 − 0.25 = 0.75 < 0.85` is exercised as a genuine subtraction.
         assert!(!regimes_are_separated(
-            &[30.0, 30.0, 30.0, 10.0],
-            &[10.0, 10.0, 10.0, 30.0],
+            stats::MannWhitneyU::new(&[30.0, 30.0, 30.0, 10.0], &[10.0, 10.0, 10.0, 30.0]),
             -20.0,
             &config,
         ));
+        // No statistics at all (an empty regime): the gate has nothing to veto on, so
+        // it trusts the move rather than suppressing it.
+        assert!(regimes_are_separated(None, 10.0, &config));
     }
 
     #[test]
@@ -2303,8 +2304,14 @@ mod tests {
     }
 
     /// Compares the `before` and `after` samples on a wall-time (noisy) series,
-    /// passing `floor` as the practical relative floor.
-    fn compare(before: &[SeriesPoint], after: &[SeriesPoint], floor: f64) -> Option<Candidate> {
+    /// passing `floor` as the practical relative floor and `config` as the analysis
+    /// configuration.
+    fn compare_with(
+        before: &[SeriesPoint],
+        after: &[SeriesPoint],
+        floor: f64,
+        config: &AnalysisConfig,
+    ) -> Option<Candidate> {
         let series = wall_series(&[100.0], 1.0);
         let before_refs: Vec<&SeriesPoint> = before.iter().collect();
         let after_refs: Vec<&SeriesPoint> = after.iter().collect();
@@ -2312,11 +2319,16 @@ mod tests {
             &series,
             &before_refs,
             &after_refs,
-            &AnalysisConfig::default(),
+            config,
             floor,
             None,
             None,
         )
+    }
+
+    /// Compares the `before` and `after` samples with the default configuration.
+    fn compare(before: &[SeriesPoint], after: &[SeriesPoint], floor: f64) -> Option<Candidate> {
+        compare_with(before, after, floor, &AnalysisConfig::default())
     }
 
     #[test]
@@ -2369,6 +2381,33 @@ mod tests {
         // each flag it instead.
         let before = pts(&[(100.0, 4.0)]);
         let after = pts(&[(108.0, 4.0)]);
+        assert!(compare(&before, &after, 0.05).is_none());
+    }
+
+    #[test]
+    fn compare_samples_across_interleaved_regimes_is_suppressed() {
+        // The branch-comparison mirror of the change-point case: a base sample and a
+        // branch sample drawn from the *same* two levels (~10 and ~30) in opposite
+        // proportions. Each sample's median lands on its dominant level, so the medians
+        // differ by 20 while three-quarters of each sample sits on its own median — the
+        // per-sample residual collapses to zero, and the median-based confidence
+        // intervals even read as disjoint, so the residual, significance (n = 20 each),
+        // and interval gates are all fooled. But the regimes overlap heavily
+        // (probability of superiority 0.75), so the separation gate rejects the move.
+        // Dropping the separation floor to zero admits it again, proving that gate is
+        // the sole reason it is suppressed.
+        let mut before_specs = vec![(10.0, 0.5); 15];
+        before_specs.extend(std::iter::repeat_n((30.0, 0.5), 5));
+        let before = pts(&before_specs);
+        let mut after_specs = vec![(10.0, 0.5); 5];
+        after_specs.extend(std::iter::repeat_n((30.0, 0.5), 15));
+        let after = pts(&after_specs);
+
+        let permissive = AnalysisConfig {
+            min_regime_separation: 0.0,
+            ..AnalysisConfig::default()
+        };
+        assert!(compare_with(&before, &after, 0.05, &permissive).is_some());
         assert!(compare(&before, &after, 0.05).is_none());
     }
 
