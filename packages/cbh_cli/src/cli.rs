@@ -373,7 +373,8 @@ struct CollectCommand {
 
     /// Run the whole suite this many times and keep, per metric, the best
     /// (minimum) observed value — a noise-reduction pass for jittery runners.
-    /// Every run must produce the same set of benchmark cases or collection fails.
+    /// Every run must produce the same benchmark cases and the same metrics
+    /// per case or collection fails.
     #[arg(long = "best-of", value_name = "N", default_value_t = NonZeroUsize::MIN, help_heading = HEADING_ENV)]
     best_of: NonZeroUsize,
 
@@ -826,7 +827,8 @@ struct BackfillCommand {
 
     /// Run the whole suite this many times per commit and keep, per metric, the
     /// best (minimum) observed value — a noise-reduction pass for jittery runners.
-    /// Every run must produce the same set of benchmark cases or collection fails.
+    /// Every run must produce the same benchmark cases and the same metrics
+    /// per case or collection fails.
     #[arg(long = "best-of", value_name = "N", default_value_t = NonZeroUsize::MIN, help_heading = HEADING_ENV)]
     best_of: NonZeroUsize,
 
