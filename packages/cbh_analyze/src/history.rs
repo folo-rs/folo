@@ -37,10 +37,9 @@ pub(crate) struct ResolvedHistory {
     pub(crate) target_ref: String,
     /// The display name of the base ref the target's history was split against
     /// (an explicit `--base`, the configured default branch, or the detected one),
-    /// for the effective-selection summary. `None` only when no base could be
-    /// resolved — which the merge-base check below turns into an error, so a
-    /// successfully resolved history always names its base.
-    pub(crate) base_name: Option<String>,
+    /// for the effective-selection summary. Always present: `resolve_history`
+    /// refuses to build a `ResolvedHistory` when no base can be resolved.
+    pub(crate) base_name: String,
     /// The full commit ID the target ref resolved to — the analyzed tip commit, carried
     /// into the report so it names the exact commit the findings describe.
     pub(crate) tip_commit: String,
@@ -105,10 +104,25 @@ where
         });
     };
 
-    let base = resolve_base(git, config, selection.base).await?;
-    let (base_name, base_commit_id) = match base {
-        Some(ResolvedBase { name, commit }) => (Some(name), Some(commit)),
-        None => (None, None),
+    // A base branch is required: the analysis splits the target's first-parent line
+    // at its merge-base with the base, so a run with no resolvable base has no
+    // topology to split on. Refuse before walking the ancestry rather than carrying
+    // an unresolved base through. The usual cause is a shallow clone or a checkout
+    // that never fetched the base branch.
+    let Some(ResolvedBase {
+        name: base_name,
+        commit: base_commit_id,
+    }) = resolve_base(git, config, selection.base).await?
+    else {
+        return Err(AnalyzeError::Analyze {
+            message: format!(
+                "could not determine the base branch to compare {target_ref} against: no \
+                 --base was given and no default branch could be resolved. Pass an explicit \
+                 --base, set project.default_branch, or make the default branch available \
+                 (a shallow clone or a checkout that never fetched the base branch is the \
+                 usual cause)."
+            ),
+        });
     };
     let first_parent_started = Instant::now();
     let first_parent = git
@@ -134,13 +148,10 @@ where
         }
         ancestry.push(commit.commit_id);
     }
-    let merge_base = match &base_commit_id {
-        Some(base) => git
-            .merge_base(&target_commit_id, base)
-            .await
-            .map_err(AnalyzeError::Io)?,
-        None => None,
-    };
+    let merge_base = git
+        .merge_base(&target_commit_id, &base_commit_id)
+        .await
+        .map_err(AnalyzeError::Io)?;
 
     reporter.if_enabled(|notes| {
         notes.note(&format!(
@@ -148,9 +159,7 @@ where
             count_noun(commit_count, "commit")
         ));
         notes.note(&format!(
-            "base ref {} resolves to {}; merge-base with target is {}",
-            base_name.as_deref().unwrap_or("<none>"),
-            base_commit_id.as_deref().unwrap_or("<none>"),
+            "base ref {base_name} resolves to {base_commit_id}; merge-base with target is {}",
             merge_base.as_deref().unwrap_or("<none>")
         ));
     });
@@ -159,45 +168,36 @@ where
     // first-parent line at the merge-base. A merge-base we cannot determine leaves
     // no topology to split on, and guessing a mode from the incomplete history would
     // silently mislead — so refuse and say how to supply the missing history. The
-    // usual cause is a shallow clone whose depth stops short of the branch point, or
-    // a checkout that never fetched the base branch.
+    // base resolved (checked above), so the only remaining cause is a shallow clone
+    // whose depth stops short of the branch point, or a checkout that never fetched
+    // the base branch.
     let Some(merge_base) = merge_base else {
-        let message = match base_commit_id.as_deref() {
-            // The base resolved, but shares no common ancestor with the target. By
-            // far the usual cause is a shallow clone whose depth stops short of the
-            // branch point, so the primary remedy is to deepen the clone — not to
-            // pick a different base. Only once the history is known-complete is a
-            // genuinely disjoint base worth calling out, and even then the deliberate
-            // `--base` a user passed is theirs to reconsider, not ours to second-guess.
-            Some(base) => {
-                let remedy = match selection.base {
-                    Some(explicit) => format!(
-                        " If the history is already complete, {explicit} is genuinely unrelated \
-                         to the target and cannot serve as its base."
-                    ),
-                    None => " If the history is already complete, the base branch is unrelated to \
-                             the target; name the intended base with --base or \
-                             project.default_branch."
-                        .to_owned(),
-                };
-                format!(
-                    "could not determine the merge-base of the target {target_ref} \
-                     ({target_commit_id}) and the base commit {base}: they share no common \
-                     ancestor in the available history. This is almost always a shallow clone \
-                     whose depth stops short of the branch point — fetch the full history (`git \
-                     fetch --unshallow`, or set fetch-depth: 0 on actions/checkout) so the branch \
-                     point is present.{remedy}"
-                )
-            }
-            None => format!(
-                "could not determine the base branch to compare {target_ref} against: no \
-                 --base was given and no default branch could be resolved. Pass an explicit \
-                 --base, set project.default_branch, or make the default branch available \
-                 (a shallow clone or a checkout that never fetched the base branch is the \
-                 usual cause)."
+        // The base resolved, but shares no common ancestor with the target. By far
+        // the usual cause is a shallow clone whose depth stops short of the branch
+        // point, so the primary remedy is to deepen the clone — not to pick a
+        // different base. Only once the history is known-complete is a genuinely
+        // disjoint base worth calling out, and even then the deliberate `--base` a
+        // user passed is theirs to reconsider, not ours to second-guess.
+        let remedy = match selection.base {
+            Some(explicit) => format!(
+                " If the history is already complete, {explicit} is genuinely unrelated \
+                 to the target and cannot serve as its base."
             ),
+            None => " If the history is already complete, the base branch is unrelated to \
+                     the target; name the intended base with --base or \
+                     project.default_branch."
+                .to_owned(),
         };
-        return Err(AnalyzeError::Analyze { message });
+        return Err(AnalyzeError::Analyze {
+            message: format!(
+                "could not determine the merge-base of the target {target_ref} \
+                 ({target_commit_id}) and the base commit {base_commit_id}: they share no \
+                 common ancestor in the available history. This is almost always a shallow \
+                 clone whose depth stops short of the branch point — fetch the full history \
+                 (`git fetch --unshallow`, or set fetch-depth: 0 on actions/checkout) so the \
+                 branch point is present.{remedy}"
+            ),
+        });
     };
 
     // The base-branch dirty-tip exception: `analyze`/`list` admit a base-side tip's

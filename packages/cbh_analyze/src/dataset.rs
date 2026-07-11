@@ -205,7 +205,7 @@ where
     // branch, and look-back window a plain run would otherwise resolve silently.
     reporter.announce(&effective_selection_summary(
         &facets,
-        base_name.as_deref(),
+        &base_name,
         selection.base.is_none(),
         since,
         selection.since.is_some(),
@@ -456,17 +456,17 @@ where
 /// why the `--since` cutoff is what it is.
 fn effective_selection_summary(
     facets: &DiscriminantSetQuery,
-    base_name: Option<&str>,
+    base_name: &str,
     base_auto: bool,
     since: Option<Timestamp>,
     since_explicit: bool,
     mode: AnalysisMode,
     until: Option<Timestamp>,
 ) -> String {
-    let base = match base_name {
-        Some(name) if base_auto => format!("base={name} (auto-detected)"),
-        Some(name) => format!("base={name}"),
-        None => "base=none".to_owned(),
+    let base = if base_auto {
+        format!("base={base_name} (auto-detected)")
+    } else {
+        format!("base={base_name}")
     };
     let since = format!(
         "since={} ({})",
@@ -715,7 +715,7 @@ mod tests {
         // is named and marked.
         let summary = effective_selection_summary(
             &facets,
-            Some("main"),
+            "main",
             true,
             Some(since),
             false,
@@ -749,7 +749,7 @@ mod tests {
         // auto-detected and the until edge is shown when set.
         let summary = effective_selection_summary(
             &facets,
-            Some("release"),
+            "release",
             false,
             None,
             false,

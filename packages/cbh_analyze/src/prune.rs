@@ -188,15 +188,12 @@ where
 
     // The `--prune-base` guard: when the context resolves onto the base branch
     // itself (`context == base`), the whole selection is base-branch history.
-    // Refuse to delete it without explicit confirmation. The tip being its own
-    // merge-base means the base resolved, so `base_name` is always `Some` here; the
-    // fallback to the target ref is a defensive belt-and-braces only.
+    // Refuse to delete it without explicit confirmation.
     if tip_is_merge_base && !options.prune_base {
-        let base = base_name.unwrap_or_else(|| target_ref.clone());
         return Err(AnalyzeError::Analyze {
             message: format!(
-                "this will delete benchmark history of the {base} branch, which is the base \
-                 branch. Confirm with --prune-base if this is correct."
+                "this will delete benchmark history of the {base_name} branch, which is the \
+                 base branch. Confirm with --prune-base if this is correct."
             ),
         });
     }
