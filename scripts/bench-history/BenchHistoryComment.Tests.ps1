@@ -110,6 +110,11 @@ Describe 'Find-RollingComment (mocked gh api)' {
             { Find-RollingComment -Repo 'o/r' -PrNumber '5; rm -rf /' -Marker $script:Marker } |
                 Should -Throw '*positive integer*'
         }
+
+        It 'rejects a zero PR number' {
+            { Find-RollingComment -Repo 'o/r' -PrNumber '0' -Marker $script:Marker } |
+                Should -Throw '*positive integer*'
+        }
     }
 }
 

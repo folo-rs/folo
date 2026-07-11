@@ -66,7 +66,9 @@ function Assert-RepoAndPr {
     if ($Repo -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') {
         throw "Repository must be in 'owner/name' form, got '$Repo'."
     }
-    if ($PrNumber -notmatch '^[0-9]+$') {
+    # `^[1-9][0-9]*$` (not `^[0-9]+$`): a PR number is a positive integer, so reject `0` and any
+    # leading-zero form to match the error message and keep a well-formed REST path.
+    if ($PrNumber -notmatch '^[1-9][0-9]*$') {
         throw "Pull request number must be a positive integer, got '$PrNumber'."
     }
 }
@@ -96,8 +98,11 @@ function Find-RollingComment {
     # A no-comments list is the literal `[]`, which ConvertFrom-Json yields as an empty array; the
     # @() wrapper keeps a single-object result enumerable under strict mode.
     $comments = $output | ConvertFrom-Json
+    # A literal substring match (.Contains, ordinal) rather than -like: the marker is a fixed HTML
+    # string, so treating it as a wildcard pattern would misbehave if it ever gained wildcard
+    # metacharacters ([, ], *, ?).
     foreach ($comment in @($comments)) {
-        if ($comment.body -and ($comment.body -like "*$Marker*")) { return $comment }
+        if ($comment.body -and $comment.body.Contains($Marker)) { return $comment }
     }
     return $null
 }
@@ -131,7 +136,9 @@ function Publish-RollingComment {
     # The marker is this module's responsibility, not the caller's: prepend it as a hidden HTML
     # comment when the rendered body lacks it, so the dedup contract holds even if a future body
     # template forgets to embed it.
-    if ($body -notlike "*$Marker*") {
+    # Literal substring check (.Contains, ordinal) rather than -notlike: the marker is a fixed hidden
+    # string, so a wildcard match would misfire if it ever contained wildcard metacharacters.
+    if (-not $body.Contains($Marker)) {
         $body = "$Marker`n`n$body"
     }
 
