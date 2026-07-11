@@ -37,10 +37,14 @@ vary by platform.
 ## Concurrency
 
 Commit-driven and PR-driven workflows cancel superseded runs, keyed on the ref, so pushing
-a new commit abandons the outdated run. The exception is history collection, which is keyed
-on the commit **SHA**: each commit is a distinct measurement, so distinct commits must run
-in parallel and only a redundant re-trigger of the *same* commit is deduplicated.
-Schedule-driven workflows carry no concurrency block at all.
+a new commit abandons the outdated run. That supersession only fires when a *new commit*
+arrives on the branch, so closing or merging a PR — which pushes nothing to the PR branch —
+would otherwise leave its in-flight Validation run to burn to completion. A dedicated
+companion workflow closes that gap: it triggers on the PR-close event and joins Validation's
+concurrency group so cancel-in-progress reclaims the stale run. The exception is history
+collection, which is keyed on the commit **SHA**: each commit is a distinct measurement, so
+distinct commits must run in parallel and only a redundant re-trigger of the *same* commit is
+deduplicated. Schedule-driven workflows carry no concurrency block at all.
 
 ## Thin steps
 
