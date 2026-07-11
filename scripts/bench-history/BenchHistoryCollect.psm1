@@ -56,8 +56,8 @@ function Get-BenchHistoryCollectCommand {
     # (before an expensive benchmark run) and, because the value is an untrusted dispatch input,
     # also guarantees it can carry no shell metacharacters.
     if ($recollect -notmatch '^[0-9a-fA-F]{7,40}$') {
-        throw ("Recollect commit id must be a 7-40 character hex commit SHA on main's history, " +
-            "got '$recollect'.")
+        throw ("Recollect commit id must be a 7-40 character hex commit SHA, got '$recollect'. " +
+            "That it names a commit actually on main's history is verified later by the backfill step.")
     }
 
     Write-Verbose ("Recollect commit ${recollect}: re-measuring that single commit in a throwaway " +
