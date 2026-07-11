@@ -34,8 +34,12 @@
 # logic, never the tool version that happened to ship at that commit. `--overwrite` bumps the
 # cloud cache-invalidation marker so the `analyze` job's read-through cache refreshes; note it also
 # drops any blessings recorded at that commit, which must be re-applied if the re-measured level is
-# still an intentional step change. The value must be a real commit on `main`'s first-parent
-# history. The mode selection and the untrusted-input validation live in
+# still an intentional step change. The value should be a real commit on `main`'s first-parent
+# history: the module validates only the SHA *format*, and `backfill` then requires the id to
+# *resolve* to a commit in the clone (failing loudly otherwise) - but neither checks main
+# ancestry, so a resolvable off-main commit is not rejected; it would just overwrite/store a
+# point the `analyze` job (which surveys only `main`) never surfaces. The mode selection and the
+# untrusted-input validation live in
 # scripts/bench-history/BenchHistoryCollect.psm1 (Pester-tested via `just test-scripts`), so this
 # recipe is a thin import + call; the value is read from the environment, never spliced into the
 # script body.

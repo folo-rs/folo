@@ -38,10 +38,12 @@ on:
 # an already-pushed commit), which `--skip-existing` would make a no-op append anyway. The
 # recollect commit id is folded into the key because a workflow_dispatch's github.sha is the
 # `main` tip, not the target: without it, two recollects of different commits (or a recollect
-# racing a push of the same tip) would share a group and wrongly cancel each other. It is empty
-# for pushes and plain dispatches, leaving their grouping unchanged.
+# racing a push of the same tip) would share a group and wrongly cancel each other. The `-<id>`
+# suffix is appended only when a recollect id is supplied (via the `&&`/`||` idiom); pushes and
+# plain dispatches carry an empty id, so the suffix is omitted entirely and their grouping is
+# unchanged (no trailing dash).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.sha }}-${{ inputs.recollect_commit_id }}
+  group: ${{ github.workflow }}-${{ github.sha }}${{ inputs.recollect_commit_id && format('-{0}', inputs.recollect_commit_id) || '' }}
   cancel-in-progress: true
 
 # Title of the rolling failure-alert issue, defined once and shared by the two jobs that
