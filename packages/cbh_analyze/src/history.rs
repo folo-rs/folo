@@ -300,19 +300,15 @@ pub(crate) async fn resolve_base<G: GitHistory>(
     base: Option<&str>,
 ) -> Result<Option<ResolvedBase>, AnalyzeError> {
     if let Some(base) = base {
-        return git
-            .resolve(base)
-            .await
-            .map_err(AnalyzeError::Io)?
-            .map(|commit| {
-                Some(ResolvedBase {
-                    name: base.to_owned(),
-                    commit,
-                })
-            })
-            .ok_or_else(|| AnalyzeError::Analyze {
+        let Some(commit) = git.resolve(base).await.map_err(AnalyzeError::Io)? else {
+            return Err(AnalyzeError::Analyze {
                 message: format!("could not resolve --base {base:?}"),
             });
+        };
+        return Ok(Some(ResolvedBase {
+            name: base.to_owned(),
+            commit,
+        }));
     }
     if let Some(default) = config.project.default_branch.as_deref()
         && let Some(commit) = git.resolve(default).await.map_err(AnalyzeError::Io)?
