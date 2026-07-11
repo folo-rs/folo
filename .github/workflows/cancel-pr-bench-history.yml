@@ -1,0 +1,37 @@
+name: Cancel PR Benchmark history
+
+# When a pull request closes (merged or abandoned), any PR Benchmark history run still in flight for
+# its branch is wasted work - a multi-hour benchmark matrix whose result no open PR will ever read.
+# The concurrency in pr-bench-history.yml only supersedes a run when a *new* commit lands on the same
+# branch; a close pushes no such commit, so nothing cancels the run and it burns runner minutes to
+# completion. This workflow fires on the close event and joins the *same* concurrency group as that
+# run, so cancel-in-progress tears the stale run down. See design.md (Concurrency).
+on:
+  pull_request:
+    types: [closed]
+
+# This group string must stay byte-for-byte identical to pr-bench-history.yml's. That workflow builds
+# it from ${{ github.workflow }}-${{ github.head_ref || github.ref }}, where github.workflow resolves
+# to its name ("PR Benchmark history"); we hardcode that literal here so this run lands in the closing
+# PR branch's group and supersedes the run already there.
+concurrency:
+  group: PR Benchmark history-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cancel:
+    runs-on: ubuntu-latest
+    steps:
+      # Entering the shared concurrency group above is what cancels the stale PR Benchmark history
+      # run; this step only records that it happened. It is intentionally the whole job - there is no
+      # benchmark work to do on a PR close.
+      - name: Report supersession
+        shell: pwsh
+        env:
+          HEAD_REF: ${{ github.head_ref || github.ref }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          Write-Host "Joined concurrency group PR Benchmark history-$env:HEAD_REF; any in-progress PR Benchmark history run for this branch is now cancelled."

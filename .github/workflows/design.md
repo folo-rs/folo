@@ -40,11 +40,12 @@ Commit-driven and PR-driven workflows cancel superseded runs, keyed on the ref, 
 a new commit abandons the outdated run. That supersession only fires when a *new commit*
 arrives on the branch, so closing or merging a PR — which pushes nothing to the PR branch —
 would otherwise leave its in-flight Validation run to burn to completion. A dedicated
-companion workflow closes that gap: it triggers on the PR-close event and joins Validation's
-concurrency group so cancel-in-progress reclaims the stale run. The exception is history
-collection, which is keyed on the commit **SHA**: each commit is a distinct measurement, so
-distinct commits must run in parallel and only a redundant re-trigger of the *same* commit is
-deduplicated. Schedule-driven workflows carry no concurrency block at all.
+companion workflow closes that gap: it triggers on the PR-close event and joins the target
+workflow's concurrency group so cancel-in-progress reclaims the stale run. Both the Validation
+workflow and the PR benchmark-history workflow pair with such a close companion. The exception
+is history collection on `main`, which is keyed on the commit **SHA**: each commit is a distinct
+measurement, so distinct commits must run in parallel and only a redundant re-trigger of the
+*same* commit is deduplicated. Schedule-driven workflows carry no concurrency block at all.
 
 ## Thin steps
 
@@ -77,6 +78,42 @@ green without one; the Azure jobs flip that skip into a hard failure so a miscon
 can never silently pass by testing nothing. All Azure authentication uses GitHub OIDC
 workload-identity federation — no long-lived secret is stored — and is gated to same-repo
 runs, since a fork cannot federate into the tenant.
+
+## Federated identity
+
+Every Azure sign-in in these workflows uses GitHub OIDC workload-identity federation, so no
+long-lived storage secret is ever committed or held as a repository secret. A job requests a
+short-lived GitHub OIDC token (`permissions: id-token: write`), and Azure exchanges it for
+managed-identity credentials only when the token's *subject* matches a federated credential
+registered on that identity. The subject encodes the triggering event: a push to a branch
+presents `repo:folo-rs/folo:ref:refs/heads/<branch>` (e.g. `…:ref:refs/heads/main`), while a
+pull-request run presents `repo:folo-rs/folo:pull_request`. The audience is always
+`api://AzureADTokenExchange`. The two non-secret identifiers a job needs — the managed
+identity's client id and the tenant id — live in `constants.env` and are remapped to the
+standard `AZURE_*` names the tool and `azure/login` read (`AZURE_PROD_CLIENT_ID` →
+`AZURE_CLIENT_ID`) by a single shared federation step, so the mapping is defined once rather
+than copy-pasted per job.
+
+Federation only works for **same-repo** runs: a fork's run cannot mint a token whose subject
+names this repository, so fork PRs skip the Azure-touching jobs rather than fail.
+
+Two managed identities exist, each registered with exactly the subjects its events present:
+
+| Event | OIDC subject | Identity | Consumer |
+| --- | --- | --- | --- |
+| push to `main` | `…:ref:refs/heads/main` | prod | `bench-history.yml` |
+| pull request | `…:pull_request` | prod | `pr-bench-history.yml` |
+| push to `main` | `…:ref:refs/heads/main` | test | `test-azure` backend tests |
+| pull request | `…:pull_request` | test | `test-azure` backend tests |
+
+The **prod** identity backs history collection and the PR benchmark workflow; the **test**
+identity backs the Azure-backend test jobs against a throwaway account. Both trust `main` and
+`pull_request` so each identity's on-main and on-PR consumers can sign in. Granting the prod
+identity a `pull_request` credential is a deliberate tradeoff: it widens prod's write surface
+from "only pushes to `main`" to "any same-repo PR run", accepting a larger blast radius in
+exchange for letting a PR's benchmarks be compared against the very store that holds `main`'s
+baseline. The narrower alternative — a separate PR store — was rejected because branch-mode
+analysis must read the base's accumulated history and the tool reads a single backend.
 
 ## Benchmark history
 
@@ -116,6 +153,47 @@ regressions never fail the run. Because a GitHub issue body is size-capped and a
 analysis can exceed it, the issue carries a **condensed summary** (the top findings) and
 links to the **full Markdown and JSON reports**, which the job uploads as a run artifact — so
 the issue always fits while the complete data stays one click away.
+
+### PR benchmark history
+
+The same measure-and-report loop runs on pull requests, retuned to answer "does this PR move
+any benchmark relative to `main`?" instead of "is `main` trending?". It reuses the analysis
+tool's **branch mode**: with the PR head as context and `main` as the base, the tool splits the
+head's first-parent ancestry at the merge-base and compares the branch tip's level against the
+base ancestry's clean baseline, so a finding means *this branch changed the level* rather than
+that the long-range trend moved. To keep that topology intact the collect and analyze jobs
+check out the PR head's real commit — not the synthetic `pull_request` merge ref, whose first
+parent is `main` and would corrupt the comparison — with full history, since both the
+merge-base and the first-parent walk need it.
+
+Because a PR is transient, the findings land in a single **rolling PR comment** (deduped by a
+hidden marker, updated in place on every push) rather than the rolling issue the `main`
+workflow files; the comment lives and dies with the pull request. The comment is strictly
+advisory — findings never affect the check's exit code, so a regression note never blocks a
+merge — and it reports detected improvements alongside regressions, or a plain "no regressions"
+state. A run *failure* surfaces only as the red check, with no issue and no failure comment,
+because a PR failure is a transient condition, not the persistent one the issue lifecycle
+tracks.
+
+Collection is **delta-scoped**: a preflight job diffs the PR against `main` and benchmarks only
+the touched packages, since re-measuring the whole workspace on every PR push would be
+wasteful. Analysis, by contrast, is deliberately **not** package-scoped, and that is a
+structural guarantee rather than a happy coincidence. Branch mode only yields a finding for a
+series that has a data point at the branch tip, and only the collected (touched) packages have
+a point at the PR's branch-unique head commit — for *every* measurement engine. An untouched
+package's latest point sits on the base ancestry, so its tip level equals its base level and it
+can never be flagged. Filtering analysis by package name would in fact be wrong: benchmark
+identities are engine-dependent (some engines identify a series by bare operation name with no
+package prefix), so a name filter would silently drop those series and turn a real regression
+into a false negative. The scoping therefore lives entirely in *what gets collected*; analysis
+surveys everything and stays correct by construction.
+
+When a PR touches no benchmarkable package — including a PR that touched one earlier and then
+reverted it — a lightweight cleanup path removes any rolling comment a prior push left behind
+and posts nothing, so a stale, misleading comment never lingers; it is a no-op when there was
+no comment. PR runs read the shared history cache **restore-only** (never saving), keeping the
+baseline warm without accumulating per-PR cache entries, which the append-only store makes
+safe even when slightly stale.
 
 ## Failure alerting
 

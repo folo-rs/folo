@@ -59,6 +59,42 @@ gh-collect-bench-history:
     $toolArgs = Get-BenchHistoryCollectCommand -RecollectCommitId $env:RECOLLECT_COMMIT_ID -Verbose
     cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- @toolArgs
 
+# The PR counterpart of `gh-collect-bench-history`: collects benchmark history for ONLY the
+# packages a pull request touched (the pr-bench-history.yml `delta` job computes them from
+# cargo-delta and passes them here space-separated, already filtered to the benchmarkable set), into
+# the SAME prod Azure store, keyed by the PR head commit. Scoping to the touched packages is a pure
+# cost optimisation - a PR rarely changes every crate, and the full 4-platform matrix is expensive -
+# and it is safe because branch-mode `analyze` only ever flags a series that has a data point at the
+# branch-unique head commit, i.e. exactly the packages collected here (see
+# gh-analyze-pr-bench-history and .github/workflows/design.md). Everything else is identical to the
+# push-to-main collect: the fixed `github` machine key keeps PR wall-clock series comparable to
+# main's baseline, `--best-of 3` sheds one-sided runner jitter, and `--skip-existing` makes a re-run
+# of the same head SHA a no-op append. There is no recollect mode on PRs (that repairs main's
+# permanent history); the scope decision lives in
+# scripts/bench-history/BenchHistoryCollect.psm1 (Pester-tested via `just test-scripts`), so this is
+# a thin import + call. `packages` must be non-empty - the workflow only invokes this recipe when
+# the delta produced at least one benchmarkable package, and an empty scope would wrongly fall back
+# to a whole-workspace run, so guard against it here.
+[group('automation')]
+[script]
+gh-collect-pr-bench-history packages:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    Import-Module ./scripts/bench-history/BenchHistoryCollect.psm1 -Force
+
+    # The delta job passes the touched packages space-separated (the same shape validation.yml's
+    # `just package="..."` gating uses); split them into the array the module scopes on.
+    $packageList = @('{{packages}}'.Split([char[]]@(' ', "`t", "`n"), [StringSplitOptions]::RemoveEmptyEntries))
+    if ($packageList.Count -eq 0) {
+        throw "gh-collect-pr-bench-history requires at least one package to collect; got an empty list. The pr-bench-history workflow must gate this recipe on a non-empty benchmarkable delta."
+    }
+
+    Write-Verbose "Collecting PR benchmark history scoped to the touched packages: $($packageList -join ', ')." -Verbose
+    $toolArgs = Get-BenchHistoryCollectCommand -RecollectCommitId '' -Package $packageList -Verbose
+    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- @toolArgs
+
 # Analyzes the collected history for regressions across ALL engines and target triples, but
 # only the `github` machine key - the fixed key `gh-collect-bench-history` stamps on the
 # GitHub runner pool's data. Restricting it here (rather than `--machine-key all`) keeps this
@@ -108,6 +144,55 @@ gh-analyze-bench-history dir:
     Set-Content -Path $notablePath -Value $notable -Encoding utf8
     Write-Verbose "Analysis complete: notable=$notable (full report at $reportPath, condensed summary at $summaryPath)." -Verbose
 
+# The PR counterpart of `gh-analyze-bench-history`: analyzes the collected history in BRANCH mode -
+# comparing the PR head's benchmark level against its base branch - and writes the same four
+# artefacts (report.md, report.json, summary.md, notable.txt) INTO {{dir}}. Branch mode is what the
+# tool auto-selects when the context (the PR head, defaulting to HEAD) differs from {{base}}: it
+# splits the head's first-parent ancestry at the merge-base with the base, treats the base
+# ancestry's clean points as the baseline, and reports how the branch tip's level moved. `{{base}}`
+# is passed EXPLICITLY (the pr-bench-history.yml `analyze` job passes `origin/main`) because the PR
+# head is checked out detached, so there is no local `main` branch to auto-resolve, whereas
+# `fetch-depth: 0` populates the `origin/main` remote-tracking ref the merge-base needs.
+# `--include-improvements` is added so the rolling PR comment can also surface detected speedups, not
+# only regressions. Everything else matches the main analyze: only the `github` machine key (the
+# fixed key collection stamps on the runner pool), all engines and triples, findings never fail the
+# recipe (the tool always exits 0), and `--cache` mirrors fetched cloud objects under {{dir}}/cache.
+#
+# This is intentionally NOT package-scoped even though collection is: `analyze` has no per-package
+# filter (only positional id-prefix subjects), and benchmark ids are engine-dependent (Callgrind
+# carries the package, Criterion group ids are crate-prefixed, but alloc_tracker/all_the_time use a
+# bare operation name), so an id-prefix filter would silently drop the measurement-engine series for
+# a touched package. The scoping is instead a structural property of branch mode: only the collected
+# (touched) packages have a point at the branch-unique head commit, so only they can produce a
+# finding - an untouched package's latest point sits on the base ancestry, giving tip == base and no
+# finding, for EVERY engine. See .github/workflows/design.md for the full invariant.
+#
+# {{dir}} is a scratch directory OUTSIDE the repo checkout (the `analyze` job passes the runner temp
+# dir), so `analyze`'s own `git status --porcelain` dirty-check never sees these artefacts.
+[group('automation')]
+[script]
+gh-analyze-pr-bench-history dir base:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    $dir = "{{dir}}"
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    $reportPath = Join-Path $dir "report.md"
+    $jsonPath = Join-Path $dir "report.json"
+    $summaryPath = Join-Path $dir "summary.md"
+    $notablePath = Join-Path $dir "notable.txt"
+    $cacheDir = Join-Path $dir "cache"
+    $common = @('--engine', 'all', '--target-triple', 'all', '--machine-key', 'github')
+
+    Write-Verbose "Analyzing PR benchmark history in branch mode (context HEAD vs base {{base}}); writing the full Markdown to $reportPath, the full JSON to $jsonPath and the condensed top-findings Markdown summary to $summaryPath, including improvements as well as regressions, and mirroring fetched cloud objects under $cacheDir." -Verbose
+    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --context HEAD --base '{{base}}' --include-improvements --cache=$cacheDir --no-text --markdown $reportPath --json $jsonPath --markdown-summary $summaryPath
+    Write-Verbose "Computing the notable flag from the JSON report." -Verbose
+    $json = Get-Content -Path $jsonPath -Raw | ConvertFrom-Json
+    $notable = if (($json.PSObject.Properties.Name -contains 'notable') -and $json.notable) { 'true' } else { 'false' }
+    Set-Content -Path $notablePath -Value $notable -Encoding utf8
+    Write-Verbose "PR analysis complete: notable=$notable (full report at $reportPath, condensed summary at $summaryPath)." -Verbose
+
 # Files (or updates in place) a single rolling issue identified by its exact title, from a
 # pre-rendered body file. Thin wrapper over Publish-RollingIssue in
 # scripts/bench-history/BenchHistoryIssue.psm1 (Pester-tested via `just test-scripts`), the one
@@ -133,6 +218,32 @@ gh-file-rolling-issue title label body_file:
         -BodyFile '{{body_file}}' `
         -Verbose
     Write-Verbose "Rolling issue is available at $url." -Verbose
+
+# Posts (or updates in place) the single rolling benchmark comment on a pull request, from a
+# pre-rendered body file. Thin wrapper over Publish-RollingComment in
+# scripts/bench-history/BenchHistoryComment.psm1 (Pester-tested via `just test-scripts`), the PR
+# counterpart of gh-file-rolling-issue: where main keeps a rolling ISSUE keyed by title, a PR keeps
+# a rolling COMMENT keyed by a hidden HTML `marker` embedded in the body, so every push updates one
+# comment instead of spamming the thread. `gh` reads the body from any path (--body-file semantics),
+# so it can live in the runner temp dir, outside the repo checkout. `repo` is `owner/name`
+# ('{{repo}}') and `pr` the PR number; both are validated in the module before being spliced into
+# the REST path. Needs GH_TOKEN in the environment (the workflow supplies it).
+[group('automation')]
+[script]
+gh-file-pr-comment repo pr marker body_file:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+    Import-Module ./scripts/bench-history/BenchHistoryComment.psm1 -Force
+
+    Write-Verbose "Posting or updating the rolling benchmark comment on {{repo}} PR #{{pr}} from body file {{body_file}}." -Verbose
+    $url = Publish-RollingComment `
+        -Repo '{{repo}}' `
+        -PrNumber '{{pr}}' `
+        -Marker '{{marker}}' `
+        -BodyFile '{{body_file}}' `
+        -Verbose
+    Write-Verbose "Rolling PR comment is available at $url." -Verbose
 
 # The release-automation logic lives in scripts/release/ReleaseAutomation.psm1, with a Pester
 # suite (scripts/release/ReleaseAutomation.Tests.ps1) that exercises it against fixtures via
