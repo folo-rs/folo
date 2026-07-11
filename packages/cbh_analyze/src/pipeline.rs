@@ -17,8 +17,9 @@ use cbh_config::{
 };
 use cbh_detect::{
     AnalysisConfig, AnalysisContext, Series, SeriesFilter, apply_blessings, find_changes_spawned,
+    retain_present_at_context, short_commit,
 };
-use cbh_diag::{Reporter, ReporterExt, StderrReporter};
+use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
 use cbh_model::DiscriminantSet;
 use cbh_probe::{EnvironmentProbe, SystemProbe, resolve_machine_key};
@@ -195,6 +196,43 @@ where
     );
 
     let mut series = dataset.series;
+
+    // Ghost filtering (default): analyze only benchmarks that still exist at the
+    // context commit. A benchmark that appears only for past commits — renamed,
+    // removed, or replaced — is a "ghost"; re-flagging it is noise. Dropping
+    // ghosts *before* detection also keeps them out of the false-discovery-rate
+    // correction, so a removed benchmark cannot dilute the correction for real
+    // ones. `--include-ghosts` opts out and analyzes every benchmark in the data
+    // set. Presence is read from the raw points, independent of re-baselining.
+    let ghosts_excluded = if options.include_ghosts {
+        0
+    } else {
+        let ghost_started = Instant::now();
+        let ghosts = retain_present_at_context(&mut series, &dataset.tip_commit);
+        for (set, id) in &ghosts {
+            reporter.note_with(|| {
+                format!(
+                    "excluding benchmark {} from {set}: not present at the context commit {}",
+                    id.qualified(),
+                    short_commit(&dataset.tip_commit),
+                )
+            });
+        }
+        reporter.note_with(|| {
+            format!(
+                "ghost filter: excluded {} not present at the context commit {}; {} remain",
+                count_noun(ghosts.len(), "ghost benchmark"),
+                short_commit(&dataset.tip_commit),
+                count_noun(series.len(), "series"),
+            )
+        });
+        reporter.timing(
+            "ghost filter (retain_present_at_context)",
+            ghost_started.elapsed(),
+        );
+        ghosts.len()
+    };
+
     // Re-baseline blessed series before detection (history mode only; branch
     // mode carries an empty blessing map).
     let rebaseline_started = Instant::now();
@@ -245,13 +283,21 @@ where
     // When stored runs existed but none entered the analysis, the empty outcome is
     // otherwise indistinguishable from "no data". Explain the dominant reasons so
     // the user can act without resorting to `--verbose`.
-    let hint = empty_history_hint(
-        dataset.run_index.is_empty(),
-        dataset.candidate_count,
-        &dataset.target_ref,
-        dataset.tally,
-        &dataset.facets,
-    );
+    //
+    // The ghost filter is a distinct empty case: runs *did* load and analyze, but
+    // every benchmark was dropped as a ghost. `empty_history_hint` keys off an
+    // empty load and stays silent here, so name the ghost case on its own.
+    let hint = if ghosts_excluded > 0 && series.is_empty() {
+        Some(all_ghosts_hint(&dataset.tip_commit))
+    } else {
+        empty_history_hint(
+            dataset.run_index.is_empty(),
+            dataset.candidate_count,
+            &dataset.target_ref,
+            dataset.tally,
+            &dataset.facets,
+        )
+    };
 
     // Admitting a dirty snapshot on the base branch's tip is a courtesy for the
     // "evaluating the tool" / "accidentally working on the base branch" cases; warn
@@ -274,6 +320,7 @@ where
         sets: &summaries,
         hint: hint.as_deref(),
         warning: warning.as_deref(),
+        ghosts_excluded,
     };
     let render_started = Instant::now();
     let rendered = request.render_analyze(
@@ -283,6 +330,20 @@ where
     reporter.timing("report render", render_started.elapsed());
 
     Ok((rendered, regressions))
+}
+
+/// The empty-outcome hint for the all-ghosts case: runs loaded and analyzed, but
+/// the ghost filter dropped every benchmark because none is present at the context
+/// commit. Distinct from [`empty_history_hint`], which speaks only to an empty load.
+fn all_ghosts_hint(tip_commit: &str) -> String {
+    format!(
+        "Runs were analyzed, but every benchmark was filtered as a ghost — none is \
+         present at the context commit {}. This usually means the context commit has \
+         no stored runs (collect at the context commit) or its benchmark set differs \
+         from history. Pass --include-ghosts to analyze every benchmark, including \
+         removed ones.",
+        short_commit(tip_commit)
+    )
 }
 
 #[cfg(test)]
@@ -514,6 +575,18 @@ mod tests {
 
     fn options() -> AnalyzeOptions {
         AnalyzeOptions::default()
+    }
+
+    /// Options that also analyze ghost benchmarks — ones absent at the context
+    /// commit. Several counting/faceting fixtures seed history that stops short of
+    /// the `linear_git` tip (`c3` carries no runs), so the default ghost filter
+    /// would empty the analysis; these tests exercise loading and tallying over the
+    /// full data set, not tip-presence, so they opt the filter off.
+    fn ghost_options() -> AnalyzeOptions {
+        AnalyzeOptions {
+            include_ghosts: true,
+            ..AnalyzeOptions::default()
+        }
     }
 
     /// A fixed clock anchor for the history-mode default `--since` window in unit
@@ -934,7 +1007,7 @@ mod tests {
         }
 
         let git = linear_git();
-        let (report, _, _) = analyze_json(&git, &storage, "folo", &options());
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &ghost_options());
 
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         let sets = parsed["sets"].as_array().unwrap();
@@ -952,6 +1025,106 @@ mod tests {
             .unwrap();
         assert_eq!(set_b["runs"], 2, "{report}");
         assert_eq!(set_b["series"], 1, "{report}");
+    }
+
+    /// A stored result set naming several benchmarks, each carrying one `Ir` metric,
+    /// so one commit's object can present or omit specific benchmarks — the shape a
+    /// ghost (a benchmark that disappears before the tip) needs.
+    fn multi_bench(effective: i64, commit: &str, benches: &[(&str, f64)]) -> Run {
+        let time = ts(effective);
+        let context = RunContext::new(
+            time,
+            GitInfo {
+                commit: Some(commit.to_owned()),
+                branch: Some("main".to_owned()),
+                dirty: false,
+            },
+            EnvironmentInfo::default(),
+            ToolchainInfo::default(),
+            "0.0.1".to_owned(),
+        );
+        let records = benches
+            .iter()
+            .map(|(name, value)| {
+                BenchmarkResult::new(
+                    BenchmarkId::new(nonempty![(*name).to_owned()]),
+                    vec![Metric::new(MetricKind::InstructionCount, *value)],
+                )
+            })
+            .collect::<Vec<_>>();
+        Run::new(context, records)
+    }
+
+    #[test]
+    fn a_ghost_benchmark_is_excluded_by_default_and_kept_with_the_flag() {
+        // `kept` is measured through the tip (c0..c3); `ghost` disappears after c2.
+        // The tip is c3, so `ghost` is no longer part of the current suite there.
+        let storage = MemoryStorage::new();
+        store(
+            &storage,
+            &clean_key("c0"),
+            &multi_bench(0, "c0", &[("kept", 100.0), ("ghost", 100.0)]),
+        );
+        store(
+            &storage,
+            &clean_key("c1"),
+            &multi_bench(1, "c1", &[("kept", 100.0), ("ghost", 100.0)]),
+        );
+        store(
+            &storage,
+            &clean_key("c2"),
+            &multi_bench(2, "c2", &[("kept", 100.0), ("ghost", 100.0)]),
+        );
+        store(
+            &storage,
+            &clean_key("c3"),
+            &multi_bench(3, "c3", &[("kept", 100.0)]),
+        );
+        let git = linear_git();
+
+        // Default: the ghost is filtered out before detection, and the verbose trail
+        // names it and the context commit it is absent from.
+        let (report, _, reporter) = analyze_json(&git, &storage, "folo", &options());
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(parsed["ghosts_excluded"], 1, "{report}");
+        assert_eq!(parsed["series"], 1, "only `kept` survives, {report}");
+        assert!(
+            reporter.contains("excluding benchmark ghost"),
+            "{:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains("not present at the context commit c3"),
+            "{:?}",
+            reporter.notes()
+        );
+
+        // --include-ghosts analyzes both benchmarks and drops nothing.
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &ghost_options());
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(parsed["ghosts_excluded"], 0, "{report}");
+        assert_eq!(parsed["series"], 2, "both benchmarks analyzed, {report}");
+    }
+
+    #[test]
+    fn an_all_ghosts_analysis_emits_the_dedicated_hint() {
+        // Every benchmark disappears before the tip (data stops at c2, tip is c3), so
+        // the default filter empties the analysis. The empty outcome must read as an
+        // all-ghosts case, distinct from a bare "no data".
+        let storage = MemoryStorage::new();
+        store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
+        store(&storage, &clean_key("c1"), &ir_set(1, "c1", 100.0));
+        store(&storage, &clean_key("c2"), &ir_set(2, "c2", 100.0));
+        let git = linear_git();
+
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &options());
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(parsed["ghosts_excluded"], 1, "{report}");
+        assert_eq!(parsed["series"], 0, "{report}");
+        assert_eq!(parsed["runs"], 3, "the runs still loaded, {report}");
+        let hint = parsed["hint"].as_str().unwrap_or_default();
+        assert!(hint.contains("filtered as a ghost"), "{report}");
+        assert!(hint.contains("--include-ghosts"), "{report}");
     }
 
     #[test]
@@ -1376,7 +1549,7 @@ mod tests {
 
         let opts = AnalyzeOptions {
             target_triple: vec!["x86_64-pc-windows-msvc".to_owned()],
-            ..options()
+            ..ghost_options()
         };
         let (report, _, _) = analyze_json(&git, &storage, "folo", &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
@@ -1402,7 +1575,7 @@ mod tests {
 
         let opts = AnalyzeOptions {
             target_triple: vec!["x86_64-unknown-linux-gnu".to_owned()],
-            ..options()
+            ..ghost_options()
         };
         let (report, _, _) = analyze_json(&git, &storage, "folo", &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
@@ -1425,7 +1598,7 @@ mod tests {
         );
         let git = linear_git();
 
-        let (report, _, _) = analyze_json(&git, &storage, "folo", &options());
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &ghost_options());
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["sets"].as_array().unwrap().len(), 2, "{report}");
     }

@@ -1116,7 +1116,7 @@ impl Workspace {
     /// Seeds one Callgrind result set carrying one `Ir` benchmark per entry in
     /// `values` for the previously created commit `label`, all in the shared
     /// `x86_64`/`synthetic` partition.
-    fn seed_many_callgrind(&self, label: &str, values: &[f64]) {
+    pub(crate) fn seed_many_callgrind(&self, label: &str, values: &[f64]) {
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
         let key = format!(

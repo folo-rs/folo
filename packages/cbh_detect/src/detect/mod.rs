@@ -27,5 +27,5 @@ pub use run_points::{MetricPoint, ResultPoints, RunPoints};
 pub use selection::{SelectedCommit, select_commits};
 pub use series::{
     Blessing, BlessingPlacement, LoadedObject, Series, SeriesBuilder, SeriesFilter, SeriesPoint,
-    apply_blessings, build_series,
+    apply_blessings, build_series, retain_present_at_context,
 };
