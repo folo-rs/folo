@@ -106,6 +106,18 @@ the past. The overwrite bumps the cache-invalidation marker so downstream analys
 and it deliberately discards any blessings recorded at that commit, since a fresh measurement
 invalidates a level that was previously accepted. Analysis is unaffected by the input and always
 surveys the current `main` tip.
+
+The stored history can also change *out of band* — a blessing or unblessing, a `prune`, or an
+administrative overwrite performed from a developer machine — and by default those only surface in
+the rolling issue on the next push, which pays for a full collection to re-survey data that already
+exists. A `workflow_dispatch` with `reanalyze` set is the cheap escape hatch: it *skips collection
+entirely* and runs only the analysis job, refreshing the rolling issue in minutes. It is
+general-purpose — re-analysis of the current store, not tied to any one kind of edit — and correct
+for every kind because the analysis always re-lists the store (so out-of-band additions are seen)
+while deletions and overwrites bump the cache-invalidation marker (so those are seen too); the
+reanalysis itself writes nothing. `reanalyze` and `recollect_commit_id` are mutually exclusive — a
+recollect *is* a collection, so requesting both is contradictory — and a dispatch that sets both is
+rejected before any work starts rather than silently picking one.
 A downstream analysis job reads the accumulated
 history and files a single rolling, advisory issue when it detects a notable regression;
 regressions never fail the run. Because a GitHub issue body is size-capped and a large
