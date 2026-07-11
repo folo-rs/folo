@@ -175,6 +175,7 @@ where
             dataset.candidate_count,
             &dataset.target_ref,
             dataset.tally,
+            &dataset.facets,
         )
     } else {
         Some(unmatched_series_hint(

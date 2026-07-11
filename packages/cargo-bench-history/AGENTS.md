@@ -76,11 +76,15 @@ cargo tools share these grouped conventions. Full group/flag map: DESIGN §7.
 through the guarded `ReporterExt` surface — `note_with(|| format!(…))` for one lazy line,
 `if_enabled(|notes| …)` for a block; the unconditional `Sink` is sealed, so there is no
 `enabled()`/`note()` guard to forget. Stage timings are a separate channel
-(`ReporterExt::timing`). Production `StderrReporter` writes `[bench-history] …` to **stderr
-only when verbose** (never stdout, so machine-readable output stays clean). The reporter is
+(`ReporterExt::timing`). A third channel, `ReporterExt::announce`, is **always on** (not
+verbose-gated): use it only for the one-line effective-selection / effective-partition
+summaries that must appear on every run, never for per-object chatter. Production
+`StderrReporter` writes `[bench-history] …` to **stderr** (notes/timings only when verbose;
+announcements always) — never stdout, so machine-readable output stays clean. The reporter is
 `&dyn` (not `+ Sync`) so run futures stay `!Send` / Miri-driven. Notes must be **explanatory,
 not conclusion-only** (see `docs/standalone-binaries.md`). Tests use the `#[cfg(test)]`
-`RecordingReporter`.
+`RecordingReporter` (`notes()`/`contains()` for notes, `announcements()`/`announced()` for the
+always-on channel).
 
 ## Storage & engines (essentials)
 

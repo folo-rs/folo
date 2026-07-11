@@ -15,6 +15,13 @@
 //! tens of thousands of objects, would otherwise drown in (and be slowed by) one
 //! note per object.
 //!
+//! Announcements are a *third*, always-on channel ([`ReporterExt::announce`]):
+//! a single line stating the effective, possibly auto-detected inputs a run
+//! resolved (the target triple, machine key, base branch, and look-back window it
+//! actually used). Unlike notes, they are emitted *regardless* of `--verbose`, so
+//! a plain run never hides which values it defaulted. Like notes they go to
+//! standard error, so machine-readable stdout stays clean.
+//!
 //! The unconditional emit primitives live on a sealed [`Sink`] trait that cannot
 //! be named outside this module, so the only note-emitting surface a caller sees
 //! is the guarded [`note_with`](ReporterExt::note_with) /
@@ -44,6 +51,10 @@ mod sealed {
         /// Records the wall-clock duration of a named pipeline `stage`
         /// unconditionally.
         fn emit_timing(&self, stage: &str, elapsed: Duration);
+
+        /// Emits an always-on announcement unconditionally (not gated on
+        /// `--verbose`).
+        fn emit_announcement(&self, message: &str);
     }
 }
 
@@ -101,6 +112,15 @@ pub trait ReporterExt {
     /// fold"`. This is a separate channel from [`note`](Notes::note) so the
     /// per-stage cost can be surfaced without the per-object note flood.
     fn timing(&self, stage: &str, elapsed: Duration);
+
+    /// Emits an always-on, one-line announcement of a run's effective inputs.
+    ///
+    /// Unlike [`note_with`](Self::note_with), this channel is *not* gated on
+    /// `--verbose`: it is the one diagnostic a plain run always prints, so a value
+    /// that was auto-detected or defaulted (the target triple, machine key, base
+    /// branch, or look-back window) is never resolved silently. Emitted to
+    /// standard error so machine-readable stdout stays clean.
+    fn announce(&self, message: &str);
 }
 
 impl<R: Reporter + ?Sized> ReporterExt for R {
@@ -118,6 +138,10 @@ impl<R: Reporter + ?Sized> ReporterExt for R {
 
     fn timing(&self, stage: &str, elapsed: Duration) {
         self.emit_timing(stage, elapsed);
+    }
+
+    fn announce(&self, message: &str) {
+        self.emit_announcement(message);
     }
 }
 
@@ -207,6 +231,16 @@ impl Sink for StderrReporter {
             );
         }
     }
+
+    /// Writes the announcement to standard error unconditionally.
+    ///
+    /// A pure standard-error side effect with no return value or observable state,
+    /// untestable for the same reason as [`emit_note`](Self::emit_note). Unlike a
+    /// note it is not gated on `verbose`: the announcement is always shown.
+    #[cfg_attr(test, mutants::skip)]
+    fn emit_announcement(&self, message: &str) {
+        eprintln!("[bench-history] {message}");
+    }
 }
 
 /// Formats a stage duration for a timing note: seconds (with millisecond
@@ -239,6 +273,7 @@ mod test_support {
     pub struct RecordingReporter {
         notes: RefCell<Vec<String>>,
         timings: RefCell<Vec<String>>,
+        announcements: RefCell<Vec<String>>,
     }
 
     impl RecordingReporter {
@@ -265,6 +300,19 @@ mod test_support {
                 .iter()
                 .any(|stage| stage.contains(needle))
         }
+
+        /// Returns a snapshot of the announcements recorded so far.
+        pub fn announcements(&self) -> Vec<String> {
+            self.announcements.borrow().clone()
+        }
+
+        /// Whether any recorded announcement contains `needle`.
+        pub fn announced(&self, needle: &str) -> bool {
+            self.announcements
+                .borrow()
+                .iter()
+                .any(|line| line.contains(needle))
+        }
     }
 
     impl Sink for RecordingReporter {
@@ -280,6 +328,10 @@ mod test_support {
             // Record only the stage label; the elapsed time is non-deterministic, so
             // tests assert that a stage *was* timed, not how long it took.
             self.timings.borrow_mut().push(stage.to_owned());
+        }
+
+        fn emit_announcement(&self, message: &str) {
+            self.announcements.borrow_mut().push(message.to_owned());
         }
     }
 }
@@ -323,6 +375,32 @@ mod tests {
         assert_eq!(reporter.notes(), vec!["a per-object note".to_owned()]);
         assert!(reporter.timed("select_dataset"));
         assert!(!reporter.timed("find_changes"));
+    }
+
+    #[test]
+    fn recording_reporter_captures_announcements_separately_from_notes() {
+        let reporter = RecordingReporter::new();
+        reporter.emit_note("a per-object note");
+        reporter.emit_announcement("selection: target-triple=x86_64 (auto-detected)");
+
+        // Announcements live in their own channel, so they neither disturb nor are
+        // disturbed by the per-object note stream.
+        assert_eq!(reporter.notes(), vec!["a per-object note".to_owned()]);
+        assert_eq!(
+            reporter.announcements(),
+            vec!["selection: target-triple=x86_64 (auto-detected)".to_owned()]
+        );
+        assert!(reporter.announced("auto-detected"));
+        assert!(!reporter.announced("machine-key"));
+    }
+
+    #[test]
+    fn reporter_ext_announce_forwards_to_the_sink() {
+        // `ReporterExt::announce` is the always-on, crate-facing entry point; it
+        // must forward to the sink's `emit_announcement` rather than drop the line.
+        let reporter = RecordingReporter::new();
+        reporter.announce("selection: base=main (auto-detected)");
+        assert!(reporter.announced("base=main"));
     }
 
     #[test]

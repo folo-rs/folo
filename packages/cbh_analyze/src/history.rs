@@ -35,6 +35,12 @@ pub(crate) enum DirtyTipPolicy {
 pub(crate) struct ResolvedHistory {
     /// The target ref the timeline was resolved against (for diagnostics).
     pub(crate) target_ref: String,
+    /// The display name of the base ref the target's history was split against
+    /// (an explicit `--base`, the configured default branch, or the detected one),
+    /// for the effective-selection summary. `None` only when no base could be
+    /// resolved — which the merge-base check below turns into an error, so a
+    /// successfully resolved history always names its base.
+    pub(crate) base_name: Option<String>,
     /// The full commit ID the target ref resolved to — the analyzed tip commit, carried
     /// into the report so it names the exact commit the findings describe.
     pub(crate) tip_commit: String,
@@ -99,7 +105,11 @@ where
         });
     };
 
-    let base_commit_id = resolve_base_ref(git, config, selection.base).await?;
+    let base = resolve_base(git, config, selection.base).await?;
+    let (base_name, base_commit_id) = match base {
+        Some(ResolvedBase { name, commit }) => (Some(name), Some(commit)),
+        None => (None, None),
+    };
     let first_parent_started = Instant::now();
     let first_parent = git
         .first_parent(&target_commit_id)
@@ -138,7 +148,8 @@ where
             count_noun(commit_count, "commit")
         ));
         notes.note(&format!(
-            "base ref resolves to {}; merge-base with target is {}",
+            "base ref {} resolves to {}; merge-base with target is {}",
+            base_name.as_deref().unwrap_or("<none>"),
             base_commit_id.as_deref().unwrap_or("<none>"),
             merge_base.as_deref().unwrap_or("<none>")
         ));
@@ -243,6 +254,7 @@ where
 
     Ok(ResolvedHistory {
         target_ref: target_ref.to_owned(),
+        base_name,
         tip_commit: target_commit_id,
         tip_dirty: working_tree_dirty,
         order,
@@ -263,62 +275,69 @@ pub(crate) fn dirty_base_exception_warning() -> String {
         .to_owned()
 }
 
-/// Resolves the base ref the target's history is split against, returning its
-/// commit ID or `None` when no base can be determined.
+/// The base ref a target's history is split against, resolved to both its display
+/// name and its commit ID in a single pass so a diagnostic can name the branch
+/// while the analysis compares against the commit.
+pub(crate) struct ResolvedBase {
+    /// The base ref's display name (an explicit `--base`, the configured
+    /// `project.default_branch`, or the repository's detected default branch).
+    pub(crate) name: String,
+    /// The commit ID the base ref resolved to.
+    pub(crate) commit: String,
+}
+
+/// Resolves the base ref the target's history is split against, returning both its
+/// display name and commit ID, or `None` when no base can be determined.
 ///
 /// Precedence: an explicit `--base` (an error if it does not resolve), then the
 /// configured `project.default_branch`, then the repository's detected default
-/// branch (`origin/HEAD`, else `main`/`master`).
-pub(crate) async fn resolve_base_ref<G: GitHistory>(
+/// branch (`origin/HEAD`, else `main`/`master`). A candidate that names a branch
+/// which does not resolve to a commit falls through to the next source, so the
+/// returned name always pairs with a real commit.
+pub(crate) async fn resolve_base<G: GitHistory>(
     git: &G,
     config: &Config,
     base: Option<&str>,
-) -> Result<Option<String>, AnalyzeError> {
+) -> Result<Option<ResolvedBase>, AnalyzeError> {
     if let Some(base) = base {
         return git
             .resolve(base)
             .await
             .map_err(AnalyzeError::Io)?
-            .map(Some)
+            .map(|commit| {
+                Some(ResolvedBase {
+                    name: base.to_owned(),
+                    commit,
+                })
+            })
             .ok_or_else(|| AnalyzeError::Analyze {
                 message: format!("could not resolve --base {base:?}"),
             });
     }
     if let Some(default) = config.project.default_branch.as_deref()
-        && let Some(resolved) = git.resolve(default).await.map_err(AnalyzeError::Io)?
+        && let Some(commit) = git.resolve(default).await.map_err(AnalyzeError::Io)?
     {
-        return Ok(Some(resolved));
+        return Ok(Some(ResolvedBase {
+            name: default.to_owned(),
+            commit,
+        }));
     }
     if let Some(name) = git.default_branch().await.map_err(AnalyzeError::Io)?
-        && let Some(resolved) = git.resolve(&name).await.map_err(AnalyzeError::Io)?
+        && let Some(commit) = git.resolve(&name).await.map_err(AnalyzeError::Io)?
     {
-        return Ok(Some(resolved));
+        return Ok(Some(ResolvedBase { name, commit }));
     }
     Ok(None)
 }
 
-/// Resolves the *display name* of the base ref (without resolving it to a commit ID),
-/// for diagnostics such as the `prune --prune-base` guard.
-///
-/// Mirrors [`resolve_base_ref`]'s precedence: an explicit `--base`, then the
-/// configured `project.default_branch` (only when it resolves), then the
-/// repository's detected default branch. Returns `None` when no base can be named.
-pub(crate) async fn resolve_base_name<G: GitHistory>(
+/// Resolves just the base ref's commit ID (discarding its display name), for
+/// callers such as `bless` that compare against the commit but never name it.
+pub(crate) async fn resolve_base_ref<G: GitHistory>(
     git: &G,
     config: &Config,
     base: Option<&str>,
 ) -> Result<Option<String>, AnalyzeError> {
-    if let Some(base) = base {
-        return Ok(Some(base.to_owned()));
-    }
-    if let Some(default) = config.project.default_branch.as_deref()
-        && git
-            .resolve(default)
-            .await
-            .map_err(AnalyzeError::Io)?
-            .is_some()
-    {
-        return Ok(Some(default.to_owned()));
-    }
-    git.default_branch().await.map_err(AnalyzeError::Io)
+    Ok(resolve_base(git, config, base)
+        .await?
+        .map(|resolved| resolved.commit))
 }
