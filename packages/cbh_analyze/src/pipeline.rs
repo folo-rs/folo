@@ -339,9 +339,9 @@ fn all_ghosts_hint(tip_commit: &str) -> String {
     format!(
         "Runs were analyzed, but every benchmark was filtered as a ghost — none is \
          present at the context commit {}. This usually means the context commit has \
-         no stored runs (collect at the context commit) or its benchmark set differs \
-         from history. Pass --include-ghosts to analyze every benchmark, including \
-         removed ones.",
+         no stored runs (collect at the context commit), a --until cutoff excluded the \
+         runs at the context commit, or its benchmark set differs from history. Pass \
+         --include-ghosts to analyze every benchmark, including removed ones.",
         short_commit(tip_commit)
     )
 }

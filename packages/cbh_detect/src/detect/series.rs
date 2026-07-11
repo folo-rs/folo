@@ -551,10 +551,13 @@ pub fn retain_present_at_context(
     // spans several metric-kind series, so dedupe by identity).
     let mut removed: HashSet<(DiscriminantSet, BenchmarkId)> = HashSet::new();
     series.retain(|one| {
-        if present.contains(&(one.set.clone(), one.id.clone())) {
+        // Clone the identity key once per series and reuse it for both the presence
+        // test and the removed-set insert, avoiding a second clone per ghost.
+        let key = (one.set.clone(), one.id.clone());
+        if present.contains(&key) {
             true
         } else {
-            removed.insert((one.set.clone(), one.id.clone()));
+            removed.insert(key);
             false
         }
     });
