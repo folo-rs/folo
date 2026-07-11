@@ -14,15 +14,36 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      # Optional escape hatch to REPAIR a corrupted history point. Leave empty for a normal
+      # dispatch (collects the current tip in append mode, exactly like a push). Set it to the
+      # full or short commit SHA of an already-collected `main` commit whose stored data point is
+      # bad (transient spikes, a degraded benchmark runner that day): the collect job then
+      # re-measures ONLY that commit and OVERWRITES its stored point, running the benchmark code
+      # AT that commit in a throwaway worktree while using THIS (HEAD) build of the tool. The
+      # analyze job ignores this input and always surveys the current `main` tip. See the
+      # gh-collect-bench-history recipe (RECOLLECT MODE) for the mechanics and caveats (e.g. it
+      # drops any blessings recorded at that commit).
+      recollect_commit_id:
+        description: "Commit SHA to re-collect and overwrite (leave empty for a normal run)"
+        required: false
+        type: string
+        default: ""
 
 # Group by the commit SHA, not the ref. Distinct commits must collect in parallel - each is
 # its own history data point, and cancelling one to favour a newer commit would drop that
 # commit's measurements, defeating the per-commit goal (so the usual ref-keyed
 # cancel-in-progress from validation.yml would be wrong here). cancel-in-progress therefore
 # only dedups a redundant re-trigger of the SAME commit (a re-run, or a workflow_dispatch on
-# an already-pushed commit), which `--skip-existing` would make a no-op append anyway.
+# an already-pushed commit), which `--skip-existing` would make a no-op append anyway. The
+# recollect commit id is folded into the key because a workflow_dispatch's github.sha is the
+# `main` tip, not the target: without it, two recollects of different commits (or a recollect
+# racing a push of the same tip) would share a group and wrongly cancel each other. The `-<id>`
+# suffix is appended only when a recollect id is supplied (via the `&&`/`||` idiom); pushes and
+# plain dispatches carry an empty id, so the suffix is omitted entirely and their grouping is
+# unchanged (no trailing dash).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.sha }}
+  group: ${{ github.workflow }}-${{ github.sha }}${{ inputs.recollect_commit_id && format('-{0}', inputs.recollect_commit_id) || '' }}
   cancel-in-progress: true
 
 # Title of the rolling failure-alert issue, defined once and shared by the two jobs that
@@ -74,6 +95,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        # A normal push/dispatch only benchmarks the tip, so a shallow clone is enough. A
+        # recollect (recollect_commit_id set) must instead re-measure a historical commit, whose
+        # objects and first-parent ancestry the `backfill` worktree needs present locally - so
+        # fetch the full history in that case only. The `&&`/`||` idiom yields '0' when the input
+        # is a non-empty string and '1' (the shallow default) when it is empty or absent.
+        with:
+          fetch-depth: ${{ inputs.recollect_commit_id && '0' || '1' }}
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -102,8 +130,13 @@ jobs:
       # The deterministic engines (Callgrind, allocation/time counters) are
       # hardware-independent; the wall-clock engines are pinned to the fixed `github` machine
       # key (see the gh-collect-bench-history recipe) so a heterogeneous runner pool does not
-      # fork the series.
+      # fork the series. RECOLLECT_COMMIT_ID (empty on a push/plain dispatch) switches the recipe
+      # from appending the pushed commit to re-measuring and OVERWRITING one historical commit;
+      # it is passed through the environment so an untrusted dispatch input is never spliced into
+      # a shell command line here.
       - name: Collect benchmark history
+        env:
+          RECOLLECT_COMMIT_ID: ${{ inputs.recollect_commit_id }}
         run: just gh-collect-bench-history
 
   analyze:

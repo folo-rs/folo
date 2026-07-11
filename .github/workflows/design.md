@@ -93,6 +93,19 @@ times per commit and keeps, per metric, the minimum sample: runner interference 
 (a contended host only ever makes a benchmark slower) and the repeats are spaced apart in
 time, so the minimum is the reading least perturbed by transient noise. This trades a
 proportionally longer collection job for a more stable series.
+
+Even with those defences, a single day of a badly degraded runner can still leave one commit's
+data point corrupted. Collection is therefore also manually re-runnable against a specific
+historical commit: a `workflow_dispatch` with a `recollect_commit_id` re-measures just that
+commit and *overwrites* its stored point instead of appending the pushed tip. The subtlety this
+resolves is that the collection tool lives in the same repository as the benchmarks, so a naive
+"check out that commit and re-run" would also run the tool as it shipped at that commit. Instead
+the re-collection benchmarks the code *at* the target commit in a throwaway worktree while
+running the current tool, so only the measured code — never the collection logic — comes from
+the past. The overwrite bumps the cache-invalidation marker so downstream analysis refreshes,
+and it deliberately discards any blessings recorded at that commit, since a fresh measurement
+invalidates a level that was previously accepted. Analysis is unaffected by the input and always
+surveys the current `main` tip.
 A downstream analysis job reads the accumulated
 history and files a single rolling, advisory issue when it detects a notable regression;
 regressions never fail the run. Because a GitHub issue body is size-capped and a large

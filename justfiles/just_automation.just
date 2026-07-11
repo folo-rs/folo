@@ -23,9 +23,41 @@
 # already-collected commit never bumps the cache-invalidation marker the `analyze` job's
 # read-through cache depends on - a re-run of the same commit is not "better" data, so there is
 # nothing to replace.
+#
+# RECOLLECT MODE. When the environment variable `RECOLLECT_COMMIT_ID` is set (the bench-history.yml
+# `collect` job wires it from the optional `recollect_commit_id` workflow_dispatch input), this
+# recipe instead re-measures that ONE historical commit and OVERWRITES its stored point, rather
+# than appending the pushed commit. It does so with `backfill <id> <id> --overwrite`, which
+# benchmarks the code AT that commit inside a throwaway git worktree (never the primary checkout)
+# while running THIS (HEAD) build of the tool - so a data point corrupted by a bad benchmark day
+# (transient spikes, a degraded runner) is replaced by a clean re-run under the CURRENT collection
+# logic, never the tool version that happened to ship at that commit. `--overwrite` bumps the
+# cloud cache-invalidation marker so the `analyze` job's read-through cache refreshes; note it also
+# drops any blessings recorded at that commit, which must be re-applied if the re-measured level is
+# still an intentional step change. The value should be a real commit on `main`'s first-parent
+# history: the module validates only the SHA *format*, and `backfill` then requires the id to
+# *resolve* to a commit in the clone (failing loudly otherwise) - but neither checks main
+# ancestry, so a resolvable off-main commit is not rejected; it would just overwrite/store a
+# point the `analyze` job (which surveys only `main`) never surfaces. The mode selection and the
+# untrusted-input validation live in
+# scripts/bench-history/BenchHistoryCollect.psm1 (Pester-tested via `just test-scripts`), so this
+# recipe is a thin import + call; the value is read from the environment, never spliced into the
+# script body.
 [group('automation')]
+[script]
 gh-collect-bench-history:
-    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- collect --workspace --exclude benchmarks --machine-key github --best-of 3 --skip-existing --verbose
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    Import-Module ./scripts/bench-history/BenchHistoryCollect.psm1 -Force
+
+    # RECOLLECT_COMMIT_ID is empty on a push / plain dispatch (normal append) and a commit SHA when
+    # repairing one historical point (overwrite). The mode-selection logic - and the untrusted-input
+    # validation - lives in the module so it is Pester-tested (BenchHistoryCollect.Tests.ps1); this
+    # step is a thin wrapper that runs whatever subcommand + flags it returns.
+    $toolArgs = Get-BenchHistoryCollectCommand -RecollectCommitId $env:RECOLLECT_COMMIT_ID -Verbose
+    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- @toolArgs
 
 # Analyzes the collected history for regressions across ALL engines and target triples, but
 # only the `github` machine key - the fixed key `gh-collect-bench-history` stamps on the
