@@ -196,3 +196,21 @@ thousands of them would both bury the timings and distort the very wall clock be
 measured. A programmatic caller can therefore request the stage timings alone, without the
 note flood — which is exactly how the stress harness surfaces the load breakdown while
 keeping its own measurement clean.
+
+## Seeing what was searched, always
+
+A third reporter channel runs **regardless of `--verbose`**: a single **effective-selection**
+line to standard error naming the facets actually queried — engine, target triple, and
+machine key, each tagged when it was auto-detected rather than typed — plus the resolved base
+branch and the `--since` / `--until` window. Auto-detection is convenient but invisible, and
+this line makes it legible so a surprising result can be traced to *what* was searched before
+suspecting the data. It is one line by construction, so it neither buries the verbose notes
+nor perturbs the timing channel, and like both of them it stays on stderr to keep stdout a
+clean stream of reports.
+
+The line is most valuable when a query comes back empty. When the effective — possibly
+auto-detected — partition holds no stored runs at all, the stdout report's hint names that
+partition and suggests widening it (for instance `--target-triple all`), so an
+auto-detected facet that quietly missed is distinguished from a genuinely empty project. The
+enumerating commands (`list`, `prune`, `examine`) resolve their dataset through the same path
+and so emit the same line.

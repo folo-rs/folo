@@ -36,8 +36,8 @@ use tick::Clock;
 
 use super::{
     AutoFacets, DirtyTipPolicy, ReportFormat, ResolvedHistory, Selection, WindowEdge,
-    detect_auto_facets, facet_filtered_candidates, parse_since, parse_until, resolve_base_name,
-    resolve_facets, resolve_history, resolve_now, window_excludes,
+    detect_auto_facets, facet_filtered_candidates, parse_since, parse_until, resolve_facets,
+    resolve_history, resolve_now, window_excludes,
 };
 use crate::{AnalyzeError, RenderedReports, ReportRequest};
 
@@ -177,6 +177,7 @@ where
 
     let ResolvedHistory {
         target_ref,
+        base_name,
         order,
         commit_times,
         admit_dirty,
@@ -189,13 +190,10 @@ where
     // itself (`context == base`), the whole selection is base-branch history.
     // Refuse to delete it without explicit confirmation.
     if tip_is_merge_base && !options.prune_base {
-        let base = resolve_base_name(git, config, selection.base)
-            .await?
-            .unwrap_or_else(|| target_ref.clone());
         return Err(AnalyzeError::Analyze {
             message: format!(
-                "this will delete benchmark history of the {base} branch, which is the base \
-                 branch. Confirm with --prune-base if this is correct."
+                "this will delete benchmark history of the {base_name} branch, which is the \
+                 base branch. Confirm with --prune-base if this is correct."
             ),
         });
     }

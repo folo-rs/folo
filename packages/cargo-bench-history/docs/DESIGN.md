@@ -384,6 +384,13 @@ write the same clean key and the second collides — so coverage gaps are expect
 from *different commits* covering different subsets, not from multiple partial runs at one
 commit.
 
+Regardless of `--verbose`, `collect` prints a one-line **effective-partition** summary to
+stderr naming the storage partition its results land in: the target triple (always the
+toolchain host) and the machine key hardware-dependent engines use — marked as
+auto-detected or as coming from `--machine-key`. This makes the otherwise-invisible
+auto-detected partition self-describing on every run. `backfill` reuses the same `collect`
+path and so emits the line per commit, each reflecting that commit's own probed toolchain.
+
 ### 7.2 `install`
 
 Generates a fully commented example config if absent and points the user at it, never
@@ -447,10 +454,18 @@ ranked list is meaningless for the enumerating commands, and it never displaces 
 reports, which the workflow attaches alongside it. **Findings never affect the exit code**:
 the process exits non-zero only when the analysis fails to *run*. A finding is advisory, and
 the machine-readable signal lives in the JSON report. Downstream automation (a scheduled
-regression watch, a PR comment bot) reads that rather than the exit status. When
-facet-matching runs were stored but none entered the analysis, the report carries a plain
-hint explaining the empty result even without verbose diagnostics, so a zero-run outcome is
-never mistaken for "no data".
+regression watch, a PR comment bot) reads that rather than the exit status.
+
+Regardless of `--verbose`, every query run (`analyze`, `list`, `prune`, `examine`) prints a
+one-line **effective-selection** summary to stderr — the engine, target-triple, and
+machine-key facets (each marked when auto-detected), the resolved base branch, and the
+`--since` / `--until` window — so the user always sees what was actually searched, not just
+what they typed. Two empty outcomes also explain themselves in the stdout report without
+verbose diagnostics: when facet-matching runs were stored but none entered the analysis the
+hint breaks down why, and when the effective (possibly auto-detected) partition holds no
+runs at all the hint names that partition and suggests widening it. A zero-run outcome is
+thus never mistaken for "no data", and an auto-detected partition that quietly missed is
+never mistaken for an empty project.
 
 ### 7.4 `backfill`
 
@@ -814,8 +829,12 @@ logic stays synchronous — parse, map, comparability, series, findings, format 
 Miri-safe bulk of the code and tests. Async is pushed only to the I/O edges, each a small
 port trait (`impl Future` return, no async-trait macro) with a real Tokio adapter and an
 in-`#[cfg(test)]` in-memory fake: the process runner, the environment and git-history
-probes, the benchmark-output harvester, the config writer for `install`, the verbose
-reporter, and storage. Time comes from an injected clock (the workspace `tick` crate), so
+probes, the benchmark-output harvester, the config writer for `install`, the diagnostics
+reporter, and storage. The reporter carries three independent channels — verbose-gated
+per-object **notes**, independent stage **timings**, and **always-on one-line summaries**
+(the effective-selection and effective-partition lines above) — all written to stderr so
+stdout stays a clean machine-readable stream of reports and JSON. Time comes from an
+injected clock (the workspace `tick` crate), so
 tests drive it deterministically and orchestration never reads the wall clock directly.
 Orchestration takes the injected ports, and the public async entry wires the real adapters.
 

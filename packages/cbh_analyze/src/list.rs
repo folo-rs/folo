@@ -177,6 +177,7 @@ where
                 dataset.candidate_count,
                 &dataset.target_ref,
                 dataset.tally,
+                &dataset.facets,
             );
             let warning = dataset
                 .included_dirty_base_exception

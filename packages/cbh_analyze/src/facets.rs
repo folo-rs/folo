@@ -92,6 +92,44 @@ fn describe_filter(filter: &FacetFilter) -> Option<String> {
     }
 }
 
+/// Renders every facet's effective value — always naming all three, including an
+/// unconstrained `all` — for the always-on effective-selection summary and the
+/// empty-partition hint.
+///
+/// Unlike [`describe_facets`] (a verbose-note helper that omits unconstrained
+/// facets), this names each facet so a plain run shows exactly which discriminant
+/// partition it searched and which values were auto-detected.
+pub(crate) fn describe_effective_facets(facets: &DiscriminantSetQuery) -> String {
+    [
+        ("engine", &facets.engine),
+        ("target-triple", &facets.target_triple),
+        ("machine-key", &facets.machine_key),
+    ]
+    .into_iter()
+    .map(|(label, filter)| format!("{label}={}", describe_effective_filter(filter)))
+    .collect::<Vec<_>>()
+    .join(", ")
+}
+
+/// Renders one facet filter for the effective summary, naming an unconstrained
+/// filter `all` rather than omitting it.
+fn describe_effective_filter(filter: &FacetFilter) -> String {
+    match filter {
+        FacetFilter::All => "all".to_owned(),
+        FacetFilter::Auto(value) => format!("{value} (auto-detected)"),
+        FacetFilter::Explicit(values) => values.iter().cloned().collect::<Vec<_>>().join("|"),
+    }
+}
+
+/// Whether every facet is unconstrained (`all`): the query spans every stored
+/// discriminant partition rather than a specific machine's. Distinguishes a
+/// genuinely empty project from an auto-detected partition that matched nothing.
+pub(crate) fn facets_are_unconstrained(facets: &DiscriminantSetQuery) -> bool {
+    matches!(facets.engine, FacetFilter::All)
+        && matches!(facets.target_triple, FacetFilter::All)
+        && matches!(facets.machine_key, FacetFilter::All)
+}
+
 /// Parses an `--engine` facet value into an [`Engine`], if set.
 fn parse_engine(name: Option<&str>) -> Result<Option<Engine>, AnalyzeError> {
     match name {
@@ -142,5 +180,44 @@ mod tests {
         assert!(parse_engine(Some("callgrind")).unwrap().is_some());
         let error = parse_engine(Some("nonsuch")).unwrap_err();
         assert!(error.to_string().contains("unknown"), "{error}");
+    }
+
+    #[test]
+    fn describe_effective_facets_names_every_facet_including_all() {
+        let query = DiscriminantSetQuery {
+            engine: FacetFilter::All,
+            target_triple: FacetFilter::Auto("x86_64-pc-windows-msvc".to_owned()),
+            machine_key: FacetFilter::Explicit(nonempty!["abcd".to_owned()]),
+        };
+        // Unlike `describe_facets`, an unconstrained facet is named `all` rather
+        // than dropped, so the summary always shows the full partition searched.
+        assert_eq!(
+            describe_effective_facets(&query),
+            "engine=all, target-triple=x86_64-pc-windows-msvc (auto-detected), machine-key=abcd"
+        );
+    }
+
+    #[test]
+    fn facets_are_unconstrained_only_when_every_facet_is_all() {
+        let all = DiscriminantSetQuery {
+            engine: FacetFilter::All,
+            target_triple: FacetFilter::All,
+            machine_key: FacetFilter::All,
+        };
+        assert!(facets_are_unconstrained(&all));
+
+        let one_auto = DiscriminantSetQuery {
+            engine: FacetFilter::All,
+            target_triple: FacetFilter::Auto("x86_64".to_owned()),
+            machine_key: FacetFilter::All,
+        };
+        assert!(!facets_are_unconstrained(&one_auto));
+
+        let one_explicit = DiscriminantSetQuery {
+            engine: FacetFilter::Explicit(nonempty!["criterion".to_owned()]),
+            target_triple: FacetFilter::All,
+            machine_key: FacetFilter::All,
+        };
+        assert!(!facets_are_unconstrained(&one_explicit));
     }
 }

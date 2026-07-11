@@ -384,6 +384,20 @@ where
         hardware: deps.probe.hardware().await,
     };
 
+    // The always-on effective-partition announcement: one line, printed regardless
+    // of `--verbose`, naming the storage partition this run's results land in (the
+    // target triple, always the toolchain host, and the machine key hardware-
+    // dependent engines use — an explicit `--machine-key` or the auto-detected
+    // fingerprint). It mirrors the query commands' effective-selection summary so
+    // the partition a `collect` writes and an `analyze` reads is stated the same way.
+    let effective_machine_key =
+        resolve_machine_key(options.machine_key.as_deref(), &shared.hardware);
+    deps.reporter.announce(&collect_selection_summary(
+        &shared.target_triple,
+        &effective_machine_key,
+        options.machine_key.is_some(),
+    ));
+
     let mut stored = 0_usize;
     let mut harvested = 0_usize;
     let mut labels = Vec::new();
@@ -411,6 +425,35 @@ where
         harvested,
         labels,
     })
+}
+
+/// Builds the always-on, one-line summary of a collect run's effective storage
+/// partition: the target triple its results are keyed under (always the toolchain
+/// host, since the tool benchmarks the OS it runs on) and the machine key
+/// hardware-dependent engines use — an explicit `--machine-key` override or the
+/// auto-detected hardware fingerprint.
+///
+/// A pure formatter so the wording is unit-tested without a probe; the effective
+/// values are resolved by the caller.
+fn collect_selection_summary(
+    target_triple: &str,
+    machine_key: &str,
+    machine_key_explicit: bool,
+) -> String {
+    let triple = if target_triple.is_empty() {
+        "unknown"
+    } else {
+        target_triple
+    };
+    let machine_source = if machine_key_explicit {
+        "from --machine-key"
+    } else {
+        "auto-detected"
+    };
+    format!(
+        "collecting: target-triple={triple} (toolchain host); \
+         machine-key={machine_key} ({machine_source}), used by hardware-dependent engines"
+    )
 }
 
 /// Emits the per-metric best-of provenance: the samples seen and which run won.
@@ -1107,6 +1150,33 @@ mod tests {
     }
 
     #[test]
+    fn collect_selection_summary_names_the_effective_partition() {
+        // Auto-detected fingerprint: the machine key is marked auto-detected and the
+        // triple is named as the toolchain host.
+        let auto = collect_selection_summary("x86_64-pc-windows-msvc", "abcd1234", false);
+        assert!(
+            auto.contains("target-triple=x86_64-pc-windows-msvc (toolchain host)"),
+            "{auto}"
+        );
+        assert!(
+            auto.contains("machine-key=abcd1234 (auto-detected)"),
+            "{auto}"
+        );
+
+        // An explicit `--machine-key` is attributed to the option, not auto-detection.
+        let explicit = collect_selection_summary("aarch64-apple-darwin", "ci-pool", true);
+        assert!(
+            explicit.contains("machine-key=ci-pool (from --machine-key)"),
+            "{explicit}"
+        );
+        assert!(!explicit.contains("auto-detected"), "{explicit}");
+
+        // A missing host triple degrades to a readable placeholder rather than blank.
+        let unknown = collect_selection_summary("", "abcd1234", false);
+        assert!(unknown.contains("target-triple=unknown"), "{unknown}");
+    }
+
+    #[test]
     fn build_message_brackets_labels_only_when_present() {
         let labels = vec!["callgrind: 1 stored".to_owned()];
         let with_labels = build_message(false, 1, 1, &labels);
@@ -1474,6 +1544,70 @@ mod tests {
             reporter.contains("stored v1/folo/objects/callgrind/"),
             "expected a stored-key note, got {:?}",
             reporter.notes()
+        );
+    }
+
+    #[test]
+    fn collect_announces_the_effective_storage_partition() {
+        let runner = FakeRunner::succeeding();
+        let probe = FakeProbe::new();
+        let output = FakeOutput::with_two_callgrind_summaries();
+        let storage = MemoryStorage::new();
+        let reporter = RecordingReporter::new();
+
+        drive_at_with(
+            FROZEN_UNIX,
+            &CollectOptions::default(),
+            &runner,
+            &probe,
+            &output,
+            &storage,
+            &reporter,
+        )
+        .unwrap();
+
+        // The always-on announcement names the probed host triple and the
+        // auto-detected machine key, so a collect run reports where its results
+        // land even without `--verbose`.
+        assert!(
+            reporter.announced("target-triple=x86_64-pc-windows-msvc (toolchain host)"),
+            "expected the effective-partition announcement, got {:?}",
+            reporter.announcements()
+        );
+        assert!(
+            reporter.announced("(auto-detected)"),
+            "machine key should read as auto-detected, got {:?}",
+            reporter.announcements()
+        );
+    }
+
+    #[test]
+    fn collect_announcement_attributes_an_explicit_machine_key() {
+        let runner = FakeRunner::succeeding();
+        let probe = FakeProbe::new();
+        let output = FakeOutput::with_two_callgrind_summaries();
+        let storage = MemoryStorage::new();
+        let reporter = RecordingReporter::new();
+        let options = CollectOptions {
+            machine_key: Some("ci-pool-a".to_owned()),
+            ..CollectOptions::default()
+        };
+
+        drive_at_with(
+            FROZEN_UNIX,
+            &options,
+            &runner,
+            &probe,
+            &output,
+            &storage,
+            &reporter,
+        )
+        .unwrap();
+
+        assert!(
+            reporter.announced("machine-key=ci-pool-a (from --machine-key)"),
+            "explicit key should be attributed to the option, got {:?}",
+            reporter.announcements()
         );
     }
 

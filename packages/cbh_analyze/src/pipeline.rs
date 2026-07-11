@@ -250,6 +250,7 @@ where
         dataset.candidate_count,
         &dataset.target_ref,
         dataset.tally,
+        &dataset.facets,
     );
 
     // Admitting a dirty snapshot on the base branch's tip is a courtesy for the

@@ -35,6 +35,11 @@ pub(crate) enum DirtyTipPolicy {
 pub(crate) struct ResolvedHistory {
     /// The target ref the timeline was resolved against (for diagnostics).
     pub(crate) target_ref: String,
+    /// The display name of the base ref the target's history was split against
+    /// (an explicit `--base`, the configured default branch, or the detected one),
+    /// for the effective-selection summary. Always present: `resolve_history`
+    /// refuses to build a `ResolvedHistory` when no base can be resolved.
+    pub(crate) base_name: String,
     /// The full commit ID the target ref resolved to — the analyzed tip commit, carried
     /// into the report so it names the exact commit the findings describe.
     pub(crate) tip_commit: String,
@@ -99,7 +104,26 @@ where
         });
     };
 
-    let base_commit_id = resolve_base_ref(git, config, selection.base).await?;
+    // A base branch is required: the analysis splits the target's first-parent line
+    // at its merge-base with the base, so a run with no resolvable base has no
+    // topology to split on. Refuse before walking the ancestry rather than carrying
+    // an unresolved base through. The usual cause is a shallow clone or a checkout
+    // that never fetched the base branch.
+    let Some(ResolvedBase {
+        name: base_name,
+        commit: base_commit_id,
+    }) = resolve_base(git, config, selection.base).await?
+    else {
+        return Err(AnalyzeError::Analyze {
+            message: format!(
+                "could not determine the base branch to compare {target_ref} against: no \
+                 --base was given and no default branch could be resolved. Pass an explicit \
+                 --base, set project.default_branch, or make the default branch available \
+                 (a shallow clone or a checkout that never fetched the base branch is the \
+                 usual cause)."
+            ),
+        });
+    };
     let first_parent_started = Instant::now();
     let first_parent = git
         .first_parent(&target_commit_id)
@@ -124,13 +148,10 @@ where
         }
         ancestry.push(commit.commit_id);
     }
-    let merge_base = match &base_commit_id {
-        Some(base) => git
-            .merge_base(&target_commit_id, base)
-            .await
-            .map_err(AnalyzeError::Io)?,
-        None => None,
-    };
+    let merge_base = git
+        .merge_base(&target_commit_id, &base_commit_id)
+        .await
+        .map_err(AnalyzeError::Io)?;
 
     reporter.if_enabled(|notes| {
         notes.note(&format!(
@@ -138,8 +159,7 @@ where
             count_noun(commit_count, "commit")
         ));
         notes.note(&format!(
-            "base ref resolves to {}; merge-base with target is {}",
-            base_commit_id.as_deref().unwrap_or("<none>"),
+            "base ref {base_name} resolves to {base_commit_id}; merge-base with target is {}",
             merge_base.as_deref().unwrap_or("<none>")
         ));
     });
@@ -148,45 +168,36 @@ where
     // first-parent line at the merge-base. A merge-base we cannot determine leaves
     // no topology to split on, and guessing a mode from the incomplete history would
     // silently mislead — so refuse and say how to supply the missing history. The
-    // usual cause is a shallow clone whose depth stops short of the branch point, or
-    // a checkout that never fetched the base branch.
+    // base resolved (checked above), so the only remaining cause is a shallow clone
+    // whose depth stops short of the branch point, or a checkout that never fetched
+    // the base branch.
     let Some(merge_base) = merge_base else {
-        let message = match base_commit_id.as_deref() {
-            // The base resolved, but shares no common ancestor with the target. By
-            // far the usual cause is a shallow clone whose depth stops short of the
-            // branch point, so the primary remedy is to deepen the clone — not to
-            // pick a different base. Only once the history is known-complete is a
-            // genuinely disjoint base worth calling out, and even then the deliberate
-            // `--base` a user passed is theirs to reconsider, not ours to second-guess.
-            Some(base) => {
-                let remedy = match selection.base {
-                    Some(explicit) => format!(
-                        " If the history is already complete, {explicit} is genuinely unrelated \
-                         to the target and cannot serve as its base."
-                    ),
-                    None => " If the history is already complete, the base branch is unrelated to \
-                             the target; name the intended base with --base or \
-                             project.default_branch."
-                        .to_owned(),
-                };
-                format!(
-                    "could not determine the merge-base of the target {target_ref} \
-                     ({target_commit_id}) and the base commit {base}: they share no common \
-                     ancestor in the available history. This is almost always a shallow clone \
-                     whose depth stops short of the branch point — fetch the full history (`git \
-                     fetch --unshallow`, or set fetch-depth: 0 on actions/checkout) so the branch \
-                     point is present.{remedy}"
-                )
-            }
-            None => format!(
-                "could not determine the base branch to compare {target_ref} against: no \
-                 --base was given and no default branch could be resolved. Pass an explicit \
-                 --base, set project.default_branch, or make the default branch available \
-                 (a shallow clone or a checkout that never fetched the base branch is the \
-                 usual cause)."
+        // The base resolved, but shares no common ancestor with the target. By far
+        // the usual cause is a shallow clone whose depth stops short of the branch
+        // point, so the primary remedy is to deepen the clone — not to pick a
+        // different base. Only once the history is known-complete is a genuinely
+        // disjoint base worth calling out, and even then the deliberate `--base` a
+        // user passed is theirs to reconsider, not ours to second-guess.
+        let remedy = match selection.base {
+            Some(explicit) => format!(
+                " If the history is already complete, {explicit} is genuinely unrelated \
+                 to the target and cannot serve as its base."
             ),
+            None => " If the history is already complete, the base branch is unrelated to \
+                     the target; name the intended base with --base or \
+                     project.default_branch."
+                .to_owned(),
         };
-        return Err(AnalyzeError::Analyze { message });
+        return Err(AnalyzeError::Analyze {
+            message: format!(
+                "could not determine the merge-base of the target {target_ref} \
+                 ({target_commit_id}) and the base commit {base_commit_id}: they share no \
+                 common ancestor in the available history. This is almost always a shallow \
+                 clone whose depth stops short of the branch point — fetch the full history \
+                 (`git fetch --unshallow`, or set fetch-depth: 0 on actions/checkout) so the \
+                 branch point is present.{remedy}"
+            ),
+        });
     };
 
     // The base-branch dirty-tip exception: `analyze`/`list` admit a base-side tip's
@@ -243,6 +254,7 @@ where
 
     Ok(ResolvedHistory {
         target_ref: target_ref.to_owned(),
+        base_name,
         tip_commit: target_commit_id,
         tip_dirty: working_tree_dirty,
         order,
@@ -263,62 +275,65 @@ pub(crate) fn dirty_base_exception_warning() -> String {
         .to_owned()
 }
 
-/// Resolves the base ref the target's history is split against, returning its
-/// commit ID or `None` when no base can be determined.
+/// The base ref a target's history is split against, resolved to both its display
+/// name and its commit ID in a single pass so a diagnostic can name the branch
+/// while the analysis compares against the commit.
+pub(crate) struct ResolvedBase {
+    /// The base ref's display name (an explicit `--base`, the configured
+    /// `project.default_branch`, or the repository's detected default branch).
+    pub(crate) name: String,
+    /// The commit ID the base ref resolved to.
+    pub(crate) commit: String,
+}
+
+/// Resolves the base ref the target's history is split against, returning both its
+/// display name and commit ID, or `None` when no base can be determined.
 ///
 /// Precedence: an explicit `--base` (an error if it does not resolve), then the
 /// configured `project.default_branch`, then the repository's detected default
-/// branch (`origin/HEAD`, else `main`/`master`).
+/// branch (`origin/HEAD`, else `main`/`master`). A candidate that names a branch
+/// which does not resolve to a commit falls through to the next source, so the
+/// returned name always pairs with a real commit.
+pub(crate) async fn resolve_base<G: GitHistory>(
+    git: &G,
+    config: &Config,
+    base: Option<&str>,
+) -> Result<Option<ResolvedBase>, AnalyzeError> {
+    if let Some(base) = base {
+        let Some(commit) = git.resolve(base).await.map_err(AnalyzeError::Io)? else {
+            return Err(AnalyzeError::Analyze {
+                message: format!("could not resolve --base {base:?}"),
+            });
+        };
+        return Ok(Some(ResolvedBase {
+            name: base.to_owned(),
+            commit,
+        }));
+    }
+    if let Some(default) = config.project.default_branch.as_deref()
+        && let Some(commit) = git.resolve(default).await.map_err(AnalyzeError::Io)?
+    {
+        return Ok(Some(ResolvedBase {
+            name: default.to_owned(),
+            commit,
+        }));
+    }
+    if let Some(name) = git.default_branch().await.map_err(AnalyzeError::Io)?
+        && let Some(commit) = git.resolve(&name).await.map_err(AnalyzeError::Io)?
+    {
+        return Ok(Some(ResolvedBase { name, commit }));
+    }
+    Ok(None)
+}
+
+/// Resolves just the base ref's commit ID (discarding its display name), for
+/// callers such as `bless` that compare against the commit but never name it.
 pub(crate) async fn resolve_base_ref<G: GitHistory>(
     git: &G,
     config: &Config,
     base: Option<&str>,
 ) -> Result<Option<String>, AnalyzeError> {
-    if let Some(base) = base {
-        return git
-            .resolve(base)
-            .await
-            .map_err(AnalyzeError::Io)?
-            .map(Some)
-            .ok_or_else(|| AnalyzeError::Analyze {
-                message: format!("could not resolve --base {base:?}"),
-            });
-    }
-    if let Some(default) = config.project.default_branch.as_deref()
-        && let Some(resolved) = git.resolve(default).await.map_err(AnalyzeError::Io)?
-    {
-        return Ok(Some(resolved));
-    }
-    if let Some(name) = git.default_branch().await.map_err(AnalyzeError::Io)?
-        && let Some(resolved) = git.resolve(&name).await.map_err(AnalyzeError::Io)?
-    {
-        return Ok(Some(resolved));
-    }
-    Ok(None)
-}
-
-/// Resolves the *display name* of the base ref (without resolving it to a commit ID),
-/// for diagnostics such as the `prune --prune-base` guard.
-///
-/// Mirrors [`resolve_base_ref`]'s precedence: an explicit `--base`, then the
-/// configured `project.default_branch` (only when it resolves), then the
-/// repository's detected default branch. Returns `None` when no base can be named.
-pub(crate) async fn resolve_base_name<G: GitHistory>(
-    git: &G,
-    config: &Config,
-    base: Option<&str>,
-) -> Result<Option<String>, AnalyzeError> {
-    if let Some(base) = base {
-        return Ok(Some(base.to_owned()));
-    }
-    if let Some(default) = config.project.default_branch.as_deref()
-        && git
-            .resolve(default)
-            .await
-            .map_err(AnalyzeError::Io)?
-            .is_some()
-    {
-        return Ok(Some(default.to_owned()));
-    }
-    git.default_branch().await.map_err(AnalyzeError::Io)
+    Ok(resolve_base(git, config, base)
+        .await?
+        .map(|resolved| resolved.commit))
 }
