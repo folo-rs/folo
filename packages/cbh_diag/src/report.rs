@@ -17,10 +17,12 @@
 //!
 //! Announcements are a *third*, always-on channel ([`ReporterExt::announce`]):
 //! a single line stating the effective, possibly auto-detected inputs a run
-//! resolved (the target triple, machine key, base branch, and look-back window it
-//! actually used). Unlike notes, they are emitted *regardless* of `--verbose`, so
-//! a plain run never hides which values it defaulted. Like notes they go to
-//! standard error, so machine-readable stdout stays clean.
+//! resolved. Which inputs appear varies by command — a `collect` run announces
+//! the target triple and machine key it partitioned under, while a query run
+//! also names the base branch and look-back window it analyzed. Unlike notes,
+//! they are emitted *regardless* of `--verbose`, so a plain run never hides which
+//! values it defaulted. Like notes they go to standard error, so
+//! machine-readable stdout stays clean.
 //!
 //! The unconditional emit primitives live on a sealed [`Sink`] trait that cannot
 //! be named outside this module, so the only note-emitting surface a caller sees
