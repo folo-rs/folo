@@ -101,11 +101,14 @@ async fn examine_renders_a_text_pivot_with_titles() {
         message.contains("c6"),
         "the tip's title is shown: {message}"
     );
-    // The series is charted before its data points (the rasciigraph axis marker).
-    assert!(
-        message.contains('┤') || message.contains('┼'),
-        "a chart leads the points: {message}"
-    );
+    // The series is charted before its data points: the rasciigraph axis marker
+    // appears ahead of the first point row (c1's title).
+    let axis = message
+        .find('┤')
+        .or_else(|| message.find('┼'))
+        .expect("a chart leads the points");
+    let first_point = message.find("c1").expect("the first point row is present");
+    assert!(axis < first_point, "a chart leads the points: {message}");
 }
 
 /// `examine` renders a per-set Markdown table with a row per observation.

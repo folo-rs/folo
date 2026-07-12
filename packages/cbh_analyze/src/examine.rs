@@ -922,10 +922,14 @@ mod tests {
 
         let report = examine(&storage, &git, &options());
         // The rasciigraph axis marker proves the neutral chart was drawn.
-        let axis = report.find('┤').or_else(|| report.find('┼'));
-        assert!(axis.is_some(), "a chart is drawn: {report}");
+        let axis = report
+            .find('┤')
+            .or_else(|| report.find('┼'))
+            .expect("a chart is drawn");
         // It leads the set: the chart precedes the first point row (the c0 title).
-        let first_point = report.find("Add the pull benchmark");
+        let first_point = report
+            .find("Add the pull benchmark")
+            .expect("the first point row is present");
         assert!(
             axis < first_point,
             "the chart precedes the points: {report}"

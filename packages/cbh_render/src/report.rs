@@ -593,10 +593,10 @@ impl From<Direction> for ChartColor {
 /// Renders a compact line chart of a finding's series values over commits, colored
 /// by direction. Returns `None` when there are too few points to plot.
 ///
-/// When `active_from` is past the start, the pre-blessing prefix is drawn greyed
-/// (the level that was re-baselined away) and the active window in the direction
-/// color, so the chart shows the full history while making clear which part the
-/// detector judged.
+/// When `active_from` falls in the series interior, the pre-blessing prefix is drawn
+/// greyed (the level that was re-baselined away) and the active window in the
+/// direction color, so the chart shows the full history while making clear which part
+/// the detector judged.
 fn chart_of(series: &[SeriesValue], direction: Direction, active_from: usize) -> Option<String> {
     let values: Vec<f64> = series.iter().map(|point| point.value).collect();
     chart(&values, direction.into(), active_from)
@@ -634,12 +634,14 @@ fn chart_plan(color: ChartColor, len: usize, active_from: usize) -> ChartPlan {
 /// dimensions, colored per `color`. Returns `None` when there are fewer than two
 /// points (nothing to plot).
 ///
-/// When `color` names a direction and `active_from` is past the start, the
-/// pre-blessing prefix is drawn greyed and the active window in the line color, so
-/// the chart shows the full history while making clear which part the detector
-/// judged. A [`ChartColor::Neutral`] chart makes no judgment, so it always draws the
-/// whole series as a single uncolored line regardless of `active_from`; callers with
-/// no blessing pass `0`.
+/// When `color` names a direction and `active_from` falls in the series interior
+/// (`0 < active_from < values.len()`), the pre-blessing prefix is drawn greyed and
+/// the active window in the line color, so the chart shows the full history while
+/// making clear which part the detector judged. An `active_from` of `0` (everything
+/// active) or at/past the end (nothing active) draws the whole series as a single
+/// colored line. A [`ChartColor::Neutral`] chart makes no judgment, so it always draws
+/// the whole series as a single uncolored line regardless of `active_from`; callers
+/// with no blessing pass `0`.
 #[must_use]
 pub fn chart(values: &[f64], color: ChartColor, active_from: usize) -> Option<String> {
     if values.len() < 2 {
