@@ -14,7 +14,7 @@ use std::num::NonZero;
 use cbh_detect::{Direction, Finding, FindingMethod, SeriesValue, short_commit};
 use cbh_model::{BenchmarkId, DiscriminantSet};
 use colored::{Color, Colorize};
-use rasciigraph::{Config, plot_colored, plot_many_colored};
+use rasciigraph::{Config, plot, plot_colored, plot_many_colored};
 use serde::Serialize;
 
 /// Height, in rows, of a history-mode finding chart.
@@ -554,37 +554,121 @@ fn active_window(values: &[f64], active_from: usize) -> Vec<f64> {
         .collect()
 }
 
+/// The line color of a rendered metric chart.
+///
+/// `analyze` colors a finding's chart by the direction of the detected change;
+/// `examine` makes no such judgment and draws a neutral line, so the color
+/// vocabulary lives here in the rendering crate rather than being borrowed from the
+/// detector's [`Direction`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChartColor {
+    /// A regression — the line is drawn in red.
+    Regression,
+    /// An improvement — the line is drawn in green.
+    Improvement,
+    /// No judgment — the line is drawn uncolored, in the terminal's default color.
+    Neutral,
+}
+
+impl ChartColor {
+    /// The `rasciigraph` line color, or `None` for a neutral (uncolored) line.
+    fn line_color(self) -> Option<Color> {
+        match self {
+            Self::Regression => Some(Color::Red),
+            Self::Improvement => Some(Color::Green),
+            Self::Neutral => None,
+        }
+    }
+}
+
+impl From<Direction> for ChartColor {
+    fn from(direction: Direction) -> Self {
+        match direction {
+            Direction::Regression => Self::Regression,
+            Direction::Improvement => Self::Improvement,
+        }
+    }
+}
+
 /// Renders a compact line chart of a finding's series values over commits, colored
 /// by direction. Returns `None` when there are too few points to plot.
 ///
-/// When `active_from` is past the start, the pre-blessing prefix is drawn greyed
-/// (the level that was re-baselined away) and the active window in the direction
-/// color, so the chart shows the full history while making clear which part the
-/// detector judged.
+/// When `active_from` falls in the series interior, the pre-blessing prefix is drawn
+/// greyed (the level that was re-baselined away) and the active window in the
+/// direction color, so the chart shows the full history while making clear which part
+/// the detector judged.
 fn chart_of(series: &[SeriesValue], direction: Direction, active_from: usize) -> Option<String> {
     let values: Vec<f64> = series.iter().map(|point| point.value).collect();
+    chart(&values, direction.into(), active_from)
+}
+
+/// The plotting strategy [`chart`] selects for a series, deciding how the line is
+/// colored before any characters are drawn.
+///
+/// Separating the decision from the drawing keeps it observable without going through
+/// `colored`'s process-global override (which the plotting functions consult), so the
+/// color/overlay choice can be asserted deterministically.
+#[cfg_attr(test, derive(Debug, Eq, PartialEq))]
+enum ChartPlan {
+    /// A single uncolored line — a neutral chart that makes no judgment.
+    Plain,
+    /// A single line drawn in one color: the whole series is active, so there is no
+    /// pre-blessing prefix to distinguish.
+    Solid(Color),
+    /// A greyed pre-blessing prefix overlaid with the color-drawn active window, so an
+    /// interior blessing boundary shows which part of the history the detector judged.
+    Split(Color),
+}
+
+/// Chooses how a `len`-point series colored per `color` with active window `active_from`
+/// is plotted. Only meaningful once the series has enough points to plot (see [`chart`]).
+fn chart_plan(color: ChartColor, len: usize, active_from: usize) -> ChartPlan {
+    match color.line_color() {
+        Some(line_color) if !covers_whole_series(active_from, len) => ChartPlan::Split(line_color),
+        Some(line_color) => ChartPlan::Solid(line_color),
+        None => ChartPlan::Plain,
+    }
+}
+
+/// Renders a compact line chart of `values` over commits at the report's fixed chart
+/// dimensions, colored per `color`. Returns `None` when there are fewer than two
+/// points (nothing to plot).
+///
+/// When `color` names a direction and `active_from` falls in the series interior
+/// (`0 < active_from < values.len()`), the pre-blessing prefix is drawn greyed and
+/// the active window in the line color, so the chart shows the full history while
+/// making clear which part the detector judged. An `active_from` of `0` (everything
+/// active) or at/past the end (nothing active) draws the whole series as a single
+/// colored line. A [`ChartColor::Neutral`] chart makes no judgment, so it always draws
+/// the whole series as a single uncolored line regardless of `active_from`; callers
+/// with no blessing pass `0`.
+#[must_use]
+pub fn chart(values: &[f64], color: ChartColor, active_from: usize) -> Option<String> {
     if values.len() < 2 {
         return None;
     }
-    let line_color = match direction {
-        Direction::Regression => Color::Red,
-        Direction::Improvement => Color::Green,
-    };
     let config = Config::default()
         .with_height(CHART_HEIGHT)
         .with_width(CHART_WIDTH);
-    let chart = if covers_whole_series(active_from, values.len()) {
-        plot_colored(values, config.with_series_colors(vec![line_color])).to_string()
-    } else {
-        // Two overlaid series: the greyed pre-blessing prefix and the
-        // direction-colored active window. They share the boundary point so the
-        // line reads as continuous; `NaN` renders as a gap elsewhere.
-        let grey = grey_prefix(&values, active_from);
-        let active = active_window(&values, active_from);
-        let config = config.with_series_colors(vec![Color::BrightBlack, line_color]);
-        plot_many_colored(vec![grey, active], config).to_string()
+    let rendered = match chart_plan(color, values.len(), active_from) {
+        // A judged chart with an interior active window overlays two series: the
+        // greyed pre-blessing prefix and the direction-colored active window. They
+        // share the boundary point so the line reads as continuous; `NaN` renders as
+        // a gap elsewhere.
+        ChartPlan::Split(line_color) => {
+            let grey = grey_prefix(values, active_from);
+            let active = active_window(values, active_from);
+            let config = config.with_series_colors(vec![Color::BrightBlack, line_color]);
+            plot_many_colored(vec![grey, active], config).to_string()
+        }
+        ChartPlan::Solid(line_color) => {
+            plot_colored(values.to_vec(), config.with_series_colors(vec![line_color])).to_string()
+        }
+        // A neutral chart carries no color, so it plots uncolored and never depends
+        // on `colored`'s process-global override.
+        ChartPlan::Plain => plot(values.to_vec(), config),
     };
-    Some(chart.trim_end_matches('\n').to_owned())
+    Some(rendered.trim_end_matches('\n').to_owned())
 }
 
 fn render_markdown(input: &ReportInput<'_>) -> String {
@@ -1850,6 +1934,90 @@ mod tests {
         // A partial active window (active_from in the interior) overlays the greyed
         // pre-blessing prefix and the active tail as two series.
         assert!(chart_of(&series, Direction::Improvement, 1).is_some());
+    }
+
+    #[test]
+    fn chart_neutral_plots_uncolored_without_ansi() {
+        // A neutral chart carries no color, so it must not depend on `colored`'s
+        // override at all. Force it on to prove the neutral path never emits ANSI.
+        let _color = ColorOverride::force(true);
+        let chart = chart(&[1.0, 2.0, 3.0], ChartColor::Neutral, 0).expect("two-plus points plot");
+        // The rasciigraph axis marker proves a chart was drawn, and no escape byte
+        // proves the neutral line stayed uncolored.
+        assert!(chart.contains('┤') || chart.contains('┼'), "{chart}");
+        assert!(!chart.contains('\u{1b}'), "no ANSI escape: {chart:?}");
+    }
+
+    #[test]
+    fn chart_needs_at_least_two_points() {
+        let _color = ColorOverride::force(false);
+        // A single point cannot be plotted, in any color.
+        assert!(chart(&[1.0], ChartColor::Neutral, 0).is_none());
+        assert!(chart(&[1.0], ChartColor::Regression, 0).is_none());
+        // Two points is the minimum that plots.
+        assert!(chart(&[1.0, 2.0], ChartColor::Neutral, 0).is_some());
+    }
+
+    #[test]
+    fn chart_neutral_ignores_the_active_window() {
+        // A neutral chart makes no judgment, so an interior `active_from` still draws
+        // the whole series as one uncolored line rather than the greyed overlay.
+        let _color = ColorOverride::force(false);
+        let whole = chart(&[1.0, 2.0, 3.0], ChartColor::Neutral, 0).expect("plots");
+        let with_window = chart(&[1.0, 2.0, 3.0], ChartColor::Neutral, 1).expect("plots");
+        assert_eq!(
+            whole, with_window,
+            "neutral ignores active_from: {with_window:?}"
+        );
+    }
+
+    #[test]
+    fn chart_plan_draws_one_solid_line_when_the_whole_series_is_active() {
+        // Both boundaries `covers_whole_series` recognizes collapse to a single
+        // color-drawn line: nothing to grey at the start (`active_from == 0`) and
+        // nothing active at the end (`active_from >= len`). `Solid` (not `Split`)
+        // proves no greyed pre-blessing overlay is drawn.
+        assert_eq!(
+            chart_plan(ChartColor::Regression, 4, 0),
+            ChartPlan::Solid(Color::Red)
+        );
+        assert_eq!(
+            chart_plan(ChartColor::Regression, 4, 4),
+            ChartPlan::Solid(Color::Red)
+        );
+    }
+
+    #[test]
+    fn chart_plan_splits_an_interior_active_window() {
+        // An interior blessing boundary overlays the greyed pre-blessing prefix on the
+        // color-drawn active window, mapping each direction to its own line color.
+        assert_eq!(
+            chart_plan(ChartColor::Regression, 4, 2),
+            ChartPlan::Split(Color::Red)
+        );
+        assert_eq!(
+            chart_plan(ChartColor::Improvement, 4, 2),
+            ChartPlan::Split(Color::Green)
+        );
+    }
+
+    #[test]
+    fn chart_plan_is_plain_and_windowless_for_a_neutral_chart() {
+        // A neutral chart is always a single uncolored line, whatever the active window.
+        assert_eq!(chart_plan(ChartColor::Neutral, 4, 0), ChartPlan::Plain);
+        assert_eq!(chart_plan(ChartColor::Neutral, 4, 2), ChartPlan::Plain);
+    }
+
+    #[test]
+    fn chart_color_maps_each_direction() {
+        assert_eq!(
+            ChartColor::from(Direction::Regression),
+            ChartColor::Regression
+        );
+        assert_eq!(
+            ChartColor::from(Direction::Improvement),
+            ChartColor::Improvement
+        );
     }
 
     #[test]

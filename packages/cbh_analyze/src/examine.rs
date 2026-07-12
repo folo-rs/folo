@@ -13,10 +13,12 @@
 //!
 //! It runs no detection, re-baselining, or blessing: it shows every selected point
 //! exactly as the chart would plot it (a commit's clean run and its dirty snapshots
-//! each contribute a flagged row, clean before dirty). Like `analyze` it needs a
-//! resolvable repository — first-parent topology to order the points and each
-//! commit's title to label them — and repeats the pivot once per matching
-//! discriminant set.
+//! each contribute a flagged row, clean before dirty). The text and Markdown
+//! renderings lead each set with the same small line chart `analyze` draws (reusing
+//! its renderer), neutral/uncolored since `examine` makes no regression/improvement
+//! judgment. Like `analyze` it needs a resolvable repository — first-parent topology
+//! to order the points and each commit's title to label them — and repeats the pivot
+//! once per matching discriminant set.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -36,8 +38,9 @@ use serde::Serialize;
 use tick::Clock;
 
 use super::{
-    AutoFacets, ReportFormat, Selection, Series, SeriesFilter, detect_auto_facets,
-    dirty_base_exception_warning, empty_history_hint, format_value, resolve_now, select_dataset,
+    AutoFacets, ChartColor, ReportFormat, Selection, Series, SeriesFilter, chart,
+    detect_auto_facets, dirty_base_exception_warning, empty_history_hint, format_value,
+    resolve_now, select_dataset,
 };
 use crate::{AnalyzeError, RenderedReports, ReportRequest};
 
@@ -319,6 +322,14 @@ fn short_commit_id(commit_id: &str) -> &str {
     commit_id.get(..12).unwrap_or(commit_id)
 }
 
+/// The neutral line chart of a set's ordered values, drawn before its data points
+/// (the same chart `analyze` renders for a finding, but uncolored because `examine`
+/// makes no judgment). `None` when there are too few points to plot.
+fn chart_of_points(points: &[DataPoint]) -> Option<String> {
+    let values: Vec<f64> = points.iter().map(|point| point.value).collect();
+    chart(&values, ChartColor::Neutral, 0)
+}
+
 /// Renders the pivot in the requested format, appending the diagnostic hint and
 /// ephemeral-data warning (if any).
 fn render_pivot(
@@ -346,6 +357,14 @@ fn render_pivot_text(pivot: &Pivot, hint: Option<&str>, warning: Option<&str>) -
         for set in &pivot.sets {
             lines.push(String::new());
             lines.push(set.set.to_string());
+            // Lead the set with the same small line chart `analyze` draws, so a
+            // maintainer sees the shape of the series before reading the points it
+            // pivots. Neutral (uncolored) because `examine` makes no regression /
+            // improvement judgment.
+            if let Some(chart) = chart_of_points(&set.points) {
+                lines.push(chart);
+                lines.push(String::new());
+            }
             // Align the commit and value columns so a maintainer can read the values
             // straight down and spot where one jumps.
             let commit_width = set
@@ -387,6 +406,14 @@ fn render_pivot_markdown(pivot: &Pivot, hint: Option<&str>, warning: Option<&str
         for set in &pivot.sets {
             lines.push(String::new());
             lines.push(format!("## {}", set.set));
+            // The same neutral series chart the text pivot draws, fenced as a `text`
+            // block so it survives Markdown rendering (mirrors `analyze`).
+            if let Some(chart) = chart_of_points(&set.points) {
+                lines.push(String::new());
+                lines.push("```text".to_owned());
+                lines.push(chart);
+                lines.push("```".to_owned());
+            }
             lines.push(String::new());
             lines.push("| Commit | Value | Kind | Title |".to_owned());
             lines.push("| --- | --- | --- | --- |".to_owned());
@@ -871,6 +898,90 @@ mod tests {
             "{report}"
         );
         assert!(report.contains("| c0 | 100 | clean |"), "{report}");
+    }
+
+    #[test]
+    fn text_draws_a_neutral_chart_before_the_points() {
+        let storage = MemoryStorage::new();
+        store(
+            &storage,
+            &clean_key("c0"),
+            &single_metric_run(0, "c0", 100.0),
+        );
+        store(
+            &storage,
+            &clean_key("c1"),
+            &single_metric_run(1, "c1", 130.0),
+        );
+        store(
+            &storage,
+            &clean_key("c2"),
+            &single_metric_run(2, "c2", 128.0),
+        );
+        let git = linear_git();
+
+        let report = examine(&storage, &git, &options());
+        // The rasciigraph axis marker proves the neutral chart was drawn.
+        let axis = report
+            .find('┤')
+            .or_else(|| report.find('┼'))
+            .expect("a chart is drawn");
+        // It leads the set: the chart precedes the first point row (the c0 title).
+        let first_point = report
+            .find("Add the pull benchmark")
+            .expect("the first point row is present");
+        assert!(
+            axis < first_point,
+            "the chart precedes the points: {report}"
+        );
+        // A neutral chart carries no color (no ANSI escapes).
+        assert!(!report.contains('\u{1b}'), "no ANSI escape: {report:?}");
+    }
+
+    #[test]
+    fn markdown_fences_the_chart_before_the_table() {
+        let storage = MemoryStorage::new();
+        store(
+            &storage,
+            &clean_key("c0"),
+            &single_metric_run(0, "c0", 100.0),
+        );
+        store(
+            &storage,
+            &clean_key("c1"),
+            &single_metric_run(1, "c1", 130.0),
+        );
+        let git = linear_git();
+
+        let report = examine_markdown(&storage, &git, &options());
+        let fence = report.find("```text").expect("the chart is fenced");
+        assert!(
+            report.contains('┤') || report.contains('┼'),
+            "a chart is drawn: {report}"
+        );
+        // The fenced chart precedes the per-set table.
+        let table = report
+            .find("| Commit | Value | Kind | Title |")
+            .expect("the table header is present");
+        assert!(fence < table, "the chart precedes the table: {report}");
+    }
+
+    #[test]
+    fn a_single_point_set_draws_no_chart() {
+        // A lone observation has too few points to plot, so no chart is drawn.
+        let storage = MemoryStorage::new();
+        store(
+            &storage,
+            &clean_key("c0"),
+            &single_metric_run(0, "c0", 100.0),
+        );
+        let git = linear_git();
+
+        let report = examine(&storage, &git, &options());
+        assert!(
+            !report.contains('┤') && !report.contains('┼'),
+            "no chart for a single point: {report}"
+        );
     }
 
     #[test]

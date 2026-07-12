@@ -101,6 +101,18 @@ async fn examine_renders_a_text_pivot_with_titles() {
         message.contains("c6"),
         "the tip's title is shown: {message}"
     );
+    // The series is charted before its data points: the rasciigraph axis marker
+    // appears ahead of the first point row. Match c1's title with its leading
+    // column gap and trailing newline so the short commit hash (which can contain
+    // "c1") cannot be mistaken for the point row.
+    let axis = message
+        .find('┤')
+        .or_else(|| message.find('┼'))
+        .expect("a chart leads the points");
+    let first_point = message
+        .find("  c1\n")
+        .expect("the first point row is present");
+    assert!(axis < first_point, "a chart leads the points: {message}");
 }
 
 /// `examine` renders a per-set Markdown table with a row per observation.
@@ -126,12 +138,18 @@ async fn examine_renders_a_markdown_table() {
         markdown.contains("# Data points for nm/nm::observe/pull"),
         "{markdown}"
     );
-    assert!(
-        markdown.contains("| Commit | Value | Kind | Title |"),
-        "the table header is present: {markdown}"
-    );
+    let table = markdown
+        .find("| Commit | Value | Kind | Title |")
+        .expect("the table header is present");
     assert!(markdown.contains("| clean | c1 |"), "{markdown}");
     assert!(markdown.contains("130"), "{markdown}");
+    // The two-point series is charted, fenced as a `text` block before the table.
+    assert!(
+        markdown.contains('┤') || markdown.contains('┼'),
+        "a chart is drawn: {markdown}"
+    );
+    let fence = markdown.find("```text").expect("the chart is fenced");
+    assert!(fence < table, "the chart precedes the table: {markdown}");
 }
 
 /// `examine` names one metric, isolating it from the other metrics recorded on the

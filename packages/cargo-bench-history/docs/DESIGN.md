@@ -609,7 +609,13 @@ three output renderings compose from one pass as everywhere else: the per-commit
 stdout by default, the same table in Markdown, and a machine-readable JSON form that carries,
 per discriminant set, the ordered points with full-precision values and each commit's full
 title — the 50-character title truncation is a readability convenience of the text and
-Markdown tables, not of the data.
+Markdown tables, not of the data. The text and Markdown renderings **lead each set with the
+same small line chart `analyze` draws**, reusing its renderer, so a maintainer sees the shape
+of the series before reading the points it pivots; because `examine` makes no
+regression/improvement judgment the line is **neutral (uncolored)** rather than
+direction-colored, and it is drawn only when a set has at least two points. The JSON form
+carries no chart (a charting concern the human reports draw from internally, not data a
+consumer reconstructs).
 
 ## 8. Analysis
 
