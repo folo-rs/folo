@@ -133,29 +133,44 @@ function Publish-RollingComment {
         throw "Comment body file '$BodyFile' is empty."
     }
 
-    # The marker is this module's responsibility, not the caller's: prepend it as a hidden HTML
-    # comment when the rendered body lacks it, so the dedup contract holds even if a future body
-    # template forgets to embed it.
+    # Hand the body to `gh` through a FILE (`-F body=@<path>`) rather than inline on the command
+    # line: a rendered report can run to tens of kilobytes, which would risk the OS command-line
+    # length limit (~32 KB on Windows), force fragile shell-escaping of arbitrary Markdown, and
+    # expose the body in process listings. The common case sends $BodyFile untouched. Only when the
+    # rendered body lacks the dedup $Marker - this module's responsibility, not the caller's, so the
+    # contract holds even if a future body template forgets to embed it - do we materialise a
+    # marker-prefixed temp file and send that instead, deleting it once `gh` has run.
     # Literal substring check (.Contains, ordinal) rather than -notlike: the marker is a fixed hidden
     # string, so a wildcard match would misfire if it ever contained wildcard metacharacters.
+    $bodyFileToSend = $BodyFile
+    $tempBodyFile = $null
     if (-not $body.Contains($Marker)) {
-        $body = "$Marker`n`n$body"
+        $tempBodyFile = New-TemporaryFile
+        Set-Content -LiteralPath $tempBodyFile.FullName -Value "$Marker`n`n$body" -Encoding utf8 -NoNewline
+        $bodyFileToSend = $tempBodyFile.FullName
     }
 
-    $existing = Find-RollingComment -Repo $Repo -PrNumber $PrNumber -Marker $Marker
+    try {
+        $existing = Find-RollingComment -Repo $Repo -PrNumber $PrNumber -Marker $Marker
 
-    if ($existing) {
-        Write-Verbose ("Updating existing rolling comment #$($existing.id) on PR #$PrNumber in place " +
-            "rather than posting a duplicate.")
-        $output = Invoke-GhCapture -Arguments @(
-            'api', '--method', 'PATCH', "repos/$Repo/issues/comments/$($existing.id)", '-f', "body=$body"
-        )
-    } else {
-        Write-Verbose ("No rolling comment found on PR #$PrNumber; posting a new one carrying the " +
-            "dedup marker so later pushes update it.")
-        $output = Invoke-GhCapture -Arguments @(
-            'api', '--method', 'POST', "repos/$Repo/issues/$PrNumber/comments", '-f', "body=$body"
-        )
+        if ($existing) {
+            Write-Verbose ("Updating existing rolling comment #$($existing.id) on PR #$PrNumber in place " +
+                "rather than posting a duplicate.")
+            $output = Invoke-GhCapture -Arguments @(
+                'api', '--method', 'PATCH', "repos/$Repo/issues/comments/$($existing.id)", '-F', "body=@$bodyFileToSend"
+            )
+        } else {
+            Write-Verbose ("No rolling comment found on PR #$PrNumber; posting a new one carrying the " +
+                "dedup marker so later pushes update it.")
+            $output = Invoke-GhCapture -Arguments @(
+                'api', '--method', 'POST', "repos/$Repo/issues/$PrNumber/comments", '-F', "body=@$bodyFileToSend"
+            )
+        }
+    }
+    finally {
+        if ($tempBodyFile) {
+            Remove-Item -LiteralPath $tempBodyFile.FullName -Force -ErrorAction SilentlyContinue
+        }
     }
 
     # Both the PATCH and POST comment endpoints return the comment object; surface its html_url,

@@ -25,6 +25,7 @@ BeforeAll {
 AfterAll {
     Remove-Item -LiteralPath $script:BodyFile -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $script:UnmarkedBodyFile -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path ([System.IO.Path]::GetTempPath()) 'bh-comment-captured-body.md') -ErrorAction SilentlyContinue
 }
 
 Describe 'Find-RollingComment (mocked gh api)' {
@@ -142,11 +143,11 @@ Describe 'Publish-RollingComment (mocked gh api)' {
             Should -Invoke gh -ModuleName BenchHistoryComment -ParameterFilter { $args -contains 'POST' } -Times 0 -Exactly
         }
 
-        It 'patches the matched comment id and passes the rendered body' {
+        It 'patches the matched comment id and sends the rendered body via a file' {
             Publish-RollingComment -Repo 'o/r' -PrNumber '5' -Marker $script:Marker -BodyFile $script:BodyFile | Out-Null
             Should -Invoke gh -ModuleName BenchHistoryComment -ParameterFilter {
                 ($args -contains 'PATCH') -and ($args -contains 'repos/o/r/issues/comments/42') -and
-                (($args -join "`n") -like '*body=*rendered body*')
+                ($args -contains "body=@$($script:BodyFile)")
             }
         }
 
@@ -159,6 +160,17 @@ Describe 'Publish-RollingComment (mocked gh api)' {
     Context 'when no rolling comment exists yet' {
         BeforeEach {
             Mock gh -ModuleName BenchHistoryComment {
+                # Capture the body file's content while it still exists: Publish-RollingComment sends
+                # the body via `-F body=@<path>` and deletes any temp file it created once `gh`
+                # returns, so a post-hoc ParameterFilter could no longer read it. The fixed capture
+                # path is recomputed identically in the assertion, so no cross-scope variable is
+                # needed between this module-scoped mock and the test.
+                foreach ($a in $args) {
+                    if ($a -like 'body=@*') {
+                        Copy-Item -LiteralPath $a.Substring('body=@'.Length) `
+                            -Destination (Join-Path ([System.IO.Path]::GetTempPath()) 'bh-comment-captured-body.md') -Force
+                    }
+                }
                 if ($args -contains 'POST') {
                     $global:LASTEXITCODE = 0
                     return '{"id":99,"html_url":"https://github.com/o/r/pull/5#issuecomment-99"}'
@@ -180,11 +192,11 @@ Describe 'Publish-RollingComment (mocked gh api)' {
                 Should -Be 'https://github.com/o/r/pull/5#issuecomment-99'
         }
 
-        It 'prepends the marker when the rendered body lacks it' {
+        It 'prepends the marker when the rendered body lacks it, sending it via a file' {
             Publish-RollingComment -Repo 'o/r' -PrNumber '5' -Marker $script:Marker -BodyFile $script:UnmarkedBodyFile | Out-Null
-            Should -Invoke gh -ModuleName BenchHistoryComment -ParameterFilter {
-                ($args -contains 'POST') -and (($args -join "`n") -like "*$($script:Marker)*")
-            }
+            $sent = Get-Content -LiteralPath (Join-Path ([System.IO.Path]::GetTempPath()) 'bh-comment-captured-body.md') -Raw
+            $sent | Should -BeLike "*$($script:Marker)*"
+            $sent | Should -BeLike '*rendered body without marker*'
         }
     }
 
