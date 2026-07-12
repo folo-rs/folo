@@ -142,7 +142,7 @@
 //! removed. When the context resolves onto the base branch itself, the whole
 //! selection *is* base-branch history, so the deletion is refused unless
 //! `--prune-base` confirms it. Narrow the selection with a facet, a `<commit>`
-//! argument, `--since`, or `--until`. `--dry-run` previews without deleting.
+//! argument, or `--since`. `--dry-run` previews without deleting.
 //!
 //! ## `examine`
 //!
@@ -186,12 +186,14 @@
 //!   (`--engine` defaults to every engine; `list discriminants` is a catalog and
 //!   defaults to every partition). The literal `all` removes the filter
 //!   for that dimension, e.g. `--machine-key all` spans every machine.
-//! * **Commit selection** (`--context`, `--base`, `--since`, `--until`) —
-//!   `--context` is the ref whose history is analyzed (default `HEAD`); `--base` is
-//!   the ref it branched from (default: the configured or detected default branch),
-//!   which determines the merge-base split. `--since`/`--until` bound the window by
-//!   each commit's **committer date** (read from git history) and accept an RFC 3339
-//!   timestamp, a `YYYY-MM-DD` date, or a relative duration such as `6 months ago`.
+//! * **Commit selection** (`--context`, `--base`, `--since`) — `--context` is the
+//!   ref whose history is analyzed (default `HEAD`); `--base` is the ref it branched
+//!   from (default: the configured or detected default branch), which determines the
+//!   merge-base split. Because `--context` already anchors the newest edge of the
+//!   timeline, `--since` is a one-sided cutoff: it bounds only the oldest commit to
+//!   include by that commit's **committer date** (read from git history) and accepts
+//!   an RFC 3339 timestamp, a `YYYY-MM-DD` date, or a relative duration such as
+//!   `6 months ago`.
 //! * **Data filtering** (`--no-dirty`) — exclude dirty snapshots.
 //!
 //! # Analyze modes
@@ -260,18 +262,24 @@
 //!    managed identity below.
 //! 3. **For CI, authenticate with GitHub OIDC workload identity federation** instead
 //!    of a stored secret: create a user-assigned managed identity, add a federated
-//!    credential whose subject matches the workflow's OIDC token (for a run
-//!    on the default branch that is `repo:<owner>/<repo>:ref:refs/heads/main`) and
-//!    whose audience is `api://AzureADTokenExchange`, then grant it the role from
-//!    step 2. Run the tool from a job that has `permissions: { id-token: write }`,
-//!    with the managed identity's client ID and your Entra tenant ID exported as the
-//!    `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` environment variables. The tool then
-//!    mints a fresh OIDC assertion straight from GitHub's per-job token endpoint for
-//!    each Entra token exchange, so it stays authenticated even across the hourly
-//!    access-token refresh of a multi-hour benchmark run — no `azure/login` step and
-//!    no stored secret are involved. (When those variables are absent — locally, or in
-//!    a short job that runs `azure/login` — the tool instead picks up the ambient
-//!    Azure CLI session.)
+//!    credential whose subject matches the workflow's OIDC token, and whose audience
+//!    is `api://AzureADTokenExchange`, then grant it the role from step 2. The subject
+//!    must match **each event that runs the tool**, so register one credential per
+//!    event: a run on the default branch presents
+//!    `repo:<owner>/<repo>:ref:refs/heads/main`, while a pull-request-triggered run
+//!    (for example a workflow that benchmarks a PR) presents
+//!    `repo:<owner>/<repo>:pull_request` and needs its own credential with that
+//!    subject. Only **same-repo** pull requests can federate — a fork's run cannot
+//!    mint a token whose subject names your repository, so fork PRs cannot reach the
+//!    store and such workflows must skip them. Run the tool from a job that has
+//!    `permissions: { id-token: write }`, with the managed identity's client ID and
+//!    your Entra tenant ID exported as the `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`
+//!    environment variables. The tool then mints a fresh OIDC assertion straight from
+//!    GitHub's per-job token endpoint for each Entra token exchange, so it stays
+//!    authenticated even across the hourly access-token refresh of a multi-hour
+//!    benchmark run — no `azure/login` step and no stored secret are involved. (When
+//!    those variables are absent — locally, or in a short job that runs `azure/login`
+//!    — the tool instead picks up the ambient Azure CLI session.)
 //!
 //! Worked, runnable examples of all of the above live in the folo repository as Bicep
 //! templates with PowerShell deploy wrappers: the long-lived store with its own
@@ -279,8 +287,11 @@
 //! <https://github.com/folo-rs/folo/tree/main/infra/azure-bench-history-prod> and a
 //! separate test account/identity at
 //! <https://github.com/folo-rs/folo/tree/main/infra/azure-bench-history-test>, with the
-//! account name baked into the committed `.cargo/bench_history.toml` and the per-push
-//! consumer at <https://github.com/folo-rs/folo/blob/main/.github/workflows/bench-history.yml>.
+//! account name baked into the committed `.cargo/bench_history.toml`, the per-push
+//! consumer at <https://github.com/folo-rs/folo/blob/main/.github/workflows/bench-history.yml>,
+//! and the per-pull-request consumer (which collects and compares a PR against `main`,
+//! and relies on the identity's `pull_request` federated credential) at
+//! <https://github.com/folo-rs/folo/blob/main/.github/workflows/pr-bench-history.yml>.
 
 mod commands;
 mod config_writer;

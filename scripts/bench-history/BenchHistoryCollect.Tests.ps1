@@ -88,6 +88,69 @@ Describe 'Get-BenchHistoryCollectCommand' {
             { Get-BenchHistoryCollectCommand -RecollectCommitId "abc1234; rm -rf /" } | Should -Throw '*hex commit SHA*'
         }
     }
+
+    Context 'package scoping (PR workflow)' {
+        It 'scopes to the given packages with repeated --package instead of --workspace' {
+            $result = Get-BenchHistoryCollectCommand -RecollectCommitId '' -Package @('nm', 'many_cpus')
+            $result | Should -Be @(
+                'collect',
+                '--package', 'nm',
+                '--package', 'many_cpus',
+                '--machine-key', 'github',
+                '--best-of', '3',
+                '--verbose',
+                '--skip-existing'
+            )
+        }
+
+        It 'does not fall back to a whole-workspace scope when packages are given' {
+            $result = Get-BenchHistoryCollectCommand -RecollectCommitId '' -Package @('nm')
+            $result | Should -Not -Contain '--workspace'
+            $result | Should -Not -Contain '--exclude'
+        }
+
+        It 'ignores blank entries in the package list' {
+            $result = Get-BenchHistoryCollectCommand -RecollectCommitId '' -Package @('nm', '', '  ')
+            $result | Should -Be @(
+                'collect',
+                '--package', 'nm',
+                '--machine-key', 'github',
+                '--best-of', '3',
+                '--verbose',
+                '--skip-existing'
+            )
+        }
+
+        It 'treats an all-blank package list as no scope (whole workspace)' {
+            $result = Get-BenchHistoryCollectCommand -RecollectCommitId '' -Package @('', '  ')
+            $result | Should -Be (@('collect') + $script:Scope + @('--skip-existing'))
+        }
+    }
+}
+
+Describe 'Select-BenchmarkablePackage' {
+    It 'drops the excluded benchmarks package' {
+        Select-BenchmarkablePackage -Package @('nm', 'benchmarks', 'many_cpus') |
+            Should -Be @('nm', 'many_cpus')
+    }
+
+    It 'returns an empty array when only benchmarks changed' {
+        @(Select-BenchmarkablePackage -Package @('benchmarks')).Count | Should -Be 0
+    }
+
+    It 'returns an empty array for an empty input' {
+        @(Select-BenchmarkablePackage -Package @()).Count | Should -Be 0
+    }
+
+    It 'preserves order and leaves other packages untouched' {
+        Select-BenchmarkablePackage -Package @('many_cpus', 'nm', 'events') |
+            Should -Be @('many_cpus', 'nm', 'events')
+    }
+
+    It 'matches the excluded name case-sensitively' {
+        Select-BenchmarkablePackage -Package @('Benchmarks', 'nm') |
+            Should -Be @('Benchmarks', 'nm')
+    }
 }
 
 

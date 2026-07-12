@@ -56,7 +56,7 @@ in [`DESIGN.md`](DESIGN.md).
 flowchart TD
   subgraph P1["Phase 1 — key-only filtering (no payload fetched)"]
     L["list keys (one round-trip)"] --> KF["parse key + facet match"]
-    KF --> WF["history / dirty / since-until filters\n(commit time + topology)"]
+    KF --> WF["history / dirty / since filter\n(commit time + topology)"]
     WF --> SK["sort survivors by storage key\n→ assign each a global ordinal"]
   end
   SK --> P23
@@ -71,7 +71,7 @@ flowchart TD
 Design properties that make this both fast and deterministic:
 
 * **Phase 1 never fetches a payload.** History membership, base-side dirty admission, and
-  the `--since`/`--until` window are all decided from the *key* and git topology, so an
+  the `--since` cutoff are all decided from the *key* and git topology, so an
   excluded object costs zero round-trips.
 * **Ordering is fixed before parallelism.** Survivors are sorted by storage key and each is
   assigned a global ordinal *before* chunking, so the result never depends on which worker
@@ -208,7 +208,7 @@ keeping its own measurement clean.
 A third reporter channel runs **regardless of `--verbose`**: a single **effective-selection**
 line to standard error naming the facets actually queried — engine, target triple, and
 machine key, each tagged when it was auto-detected rather than typed — plus the resolved base
-branch and the `--since` / `--until` window. Auto-detection is convenient but invisible, and
+branch and the `--since` cutoff. Auto-detection is convenient but invisible, and
 this line makes it legible so a surprising result can be traced to *what* was searched before
 suspecting the data. It is one line by construction, so it neither buries the verbose notes
 nor perturbs the timing channel, and like both of them it stays on stderr to keep stdout a

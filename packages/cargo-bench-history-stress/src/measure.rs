@@ -262,7 +262,6 @@ fn build_options(
         base: Some(base.to_owned()),
         no_dirty: false,
         since,
-        until: None,
         engine: vec!["all".to_owned()],
         target_triple: vec!["all".to_owned()],
         machine_key: vec!["all".to_owned()],

@@ -173,8 +173,6 @@ pub struct AnalyzeOptions {
     pub no_dirty: bool,
     /// Only consider commits made on or after this cutoff, if set.
     pub since: Option<String>,
-    /// Only consider commits made on or before this cutoff, if set.
-    pub until: Option<String>,
     /// Restrict analysis to these engines (repeatable). Empty auto-detects every
     /// engine; the `all` keyword is an explicit synonym for no filter.
     pub engine: Vec<String>,
@@ -278,8 +276,6 @@ pub struct ListOptions {
     pub no_dirty: bool,
     /// Only consider commits made on or after this cutoff, if set.
     pub since: Option<String>,
-    /// Only consider commits made on or before this cutoff, if set.
-    pub until: Option<String>,
     /// Restrict the listing to these engines (repeatable). Empty auto-detects
     /// every engine; the `all` keyword is an explicit synonym for no filter.
     pub engine: Vec<String>,
@@ -334,8 +330,6 @@ pub struct ExamineOptions {
     pub no_dirty: bool,
     /// Only consider commits made on or after this cutoff, if set.
     pub since: Option<String>,
-    /// Only consider commits made on or before this cutoff, if set.
-    pub until: Option<String>,
     /// Restrict the examination to these engines (repeatable). Empty auto-detects
     /// every engine; the `all` keyword is an explicit synonym for no filter.
     pub engine: Vec<String>,
@@ -396,8 +390,6 @@ pub struct PruneOptions {
     pub commit: Vec<String>,
     /// Only prune commits made on or after this cutoff, if set.
     pub since: Option<String>,
-    /// Only prune commits made on or before this cutoff, if set.
-    pub until: Option<String>,
     /// Restrict removal to these engines (repeatable). Empty auto-detects every
     /// engine; the `all` keyword is an explicit synonym for no filter.
     pub engine: Vec<String>,

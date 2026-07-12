@@ -35,9 +35,9 @@ use serde::Serialize;
 use tick::Clock;
 
 use super::{
-    AutoFacets, DirtyTipPolicy, ReportFormat, ResolvedHistory, Selection, WindowEdge,
-    detect_auto_facets, facet_filtered_candidates, parse_since, parse_until, resolve_facets,
-    resolve_history, resolve_now, window_excludes,
+    AutoFacets, DirtyTipPolicy, ReportFormat, ResolvedHistory, Selection, before_since_cutoff,
+    detect_auto_facets, facet_filtered_candidates, parse_since, resolve_facets, resolve_history,
+    resolve_now,
 };
 use crate::{AnalyzeError, RenderedReports, ReportRequest};
 
@@ -84,7 +84,7 @@ impl Scope {
 /// history, and orchestrate.
 ///
 /// `clock_override` injects the [`tick::Clock`] that anchors a relative
-/// `--since`/`--until` bound (see [`resolve_now`](super::resolve_now)); production
+/// `--since` bound (see [`resolve_now`](super::resolve_now)); production
 /// passes `None` for the runtime wall clock.
 // Thin real-adapter wiring: loads config from disk, builds the configured storage,
 // and shells out via `SystemGitHistory`/`detect_auto_facets` before delegating every
@@ -168,7 +168,6 @@ where
         options.json.as_deref(),
     )?;
     let since = parse_since(options.since.as_deref(), now)?;
-    let until = parse_until(options.until.as_deref(), now)?;
     let scope = Scope::from_options(options)?;
     let selection = Selection::from_prune(options);
 
@@ -284,25 +283,13 @@ where
             RunKind::Bless => unreachable!("blessings were partitioned out"),
         }
 
-        // The time window is a per-commit property — git's committer date — which
-        // topology already resolved with the rest of the history, so deciding it
-        // needs no object fetch.
-        if since.is_some() || until.is_some() {
-            match window_excludes(commit_times.get(&parsed.commit).copied(), since, until) {
-                Some(WindowEdge::Since) => {
-                    reporter.note_with(|| {
-                        format!("skipping {key}: its commit predates the --since cutoff")
-                    });
-                    continue;
-                }
-                Some(WindowEdge::Until) => {
-                    reporter.note_with(|| {
-                        format!("skipping {key}: its commit is after the --until cutoff")
-                    });
-                    continue;
-                }
-                None => {}
-            }
+        // The `--since` cutoff is a per-commit property — git's committer date —
+        // which topology already resolved with the rest of the history, so deciding
+        // it needs no object fetch.
+        if before_since_cutoff(commit_times.get(&parsed.commit).copied(), since) {
+            reporter
+                .note_with(|| format!("skipping {key}: its commit predates the --since cutoff"));
+            continue;
         }
 
         if kind == RunKind::Clean {
@@ -822,7 +809,7 @@ mod tests {
     }
 
     /// A feature history whose own commits carry committer dates, for the
-    /// `--since`/`--until` window tests. Branched off the base at `c1`:
+    /// `--since` cutoff tests. Branched off the base at `c1`:
     ///
     /// ```text
     /// master:  c0 - c1 - c2 - c3
@@ -848,7 +835,7 @@ mod tests {
     }
 
     /// A fixed analysis anchor for prune tests. These exercise absolute or
-    /// unset `--since`/`--until` windows, so the exact instant is immaterial; it
+    /// unset `--since` cutoffs, so the exact instant is immaterial; it
     /// only stands in for the clock reading `prune::execute` supplies in production.
     fn now() -> Timestamp {
         "2024-06-01T00:00:00Z"
@@ -1387,35 +1374,6 @@ mod tests {
         assert!(
             !remaining.contains(&dirty_key("f3", 30)),
             "f3 (committed at 300s) is after --since and removed"
-        );
-    }
-
-    #[test]
-    fn until_only_removes_commits_on_or_before_the_cutoff() {
-        let storage = MemoryStorage::new();
-        store(&storage, &dirty_key("f1", 10), &set("f1"));
-        store(&storage, &dirty_key("f2", 20), &set("f2"));
-        store(&storage, &dirty_key("f3", 30), &set("f3"));
-        let git = dated_feature_git();
-
-        let opts = PruneOptions {
-            until: Some("1970-01-01T00:03:00Z".to_owned()), // 180s
-            ..dirty_options()
-        };
-        prune(&storage, &git, &opts);
-
-        let remaining = keys(&storage);
-        assert!(
-            !remaining.contains(&dirty_key("f1", 10)),
-            "f1 (committed at 100s) is before --until and removed"
-        );
-        assert!(
-            !remaining.contains(&dirty_key("f2", 20)),
-            "f2 (committed exactly at the 180s cutoff) is removed (inclusive)"
-        );
-        assert!(
-            remaining.contains(&dirty_key("f3", 30)),
-            "f3 (committed at 300s) is after --until and kept"
         );
     }
 

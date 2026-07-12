@@ -66,4 +66,4 @@ pub use prune::execute as prune;
 pub use report::RenderedReports;
 pub(crate) use report::ReportRequest;
 pub(crate) use selection::Selection;
-pub(crate) use window::{WindowEdge, parse_since, parse_until, window_excludes};
+pub(crate) use window::{before_since_cutoff, parse_since};
