@@ -138,14 +138,23 @@ can sacrifice precision but still want satisfactory performance, [`fast_time`][f
 a clock that is much cheaper to query. It will not give you precise numbers but it is safe to
 query tens of thousands of times per second.
 
+A single benchmark run is only a snapshot. The numbers that matter emerge over time: a hot
+path that slowly regresses across dozens of commits, or a "harmless" refactor that doubles the
+allocation count. [`cargo-bench-history`][cargo_bench_history] maintains a long-lived history of
+your benchmark results - from [Criterion][criterion], [`all_the_time`][all_the_time],
+[`alloc_tracker`][alloc_tracker] and [Callgrind][gungraun] - and analyzes it to detect
+regressions and improvements across commits, so a
+performance change cannot slip by unnoticed between one release and the next.
+
 
 # Extras
 
 Auxiliary packages developed and published by this project:
 
 * [`awaiter_set`][awaiter_set] - zero-allocation awaiter tracking for async synchronization primitives.
-* `cargo-detect-package` - cargo subcommand to detect which package is used based on a provided path and to run another subcommand on that package.
-* `cpulist` - utilities for parsing and emitting Linux cpulist strings, used by `many_cpus`.
+* [`cargo-detect-package`][cargo_detect_package] - cargo subcommand to detect which package is used based on a provided path and to run another subcommand on that package.
+* [`cargo-freeze-deps`][cargo_freeze_deps] - cargo subcommand that freezes floating dependency versions in a `Cargo.toml` to their resolved literal values.
+* [`cpulist`][cpulist] - utilities for parsing and emitting Linux cpulist strings, used by `many_cpus`.
 * [`events`][events] - async manual-reset and auto-reset events for multi-use signaling.
 * [`future_deque`][future_deque] - pool-backed deque collections for managing groups of futures with precise control over polling order and result retrieval.
 * `new_zealand` - [utilities for working with non-zero integers][nonzero].
@@ -153,21 +162,27 @@ Auxiliary packages developed and published by this project:
 Packages present in the repo but not relevant to a general audience:
 
 * `benchmarks` - random pile of benchmarks to explore relevant scenarios and guide Folo development.
+* `cargo-bench-history-stress` - on-demand stress harness that seeds a synthetic benchmark history and times `cargo-bench-history` analysis modes over it; not published.
 * `folo_ffi` - utilities for working with FFI logic; exists for internal use in Folo packages; no stable API surface.
 * `folo_utils` - utilities for internal use in Folo packages; exists for internal use in Folo packages; no stable API surface.
-* `linked_macros` - internal proc-macro dependency of the `linked` package; do not reference directly.
-* `linked_macros_impl` - internal proc-macro dependency of the `linked_macros` package; do not reference directly.
+* `mock_bench_engine` - test-support stand-in benchmark engine for `cargo-bench-history` integration tests; not published.
 * `testing` - private helpers for testing and examples in Folo packages.
 * `ui_tests` - compile-time UI tests for workspace packages; not published.
+* Various `_impl` packages (and the `linked_macros`/`cbh_*` families) that exist only to separate public and private API surface for implementation purposes; do not reference them directly.
 
 [all_the_time]: packages/all_the_time/README.md
 [alloc_tracker]: packages/alloc_tracker/README.md
 [awaiter_set]: packages/awaiter_set/README.md
+[cargo_bench_history]: packages/cargo-bench-history/README.md
+[cargo_detect_package]: packages/cargo-detect-package/README.md
+[cargo_freeze_deps]: packages/cargo-freeze-deps/README.md
+[cpulist]: packages/cpulist/README.md
 [criterion]: https://bheisler.github.io/criterion.rs/book/criterion_rs.html
 [events]: packages/events/README.md
 [events_once]: packages/events_once/README.md
 [fast_time]: packages/fast_time/README.md
 [future_deque]: packages/future_deque/README.md
+[gungraun]: https://crates.io/crates/gungraun
 [infinity_pool]: packages/infinity_pool/README.md
 [linked]: packages/linked/README.md
 [many_cpus]: packages/many_cpus/README.md
