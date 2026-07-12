@@ -118,7 +118,7 @@ gh-write-bench-history-machine-key file:
 
     $file = "{{file}}"
     $parent = Split-Path -Parent $file
-    if ($parent) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+    if ($parent) { New-Item -ItemType Directory -LiteralPath $parent -Force | Out-Null }
 
     Write-Verbose "Resolving this runner's real hardware machine key; the fingerprint components are logged to stderr under --verbose for debugging a key change." -Verbose
     # The key is the tool's sole stdout line; --verbose components go to stderr, so the pipeline
@@ -132,7 +132,7 @@ gh-write-bench-history-machine-key file:
     # Normalize to lowercase right after validation so the persisted file and the verbose log below
     # always agree, even if the tool ever emits uppercase or mixed-case hex.
     $key = $key.ToLowerInvariant()
-    Set-Content -Path $file -Value $key -Encoding utf8 -NoNewline
+    Set-Content -LiteralPath $file -Value $key -Encoding utf8 -NoNewline
     Write-Verbose "Wrote machine key '$key' to $file." -Verbose
 
 # Analyzes the collected history for regressions across ALL engines and target triples, restricted
@@ -180,7 +180,7 @@ gh-analyze-bench-history dir keydir:
     Import-Module ./scripts/bench-history/BenchHistoryMachineKey.psm1 -Force
 
     $dir = "{{dir}}"
-    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    New-Item -ItemType Directory -LiteralPath $dir -Force | Out-Null
     $reportPath = Join-Path $dir "report.md"
     $jsonPath = Join-Path $dir "report.json"
     $summaryPath = Join-Path $dir "summary.md"
@@ -194,10 +194,10 @@ gh-analyze-bench-history dir keydir:
         # keep the recipe's four-artefact contract) and skip the tool. The collect-failure alert
         # already notifies, so this deliberately does not itself fail.
         Write-Warning "No machine keys were collected this run (every collect leg failed); skipping analysis and emitting a non-notable placeholder report."
-        Set-Content -Path $reportPath -Value "# Benchmark history`n`nNo machine keys were collected this run, so there was nothing to analyze." -Encoding utf8
-        Set-Content -Path $summaryPath -Value "No machine keys were collected this run, so there was nothing to analyze." -Encoding utf8
-        Set-Content -Path $jsonPath -Value '{"notable":false}' -Encoding utf8
-        Set-Content -Path $notablePath -Value 'false' -Encoding utf8
+        Set-Content -LiteralPath $reportPath -Value "# Benchmark history`n`nNo machine keys were collected this run, so there was nothing to analyze." -Encoding utf8
+        Set-Content -LiteralPath $summaryPath -Value "No machine keys were collected this run, so there was nothing to analyze." -Encoding utf8
+        Set-Content -LiteralPath $jsonPath -Value '{"notable":false}' -Encoding utf8
+        Set-Content -LiteralPath $notablePath -Value 'false' -Encoding utf8
         return
     }
 
@@ -206,9 +206,9 @@ gh-analyze-bench-history dir keydir:
     Write-Verbose "Analyzing benchmark history in a single pass; writing the full Markdown to $reportPath, the full JSON to $jsonPath and the condensed top-findings Markdown summary to $summaryPath, mirroring fetched cloud objects under $cacheDir so the history is downloaded at most once across runs." -Verbose
     cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --verbose --cache=$cacheDir --no-text --markdown $reportPath --json $jsonPath --markdown-summary $summaryPath
     Write-Verbose "Computing the notable flag from the JSON report." -Verbose
-    $json = Get-Content -Path $jsonPath -Raw | ConvertFrom-Json
+    $json = Get-Content -LiteralPath $jsonPath -Raw | ConvertFrom-Json
     $notable = if (($json.PSObject.Properties.Name -contains 'notable') -and $json.notable) { 'true' } else { 'false' }
-    Set-Content -Path $notablePath -Value $notable -Encoding utf8
+    Set-Content -LiteralPath $notablePath -Value $notable -Encoding utf8
     Write-Verbose "Analysis complete: notable=$notable (full report at $reportPath, condensed summary at $summaryPath)." -Verbose
 
 # The PR counterpart of `gh-analyze-bench-history`: analyzes the collected history in BRANCH mode -
@@ -252,7 +252,7 @@ gh-analyze-pr-bench-history dir base keydir:
     Import-Module ./scripts/bench-history/BenchHistoryMachineKey.psm1 -Force
 
     $dir = "{{dir}}"
-    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    New-Item -ItemType Directory -LiteralPath $dir -Force | Out-Null
     $reportPath = Join-Path $dir "report.md"
     $jsonPath = Join-Path $dir "report.json"
     $summaryPath = Join-Path $dir "summary.md"
@@ -265,10 +265,10 @@ gh-analyze-pr-bench-history dir base keydir:
         # non-notable placeholder set (keeping the recipe's four-artefact contract) and skip the tool;
         # the workflow's collect-failure handling notifies separately.
         Write-Warning "No machine keys were collected this run (every collect leg failed); skipping PR analysis and emitting a non-notable placeholder report."
-        Set-Content -Path $reportPath -Value "# PR benchmark history`n`nNo machine keys were collected this run, so there was nothing to analyze." -Encoding utf8
-        Set-Content -Path $summaryPath -Value "No machine keys were collected this run, so there was nothing to analyze." -Encoding utf8
-        Set-Content -Path $jsonPath -Value '{"notable":false}' -Encoding utf8
-        Set-Content -Path $notablePath -Value 'false' -Encoding utf8
+        Set-Content -LiteralPath $reportPath -Value "# PR benchmark history`n`nNo machine keys were collected this run, so there was nothing to analyze." -Encoding utf8
+        Set-Content -LiteralPath $summaryPath -Value "No machine keys were collected this run, so there was nothing to analyze." -Encoding utf8
+        Set-Content -LiteralPath $jsonPath -Value '{"notable":false}' -Encoding utf8
+        Set-Content -LiteralPath $notablePath -Value 'false' -Encoding utf8
         return
     }
 
@@ -277,9 +277,9 @@ gh-analyze-pr-bench-history dir base keydir:
     Write-Verbose "Analyzing PR benchmark history in branch mode (context HEAD vs base {{base}}); writing the full Markdown to $reportPath, the full JSON to $jsonPath and the condensed top-findings Markdown summary to $summaryPath, including improvements as well as regressions, and mirroring fetched cloud objects under $cacheDir." -Verbose
     cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --verbose --context HEAD --base '{{base}}' --include-improvements --cache=$cacheDir --no-text --markdown $reportPath --json $jsonPath --markdown-summary $summaryPath
     Write-Verbose "Computing the notable flag from the JSON report." -Verbose
-    $json = Get-Content -Path $jsonPath -Raw | ConvertFrom-Json
+    $json = Get-Content -LiteralPath $jsonPath -Raw | ConvertFrom-Json
     $notable = if (($json.PSObject.Properties.Name -contains 'notable') -and $json.notable) { 'true' } else { 'false' }
-    Set-Content -Path $notablePath -Value $notable -Encoding utf8
+    Set-Content -LiteralPath $notablePath -Value $notable -Encoding utf8
     Write-Verbose "PR analysis complete: notable=$notable (full report at $reportPath, condensed summary at $summaryPath)." -Verbose
 
 # Files (or updates in place) a single rolling issue identified by its exact title, from a
