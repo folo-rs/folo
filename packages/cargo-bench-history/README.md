@@ -56,6 +56,9 @@ cargo bench-history machine-key
 
 ## See also
 
+The [user guide](https://folo-rs.github.io/folo/cargo-bench-history/) walks through every command,
+the storage backends and the analysis model in depth.
+
 More details in the [package documentation](https://docs.rs/cargo-bench-history/).
 
 This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for

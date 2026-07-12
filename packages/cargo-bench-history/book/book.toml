@@ -1,0 +1,24 @@
+[book]
+title = "cargo-bench-history"
+description = "A Cargo subcommand that maintains a long-lived history of benchmark results and analyzes it for trends."
+authors = ["Folo contributors"]
+language = "en"
+src = "src"
+
+[output.html]
+# Served from a subpath of the repository Pages site, so absolute links and the
+# generated 404 page must know where the book root lives. Keep this in lockstep with
+# the destination directory the book workflow assembles this book into.
+site-url = "/folo/cargo-bench-history/"
+git-repository-url = "https://github.com/folo-rs/folo"
+edit-url-template = "https://github.com/folo-rs/folo/edit/main/packages/cargo-bench-history/book/{path}"
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
+
+[output.html.playground]
+runnable = false
+
+# Renders ```mermaid fenced blocks as diagrams. The two additional-js assets above are
+# generated (and git-ignored) by `mdbook-mermaid install`, which `just book-build` runs
+# before every build.
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
