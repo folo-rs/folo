@@ -7,14 +7,8 @@ on:
     branches: [main]
 
 concurrency:
-  # PR runs supersede: a new commit cancels the outdated in-progress run, keyed on the PR
-  # branch (cancel-in-progress is true for the `pull_request` event). Pushes to `main`, by
-  # contrast, must NOT cancel each other - `main` is the backstop branch and files a per-run
-  # failure issue, so every landed commit is validated to completion. For the `push` event
-  # cancel-in-progress is false, so a new `main` push queues behind the in-progress run
-  # instead of killing it: `main` validation is sequential. See design.md (Concurrency).
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'push' }}
+  cancel-in-progress: true
 
 jobs:
   # Determines which packages are impacted by changes in a PR branch compared
