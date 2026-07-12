@@ -80,8 +80,9 @@ pub struct MachineInfo {
     pub memory_regions: usize,
     /// Best-effort CPU brand string (`None` when it could not be determined).
     pub cpu_brand: Option<String>,
-    /// The machine fingerprint these factors hash to — the auto-detected machine
-    /// key hardware-dependent engines partition by.
+    /// The hardware fingerprint these factors hash to: the host's auto-detected
+    /// identity, recorded regardless of the machine key the run was partitioned
+    /// under (see the type-level note).
     pub fingerprint: String,
 }
 
