@@ -1486,6 +1486,16 @@ mod tests {
         ] {
             let error = Cli::from_args(&["cargo-bench-history"], &args).unwrap_err();
             assert!(error.status.is_err(), "{args:?} should reject --until");
+            assert!(
+                error.output.contains("--until"),
+                "{args:?} error should name the rejected flag: {}",
+                error.output
+            );
+            assert!(
+                error.output.contains("unexpected argument"),
+                "{args:?} error should reject --until as an unexpected argument: {}",
+                error.output
+            );
         }
     }
 
