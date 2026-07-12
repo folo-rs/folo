@@ -114,7 +114,9 @@ validate-scripts:
             $relative = $finding.ScriptName.Substring($root.Length).TrimStart('\', '/')
             Write-Host ("{0}:{1} [{2}] {3}: {4}" -f $relative, $finding.Line, $finding.Severity, $finding.RuleName, $finding.Message)
         }
-        throw "PSScriptAnalyzer reported $($results.Count) issue(s). Fix them (or add a justified SuppressMessageAttribute) so the tree stays clean."
+        $issueNoun = if ($results.Count -eq 1) { 'issue' } else { 'issues' }
+        $issuePronoun = if ($results.Count -eq 1) { 'it' } else { 'them' }
+        throw "PSScriptAnalyzer reported $($results.Count) $issueNoun. Fix $issuePronoun (or add a justified SuppressMessageAttribute) so the tree stays clean."
     }
 
     Write-Host "PSScriptAnalyzer: no issues in scripts/."

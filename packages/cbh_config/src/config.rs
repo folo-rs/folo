@@ -28,7 +28,10 @@ const DEFAULT_TEMPLATE: &str = "\
 # Authentication is always Microsoft Entra ID (OAuth): the endpoint must be
 # HTTPS and the identity running the tool is granted data-plane access to the
 # container. In CI, GitHub Actions federates into Azure without a stored secret;
-# for setup, see
+# the federated credential's subject must match the triggering event — e.g.
+# `repo:<owner>/<repo>:ref:refs/heads/main` for a default-branch run, or
+# `repo:<owner>/<repo>:pull_request` for a pull-request run (same-repo only).
+# For setup, see
 # https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-azure
 #
 # [storage.azure]

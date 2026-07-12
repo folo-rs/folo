@@ -1,0 +1,406 @@
+name: PR Benchmark history
+
+# Per-push benchmark feedback on pull requests: the PR counterpart of bench-history.yml. Where that
+# workflow collects on every push to `main` and files a rolling ISSUE about long-range trends, this
+# one runs on every push to a PR branch, benchmarks only the packages the PR touched (cargo-delta
+# scoped), compares the PR head's benchmark level against `main` in BRANCH mode, and posts/updates a
+# rolling PR COMMENT with the findings. PR-head points are written into the SAME prod Azure store as
+# the `main` baseline (branch-mode comparison reads a single backend); PR commits are
+# topologically branch-unique, so they never enter `main`'s history analysis. Findings are advisory:
+# they never gate the merge, only inform. See .github/workflows/design.md (Benchmark history).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+# Key by the PR head ref and cancel in progress: a newer push supersedes the running benchmark,
+# because a PR's benchmark is only ever interesting for its current tip (unlike bench-history.yml,
+# which keys per-SHA with NO cancel because each `main` commit is a permanent data point). The
+# companion cancel-pr-bench-history.yml joins this SAME group on `pull_request: closed` to tear down
+# an in-flight run when the PR merges or closes; its hardcoded group string must stay byte-identical
+# to the one built here from ${{ github.workflow }} (the name "PR Benchmark history").
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+# The hidden HTML marker that identifies this workflow's rolling PR comment, defined once and shared
+# by the `analyze` job (which posts/updates it) and the `cleanup` job (which deletes it when the PR
+# no longer touches any benchmarkable package). The comment module dedups solely on this marker, so
+# a single definition keeps the post and delete paths from drifting apart.
+env:
+  PR_COMMENT_MARKER: "<!-- folo-bench-history-pr -->"
+
+jobs:
+  # Compute which packages the PR touched (cargo-delta vs origin/main), filtered to the
+  # benchmarkable set (everything except the slow, special-purpose `benchmarks` crate). The result
+  # gates the whole workflow: a non-empty set drives collect+analyze, an empty set routes to
+  # cleanup. Runs only for same-repo PRs - fork runs cannot federate into Azure (no secrets), so
+  # like bench-history.yml's fork gate they are skipped silently; because every downstream job
+  # `needs` this one, a skipped delta cascades to skip them too.
+  delta:
+    if: github.repository == 'folo-rs/folo' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.compute.outputs.packages }}
+      packages_json: ${{ steps.compute.outputs.packages_json }}
+      skip_all: ${{ steps.compute.outputs.skip_all }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        # Full history so cargo-delta can diff against origin/main in a throwaway worktree (the
+        # merge ref the pull_request event checks out is fine for the diff; only collect/analyze
+        # need the real head SHA for branch-mode topology).
+        with:
+          fetch-depth: 0
+
+      - name: Setup environment
+        # Same composite the package-scoped jobs use, so cargo-delta is installed once (via
+        # `just install-tools`) and the shared prerequisites cache is primed for the collect job.
+        uses: ./.github/actions/setup-environment
+
+      - name: Compute delta
+        id: compute
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          # The cargo-delta pipeline lives in the Pester-tested Delta module (shared with the local
+          # `just delta` recipe and validation.yml so they cannot drift); Select-BenchmarkablePackage
+          # lives in the collection module so the same "drop benchmarks" rule the collect step uses
+          # also decides here whether anything is left to bench. See scripts/build/Delta.psm1 and
+          # scripts/bench-history/BenchHistoryCollect.psm1.
+          Import-Module ./scripts/build/Delta.psm1 -Force
+          Import-Module ./scripts/bench-history/BenchHistoryCollect.psm1 -Force
+
+          # Full history is already present (fetch-depth: 0), so -SkipFetch avoids a redundant fetch;
+          # the module analyzes origin/main in a throwaway worktree and cleans up after itself.
+          $affected = @(Invoke-CargoDelta -SkipFetch)
+          # Drop the excluded `benchmarks` crate BEFORE shaping the outputs, so `skip_all` reflects
+          # the benchmarkable set: a PR that touches only `benchmarks` (or nothing) collects nothing
+          # and instead has its stale comment (if any) cleaned up.
+          $benchmarkable = @(Select-BenchmarkablePackage -Package $affected)
+          $output = Get-DeltaOutput -Affected $benchmarkable
+
+          if ($benchmarkable.Count -eq 0) {
+            Write-Host 'No benchmarkable packages touched by this PR; collection will be skipped and any stale rolling comment removed.'
+          } else {
+            Write-Host "Benchmarkable packages touched by this PR: $($output.Packages)"
+          }
+
+          @(
+            "packages=$($output.Packages)"
+            "packages_json=$($output.PackagesJson)"
+            "skip_all=$($output.SkipAll)"
+          ) | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
+
+  # Benchmark ONLY the touched packages across the full platform matrix, keyed by the PR head
+  # commit, appending the results into the prod store. Skipped when the PR touches nothing
+  # benchmarkable (delta.skip_all). Mirrors bench-history.yml's collect job, differing only in the
+  # checkout (real head SHA, full history) and the package-scoped recipe.
+  collect:
+    needs: delta
+    if: needs.delta.outputs.skip_all != 'true'
+
+    strategy:
+      # One platform's benchmarks failing must not abandon the others for this PR head; each
+      # platform stores into its own partition independently.
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, windows-latest, ubuntu-24.04-arm, windows-11-arm]
+
+    runs-on: ${{ matrix.platform }}
+    # Same ceiling as the main collect: `--best-of 3` roughly triples the ~60-75 min suite, and the
+    # 360-minute cap (GitHub's hosted maximum) bounds only a genuinely stuck run since the matrix
+    # runs in parallel.
+    timeout-minutes: 360
+
+    # id-token to self-federate with Entra (the prod identity's `pull_request` federated credential,
+    # added by infra/azure-bench-history-prod/, matches a same-repo PR run's OIDC subject), contents
+    # for the checkout. Same on-demand OIDC minting as the main collect keeps a multi-hour run
+    # authenticated past the ~1h access-token lifetime.
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        # Check out the REAL PR head commit with FULL history, NOT the default pull_request merge ref
+        # (refs/pull/N/merge): that merge commit's first parent is `main`, which would corrupt
+        # branch-mode topology. A full clone is required (not shallow) because cargo-bench-history
+        # walks the head's first-parent ancestry and computes the merge-base with the base; fetch-depth
+        # 0 also populates refs/remotes/origin/main for the analyze job's base ref.
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      # Reused unchanged from bench-history.yml: export the prod identity's client id and tenant
+      # under the standard names cargo-bench-history reads, then let the tool mint OIDC assertions on
+      # demand (no azure/login). The same prod identity backs main and PR runs. See
+      # scripts/bench-history/AzureFederation.psm1.
+      - name: Configure Azure federation identity from constants.env
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
+          Set-AzureFederationEnv -ConstantsPath constants.env -EnvFilePath $env:GITHUB_ENV | Out-Null
+
+      # Collect only the delta-affected packages (space-separated from the delta job), keyed by the
+      # PR head commit with the fixed `github` machine key so the wall-clock series stays comparable
+      # to main's baseline. `--skip-existing` makes a re-run of the same head SHA a no-op append.
+      - name: Collect PR benchmark history
+        shell: pwsh
+        env:
+          PR_PACKAGES: ${{ needs.delta.outputs.packages }}
+        run: just gh-collect-pr-bench-history "$env:PR_PACKAGES"
+
+  # Compare the PR head against `main` in branch mode and post/update the rolling PR comment. Runs
+  # after every platform finishes (even partially: fail-fast is off) so the comparison reflects
+  # whatever landed. Uses always() so a partially-failed collect still analyzes, but the explicit
+  # same-repo + skip_all gates keep it from running on forks or empty deltas.
+  analyze:
+    needs: [delta, collect]
+    if: >-
+      always()
+      && github.repository == 'folo-rs/folo'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && needs.delta.outputs.skip_all != 'true'
+    runs-on: ubuntu-latest
+    # Analysis loads the store and reduces it; far faster than benchmarking, but the cap must clear a
+    # cold-cache setup-environment on top of the analysis.
+    timeout-minutes: 150
+
+    # id-token to self-federate with Entra (reads the history), contents for checkout, and
+    # pull-requests to post/update the rolling comment.
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        # Same real-head-SHA + full-history checkout as collect: branch mode walks the head's
+        # first-parent ancestry and needs origin/main (from fetch-depth 0) for the merge-base.
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Configure Azure federation identity from constants.env
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
+          Set-AzureFederationEnv -ConstantsPath constants.env -EnvFilePath $env:GITHUB_ENV | Out-Null
+
+      # All bench-history scratch - the read-through cache and every rendered report/summary/notable/
+      # comment-body file - lives under the runner temp directory, OUTSIDE the repo checkout, so
+      # analyze's own `git status --porcelain` dirty-check never sees these files. The individual
+      # filenames (cache/, report.md, report.json, summary.md, notable.txt) are the contract the
+      # gh-analyze-pr-bench-history recipe writes; comment-body.md is composed here.
+      - name: Resolve scratch directory
+        id: scratch
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $dir = Join-Path $env:RUNNER_TEMP 'bench-history'
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+          "dir=$dir" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
+
+      # RESTORE-ONLY the read-through cache produced on `main` (the default-branch caches are visible
+      # to PR branches), so the baseline history is warm without every PR saving its own cache entry
+      # (which would clutter the cache with per-PR mirrors). PR runs never SAVE; the append-only
+      # store keeps a slightly-stale mirror harmless. The path MUST match the `--cache` directory the
+      # gh-analyze-pr-bench-history recipe passes (`<scratch>/cache`).
+      - name: Restore benchmark-history read-through cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.scratch.outputs.dir }}/cache
+          key: bench-history-cache-pr-${{ github.run_id }}
+          restore-keys: |
+            bench-history-cache-
+
+      # Renders report.md (full Markdown), report.json (full JSON), summary.md (the condensed
+      # top-findings Markdown) and notable.txt into the scratch directory, in BRANCH mode (PR head
+      # vs origin/main), including improvements as well as regressions. Findings never fail the
+      # recipe (the tool always exits 0); the PR comment is advisory, not a gate. Analysis is
+      # deliberately run UNSCOPED: `analyze`'s default ghost-exclusion (only benchmarks present at
+      # the PR head are analyzed) restricts it to exactly the collected packages, so no per-package
+      # filter is needed - the recipe must not pass `--include-ghosts`. See the recipe / design.md.
+      - name: Analyze PR benchmark history
+        shell: pwsh
+        env:
+          SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
+        run: just gh-analyze-pr-bench-history "$env:SCRATCH_DIR" origin/main
+
+      - name: Read notable flag
+        id: notable
+        shell: pwsh
+        env:
+          SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $value = (Get-Content (Join-Path $env:SCRATCH_DIR 'notable.txt') -Raw).Trim()
+          "value=$value" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
+
+      # Attach the full Markdown and JSON reports to the run as a single artifact when there are
+      # findings, so the rolling comment can carry only the condensed summary (staying under GitHub's
+      # 65,536-character comment limit) while a reader can still download the complete reports.
+      - name: Upload full benchmark reports
+        id: full_reports
+        if: steps.notable.outputs.value == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-bench-history-full-report
+          path: |
+            ${{ steps.scratch.outputs.dir }}/report.md
+            ${{ steps.scratch.outputs.dir }}/report.json
+          if-no-files-found: error
+
+      # Compose the rolling comment body (always, into comment-body.md): when notable, the condensed
+      # summary + a link to the full-report artifact + a "how to read" footer; otherwise a compact
+      # "no regressions" state. The hidden marker is embedded so the module finds this same comment
+      # on the next push. The comment is advisory - it explicitly is NOT a merge gate.
+      - name: Compose PR benchmark comment
+        shell: pwsh
+        env:
+          MARKER: ${{ env.PR_COMMENT_MARKER }}
+          NOTABLE: ${{ steps.notable.outputs.value }}
+          REPORT_ARTIFACT_URL: ${{ steps.full_reports.outputs.artifact-url }}
+          SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
+          PACKAGES: ${{ needs.delta.outputs.packages }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          $header = "### Benchmark history (vs ``main``)"
+
+          # Disclose the collection scope so a reader never mistakes a clean result for the whole
+          # suite: PR runs benchmark ONLY the packages this PR changed (cargo-delta scoped), and the
+          # analyze ghost filter narrows the report to exactly that set. List them explicitly.
+          $packages = @(($env:PACKAGES -split '\s+') | Where-Object { $_ } | Sort-Object -Unique)
+          $renderedPackages = ($packages | ForEach-Object { '`' + $_ + '`' }) -join ', '
+          $packageNoun = if ($packages.Count -eq 1) { 'package' } else { 'packages' }
+          $scope = "**Collection scope:** benchmarked the $($packages.Count) $packageNoun this PR changed ($renderedPackages)."
+          if ($env:NOTABLE -eq 'true') {
+            $summary = (Get-Content (Join-Path $env:SCRATCH_DIR 'summary.md') -Raw).TrimEnd()
+            $fullReport = "**Full report:** the complete Markdown and JSON reports are attached to this workflow run. [Download the full report bundle]($env:REPORT_ARTIFACT_URL)."
+            # Literal Markdown: the single-quoted here-string keeps the inline-code backticks verbatim.
+            $footer = @'
+          **How to read this**
+
+          This compares this PR's benchmark level against `main` (branch mode). It is **advisory** - it never blocks the merge; the workflow's check status reflects run success, not whether there are findings. Shared runners are noisy, so treat small movements with suspicion (`--best-of 3` and the false-discovery filter already suppress most noise).
+
+          To investigate a finding, copy its benchmark id and metric and run:
+
+          `cargo bench-history examine --benchmark <id> --metric <name>`
+
+          If a regression is an intentional tradeoff, bless it on the base commit; if it is a defect, fix it. Improvements are shown for information only.
+          '@
+            $parts = @(
+              $header
+              ''
+              $scope
+              ''
+              $summary
+              ''
+              '---'
+              ''
+              $fullReport
+              ''
+              '---'
+              ''
+              $footer
+            )
+          } else {
+            $parts = @(
+              $header
+              ''
+              $scope
+              ''
+              '✅ No benchmark regressions detected against `main`.'
+              ''
+              'This check is advisory and never blocks the merge. It refreshes on every push.'
+            )
+          }
+
+          # Prepend the hidden dedup marker so the comment module finds and updates this same comment
+          # on the next push instead of posting a duplicate.
+          $body = @($env:MARKER, '') + $parts
+          Set-Content -Path (Join-Path $env:SCRATCH_DIR 'comment-body.md') -Value ($body -join "`n") -Encoding utf8
+
+      # One rolling comment per PR, updated in place (deduped by the hidden marker) so repeated pushes
+      # never spam the thread. Posted via `gh` through the shared gh-file-pr-comment recipe (the
+      # workflow's one comment path) so the body file can live in the runner temp dir, outside the
+      # repo checkout.
+      - name: Post rolling PR comment
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MARKER: ${{ env.PR_COMMENT_MARKER }}
+          SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
+        run: just gh-file-pr-comment "$env:REPO" "$env:PR_NUMBER" "$env:MARKER" (Join-Path $env:SCRATCH_DIR 'comment-body.md')
+
+  # When the PR no longer touches any benchmarkable package (delta.skip_all), remove any rolling
+  # comment left by an EARLIER iteration of the same PR - e.g. a benchmarked change that was later
+  # reverted - so a stale, misleading comment does not linger. A no-op when there is no such comment.
+  # Deliberately lightweight (checkout + preinstalled gh + direct module import, no build-env setup,
+  # no Azure, no history), mirroring bench-history.yml's alert/resolve jobs.
+  cleanup:
+    needs: delta
+    if: needs.delta.outputs.skip_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # pull-requests to delete the rolling comment, contents for the checkout that puts the shared
+    # BenchHistoryComment module on disk (the removal logic lives there so it is unit-tested against
+    # a mocked gh, mirroring how the analyze job posts via the same module).
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Remove stale rolling comment if present
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MARKER: ${{ env.PR_COMMENT_MARKER }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Import-Module ./scripts/bench-history/BenchHistoryComment.psm1 -Force
+
+          $removed = Remove-RollingComment -Repo $env:REPO -PrNumber $env:PR_NUMBER -Marker $env:MARKER -Verbose
+          if ($removed) {
+            Write-Host "Removed a stale rolling benchmark comment from PR #$env:PR_NUMBER (the PR no longer touches any benchmarkable package)."
+          } else {
+            Write-Host "No rolling benchmark comment to remove on PR #$env:PR_NUMBER."
+          }

@@ -16,12 +16,16 @@ the environment can be deleted and re-created with one command.
 - A **Storage account** — `StorageV2`, HTTPS-only, TLS 1.2, **shared-key access
   disabled** (Entra ID only, so there is no account key to leak). Container and blob
   soft-delete are disabled, matching the test account.
-- A **dedicated user-assigned managed identity** (`id-folo-bench-history-prod`) with a
-  **GitHub OIDC federated credential** for `main`. The bench-history workflow federates into
+- A **dedicated user-assigned managed identity** (`id-folo-bench-history-prod`) with
+  **GitHub OIDC federated credentials** for `main` and for same-repo **pull requests**. Both
+  the bench-history workflow (on `main`) and the PR benchmark-history workflow federate into
   it with no stored secret: `cargo-bench-history` mints a fresh GitHub OIDC token on
   demand and exchanges it with Entra for each access token (so a multi-hour run stays
-  authenticated). Only `main` is trusted — there is no pull-request credential —
-  because collection only ever runs on `main` (push + gated dispatch).
+  authenticated). The pull-request credential (subject `…:pull_request`) is what lets the PR
+  workflow collect PR-head points and analyze them against `main`'s baseline in the same
+  store; only **same-repo** PRs can federate (forks carry no secrets), and the credential can
+  be removed by setting the `trustPullRequests` parameter in `main.bicep` to `false` and
+  redeploying, reverting prod to main-only.
 - **`Storage Blob Data Contributor`** role assignments on the account for that managed
   identity and (optionally) a local developer principal. That single role covers
   container create/delete and blob read/write/delete via the data plane, which is all
