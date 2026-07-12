@@ -23,10 +23,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
-# The hidden HTML marker that identifies this workflow's rolling PR comment, defined once and shared
-# by the `analyze` job (which posts/updates it) and the `cleanup` job (which deletes it when the PR
-# no longer touches any benchmarkable package). The comment module dedups solely on this marker, so
-# a single definition keeps the post and delete paths from drifting apart.
+# The hidden HTML marker that identifies this workflow's rolling PR comment, defined once and shared by
+# the `analyze` job (which posts/updates it with results), the `mark-stale` job (which seeds/refreshes an
+# in-progress placeholder carrying it), and the `cleanup` job (which deletes it when the PR no longer
+# touches any benchmarkable package). The comment module dedups solely on this marker, so a single
+# definition keeps the post, placeholder and delete paths from drifting apart.
 #
 # PR_COMMIT_MARKER_PREFIX is the prefix of a SECOND hidden marker the `analyze` job embeds to record
 # which commit its numbers describe (`<prefix><full-sha> -->`). The `mark-stale` job parses that SHA
@@ -102,18 +103,22 @@ jobs:
             "skip_all=$($output.SkipAll)"
           ) | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
 
-  # As soon as a new run is known to be collecting (the delta is non-empty), flag any existing rolling
-  # comment as STALE so a reader is not misled by hours-old numbers while the multi-hour collect+analyze
-  # runs. Deliberately lightweight - default (shallow) checkout + preinstalled gh + a direct module
-  # call, no build-env setup, no Azure, no full history - so the warning appears within minutes of the
-  # push (right after this short delta job), long before analyze rewrites the comment. It reads the
-  # analyzed-commit marker from the current comment and asks the GitHub compare API how far HEAD is
-  # ahead, which needs no clone and still resolves a commit orphaned by a force-push. Gated on
+  # At the START of every collecting run (delta non-empty), keep the rolling PR comment honest about the
+  # fresh run in two complementary ways. If a comment with real results already exists, flag it STALE so
+  # a reader is not misled by hours-old numbers while the multi-hour collect+analyze runs. If the PR has
+  # no comment yet - the common case on a PR's first push - seed a "benchmarking in progress" placeholder
+  # instead, so the author knows results are on the way rather than seeing nothing for hours; the same
+  # step refreshes that placeholder's disclosed scope on later pushes and steps aside once analyze writes
+  # real findings. Deliberately lightweight - default (shallow) checkout + preinstalled gh + a direct
+  # module call, no build-env setup, no Azure, no full history - so the signal appears within minutes of
+  # the push (right after this short delta job), long before analyze rewrites the comment. The staleness
+  # side reads the analyzed-commit marker from the current comment and asks the GitHub compare API how
+  # far HEAD is ahead, which needs no clone and still resolves a commit orphaned by a force-push. Gated on
   # skip_all != 'true' for the same reason collect is: when the PR now touches nothing benchmarkable the
-  # `cleanup` job DELETES the comment instead, and marking a comment about to be deleted would only race
-  # that delete. Runs in parallel with collect (both `needs: delta`), and mirrors collect's gating
-  # exactly - no `always()`, so a FAILED or skipped delta skips this job too rather than flagging a
-  # comment stale for a run that will never collect; the same-repo gate rides along from delta, which is
+  # `cleanup` job DELETES the comment instead, and posting or marking a comment about to be deleted would
+  # only race that delete. Runs in parallel with collect (both `needs: delta`), and mirrors collect's
+  # gating exactly - no `always()`, so a FAILED or skipped delta skips this job too rather than acting on
+  # a comment for a run that will never collect; the same-repo gate rides along from delta, which is
   # skipped on forks (skipping this dependent with it).
   mark-stale:
     needs: delta
@@ -121,9 +126,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
-    # pull-requests to PATCH the rolling comment; contents so the compare API can read commit topology
-    # and the checkout can put the shared BenchHistoryComment module on disk (the marking logic lives
-    # there so it is unit-tested against a mocked gh, mirroring how analyze posts via the same module).
+    # pull-requests to POST/PATCH the rolling comment; contents so the compare API can read commit
+    # topology and the checkout can put the shared BenchHistoryComment module on disk (the marking and
+    # placeholder logic lives there so it is unit-tested against a mocked gh, mirroring how analyze posts
+    # via the same module).
     permissions:
       contents: read
       pull-requests: write
@@ -134,7 +140,7 @@ jobs:
         # compare API, so no local history is walked here - only the module needs to be on disk.
         uses: actions/checkout@v6
 
-      - name: Flag rolling PR comment as stale
+      - name: Signal the new run on the rolling PR comment
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -143,17 +149,21 @@ jobs:
           MARKER: ${{ env.PR_COMMENT_MARKER }}
           COMMIT_MARKER_PREFIX: ${{ env.PR_COMMIT_MARKER_PREFIX }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_PACKAGES: ${{ needs.delta.outputs.packages }}
         # Import and call the shared module directly (like cleanup) rather than via `just`: this job
         # deliberately skips setup-environment to stay lightweight, so it must not assume `just` is
-        # preinstalled on the runner image. The real logic (SHA/repo validation, compare-distance
-        # lookup, banner insertion) lives in the Pester-tested module; this step is just glue.
+        # preinstalled on the runner image. The real logic (SHA/repo validation, compare-distance lookup,
+        # banner insertion, placeholder rendering) lives in the Pester-tested module; this step is just
+        # glue. The two calls are ordered stale-then-placeholder so they compose: Set-RollingCommentStaleness
+        # marks an existing results comment (and no-ops on a placeholder or when there is no comment), then
+        # Publish-InProgressComment seeds/refreshes the placeholder only when there are no results yet.
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           Import-Module ./scripts/bench-history/BenchHistoryComment.psm1 -Force
 
-          Write-Host "Flagging the rolling benchmark comment on $env:REPO PR #$env:PR_NUMBER as stale relative to head $env:HEAD_SHA."
+          Write-Host "Flagging any prior benchmark results on $env:REPO PR #$env:PR_NUMBER as stale relative to head $env:HEAD_SHA."
           $marked = Set-RollingCommentStaleness `
             -Repo $env:REPO `
             -PrNumber $env:PR_NUMBER `
@@ -164,7 +174,20 @@ jobs:
           if ($marked) {
             Write-Host "Added a staleness warning to the rolling PR comment."
           } else {
-            Write-Host "No staleness warning needed (no rolling comment yet, or it already reflects head)."
+            Write-Host "No staleness warning needed (no results comment yet, an in-progress placeholder, or it already reflects head)."
+          }
+
+          Write-Host "Ensuring an in-progress placeholder is present so the author knows benchmark results are coming."
+          $posted = Publish-InProgressComment `
+            -Repo $env:REPO `
+            -PrNumber $env:PR_NUMBER `
+            -Marker $env:MARKER `
+            -Packages $env:PR_PACKAGES `
+            -Verbose
+          if ($posted) {
+            Write-Host "Posted or refreshed the in-progress benchmark placeholder comment."
+          } else {
+            Write-Host "No placeholder change needed (the PR already has a rolling comment with results, or the placeholder is current)."
           }
 
   # Benchmark ONLY the touched packages across the full platform matrix, keyed by the PR head

@@ -13,13 +13,17 @@
 # imports this module directly and calls Remove-RollingComment to sweep away a comment left by an
 # earlier iteration of the same PR (e.g. a benchmarked change that was later reverted).
 #
-# A benchmark run takes many hours, and a new push cancels the in-flight one, so the comment a reader
-# sees can lag the PR tip by a long way. Two seams keep that honest: the analyze job embeds a hidden
-# "analyzed commit" marker in the body (which commit the numbers describe), and the mark-stale job -
-# which fires at the START of a new run - calls Set-RollingCommentStaleness to prepend a warning
-# banner stating how far behind HEAD those numbers now are (via Get-CommitsBehind), so nobody mistakes
-# hours-old results for the current state. The banner clears itself when the next analyze rewrites the
-# body with fresh results.
+# A benchmark run takes many hours, and a new push cancels the in-flight one, so on the FIRST run of a
+# PR there is nothing on display yet and on later runs the comment a reader sees can lag the PR tip by
+# a long way. Three seams keep that honest, all driven by the lightweight mark-stale job that fires at
+# the START of a new run. First, before any comment exists, Publish-InProgressComment seeds a
+# "benchmarking in progress" placeholder (carrying the in-progress marker above) so the author knows
+# results are coming; it refreshes that placeholder's disclosed scope on re-runs and steps aside once
+# real findings land. Second, the analyze job embeds a hidden "analyzed commit" marker in the body
+# (which commit the numbers describe). Third, once results exist, Set-RollingCommentStaleness prepends
+# a warning banner stating how far behind HEAD those numbers now are (via Get-CommitsBehind), so nobody
+# mistakes hours-old results for the current state; it skips the still-empty placeholder, which has no
+# results to stale. The banner clears itself when the next analyze rewrites the body with fresh results.
 #
 # Every GitHub-touching call goes through `gh api` behind the single Invoke-GhCapture seam the
 # Pester suite (BenchHistoryComment.Tests.ps1) mocks, so the find/update/create/delete logic is
@@ -35,6 +39,16 @@ Set-StrictMode -Version Latest
 # unlike the caller-supplied dedup and analyzed-commit markers it needs no workflow-level definition.
 $script:StaleBannerOpen = '<!-- folo-bench-history-stale -->'
 $script:StaleBannerClose = '<!-- /folo-bench-history-stale -->'
+
+# Hidden marker identifying an "in-progress" placeholder comment - the one Publish-InProgressComment
+# seeds at the START of a run (via the mark-stale job) when the PR has no rolling comment yet, so the
+# author knows benchmark results are coming rather than seeing nothing for the multi-hour collect.
+# Purely internal to this module, like the stale-banner sentinels: Publish-InProgressComment writes it
+# and both it and Set-RollingCommentStaleness read it to tell a still-empty placeholder apart from a
+# comment carrying real results. A results comment never has it - the analyze compose step rebuilds the
+# body from scratch without it - so its presence unambiguously means "no results yet". Because the
+# writer and both readers live here, it needs no workflow-level definition.
+$script:InProgressMarker = '<!-- folo-bench-history-in-progress -->'
 
 function Invoke-GhCapture {
     # Runs `gh` with the given arguments, capturing stdout and stderr SEPARATELY. stderr is
@@ -442,6 +456,17 @@ function Set-RollingCommentStaleness {
 
     $body = $existing.body
 
+    # An in-progress placeholder (seeded by Publish-InProgressComment when the run started and the PR had
+    # no comment yet) carries no results, so there is nothing to flag as stale - marking it would only
+    # stamp a misleading "out of date" banner onto a comment that already says "in progress". Recognise
+    # it by its hidden marker and step aside; Publish-InProgressComment, called right after this in the
+    # same job, keeps the placeholder's disclosed scope current instead.
+    if ($body.Contains($script:InProgressMarker)) {
+        Write-Verbose ("Rolling comment on PR #$PrNumber is an in-progress placeholder with no results " +
+            "yet; nothing to flag as stale.")
+        return $false
+    }
+
     # Pull the analyzed commit SHA out of the hidden marker the analyze job embeds
     # ("$CommitMarkerPrefix<40-hex> -->"). A pre-change comment - or any body missing the marker -
     # yields no SHA, in which case a distance cannot be expressed and we fall back to the numberless
@@ -507,4 +532,125 @@ function Set-RollingCommentStaleness {
     return $true
 }
 
-Export-ModuleMember -Function Find-RollingComment, Publish-RollingComment, Remove-RollingComment, Get-CommitsBehind, Set-RollingCommentStaleness
+function Format-InProgressBody {
+    # Pure string transform: renders the "benchmarking in progress" placeholder body, prefixed with the
+    # dedup $Marker (so the next run - and the eventual analyze - find and update THIS comment instead of
+    # posting a duplicate) and the hidden in-progress marker (so Set-RollingCommentStaleness and
+    # Publish-InProgressComment can tell a still-empty placeholder from a comment carrying real results).
+    # Mirrors the analyze comment's header and "Collection scope" line - listing exactly the packages
+    # this PR changed, sorted and de-duped the same way - so the placeholder reads as an early form of the
+    # very comment analyze will later overwrite. Factored out (and kept unexported) so the rendering is
+    # one testable place, mirroring Add-StalenessBanner.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][string] $Marker,
+        [Parameter(Mandatory)][string] $Packages
+    )
+
+    # Split the space-separated package list the delta job produced, dropping blanks and de-duping, then
+    # render each as inline code - the same shaping the analyze compose step applies, so the two scope
+    # lines stay worded alike. A distinct local name (not $Packages) avoids coercing the array back into
+    # the string-typed parameter.
+    $names = @(($Packages -split '\s+') | Where-Object { $_ } | Sort-Object -Unique)
+    $renderedPackages = ($names | ForEach-Object { '`' + $_ + '`' }) -join ', '
+    $packageNoun = if ($names.Count -eq 1) { 'package' } else { 'packages' }
+    $scope = "**Collection scope:** benchmarking the $($names.Count) $packageNoun this PR changed ($renderedPackages)."
+
+    $lines = @(
+        $Marker
+        $script:InProgressMarker
+        ''
+        "### Benchmark history (vs ``main``)"
+        ''
+        $scope
+        ''
+        ('⏳ **Benchmarking in progress.** Results will appear here when the run completes - this can ' +
+            'take a few hours. This comment refreshes automatically on every push.')
+    )
+    return ($lines -join "`n")
+}
+
+function Publish-InProgressComment {
+    # Called at the START of a new PR benchmark run (the mark-stale job), right after
+    # Set-RollingCommentStaleness, to make sure the PR shows a "benchmarking in progress" placeholder so
+    # the author knows results are coming during the multi-hour collect instead of seeing nothing. Three
+    # outcomes, keyed off the hidden in-progress marker:
+    #   * no rolling comment yet          -> POST the placeholder;
+    #   * the placeholder already exists  -> PATCH it so the disclosed collection scope tracks the current
+    #                                        delta (a no-op when it already matches);
+    #   * a comment carrying real results -> leave it untouched - analyzed findings must never be
+    #                                        clobbered by a placeholder; Set-RollingCommentStaleness owns
+    #                                        that comment's staleness.
+    # Returns $true when a comment was posted or updated. SupportsShouldProcess because posting/editing a
+    # comment is state-changing (matches the module's other mutating helpers): the POST/PATCH is gated on
+    # ShouldProcess so `-WhatIf` reports without performing it.
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)][string] $Repo,
+        [Parameter(Mandatory)][string] $PrNumber,
+        [Parameter(Mandatory)][string] $Marker,
+        [Parameter(Mandatory)][string] $Packages
+    )
+
+    Assert-RepoAndPr -Repo $Repo -PrNumber $PrNumber
+
+    $existing = Find-RollingComment -Repo $Repo -PrNumber $PrNumber -Marker $Marker
+
+    # A comment WITHOUT the in-progress marker carries real analyzed results (or is a legacy pre-change
+    # comment); either way it is not ours to overwrite - the marker exists precisely to keep this path
+    # from clobbering findings. Leave it to Set-RollingCommentStaleness, which flagged it stale just before
+    # this call. Literal substring match (.Contains, ordinal) for the same reason the other markers use it.
+    if ($existing -and -not $existing.body.Contains($script:InProgressMarker)) {
+        Write-Verbose ("Rolling comment on PR #$PrNumber already carries analyzed results; leaving it " +
+            "untouched rather than overwriting it with an in-progress placeholder.")
+        return $false
+    }
+
+    $body = Format-InProgressBody -Marker $Marker -Packages $Packages
+
+    # Refresh an existing placeholder in place, or post a fresh one; a placeholder that already matches the
+    # current scope needs no write. Both writes send the body through a FILE (`-F body=@<path>`) for the
+    # same reasons the module's other writers do: it sidesteps the command-line length limit and any
+    # Markdown shell-escaping, and keeps the body out of process listings.
+    if ($existing) {
+        if ($existing.body -eq $body) {
+            Write-Verbose ("In-progress placeholder on PR #$PrNumber already reflects the current scope; " +
+                "nothing to update.")
+            return $false
+        }
+        $action = 'Refresh in-progress placeholder'
+        $target = "comment #$($existing.id) on PR #$PrNumber"
+        $method = 'PATCH'
+        $apiPath = "repos/$Repo/issues/comments/$($existing.id)"
+        $logMessage = ("Refreshing the in-progress placeholder #$($existing.id) on PR #$PrNumber so its " +
+            "disclosed scope tracks the current delta.")
+    } else {
+        $action = 'Post in-progress placeholder'
+        $target = "PR #$PrNumber"
+        $method = 'POST'
+        $apiPath = "repos/$Repo/issues/$PrNumber/comments"
+        $logMessage = ("No rolling comment on PR #$PrNumber yet; posting an in-progress placeholder so the " +
+            "author knows benchmark results are on the way.")
+    }
+
+    if (-not $PSCmdlet.ShouldProcess($target, $action)) {
+        return $false
+    }
+
+    $tempBodyFile = New-TemporaryFile
+    try {
+        Set-Content -LiteralPath $tempBodyFile.FullName -Value $body -Encoding utf8 -NoNewline
+        Write-Verbose $logMessage
+        Invoke-GhCapture -Arguments @(
+            'api', '--method', $method, $apiPath, '-F', "body=@$($tempBodyFile.FullName)"
+        ) | Out-Null
+    }
+    finally {
+        Remove-Item -LiteralPath $tempBodyFile.FullName -Force -ErrorAction SilentlyContinue
+    }
+    return $true
+}
+
+Export-ModuleMember -Function Find-RollingComment, Publish-RollingComment, Remove-RollingComment, Get-CommitsBehind, Set-RollingCommentStaleness, Publish-InProgressComment

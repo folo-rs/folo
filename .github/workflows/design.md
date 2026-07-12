@@ -216,22 +216,28 @@ because a PR failure is a transient condition, not the persistent one the issue 
 tracks.
 
 Because a full benchmark run takes hours and a new push *cancels* the in-flight one (see
-Concurrency), the comment on display can lag the PR tip by a long way, and a reader has no way to
-tell current numbers from hours-old ones. Two mechanisms keep that honest. First, every comment
-records **which commit it measured** — a human-visible line printing the full SHA bare (GitHub
-autolinks it to the commit and abbreviates it for display, so we neither truncate it ourselves nor
-lose the click-through) plus a hidden full-SHA marker.
-Second, a lightweight **`mark-stale` job** runs at the *start* of each new run (right after the
-short delta preflight, in parallel with the multi-hour collect) and, if a comment already exists,
-prepends a warning banner stating how far behind `HEAD` those numbers now are — *"N commits behind
-HEAD"*, or a numberless *"out of date"* when the two share no history (e.g. a force-push) or the
-marker is absent. The distance comes from the GitHub compare API (`ahead_by`), which needs no
-clone and still resolves a commit orphaned by a force-push; any inability to compute it degrades
-to the numberless wording rather than failing the run. The banner is bounded by a sentinel pair so
-a re-run *replaces* rather than stacks it, and the next completed analyze — which rewrites the body
-from scratch with a fresh analyzed-commit marker — drops it automatically once real new results
-land. `mark-stale` is gated on the same non-empty delta as collect, so it never races the cleanup
-path that *deletes* the comment when the PR no longer touches anything benchmarkable.
+Concurrency), on a PR's first push there is nothing on display yet, and on later pushes the comment
+on display can lag the PR tip by a long way with no way for a reader to tell current numbers from
+hours-old ones. A lightweight **`mark-stale` job** runs at the *start* of each new run (right after
+the short delta preflight, in parallel with the multi-hour collect) and keeps the comment honest
+about the run just begun. When the PR has **no comment yet**, it seeds a *"benchmarking in
+progress"* placeholder — carrying the same hidden dedup marker and disclosing the collection scope,
+so the author knows results are coming rather than seeing nothing for hours; it refreshes that
+placeholder's scope on later pushes and steps aside once a completed analyze overwrites it with real
+findings. When a comment **already carries results**, two further mechanisms flag their age: every
+such comment records **which commit it measured** — a human-visible line printing the full SHA bare
+(GitHub autolinks it to the commit and abbreviates it for display, so we neither truncate it
+ourselves nor lose the click-through) plus a hidden full-SHA marker — and `mark-stale` prepends a
+warning banner stating how far behind `HEAD` those numbers now are: *"N commits behind HEAD"*, or a
+numberless *"out of date"* when the two share no history (e.g. a force-push) or the marker is
+absent. The distance comes from the GitHub compare API (`ahead_by`), which needs no clone and still
+resolves a commit orphaned by a force-push; any inability to compute it degrades to the numberless
+wording rather than failing the run. The banner is bounded by a sentinel pair so a re-run *replaces*
+rather than stacks it, and the next completed analyze — which rewrites the body from scratch with a
+fresh analyzed-commit marker — drops it automatically once real new results land. The staleness pass
+skips a still-empty placeholder (it has no results to age), leaving the placeholder's own upkeep to
+the seeding pass. `mark-stale` is gated on the same non-empty delta as collect, so it never races the
+cleanup path that *deletes* the comment when the PR no longer touches anything benchmarkable.
 
 Collection is **delta-scoped**: a preflight job diffs the PR against `main` and benchmarks only
 the touched packages, since re-measuring the whole workspace on every PR push would be
