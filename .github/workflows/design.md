@@ -10,9 +10,11 @@ Validation runs each `just` command as its own parallel job rather than one comb
 `validate-local` step. Parallelism gives faster feedback and pinpoints failures by check
 name instead of burying them in a monolithic log. Expensive jobs gate behind cheaper
 equivalents so a fast failure short-circuits slow work — for example, Miri and mutation
-testing only start once the plain dev `cargo check` and the base test pass have already
-succeeded, since there is nothing to interpret or mutate in code that does not compile or
-whose tests already fail.
+testing only start once the dev Clippy pass and the base test pass have already succeeded,
+since there is nothing to interpret or mutate in code that does not compile or whose tests
+already fail. Clippy stands in for a bare `cargo check` here: Clippy compiles the code as a
+prerequisite to linting it, so a standalone `check` job would only re-prove what a green
+Clippy already guarantees.
 
 ## Selective validation
 
@@ -33,6 +35,29 @@ shape: it is an architecture-agnostic interpreter, so a second ARM run earns its
 by subjecting ARM-gated paths to Miri's UB detection. Platform-agnostic checks (formatting,
 workflow validation, script tests) run on a single Linux runner because their result cannot
 vary by platform.
+
+Not every check earns its place on every pull request. The full matrix runs on each push to
+`main`, but pull-request validation prunes the rarely-informative legs to cut runner cost,
+leaning on push-to-`main` as the backstop for what it drops. PRs build and test only the
+x86_64 Windows and Linux runners: the whole ARM pass (which carries the MSRV *test* run) and
+the macOS legs of the test and docs jobs wait for `main`, because architecture- and
+OS-gated behaviour rarely diverges on a PR and re-running the platform-independent test and
+doc suites on macOS almost never is informative. Miri runs on Windows only for a PR — being
+an architecture-agnostic interpreter, its Linux and ARM re-runs are a `main`-only sanity net
+over cfg-gated paths — and the release-profile Clippy pass and the `careful` run are skipped
+entirely on PRs. The compile-oriented passes (dev Clippy, release build, frozen-minimum
+check, feature `hack`) deliberately keep their macOS leg on PRs, because a cheap macOS
+cross-compile still catches macOS-specific build breaks that the pruned runtime passes would
+not. MSRV *compilation* therefore stays covered on every PR by `check-frozen`, which compiles
+all targets on the MSRV toolchain against the frozen minimum-version lockfile even though the
+ARM MSRV test pass is `main`-only. Because a push to `main` is the first place the pruned
+checks can fail, that event — unlike a PR — files a tracking issue (see Failure alerting).
+
+The event split is expressed two ways: a job whose every leg is pruned on a PR (the ARM test
+and Miri passes, `clippy-release`, `careful`) carries a whole-job `github.event_name ==
+'push'` guard, while a job that keeps some legs on a PR (macOS-dropping test/docs, the
+Ubuntu-dropping `miri-x64`) selects its platform list with a `fromJSON` conditional matrix
+keyed on the same event. Both reduce to "the full set on push, the pruned set on a PR".
 
 ## Concurrency
 
@@ -215,7 +240,7 @@ safe even when slightly stale.
 
 ## Failure alerting
 
-The history and release workflows both open a GitHub issue on failure, but with
+The history, release, and validation workflows all open a GitHub issue on failure, but with
 deliberately different lifecycles matched to what failed. A benchmark-history failure is
 a recurring condition on a rolling target, so it opens a *deduplicated* tracking issue
 (keyed on a fixed title) that a companion job closes automatically once the workflow is
@@ -223,7 +248,13 @@ green again — exactly one open issue per persistent failure, cleared without m
 intervention. A release failure is a discrete event tied to one publish attempt, so it
 opens a *per-run* issue (identified by the failing run) that stays open until a human
 investigates; each failed release is tracked individually rather than folded into a
-rolling issue.
+rolling issue. A push-to-`main` Validation failure follows the same per-run shape as the
+release alert — a fresh `ci-failure` issue per failing run, no dedup and no auto-close —
+because it now backstops the checks pruned from PR validation, so each such failure warrants
+individual triage. It fires *only* on push to `main`: a PR failure is already self-evident as
+the red check and needs no issue, so the alert is gated on the `main` ref (which a
+`pull_request` run never presents) and on `failure()`, leaving a green or skipped-only run to
+file nothing.
 
 ## Release automation
 

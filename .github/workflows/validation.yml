@@ -149,26 +149,6 @@ jobs:
       - name: Run default-features-check
         run: just default-features-check
 
-  check-dev:
-    needs: [delta]
-    if: needs.delta.outputs.skip_all != 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [ubuntu-latest, macos-latest, windows-latest]
-
-    runs-on: ${{ matrix.platform }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Setup environment
-        uses: ./.github/actions/setup-environment
-
-      - name: Run check dev on ${{ matrix.platform }}
-        run: just package="${{ needs.delta.outputs.packages }}" check dev
-
   clippy-dev:
     needs: [delta]
     if: needs.delta.outputs.skip_all != 'true'
@@ -201,7 +181,8 @@ jobs:
   #
   # Coverage requires the nightly toolchain (llvm-tools-preview is installed only there via
   # `just install-tools`), so this is the nightly test pass. The MSRV test pass runs on the
-  # ARM runners (`test-arm`), and MSRV compilation of every target is covered by `check-dev`.
+  # ARM runners (`test-arm`, push-to-`main` only), and MSRV compilation of every target is
+  # covered by `check-frozen` (which compiles all targets on MSRV against the frozen minimums).
   # Paired with `test-arm`; both carry an explicit `-x64`/`-arm` suffix for symmetry.
   test-x64:
     needs: [delta]
@@ -244,13 +225,15 @@ jobs:
       - name: Run benchmark targets on ${{ matrix.platform }}
         run: just package="${{ needs.delta.outputs.packages }}" test-benches
 
+  # macOS is dropped on PRs (a doctest pass on macOS is rarely informative); the full
+  # three-platform matrix runs on push to `main`.
   test-docs:
     needs: [delta]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
       matrix:
-        platform: [ubuntu-latest, macos-latest, windows-latest]
+        platform: ${{ fromJSON(github.event_name == 'push' && '["ubuntu-latest", "macos-latest", "windows-latest"]' || '["ubuntu-latest", "windows-latest"]') }}
 
     runs-on: ${{ matrix.platform }}
 
@@ -264,13 +247,15 @@ jobs:
       - name: Run test-docs on ${{ matrix.platform }}
         run: just package="${{ needs.delta.outputs.packages }}" test-docs
 
+  # macOS is dropped on PRs (rustdoc output does not vary by platform, so a macOS docs build
+  # is rarely informative); the full three-platform matrix runs on push to `main`.
   docs:
     needs: [delta]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
       matrix:
-        platform: [ubuntu-latest, macos-latest, windows-latest]
+        platform: ${{ fromJSON(github.event_name == 'push' && '["ubuntu-latest", "macos-latest", "windows-latest"]' || '["ubuntu-latest", "windows-latest"]') }}
 
     runs-on: ${{ matrix.platform }}
 
@@ -287,13 +272,15 @@ jobs:
       - name: Run docs-default-features on ${{ matrix.platform }}
         run: just package="${{ needs.delta.outputs.packages }}" docs-default-features
 
+  # Ubuntu is dropped on PRs: Miri is an architecture-agnostic interpreter, so the Linux run
+  # is a push-to-`main`-only sanity net over the Windows pass. Both platforms run on push.
   miri-x64:
-    needs: [delta, check-dev, test-x64]
+    needs: [delta, clippy-dev, test-x64]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
       matrix:
-        platform: [ubuntu-latest, windows-latest]
+        platform: ${{ fromJSON(github.event_name == 'push' && '["ubuntu-latest", "windows-latest"]' || '["windows-latest"]') }}
 
     runs-on: ${{ matrix.platform }}
 
@@ -316,7 +303,8 @@ jobs:
   # `test-x64`; both carry an explicit `-x64`/`-arm` suffix.
   test-arm:
     needs: [delta]
-    if: needs.delta.outputs.skip_all != 'true'
+    # Push-to-`main` only: every leg here is ARM or macOS, all pruned from PR validation.
+    if: github.event_name == 'push' && needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -350,8 +338,10 @@ jobs:
   # architecture-agnostic for platform-neutral code; we run it on ARM purely to exercise
   # cfg(target_arch = "aarch64") (and similar) code paths under Miri's UB detection.
   miri-arm:
-    needs: [delta, check-dev, test-arm]
-    if: needs.delta.outputs.skip_all != 'true'
+    needs: [delta, clippy-dev, test-arm]
+    # Push-to-`main` only: an architecture-agnostic interpreter re-run on ARM is a sanity net
+    # over cfg-gated paths, not PR-worthy signal.
+    if: github.event_name == 'push' && needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -369,12 +359,13 @@ jobs:
       - name: Run miri on ${{ matrix.platform }}
         run: just package="${{ needs.delta.outputs.packages }}" miri
 
-  # Miri with many seeds is very slow, so we only run it for select packages on Windows.
+  # Miri with many seeds is very slow, so we only run it for select packages on Linux (these
+  # exercise platform-independent code, so Linux's lower overhead is preferred over Windows).
   # These jobs only run when their specific package is affected by changes.
-  # Gated behind the base `miri-x64` and `miri-arm` jobs so a quick Miri failure short-circuits
-  # the much more expensive many-seeds run.
+  # Gated behind the base `miri-x64` job so a quick Miri failure short-circuits the much more
+  # expensive many-seeds run.
   miri-harder-events-once:
-    needs: [delta, miri-x64, miri-arm]
+    needs: [delta, miri-x64]
     if: >-
       needs.delta.outputs.skip_all != 'true'
       && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'events_once'))
@@ -384,7 +375,7 @@ jobs:
         shard: [1/4, 2/4, 3/4, 4/4]
     # Many-seeds Miri work budget (~90 min) plus up to 90 min for a cold-cache setup-environment.
     timeout-minutes: 180
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
@@ -393,11 +384,11 @@ jobs:
       - name: Setup environment
         uses: ./.github/actions/setup-environment
 
-      - name: Run miri-harder for events_once on windows-latest (shard ${{ matrix.shard }})
+      - name: Run miri-harder for events_once on ubuntu-latest (shard ${{ matrix.shard }})
         run: just package=events_once miri-harder ${{ matrix.shard }}
 
   miri-harder-infinity-pool:
-    needs: [delta, miri-x64, miri-arm]
+    needs: [delta, miri-x64]
     if: >-
       needs.delta.outputs.skip_all != 'true'
       && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'infinity_pool'))
@@ -407,7 +398,7 @@ jobs:
         shard: [1/8, 2/8, 3/8, 4/8, 5/8, 6/8, 7/8, 8/8]
     # Many-seeds Miri work budget (~90 min) plus up to 90 min for a cold-cache setup-environment.
     timeout-minutes: 180
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
@@ -416,11 +407,11 @@ jobs:
       - name: Setup environment
         uses: ./.github/actions/setup-environment
 
-      - name: Run miri-harder for infinity_pool on windows-latest (shard ${{ matrix.shard }})
+      - name: Run miri-harder for infinity_pool on ubuntu-latest (shard ${{ matrix.shard }})
         run: just package=infinity_pool miri-harder ${{ matrix.shard }}
 
   miri-harder-events:
-    needs: [delta, miri-x64, miri-arm]
+    needs: [delta, miri-x64]
     if: >-
       needs.delta.outputs.skip_all != 'true'
       && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'events'))
@@ -430,7 +421,7 @@ jobs:
         shard: [1/2, 2/2]
     # Many-seeds Miri work budget (~90 min) plus up to 90 min for a cold-cache setup-environment.
     timeout-minutes: 180
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
@@ -439,11 +430,11 @@ jobs:
       - name: Setup environment
         uses: ./.github/actions/setup-environment
 
-      - name: Run miri-harder for events on windows-latest (shard ${{ matrix.shard }})
+      - name: Run miri-harder for events on ubuntu-latest (shard ${{ matrix.shard }})
         run: just package=events miri-harder ${{ matrix.shard }}
 
   miri-harder-awaiter-set:
-    needs: [delta, miri-x64, miri-arm]
+    needs: [delta, miri-x64]
     if: >-
       needs.delta.outputs.skip_all != 'true'
       && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'awaiter_set'))
@@ -453,7 +444,7 @@ jobs:
         shard: [1/2, 2/2]
     # Many-seeds Miri work budget (~90 min) plus up to 90 min for a cold-cache setup-environment.
     timeout-minutes: 180
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
@@ -462,7 +453,7 @@ jobs:
       - name: Setup environment
         uses: ./.github/actions/setup-environment
 
-      - name: Run miri-harder for awaiter_set on windows-latest (shard ${{ matrix.shard }})
+      - name: Run miri-harder for awaiter_set on ubuntu-latest (shard ${{ matrix.shard }})
         run: just package=awaiter_set miri-harder ${{ matrix.shard }}
 
   machete:
@@ -486,29 +477,10 @@ jobs:
       - name: Run machete on ${{ matrix.platform }}
         run: just machete
 
-  check-release:
-    needs: [delta, check-dev]
-    if: needs.delta.outputs.skip_all != 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [ubuntu-latest, macos-latest, windows-latest]
-
-    runs-on: ${{ matrix.platform }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Setup environment
-        uses: ./.github/actions/setup-environment
-
-      - name: Run check release on ${{ matrix.platform }}
-        run: just package="${{ needs.delta.outputs.packages }}" check release
-
   clippy-release:
     needs: [delta, clippy-dev]
-    if: needs.delta.outputs.skip_all != 'true'
+    # Push-to-`main` only: release-profile Clippy rarely diverges from the dev pass on a PR.
+    if: github.event_name == 'push' && needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -527,7 +499,7 @@ jobs:
         run: just package="${{ needs.delta.outputs.packages }}" clippy release
 
   build-release:
-    needs: [delta, check-dev]
+    needs: [delta, clippy-dev]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
@@ -549,11 +521,11 @@ jobs:
   # Verifies the workspace still compiles at the minimum dependency versions declared in
   # Cargo.toml (our published minimum-version promises), rather than the higher versions
   # pinned in Cargo.lock. The `check-frozen` recipe freezes every workspace dependency to
-  # its declared minimum, regenerates the lockfile, and runs `check`. Gated behind check-dev
+  # its declared minimum, regenerates the lockfile, and runs `check`. Gated behind clippy-dev
   # because checking the frozen minimums is pointless if the code does not even build with
   # the normal lockfile versions.
   check-frozen:
-    needs: [delta, check-dev]
+    needs: [delta, clippy-dev]
     if: needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
@@ -641,7 +613,8 @@ jobs:
 
   careful:
     needs: [delta, test-x64]
-    if: needs.delta.outputs.skip_all != 'true'
+    # Push-to-`main` only: `cargo careful` rarely surfaces PR-specific signal.
+    if: github.event_name == 'push' && needs.delta.outputs.skip_all != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -917,3 +890,81 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           run_command: send-notifications
           fail_ci_if_error: true
+
+  # File a GitHub issue whenever any job above fails on a push to `main`, so a push-to-main
+  # failure is tracked rather than lost. PR runs surface a failure as the red check and need
+  # no issue - and this workflow now leans more heavily on push-to-main as the backstop for
+  # the checks pruned from PR validation (ARM, macOS test/docs, the Linux Miri run,
+  # clippy-release, careful), so a green PR no longer implies those passed.
+  #
+  # A fresh issue is filed per failing run - no dedup, no auto-close - mirroring the release
+  # workflow's per-run alert: each failure is investigated and closed individually, and a
+  # later green run does not touch prior issues. `failure()` fires only on a real failure, so
+  # a fully-green (or skipped-only) run files nothing. `needs` lists every job so a failure in
+  # any of them reaches this gate.
+  alert:
+    needs:
+      - delta
+      - test-scripts
+      - validate-workflows
+      - format-check
+      - default-features-check
+      - clippy-dev
+      - test-x64
+      - test-docs
+      - docs
+      - miri-x64
+      - test-arm
+      - miri-arm
+      - miri-harder-events-once
+      - miri-harder-infinity-pool
+      - miri-harder-events
+      - miri-harder-awaiter-set
+      - machete
+      - clippy-release
+      - build-release
+      - check-frozen
+      - mutants
+      - run-examples
+      - hack
+      - careful
+      - test-azurite
+      - test-azure
+      - test-azure-gh
+      - coverage-notify
+    if: failure() && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      issues: write
+
+    steps:
+      - name: Open failure issue for this run
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          # Ensure the shared label exists (idempotent) so `gh issue create` cannot fail on a
+          # missing label.
+          $PSNativeCommandUseErrorActionPreference = $false
+          gh label create ci-failure --color B60205 --description "CI workflow failure" --force *> $null
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          $body = @"
+          The Validation workflow failed on a push to ``main``.
+
+          Push-to-``main`` validation is the backstop for the checks pruned from PR validation
+          (ARM and macOS test/docs runs, the Linux Miri sanity run, ``clippy-release`` and
+          ``careful``), so this failure may be in a check a PR never ran.
+
+          Failed run: $env:RUN_URL
+          "@
+          gh issue create --label ci-failure --title "Validation workflow failed (run $env:RUN_ID)" --body $body
