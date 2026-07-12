@@ -466,6 +466,34 @@ Describe 'Set-RollingCommentStaleness (mocked gh api)' {
         }
     }
 
+    Context 'when the compare lookup fails for a transient reason' {
+        BeforeEach {
+            Remove-Item -LiteralPath $script:StaleCapture -ErrorAction SilentlyContinue
+            Mock gh -ModuleName BenchHistoryComment {
+                foreach ($a in $args) {
+                    if ($a -like 'body=@*') {
+                        Copy-Item -LiteralPath $a.Substring('body=@'.Length) `
+                            -Destination (Join-Path ([System.IO.Path]::GetTempPath()) 'bh-stale-captured-body.md') -Force
+                    }
+                }
+                if ($args -contains 'PATCH') { $global:LASTEXITCODE = 0; return '{"id":42}' }
+                # A non-404 compare failure (e.g. a transient 500) is a genuine error Get-CommitsBehind
+                # rethrows; staleness marking is best-effort and must degrade rather than fail the run.
+                foreach ($a in $args) { if ($a -like 'repos/*/compare/*') { $global:LASTEXITCODE = 1; return 'HTTP 500: Internal Server Error' } }
+                $global:LASTEXITCODE = 0
+                return '[{"id":42,"body":"<!-- folo-bench-history-pr -->\n<!-- folo-bench-history-commit:1111111111111111111111111111111111111111 -->\n\nfindings","html_url":"u"}]'
+            }
+        }
+
+        It 'degrades to the numberless "out of date" warning instead of throwing' {
+            $result = Set-RollingCommentStaleness -Repo 'o/r' -PrNumber '5' -Marker $script:Marker -CommitMarkerPrefix $script:CommitPrefix -HeadSha $script:HeadSha2
+            $result | Should -BeTrue
+            $sent = Get-Content -LiteralPath $script:StaleCapture -Raw
+            $sent | Should -BeLike '*out of date*'
+            $sent | Should -Not -BeLike '*behind HEAD*'
+        }
+    }
+
     Context 'when the comment lacks an analyzed-commit marker (pre-change comment)' {
         BeforeEach {
             Remove-Item -LiteralPath $script:StaleCapture -ErrorAction SilentlyContinue
@@ -567,3 +595,62 @@ Describe 'Set-RollingCommentStaleness (mocked gh api)' {
         }
     }
 }
+
+Describe 'Add-StalenessBanner (unexported string transform)' {
+    Context 'when an opening sentinel has no matching close (manually edited/truncated comment)' {
+        It 'preserves the trailing body instead of dropping it' {
+            InModuleScope BenchHistoryComment {
+                $marker = '<!-- folo-bench-history-pr -->'
+                # An open sentinel with NO closing sentinel is not a block we produced. Stripping from it
+                # to end-of-body would silently delete the benchmark findings that follow, so they must
+                # survive verbatim.
+                $body = @(
+                    $marker
+                    ''
+                    $script:StaleBannerOpen
+                    '> [!WARNING]'
+                    '> a banner that was never closed'
+                    ''
+                    '### Benchmark history'
+                    'precious findings that must not vanish'
+                ) -join "`n"
+
+                $result = Add-StalenessBanner -Body $body -Warning 'fresh warning' -Marker $marker
+
+                $result | Should -BeLike '*### Benchmark history*'
+                $result | Should -BeLike '*precious findings that must not vanish*'
+                # The fresh banner is still inserted after the marker.
+                $result | Should -BeLike '*fresh warning*'
+            }
+        }
+    }
+
+    Context 'when the marker text also appears quoted elsewhere (e.g. inside a code block)' {
+        It 'inserts after the whole-line marker, not the quoted occurrence' {
+            InModuleScope BenchHistoryComment {
+                $marker = '<!-- folo-bench-history-pr -->'
+                # The marker text appears first inside a fenced code block (indented, with trailing text)
+                # and only later on its own line as the real marker. A substring match would latch onto
+                # the quoted line; a whole-line (trimmed-equality) match lands on the real marker.
+                $body = @(
+                    '### Example usage'
+                    '```'
+                    "    $marker  <- quoted in docs, NOT the real marker"
+                    '```'
+                    $marker
+                    'findings'
+                ) -join "`n"
+
+                $result = Add-StalenessBanner -Body $body -Warning 'fresh warning' -Marker $marker
+                $lines = $result -split "`n"
+
+                ([regex]::Matches($result, '\[!WARNING\]')).Count | Should -Be 1
+                $bannerLine = [array]::IndexOf($lines, '> [!WARNING]')
+                $realMarkerLine = [array]::IndexOf($lines, $marker)
+                # The banner must land after the real marker line, i.e. past the whole code block.
+                $bannerLine | Should -BeGreaterThan $realMarkerLine
+            }
+        }
+    }
+}
+

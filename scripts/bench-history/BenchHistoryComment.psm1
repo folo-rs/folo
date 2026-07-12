@@ -342,18 +342,32 @@ function Add-StalenessBanner {
         [Parameter(Mandatory)][string] $Marker
     )
 
-    # 1. Drop any previously-inserted banner block (open..close inclusive).
+    # 1. Drop any previously-inserted banner block, but ONLY when it is COMPLETE (both the opening and
+    #    the closing sentinel present). An opening sentinel with no matching close - a manually edited or
+    #    truncated comment - is NOT a block we produced, so stripping from it to end-of-body would
+    #    silently delete the benchmark findings that follow. Buffer the lines after an open sentinel and
+    #    discard them only once the matching close is seen; if the body ends first, flush the buffer back
+    #    verbatim so the body is preserved intact.
     $kept = [System.Collections.Generic.List[string]]::new()
+    $pending = [System.Collections.Generic.List[string]]::new()
     $inBanner = $false
     foreach ($line in @($Body -split "`n")) {
         $trimmed = $line.Trim()
-        if ($trimmed -eq $script:StaleBannerOpen) { $inBanner = $true; continue }
+        if (-not $inBanner -and $trimmed -eq $script:StaleBannerOpen) {
+            $inBanner = $true
+            $pending.Clear()
+            $pending.Add($line)
+            continue
+        }
         if ($inBanner) {
-            if ($trimmed -eq $script:StaleBannerClose) { $inBanner = $false }
+            $pending.Add($line)
+            if ($trimmed -eq $script:StaleBannerClose) { $inBanner = $false; $pending.Clear() }
             continue
         }
         $kept.Add($line)
     }
+    # Unterminated open sentinel: keep the buffered lines rather than dropping the remainder of the body.
+    if ($inBanner) { foreach ($p in $pending) { $kept.Add($p) } }
 
     # 2. Build the fresh banner: a GitHub "warning" alert bounded by the sentinel pair so the next
     #    strip finds it.
@@ -364,11 +378,14 @@ function Add-StalenessBanner {
         $script:StaleBannerClose
     )
 
-    # 3. Insert it right after the dedup marker line, with exactly one blank line on each side. If the
-    #    marker is somehow absent, prepend the banner at the very top instead.
+    # 3. Insert it right after the dedup marker line, with exactly one blank line on each side. Match the
+    #    marker as a whole line (trimmed equality) rather than a substring: the marker occupies its own
+    #    line by construction (Publish-RollingComment prepends "$Marker`n`n..."), so an equality test
+    #    keeps insertion deterministic and cannot latch onto the marker text quoted elsewhere in the body
+    #    (e.g. inside a code block). If the marker is somehow absent, prepend the banner at the very top.
     $markerIndex = -1
     for ($i = 0; $i -lt $kept.Count; $i++) {
-        if ($kept[$i].Contains($Marker)) { $markerIndex = $i; break }
+        if ($kept[$i].Trim() -eq $Marker) { $markerIndex = $i; break }
     }
     if ($markerIndex -lt 0) {
         return (($banner + @('') + @($kept)) -join "`n")
@@ -435,13 +452,25 @@ function Set-RollingCommentStaleness {
 
     $warning = $null
     if ($analyzedSha) {
-        $distance = Get-CommitsBehind -Repo $Repo -BaseSha $analyzedSha -HeadSha $HeadSha
-        if ($distance.Related -and $distance.Behind -eq 0) {
+        # Staleness marking is best-effort (see the workflow design doc): a transient compare API / `gh`
+        # failure must NOT fail the whole run. Only a genuine distance lets us word the banner with a
+        # number; any error leaves $distance null so the numberless "out of date" fallback below applies,
+        # and the cause is recorded in -Verbose so the run log still explains the missing figure.
+        $distance = $null
+        try {
+            $distance = Get-CommitsBehind -Repo $Repo -BaseSha $analyzedSha -HeadSha $HeadSha
+        }
+        catch {
+            Write-Verbose ("Compare lookup failed for analyzed commit $analyzedSha " +
+                "(head $HeadSha) on PR #$PrNumber; using generic out-of-date wording. " +
+                "Error: $($_.Exception.Message)")
+        }
+        if ($distance -and $distance.Related -and $distance.Behind -eq 0) {
             Write-Verbose ("Rolling comment on PR #$PrNumber already reflects HEAD ($HeadSha); leaving it " +
                 "unmarked.")
             return $false
         }
-        if ($distance.Related) {
+        if ($distance -and $distance.Related) {
             $noun = if ($distance.Behind -eq 1) { 'commit' } else { 'commits' }
             $warning = "Benchmark results are $($distance.Behind) $noun behind HEAD. This comment will be updated when newer results are available."
         }
