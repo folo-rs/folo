@@ -293,3 +293,364 @@ Describe 'Remove-RollingComment (mocked gh api)' {
         }
     }
 }
+
+Describe 'Get-CommitsBehind (mocked gh compare api)' {
+    BeforeAll {
+        # Full 40-hex SHAs: Get-CommitsBehind validates the shape before splicing them into the
+        # compare path, so short placeholders would be rejected.
+        $script:BaseSha = '1111111111111111111111111111111111111111'
+        $script:HeadSha = '2222222222222222222222222222222222222222'
+    }
+
+    Context 'when the two commits share history' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryComment {
+                $global:LASTEXITCODE = 0
+                '{"status":"ahead","ahead_by":3,"behind_by":0,"total_commits":3}'
+            }
+        }
+
+        It 'returns the ahead-by count as the distance' {
+            $result = Get-CommitsBehind -Repo 'o/r' -BaseSha $script:BaseSha -HeadSha $script:HeadSha
+            $result.Related | Should -BeTrue
+            $result.Behind | Should -Be 3
+        }
+
+        It 'queries the compare endpoint for base...head' {
+            Get-CommitsBehind -Repo 'o/r' -BaseSha $script:BaseSha -HeadSha $script:HeadSha | Out-Null
+            Should -Invoke gh -ModuleName BenchHistoryComment -ParameterFilter {
+                ($args -contains 'api') -and ($args -contains "repos/o/r/compare/$($script:BaseSha)...$($script:HeadSha)")
+            }
+        }
+    }
+
+    Context 'when the head is identical to the base' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryComment { $global:LASTEXITCODE = 0; '{"status":"identical","ahead_by":0,"behind_by":0}' }
+        }
+
+        It 'reports a related zero distance' {
+            $result = Get-CommitsBehind -Repo 'o/r' -BaseSha $script:BaseSha -HeadSha $script:HeadSha
+            $result.Related | Should -BeTrue
+            $result.Behind | Should -Be 0
+        }
+    }
+
+    Context 'when the commits share no history' {
+        BeforeEach {
+            # The compare endpoint 404s with this message for unrelated histories (e.g. a force-push).
+            Mock gh -ModuleName BenchHistoryComment { $global:LASTEXITCODE = 1; 'gh: No common ancestor for the two commits (HTTP 404)' }
+        }
+
+        It 'reports unrelated with no distance' {
+            $result = Get-CommitsBehind -Repo 'o/r' -BaseSha $script:BaseSha -HeadSha $script:HeadSha
+            $result.Related | Should -BeFalse
+            $result.Behind | Should -Be 0
+        }
+    }
+
+    Context 'when the compare fails for another reason' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryComment { $global:LASTEXITCODE = 1; 'HTTP 500: Internal Server Error' }
+        }
+
+        It 'rethrows rather than reporting a bogus "out of date"' {
+            { Get-CommitsBehind -Repo 'o/r' -BaseSha $script:BaseSha -HeadSha $script:HeadSha } | Should -Throw '*HTTP 500*'
+        }
+    }
+
+    Context 'input validation' {
+        It 'rejects a non-hex base SHA' {
+            { Get-CommitsBehind -Repo 'o/r' -BaseSha 'not-a-sha' -HeadSha $script:HeadSha } | Should -Throw '*40-character hex*'
+        }
+
+        It 'rejects a malformed repository' {
+            { Get-CommitsBehind -Repo 'bad' -BaseSha $script:BaseSha -HeadSha $script:HeadSha } | Should -Throw '*owner/name*'
+        }
+    }
+}
+
+Describe 'Set-RollingCommentStaleness (mocked gh api)' {
+    BeforeAll {
+        $script:CommitPrefix = '<!-- folo-bench-history-commit:'
+        $script:AnalyzedSha = '1111111111111111111111111111111111111111'
+        $script:HeadSha2 = '2222222222222222222222222222222222222222'
+        # Fixed capture path (recomputed identically in the mock and the assertions) for the PATCHed
+        # body, mirroring the Publish-RollingComment tests: the temp body file is deleted once `gh`
+        # returns, so a post-hoc ParameterFilter could not read it.
+        $script:StaleCapture = Join-Path ([System.IO.Path]::GetTempPath()) 'bh-stale-captured-body.md'
+    }
+
+    AfterAll {
+        Remove-Item -LiteralPath $script:StaleCapture -ErrorAction SilentlyContinue
+    }
+
+    Context 'when the analyzed commit is behind head' {
+        BeforeEach {
+            Remove-Item -LiteralPath $script:StaleCapture -ErrorAction SilentlyContinue
+            Mock gh -ModuleName BenchHistoryComment {
+                foreach ($a in $args) {
+                    if ($a -like 'body=@*') {
+                        Copy-Item -LiteralPath $a.Substring('body=@'.Length) `
+                            -Destination (Join-Path ([System.IO.Path]::GetTempPath()) 'bh-stale-captured-body.md') -Force
+                    }
+                }
+                if ($args -contains 'PATCH') { $global:LASTEXITCODE = 0; return '{"id":42,"html_url":"https://github.com/o/r/pull/5#issuecomment-42"}' }
+                foreach ($a in $args) { if ($a -like 'repos/*/compare/*') { $global:LASTEXITCODE = 0; return '{"status":"ahead","ahead_by":3}' } }
+                $global:LASTEXITCODE = 0
+                return '[{"id":42,"body":"<!-- folo-bench-history-pr -->\n<!-- folo-bench-history-commit:1111111111111111111111111111111111111111 -->\n\n### Benchmark history\nold findings","html_url":"https://github.com/o/r/pull/5#issuecomment-42"}]'
+            }
+        }
+
+        It 'patches the comment with an N-commits-behind warning and preserves the analyzed marker' {
+            $result = Set-RollingCommentStaleness -Repo 'o/r' -PrNumber '5' -Marker $script:Marker -CommitMarkerPrefix $script:CommitPrefix -HeadSha $script:HeadSha2
+            $result | Should -BeTrue
+            Should -Invoke gh -ModuleName BenchHistoryComment -ParameterFilter {
+                ($args -contains 'PATCH') -and ($args -contains 'repos/o/r/issues/comments/42')
+            }
+            $sent = Get-Content -LiteralPath $script:StaleCapture -Raw
+            $sent | Should -BeLike '*3 commits behind HEAD*'
+            $sent | Should -BeLike '*[!WARNING]*'
+            # The analyzed-commit marker must survive so the next run can still parse it.
+            $sent | Should -BeLike "*$($script:CommitPrefix)$($script:AnalyzedSha)*"
+        }
+    }
+
+    Context 'when the analyzed commit is exactly one commit behind' {
+        BeforeEach {
+            Remove-Item -LiteralPath $script:StaleCapture -ErrorAction SilentlyContinue
+            Mock gh -ModuleName BenchHistoryComment {
+                foreach ($a in $args) {
+                    if ($a -like 'body=@*') {
+                        Copy-Item -LiteralPath $a.Substring('body=@'.Length) `
+                            -Destination (Join-Path ([System.IO.Path]::GetTempPath()) 'bh-stale-captured-body.md') -Force
+                    }
+                }
+                if ($args -contains 'PATCH') { $global:LASTEXITCODE = 0; return '{"id":42}' }
+                foreach ($a in $args) { if ($a -like 'repos/*/compare/*') { $global:LASTEXITCODE = 0; return '{"status":"ahead","ahead_by":1}' } }
+                $global:LASTEXITCODE = 0
+                return '[{"id":42,"body":"<!-- folo-bench-history-pr -->\n<!-- folo-bench-history-commit:1111111111111111111111111111111111111111 -->\n\nfindings","html_url":"u"}]'
+            }
+        }
+
+        It 'uses the singular "commit"' {
+            Set-RollingCommentStaleness -Repo 'o/r' -PrNumber '5' -Marker $script:Marker -CommitMarkerPrefix $script:CommitPrefix -HeadSha $script:HeadSha2 | Out-Null
+            $sent = Get-Content -LiteralPath $script:StaleCapture -Raw
+            $sent | Should -BeLike '*1 commit behind HEAD*'
+            $sent | Should -Not -BeLike '*1 commits behind*'
+        }
+    }
+
+    Context 'when the analyzed commit shares no history with head' {
+        BeforeEach {
+            Remove-Item -LiteralPath $script:StaleCapture -ErrorAction SilentlyContinue
+            Mock gh -ModuleName BenchHistoryComment {
+                foreach ($a in $args) {
+                    if ($a -like 'body=@*') {
+                        Copy-Item -LiteralPath $a.Substring('body=@'.Length) `
+                            -Destination (Join-Path ([System.IO.Path]::GetTempPath()) 'bh-stale-captured-body.md') -Force
+                    }
+                }
+                if ($args -contains 'PATCH') { $global:LASTEXITCODE = 0; return '{"id":42}' }
+                foreach ($a in $args) { if ($a -like 'repos/*/compare/*') { $global:LASTEXITCODE = 1; return 'gh: No common ancestor for the two commits (HTTP 404)' } }
+                $global:LASTEXITCODE = 0
+                return '[{"id":42,"body":"<!-- folo-bench-history-pr -->\n<!-- folo-bench-history-commit:1111111111111111111111111111111111111111 -->\n\nfindings","html_url":"u"}]'
+            }
+        }
+
+        It 'patches a numberless "out of date" warning' {
+            Set-RollingCommentStaleness -Repo 'o/r' -PrNumber '5' -Marker $script:Marker -CommitMarkerPrefix $script:CommitPrefix -HeadSha $script:HeadSha2 | Out-Null
+            $sent = Get-Content -LiteralPath $script:StaleCapture -Raw
+            $sent | Should -BeLike '*out of date*'
+            $sent | Should -Not -BeLike '*behind HEAD*'
+        }
+    }
+
+    Context 'when the compare lookup fails for a transient reason' {
+        BeforeEach {
+            Remove-Item -LiteralPath $script:StaleCapture -ErrorAction SilentlyContinue
+            Mock gh -ModuleName BenchHistoryComment {
+                foreach ($a in $args) {
+                    if ($a -like 'body=@*') {
+                        Copy-Item -LiteralPath $a.Substring('body=@'.Length) `
+                            -Destination (Join-Path ([System.IO.Path]::GetTempPath()) 'bh-stale-captured-body.md') -Force
+                    }
+                }
+                if ($args -contains 'PATCH') { $global:LASTEXITCODE = 0; return '{"id":42}' }
+                # A non-404 compare failure (e.g. a transient 500) is a genuine error Get-CommitsBehind
+                # rethrows; staleness marking is best-effort and must degrade rather than fail the run.
+                foreach ($a in $args) { if ($a -like 'repos/*/compare/*') { $global:LASTEXITCODE = 1; return 'HTTP 500: Internal Server Error' } }
+                $global:LASTEXITCODE = 0
+                return '[{"id":42,"body":"<!-- folo-bench-history-pr -->\n<!-- folo-bench-history-commit:1111111111111111111111111111111111111111 -->\n\nfindings","html_url":"u"}]'
+            }
+        }
+
+        It 'degrades to the numberless "out of date" warning instead of throwing' {
+            $result = Set-RollingCommentStaleness -Repo 'o/r' -PrNumber '5' -Marker $script:Marker -CommitMarkerPrefix $script:CommitPrefix -HeadSha $script:HeadSha2
+            $result | Should -BeTrue
+            $sent = Get-Content -LiteralPath $script:StaleCapture -Raw
+            $sent | Should -BeLike '*out of date*'
+            $sent | Should -Not -BeLike '*behind HEAD*'
+        }
+    }
+
+    Context 'when the comment lacks an analyzed-commit marker (pre-change comment)' {
+        BeforeEach {
+            Remove-Item -LiteralPath $script:StaleCapture -ErrorAction SilentlyContinue
+            Mock gh -ModuleName BenchHistoryComment {
+                foreach ($a in $args) {
+                    if ($a -like 'body=@*') {
+                        Copy-Item -LiteralPath $a.Substring('body=@'.Length) `
+                            -Destination (Join-Path ([System.IO.Path]::GetTempPath()) 'bh-stale-captured-body.md') -Force
+                    }
+                }
+                if ($args -contains 'PATCH') { $global:LASTEXITCODE = 0; return '{"id":42}' }
+                $global:LASTEXITCODE = 0
+                return '[{"id":42,"body":"<!-- folo-bench-history-pr -->\n\nfindings","html_url":"u"}]'
+            }
+        }
+
+        It 'falls back to "out of date" without calling the compare api' {
+            Set-RollingCommentStaleness -Repo 'o/r' -PrNumber '5' -Marker $script:Marker -CommitMarkerPrefix $script:CommitPrefix -HeadSha $script:HeadSha2 | Out-Null
+            $sent = Get-Content -LiteralPath $script:StaleCapture -Raw
+            $sent | Should -BeLike '*out of date*'
+            Should -Invoke gh -ModuleName BenchHistoryComment -ParameterFilter { [bool]($args | Where-Object { $_ -like 'repos/*/compare/*' }) } -Times 0 -Exactly
+        }
+    }
+
+    Context 'when the analyzed commit already equals head' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryComment {
+                if ($args -contains 'PATCH') { $global:LASTEXITCODE = 0; return '{"id":42}' }
+                foreach ($a in $args) { if ($a -like 'repos/*/compare/*') { $global:LASTEXITCODE = 0; return '{"status":"identical","ahead_by":0}' } }
+                $global:LASTEXITCODE = 0
+                return '[{"id":42,"body":"<!-- folo-bench-history-pr -->\n<!-- folo-bench-history-commit:1111111111111111111111111111111111111111 -->\n\nfindings","html_url":"u"}]'
+            }
+        }
+
+        It 'adds no warning and does not patch' {
+            $result = Set-RollingCommentStaleness -Repo 'o/r' -PrNumber '5' -Marker $script:Marker -CommitMarkerPrefix $script:CommitPrefix -HeadSha $script:HeadSha2
+            $result | Should -BeFalse
+            Should -Invoke gh -ModuleName BenchHistoryComment -ParameterFilter { $args -contains 'PATCH' } -Times 0 -Exactly
+        }
+    }
+
+    Context 'when the PR has no rolling comment yet' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryComment { $global:LASTEXITCODE = 0; '[]' }
+        }
+
+        It 'is a no-op returning false' {
+            $result = Set-RollingCommentStaleness -Repo 'o/r' -PrNumber '5' -Marker $script:Marker -CommitMarkerPrefix $script:CommitPrefix -HeadSha $script:HeadSha2
+            $result | Should -BeFalse
+            Should -Invoke gh -ModuleName BenchHistoryComment -ParameterFilter { $args -contains 'PATCH' } -Times 0 -Exactly
+        }
+    }
+
+    Context 'when the comment already carries a stale banner (re-run)' {
+        BeforeEach {
+            Remove-Item -LiteralPath $script:StaleCapture -ErrorAction SilentlyContinue
+            Mock gh -ModuleName BenchHistoryComment {
+                foreach ($a in $args) {
+                    if ($a -like 'body=@*') {
+                        Copy-Item -LiteralPath $a.Substring('body=@'.Length) `
+                            -Destination (Join-Path ([System.IO.Path]::GetTempPath()) 'bh-stale-captured-body.md') -Force
+                    }
+                }
+                if ($args -contains 'PATCH') { $global:LASTEXITCODE = 0; return '{"id":42}' }
+                foreach ($a in $args) { if ($a -like 'repos/*/compare/*') { $global:LASTEXITCODE = 0; return '{"status":"ahead","ahead_by":3}' } }
+                $global:LASTEXITCODE = 0
+                return '[{"id":42,"body":"<!-- folo-bench-history-pr -->\n\n<!-- folo-bench-history-stale -->\n> [!WARNING]\n> Benchmark results are 2 commits behind HEAD. This comment will be updated when newer results are available.\n<!-- /folo-bench-history-stale -->\n\n<!-- folo-bench-history-commit:1111111111111111111111111111111111111111 -->\n\nfindings","html_url":"u"}]'
+            }
+        }
+
+        It 'replaces the old banner instead of stacking a second one' {
+            Set-RollingCommentStaleness -Repo 'o/r' -PrNumber '5' -Marker $script:Marker -CommitMarkerPrefix $script:CommitPrefix -HeadSha $script:HeadSha2 | Out-Null
+            $sent = Get-Content -LiteralPath $script:StaleCapture -Raw
+            $sent | Should -BeLike '*3 commits behind HEAD*'
+            $sent | Should -Not -BeLike '*2 commits behind HEAD*'
+            ([regex]::Matches($sent, '\[!WARNING\]')).Count | Should -Be 1
+        }
+    }
+
+    Context 'when -WhatIf is passed' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryComment {
+                foreach ($a in $args) { if ($a -like 'repos/*/compare/*') { $global:LASTEXITCODE = 0; return '{"status":"ahead","ahead_by":3}' } }
+                $global:LASTEXITCODE = 0
+                return '[{"id":42,"body":"<!-- folo-bench-history-pr -->\n<!-- folo-bench-history-commit:1111111111111111111111111111111111111111 -->\n\nfindings","html_url":"u"}]'
+            }
+        }
+
+        It 'reports the edit without performing the PATCH' {
+            Set-RollingCommentStaleness -Repo 'o/r' -PrNumber '5' -Marker $script:Marker -CommitMarkerPrefix $script:CommitPrefix -HeadSha $script:HeadSha2 -WhatIf | Out-Null
+            Should -Invoke gh -ModuleName BenchHistoryComment -ParameterFilter { $args -contains 'PATCH' } -Times 0 -Exactly
+        }
+    }
+
+    Context 'input validation' {
+        It 'rejects a non-hex head SHA' {
+            { Set-RollingCommentStaleness -Repo 'o/r' -PrNumber '5' -Marker $script:Marker -CommitMarkerPrefix $script:CommitPrefix -HeadSha 'nope' } |
+                Should -Throw '*40-character hex*'
+        }
+    }
+}
+
+Describe 'Add-StalenessBanner (unexported string transform)' {
+    Context 'when an opening sentinel has no matching close (manually edited/truncated comment)' {
+        It 'preserves the trailing body instead of dropping it' {
+            InModuleScope BenchHistoryComment {
+                $marker = '<!-- folo-bench-history-pr -->'
+                # An open sentinel with NO closing sentinel is not a block we produced. Stripping from it
+                # to end-of-body would silently delete the benchmark findings that follow, so they must
+                # survive verbatim.
+                $body = @(
+                    $marker
+                    ''
+                    $script:StaleBannerOpen
+                    '> [!WARNING]'
+                    '> a banner that was never closed'
+                    ''
+                    '### Benchmark history'
+                    'precious findings that must not vanish'
+                ) -join "`n"
+
+                $result = Add-StalenessBanner -Body $body -Warning 'fresh warning' -Marker $marker
+
+                $result | Should -BeLike '*### Benchmark history*'
+                $result | Should -BeLike '*precious findings that must not vanish*'
+                # The fresh banner is still inserted after the marker.
+                $result | Should -BeLike '*fresh warning*'
+            }
+        }
+    }
+
+    Context 'when the marker text also appears quoted elsewhere (e.g. inside a code block)' {
+        It 'inserts after the whole-line marker, not the quoted occurrence' {
+            InModuleScope BenchHistoryComment {
+                $marker = '<!-- folo-bench-history-pr -->'
+                # The marker text appears first inside a fenced code block (indented, with trailing text)
+                # and only later on its own line as the real marker. A substring match would latch onto
+                # the quoted line; a whole-line (trimmed-equality) match lands on the real marker.
+                $body = @(
+                    '### Example usage'
+                    '```'
+                    "    $marker  <- quoted in docs, NOT the real marker"
+                    '```'
+                    $marker
+                    'findings'
+                ) -join "`n"
+
+                $result = Add-StalenessBanner -Body $body -Warning 'fresh warning' -Marker $marker
+                $lines = $result -split "`n"
+
+                ([regex]::Matches($result, '\[!WARNING\]')).Count | Should -Be 1
+                $bannerLine = [array]::IndexOf($lines, '> [!WARNING]')
+                $realMarkerLine = [array]::IndexOf($lines, $marker)
+                # The banner must land after the real marker line, i.e. past the whole code block.
+                $bannerLine | Should -BeGreaterThan $realMarkerLine
+            }
+        }
+    }
+}
+
