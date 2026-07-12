@@ -301,7 +301,7 @@ jobs:
           $packages = @(($env:PACKAGES -split '\s+') | Where-Object { $_ } | Sort-Object -Unique)
           $renderedPackages = ($packages | ForEach-Object { '`' + $_ + '`' }) -join ', '
           $packageNoun = if ($packages.Count -eq 1) { 'package' } else { 'packages' }
-          $scope = "**Collection scope:** benchmarked the $($packages.Count) $packageNoun this PR changed ($renderedPackages). Packages this PR did not change were not benchmarked, so these results cover only the changed subset."
+          $scope = "**Collection scope:** benchmarked the $($packages.Count) $packageNoun this PR changed ($renderedPackages)."
           if ($env:NOTABLE -eq 'true') {
             $summary = (Get-Content (Join-Path $env:SCRATCH_DIR 'summary.md') -Raw).TrimEnd()
             $fullReport = "**Full report:** the complete Markdown and JSON reports are attached to this workflow run. [Download the full report bundle]($env:REPORT_ARTIFACT_URL)."
