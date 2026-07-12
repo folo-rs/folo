@@ -61,14 +61,28 @@ keyed on the same event. Both reduce to "the full set on push, the pruned set on
 
 ## Concurrency
 
-Commit-driven and PR-driven workflows cancel superseded runs, keyed on the ref, so pushing
-a new commit abandons the outdated run. That supersession only fires when a *new commit*
-arrives on the branch, so closing or merging a PR — which pushes nothing to the PR branch —
-would otherwise leave its in-flight Validation run to burn to completion. A dedicated
-companion workflow closes that gap: it triggers on the PR-close event and joins the target
-workflow's concurrency group so cancel-in-progress reclaims the stale run. Both the Validation
-workflow and the PR benchmark-history workflow pair with such a close companion. The exception
-is history collection on `main`, which is keyed on the commit **SHA**: each commit is a distinct
+PR-driven Validation runs cancel superseded runs, keyed on the branch, so pushing a new
+commit to a pull request abandons the outdated in-progress run. That supersession only fires
+when a *new commit* arrives on the branch, so closing or merging a PR — which pushes nothing
+to the PR branch — would otherwise leave its in-flight Validation run to burn to completion.
+A dedicated companion workflow closes that gap: it triggers on the PR-close event and joins
+the target workflow's concurrency group so cancel-in-progress reclaims the stale run. Both the
+Validation workflow and the PR benchmark-history workflow pair with such a close companion.
+
+Pushes to `main` are the deliberate exception: they share the ref-keyed group but do **not**
+cancel in progress, so a commit landing while an earlier one is still validating *queues*
+behind it rather than killing it. `main` is validated **sequentially**, one commit at a time,
+each to completion. This is what makes `main` the trustworthy backstop for the checks pruned
+from PR validation and lets the per-run failure alert (see Failure alerting) attribute a
+breakage to the commit that caused it — a superseded, cancelled run would neither finish those
+checks nor fire the alert. The one limitation is inherent to GitHub concurrency: only a single
+run may sit queued, so a rapid burst of pushes collapses to "the one already running, then the
+newest", skipping the intermediate commits; the newest still validates the cumulative tree, so
+`main`'s current state is never left unvalidated. The split is expressed by making
+cancel-in-progress an expression — `${{ github.event_name != 'push' }}` — true for the
+`pull_request` event and false for a push to `main`.
+
+History collection on `main` is keyed instead on the commit **SHA**: each commit is a distinct
 measurement, so distinct commits must run in parallel and only a redundant re-trigger of the
 *same* commit is deduplicated. Schedule-driven workflows carry no concurrency block at all.
 
