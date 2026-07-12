@@ -22,9 +22,7 @@ use super::load::{
     RunIndex, WorkerFold, facet_filtered_candidates, fold_runs_chunked, load_objects_concurrently,
 };
 use super::selection::Selection;
-use super::window::{
-    WindowEdge, auto_mode, parse_until, resolve_since, since_cutoff_reason, window_excludes,
-};
+use super::window::{auto_mode, before_since_cutoff, resolve_since, since_cutoff_reason};
 use crate::AnalyzeError;
 
 /// The data an analysis (or listing) draws on, plus the bookkeeping needed to
@@ -192,13 +190,6 @@ where
             since_cutoff_reason(selection.since.is_some(), mode)
         )
     });
-    let until = parse_until(selection.until, now)?;
-    reporter.note_with(|| {
-        format!(
-            "until cutoff: {}",
-            until.map_or_else(|| "none".to_owned(), |until| until.to_string())
-        )
-    });
 
     // The always-on effective-selection announcement: one line, printed regardless
     // of `--verbose`, naming the resolved (possibly auto-detected) partition, base
@@ -210,7 +201,6 @@ where
         since,
         selection.since.is_some(),
         mode,
-        until,
     ));
 
     // Tally why candidates do not enter the analysis, so a `0 runs` outcome can
@@ -220,13 +210,12 @@ where
     let mut excluded_outside_history = 0_usize;
     let mut excluded_dirty_base = 0_usize;
     let mut excluded_since = 0_usize;
-    let mut excluded_until = 0_usize;
 
     // Phase 1 — key-only filtering, in candidate order. Every exclusion that does
     // not need the object's payload runs here, before anything is fetched, so an
     // excluded candidate never costs a round-trip: history membership, base-side
-    // dirty admission, and the `--since`/`--until` window (decided from each
-    // commit's committer time, which git reports with the topology).
+    // dirty admission, and the `--since` cutoff (decided from each commit's
+    // committer time, which git reports with the topology).
     let phase1_started = Instant::now();
     let mut to_fetch: Vec<(String, StorageKey)> = Vec::new();
     for (key, parsed) in candidates {
@@ -256,28 +245,15 @@ where
             });
             continue;
         }
-        match window_excludes(commit_times.get(&parsed.commit).copied(), since, until) {
-            Some(WindowEdge::Since) => {
-                excluded_since = excluded_since.saturating_add(1);
-                reporter.note_with(|| {
-                    format!(
-                        "excluding {key}: commit {} is before the --since cutoff",
-                        parsed.commit
-                    )
-                });
-                continue;
-            }
-            Some(WindowEdge::Until) => {
-                excluded_until = excluded_until.saturating_add(1);
-                reporter.note_with(|| {
-                    format!(
-                        "excluding {key}: commit {} is after the --until cutoff",
-                        parsed.commit
-                    )
-                });
-                continue;
-            }
-            None => {}
+        if before_since_cutoff(commit_times.get(&parsed.commit).copied(), since) {
+            excluded_since = excluded_since.saturating_add(1);
+            reporter.note_with(|| {
+                format!(
+                    "excluding {key}: commit {} is before the --since cutoff",
+                    parsed.commit
+                )
+            });
+            continue;
         }
         to_fetch.push((key, parsed));
     }
@@ -356,8 +332,7 @@ where
     reporter.note_with(|| {
         format!(
             "{} entered the analysis ({excluded_outside_history} outside history, \
-         {excluded_dirty_base} dirty-on-base, {excluded_since} before --since, \
-         {excluded_until} after --until)",
+         {excluded_dirty_base} dirty-on-base, {excluded_since} before --since)",
             count_noun(run_index.total(), "object")
         )
     });
@@ -432,7 +407,6 @@ where
             outside_history: excluded_outside_history,
             dirty_base: excluded_dirty_base,
             since: excluded_since,
-            until: excluded_until,
         },
         included_dirty_base_exception,
         target_ref,
@@ -448,7 +422,7 @@ where
 
 /// Builds the always-on, one-line summary of a run's effective selection: the
 /// discriminant partition it searched (naming auto-detected facets), the base
-/// branch it split history against, and the resolved look-back window.
+/// branch it split history against, and the resolved look-back cutoff.
 ///
 /// Emitted to standard error regardless of `--verbose` so a plain run never hides
 /// a value it auto-detected or defaulted. `base_auto` marks the base as
@@ -461,7 +435,6 @@ fn effective_selection_summary(
     since: Option<Timestamp>,
     since_explicit: bool,
     mode: AnalysisMode,
-    until: Option<Timestamp>,
 ) -> String {
     let base = if base_auto {
         format!("base={base_name} (auto-detected)")
@@ -473,15 +446,12 @@ fn effective_selection_summary(
         since.map_or_else(|| "none".to_owned(), |since| since.to_string()),
         since_cutoff_reason(since_explicit, mode)
     );
-    let mut parts = vec![
+    [
         format!("selection: {}", describe_effective_facets(facets)),
         base,
         since,
-    ];
-    if let Some(until) = until {
-        parts.push(format!("until={until}"));
-    }
-    parts.join("; ")
+    ]
+    .join("; ")
 }
 
 /// How many facet-matching candidates were excluded, by reason.
@@ -493,8 +463,6 @@ pub(crate) struct ExclusionTally {
     dirty_base: usize,
     /// Effective time is before the `--since` cutoff.
     since: usize,
-    /// Effective time is after the `--until` cutoff.
-    until: usize,
 }
 
 /// Builds a diagnostic hint explaining an empty outcome, so a bare `0 runs` never
@@ -504,8 +472,8 @@ pub(crate) struct ExclusionTally {
 /// hint names the effective (possibly auto-detected) partition it searched — so an
 /// auto-detected target-triple / machine-key that simply does not match the stored
 /// data explains itself — and distinguishes a genuinely empty project from a
-/// missed partition. When runs matched the facets but topology or the window
-/// excluded them all, the hint breaks down the dominant exclusion reasons.
+/// missed partition. When runs matched the facets but topology or the `--since`
+/// cutoff excluded them all, the hint breaks down the dominant exclusion reasons.
 ///
 /// Returns `None` when at least one run was loaded.
 pub(crate) fn empty_history_hint(
@@ -565,12 +533,6 @@ pub(crate) fn empty_history_hint(
             count_noun(tally.since, "run")
         ));
     }
-    if tally.until > 0 {
-        lines.push(format!(
-            "  - {} newer than the --until cutoff.",
-            count_noun(tally.until, "run")
-        ));
-    }
     lines.push("Re-run with --verbose for a per-object explanation.".to_owned());
     Some(lines.join("\n"))
 }
@@ -599,7 +561,6 @@ mod tests {
             outside_history: 0,
             dirty_base: 0,
             since: 0,
-            until: 0,
         };
         let facets = unconstrained_facets();
         // Runs were actually loaded → no hint regardless of candidate count.
@@ -612,7 +573,6 @@ mod tests {
             outside_history: 2,
             dirty_base: 1,
             since: 4,
-            until: 0,
         };
         let hint = empty_history_hint(true, 7, "master", tally, &facets).unwrap();
         assert!(hint.contains("7 stored runs"), "{hint}");
@@ -633,40 +593,36 @@ mod tests {
             outside_history: 0,
             dirty_base: 3,
             since: 0,
-            until: 0,
         };
         let hint = empty_history_hint(true, 3, "master", dirty_only, &facets).unwrap();
         assert!(hint.contains("dirty (uncommitted-tree)"), "{hint}");
         assert!(!hint.contains("outside"), "{hint}");
         assert!(!hint.contains("--since cutoff"), "{hint}");
-        assert!(!hint.contains("--until cutoff"), "{hint}");
 
         // Only the outside-history reason is present here (dirty omitted).
         let outside_only = ExclusionTally {
             outside_history: 2,
             dirty_base: 0,
             since: 0,
-            until: 0,
         };
         let hint = empty_history_hint(true, 2, "master", outside_only, &facets).unwrap();
         assert!(hint.contains("outside master"), "{hint}");
         assert!(!hint.contains("dirty (uncommitted-tree)"), "{hint}");
         assert!(!hint.contains("--since cutoff"), "{hint}");
 
-        // Only the until reason is present here.
-        let until_only = ExclusionTally {
+        // Only the since reason is present here.
+        let since_only = ExclusionTally {
             outside_history: 0,
             dirty_base: 0,
-            since: 0,
-            until: 5,
+            since: 5,
         };
-        let hint = empty_history_hint(true, 5, "master", until_only, &facets).unwrap();
+        let hint = empty_history_hint(true, 5, "master", since_only, &facets).unwrap();
         assert!(
-            hint.contains("5 runs newer than the --until cutoff"),
+            hint.contains("5 runs older than the --since cutoff"),
             "{hint}"
         );
         assert!(!hint.contains("dirty (uncommitted-tree)"), "{hint}");
-        assert!(!hint.contains("--since cutoff"), "{hint}");
+        assert!(!hint.contains("outside"), "{hint}");
     }
 
     #[test]
@@ -675,7 +631,6 @@ mod tests {
             outside_history: 0,
             dirty_base: 0,
             since: 0,
-            until: 0,
         };
 
         // Unconstrained facets that matched nothing → a genuinely empty project.
@@ -720,7 +675,6 @@ mod tests {
             Some(since),
             false,
             AnalysisMode::History,
-            None,
         );
         assert!(
             summary.contains("target-triple=x86_64-pc-windows-msvc (auto-detected)"),
@@ -744,9 +698,8 @@ mod tests {
             target_triple: FacetFilter::All,
             machine_key: FacetFilter::All,
         };
-        let until = Timestamp::from_second(1_700_100_000).unwrap();
-        // Branch mode, explicit base, no default window: nothing is marked
-        // auto-detected and the until edge is shown when set.
+        // Branch mode, explicit base, no default cutoff: nothing is marked
+        // auto-detected.
         let summary = effective_selection_summary(
             &facets,
             "release",
@@ -754,7 +707,6 @@ mod tests {
             None,
             false,
             AnalysisMode::Branch,
-            Some(until),
         );
         assert!(summary.contains("engine=criterion"), "{summary}");
         assert!(summary.contains("target-triple=all"), "{summary}");
@@ -764,6 +716,5 @@ mod tests {
             summary.contains("no default look-back window outside history mode"),
             "{summary}"
         );
-        assert!(summary.contains(&format!("until={until}")), "{summary}");
     }
 }

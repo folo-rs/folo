@@ -1,6 +1,6 @@
-//! `--since` / `--until` window resolution: parsing the edges, deciding the
+//! `--since` cutoff resolution: parsing the lower-bound edge, deciding the
 //! history-mode default look-back, and testing each committer time against the
-//! resolved window.
+//! resolved cutoff.
 
 use cbh_detect::AnalysisMode;
 use jiff::civil::Date;
@@ -83,48 +83,22 @@ pub(crate) fn parse_since(
     parse_instant(value, "--since", now)
 }
 
-/// Parses the `--until` option into an absolute upper-bound instant, if set.
+/// Decides whether a commit's `committer_time` places it before the `--since`
+/// lower bound (an inclusive-on-or-after cutoff), matching the object-timestamp
+/// comparison the analysis used before topology carried the time.
 ///
-/// See [`parse_instant`] for the accepted input forms. `now` anchors a relative
-/// duration.
-pub(crate) fn parse_until(
-    value: Option<&str>,
-    now: Timestamp,
-) -> Result<Option<Timestamp>, AnalyzeError> {
-    parse_instant(value, "--until", now)
-}
-
-/// Which edge of the `--since`/`--until` window a commit falls outside of.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WindowEdge {
-    /// The commit predates the `--since` lower bound.
-    Since,
-    /// The commit postdates the `--until` upper bound.
-    Until,
-}
-
-/// Decides whether a commit's `committer_time` places it outside the
-/// `--since`/`--until` window, reporting which edge it fell off.
-///
-/// `--since` is an inclusive-on-or-after lower bound and `--until` an
-/// inclusive-on-or-before upper bound, matching the object-timestamp comparison
-/// the analysis used before topology carried the time. A commit with an unknown
-/// time (`None`) is never excluded — git always reports a committer date for a
-/// real commit, so this only guards a degenerate input conservatively (by
-/// keeping the object and letting the rest of the pipeline judge it).
-pub(crate) fn window_excludes(
+/// A commit with an unknown time (`None`) is never excluded — git always reports a
+/// committer date for a real commit, so this only guards a degenerate input
+/// conservatively (by keeping the object and letting the rest of the pipeline
+/// judge it).
+pub(crate) fn before_since_cutoff(
     committer_time: Option<Timestamp>,
     since: Option<Timestamp>,
-    until: Option<Timestamp>,
-) -> Option<WindowEdge> {
-    let time = committer_time?;
-    if since.is_some_and(|since| time < since) {
-        return Some(WindowEdge::Since);
-    }
-    if until.is_some_and(|until| time > until) {
-        return Some(WindowEdge::Until);
-    }
-    None
+) -> bool {
+    let Some(time) = committer_time else {
+        return false;
+    };
+    since.is_some_and(|since| time < since)
 }
 
 /// Parses a time-cutoff option into an absolute instant, if set.
@@ -271,27 +245,17 @@ mod tests {
     }
 
     #[test]
-    fn window_excludes_decides_each_edge_from_committer_time() {
+    fn before_since_cutoff_decides_from_committer_time() {
         let since = Some(ts(10));
-        let until = Some(ts(20));
-        // Before the lower bound, after the upper bound, and inside the window.
-        assert_eq!(
-            window_excludes(Some(ts(5)), since, until),
-            Some(WindowEdge::Since)
-        );
-        assert_eq!(
-            window_excludes(Some(ts(25)), since, until),
-            Some(WindowEdge::Until)
-        );
-        assert_eq!(window_excludes(Some(ts(15)), since, until), None);
-        // Both bounds are inclusive: a commit exactly on an edge stays in-window.
-        assert_eq!(window_excludes(Some(ts(10)), since, until), None);
-        assert_eq!(window_excludes(Some(ts(20)), since, until), None);
-        // An open bound never excludes on that side.
-        assert_eq!(window_excludes(Some(ts(0)), None, until), None);
-        assert_eq!(window_excludes(Some(ts(99)), since, None), None);
-        // An unknown committer time is never excluded, even with both bounds set.
-        assert_eq!(window_excludes(None, since, until), None);
+        // Before the lower bound is excluded; on or after it stays in.
+        assert!(before_since_cutoff(Some(ts(5)), since));
+        assert!(!before_since_cutoff(Some(ts(15)), since));
+        // The bound is inclusive: a commit exactly on the edge stays in.
+        assert!(!before_since_cutoff(Some(ts(10)), since));
+        // An open bound never excludes.
+        assert!(!before_since_cutoff(Some(ts(0)), None));
+        // An unknown committer time is never excluded, even with a bound set.
+        assert!(!before_since_cutoff(None, since));
     }
 
     #[test]

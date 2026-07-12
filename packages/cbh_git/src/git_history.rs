@@ -20,11 +20,11 @@ use crate::process::capture;
 /// its subject line.
 ///
 /// `analyze` orders a series by first-parent topology and filters it by the
-/// `--since`/`--until` window. The window is a per-commit property — a commit's
+/// `--since` cutoff. The cutoff is a per-commit property — a commit's
 /// committer date — that topology alone decides, letting out-of-window objects be
 /// skipped before any stored object is fetched. `committer_time` is `None` only
 /// when `git` emitted an unparseable date, which a real commit never does; such a
-/// commit is treated as in-window (never excluded by the window).
+/// commit is treated as in-window (never excluded by the cutoff).
 ///
 /// `subject` is the commit's title (`git`'s `%s`), harvested on the same walk so
 /// `examine` can label each data point with what its commit changed. It is empty
@@ -67,7 +67,7 @@ pub trait GitHistory {
     ///
     /// This is the linear mainline of the ref — the timeline `analyze` orders a
     /// series by. Each commit carries its committer timestamp, which `analyze`
-    /// uses to apply the `--since`/`--until` window before fetching any object,
+    /// uses to apply the `--since` cutoff before fetching any object,
     /// and its subject line, which `examine` uses to label each data point.
     /// An unresolvable ref yields an empty list.
     fn first_parent(

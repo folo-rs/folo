@@ -297,38 +297,6 @@ async fn prune_dirty_since_only_removes_runs_on_or_after_the_cutoff() {
     );
 }
 
-/// `--until` removes only the runs on or before the cutoff: the mirror of `--since`,
-/// also reading object bodies to recover each run's commit time.
-#[tokio::test]
-#[cfg_attr(miri, ignore)]
-async fn prune_dirty_until_only_removes_runs_on_or_before_the_cutoff() {
-    let workspace = Workspace::repo(&storage_only_config());
-    workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_callgrind("c1", 100.0);
-    workspace.checkout_new_branch("feature");
-    workspace.commit_dated("2024-01-02", "f1");
-    workspace.seed_dirty_callgrind("2024-01-02", "f1", 100.0);
-    workspace.commit_dated("2024-01-05", "f2");
-    workspace.seed_dirty_callgrind("2024-01-05", "f2", 200.0);
-
-    // Only the 2024-01-02 run is on or before the cutoff.
-    let message = workspace
-        .drive_json(&["prune", "--dirty", "--until", "2024-01-03"])
-        .await;
-    let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
-    assert_eq!(parsed["totals"]["runs"], 1, "{message}");
-
-    // The later run survives the cutoff; only the on-or-before run was removed.
-    let message = workspace
-        .drive_json(&["prune", "--dirty", "--dry-run"])
-        .await;
-    let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
-    assert_eq!(
-        parsed["totals"]["runs"], 1,
-        "the later run survived the cutoff: {message}"
-    );
-}
-
 /// The `--all` scope deletes clean *and* dirty runs (and their blessing sidecars)
 /// for the narrowed selection. A `<commit>` argument selecting one feature commit removes its
 /// clean and dirty runs while leaving the base-branch run intact.
