@@ -248,6 +248,38 @@ gh-file-pr-comment repo pr marker body_file:
         -Verbose
     Write-Verbose "Rolling PR comment is available at $url." -Verbose
 
+# Flags the rolling benchmark comment on a pull request as STALE at the start of a new run: a benchmark
+# takes hours and a new push cancels the in-flight run, so the numbers on display can lag the PR tip by
+# a long way. Thin wrapper over Set-RollingCommentStaleness in
+# scripts/bench-history/BenchHistoryComment.psm1 (Pester-tested via `just test-scripts`). It reads the
+# analyzed-commit SHA the analyze job embedded in the comment (via `commit_marker_prefix`), counts how
+# far `head_sha` is ahead of it, and prepends a warning banner ("N commits behind HEAD", or a
+# numberless "out of date" when the two share no history). A no-op when the PR has no rolling comment
+# yet or already reflects `head_sha`. `repo` is `owner/name` and `pr` the PR number; both, and the
+# SHA, are validated in the module before being spliced into the REST path. Needs GH_TOKEN in the
+# environment (the workflow supplies it).
+[group('automation')]
+[script]
+gh-mark-pr-bench-history-stale repo pr marker commit_marker_prefix head_sha:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+    Import-Module ./scripts/bench-history/BenchHistoryComment.psm1 -Force
+
+    Write-Verbose "Flagging the rolling benchmark comment on {{repo}} PR #{{pr}} as stale relative to head {{head_sha}}." -Verbose
+    $marked = Set-RollingCommentStaleness `
+        -Repo '{{repo}}' `
+        -PrNumber '{{pr}}' `
+        -Marker '{{marker}}' `
+        -CommitMarkerPrefix '{{commit_marker_prefix}}' `
+        -HeadSha '{{head_sha}}' `
+        -Verbose
+    if ($marked) {
+        Write-Verbose "Added a staleness warning to the rolling PR comment." -Verbose
+    } else {
+        Write-Verbose "No staleness warning needed (no rolling comment yet, or it already reflects head)." -Verbose
+    }
+
 # The release-automation logic lives in scripts/release/ReleaseAutomation.psm1, with a Pester
 # suite (scripts/release/ReleaseAutomation.Tests.ps1) that exercises it against fixtures via
 # `just test-scripts`. The recipes below are thin wrappers that import the module and call its

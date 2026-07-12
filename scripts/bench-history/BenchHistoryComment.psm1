@@ -13,12 +13,28 @@
 # imports this module directly and calls Remove-RollingComment to sweep away a comment left by an
 # earlier iteration of the same PR (e.g. a benchmarked change that was later reverted).
 #
+# A benchmark run takes many hours, and a new push cancels the in-flight one, so the comment a reader
+# sees can lag the PR tip by a long way. Two seams keep that honest: the analyze job embeds a hidden
+# "analyzed commit" marker in the body (which commit the numbers describe), and the mark-stale job -
+# which fires at the START of a new run - calls Set-RollingCommentStaleness to prepend a warning
+# banner stating how far behind HEAD those numbers now are (via Get-CommitsBehind), so nobody mistakes
+# hours-old results for the current state. The banner clears itself when the next analyze rewrites the
+# body with fresh results.
+#
 # Every GitHub-touching call goes through `gh api` behind the single Invoke-GhCapture seam the
 # Pester suite (BenchHistoryComment.Tests.ps1) mocks, so the find/update/create/delete logic is
 # exercised without touching a real pull request. Unlike an agent-authored GitHub post, this is
 # CI/bot output and therefore carries NO `[Copilot speaking]` prefix.
 
 Set-StrictMode -Version Latest
+
+# Sentinel pair bounding the staleness warning banner Set-RollingCommentStaleness prepends. Keeping the
+# banner between two hidden markers makes a re-run REPLACE it (strip the old block, insert the new)
+# rather than stack a second copy, and lets the block be located without depending on its wording.
+# Purely internal to this module - only Set-RollingCommentStaleness produces and consumes it - so
+# unlike the caller-supplied dedup and analyzed-commit markers it needs no workflow-level definition.
+$script:StaleBannerOpen = '<!-- folo-bench-history-stale -->'
+$script:StaleBannerClose = '<!-- /folo-bench-history-stale -->'
 
 function Invoke-GhCapture {
     # Runs `gh` with the given arguments, capturing stdout and stderr SEPARATELY. stderr is
@@ -33,7 +49,13 @@ function Invoke-GhCapture {
     param([Parameter(Mandatory)][object[]] $Arguments)
 
     $PSNativeCommandUseErrorActionPreference = $false
-    $stderrFile = New-TemporaryFile
+    # `-WhatIf:$false` on the temp-file bookkeeping: New-TemporaryFile and Remove-Item both support
+    # ShouldProcess, so an ambient $WhatIfPreference from a SupportsShouldProcess CALLER (e.g.
+    # Set-RollingCommentStaleness -WhatIf, which still needs the read GETs that back its preview) would
+    # otherwise make New-TemporaryFile a no-op and null out $stderrFile. This stderr redirect is a
+    # read-side implementation detail, never the state change -WhatIf is meant to gate, so it must run
+    # regardless; the caller gates the actual mutating `gh` call itself.
+    $stderrFile = New-TemporaryFile -WhatIf:$false
     try {
         $stderrPath = $stderrFile.FullName
         $stdout = (gh @Arguments 2>$stderrPath | Out-String)
@@ -48,7 +70,38 @@ function Invoke-GhCapture {
         return $stdout
     }
     finally {
-        Remove-Item -LiteralPath $stderrFile.FullName -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $stderrFile.FullName -Force -ErrorAction SilentlyContinue -WhatIf:$false
+    }
+}
+
+function Assert-Repo {
+    # Guards the `owner/name` value spliced into every `gh api` REST path (`repos/<repo>/...`). It
+    # arrives from workflow context (`github.repository`), but validating its shape here keeps the path
+    # well-formed and forecloses any path-traversal/injection surprise if a caller ever passes it from a
+    # less trustworthy source. Throws on a malformed value. Shared by Assert-RepoAndPr and the
+    # compare-API caller (which has no PR number).
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string] $Repo)
+
+    if ($Repo -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') {
+        throw "Repository must be in 'owner/name' form, got '$Repo'."
+    }
+}
+
+function Assert-CommitSha {
+    # Guards a commit SHA spliced into a `gh api` compare path (`repos/<repo>/compare/<base>...<head>`).
+    # Both the PR head SHA (from `github.event.pull_request.head.sha`) and the analyzed SHA parsed from
+    # the hidden marker are full 40-char hex, so requiring that shape both rejects a malformed/injected
+    # value and keeps the REST path well-formed. $Label names which SHA in the error. Throws on a
+    # malformed value.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $Sha,
+        [Parameter(Mandatory)][string] $Label
+    )
+
+    if ($Sha -notmatch '^[0-9a-fA-F]{40}$') {
+        throw "$Label commit SHA must be a 40-character hex string, got '$Sha'."
     }
 }
 
@@ -63,9 +116,7 @@ function Assert-RepoAndPr {
         [Parameter(Mandatory)][string] $PrNumber
     )
 
-    if ($Repo -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') {
-        throw "Repository must be in 'owner/name' form, got '$Repo'."
-    }
+    Assert-Repo -Repo $Repo
     # `^[1-9][0-9]*$` (not `^[0-9]+$`): a PR number is a positive integer, so reject `0` and any
     # leading-zero form to match the error message and keep a well-formed REST path.
     if ($PrNumber -notmatch '^[1-9][0-9]*$') {
@@ -219,4 +270,212 @@ function Remove-RollingComment {
     return $true
 }
 
-Export-ModuleMember -Function Find-RollingComment, Publish-RollingComment, Remove-RollingComment
+function Get-CommitsBehind {
+    # Counts how many commits $HeadSha carries beyond $BaseSha using the GitHub compare API, so the
+    # rolling comment can state how far its analyzed commit lags the current PR tip WITHOUT a
+    # full-history clone: the topology is computed server-side and still resolves a commit orphaned by a
+    # force-push (which a fresh shallow checkout would not contain). Returns a hashtable:
+    #   @{ Related = $true;  Behind = <int> }  when the two commits share history (Behind = `ahead_by`,
+    #                                           the commits HEAD has that BASE lacks - exactly the
+    #                                           "results are N commits behind the tip" figure);
+    #   @{ Related = $false; Behind = 0 }       when they have NO common ancestor (compare 404s) or the
+    #                                           base SHA no longer resolves - the caller then renders the
+    #                                           numberless "out of date" wording.
+    # Only a 404 is treated as "not comparable"; every other `gh` failure is a genuine error and is
+    # rethrown, so a transient outage is never silently reported as "out of date". Isolates the real
+    # `gh api` compare call behind Invoke-GhCapture so the tests can mock it.
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][string] $Repo,
+        [Parameter(Mandatory)][string] $BaseSha,
+        [Parameter(Mandatory)][string] $HeadSha
+    )
+
+    Assert-Repo -Repo $Repo
+    Assert-CommitSha -Sha $BaseSha -Label 'Base'
+    Assert-CommitSha -Sha $HeadSha -Label 'Head'
+
+    try {
+        # `<base>...<head>` (three dots) is the compare endpoint's basehead syntax; both SHAs are
+        # validated 40-hex above, so the path is safe to splice.
+        $output = Invoke-GhCapture -Arguments @(
+            'api', "repos/$Repo/compare/$BaseSha...$HeadSha"
+        )
+    }
+    catch {
+        # The compare endpoint 404s with "No common ancestor for the two commits" for unrelated
+        # histories (e.g. a force-push that replaced the branch) and with a not-found message when the
+        # base SHA no longer resolves. Both mean "cannot express a distance" -> Related=$false so the
+        # caller falls back to the numberless wording. Match the HTTP status (gh appends "(HTTP 404)")
+        # or the specific messages; anything else is a real failure and propagates.
+        $message = $_.Exception.Message
+        if ($message -match 'HTTP 404' -or $message -match '(?i)no common ancestor' -or
+            $message -match '(?i)no commit found') {
+            return @{ Related = $false; Behind = 0 }
+        }
+        throw
+    }
+
+    $comparison = $output | ConvertFrom-Json
+    # `ahead_by` is always present on a successful compare; guard defensively so a schema surprise
+    # degrades to the "out of date" wording rather than throwing.
+    if ($comparison -and ($comparison.PSObject.Properties.Name -contains 'ahead_by')) {
+        return @{ Related = $true; Behind = [int] $comparison.ahead_by }
+    }
+    return @{ Related = $false; Behind = 0 }
+}
+
+function Add-StalenessBanner {
+    # Pure string transform: returns $Body with a fresh staleness banner carrying $Warning inserted
+    # just after the dedup $Marker line, replacing any banner a previous run left behind. Factored out
+    # of Set-RollingCommentStaleness (and kept unexported) so the strip/insert bookkeeping is one
+    # testable place. Idempotent by construction: it first removes every line of any existing
+    # sentinel-bounded block, then rebuilds "marker, blank, banner, blank, rest" with the rest's leading
+    # blank lines trimmed, so re-running on its own output yields byte-identical text (no stacking, no
+    # accumulating blank lines).
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][string] $Body,
+        [Parameter(Mandatory)][string] $Warning,
+        [Parameter(Mandatory)][string] $Marker
+    )
+
+    # 1. Drop any previously-inserted banner block (open..close inclusive).
+    $kept = [System.Collections.Generic.List[string]]::new()
+    $inBanner = $false
+    foreach ($line in @($Body -split "`n")) {
+        $trimmed = $line.Trim()
+        if ($trimmed -eq $script:StaleBannerOpen) { $inBanner = $true; continue }
+        if ($inBanner) {
+            if ($trimmed -eq $script:StaleBannerClose) { $inBanner = $false }
+            continue
+        }
+        $kept.Add($line)
+    }
+
+    # 2. Build the fresh banner: a GitHub "warning" alert bounded by the sentinel pair so the next
+    #    strip finds it.
+    $banner = @(
+        $script:StaleBannerOpen
+        '> [!WARNING]'
+        "> $Warning"
+        $script:StaleBannerClose
+    )
+
+    # 3. Insert it right after the dedup marker line, with exactly one blank line on each side. If the
+    #    marker is somehow absent, prepend the banner at the very top instead.
+    $markerIndex = -1
+    for ($i = 0; $i -lt $kept.Count; $i++) {
+        if ($kept[$i].Contains($Marker)) { $markerIndex = $i; break }
+    }
+    if ($markerIndex -lt 0) {
+        return (($banner + @('') + @($kept)) -join "`n")
+    }
+
+    $after = [System.Collections.Generic.List[string]]::new()
+    for ($i = $markerIndex + 1; $i -lt $kept.Count; $i++) { $after.Add($kept[$i]) }
+    while ($after.Count -gt 0 -and $after[0].Trim() -eq '') { $after.RemoveAt(0) }
+
+    $assembled = [System.Collections.Generic.List[string]]::new()
+    for ($i = 0; $i -le $markerIndex; $i++) { $assembled.Add($kept[$i]) }
+    $assembled.Add('')
+    foreach ($b in $banner) { $assembled.Add($b) }
+    $assembled.Add('')
+    foreach ($a in $after) { $assembled.Add($a) }
+    return ($assembled -join "`n")
+}
+
+function Set-RollingCommentStaleness {
+    # Called at the START of a new PR benchmark run (the mark-stale job) to flag that the rolling
+    # comment's currently-displayed findings now lag the PR tip and a fresh run is underway, so a reader
+    # never mistakes hours-old numbers for the current state. Finds the rolling comment by $Marker
+    # (no-op when the PR has none yet); reads the analyzed commit SHA from the hidden
+    # "$CommitMarkerPrefix<40-hex> -->" marker the analyze job embeds; asks Get-CommitsBehind how far
+    # that commit lags $HeadSha; and PATCHes a warning banner onto the TOP of the comment body. Three
+    # outcomes:
+    #   * a concrete distance                       -> "... N commit(s) behind HEAD ..."
+    #   * unrelated histories / no analyzed marker  -> generic "... out of date ..." (no number)
+    #   * already at $HeadSha (distance 0)          -> no banner is warranted, so nothing is patched.
+    # The banner is bounded by a sentinel pair (see Add-StalenessBanner) so a re-run replaces rather
+    # than stacks it, and the next completed analyze - which rewrites the whole body from scratch -
+    # drops it automatically once real new results land. Returns $true when the comment was patched.
+    # SupportsShouldProcess because editing a comment is state-changing (matches the module's other
+    # mutating helpers): the PATCH is gated on ShouldProcess so `-WhatIf` reports without performing it.
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)][string] $Repo,
+        [Parameter(Mandatory)][string] $PrNumber,
+        [Parameter(Mandatory)][string] $Marker,
+        [Parameter(Mandatory)][string] $CommitMarkerPrefix,
+        [Parameter(Mandatory)][string] $HeadSha
+    )
+
+    Assert-RepoAndPr -Repo $Repo -PrNumber $PrNumber
+    Assert-CommitSha -Sha $HeadSha -Label 'Head'
+
+    $existing = Find-RollingComment -Repo $Repo -PrNumber $PrNumber -Marker $Marker
+    if (-not $existing) {
+        Write-Verbose ("No rolling comment on PR #$PrNumber to flag as stale; nothing to do (the first " +
+            "completed run will post one carrying the analyzed-commit marker).")
+        return $false
+    }
+
+    $body = $existing.body
+
+    # Pull the analyzed commit SHA out of the hidden marker the analyze job embeds
+    # ("$CommitMarkerPrefix<40-hex> -->"). A pre-change comment - or any body missing the marker -
+    # yields no SHA, in which case a distance cannot be expressed and we fall back to the numberless
+    # wording. Escape the prefix: it is HTML and contains regex metacharacters (`!`, `-`).
+    $analyzedSha = $null
+    $match = [regex]::Match($body, "$([regex]::Escape($CommitMarkerPrefix))([0-9a-fA-F]{40})")
+    if ($match.Success) { $analyzedSha = $match.Groups[1].Value }
+
+    $warning = $null
+    if ($analyzedSha) {
+        $distance = Get-CommitsBehind -Repo $Repo -BaseSha $analyzedSha -HeadSha $HeadSha
+        if ($distance.Related -and $distance.Behind -eq 0) {
+            Write-Verbose ("Rolling comment on PR #$PrNumber already reflects HEAD ($HeadSha); leaving it " +
+                "unmarked.")
+            return $false
+        }
+        if ($distance.Related) {
+            $noun = if ($distance.Behind -eq 1) { 'commit' } else { 'commits' }
+            $warning = "Benchmark results are $($distance.Behind) $noun behind HEAD. This comment will be updated when newer results are available."
+        }
+    }
+    if (-not $warning) {
+        $warning = 'Benchmark results are out of date. This comment will be updated when newer results are available.'
+    }
+
+    $newBody = Add-StalenessBanner -Body $body -Warning $warning -Marker $Marker
+    if ($newBody -eq $body) {
+        Write-Verbose ("Rolling comment on PR #$PrNumber already carries this staleness banner; no update " +
+            "needed.")
+        return $false
+    }
+
+    if (-not $PSCmdlet.ShouldProcess("comment #$($existing.id) on PR #$PrNumber", 'Flag benchmark comment as stale')) {
+        return $false
+    }
+
+    # Send the edited body through a FILE (`-F body=@<path>`) for the same reasons Publish-RollingComment
+    # does: a rendered report can run to tens of kilobytes (over the command-line length limit), it
+    # avoids shell-escaping arbitrary Markdown, and it keeps the body out of process listings.
+    $tempBodyFile = New-TemporaryFile
+    try {
+        Set-Content -LiteralPath $tempBodyFile.FullName -Value $newBody -Encoding utf8 -NoNewline
+        Write-Verbose ("Flagging rolling comment #$($existing.id) on PR #$PrNumber as stale: $warning")
+        Invoke-GhCapture -Arguments @(
+            'api', '--method', 'PATCH', "repos/$Repo/issues/comments/$($existing.id)", '-F', "body=@$($tempBodyFile.FullName)"
+        ) | Out-Null
+    }
+    finally {
+        Remove-Item -LiteralPath $tempBodyFile.FullName -Force -ErrorAction SilentlyContinue
+    }
+    return $true
+}
+
+Export-ModuleMember -Function Find-RollingComment, Publish-RollingComment, Remove-RollingComment, Get-CommitsBehind, Set-RollingCommentStaleness

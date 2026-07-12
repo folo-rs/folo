@@ -27,8 +27,14 @@ concurrency:
 # by the `analyze` job (which posts/updates it) and the `cleanup` job (which deletes it when the PR
 # no longer touches any benchmarkable package). The comment module dedups solely on this marker, so
 # a single definition keeps the post and delete paths from drifting apart.
+#
+# PR_COMMIT_MARKER_PREFIX is the prefix of a SECOND hidden marker the `analyze` job embeds to record
+# which commit its numbers describe (`<prefix><full-sha> -->`). The `mark-stale` job parses that SHA
+# back out to measure how far the displayed results now lag HEAD. Defined here once so the writer
+# (analyze compose step) and the reader (mark-stale) cannot drift, mirroring PR_COMMENT_MARKER.
 env:
   PR_COMMENT_MARKER: "<!-- folo-bench-history-pr -->"
+  PR_COMMIT_MARKER_PREFIX: "<!-- folo-bench-history-commit:"
 
 jobs:
   # Compute which packages the PR touched (cargo-delta vs origin/main), filtered to the
@@ -95,6 +101,50 @@ jobs:
             "packages_json=$($output.PackagesJson)"
             "skip_all=$($output.SkipAll)"
           ) | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
+
+  # As soon as a new run is known to be collecting (the delta is non-empty), flag any existing rolling
+  # comment as STALE so a reader is not misled by hours-old numbers while the multi-hour collect+analyze
+  # runs. Deliberately lightweight - default (shallow) checkout + preinstalled gh + a direct module
+  # call, no build-env setup, no Azure, no full history - so the warning appears within minutes of the
+  # push (right after this short delta job), long before analyze rewrites the comment. It reads the
+  # analyzed-commit marker from the current comment and asks the GitHub compare API how far HEAD is
+  # ahead, which needs no clone and still resolves a commit orphaned by a force-push. Gated on
+  # skip_all != 'true' for the same reason collect is: when the PR now touches nothing benchmarkable the
+  # `cleanup` job DELETES the comment instead, and marking a comment about to be deleted would only race
+  # that delete. Runs in parallel with collect (both `needs: delta`).
+  mark-stale:
+    needs: delta
+    if: >-
+      always()
+      && github.repository == 'folo-rs/folo'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && needs.delta.outputs.skip_all != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # pull-requests to PATCH the rolling comment; contents so the compare API can read commit topology
+    # and the checkout can put the shared BenchHistoryComment module on disk (the marking logic lives
+    # there so it is unit-tested against a mocked gh, mirroring how analyze posts via the same module).
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        # Default shallow checkout is enough: the commits-behind count is computed server-side by the
+        # compare API, so no local history is walked here - only the module needs to be on disk.
+        uses: actions/checkout@v6
+
+      - name: Flag rolling PR comment as stale
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MARKER: ${{ env.PR_COMMENT_MARKER }}
+          COMMIT_MARKER_PREFIX: ${{ env.PR_COMMIT_MARKER_PREFIX }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: just gh-mark-pr-bench-history-stale "$env:REPO" "$env:PR_NUMBER" "$env:MARKER" "$env:COMMIT_MARKER_PREFIX" "$env:HEAD_SHA"
 
   # Benchmark ONLY the touched packages across the full platform matrix, keyed by the PR head
   # commit, appending the results into the prod store. Skipped when the PR touches nothing
@@ -284,6 +334,8 @@ jobs:
         shell: pwsh
         env:
           MARKER: ${{ env.PR_COMMENT_MARKER }}
+          COMMIT_MARKER_PREFIX: ${{ env.PR_COMMIT_MARKER_PREFIX }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           NOTABLE: ${{ steps.notable.outputs.value }}
           REPORT_ARTIFACT_URL: ${{ steps.full_reports.outputs.artifact-url }}
           SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
@@ -294,6 +346,14 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
 
           $header = "### Benchmark history (vs ``main``)"
+
+          # Record which commit these numbers describe: a human-visible short-SHA line (so a reader can
+          # see at a glance what was measured) and, embedded once in the body via the shared prefix, a
+          # hidden full-SHA marker the mark-stale job parses on the next push to measure how far behind
+          # HEAD the results have fallen. Both derive from the same head SHA in this one step, so they
+          # cannot drift.
+          $shortSha = $env:HEAD_SHA.Substring(0, 7)
+          $analyzedLine = "**Analyzed commit:** ``$shortSha``"
 
           # Disclose the collection scope so a reader never mistakes a clean result for the whole
           # suite: PR runs benchmark ONLY the packages this PR changed (cargo-delta scoped), and the
@@ -322,6 +382,8 @@ jobs:
               ''
               $scope
               ''
+              $analyzedLine
+              ''
               $summary
               ''
               '---'
@@ -338,15 +400,19 @@ jobs:
               ''
               $scope
               ''
+              $analyzedLine
+              ''
               '✅ No benchmark regressions detected against `main`.'
               ''
               'This check is advisory and never blocks the merge. It refreshes on every push.'
             )
           }
 
-          # Prepend the hidden dedup marker so the comment module finds and updates this same comment
-          # on the next push instead of posting a duplicate.
-          $body = @($env:MARKER, '') + $parts
+          # Prepend the hidden dedup marker (so the comment module finds and updates this same comment
+          # on the next push instead of posting a duplicate) and the hidden analyzed-commit marker (so
+          # mark-stale can recover the measured SHA); both are HTML comments, invisible when rendered.
+          $commitMarker = "$env:COMMIT_MARKER_PREFIX$env:HEAD_SHA -->"
+          $body = @($env:MARKER, $commitMarker, '') + $parts
           Set-Content -Path (Join-Path $env:SCRATCH_DIR 'comment-body.md') -Value ($body -join "`n") -Encoding utf8
 
       # One rolling comment per PR, updated in place (deduped by the hidden marker) so repeated pushes
