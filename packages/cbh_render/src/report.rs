@@ -109,6 +109,12 @@ pub struct ReportInput<'a> {
     /// A warning shown when the analysis admitted dirty runs on the base branch's
     /// tip (the working-tree-dirty exception). Absent in the normal case.
     pub warning: Option<&'a str>,
+    /// How many benchmarks were dropped as "ghosts" — present only for past commits,
+    /// not at the context commit — before detection. Zero when `--include-ghosts`
+    /// disabled the filter or nothing was dropped. Carried for the JSON report so a
+    /// machine consumer sees that scoping happened; the text and Markdown reports
+    /// surface it only through the verbose trail and the empty-outcome hint.
+    pub ghosts_excluded: usize,
 }
 
 /// The JSON shape of a per-set slice.
@@ -227,6 +233,9 @@ struct JsonReport<'a> {
     regressions: usize,
     /// Number of flagged improvements.
     improvements: usize,
+    /// Benchmarks dropped as ghosts (present only for past commits, not at the
+    /// context commit) before detection. Zero when `--include-ghosts` was passed.
+    ghosts_excluded: usize,
     /// A diagnostic hint when stored runs existed but none were analyzed.
     #[serde(skip_serializing_if = "Option::is_none")]
     hint: Option<&'a str>,
@@ -807,6 +816,7 @@ fn render_json(input: &ReportInput<'_>) -> String {
         series: input.series,
         regressions: count_top(input.findings, Direction::Regression),
         improvements: count_top(input.findings, Direction::Improvement),
+        ghosts_excluded: input.ghosts_excluded,
         hint: input.hint,
         warning: input.warning,
         findings: input
@@ -975,6 +985,7 @@ mod tests {
             sets: summaries,
             hint: None,
             warning: None,
+            ghosts_excluded: 0,
         }
     }
 
@@ -996,6 +1007,7 @@ mod tests {
             sets: &[],
             hint: None,
             warning: None,
+            ghosts_excluded: 0,
         }
     }
 
@@ -1226,6 +1238,7 @@ mod tests {
             sets: &[],
             hint: None,
             warning: None,
+            ghosts_excluded: 0,
         };
         let report = render(&input, ReportFormat::Text, false);
         assert!(report.contains("Analyzed project folo"), "{report}");
@@ -1249,6 +1262,7 @@ mod tests {
             sets: &[],
             hint: Some("Found 2 stored runs ... dirty snapshots"),
             warning: None,
+            ghosts_excluded: 0,
         };
         let report = render(&input, ReportFormat::Text, false);
         assert!(report.contains("No notable changes detected."), "{report}");
@@ -1319,6 +1333,7 @@ mod tests {
             sets: &summaries,
             hint: None,
             warning: None,
+            ghosts_excluded: 0,
         };
         let report = render(&input, ReportFormat::Text, false);
         // The per-set counts line carries the set's own tallies, distinct from the
@@ -1527,6 +1542,7 @@ mod tests {
             sets: &[],
             hint: Some("Found 2 stored runs ... commit your working tree"),
             warning: None,
+            ghosts_excluded: 0,
         };
         let report = render(&input, ReportFormat::Markdown, false);
         assert!(report.contains("No notable changes detected."), "{report}");
@@ -1549,6 +1565,7 @@ mod tests {
             sets: &[],
             hint: Some("dirty snapshots on base-branch commits"),
             warning: None,
+            ghosts_excluded: 0,
         };
         let report = render(&input, ReportFormat::Json, false);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
@@ -1596,6 +1613,7 @@ mod tests {
             sets: &[],
             hint: None,
             warning: Some("Warning: dirty runs were included."),
+            ghosts_excluded: 0,
         };
         let text = render(&input, ReportFormat::Text, false);
         assert!(text.contains("No notable changes detected."), "{text}");
@@ -1621,6 +1639,7 @@ mod tests {
             sets: &[],
             hint: None,
             warning: None,
+            ghosts_excluded: 0,
         };
         let report = render(&input, ReportFormat::Json, false);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
@@ -1696,6 +1715,7 @@ mod tests {
             sets: &[],
             hint: None,
             warning: None,
+            ghosts_excluded: 0,
         };
 
         let text = render(&input, ReportFormat::Text, false);
@@ -1961,6 +1981,7 @@ mod tests {
             sets: &summaries,
             hint: None,
             warning: None,
+            ghosts_excluded: 0,
         };
         let report = render(&input, ReportFormat::Text, false);
         assert!(report.contains("drift"), "{report}");
@@ -2004,6 +2025,7 @@ mod tests {
             sets: &summaries,
             hint: None,
             warning: None,
+            ghosts_excluded: 0,
         };
         let report = render(&input, ReportFormat::Markdown, false);
         assert!(report.contains("drift"), "{report}");
