@@ -340,7 +340,7 @@ jobs:
               ''
               '✅ No benchmark regressions detected against `main`.'
               ''
-              'This check is advisory and never blocks the merge. It refreshes on every push; if the PR later stops touching any benchmarked package, this comment is removed.'
+              'This check is advisory and never blocks the merge. It refreshes on every push.'
             )
           }
 
