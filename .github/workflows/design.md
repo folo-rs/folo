@@ -42,17 +42,20 @@ leaning on push-to-`main` as the backstop for what it drops. PRs run the test an
 suites only on the x86_64 Windows and Linux runners: the whole ARM pass (which carries the
 MSRV *test* run) and the macOS legs of the test and docs jobs wait for `main`, because
 architecture- and OS-gated behaviour rarely diverges on a PR and re-running the
-platform-independent test and doc suites on macOS almost never is informative. Miri runs on
-Windows only for a PR — being an architecture-agnostic interpreter, its Linux and ARM
-re-runs are a `main`-only sanity net over cfg-gated paths — and the release-profile Clippy
-pass and the `careful` run are skipped entirely on PRs. The compile-oriented passes (dev
-Clippy, release build, frozen-minimum check, feature `hack`) deliberately keep their macOS
-leg on PRs, because a cheap macOS cross-compile still catches macOS-specific build breaks
-that the pruned runtime passes would not. MSRV *compilation* therefore stays covered on
-every PR by `check-frozen`, which compiles all targets on the MSRV toolchain against the
-frozen minimum-version lockfile even though the ARM MSRV test pass is `main`-only. Because a
-push to `main` is the first place the pruned checks can fail, that event — unlike a PR —
-files a tracking issue (see Failure alerting).
+platform-independent test and doc suites on macOS almost never is informative. The base Miri
+pass runs on Windows only for a PR — being an architecture-agnostic interpreter, its Linux
+and ARM re-runs are a `main`-only sanity net over cfg-gated paths — and the release-profile
+Clippy pass and the `careful` run are skipped entirely on PRs. The many-seeds Miri passes are
+the exception to that pruning: gated by *package* rather than by event, they run on Linux —
+on a PR as much as on `main` — whenever their specific package is touched, because their
+worth is catching seed-dependent UB in that code, not covering a platform. The
+compile-oriented passes (dev Clippy, release build, frozen-minimum check, feature `hack`)
+deliberately keep their macOS leg on PRs, because a cheap macOS cross-compile still catches
+macOS-specific build breaks that the pruned runtime passes would not. MSRV *compilation*
+therefore stays covered on every PR by `check-frozen`, which compiles all targets on the
+MSRV toolchain against the frozen minimum-version lockfile even though the ARM MSRV test
+pass is `main`-only. Because a push to `main` is the first place the pruned checks can fail,
+that event — unlike a PR — files a tracking issue (see Failure alerting).
 
 The event split is expressed two ways: a job whose every leg is pruned on a PR (the ARM test
 and Miri passes, `clippy-release`, `careful`) carries a whole-job `github.event_name ==
