@@ -9,7 +9,7 @@ file_exclude_patterns = ["target", "mutants.out", "mutants.out.old", "**/.*"]
 #
 # Keep this list small. A file earns a trip wire only when it genuinely changes what "passing"
 # means for *every* crate AND, when changed on its own, touches no package - so without the trip
-# wire delta would select nothing and validate nothing. Only three files clear that bar:
+# wire delta would select nothing and validate nothing. Only four files clear that bar:
 #
 #   - rust-toolchain.toml - the pinned stable toolchain; a bump changes codegen, lints and MSRV
 #     behavior for every crate.
