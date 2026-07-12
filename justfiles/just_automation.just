@@ -129,7 +129,10 @@ gh-write-bench-history-machine-key file:
     if ($key -notmatch '^[0-9a-fA-F]{16}$') {
         throw "machine-key produced '$key', which is not a 16-hex-character fingerprint; refusing to persist it."
     }
-    Set-Content -Path $file -Value $key.ToLowerInvariant() -Encoding utf8 -NoNewline
+    # Normalize to lowercase right after validation so the persisted file and the verbose log below
+    # always agree, even if the tool ever emits uppercase or mixed-case hex.
+    $key = $key.ToLowerInvariant()
+    Set-Content -Path $file -Value $key -Encoding utf8 -NoNewline
     Write-Verbose "Wrote machine key '$key' to $file." -Verbose
 
 # Analyzes the collected history for regressions across ALL engines and target triples, restricted

@@ -22,9 +22,12 @@ Set-StrictMode -Version Latest
 function Get-MachineKeyArgument {
     # Reads every machine-key file the collect matrix uploaded into $KeyDirectory and returns the
     # `--machine-key <fingerprint>` argument vector (a string[]) to splat into the analyze tool call.
-    # Each collect leg's artifact contributes one file holding a single 16-hex-character fingerprint
-    # (as emitted by `cargo-bench-history machine-key`); files are read recursively so it does not
-    # matter whether the download flattened them or kept one subdirectory per artifact.
+    # Each collect leg's artifact contributes one `machine-key.txt` holding a single 16-hex-character
+    # fingerprint (as emitted by `cargo-bench-history machine-key`); the scan is restricted to that
+    # exact filename and recursive, so it does not matter whether the download flattened the files or
+    # kept one subdirectory per artifact, while stray files the download may drop alongside them (e.g.
+    # `actions/download-artifact` metadata, a `.DS_Store`, an accidental readme) are ignored rather
+    # than mistaken for a corrupt key and failing the whole analysis.
     #
     # Keys are trimmed, lowercased, de-duplicated and sorted so two runners with identical hardware
     # collapse to one `--machine-key` (the tool would otherwise see a redundant repeat) and the
@@ -53,10 +56,14 @@ function Get-MachineKeyArgument {
         return @()
     }
 
-    $files = @(Get-ChildItem -LiteralPath $KeyDirectory -Recurse -File)
+    # Scan recursively but ONLY for the `machine-key.txt` each collect leg writes: restricting the
+    # filename means an unrelated file the artifact download may leave in the tree (metadata, a
+    # `.DS_Store`, a stray readme) is skipped instead of failing fingerprint validation, and
+    # -ErrorAction Stop turns any enumeration error into a hard failure rather than a partial key set.
+    $files = @(Get-ChildItem -LiteralPath $KeyDirectory -Recurse -File -Filter 'machine-key.txt' -ErrorAction Stop)
     if ($files.Count -eq 0) {
-        Write-Verbose ("Machine-key directory '$KeyDirectory' is empty: zero collected keys. The " +
-            'caller skips analysis.')
+        Write-Verbose ("Machine-key directory '$KeyDirectory' holds no machine-key.txt files: zero " +
+            'collected keys. The caller skips analysis.')
         return @()
     }
 

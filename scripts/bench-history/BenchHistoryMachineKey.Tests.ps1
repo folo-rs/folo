@@ -82,6 +82,23 @@ Describe 'Get-MachineKeyArgument' {
                 Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
             }
         }
+
+        It 'ignores stray non-key files the artifact download may leave alongside the keys' {
+            $dir = Get-KeyDirectory
+            try {
+                Write-KeyFile -Directory $dir -Name 'ubuntu-latest' -Content 'abcdef0123456789'
+                # Files the download can drop next to the real keys - metadata, a macOS `.DS_Store`,
+                # an accidental readme. None is a machine-key.txt, so the scan must skip them all
+                # rather than fail fingerprint validation and abort the whole analysis.
+                Set-Content -LiteralPath (Join-Path $dir 'metadata.json') -Value '{ "not": "a key" }' -Encoding utf8
+                Set-Content -LiteralPath (Join-Path $dir 'README.md') -Value 'not a fingerprint' -Encoding utf8
+                Set-Content -LiteralPath (Join-Path $dir 'ubuntu-latest/.DS_Store') -Value 'junk' -Encoding utf8
+                $result = Get-MachineKeyArgument -KeyDirectory $dir
+                $result | Should -Be @('--machine-key', 'abcdef0123456789')
+            } finally {
+                Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 
     Context 'zero collected keys (total collect failure)' {
@@ -93,6 +110,18 @@ Describe 'Get-MachineKeyArgument' {
         It 'returns an empty vector for an empty directory' {
             $dir = Get-KeyDirectory
             try {
+                @(Get-MachineKeyArgument -KeyDirectory $dir).Count | Should -Be 0
+            } finally {
+                Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        It 'returns an empty vector for a directory holding only stray non-key files' {
+            $dir = Get-KeyDirectory
+            try {
+                # A total collect failure uploads no machine-key.txt; anything else in the tree is not
+                # a key, so the recipe treats it as zero collected keys and the caller skips analysis.
+                Set-Content -LiteralPath (Join-Path $dir 'metadata.json') -Value '{}' -Encoding utf8
                 @(Get-MachineKeyArgument -KeyDirectory $dir).Count | Should -Be 0
             } finally {
                 Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
