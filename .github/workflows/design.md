@@ -189,16 +189,20 @@ tracks.
 
 Collection is **delta-scoped**: a preflight job diffs the PR against `main` and benchmarks only
 the touched packages, since re-measuring the whole workspace on every PR push would be
-wasteful. Analysis, by contrast, is deliberately **not** package-scoped, and that is a
-structural guarantee rather than a happy coincidence. Branch mode only yields a finding for a
-series that has a data point at the branch tip, and only the collected (touched) packages have
-a point at the PR's branch-unique head commit — for *every* measurement engine. An untouched
-package's latest point sits on the base ancestry, so its tip level equals its base level and it
-can never be flagged. Filtering analysis by package name would in fact be wrong: benchmark
-identities are engine-dependent (some engines identify a series by bare operation name with no
-package prefix), so a name filter would silently drop those series and turn a real regression
-into a false negative. The scoping therefore lives entirely in *what gets collected*; analysis
-surveys everything and stays correct by construction.
+wasteful. Analysis, by contrast, is deliberately **not** package-scoped — yet it stays correctly
+scoped anyway, by construction rather than by a name filter. `analyze` by default considers only
+benchmarks **present at the context commit** (the PR head), dropping any "ghost" benchmark with
+no run there *before* detection. Because only the touched packages are collected at the PR's
+branch-unique head commit, only they are present there, so every untouched package is excluded
+as a ghost automatically — for *every* measurement engine — leaving exactly the collected set to
+analyze. Package scoping thus falls out of *what gets collected*, with no need to filter analysis
+by name, which would in fact be wrong: benchmark identities are engine-dependent (some engines
+identify a series by bare operation name with no package prefix), so a name filter would silently
+drop those series and turn a real regression into a false negative. The PR analysis therefore
+relies on that default ghost exclusion and must never pass `--include-ghosts`, which would
+re-admit every historical benchmark and defeat the scoping. As a side benefit the same filter
+also drops a benchmark the PR itself *removed*, so a deletion is never mis-reported as a
+regression.
 
 When a PR touches no benchmarkable package — including a PR that touched one earlier and then
 reverted it — a lightweight cleanup path removes any rolling comment a prior push left behind

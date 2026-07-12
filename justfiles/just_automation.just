@@ -162,10 +162,13 @@ gh-analyze-bench-history dir:
 # filter (only positional id-prefix subjects), and benchmark ids are engine-dependent (Callgrind
 # carries the package, Criterion group ids are crate-prefixed, but alloc_tracker/all_the_time use a
 # bare operation name), so an id-prefix filter would silently drop the measurement-engine series for
-# a touched package. The scoping is instead a structural property of branch mode: only the collected
-# (touched) packages have a point at the branch-unique head commit, so only they can produce a
-# finding - an untouched package's latest point sits on the base ancestry, giving tip == base and no
-# finding, for EVERY engine. See .github/workflows/design.md for the full invariant.
+# a touched package. The scoping is instead enforced by `analyze`'s DEFAULT ghost exclusion: it
+# analyzes only benchmarks present at the context commit (HEAD, the PR head), and only the collected
+# (touched) packages have a run there, so every untouched package is dropped as a "ghost" before
+# detection - for EVERY engine. This recipe therefore MUST NOT pass `--include-ghosts`: that flag
+# re-admits every historical benchmark in the store and would defeat the scoping. As a bonus the
+# same default also drops a benchmark this PR removed, so a deletion is never mis-flagged as a
+# regression. See .github/workflows/design.md for the full invariant.
 #
 # {{dir}} is a scratch directory OUTSIDE the repo checkout (the `analyze` job passes the runner temp
 # dir), so `analyze`'s own `git status --porcelain` dirty-check never sees these artefacts.
