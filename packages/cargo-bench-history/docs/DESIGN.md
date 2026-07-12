@@ -86,8 +86,8 @@ flowchart LR
 * **Observation timestamp** — every run carries a single wall-clock timestamp: when the
   benches ran and were stored. It is **provenance only** and never orders anything. It
   names dirty snapshot files so concurrent snapshots of one commit coexist. The
-  benchmarked commit's position on the timeline — and the basis for the `--since` /
-  `--until` window — is its committer date, read from the git graph at analyze time and
+  benchmarked commit's position on the timeline — and the basis for the `--since`
+  cutoff — is its committer date, read from the git graph at analyze time and
   never copied onto the run, so a rebase or amended date can never leave a stale
   timestamp behind. There is deliberately no "effective timestamp" concept and no
   timestamp override.
@@ -436,10 +436,14 @@ and the report ends with a warning that the data is ephemeral and suggests switc
 branch to persist history. The exception is limited to the tip and a flag overrides it.
 
 Series are ordered by git topology; runs on one commit sub-order clean-before-dirty, then
-by storage key. The `--since` / `--until` window drops whole runs by each commit's
+by storage key. The `--since` cutoff drops whole runs older than it by each commit's
 committer date (decided from topology before any out-of-window body is fetched); `--since`
 defaults to a six-month look-back uniformly, so a scheduled trend watch does not silently
-widen as history accumulates. Positional prefix subjects scope the analysis to benchmarks
+widen as history accumulates. The cutoff is deliberately one-sided: `--context` already
+anchors the newest edge of the timeline (its first-parent tip, the merge-base split, and the
+ghost-detection reference), so a symmetric `--until` would only re-trim that same edge by
+timestamp — a topology-first tool moves the tip with `--context` instead — and is therefore
+omitted. Positional prefix subjects scope the analysis to benchmarks
 whose id starts with a prefix; there is no metric filter, since metrics are an internal
 detail users are not expected to know.
 
@@ -451,8 +455,8 @@ per discriminant set (a set behind on collection at the context commit legitimat
 from another) and a present benchmark keeps all its metric-kind series. The filter runs
 before detection, so ghosts never contribute p-values to the false-discovery-rate correction.
 `--include-ghosts` opts back in and analyzes every benchmark in the data set. If a set has no
-runs at the context commit at all (`HEAD` was never collected, a collect failed, or `--until`
-excluded the tip), every benchmark is a ghost and the set analyzes empty with a dedicated
+runs at the context commit at all (`HEAD` was never collected or a collect failed),
+every benchmark is a ghost and the set analyzes empty with a dedicated
 hint pointing at `--include-ghosts` — an empty outcome the tool explains rather than guesses
 around. Because it changes only which reconstructed series are detected on (not which runs
 are selected), `--include-ghosts` is analyze-only and outside the selection lockstep (§8.5).
@@ -473,7 +477,7 @@ regression watch, a PR comment bot) reads that rather than the exit status.
 Regardless of `--verbose`, every query run (`analyze`, `list`, `prune`, `examine`) prints a
 one-line **effective-selection** summary to stderr — the engine, target-triple, and
 machine-key facets (each marked when auto-detected), the resolved base branch, and the
-`--since` / `--until` window — so the user always sees what was actually searched, not just
+`--since` cutoff — so the user always sees what was actually searched, not just
 what they typed. Two empty outcomes also explain themselves in the stdout report without
 verbose diagnostics: when facet-matching runs were stored but none entered the analysis the
 hint breaks down why, and when the effective (possibly auto-detected) partition holds no

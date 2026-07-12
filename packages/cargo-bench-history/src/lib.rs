@@ -142,7 +142,7 @@
 //! removed. When the context resolves onto the base branch itself, the whole
 //! selection *is* base-branch history, so the deletion is refused unless
 //! `--prune-base` confirms it. Narrow the selection with a facet, a `<commit>`
-//! argument, `--since`, or `--until`. `--dry-run` previews without deleting.
+//! argument, or `--since`. `--dry-run` previews without deleting.
 //!
 //! ## `examine`
 //!
@@ -186,12 +186,14 @@
 //!   (`--engine` defaults to every engine; `list discriminants` is a catalog and
 //!   defaults to every partition). The literal `all` removes the filter
 //!   for that dimension, e.g. `--machine-key all` spans every machine.
-//! * **Commit selection** (`--context`, `--base`, `--since`, `--until`) —
-//!   `--context` is the ref whose history is analyzed (default `HEAD`); `--base` is
-//!   the ref it branched from (default: the configured or detected default branch),
-//!   which determines the merge-base split. `--since`/`--until` bound the window by
-//!   each commit's **committer date** (read from git history) and accept an RFC 3339
-//!   timestamp, a `YYYY-MM-DD` date, or a relative duration such as `6 months ago`.
+//! * **Commit selection** (`--context`, `--base`, `--since`) — `--context` is the
+//!   ref whose history is analyzed (default `HEAD`); `--base` is the ref it branched
+//!   from (default: the configured or detected default branch), which determines the
+//!   merge-base split. Because `--context` already anchors the newest edge of the
+//!   timeline, `--since` is a one-sided cutoff: it bounds only the oldest commit to
+//!   include by that commit's **committer date** (read from git history) and accepts
+//!   an RFC 3339 timestamp, a `YYYY-MM-DD` date, or a relative duration such as
+//!   `6 months ago`.
 //! * **Data filtering** (`--no-dirty`) — exclude dirty snapshots.
 //!
 //! # Analyze modes

@@ -648,10 +648,10 @@ impl Workspace {
     /// at UTC midnight), on the current branch and returns its full commit ID, reusing the
     /// commit ID (without redating) if the label already exists.
     ///
-    /// Pinning the author and committer date lets the window tests exercise
-    /// `--since`/`--until`: `analyze`/`list` read each commit's committer timestamp
-    /// from git topology to decide the window before any object is fetched, so the
-    /// date stamped here governs how a seeded object behaves under the window.
+    /// Pinning the author and committer date lets the cutoff tests exercise
+    /// `--since`: `analyze`/`list` read each commit's committer timestamp
+    /// from git topology to decide the cutoff before any object is fetched, so the
+    /// date stamped here governs how a seeded object behaves under the cutoff.
     pub(crate) fn commit_dated(&self, date: &str, label: &str) -> String {
         if let Some(commit_id) = self.commits.borrow().get(label) {
             return commit_id.clone();

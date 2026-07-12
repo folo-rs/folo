@@ -281,11 +281,6 @@ struct TimelineArgs {
     /// a `YYYY-MM-DD` date, or a relative duration such as `6 months ago`.
     #[arg(long, value_name = "WHEN")]
     since: Option<String>,
-
-    /// Only consider commits made on or before this cutoff (same formats as
-    /// `--since`).
-    #[arg(long, value_name = "WHEN")]
-    until: Option<String>,
 }
 
 /// Per-format report output shared by `analyze`/`list`/`prune`.
@@ -496,7 +491,6 @@ impl AnalyzeCommand {
             base: self.timeline.base,
             no_dirty: self.no_dirty,
             since: self.timeline.since,
-            until: self.timeline.until,
             engine: self.facets.engine,
             target_triple: self.facets.target_triple,
             machine_key: self.facets.machine_key,
@@ -583,7 +577,6 @@ impl ListCommand {
             base: self.timeline.base,
             no_dirty: self.no_dirty,
             since: self.timeline.since,
-            until: self.timeline.until,
             engine: self.facets.engine,
             target_triple: self.facets.target_triple,
             machine_key: self.facets.machine_key,
@@ -646,7 +639,6 @@ impl ExamineCommand {
             base: self.timeline.base,
             no_dirty: self.no_dirty,
             since: self.timeline.since,
-            until: self.timeline.until,
             engine: self.facets.engine,
             target_triple: self.facets.target_triple,
             machine_key: self.facets.machine_key,
@@ -734,11 +726,6 @@ struct PruneCommitArgs {
     /// `YYYY-MM-DD` date, or a relative duration such as `6 months ago`.
     #[arg(long, value_name = "WHEN")]
     since: Option<String>,
-
-    /// Only prune commits made on or before this cutoff (same formats as
-    /// `--since`).
-    #[arg(long, value_name = "WHEN")]
-    until: Option<String>,
 }
 
 impl PruneCommand {
@@ -755,7 +742,6 @@ impl PruneCommand {
             base: self.commit_selection.base,
             commit: self.commit,
             since: self.commit_selection.since,
-            until: self.commit_selection.until,
             engine: self.facets.engine,
             target_triple: self.facets.target_triple,
             machine_key: self.facets.machine_key,
@@ -1441,7 +1427,7 @@ mod tests {
             "feature",
             "--base",
             "master",
-            "--until",
+            "--since",
             "2024-06-01T00:00:00Z",
             "--no-dirty",
             "--engine",
@@ -1459,7 +1445,7 @@ mod tests {
         assert_eq!(options.repo, Some(PathBuf::from("/work/folo")));
         assert_eq!(options.context.as_deref(), Some("feature"));
         assert_eq!(options.base.as_deref(), Some("master"));
-        assert_eq!(options.until.as_deref(), Some("2024-06-01T00:00:00Z"));
+        assert_eq!(options.since.as_deref(), Some("2024-06-01T00:00:00Z"));
         assert!(options.no_dirty);
         assert_eq!(
             options.engine,
@@ -1477,7 +1463,30 @@ mod tests {
         assert!(options.engine.is_empty());
         assert!(options.target_triple.is_empty());
         assert!(options.machine_key.is_empty());
-        assert!(options.until.is_none());
+        assert!(options.since.is_none());
+    }
+
+    #[test]
+    fn until_flag_is_rejected_after_removal() {
+        // `--until` was removed in favour of `--context` as the timeline's end, so
+        // every command that previously accepted it now rejects it as unknown.
+        for args in [
+            vec!["analyze", "--until", "2024-06-01"],
+            vec!["list", "runs", "--until", "2024-06-01"],
+            vec![
+                "examine",
+                "--benchmark",
+                "b",
+                "--metric",
+                "m",
+                "--until",
+                "2024-06-01",
+            ],
+            vec!["prune", "--dirty", "--until", "2024-06-01"],
+        ] {
+            let error = Cli::from_args(&["cargo-bench-history"], &args).unwrap_err();
+            assert!(error.status.is_err(), "{args:?} should reject --until");
+        }
     }
 
     #[test]
@@ -1640,8 +1649,6 @@ mod tests {
             "ci-pool",
             "--since",
             "2024-01-01",
-            "--until",
-            "2024-02-01",
             "--no-text",
             "--markdown",
             "examine.md",
@@ -1665,7 +1672,6 @@ mod tests {
         );
         assert_eq!(options.machine_key, vec!["ci-pool".to_owned()]);
         assert_eq!(options.since.as_deref(), Some("2024-01-01"));
-        assert_eq!(options.until.as_deref(), Some("2024-02-01"));
         assert!(options.no_text);
         assert_eq!(options.markdown, Some(PathBuf::from("examine.md")));
         assert_eq!(options.json, Some(PathBuf::from("examine.json")));
@@ -1791,8 +1797,6 @@ mod tests {
             "master",
             "--since",
             "2024-01-01T00:00:00Z",
-            "--until",
-            "2024-06-01T00:00:00Z",
             "--engine",
             "callgrind",
             "--target-triple",
@@ -1817,7 +1821,6 @@ mod tests {
             vec!["abc123".to_owned(), "def456".to_owned()]
         );
         assert_eq!(options.since.as_deref(), Some("2024-01-01T00:00:00Z"));
-        assert_eq!(options.until.as_deref(), Some("2024-06-01T00:00:00Z"));
         assert_eq!(options.engine, vec!["callgrind".to_owned()]);
         assert_eq!(
             options.target_triple,

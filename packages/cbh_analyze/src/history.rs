@@ -52,7 +52,7 @@ pub(crate) struct ResolvedHistory {
     /// object whose commit is absent is outside the analyzed history.
     pub(crate) order: HashMap<String, usize>,
     /// Committer timestamp of each first-parent commit, for deciding the
-    /// `--since`/`--until` window from topology before any object is fetched. A
+    /// `--since` cutoff from topology before any object is fetched. A
     /// commit absent here has an unknown time and is treated as in-window.
     pub(crate) commit_times: HashMap<String, Timestamp>,
     /// Subject line of each first-parent commit that has one, for labeling

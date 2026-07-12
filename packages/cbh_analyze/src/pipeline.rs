@@ -41,7 +41,7 @@ use crate::{AnalyzeError, RenderedReports, ReportRequest};
 /// `None` reads the runtime wall clock (`Clock::new_tokio`), while tests pass a
 /// frozen clock (`Clock::new_frozen_at`) so the anchor is deterministic. That
 /// single anchor drives both the history-mode default `--since` look-back and the
-/// resolution of any relative `--since`/`--until` duration, so the whole window is
+/// resolution of any relative `--since` duration, so the cutoff is
 /// deterministic under a frozen clock.
 ///
 /// Returns the rendered reports for the requested formats plus the regression
@@ -339,9 +339,9 @@ fn all_ghosts_hint(tip_commit: &str) -> String {
     format!(
         "Runs were analyzed, but every benchmark was filtered as a ghost — none is \
          present at the context commit {}. This usually means the context commit has \
-         no stored runs (collect at the context commit), a --until cutoff excluded the \
-         runs at the context commit, or its benchmark set differs from history. Pass \
-         --include-ghosts to analyze every benchmark, including removed ones.",
+        no stored runs (collect at the context commit), or its benchmark set differs \
+        from history. Pass --include-ghosts to analyze every benchmark, including \
+        removed ones.",
         short_commit(tip_commit)
     )
 }
@@ -455,8 +455,8 @@ mod tests {
 
     /// A linear master history `c0 - c1 - c2 - c3`, HEAD at the tip. Each commit
     /// carries committer time `ts(N)` for `cN`, matching the `effective`-second
-    /// convention the seeders use, so the topology-decided `--since`/`--until`
-    /// window can be exercised.
+    /// convention the seeders use, so the topology-decided `--since`
+    /// cutoff can be exercised.
     fn linear_git() -> FakeGitHistory {
         let mut git = FakeGitHistory::new();
         git.commit_at("c0", None, ts(0))
@@ -1647,30 +1647,6 @@ mod tests {
         let (report, _, _) = analyze_json(&git, &storage, "folo", &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 2, "only c2 and c3 are within the window");
-    }
-
-    #[test]
-    fn until_window_excludes_later_runs() {
-        let storage = MemoryStorage::new();
-        // c0..c3 at epoch seconds 0..3. `--until` epoch 1 keeps only c0 and c1.
-        for (index, value) in [100.0, 100.0, 130.0, 130.0].into_iter().enumerate() {
-            let commit = format!("c{index}");
-            let second = i64::try_from(index).unwrap();
-            store(
-                &storage,
-                &clean_key(&commit),
-                &ir_set(second, &commit, value),
-            );
-        }
-        let git = linear_git();
-
-        let opts = AnalyzeOptions {
-            until: Some("1970-01-01T00:00:01Z".to_owned()),
-            ..options()
-        };
-        let (report, _, _) = analyze_json(&git, &storage, "folo", &opts);
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-        assert_eq!(parsed["runs"], 2, "only c0 and c1 are within the window");
     }
 
     #[test]
