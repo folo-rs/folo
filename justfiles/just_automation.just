@@ -116,9 +116,12 @@ gh-write-bench-history-machine-key file:
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
+    Import-Module ./scripts/bench-history/BenchHistoryPath.psm1 -Force
+
     $file = "{{file}}"
-    $parent = Split-Path -Parent $file
-    if ($parent) { New-Item -ItemType Directory -LiteralPath $parent -Force | Out-Null }
+    # Ensure the key file's parent directory exists (a no-op when the path is a bare filename). The
+    # creation lives in the Pester-tested module so this glue actually runs somewhere other than CI.
+    New-BenchHistoryDirectory -Path (Split-Path -Parent $file)
 
     Write-Verbose "Resolving this runner's real hardware machine key; the fingerprint components are logged to stderr under --verbose for debugging a key change." -Verbose
     # The key is the tool's sole stdout line; --verbose components go to stderr, so the pipeline
@@ -178,9 +181,10 @@ gh-analyze-bench-history dir keydir:
     $PSNativeCommandUseErrorActionPreference = $true
 
     Import-Module ./scripts/bench-history/BenchHistoryMachineKey.psm1 -Force
+    Import-Module ./scripts/bench-history/BenchHistoryPath.psm1 -Force
 
     $dir = "{{dir}}"
-    New-Item -ItemType Directory -LiteralPath $dir -Force | Out-Null
+    New-BenchHistoryDirectory -Path $dir
     $reportPath = Join-Path $dir "report.md"
     $jsonPath = Join-Path $dir "report.json"
     $summaryPath = Join-Path $dir "summary.md"
@@ -250,9 +254,10 @@ gh-analyze-pr-bench-history dir base keydir:
     $PSNativeCommandUseErrorActionPreference = $true
 
     Import-Module ./scripts/bench-history/BenchHistoryMachineKey.psm1 -Force
+    Import-Module ./scripts/bench-history/BenchHistoryPath.psm1 -Force
 
     $dir = "{{dir}}"
-    New-Item -ItemType Directory -LiteralPath $dir -Force | Out-Null
+    New-BenchHistoryDirectory -Path $dir
     $reportPath = Join-Path $dir "report.md"
     $jsonPath = Join-Path $dir "report.json"
     $summaryPath = Join-Path $dir "summary.md"
