@@ -101,6 +101,33 @@ Describe 'Get-MachineKeyArgument' {
         }
     }
 
+    Context 'verbose diagnostics' {
+        It 'uses the singular noun for exactly one key' {
+            $dir = Get-KeyDirectory
+            try {
+                Write-KeyFile -Directory $dir -Name 'ubuntu-latest' -Content 'abcdef0123456789'
+                $verbose = Get-MachineKeyArgument -KeyDirectory $dir -Verbose 4>&1 |
+                    Where-Object { $_ -is [System.Management.Automation.VerboseRecord] }
+                ($verbose -join "`n") | Should -Match 'Threading 1 machine key into analysis'
+            } finally {
+                Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        It 'uses the plural noun for more than one key' {
+            $dir = Get-KeyDirectory
+            try {
+                Write-KeyFile -Directory $dir -Name 'ubuntu-latest' -Content 'ffff0000ffff0000'
+                Write-KeyFile -Directory $dir -Name 'windows-latest' -Content '00001111aaaa2222'
+                $verbose = Get-MachineKeyArgument -KeyDirectory $dir -Verbose 4>&1 |
+                    Where-Object { $_ -is [System.Management.Automation.VerboseRecord] }
+                ($verbose -join "`n") | Should -Match 'Threading 2 machine keys into analysis'
+            } finally {
+                Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
     Context 'zero collected keys (total collect failure)' {
         It 'returns an empty vector for a non-existent directory' {
             $missing = Join-Path ([System.IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('n'))

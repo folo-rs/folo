@@ -69,7 +69,10 @@ function Get-MachineKeyArgument {
 
     $keys = [System.Collections.Generic.List[string]]::new()
     foreach ($file in $files) {
-        $raw = Get-Content -LiteralPath $file.FullName -Raw
+        # Read with a terminating error: a genuinely empty file returns $null (handled as the
+        # "is empty" corrupt-upload case below), but an unreadable file (permissions/IO) must surface
+        # its real failure here rather than fall through to the misleading "is empty" guard.
+        $raw = Get-Content -LiteralPath $file.FullName -Raw -ErrorAction Stop
         $key = if ($null -eq $raw) { '' } else { $raw.Trim() }
         if ($key -eq '') {
             throw ("Machine-key file '$($file.FullName)' is empty. Each collect leg writes exactly " +
@@ -90,7 +93,8 @@ function Get-MachineKeyArgument {
     }
 
     $unique = @($keys | Sort-Object -Unique)
-    Write-Verbose ("Threading $($unique.Count) machine key(s) into analysis: " +
+    $noun = if ($unique.Count -eq 1) { 'machine key' } else { 'machine keys' }
+    Write-Verbose ("Threading $($unique.Count) $noun into analysis: " +
         ($unique -join ', ') + '.')
 
     $arguments = [System.Collections.Generic.List[string]]::new()
