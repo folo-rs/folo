@@ -4,28 +4,38 @@
 # Exclude build artifacts, mutation outputs, and dotfiles/directories.
 file_exclude_patterns = ["target", "mutants.out", "mutants.out.old", "**/.*"]
 
-# Trip wire patterns - if any changed file matches these patterns,
-# all crates in the workspace are considered impacted. This is used
-# for files that affect the entire workspace, such as configuration
-# files, workflow definitions and the build system itself.
+# Trip wire patterns - if any changed file matches these, every crate in the workspace is
+# validated regardless of what the dependency analysis would otherwise select.
 #
-# The workspace-root Cargo.toml and Cargo.lock are deliberately omitted: ordinary
-# dependency-management edits touch them constantly yet rarely affect every crate, so
-# treating them as trip wires would force a full-workspace run on almost every PR and
-# defeat delta scoping. Genuinely cross-cutting manifest changes (e.g. a shared
-# [workspace.dependencies] bump) are still caught by the push-to-main backstop, which
-# always validates the full workspace regardless of delta.
+# Keep this list small. A file earns a trip wire only when it genuinely changes what "passing"
+# means for *every* crate AND, when changed on its own, touches no package - so without the trip
+# wire delta would select nothing and validate nothing. Only three files clear that bar:
+#
+#   - rust-toolchain.toml - the pinned stable toolchain; a bump changes codegen, lints and MSRV
+#     behavior for every crate.
+#   - constants.env - holds the MSRV floor and the pinned nightly (a change there must be checked
+#     against the whole workspace).
+#   - clippy.toml - lint configuration; under `-D warnings` a change flips clippy pass/fail for
+#     every crate.
+#
+# Everything else is deliberately NOT a trip wire. Workflow definitions (`.github/**`), the build
+# system (`justfile`, `justfiles/**`), release configuration (`release-plz.toml`), formatting
+# config (`unstable-rustfmt.toml`) and delta's own config (`delta.toml`) do not change any crate's
+# build/test correctness. A change that breaks the *mechanism* fails the PR's own jobs (which run
+# those very workflows and recipes), so it never passes silently; the format check runs
+# whole-workspace anyway; and the rare correctness impact that dependency analysis cannot see is
+# caught by the push-to-main backstop, which always validates the full workspace. Making these
+# trip wires only forced a full-workspace run on the many PRs that touch them for unrelated
+# reasons - pure jitter with little safety in return.
+#
+# The workspace-root Cargo.toml and Cargo.lock are omitted for the same reason: routine
+# dependency edits touch them constantly yet rarely affect every crate. If the backstop ever
+# catches something a delta build missed, add the *specific* file here rather than broadening
+# back to whole directory trees.
 trip_wire_patterns = [
     "rust-toolchain.toml",
     "clippy.toml",
-    "unstable-rustfmt.toml",
     "constants.env",
-    "release-plz.toml",
-    "cargo-delta.toml",
-    "delta.toml",
-    "justfile",
-    "justfiles/**",
-    ".github/**",
 ]
 
 [parser]

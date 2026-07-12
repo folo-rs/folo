@@ -12,9 +12,16 @@ which packages are directly modified and which are indirectly affected (via depe
 Only those packages are validated.
 
 Certain files are designated as "trip wires" (see `delta.toml`). If any trip wire file is
-changed, all packages are validated regardless. Trip wires include workspace-wide configuration
-files (`rust-toolchain.toml`, `clippy.toml`, etc.), workflow definitions and the build system
-itself.
+changed, all packages are validated regardless. The list is deliberately small - only files that
+change what "passing" means for *every* crate and that, changed alone, touch no package (so delta
+would otherwise validate nothing): the pinned toolchain (`rust-toolchain.toml`), the MSRV/nightly
+pins (`constants.env`) and the lint configuration (`clippy.toml`).
+
+Workflow definitions (`.github/**`), the build system (`justfile`, `justfiles/**`) and similar
+tooling/config files are intentionally *not* trip wires: they do not change any crate's build/test
+correctness, a change that breaks the mechanism fails the PR's own jobs, and the rare miss is
+caught by the push-to-main backstop. Treating them as trip wires only forced a full-workspace run
+on the many PRs that touch them for unrelated reasons.
 
 The workspace-root `Cargo.toml` and `Cargo.lock` are intentionally *not* trip wires: routine
 dependency edits touch them constantly but rarely affect every package, so tripping the whole
