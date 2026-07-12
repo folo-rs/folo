@@ -111,14 +111,13 @@ jobs:
   # ahead, which needs no clone and still resolves a commit orphaned by a force-push. Gated on
   # skip_all != 'true' for the same reason collect is: when the PR now touches nothing benchmarkable the
   # `cleanup` job DELETES the comment instead, and marking a comment about to be deleted would only race
-  # that delete. Runs in parallel with collect (both `needs: delta`).
+  # that delete. Runs in parallel with collect (both `needs: delta`), and mirrors collect's gating
+  # exactly - no `always()`, so a FAILED or skipped delta skips this job too rather than flagging a
+  # comment stale for a run that will never collect; the same-repo gate rides along from delta, which is
+  # skipped on forks (skipping this dependent with it).
   mark-stale:
     needs: delta
-    if: >-
-      always()
-      && github.repository == 'folo-rs/folo'
-      && github.event.pull_request.head.repo.full_name == github.repository
-      && needs.delta.outputs.skip_all != 'true'
+    if: needs.delta.outputs.skip_all != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -144,7 +143,29 @@ jobs:
           MARKER: ${{ env.PR_COMMENT_MARKER }}
           COMMIT_MARKER_PREFIX: ${{ env.PR_COMMIT_MARKER_PREFIX }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: just gh-mark-pr-bench-history-stale "$env:REPO" "$env:PR_NUMBER" "$env:MARKER" "$env:COMMIT_MARKER_PREFIX" "$env:HEAD_SHA"
+        # Import and call the shared module directly (like cleanup) rather than via `just`: this job
+        # deliberately skips setup-environment to stay lightweight, so it must not assume `just` is
+        # preinstalled on the runner image. The real logic (SHA/repo validation, compare-distance
+        # lookup, banner insertion) lives in the Pester-tested module; this step is just glue.
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Import-Module ./scripts/bench-history/BenchHistoryComment.psm1 -Force
+
+          Write-Host "Flagging the rolling benchmark comment on $env:REPO PR #$env:PR_NUMBER as stale relative to head $env:HEAD_SHA."
+          $marked = Set-RollingCommentStaleness `
+            -Repo $env:REPO `
+            -PrNumber $env:PR_NUMBER `
+            -Marker $env:MARKER `
+            -CommitMarkerPrefix $env:COMMIT_MARKER_PREFIX `
+            -HeadSha $env:HEAD_SHA `
+            -Verbose
+          if ($marked) {
+            Write-Host "Added a staleness warning to the rolling PR comment."
+          } else {
+            Write-Host "No staleness warning needed (no rolling comment yet, or it already reflects head)."
+          }
 
   # Benchmark ONLY the touched packages across the full platform matrix, keyed by the PR head
   # commit, appending the results into the prod store. Skipped when the PR touches nothing
