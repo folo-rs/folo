@@ -15,7 +15,8 @@ Certain files are designated as "trip wires" (see `delta.toml`). If any trip wir
 changed, all packages are validated regardless. The list is deliberately small - only files that
 change what "passing" means for *every* crate and that, changed alone, touch no package (so delta
 would otherwise validate nothing): the pinned toolchain (`rust-toolchain.toml`), the MSRV/nightly
-pins (`constants.env`) and the lint configuration (`clippy.toml`).
+pins (`constants.env`), the lint configuration (`clippy.toml`) and the formatting configuration
+(`unstable-rustfmt.toml`, whose format check is a hard whole-workspace gate).
 
 Workflow definitions (`.github/**`), the build system (`justfile`, `justfiles/**`) and similar
 tooling/config files are intentionally *not* trip wires: they do not change any crate's build/test

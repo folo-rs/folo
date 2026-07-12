@@ -17,16 +17,17 @@ file_exclude_patterns = ["target", "mutants.out", "mutants.out.old", "**/.*"]
 #     against the whole workspace).
 #   - clippy.toml - lint configuration; under `-D warnings` a change flips clippy pass/fail for
 #     every crate.
+#   - unstable-rustfmt.toml - formatting configuration; the format check is a hard gate run across
+#     the whole workspace, so a change flips `cargo fmt --check` pass/fail for every crate.
 #
 # Everything else is deliberately NOT a trip wire. Workflow definitions (`.github/**`), the build
-# system (`justfile`, `justfiles/**`), release configuration (`release-plz.toml`), formatting
-# config (`unstable-rustfmt.toml`) and delta's own config (`delta.toml`) do not change any crate's
-# build/test correctness. A change that breaks the *mechanism* fails the PR's own jobs (which run
-# those very workflows and recipes), so it never passes silently; the format check runs
-# whole-workspace anyway; and the rare correctness impact that dependency analysis cannot see is
-# caught by the push-to-main backstop, which always validates the full workspace. Making these
-# trip wires only forced a full-workspace run on the many PRs that touch them for unrelated
-# reasons - pure jitter with little safety in return.
+# system (`justfile`, `justfiles/**`), release configuration (`release-plz.toml`) and delta's own
+# config (`delta.toml`) do not change any crate's build/test correctness. A change that breaks the
+# *mechanism* fails the PR's own jobs (which run those very workflows and recipes), so it never
+# passes silently; and the rare correctness impact that dependency analysis cannot see is caught by
+# the push-to-main backstop, which always validates the full workspace. Making these trip wires
+# only forced a full-workspace run on the many PRs that touch them for unrelated reasons - pure
+# jitter with little safety in return.
 #
 # The workspace-root Cargo.toml and Cargo.lock are omitted for the same reason: routine
 # dependency edits touch them constantly yet rarely affect every crate. If the backstop ever
@@ -35,6 +36,7 @@ file_exclude_patterns = ["target", "mutants.out", "mutants.out.old", "**/.*"]
 trip_wire_patterns = [
     "rust-toolchain.toml",
     "clippy.toml",
+    "unstable-rustfmt.toml",
     "constants.env",
 ]
 
