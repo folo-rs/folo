@@ -155,13 +155,34 @@ jobs:
           Set-AzureFederationEnv -ConstantsPath constants.env -EnvFilePath $env:GITHUB_ENV | Out-Null
 
       # Collect only the delta-affected packages (space-separated from the delta job), keyed by the
-      # PR head commit with the fixed `github` machine key so the wall-clock series stays comparable
-      # to main's baseline. `--skip-existing` makes a re-run of the same head SHA a no-op append.
+      # PR head commit and stamped with THIS runner's real hardware fingerprint (no fixed key) so the
+      # wall-clock series lives on the same per-SKU partitions as main's baseline. `--skip-existing`
+      # makes a re-run of the same head SHA a no-op append.
       - name: Collect PR benchmark history
         shell: pwsh
         env:
           PR_PACKAGES: ${{ needs.delta.outputs.packages }}
         run: just gh-collect-pr-bench-history "$env:PR_PACKAGES"
+
+      # Record THIS runner's real hardware fingerprint so the single analyze job can thread the exact
+      # keys collected this run into its `--machine-key` filter (collect is a matrix, analyze is not).
+      # Runs only after a SUCCESSFUL collect - the default step behavior - so a failed leg's key is
+      # not threaded. The write recipe logs the fingerprint components under --verbose.
+      - name: Record runner machine key
+        shell: pwsh
+        env:
+          KEY_FILE: ${{ runner.temp }}/machine-key.txt
+        run: just gh-write-bench-history-machine-key "$env:KEY_FILE"
+
+      # Upload this leg's key under a per-platform artifact name so the analyze job can download every
+      # leg's key together (one file per platform). if-no-files-found: error catches a broken
+      # key-write step loudly rather than silently dropping a key from the analysis.
+      - name: Upload runner machine key
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-bench-history-machine-key-${{ matrix.platform }}
+          path: ${{ runner.temp }}/machine-key.txt
+          if-no-files-found: error
 
   # Compare the PR head against `main` in branch mode and post/update the rolling PR comment. Runs
   # after every platform finishes (even partially: fail-fast is off) so the comparison reflects
@@ -242,13 +263,27 @@ jobs:
       # vs origin/main), including improvements as well as regressions. Findings never fail the
       # recipe (the tool always exits 0); the PR comment is advisory, not a gate. Analysis is
       # deliberately run UNSCOPED: `analyze`'s default ghost-exclusion (only benchmarks present at
+      # Download every collect leg's machine-key file (one per-platform artifact) into a single
+      # directory so the analysis can thread the EXACT fingerprints collected this run into its
+      # `--machine-key` filter. The default (no merge-multiple) keeps one subdirectory per artifact;
+      # the recipe scans recursively. A leg whose collection failed uploaded nothing, so its key is
+      # simply absent; if EVERY leg failed the pattern download matches nothing (it does not fail) and
+      # the recipe treats the empty directory as "nothing to analyze".
+      - name: Download collected machine keys
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pr-bench-history-machine-key-*
+          path: ${{ steps.scratch.outputs.dir }}/machine-keys
+
       # the PR head are analyzed) restricts it to exactly the collected packages, so no per-package
       # filter is needed - the recipe must not pass `--include-ghosts`. See the recipe / design.md.
+      # The third argument is the downloaded machine-key directory whose fingerprints scope the
+      # analysis.
       - name: Analyze PR benchmark history
         shell: pwsh
         env:
           SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
-        run: just gh-analyze-pr-bench-history "$env:SCRATCH_DIR" origin/main
+        run: just gh-analyze-pr-bench-history "$env:SCRATCH_DIR" origin/main "$env:SCRATCH_DIR/machine-keys"
 
       - name: Read notable flag
         id: notable

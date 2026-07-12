@@ -175,6 +175,19 @@
 //! at *later* commits remain in force, so the timeline may stay blessed past the
 //! unblessed commit.
 //!
+//! ## `machine-key`
+//!
+//! Prints this machine's hardware fingerprint — the machine key that
+//! hardware-dependent engines partition their history by — to standard output as a
+//! single clean line, and exits. It probes only the host's hardware: no repository,
+//! git, config, or storage is touched. This is the key `collect` stamps its
+//! hardware-dependent results with, so CI captures it to thread the exact keys a
+//! collection produced into the matching `analyze` selection (see the per-push and
+//! per-PR workflows). Under `--verbose` the individual factors behind the
+//! fingerprint (processor count, memory regions, CPU brand, and the factor-set
+//! version tag) are written to standard error, so a change in the key can be traced
+//! to the specific factor that moved.
+//!
 //! # Selecting data: options shared by the query commands
 //!
 //! `analyze`, `list`, `prune`, and `examine` share one selection model, organized
@@ -302,8 +315,8 @@ mod output;
 pub use cbh_cli::{Cli, EarlyExit};
 pub use cbh_command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
-    ExamineOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection, PruneOptions,
-    UnblessOptions,
+    ExamineOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection,
+    MachineKeyOptions, PruneOptions, UnblessOptions,
 };
 pub use cbh_config::{ConfigError, default_template};
 pub(crate) use cbh_model as model;

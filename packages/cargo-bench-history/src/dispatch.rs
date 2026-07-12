@@ -114,5 +114,6 @@ pub async fn run_with_overrides(
         }
         Command::Bless(options) => commands::bless(options, workspace_dir, clock).await,
         Command::Unbless(options) => commands::unbless(options, workspace_dir).await,
+        Command::MachineKey(options) => commands::machine_key(options).await,
     }
 }

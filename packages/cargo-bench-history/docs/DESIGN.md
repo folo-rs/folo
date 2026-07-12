@@ -206,6 +206,15 @@ so an accidental change to the canonical form is caught. A command-line override
 the computed fingerprint (it is CLI-only — a committed config would carry a machine key
 wrong for some checkouts). The key is computed only for hardware-dependent engines.
 
+The individual factors behind the fingerprint (the version tag, processor and memory-region
+counts, and CPU brand) are surfaced for debugging: `collect` and the query commands emit
+them to standard error under `--verbose`, and the standalone `machine-key` command prints
+the key to standard output (with `--verbose` adding the factors to standard error). The
+latter exists so CI can capture the real per-runner key and thread it into a later `analyze`
+selection, now that runs are keyed by the auto-detected fingerprint rather than a fixed pin.
+The same factors and resulting fingerprint are also recorded on every stored run as
+write-only provenance (see §5).
+
 ## 5. Run context
 
 Captured once per stored run: the observation timestamp (above); the git commit, branch,
@@ -216,6 +225,15 @@ environment (with `Local` a first-class provider alongside the automated ones); 
 and cargo versions and the resolved execution triple; and provenance (tool version, schema
 version, machine key). Git and environment access go through a small abstraction so the
 logic is unit-testable without a real repo or CI.
+
+The context also carries optional **host-hardware provenance** (`context.machine`): the
+fingerprint factors (processor and memory-region counts, CPU brand) and the auto-detected
+key they hash to. It is **write-only** — nothing reads it back — and exists purely so that a
+later change in a machine key can be traced to the specific factor that moved (for example, a
+runner pool swapping CPU models). It records the auto-detected fingerprint regardless of any
+`--machine-key` override, and is an additive, backward-compatible field (absent on runs
+written before it existed and on the non-`collect` construction sites that do not probe
+hardware), so its introduction only bumps the schema version for legibility.
 
 ## 6. Storage
 

@@ -9,6 +9,12 @@
 //! share a key; genuinely different hardware produces a different key. The host
 //! *name* is deliberately not a factor, since pool machines have distinct names
 //! but equivalent hardware.
+//!
+//! The key is surfaced two ways for operators. [`resolve_machine_key`] yields the
+//! key itself (what `collect` stamps hardware-dependent results with and the
+//! `machine-key` command prints), while [`describe_fingerprint_components`] renders
+//! the individual factors that fed the hash, so a change in the key can be traced —
+//! in verbose logs — to the specific hardware detail that moved.
 
 use cbh_model::sanitize_segment;
 use sha2::{Digest, Sha256};
@@ -88,6 +94,26 @@ pub fn resolve_machine_key(override_key: Option<&str>, profile: &HardwareProfile
         Some(key) => sanitize_segment(key),
         None => fingerprint(profile),
     }
+}
+
+/// Renders the individual factors behind a machine [`fingerprint`] as a
+/// diagnostic, single-line summary (pure).
+///
+/// It reports the fingerprint version tag and each hardware factor using the same
+/// normalized values that enter the hash, so that when a machine key changes the
+/// specific factor responsible can be identified from a `--verbose` log. An absent
+/// CPU brand is shown as `<none>` (matching the empty value it contributes to the
+/// canonical string) rather than omitted, so its absence is itself visible.
+#[must_use]
+pub fn describe_fingerprint_components(profile: &HardwareProfile) -> String {
+    let brand = profile.cpu_brand.as_deref().map_or_else(
+        || "<none>".to_owned(),
+        |brand| format!("\"{}\"", normalize_brand(brand)),
+    );
+    format!(
+        "version={FINGERPRINT_VERSION}, processors={}, memory_regions={}, cpu_brand={brand}",
+        profile.processors, profile.memory_regions,
+    )
 }
 
 /// Profiles the host hardware (best effort).
@@ -258,6 +284,24 @@ mod tests {
         assert_eq!(
             resolve_machine_key(Some("ci/pool one"), &hardware),
             "ci_pool_one"
+        );
+    }
+
+    #[test]
+    fn describe_components_lists_version_and_normalized_factors() {
+        let described = describe_fingerprint_components(&profile(8, 1, Some("Intel  Xeon  E5")));
+        assert_eq!(
+            described,
+            "version=mk1, processors=8, memory_regions=1, cpu_brand=\"Intel Xeon E5\""
+        );
+    }
+
+    #[test]
+    fn describe_components_marks_an_absent_brand() {
+        let described = describe_fingerprint_components(&profile(4, 2, None));
+        assert_eq!(
+            described,
+            "version=mk1, processors=4, memory_regions=2, cpu_brand=<none>"
         );
     }
 

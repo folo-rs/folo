@@ -7,18 +7,20 @@
 
 # Collects the whole workspace's benchmark history (excluding the slow, special-purpose
 # `benchmarks` package) into the prod Azure store, keyed by the current commit. The machine
-# partition for noisy wall-clock engines is pinned to the fixed key `github` rather than
-# auto-detected: the GitHub-hosted runner pool may contain differently-specced machines, and a
-# per-machine fingerprint would fork the series (and split the history) whenever a run lands on
-# a different SKU. Pinning keeps every push on one series (accepting the jitter a heterogeneous
-# pool causes); a genuine hardware migration is absorbed by blessing the resulting step change.
-# Deterministic engines (Callgrind, allocation/time counters) are hardware-independent and
-# ignore the key. `--best-of 3` counteracts the same runner noise from the other direction: the
+# partition for noisy wall-clock engines is the runner's OWN auto-detected hardware fingerprint,
+# NOT a fixed key: the GitHub-hosted runner pool is heterogeneous, and pinning every SKU onto one
+# synthetic series just mixes incomparable machines and jitters daily. Letting each runner stamp
+# its real fingerprint splits the data into one clean series per hardware type; the analyze job is
+# fed the exact fingerprints collected this run (see gh-analyze-bench-history) so it surveys only
+# those series. Deterministic engines (Callgrind, allocation/time counters) are hardware-independent
+# and ignore the key. `--best-of 3` counteracts the same runner noise from the other direction: the
 # suite runs three times and each metric keeps its minimum sample, since benchmark interference
 # on a shared runner is one-sided (it only ever makes a case slower) and the runs are spaced far
 # enough apart in time that a transient slowdown is unlikely to hit every one. This roughly
 # triples the wall-clock benchmark portion of the collect job (see bench-history.yml's
-# `timeout-minutes`). `--skip-existing` makes a re-run on an unchanged commit a no-op append (each
+# `timeout-minutes`). `--verbose` makes the collect log spell out the resolved machine key and the
+# fingerprint components behind it, so a key change (a runner-pool SKU shift) is debuggable from the
+# log alone. `--skip-existing` makes a re-run on an unchanged commit a no-op append (each
 # already-stored object is skipped, not overwritten), so a re-triggered run of an
 # already-collected commit never bumps the cache-invalidation marker the `analyze` job's
 # read-through cache depends on - a re-run of the same commit is not "better" data, so there is
@@ -67,10 +69,11 @@ gh-collect-bench-history:
 # and it is safe because branch-mode `analyze` only ever flags a series that has a data point at the
 # branch-unique head commit, i.e. exactly the packages collected here (see
 # gh-analyze-pr-bench-history and .github/workflows/design.md). Everything else is identical to the
-# push-to-main collect: the fixed `github` machine key keeps PR wall-clock series comparable to
-# main's baseline, `--best-of 3` sheds one-sided runner jitter, and `--skip-existing` makes a re-run
-# of the same head SHA a no-op append. There is no recollect mode on PRs (that repairs main's
-# permanent history); the scope decision lives in
+# push-to-main collect: each runner stamps its OWN real hardware fingerprint (no fixed key), so PR
+# wall-clock series live on the same per-SKU partitions as main's baseline, `--best-of 3` sheds
+# one-sided runner jitter, `--verbose` logs the resolved key and its components, and
+# `--skip-existing` makes a re-run of the same head SHA a no-op append. There is no recollect mode on
+# PRs (that repairs main's permanent history); the scope decision lives in
 # scripts/bench-history/BenchHistoryCollect.psm1 (Pester-tested via `just test-scripts`), so this is
 # a thin import + call. `packages` must be non-empty - the workflow only invokes this recipe when
 # the delta produced at least one benchmarkable package, and an empty scope would wrongly fall back
@@ -95,19 +98,63 @@ gh-collect-pr-bench-history packages:
     $toolArgs = Get-BenchHistoryCollectCommand -RecollectCommitId '' -Package $packageList -Verbose
     cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- @toolArgs
 
-# Analyzes the collected history for regressions across ALL engines and target triples, but
-# only the `github` machine key - the fixed key `gh-collect-bench-history` stamps on the
-# GitHub runner pool's data. Restricting it here (rather than `--machine-key all`) keeps this
-# job surveying only GitHub-pool history and never mixes in a stray key some other machine may
-# have inserted into the shared store. It writes four artefacts INTO the given {{dir}}:
-# report.md (the full Markdown report), report.json (the full JSON report), summary.md (the
-# Markdown report condensed to the top findings by magnitude, so the rolling regression issue's
-# body stays under GitHub's 65,536-character limit) and notable.txt (`true`/`false`, the JSON
-# `notable` flag). Findings never fail the recipe (the tool always exits 0); the workflow files
-# a rolling issue when notable, posting the summary as the body and attaching the two full
-# reports as run artifacts. `auto` mode on a clean `main` checkout resolves to long-range
-# history-trend detection. A single analyze pass emits every report via the per-format output
-# toggles (`--no-text --markdown --json --markdown-summary`).
+# Writes THIS runner's real hardware machine key (the fingerprint the collect step just stamped its
+# wall-clock results with) to {{file}}, so the single analyze job can thread the EXACT keys collected
+# this run into its `--machine-key` filter. Collection is a matrix across a heterogeneous runner pool
+# but analysis is one job that cannot re-derive those keys from its own hardware, so each collect leg
+# records its key here and uploads it as a per-platform artifact; the analyze job downloads them all
+# and gh-analyze-bench-history turns the directory into repeated `--machine-key` args (see
+# scripts/bench-history/BenchHistoryMachineKey.psm1). The `machine-key` command prints ONLY the key
+# to stdout (captured here) while `--verbose` sends the fingerprint components to stderr, so the same
+# components appear in the workflow log for debugging a key change without polluting the file. Shared
+# by both bench-history.yml and pr-bench-history.yml; run after a SUCCESSFUL collect (a failed leg
+# collected nothing, so its key must not be threaded).
+[group('automation')]
+[script]
+gh-write-bench-history-machine-key file:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    $file = "{{file}}"
+    $parent = Split-Path -Parent $file
+    if ($parent) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+
+    Write-Verbose "Resolving this runner's real hardware machine key; the fingerprint components are logged to stderr under --verbose for debugging a key change." -Verbose
+    # The key is the tool's sole stdout line; --verbose components go to stderr, so the pipeline
+    # captures only the key. Select the last stdout line defensively in case cargo emits anything to
+    # stdout, then validate it is the expected 16-hex-character fingerprint before persisting.
+    $key = (cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- machine-key --verbose | Select-Object -Last 1)
+    $key = if ($null -eq $key) { '' } else { $key.Trim() }
+    if ($key -notmatch '^[0-9a-fA-F]{16}$') {
+        throw "machine-key produced '$key', which is not a 16-hex-character fingerprint; refusing to persist it."
+    }
+    Set-Content -Path $file -Value $key.ToLowerInvariant() -Encoding utf8 -NoNewline
+    Write-Verbose "Wrote machine key '$key' to $file." -Verbose
+
+# Analyzes the collected history for regressions across ALL engines and target triples, restricted
+# to the EXACT machine keys collected this run. Collection now stamps each runner's real hardware
+# fingerprint (no fixed `github` key), and every collect leg uploaded its fingerprint as an artifact;
+# the analyze job downloads them all into {{keydir}} and this recipe turns that directory into the
+# repeated `--machine-key <fingerprint>` args via the Pester-tested Get-MachineKeyArgument (see
+# scripts/bench-history/BenchHistoryMachineKey.psm1). Threading the exact keys (rather than
+# `--machine-key all`) keeps the survey scoped to the machines that actually measured this commit and
+# never mixes in a stray key some other machine inserted into the shared store. Only hardware-
+# DEPENDENT engines partition by machine key; deterministic engines (Callgrind, alloc/time counters)
+# are exempt from the machine-key filter inside the tool, so they are analyzed regardless.
+#
+# {{keydir}} may be EMPTY when every collect leg failed (a total collect failure uploads nothing):
+# there is then no new data at this commit to survey, so the recipe writes a non-notable placeholder
+# report set and returns without invoking the tool (the workflow's separate collect-failure alert
+# does the notifying). It writes four artefacts INTO the given {{dir}}: report.md (the full Markdown
+# report), report.json (the full JSON report), summary.md (the Markdown report condensed to the top
+# findings by magnitude, so the rolling regression issue's body stays under GitHub's 65,536-character
+# limit) and notable.txt (`true`/`false`, the JSON `notable` flag). Findings never fail the recipe
+# (the tool always exits 0); the workflow files a rolling issue when notable, posting the summary as
+# the body and attaching the two full reports as run artifacts. `auto` mode on a clean `main`
+# checkout resolves to long-range history-trend detection. A single analyze pass emits every report
+# via the per-format output toggles (`--no-text --markdown --json --markdown-summary`); `--verbose`
+# makes the analysis log spell out the effective machine-key selection for debugging.
 #
 # {{dir}} is a scratch directory OUTSIDE the repo checkout (the bench-history.yml `analyze`
 # job passes the runner temp dir). Keeping every artefact out of the working tree is what
@@ -122,10 +169,12 @@ gh-collect-pr-bench-history packages:
 # a stale mirror is wiped via the cloud-side marker only after a deliberate `--overwrite`/`prune`.
 [group('automation')]
 [script]
-gh-analyze-bench-history dir:
+gh-analyze-bench-history dir keydir:
     Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
+
+    Import-Module ./scripts/bench-history/BenchHistoryMachineKey.psm1 -Force
 
     $dir = "{{dir}}"
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -134,10 +183,25 @@ gh-analyze-bench-history dir:
     $summaryPath = Join-Path $dir "summary.md"
     $notablePath = Join-Path $dir "notable.txt"
     $cacheDir = Join-Path $dir "cache"
-    $common = @('--engine', 'all', '--target-triple', 'all', '--machine-key', 'github')
+
+    $keyArgs = @(Get-MachineKeyArgument -KeyDirectory "{{keydir}}" -Verbose)
+    if ($keyArgs.Count -eq 0) {
+        # Total collect failure: no keys were uploaded, so there is nothing new to analyze. Emit a
+        # non-notable placeholder set (the workflow's Read-notable step needs notable.txt; the rest
+        # keep the recipe's four-artefact contract) and skip the tool. The collect-failure alert
+        # already notifies, so this deliberately does not itself fail.
+        Write-Warning "No machine keys were collected this run (every collect leg failed); skipping analysis and emitting a non-notable placeholder report."
+        Set-Content -Path $reportPath -Value "# Benchmark history`n`nNo machine keys were collected this run, so there was nothing to analyze." -Encoding utf8
+        Set-Content -Path $summaryPath -Value "No machine keys were collected this run, so there was nothing to analyze." -Encoding utf8
+        Set-Content -Path $jsonPath -Value '{"notable":false}' -Encoding utf8
+        Set-Content -Path $notablePath -Value 'false' -Encoding utf8
+        return
+    }
+
+    $common = @('--engine', 'all', '--target-triple', 'all') + $keyArgs
 
     Write-Verbose "Analyzing benchmark history in a single pass; writing the full Markdown to $reportPath, the full JSON to $jsonPath and the condensed top-findings Markdown summary to $summaryPath, mirroring fetched cloud objects under $cacheDir so the history is downloaded at most once across runs." -Verbose
-    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --cache=$cacheDir --no-text --markdown $reportPath --json $jsonPath --markdown-summary $summaryPath
+    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --verbose --cache=$cacheDir --no-text --markdown $reportPath --json $jsonPath --markdown-summary $summaryPath
     Write-Verbose "Computing the notable flag from the JSON report." -Verbose
     $json = Get-Content -Path $jsonPath -Raw | ConvertFrom-Json
     $notable = if (($json.PSObject.Properties.Name -contains 'notable') -and $json.notable) { 'true' } else { 'false' }
@@ -154,9 +218,12 @@ gh-analyze-bench-history dir:
 # head is checked out detached, so there is no local `main` branch to auto-resolve, whereas
 # `fetch-depth: 0` populates the `origin/main` remote-tracking ref the merge-base needs.
 # `--include-improvements` is added so the rolling PR comment can also surface detected speedups, not
-# only regressions. Everything else matches the main analyze: only the `github` machine key (the
-# fixed key collection stamps on the runner pool), all engines and triples, findings never fail the
-# recipe (the tool always exits 0), and `--cache` mirrors fetched cloud objects under {{dir}}/cache.
+# only regressions. Everything else matches the main analyze: the EXACT machine keys collected this
+# run (threaded from {{keydir}} via Get-MachineKeyArgument, not the removed fixed `github` key), all
+# engines and triples, findings never fail the recipe (the tool always exits 0), `--verbose` logs the
+# effective machine-key selection, and `--cache` mirrors fetched cloud objects under {{dir}}/cache. A
+# total collect failure leaves {{keydir}} empty; as in the main analyze, the recipe then writes a
+# non-notable placeholder set and skips the tool.
 #
 # This is intentionally NOT package-scoped even though collection is: `analyze` has no per-package
 # filter (only positional id-prefix subjects), and benchmark ids are engine-dependent (Callgrind
@@ -174,10 +241,12 @@ gh-analyze-bench-history dir:
 # dir), so `analyze`'s own `git status --porcelain` dirty-check never sees these artefacts.
 [group('automation')]
 [script]
-gh-analyze-pr-bench-history dir base:
+gh-analyze-pr-bench-history dir base keydir:
     Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
+
+    Import-Module ./scripts/bench-history/BenchHistoryMachineKey.psm1 -Force
 
     $dir = "{{dir}}"
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -186,10 +255,24 @@ gh-analyze-pr-bench-history dir base:
     $summaryPath = Join-Path $dir "summary.md"
     $notablePath = Join-Path $dir "notable.txt"
     $cacheDir = Join-Path $dir "cache"
-    $common = @('--engine', 'all', '--target-triple', 'all', '--machine-key', 'github')
+
+    $keyArgs = @(Get-MachineKeyArgument -KeyDirectory "{{keydir}}" -Verbose)
+    if ($keyArgs.Count -eq 0) {
+        # Total collect failure: no keys were uploaded, so there is nothing new to analyze. Emit a
+        # non-notable placeholder set (keeping the recipe's four-artefact contract) and skip the tool;
+        # the workflow's collect-failure handling notifies separately.
+        Write-Warning "No machine keys were collected this run (every collect leg failed); skipping PR analysis and emitting a non-notable placeholder report."
+        Set-Content -Path $reportPath -Value "# PR benchmark history`n`nNo machine keys were collected this run, so there was nothing to analyze." -Encoding utf8
+        Set-Content -Path $summaryPath -Value "No machine keys were collected this run, so there was nothing to analyze." -Encoding utf8
+        Set-Content -Path $jsonPath -Value '{"notable":false}' -Encoding utf8
+        Set-Content -Path $notablePath -Value 'false' -Encoding utf8
+        return
+    }
+
+    $common = @('--engine', 'all', '--target-triple', 'all') + $keyArgs
 
     Write-Verbose "Analyzing PR benchmark history in branch mode (context HEAD vs base {{base}}); writing the full Markdown to $reportPath, the full JSON to $jsonPath and the condensed top-findings Markdown summary to $summaryPath, including improvements as well as regressions, and mirroring fetched cloud objects under $cacheDir." -Verbose
-    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --context HEAD --base '{{base}}' --include-improvements --cache=$cacheDir --no-text --markdown $reportPath --json $jsonPath --markdown-summary $summaryPath
+    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --verbose --context HEAD --base '{{base}}' --include-improvements --cache=$cacheDir --no-text --markdown $reportPath --json $jsonPath --markdown-summary $summaryPath
     Write-Verbose "Computing the notable flag from the JSON report." -Verbose
     $json = Get-Content -Path $jsonPath -Raw | ConvertFrom-Json
     $notable = if (($json.PSObject.Properties.Name -contains 'notable') -and $json.notable) { 'true' } else { 'false' }

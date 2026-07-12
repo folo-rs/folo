@@ -79,9 +79,13 @@ function Get-BenchHistoryCollectCommand {
     )
 
     # Scope + noise-reduction flags shared by both modes: `collect` and `backfill` flatten the same
-    # clap arg groups, so this array applies verbatim to either subcommand. The fixed `github`
-    # machine key keeps the whole GitHub runner pool on one wall-clock series; `--best-of 3` keeps
-    # each metric's minimum across three runs to shed one-sided runner jitter.
+    # clap arg groups, so this array applies verbatim to either subcommand. No `--machine-key`
+    # override: each runner stamps its results with its OWN real hardware fingerprint, so a
+    # heterogeneous GitHub runner pool splits into one clean wall-clock series per hardware type
+    # instead of one jittery series mixing incomparable machines. `--best-of 3` keeps each metric's
+    # minimum across three runs to shed one-sided runner jitter; `--verbose` makes the collect log
+    # spell out the resolved machine key and the fingerprint components behind it, so a key change is
+    # debuggable from the log alone.
     $packages = @($Package | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     if ($packages.Count -gt 0) {
         # Explicit package scoping (PR workflow): one `--package <name>` per touched crate.
@@ -96,7 +100,6 @@ function Get-BenchHistoryCollectCommand {
     }
 
     $scope = $selection + @(
-        '--machine-key', 'github',
         '--best-of', '3',
         '--verbose'
     )
