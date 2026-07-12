@@ -101,6 +101,11 @@ async fn examine_renders_a_text_pivot_with_titles() {
         message.contains("c6"),
         "the tip's title is shown: {message}"
     );
+    // The series is charted before its data points (the rasciigraph axis marker).
+    assert!(
+        message.contains('┤') || message.contains('┼'),
+        "a chart leads the points: {message}"
+    );
 }
 
 /// `examine` renders a per-set Markdown table with a row per observation.
@@ -132,6 +137,15 @@ async fn examine_renders_a_markdown_table() {
     );
     assert!(markdown.contains("| clean | c1 |"), "{markdown}");
     assert!(markdown.contains("130"), "{markdown}");
+    // The two-point series is charted, fenced as a `text` block before the table.
+    assert!(
+        markdown.contains("```text"),
+        "the chart is fenced: {markdown}"
+    );
+    assert!(
+        markdown.contains('┤') || markdown.contains('┼'),
+        "a chart is drawn: {markdown}"
+    );
 }
 
 /// `examine` names one metric, isolating it from the other metrics recorded on the
