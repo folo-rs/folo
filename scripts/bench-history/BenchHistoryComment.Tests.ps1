@@ -547,6 +547,27 @@ Describe 'Set-RollingCommentStaleness (mocked gh api)' {
         }
     }
 
+    Context 'when the comment is an in-progress placeholder (no results yet)' {
+        BeforeEach {
+            # A placeholder carries the dedup marker plus the in-progress marker but NO analyzed-commit
+            # marker: there are no results to age, so the staleness pass must step aside entirely -
+            # neither hitting the compare API nor PATCHing a misleading "out of date" banner over a
+            # comment that already reads "benchmarking in progress".
+            Mock gh -ModuleName BenchHistoryComment {
+                if ($args -contains 'PATCH') { $global:LASTEXITCODE = 0; return '{"id":42}' }
+                $global:LASTEXITCODE = 0
+                return '[{"id":42,"body":"<!-- folo-bench-history-pr -->\n<!-- folo-bench-history-in-progress -->\n\n### Benchmark history (vs `main`)\n\nbenchmarking in progress","html_url":"u"}]'
+            }
+        }
+
+        It 'is a no-op returning false, touching neither the compare api nor a PATCH' {
+            $result = Set-RollingCommentStaleness -Repo 'o/r' -PrNumber '5' -Marker $script:Marker -CommitMarkerPrefix $script:CommitPrefix -HeadSha $script:HeadSha2
+            $result | Should -BeFalse
+            Should -Invoke gh -ModuleName BenchHistoryComment -ParameterFilter { $args -contains 'PATCH' } -Times 0 -Exactly
+            Should -Invoke gh -ModuleName BenchHistoryComment -ParameterFilter { [bool]($args | Where-Object { $_ -like 'repos/*/compare/*' }) } -Times 0 -Exactly
+        }
+    }
+
     Context 'when the comment already carries a stale banner (re-run)' {
         BeforeEach {
             Remove-Item -LiteralPath $script:StaleCapture -ErrorAction SilentlyContinue
@@ -650,6 +671,187 @@ Describe 'Add-StalenessBanner (unexported string transform)' {
                 # The banner must land after the real marker line, i.e. past the whole code block.
                 $bannerLine | Should -BeGreaterThan $realMarkerLine
             }
+        }
+    }
+}
+
+Describe 'Publish-InProgressComment (mocked gh api)' {
+    BeforeAll {
+        # An unsorted, duplicate-free-after-sort package list so the assertions also prove the rendering
+        # sorts it; kept in sync with the InModuleScope literal used by the idempotency context below.
+        $script:Packages = 'pool events'
+        # Fixed capture path (recomputed identically in the mock and the assertions) for the posted body:
+        # the temp body file is deleted once `gh` returns, so a post-hoc ParameterFilter could not read it.
+        $script:InProgressCapture = Join-Path ([System.IO.Path]::GetTempPath()) 'bh-inprogress-captured-body.md'
+        # The JSON list `gh` "returns" for the already-matches case is written to a file the mock reads
+        # back inline, because a mock scriptblock cannot see test-scope variables.
+        $script:InProgressListFile = Join-Path ([System.IO.Path]::GetTempPath()) 'bh-inprogress-existing-list.json'
+    }
+
+    AfterAll {
+        Remove-Item -LiteralPath $script:InProgressCapture -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $script:InProgressListFile -ErrorAction SilentlyContinue
+    }
+
+    Context 'when the PR has no rolling comment yet' {
+        BeforeEach {
+            Remove-Item -LiteralPath $script:InProgressCapture -ErrorAction SilentlyContinue
+            Mock gh -ModuleName BenchHistoryComment {
+                foreach ($a in $args) {
+                    if ($a -like 'body=@*') {
+                        Copy-Item -LiteralPath $a.Substring('body=@'.Length) `
+                            -Destination (Join-Path ([System.IO.Path]::GetTempPath()) 'bh-inprogress-captured-body.md') -Force
+                    }
+                }
+                if ($args -contains 'POST') { $global:LASTEXITCODE = 0; return '{"id":99,"html_url":"https://github.com/o/r/pull/5#issuecomment-99"}' }
+                $global:LASTEXITCODE = 0
+                return '[]'
+            }
+        }
+
+        It 'posts a placeholder carrying both markers and the disclosed scope' {
+            $result = Publish-InProgressComment -Repo 'o/r' -PrNumber '5' -Marker $script:Marker -Packages $script:Packages
+            $result | Should -BeTrue
+            Should -Invoke gh -ModuleName BenchHistoryComment -ParameterFilter {
+                ($args -contains 'POST') -and ($args -contains 'repos/o/r/issues/5/comments')
+            }
+            $sent = Get-Content -LiteralPath $script:InProgressCapture -Raw
+            $sent | Should -BeLike '*<!-- folo-bench-history-pr -->*'
+            $sent | Should -BeLike '*<!-- folo-bench-history-in-progress -->*'
+            $sent | Should -BeLike '*Benchmarking in progress*'
+            $sent | Should -BeLike '*Collection scope*'
+            $sent | Should -BeLike '*events*'
+            $sent | Should -BeLike '*pool*'
+        }
+
+        It 'never carries an analyzed-commit marker, so a later mark-stale treats it as in-progress' {
+            Publish-InProgressComment -Repo 'o/r' -PrNumber '5' -Marker $script:Marker -Packages $script:Packages | Out-Null
+            $sent = Get-Content -LiteralPath $script:InProgressCapture -Raw
+            $sent | Should -Not -BeLike '*folo-bench-history-commit:*'
+        }
+    }
+
+    Context 'when a completed analyze already posted real results' {
+        BeforeEach {
+            Remove-Item -LiteralPath $script:InProgressCapture -ErrorAction SilentlyContinue
+            # A results comment carries the dedup + analyzed-commit markers but NOT the in-progress marker;
+            # the placeholder path must never overwrite those findings (no POST, no PATCH).
+            Mock gh -ModuleName BenchHistoryComment {
+                foreach ($a in $args) {
+                    if ($a -like 'body=@*') {
+                        Copy-Item -LiteralPath $a.Substring('body=@'.Length) `
+                            -Destination (Join-Path ([System.IO.Path]::GetTempPath()) 'bh-inprogress-captured-body.md') -Force
+                    }
+                }
+                $global:LASTEXITCODE = 0
+                return '[{"id":42,"body":"<!-- folo-bench-history-pr -->\n<!-- folo-bench-history-commit:1111111111111111111111111111111111111111 -->\n\nreal findings","html_url":"u"}]'
+            }
+        }
+
+        It 'leaves the results comment untouched, returning false' {
+            $result = Publish-InProgressComment -Repo 'o/r' -PrNumber '5' -Marker $script:Marker -Packages $script:Packages
+            $result | Should -BeFalse
+            Should -Invoke gh -ModuleName BenchHistoryComment -ParameterFilter { $args -contains 'POST' } -Times 0 -Exactly
+            Should -Invoke gh -ModuleName BenchHistoryComment -ParameterFilter { $args -contains 'PATCH' } -Times 0 -Exactly
+        }
+    }
+
+    Context 'when an in-progress placeholder already exists with a stale scope' {
+        BeforeEach {
+            Remove-Item -LiteralPath $script:InProgressCapture -ErrorAction SilentlyContinue
+            # The placeholder carries the in-progress marker but its body differs from the freshly-rendered
+            # one, so it must be refreshed (PATCHed) in place rather than left as-is.
+            Mock gh -ModuleName BenchHistoryComment {
+                foreach ($a in $args) {
+                    if ($a -like 'body=@*') {
+                        Copy-Item -LiteralPath $a.Substring('body=@'.Length) `
+                            -Destination (Join-Path ([System.IO.Path]::GetTempPath()) 'bh-inprogress-captured-body.md') -Force
+                    }
+                }
+                if ($args -contains 'PATCH') { $global:LASTEXITCODE = 0; return '{"id":42}' }
+                $global:LASTEXITCODE = 0
+                return '[{"id":42,"body":"<!-- folo-bench-history-pr -->\n<!-- folo-bench-history-in-progress -->\n\nan out-of-date placeholder scope","html_url":"u"}]'
+            }
+        }
+
+        It 'refreshes the placeholder in place with the current scope' {
+            $result = Publish-InProgressComment -Repo 'o/r' -PrNumber '5' -Marker $script:Marker -Packages $script:Packages
+            $result | Should -BeTrue
+            Should -Invoke gh -ModuleName BenchHistoryComment -ParameterFilter {
+                ($args -contains 'PATCH') -and ($args -contains 'repos/o/r/issues/comments/42')
+            }
+            $sent = Get-Content -LiteralPath $script:InProgressCapture -Raw
+            $sent | Should -BeLike '*<!-- folo-bench-history-in-progress -->*'
+            $sent | Should -BeLike '*events*'
+        }
+    }
+
+    Context 'when the existing placeholder already matches the current scope' {
+        BeforeEach {
+            # Render the exact body Publish-InProgressComment will produce for these packages and hand it
+            # back as the existing comment, so the idempotency check sees no change. The literal packages
+            # here must match $script:Packages passed by the It.
+            $canonical = InModuleScope BenchHistoryComment {
+                Format-InProgressBody -Marker '<!-- folo-bench-history-pr -->' -Packages 'pool events'
+            }
+            $list = '[' + (@{ id = 42; body = $canonical; html_url = 'u' } | ConvertTo-Json -Compress) + ']'
+            Set-Content -LiteralPath $script:InProgressListFile -Value $list -Encoding utf8 -NoNewline
+            Mock gh -ModuleName BenchHistoryComment {
+                if ($args -contains 'PATCH') { $global:LASTEXITCODE = 0; return '{"id":42}' }
+                $global:LASTEXITCODE = 0
+                return (Get-Content -LiteralPath (Join-Path ([System.IO.Path]::GetTempPath()) 'bh-inprogress-existing-list.json') -Raw)
+            }
+        }
+
+        It 'is a no-op returning false, without patching' {
+            $result = Publish-InProgressComment -Repo 'o/r' -PrNumber '5' -Marker $script:Marker -Packages $script:Packages
+            $result | Should -BeFalse
+            Should -Invoke gh -ModuleName BenchHistoryComment -ParameterFilter { $args -contains 'PATCH' } -Times 0 -Exactly
+        }
+    }
+
+    Context 'when -WhatIf is passed and no comment exists' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryComment { $global:LASTEXITCODE = 0; '[]' }
+        }
+
+        It 'reports the post without performing it' {
+            Publish-InProgressComment -Repo 'o/r' -PrNumber '5' -Marker $script:Marker -Packages $script:Packages -WhatIf | Out-Null
+            Should -Invoke gh -ModuleName BenchHistoryComment -ParameterFilter { $args -contains 'POST' } -Times 0 -Exactly
+        }
+    }
+
+    Context 'input validation' {
+        It 'rejects a malformed repository' {
+            { Publish-InProgressComment -Repo 'bad repo' -PrNumber '5' -Marker $script:Marker -Packages $script:Packages } |
+                Should -Throw '*owner/name*'
+        }
+    }
+}
+
+Describe 'Format-InProgressBody (unexported string transform)' {
+    It 'renders a single changed package with singular wording' {
+        InModuleScope BenchHistoryComment {
+            $body = Format-InProgressBody -Marker '<!-- folo-bench-history-pr -->' -Packages 'solo'
+            $body.Contains('benchmarking the 1 package this PR changed (`solo`).') | Should -BeTrue
+        }
+    }
+
+    It 'sorts and de-duplicates multiple changed packages with plural wording' {
+        InModuleScope BenchHistoryComment {
+            $body = Format-InProgressBody -Marker '<!-- folo-bench-history-pr -->' -Packages 'beta alpha beta'
+            $body.Contains('benchmarking the 2 packages this PR changed (`alpha`, `beta`).') | Should -BeTrue
+        }
+    }
+
+    It 'leads with the dedup and in-progress markers, then the shared header and status' {
+        InModuleScope BenchHistoryComment {
+            $body = Format-InProgressBody -Marker '<!-- folo-bench-history-pr -->' -Packages 'solo'
+            $lines = $body -split "`n"
+            $lines[0] | Should -Be '<!-- folo-bench-history-pr -->'
+            $lines[1] | Should -Be $script:InProgressMarker
+            $body.Contains('### Benchmark history (vs `main`)') | Should -BeTrue
+            $body | Should -BeLike '*Benchmarking in progress*'
         }
     }
 }
