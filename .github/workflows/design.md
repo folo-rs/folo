@@ -183,7 +183,9 @@ hidden marker, updated in place on every push) rather than the rolling issue the
 workflow files; the comment lives and dies with the pull request. The comment is strictly
 advisory — findings never affect the check's exit code, so a regression note never blocks a
 merge — and it reports detected improvements alongside regressions, or a plain "no regressions"
-state. A run *failure* surfaces only as the red check, with no issue and no failure comment,
+state. It also states its **collection scope** — which packages were benchmarked — so a clean
+result is never mistaken for the whole suite being clean when only the changed subset was
+measured. A run *failure* surfaces only as the red check, with no issue and no failure comment,
 because a PR failure is a transient condition, not the persistent one the issue lifecycle
 tracks.
 

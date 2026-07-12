@@ -287,12 +287,21 @@ jobs:
           NOTABLE: ${{ steps.notable.outputs.value }}
           REPORT_ARTIFACT_URL: ${{ steps.full_reports.outputs.artifact-url }}
           SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
+          PACKAGES: ${{ needs.delta.outputs.packages }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
 
           $header = "### Benchmark history (vs ``main``)"
+
+          # Disclose the collection scope so a reader never mistakes a clean result for the whole
+          # suite: PR runs benchmark ONLY the packages this PR changed (cargo-delta scoped), and the
+          # analyze ghost filter narrows the report to exactly that set. List them explicitly.
+          $packages = @(($env:PACKAGES -split '\s+') | Where-Object { $_ } | Sort-Object -Unique)
+          $renderedPackages = ($packages | ForEach-Object { '`' + $_ + '`' }) -join ', '
+          $packageNoun = if ($packages.Count -eq 1) { 'package' } else { 'packages' }
+          $scope = "**Collection scope:** benchmarked the $($packages.Count) $packageNoun this PR changed ($renderedPackages). Packages this PR did not change were not benchmarked, so these results cover only the changed subset."
           if ($env:NOTABLE -eq 'true') {
             $summary = (Get-Content (Join-Path $env:SCRATCH_DIR 'summary.md') -Raw).TrimEnd()
             $fullReport = "**Full report:** the complete Markdown and JSON reports are attached to this workflow run. [Download the full report bundle]($env:REPORT_ARTIFACT_URL)."
@@ -311,6 +320,8 @@ jobs:
             $parts = @(
               $header
               ''
+              $scope
+              ''
               $summary
               ''
               '---'
@@ -325,7 +336,9 @@ jobs:
             $parts = @(
               $header
               ''
-              '✅ No benchmark regressions detected against `main` for the packages this PR touched.'
+              $scope
+              ''
+              '✅ No benchmark regressions detected against `main`.'
               ''
               'This check is advisory and never blocks the merge. It refreshes on every push; if the PR later stops touching any benchmarked package, this comment is removed.'
             )
