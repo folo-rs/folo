@@ -421,7 +421,7 @@ checksum = "8ae3f5d315924270530207e2a68396c3cc547f6dca3fbdca317cfb1a51edb593"
 
 [[package]]
 name = "cargo-bench-history"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "azure_core",
@@ -508,7 +508,7 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "cbh_analyze"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyspawn",
  "cbh_command",
@@ -531,7 +531,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_cli"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "cbh_command",
  "cbh_model",
@@ -541,7 +541,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_codec"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "alloc_tracker",
  "cbh_model",
@@ -553,7 +553,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_command"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "cbh_model",
  "mutants",
@@ -561,7 +561,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_config"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "cbh_command",
  "mutants",
@@ -573,7 +573,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_detect"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyspawn",
  "cbh_model",
@@ -592,14 +592,14 @@ dependencies = [
 
 [[package]]
 name = "cbh_diag"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "mutants",
 ]
 
 [[package]]
 name = "cbh_engines"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -616,7 +616,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_git"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "cbh_model",
  "futures",
@@ -627,7 +627,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_model"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "criterion",
  "jiff",
@@ -639,7 +639,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_probe"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "cbh_git",
  "cbh_model",
@@ -651,7 +651,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_render"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "cbh_detect",
  "cbh_model",
@@ -665,14 +665,14 @@ dependencies = [
 
 [[package]]
 name = "cbh_stats"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "mutants",
 ]
 
 [[package]]
 name = "cbh_storage"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "azure_core",
