@@ -613,7 +613,7 @@ Markdown tables, not of the data. The text and Markdown renderings **lead each s
 same small line chart `analyze` draws**, reusing its renderer, so a maintainer sees the shape
 of the series before reading the points it pivots; because `examine` makes no
 regression/improvement judgment the line is **neutral (uncolored)** rather than
-direction-coloured, and it is drawn only when a set has at least two points. The JSON form
+direction-colored, and it is drawn only when a set has at least two points. The JSON form
 carries no chart (a charting concern the human reports draw from internally, not data a
 consumer reconstructs).
 

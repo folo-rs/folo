@@ -608,7 +608,7 @@ fn chart_of(series: &[SeriesValue], direction: Direction, active_from: usize) ->
 /// Separating the decision from the drawing keeps it observable without going through
 /// `colored`'s process-global override (which the plotting functions consult), so the
 /// color/overlay choice can be asserted deterministically.
-#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
+#[cfg_attr(test, derive(Debug, Eq, PartialEq))]
 enum ChartPlan {
     /// A single uncolored line — a neutral chart that makes no judgment.
     Plain,
