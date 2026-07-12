@@ -53,9 +53,12 @@ New per-series logic must be side-effect-free. Flow and rationale: [`docs/analyz
 (`list.rs`, `prune.rs`, `examine.rs`, each `pub(crate) mod`; `bless`/`unbless` in `bless.rs`
 reuse the same facet selection). **A selection parameter added to one must be added to all
 four** unless genuinely inapplicable. The analysis-only flags
-(`--include-improvements`, `--include-inactive`) and the analyze-only condensed
-`--markdown-summary` output are **not** part of the lockstep — only `analyze` detects;
-`list`/`prune`/`examine` reuse the selection but never analyze. Each is
+(`--include-improvements`, `--include-inactive`, `--include-ghosts`) and the
+analyze-only condensed `--markdown-summary` output are **not** part of the lockstep —
+only `analyze` detects; `list`/`prune`/`examine` reuse the selection but never analyze.
+`--include-ghosts` in particular changes only *which reconstructed series are detected
+on* (it drops benchmarks absent at the context commit), not which runs are *selected*,
+so `list runs` may report more series than `analyze` now analyzes. Each is
 generic over the `GitHistory` + `Storage` ports so tests drive it with fakes + `block_on`.
 Semantics and per-command behaviour: DESIGN §7–§8.
 

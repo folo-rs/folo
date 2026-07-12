@@ -741,9 +741,13 @@ async fn analyze_alloc_tracker_ignores_gaps_in_a_sparse_history() {
         day += 1;
     }
 
-    let report = workspace.drive_json(&["analyze"]).await;
     // Only `allocate_vec`'s allocated-bytes step is a finding. A gap read as a drop
     // to zero would manufacture wild swings; instead the series is contiguous.
+    //
+    // The sparse history ends on a `free_box` commit, so `allocate_vec` is absent at
+    // the tip and the default ghost filter would drop it. This test is about gap
+    // reconstruction, not tip presence, so it analyzes every benchmark.
+    let report = workspace.drive_json(&["analyze", "--include-ghosts"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
         parsed["regressions"], 1,
@@ -1537,6 +1541,10 @@ async fn analyze_criterion_machine_keys_stay_isolated() {
             "x86_64-pc-windows-msvc",
             "--machine-key",
             "all",
+            // The flat machine stops collecting at d4 while the rising history runs to
+            // d8, so `mk-flat` is a ghost at the tip. This test is about machine-key
+            // isolation, not tip presence, so it analyzes every benchmark.
+            "--include-ghosts",
         ])
         .await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
@@ -1711,5 +1719,50 @@ async fn analyze_criterion_feature_branch_admits_dirty_snapshots() {
     assert_eq!(
         regressions, 0,
         "with --no-dirty only the flat clean Criterion series remains: {report}"
+    );
+}
+
+/// By default `analyze` ignores "ghost" benchmarks — ones no longer present at the
+/// context commit — so a regression on a since-removed benchmark is not re-flagged.
+/// `--include-ghosts` opts back in and the removed benchmark's regression surfaces.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn analyze_excludes_ghost_benchmarks_by_default() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // `bench_000` runs flat through the tip; `bench_001` climbs into a regression but
+    // is dropped from the suite at the tip commit, so it is a ghost there.
+    for (date, label, values) in [
+        ("2024-01-01", "c1", vec![100.0, 100.0]),
+        ("2024-01-02", "c2", vec![100.0, 100.0]),
+        ("2024-01-03", "c3", vec![100.0, 100.0]),
+        ("2024-01-04", "c4", vec![100.0, 130.0]),
+        ("2024-01-05", "c5", vec![100.0, 130.0]),
+        ("2024-01-06", "c6", vec![100.0, 130.0]),
+    ] {
+        workspace.commit_dated(date, label);
+        workspace.seed_many_callgrind(label, &values);
+    }
+    // The tip carries only the surviving benchmark; `bench_001` is absent here.
+    workspace.commit_dated("2024-01-07", "c7");
+    workspace.seed_many_callgrind("c7", &[100.0]);
+
+    // Default: the ghost's regression is filtered out, and the JSON reports the count.
+    let report = workspace.drive_json(&["analyze"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(parsed["regressions"], 0, "{report}");
+    assert_eq!(parsed["ghosts_excluded"], 1, "{report}");
+    assert!(
+        !report.contains("many::bench_001"),
+        "the ghost benchmark must not appear: {report}"
+    );
+
+    // --include-ghosts analyzes the removed benchmark and surfaces its regression.
+    let report = workspace.drive_json(&["analyze", "--include-ghosts"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(parsed["regressions"], 1, "{report}");
+    assert_eq!(parsed["ghosts_excluded"], 0, "{report}");
+    assert!(
+        report.contains("many::bench_001"),
+        "the removed benchmark's regression must surface: {report}"
     );
 }

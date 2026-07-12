@@ -443,6 +443,20 @@ widen as history accumulates. Positional prefix subjects scope the analysis to b
 whose id starts with a prefix; there is no metric filter, since metrics are an internal
 detail users are not expected to know.
 
+By default `analyze` also drops **ghost benchmarks** — benchmark identities that appear in
+the selected data set but have no run at the **context commit** (the resolved `--context`,
+`HEAD` by default). In a long-lived project benchmarks are renamed, removed, or replaced, and
+re-flagging a change on a benchmark that no longer exists is noise; presence is judged
+per discriminant set (a set behind on collection at the context commit legitimately differs
+from another) and a present benchmark keeps all its metric-kind series. The filter runs
+before detection, so ghosts never contribute p-values to the false-discovery-rate correction.
+`--include-ghosts` opts back in and analyzes every benchmark in the data set. If a set has no
+runs at the context commit at all (`HEAD` was never collected, a collect failed, or `--until`
+excluded the tip), every benchmark is a ghost and the set analyzes empty with a dedicated
+hint pointing at `--include-ghosts` — an empty outcome the tool explains rather than guesses
+around. Because it changes only which reconstructed series are detected on (not which runs
+are selected), `--include-ghosts` is analyze-only and outside the selection lockstep (§8.5).
+
 Output toggles select which renderings one analysis pass emits — text to stdout by default,
 with file toggles that compose so a single pass can emit text, Markdown, and JSON at once;
 requesting no output at all is an error. Beyond those three canonical renderings, `analyze`
@@ -749,7 +763,12 @@ or two branch points, which is why the techniques differ by mode:
 
 Modes apply to `analyze` only; `list`, `prune`, and `examine` reuse the same data-set
 *selection* but never analyze, so the mode selection and improvement/inactive flags are
-analyze-only and not part of the selection lockstep.
+analyze-only and not part of the selection lockstep. The **ghost filter** (§7.3) is likewise
+analyze-only and outside the lockstep: it applies in both modes, dropping — before detection
+— any benchmark absent at the context commit (the analyzed tip) unless `--include-ghosts` is
+passed. In branch mode a benchmark removed on the branch is a ghost and a benchmark newly
+added on the branch is present and kept; dirty snapshots at the branch tip count as present
+via the base-tip dirty exception.
 
 ### 8.6 Re-baselining: blessings and resolved spikes
 

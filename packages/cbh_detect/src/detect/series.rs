@@ -13,8 +13,8 @@
 //! a large history, so the storage key is reduced to a 4-byte ordinal and the
 //! per-point commit string is interned to a shared `Arc<str>` rather than cloned.
 
-use std::collections::HashMap;
 use std::collections::hash_map::Entry as MapEntry;
+use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasher;
 use std::sync::Arc;
 
@@ -510,6 +510,64 @@ pub fn apply_blessings<S: BuildHasher>(
     }
 }
 
+/// Drops every series whose benchmark is not present at `context_commit`, keeping
+/// only the benchmarks the context commit actually measured.
+///
+/// Presence is evaluated per `(discriminant set, benchmark id)`: a benchmark is
+/// kept when at least one of its points was measured against `context_commit` — a
+/// clean run or a dirty snapshot on that commit — after which *all* of its
+/// metric-kind series are retained. A benchmark with points only on earlier commits
+/// is a "ghost" that no longer exists in the current suite; all of its series are
+/// removed so the detectors never re-flag a benchmark that is gone.
+///
+/// The check reads each series' raw points, so it is independent of any blessing
+/// re-baselining; call it *before* [`apply_blessings`]. When `context_commit` was
+/// itself never measured, every benchmark is a ghost and the whole list is emptied
+/// — the caller distinguishes that empty outcome for the user.
+///
+/// Returns the removed ghost benchmark identities, deduplicated across metric kinds
+/// and ordered by `(set, id)`, so a caller can report exactly what it excluded.
+#[must_use]
+pub fn retain_present_at_context(
+    series: &mut Vec<Series>,
+    context_commit: &str,
+) -> Vec<(DiscriminantSet, BenchmarkId)> {
+    // The benchmarks the context commit measured: a single series carrying a point
+    // on that commit marks its whole benchmark present, across every metric kind.
+    // Keyed by `(set, id)` so a benchmark present in one discriminant set does not
+    // rescue a same-named ghost in another — sets are analyzed independently.
+    let mut present: HashSet<(DiscriminantSet, BenchmarkId)> = HashSet::new();
+    for one in series.iter() {
+        let measured_here = one
+            .points
+            .iter()
+            .any(|point| point.commit.as_deref() == Some(context_commit));
+        if measured_here {
+            present.insert((one.set.clone(), one.id.clone()));
+        }
+    }
+
+    // Retain the present benchmarks and record each dropped ghost once (a benchmark
+    // spans several metric-kind series, so dedupe by identity).
+    let mut removed: HashSet<(DiscriminantSet, BenchmarkId)> = HashSet::new();
+    series.retain(|one| {
+        // Clone the identity key once per series and reuse it for both the presence
+        // test and the removed-set insert, avoiding a second clone per ghost.
+        let key = (one.set.clone(), one.id.clone());
+        if present.contains(&key) {
+            true
+        } else {
+            removed.insert(key);
+            false
+        }
+    });
+
+    // A stable, deterministic order for the diagnostics the caller emits.
+    let mut removed: Vec<(DiscriminantSet, BenchmarkId)> = removed.into_iter().collect();
+    removed.sort_unstable();
+    removed
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -942,6 +1000,257 @@ mod tests {
             "an unrelated set leaves the series active from the start"
         );
         assert!(series[0].blessing.is_none(), "no blessing recorded");
+    }
+
+    /// A clean/dirty object at `commit` under `triple` whose run carries one
+    /// `InstructionCount` result per `(package, value)`, so several benchmarks share
+    /// one stored run exactly as a real `clean.json` holds a whole suite.
+    fn multi_object(
+        triple: &str,
+        commit: &str,
+        filename: &str,
+        observation: i64,
+        benches: &[(&str, f64)],
+    ) -> LoadedObject {
+        let object_key =
+            format!("v1/proj/objects/callgrind/{triple}/synthetic/{commit}/{filename}");
+        let context = RunContext::new(
+            ts(observation),
+            GitInfo {
+                commit: Some(format!("{commit}full")),
+                branch: Some("main".to_owned()),
+                dirty: filename != "clean.json",
+            },
+            EnvironmentInfo::default(),
+            ToolchainInfo::default(),
+            "0.0.1".to_owned(),
+        );
+        let records = benches
+            .iter()
+            .map(|(package, value)| {
+                BenchmarkResult::new(
+                    BenchmarkId::new(
+                        NonEmpty::from_vec(vec![
+                            (*package).to_owned(),
+                            "group".to_owned(),
+                            "case".to_owned(),
+                        ])
+                        .unwrap(),
+                    ),
+                    vec![Metric::new(MetricKind::InstructionCount, *value)],
+                )
+            })
+            .collect();
+        LoadedObject {
+            key: parse_key(&object_key).unwrap(),
+            object_key,
+            result: Run::new(context, records),
+        }
+    }
+
+    /// A clean object under the default triple.
+    fn clean_multi(commit: &str, observation: i64, benches: &[(&str, f64)]) -> LoadedObject {
+        multi_object(
+            "x86_64-unknown-linux-gnu",
+            commit,
+            "clean.json",
+            observation,
+            benches,
+        )
+    }
+
+    #[test]
+    fn retain_present_at_context_drops_a_benchmark_absent_at_the_context() {
+        // `pkgb` was measured at c0 but not at the context commit c1, so it is a
+        // ghost: every one of its series is removed, and `pkga` (present at c1)
+        // stays. The dropped identity is reported for diagnostics.
+        let objects = vec![
+            clean_multi("c0", 100, &[("pkga", 10.0), ("pkgb", 20.0)]),
+            clean_multi("c1", 200, &[("pkga", 11.0)]),
+        ];
+        let mut series = build_series(&objects, &order(&["c0", "c1"]), &SeriesFilter::default());
+        assert_eq!(
+            series.len(),
+            2,
+            "both benchmarks build a series before filtering"
+        );
+
+        let removed = retain_present_at_context(&mut series, "c1");
+
+        assert_eq!(series.len(), 1);
+        assert_eq!(series[0].id.qualified(), "pkga/group/case");
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].1.qualified(), "pkgb/group/case");
+    }
+
+    #[test]
+    fn retain_present_at_context_keeps_every_metric_kind_of_a_present_benchmark() {
+        // The benchmark carried two metric kinds historically but only
+        // InstructionCount at the context commit. Presence is benchmark-level, so
+        // the ConditionalBranches series — which has no point at c1 — is retained
+        // because its benchmark is present, and nothing is reported as a ghost.
+        let objects = vec![
+            clean_metrics(
+                "c0",
+                100,
+                "pkga",
+                &[
+                    (MetricKind::InstructionCount, 10.0),
+                    (MetricKind::ConditionalBranches, 100.0),
+                ],
+            ),
+            clean_metrics("c1", 200, "pkga", &[(MetricKind::InstructionCount, 11.0)]),
+        ];
+        let mut series = build_series(&objects, &order(&["c0", "c1"]), &SeriesFilter::default());
+        assert_eq!(series.len(), 2, "one series per metric kind");
+
+        let removed = retain_present_at_context(&mut series, "c1");
+
+        assert_eq!(series.len(), 2, "both metric-kind series survive");
+        assert!(
+            removed.is_empty(),
+            "the benchmark is present, so nothing is a ghost"
+        );
+    }
+
+    /// A clean object whose single `package` result carries several metric kinds.
+    fn clean_metrics(
+        commit: &str,
+        observation: i64,
+        package: &str,
+        metrics: &[(MetricKind, f64)],
+    ) -> LoadedObject {
+        let object_key = format!(
+            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json"
+        );
+        let context = RunContext::new(
+            ts(observation),
+            GitInfo {
+                commit: Some(format!("{commit}full")),
+                branch: Some("main".to_owned()),
+                dirty: false,
+            },
+            EnvironmentInfo::default(),
+            ToolchainInfo::default(),
+            "0.0.1".to_owned(),
+        );
+        let record = BenchmarkResult::new(
+            BenchmarkId::new(
+                NonEmpty::from_vec(vec![
+                    package.to_owned(),
+                    "group".to_owned(),
+                    "case".to_owned(),
+                ])
+                .unwrap(),
+            ),
+            metrics
+                .iter()
+                .map(|(kind, value)| Metric::new(*kind, *value))
+                .collect::<Vec<_>>(),
+        );
+        LoadedObject {
+            key: parse_key(&object_key).unwrap(),
+            object_key,
+            result: Run::new(context, vec![record]),
+        }
+    }
+
+    #[test]
+    fn retain_present_at_context_empties_when_the_context_has_no_runs() {
+        // c2 is an analyzed commit that carries no runs. Every benchmark is a ghost,
+        // so the list empties — the caller turns this into the "collect at the
+        // context commit / --include-ghosts" hint.
+        let objects = vec![
+            clean_multi("c0", 100, &[("pkga", 10.0)]),
+            clean_multi("c1", 200, &[("pkga", 11.0)]),
+        ];
+        let mut series = build_series(
+            &objects,
+            &order(&["c0", "c1", "c2"]),
+            &SeriesFilter::default(),
+        );
+
+        let removed = retain_present_at_context(&mut series, "c2");
+
+        assert!(series.is_empty(), "no benchmark is present at c2");
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].1.qualified(), "pkga/group/case");
+    }
+
+    #[test]
+    fn retain_present_at_context_is_evaluated_per_discriminant_set() {
+        // The same benchmark id exists under two triples. It is present at the
+        // context c1 in the linux set but only at c0 in the arm set, so it is kept
+        // in one set and dropped in the other — presence never leaks across sets.
+        let objects = vec![
+            multi_object(
+                "x86_64-unknown-linux-gnu",
+                "c0",
+                "clean.json",
+                100,
+                &[("pkga", 10.0)],
+            ),
+            multi_object(
+                "x86_64-unknown-linux-gnu",
+                "c1",
+                "clean.json",
+                200,
+                &[("pkga", 11.0)],
+            ),
+            multi_object(
+                "aarch64-unknown-linux-gnu",
+                "c0",
+                "clean.json",
+                100,
+                &[("pkga", 20.0)],
+            ),
+        ];
+        let mut series = build_series(&objects, &order(&["c0", "c1"]), &SeriesFilter::default());
+        assert_eq!(series.len(), 2, "one series per set");
+
+        let removed = retain_present_at_context(&mut series, "c1");
+
+        assert_eq!(
+            series.len(),
+            1,
+            "the arm-set ghost is dropped, the linux one kept"
+        );
+        assert_eq!(
+            series[0].points.len(),
+            2,
+            "the surviving series is the linux one (c0 + c1)"
+        );
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].1.qualified(), "pkga/group/case");
+        assert_ne!(
+            removed[0].0, series[0].set,
+            "the dropped ghost is in the other discriminant set"
+        );
+    }
+
+    #[test]
+    fn retain_present_at_context_admits_a_dirty_snapshot_at_the_context() {
+        // `pkga` exists at the context commit only as a dirty snapshot (the
+        // uncommitted-work case), which still counts as present; `pkgb`, seen only
+        // at c0, is the ghost.
+        let objects = vec![
+            clean_multi("c0", 100, &[("pkga", 10.0), ("pkgb", 20.0)]),
+            multi_object(
+                "x86_64-unknown-linux-gnu",
+                "c1",
+                "dirty-200.json",
+                200,
+                &[("pkga", 11.0)],
+            ),
+        ];
+        let mut series = build_series(&objects, &order(&["c0", "c1"]), &SeriesFilter::default());
+
+        let removed = retain_present_at_context(&mut series, "c1");
+
+        assert_eq!(series.len(), 1);
+        assert_eq!(series[0].id.qualified(), "pkga/group/case");
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].1.qualified(), "pkgb/group/case");
     }
 
     #[test]
