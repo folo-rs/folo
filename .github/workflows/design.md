@@ -192,7 +192,9 @@ tracks.
 Because a full benchmark run takes hours and a new push *cancels* the in-flight one (see
 Concurrency), the comment on display can lag the PR tip by a long way, and a reader has no way to
 tell current numbers from hours-old ones. Two mechanisms keep that honest. First, every comment
-records **which commit it measured** — a human-visible short SHA plus a hidden full-SHA marker.
+records **which commit it measured** — a human-visible line printing the full SHA bare (GitHub
+autolinks it to the commit and abbreviates it for display, so we neither truncate it ourselves nor
+lose the click-through) plus a hidden full-SHA marker.
 Second, a lightweight **`mark-stale` job** runs at the *start* of each new run (right after the
 short delta preflight, in parallel with the multi-hour collect) and, if a comment already exists,
 prepends a warning banner stating how far behind `HEAD` those numbers now are — *"N commits behind

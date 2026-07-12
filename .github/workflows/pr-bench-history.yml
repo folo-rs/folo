@@ -368,13 +368,14 @@ jobs:
 
           $header = "### Benchmark history (vs ``main``)"
 
-          # Record which commit these numbers describe: a human-visible short-SHA line (so a reader can
-          # see at a glance what was measured) and, embedded once in the body via the shared prefix, a
-          # hidden full-SHA marker the mark-stale job parses on the next push to measure how far behind
-          # HEAD the results have fallen. Both derive from the same head SHA in this one step, so they
-          # cannot drift.
-          $shortSha = $env:HEAD_SHA.Substring(0, 7)
-          $analyzedLine = "**Analyzed commit:** ``$shortSha``"
+          # Record which commit these numbers describe: a human-visible line and, embedded once in the
+          # body via the shared prefix, a hidden full-SHA marker the mark-stale job parses on the next
+          # push to measure how far behind HEAD the results have fallen. Both derive from the same head
+          # SHA in this one step, so they cannot drift. The visible line prints the FULL 40-char SHA
+          # bare (no backticks): GitHub autolinks a bare commit SHA to the commit and renders it
+          # abbreviated, so we get a click-through link and short display for free - manually truncating
+          # into a code span would only throw both away.
+          $analyzedLine = "**Analyzed commit:** $env:HEAD_SHA"
 
           # Disclose the collection scope so a reader never mistakes a clean result for the whole
           # suite: PR runs benchmark ONLY the packages this PR changed (cargo-delta scoped), and the
