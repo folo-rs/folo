@@ -28,5 +28,5 @@ mod machine;
 mod probe;
 
 pub use host::RustcInfo;
-pub use machine::{HardwareProfile, resolve_machine_key};
+pub use machine::{HardwareProfile, describe_fingerprint_components, resolve_machine_key};
 pub use probe::{EnvironmentProbe, SystemProbe};

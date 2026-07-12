@@ -19,14 +19,17 @@ use cbh_engines::{
     parse_criterion_case,
 };
 use cbh_git::{BenchRunner, TokioBenchRunner};
-use cbh_probe::{EnvironmentProbe, HardwareProfile, RustcInfo, SystemProbe, resolve_machine_key};
+use cbh_probe::{
+    EnvironmentProbe, HardwareProfile, RustcInfo, SystemProbe, describe_fingerprint_components,
+    resolve_machine_key,
+};
 use cbh_storage::{Storage, StorageError, StorageFacade, build_storage};
 use jiff::Timestamp;
 use tick::Clock;
 
 use crate::model::{
-    BenchmarkResult, DiscriminantSet, Engine, EnvironmentInfo, GitInfo, Run, RunContext,
-    ToolchainInfo, detect_environment, min_per_metric,
+    BenchmarkResult, DiscriminantSet, Engine, EnvironmentInfo, GitInfo, MachineInfo, Run,
+    RunContext, ToolchainInfo, detect_environment, min_per_metric,
 };
 use crate::{CollectOptions, LocalStorageSelection, RunError, RunOutcome, finish_with_flush};
 
@@ -397,6 +400,16 @@ where
         &effective_machine_key,
         options.machine_key.is_some(),
     ));
+    // Under --verbose, spell out the individual hardware factors behind the
+    // auto-detected fingerprint so that if the machine key changes between runs
+    // the responsible factor can be identified from the log (even when an
+    // explicit --machine-key override is currently masking the fingerprint).
+    deps.reporter.note_with(|| {
+        format!(
+            "hardware fingerprint components: {}",
+            describe_fingerprint_components(&shared.hardware)
+        )
+    });
 
     let mut stored = 0_usize;
     let mut harvested = 0_usize;
@@ -454,6 +467,21 @@ fn collect_selection_summary(
         "collecting: target-triple={triple} (toolchain host); \
          machine-key={machine_key} ({machine_source}), used by hardware-dependent engines"
     )
+}
+
+/// Builds the write-only host-hardware provenance recorded on every stored run:
+/// the fingerprint factors and the key they hash to.
+///
+/// It always records the auto-detected fingerprint (independent of any
+/// `--machine-key` override used to partition storage), so that a later change in
+/// a partition key can be traced back to the specific hardware factor that moved.
+fn machine_info(hardware: &HardwareProfile) -> MachineInfo {
+    MachineInfo {
+        processors: hardware.processors,
+        memory_regions: hardware.memory_regions,
+        cpu_brand: hardware.cpu_brand.clone(),
+        fingerprint: resolve_machine_key(None, hardware),
+    }
 }
 
 /// Emits the per-metric best-of provenance: the samples seen and which run won.
@@ -644,6 +672,11 @@ where
         },
         deps.tool_version.to_owned(),
     );
+    // Record the host hardware provenance on every stored run (write-only): the
+    // fingerprint factors and the key they hash to, so a later change in a
+    // machine key can be traced to the specific factor that moved.
+    let mut context = context;
+    context.machine = Some(machine_info(&shared.hardware));
     let run = Run::new(context, records);
 
     // Hardware-dependent engines (such as Criterion) partition their history by a

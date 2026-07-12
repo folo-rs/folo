@@ -38,7 +38,8 @@ pub use bless::{BLESS_SCHEMA_VERSION, BlessingRecord};
 pub use comparability::{DiscriminantSet, Engine, StorageKey, parse_key, sanitize_segment};
 pub use constants::{OBJECTS_SEGMENT, STORAGE_VERSION};
 pub use context::{
-    EnvironmentInfo, EnvironmentProvider, GitInfo, RunContext, ToolchainInfo, detect_environment,
+    EnvironmentInfo, EnvironmentProvider, GitInfo, MachineInfo, RunContext, ToolchainInfo,
+    detect_environment,
 };
 pub use metric::{Metric, MetricKind};
 pub use run::{BenchmarkResult, MetricList, Run, SCHEMA_VERSION};

@@ -29,6 +29,25 @@ async fn collect_callgrind_end_to_end_stores_results() {
     assert_eq!(set.schema_version, SCHEMA_VERSION);
     assert_eq!(set.context.tool_version, TOOL_VERSION);
 
+    // The host-hardware provenance is recorded on every stored run (write-only),
+    // even for a hardware-independent engine: its fingerprint is the auto-detected
+    // machine key, a 16-char lowercase hex digest of the probed factors.
+    let machine = set
+        .context
+        .machine
+        .as_ref()
+        .expect("collect records host-hardware provenance");
+    assert!(machine.processors >= 1, "{machine:?}");
+    assert!(machine.memory_regions >= 1, "{machine:?}");
+    assert_eq!(machine.fingerprint.len(), 16, "{machine:?}");
+    assert!(
+        machine
+            .fingerprint
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+        "{machine:?}"
+    );
+
     assert_eq!(set.results.len(), 1);
     let record = &set.results[0];
     // The unparametrized summary carries no parameter segment, so its identity

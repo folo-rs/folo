@@ -29,23 +29,6 @@ on:
         required: false
         type: string
         default: ""
-      # Optional switch to RE-SURVEY the existing history WITHOUT collecting anything new. Leave
-      # false for a normal dispatch (collects the current tip, exactly like a push). Set it true to
-      # SKIP the whole benchmark matrix and run ONLY the analyze job against the current stored
-      # history, refreshing the rolling regression issue in minutes instead of the ~hour a full
-      # collect costs. Use it after the data set changed OUT OF BAND and you want the issue to
-      # reflect it now - for example a blessing/unblessing, a `prune`, or an administrative
-      # overwrite done from a developer machine. It is general-purpose (re-analysis of the current
-      # store), NOT a blessing-specific switch, and is correct for any such change because the
-      # analyze job always re-lists the store and deletes/overwrites bump the cache-invalidation
-      # marker (see the analyze job and DESIGN.md 6.2). Mutually exclusive with
-      # recollect_commit_id: setting both is rejected by the reject-conflicting-inputs job, since a
-      # recollect is itself a collection. Ignored on push (only a dispatch can set it).
-      reanalyze:
-        description: "Re-run analysis only, skipping collection (leave false for a normal run)"
-        required: false
-        type: boolean
-        default: false
 
 # Group by the commit SHA, not the ref. Distinct commits must collect in parallel - each is
 # its own history data point, and cancelling one to favour a newer commit would drop that
@@ -58,14 +41,9 @@ on:
 # racing a push of the same tip) would share a group and wrongly cancel each other. The `-<id>`
 # suffix is appended only when a recollect id is supplied (via the `&&`/`||` idiom); pushes and
 # plain dispatches carry an empty id, so the suffix is omitted entirely and their grouping is
-# unchanged (no trailing dash). For the same reason a `-reanalyze` suffix is appended when the
-# reanalyze switch is set: a reanalyze dispatch shares the tip's github.sha, so without the suffix
-# it would wrongly cancel (or be cancelled by) a concurrent push or recollect of the same tip -
-# whereas two reanalyze dispatches of the same tip still share the suffixed group and dedup as
-# intended. The two suffixes are mutually exclusive on a valid run (a both-set dispatch is rejected
-# by the reject-conflicting-inputs job), so at most one is ever appended.
+# unchanged (no trailing dash).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.sha }}${{ inputs.recollect_commit_id && format('-{0}', inputs.recollect_commit_id) || '' }}${{ inputs.reanalyze && '-reanalyze' || '' }}
+  group: ${{ github.workflow }}-${{ github.sha }}${{ inputs.recollect_commit_id && format('-{0}', inputs.recollect_commit_id) || '' }}
   cancel-in-progress: true
 
 # Title of the rolling failure-alert issue, defined once and shared by the two jobs that
@@ -77,49 +55,13 @@ env:
   FAILURE_ISSUE_TITLE: Benchmark-history workflow failed
 
 jobs:
-  # Reject a self-contradictory manual dispatch BEFORE any expensive work starts. `reanalyze`
-  # (analysis only, no collection) and `recollect_commit_id` (re-measure and overwrite one commit)
-  # are mutually exclusive: a recollect IS a collection, so asking to both skip collection and
-  # recollect a commit is a contradiction. Rather than a script that validates the combination,
-  # this job's own `if:` IS the validation - it runs ONLY when both inputs are set, and when it runs
-  # it does nothing but fail. In every valid mode (push, plain dispatch, recollect-only,
-  # reanalyze-only) the condition is false and the job is SKIPPED, so it costs nothing and, crucially,
-  # every downstream job keys off its `skipped` result to mean "inputs are consistent" (a `failure`
-  # means the contradiction was dispatched). It carries the same repo/main gate as the others purely
-  # for consistency; nothing runs off-main anyway. No checkout, permissions or setup-environment - it
-  # only needs to print and exit non-zero.
-  reject-conflicting-inputs:
-    if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main' && inputs.reanalyze && inputs.recollect_commit_id != ''
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Reject conflicting reanalyze + recollect inputs
-        shell: pwsh
-        env:
-          RECOLLECT_COMMIT_ID: ${{ inputs.recollect_commit_id }}
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-
-          # The value is echoed for the log only; it is never spliced into a command. The failure is
-          # the whole point of this step - pick exactly one mode and re-dispatch.
-          throw ("Conflicting dispatch inputs: 'reanalyze' is set AND 'recollect_commit_id' is " +
-            "'$env:RECOLLECT_COMMIT_ID'. A recollect re-measures and OVERWRITES a commit (a " +
-            "collection), which contradicts reanalyze (analysis only, no collection). Choose one: " +
-            "leave recollect_commit_id empty to reanalyze, or clear reanalyze to recollect.")
-
   collect:
-    # Never collect in reanalyze mode: that mode re-surveys the existing store only, so the whole
-    # benchmark matrix is skipped and just the analyze job runs. `!inputs.reanalyze` is also what
-    # keeps collection off for a rejected both-inputs-set dispatch (reanalyze is set there too), so
-    # this job needs no dependency on the guard. Otherwise, skip everywhere the OIDC sign-in cannot
-    # work: forks (only this repository's
-    # identity can federate into Azure) and any ref other than main (the federated
-    # credential is scoped to refs/heads/main, so a workflow_dispatch from a feature
-    # branch would mint a non-matching subject and fail at azure/login). Gating here
-    # makes such manual runs skip cleanly instead of failing red.
-    if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main' && !inputs.reanalyze
+    # Skip everywhere the OIDC sign-in cannot work: forks (only this repository's identity can
+    # federate into Azure) and any ref other than main (the federated credential is scoped to
+    # refs/heads/main, so a workflow_dispatch from a feature branch would mint a non-matching
+    # subject and fail at azure/login). Gating here makes such manual runs skip cleanly instead
+    # of failing red.
+    if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
 
     strategy:
       # One platform's benchmarks failing must not abandon the others' history for this
@@ -185,30 +127,48 @@ jobs:
           Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
           Set-AzureFederationEnv -ConstantsPath constants.env -EnvFilePath $env:GITHUB_ENV | Out-Null
 
-      # The deterministic engines (Callgrind, allocation/time counters) are
-      # hardware-independent; the wall-clock engines are pinned to the fixed `github` machine
-      # key (see the gh-collect-bench-history recipe) so a heterogeneous runner pool does not
-      # fork the series. RECOLLECT_COMMIT_ID (empty on a push/plain dispatch) switches the recipe
-      # from appending the pushed commit to re-measuring and OVERWRITING one historical commit;
-      # it is passed through the environment so an untrusted dispatch input is never spliced into
-      # a shell command line here.
+      # The deterministic engines (Callgrind, allocation/time counters) are hardware-independent; the
+      # wall-clock engines are partitioned by each runner's OWN real hardware fingerprint (see the
+      # gh-collect-bench-history recipe) so a heterogeneous runner pool splits into one clean series
+      # per SKU rather than one jittery mixed series. RECOLLECT_COMMIT_ID (empty on a push/plain
+      # dispatch) switches the recipe from appending the pushed commit to re-measuring and OVERWRITING
+      # one historical commit; it is passed through the environment so an untrusted dispatch input is
+      # never spliced into a shell command line here.
       - name: Collect benchmark history
         env:
           RECOLLECT_COMMIT_ID: ${{ inputs.recollect_commit_id }}
         run: just gh-collect-bench-history
 
+      # Record THIS runner's real hardware fingerprint so the single analyze job can thread the exact
+      # keys collected this run into its `--machine-key` filter (collect is a matrix, analyze is not,
+      # so analyze cannot re-derive them). Runs only after a SUCCESSFUL collect - a failed leg
+      # collected nothing, so its key must not be threaded - which is the default step behavior (a
+      # prior step's failure skips this one). The write recipe logs the fingerprint components under
+      # --verbose for debugging a key change.
+      - name: Record runner machine key
+        shell: pwsh
+        env:
+          KEY_FILE: ${{ runner.temp }}/machine-key.txt
+        run: just gh-write-bench-history-machine-key "$env:KEY_FILE"
+
+      # Upload this leg's key under a per-platform artifact name so the analyze job can download every
+      # leg's key together (one file per platform). if-no-files-found: error catches a broken
+      # key-write step loudly rather than silently dropping a key from the analysis.
+      - name: Upload runner machine key
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-history-machine-key-${{ matrix.platform }}
+          path: ${{ runner.temp }}/machine-key.txt
+          if-no-files-found: error
+
   analyze:
-    # Survey the (possibly re-collected, or in reanalyze mode simply the existing) history for
-    # regressions and post a rolling issue when any finding survives. Runs after every platform
-    # finishes (even partially: fail-fast is off) so this commit's analysis reflects whatever did
-    # land, and only on main (where OIDC sign-in works), matching collect's gate. `always()` is what
-    # lets it run despite a partially-failed - or entirely skipped (reanalyze) - collect; the guard's
-    # `skipped` result then gates it to consistent-input runs only, so a rejected both-inputs-set
-    # dispatch (guard `failure`) does NOT analyze. This is also the reanalyze entry point: with
-    # collect skipped, this is the only job that runs, re-listing the store (picking up out-of-band
-    # additions) while deletes/overwrites are handled by the cache-invalidation marker (DESIGN 6.2).
-    needs: [reject-conflicting-inputs, collect]
-    if: always() && needs.reject-conflicting-inputs.result == 'skipped' && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
+    # Survey the (possibly re-collected) history for regressions and post a rolling issue when any
+    # finding survives. Runs after every platform finishes (even partially: fail-fast is off) so this
+    # commit's analysis reflects whatever did land, and only on main (where OIDC sign-in works),
+    # matching collect's gate. `always()` is what lets it run despite a partially-failed collect;
+    # the repo/ref gate then keeps it off forks and non-main refs (where collect itself skips).
+    needs: [collect]
+    if: always() && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # Analysis loads the whole store and reduces it; far faster than benchmarking, but the cap
     # must still clear a cold-cache setup-environment (up to ~90 min) on top of the analysis.
@@ -285,14 +245,28 @@ jobs:
           restore-keys: |
             bench-history-cache-
 
+      # Download every collect leg's machine-key file (one per-platform artifact) into a single
+      # directory so the analysis can thread the EXACT fingerprints collected this run into its
+      # `--machine-key` filter. The default (no merge-multiple) keeps one subdirectory per artifact;
+      # the recipe scans recursively. A leg whose collection failed uploaded nothing, so its key is
+      # simply absent and not analyzed. If EVERY leg failed there are no matching artifacts: a pattern
+      # download tolerates zero matches (it does not fail), and the recipe treats the empty directory
+      # as "nothing to analyze".
+      - name: Download collected machine keys
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bench-history-machine-key-*
+          path: ${{ steps.scratch.outputs.dir }}/machine-keys
+
       # Renders report.md (full Markdown), report.json (full JSON), summary.md (the condensed
       # top-findings Markdown) and notable.txt into the scratch directory. Findings never fail
-      # the recipe (the tool always exits 0); the issue is advisory, not a gate.
+      # the recipe (the tool always exits 0); the issue is advisory, not a gate. The second argument
+      # is the downloaded machine-key directory whose fingerprints scope the analysis.
       - name: Analyze benchmark history
         shell: pwsh
         env:
           SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
-        run: just gh-analyze-bench-history "$env:SCRATCH_DIR"
+        run: just gh-analyze-bench-history "$env:SCRATCH_DIR" "$env:SCRATCH_DIR/machine-keys"
 
       - name: Read notable flag
         id: notable
@@ -397,12 +371,8 @@ jobs:
   alert:
     # Open a deduplicated issue whenever collection or analysis fails, so a broken
     # run is noticed instead of silently rotting. Same main-only gate as the others.
-    # A REJECTED both-inputs-set dispatch is deliberately excluded (`guard.result != 'failure'`):
-    # that is an operator input mistake, not a pipeline-health failure, and the red run is already
-    # self-evident to whoever dispatched it - filing the rolling "workflow failed" issue for a typo
-    # would be misleading noise. Genuine collect/analyze failures (guard skipped) still alert.
-    needs: [reject-conflicting-inputs, collect, analyze]
-    if: failure() && needs.reject-conflicting-inputs.result != 'failure' && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
+    needs: [collect, analyze]
+    if: failure() && github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -462,16 +432,12 @@ jobs:
     # success() function, so a future unrelated job cannot affect this decision); if either the
     # collect or analyze it cares about failed, alert (failure()) handles it and this stays off.
     # Same main-only gate as the others. A no-op on runs when no failure issue is open.
-    # `always()` is REQUIRED, not cosmetic: a green reanalyze run legitimately SKIPS collect, and a
-    # skipped `needs` job would otherwise force this plain-conditional job to skip too (the guard,
-    # also normally skipped, is in `needs` for the same reason). With `always()` the explicit result
-    # checks below do all the deciding - a `skipped` collect is accepted alongside `success` so an
-    # analysis-only run still clears a stale alert, while a rejected both-inputs-set dispatch leaves
-    # analyze skipped (not success), keeping this off.
-    needs: [reject-conflicting-inputs, collect, analyze]
+    # `always()` lets the explicit result checks below do all the deciding, independent of the
+    # default all-needs-succeeded gate.
+    needs: [collect, analyze]
     if: >-
       always()
-      && (needs.collect.result == 'success' || needs.collect.result == 'skipped')
+      && needs.collect.result == 'success'
       && needs.analyze.result == 'success'
       && github.repository == 'folo-rs/folo'
       && github.ref == 'refs/heads/main'

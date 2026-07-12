@@ -12,7 +12,6 @@ BeforeAll {
     $script:Scope = @(
         '--workspace',
         '--exclude', 'benchmarks',
-        '--machine-key', 'github',
         '--best-of', '3',
         '--verbose'
     )
@@ -96,7 +95,6 @@ Describe 'Get-BenchHistoryCollectCommand' {
                 'collect',
                 '--package', 'nm',
                 '--package', 'many_cpus',
-                '--machine-key', 'github',
                 '--best-of', '3',
                 '--verbose',
                 '--skip-existing'
@@ -114,7 +112,6 @@ Describe 'Get-BenchHistoryCollectCommand' {
             $result | Should -Be @(
                 'collect',
                 '--package', 'nm',
-                '--machine-key', 'github',
                 '--best-of', '3',
                 '--verbose',
                 '--skip-existing'

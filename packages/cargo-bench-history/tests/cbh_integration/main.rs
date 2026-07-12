@@ -20,5 +20,6 @@ mod examine;
 mod harness;
 mod install;
 mod list;
+mod machine_key;
 mod prune;
 mod storage;

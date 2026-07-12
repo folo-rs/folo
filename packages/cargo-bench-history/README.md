@@ -47,6 +47,11 @@ cargo bench-history analyze --local=./bench-history
 # with the commit that caused it (both --benchmark and --metric are required).
 cargo bench-history examine --local=./bench-history \
     --benchmark my_pkg/my_group/my_case --metric instruction_count
+
+# Print this machine's hardware fingerprint (the key hardware-dependent history is
+# partitioned by). --verbose additionally reports the factors behind the key on
+# standard error, for tracing a key change to the hardware detail that moved.
+cargo bench-history machine-key
 ```
 
 ## See also

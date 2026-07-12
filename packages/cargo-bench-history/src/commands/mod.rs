@@ -4,9 +4,11 @@
 mod backfill;
 mod collect;
 mod install;
+mod machine_key;
 mod reporting;
 
 pub(crate) use backfill::execute as backfill;
 pub(crate) use collect::execute as collect;
 pub(crate) use install::execute as install;
+pub(crate) use machine_key::execute as machine_key;
 pub(crate) use reporting::{analyze, bless, examine, list, prune, unbless};

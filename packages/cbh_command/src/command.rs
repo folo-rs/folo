@@ -67,6 +67,9 @@ pub enum Command {
     Bless(BlessOptions),
     /// Remove blessings recorded at the current commit.
     Unbless(UnblessOptions),
+    /// Print this machine's hardware fingerprint (the machine key
+    /// hardware-dependent engines partition by).
+    MachineKey(MachineKeyOptions),
 }
 
 /// Options for the `collect` command.
@@ -146,6 +149,20 @@ pub struct InstallOptions {
     /// Path to the configuration file to generate, if overridden.
     pub config_path: Option<PathBuf>,
     /// Emit detailed diagnostic notes to standard error describing each step.
+    pub verbose: bool,
+}
+
+/// Options for the `machine-key` command.
+///
+/// The command derives no configuration, git, or storage state: it only probes
+/// the host hardware and prints the resulting fingerprint, so its sole option is
+/// the shared verbosity flag.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MachineKeyOptions {
+    /// Emit the individual hardware components that make up the fingerprint to
+    /// standard error, so a change in the key can be traced to which factor
+    /// changed. The key itself always goes to standard output.
     pub verbose: bool,
 }
 

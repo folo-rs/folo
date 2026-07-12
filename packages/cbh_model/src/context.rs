@@ -30,10 +30,21 @@ pub struct RunContext {
     pub toolchain: ToolchainInfo,
     /// Version of the cargo-bench-history tool that produced this run.
     pub tool_version: String,
+    /// Host hardware provenance: the machine fingerprint and the factors it
+    /// derives from. Write-only — nothing reads it back today; it is recorded so
+    /// that a later change in a machine key can be traced to the specific factor
+    /// that changed. `None` on runs written before this field existed (and on the
+    /// many non-collect construction sites that do not probe hardware).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<MachineInfo>,
 }
 
 impl RunContext {
     /// Creates a run context from its components.
+    ///
+    /// The host [`machine`](Self::machine) provenance is left absent; `collect`
+    /// sets it after construction (it is the only site that probes hardware), so
+    /// the many other callers need not thread a value they cannot supply.
     #[must_use]
     pub fn new(
         observation: Timestamp,
@@ -48,8 +59,31 @@ impl RunContext {
             env,
             toolchain,
             tool_version,
+            machine: None,
         }
     }
+}
+
+/// Host hardware provenance recorded with a run: the machine fingerprint and the
+/// factors it hashes.
+///
+/// Write-only metadata. Nothing reads it back today; it exists so that a later
+/// change in a machine key can be traced to the specific hardware factor that
+/// changed (for example, a runner pool swapping CPU models). It records the host's
+/// auto-detected fingerprint and is independent of any `--machine-key` override
+/// used to partition storage.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MachineInfo {
+    /// Number of logical processors the host reported.
+    pub processors: usize,
+    /// Number of NUMA memory regions the host reported.
+    pub memory_regions: usize,
+    /// Best-effort CPU brand string (`None` when it could not be determined).
+    pub cpu_brand: Option<String>,
+    /// The hardware fingerprint these factors hash to: the host's auto-detected
+    /// identity, recorded regardless of the machine key the run was partitioned
+    /// under (see the type-level note).
+    pub fingerprint: String,
 }
 
 /// Identification of the git commit a run was measured against.
@@ -164,6 +198,57 @@ mod tests {
     fn detect_environment_defaults_to_local() {
         let detected = detect_environment(env_from(&[]));
         assert_eq!(detected.provider, EnvironmentProvider::Local);
+    }
+
+    #[test]
+    fn machine_info_is_omitted_when_absent_and_restored_when_present() {
+        let epoch = "2024-01-01T00:00:00Z".parse().unwrap();
+        let context = RunContext::new(
+            epoch,
+            GitInfo::default(),
+            EnvironmentInfo::default(),
+            ToolchainInfo::default(),
+            "0.0.1".to_owned(),
+        );
+
+        // Absent host provenance must not appear on the wire, so old readers and
+        // records stay byte-compatible.
+        let json = serde_json::to_string(&context).unwrap();
+        assert!(!json.contains("machine"), "{json}");
+        assert_eq!(serde_json::from_str::<RunContext>(&json).unwrap(), context);
+
+        // A populated value round-trips intact.
+        let mut with_machine = context;
+        with_machine.machine = Some(MachineInfo {
+            processors: 8,
+            memory_regions: 1,
+            cpu_brand: Some("Test CPU 3000".to_owned()),
+            fingerprint: "d3ddd69dcf3b84ea".to_owned(),
+        });
+        let json = serde_json::to_string(&with_machine).unwrap();
+        assert!(
+            json.contains("\"fingerprint\":\"d3ddd69dcf3b84ea\""),
+            "{json}"
+        );
+        assert_eq!(
+            serde_json::from_str::<RunContext>(&json).unwrap(),
+            with_machine
+        );
+    }
+
+    #[test]
+    fn run_context_without_machine_field_deserializes_to_none() {
+        // A record written before the host-provenance field existed omits it
+        // entirely; it must still parse, leaving `machine` absent.
+        let json = r#"{
+            "observation": "2024-01-01T00:00:00Z",
+            "git": {"commit": null, "branch": null, "dirty": false},
+            "env": {"provider": "local", "run_id": null, "pull_request": null},
+            "toolchain": {"target_triple": "", "rustc_version": null},
+            "tool_version": "0.0.1"
+        }"#;
+        let context: RunContext = serde_json::from_str(json).unwrap();
+        assert_eq!(context.machine, None);
     }
 
     #[test]

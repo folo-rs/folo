@@ -9,11 +9,14 @@ use crate::{BenchmarkId, Metric, MetricKind, RunContext};
 ///
 /// Records which on-disk format a file was written with. Reads are not gated on
 /// it: version 2 dropped the redundant per-object `commit` timestamp (a run's
-/// timeline position is resolved from git topology, keyed by its commit ID), and
+/// timeline position is resolved from git topology, keyed by its commit ID),
 /// version 3 dropped the redundant `short_commit` (an abbreviation of the full
-/// commit ID the analysis already has from the storage key). Older records still
-/// deserialize because the removed fields are simply ignored.
-pub const SCHEMA_VERSION: u32 = 3;
+/// commit ID the analysis already has from the storage key), and version 4 added
+/// the optional host-hardware provenance (`context.machine`). Every one of these
+/// changes is wire-compatible: older records still deserialize because a removed
+/// field is ignored and an added field defaults to absent. The version is bumped
+/// so a file's provenance stays legible, not because a read path branches on it.
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// A complete benchmark run: the unit of storage (one immutable file per run).
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -155,17 +158,24 @@ mod tests {
     use nonempty::nonempty;
 
     use super::*;
-    use crate::{EnvironmentInfo, GitInfo, MetricKind, ToolchainInfo};
+    use crate::{EnvironmentInfo, GitInfo, MachineInfo, MetricKind, ToolchainInfo};
 
     fn sample_context() -> RunContext {
         let epoch = "2024-01-01T00:00:00Z".parse().unwrap();
-        RunContext::new(
+        let mut context = RunContext::new(
             epoch,
             GitInfo::default(),
             EnvironmentInfo::default(),
             ToolchainInfo::default(),
             "0.0.1".to_owned(),
-        )
+        );
+        context.machine = Some(MachineInfo {
+            processors: 8,
+            memory_regions: 1,
+            cpu_brand: Some("Test CPU 3000".to_owned()),
+            fingerprint: "d3ddd69dcf3b84ea".to_owned(),
+        });
+        context
     }
 
     #[test]
