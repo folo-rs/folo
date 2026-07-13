@@ -34,6 +34,7 @@ use jiff::Timestamp;
 use serde::Serialize;
 use tick::Clock;
 
+use super::announce::{AnnouncedBase, AnnouncedSince, selection_announcement};
 use super::{
     AutoFacets, DirtyTipPolicy, ReportFormat, ResolvedHistory, Selection, before_since_cutoff,
     detect_auto_facets, facet_filtered_candidates, parse_since, resolve_facets, resolve_history,
@@ -77,6 +78,18 @@ impl Scope {
     /// Whether this scope deletes dirty runs.
     fn touches_dirty(self) -> bool {
         matches!(self, Self::All | Self::Dirty)
+    }
+}
+
+/// Explains `prune`'s `--since` cutoff for the effective-selection announcement.
+///
+/// `prune` has no history-mode default look-back — it considers the whole selected
+/// history — so the cutoff is either the explicit `--since` value or absent.
+fn prune_since_reason(explicit: bool) -> &'static str {
+    if explicit {
+        "from the --since option"
+    } else {
+        "no default look-back"
     }
 }
 
@@ -184,6 +197,24 @@ where
         tip_is_merge_base,
         ..
     } = resolve_history(git, config, &selection, DirtyTipPolicy::Always, reporter).await?;
+
+    // The always-on effective-selection announcement: one line, printed regardless
+    // of `--verbose`, naming the resolved (possibly auto-detected) partition, base
+    // branch, and `--since` cutoff a plain run would otherwise resolve silently.
+    // Emitted before the `--prune-base` guard so even that refusal states what was
+    // selected.
+    reporter.announce(&selection_announcement(
+        &facets,
+        Some(AnnouncedBase {
+            name: &base_name,
+            auto: options.base.is_none(),
+        }),
+        None,
+        Some(AnnouncedSince {
+            cutoff: since,
+            reason: prune_since_reason(options.since.is_some()),
+        }),
+    ));
 
     // The `--prune-base` guard: when the context resolves onto the base branch
     // itself (`context == base`), the whole selection is base-branch history.
@@ -909,6 +940,73 @@ mod tests {
         rendered
             .markdown
             .expect("the Markdown report was rendered for the requested path")
+    }
+
+    #[test]
+    fn prune_announces_the_effective_selection() {
+        let storage = MemoryStorage::new();
+        store(&storage, &dirty_key("f2", 300), &set("f2"));
+        let reporter = RecordingReporter::new();
+        block_on(prune_with(
+            &feature_git(),
+            &storage,
+            "folo",
+            &config(),
+            &dirty_options(),
+            &auto(),
+            now(),
+            &reporter,
+        ))
+        .unwrap();
+        // The auto-detected partition, auto-detected base branch, and the (absent,
+        // no-default-look-back) `--since` cutoff are all named on the always-on line.
+        assert!(
+            reporter.announced("target-triple=x86_64-unknown-linux-gnu (auto-detected)"),
+            "{:?}",
+            reporter.announcements()
+        );
+        assert!(
+            reporter.announced("machine-key=synthetic (auto-detected)"),
+            "{:?}",
+            reporter.announcements()
+        );
+        assert!(
+            reporter.announced("base=master (auto-detected)"),
+            "{:?}",
+            reporter.announcements()
+        );
+        assert!(
+            reporter.announced("since=none (no default look-back)"),
+            "{:?}",
+            reporter.announcements()
+        );
+    }
+
+    #[test]
+    fn prune_announces_an_explicit_since_reason() {
+        let storage = MemoryStorage::new();
+        store(&storage, &dirty_key("f2", 300), &set("f2"));
+        let options = PruneOptions {
+            since: Some("2024-01-01".to_owned()),
+            ..dirty_options()
+        };
+        let reporter = RecordingReporter::new();
+        block_on(prune_with(
+            &feature_git(),
+            &storage,
+            "folo",
+            &config(),
+            &options,
+            &auto(),
+            now(),
+            &reporter,
+        ))
+        .unwrap();
+        assert!(
+            reporter.announced("since=2024-01-01T00:00:00Z (from the --since option)"),
+            "{:?}",
+            reporter.announcements()
+        );
     }
 
     #[test]

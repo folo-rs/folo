@@ -14,6 +14,7 @@ use cbh_model::{BenchmarkIdPrefix, BlessingRecord, DiscriminantSet, StorageKey};
 use cbh_storage::Storage;
 use jiff::Timestamp;
 
+use super::announce::{AnnouncedBase, AnnouncedSince, selection_announcement};
 use super::facets::{
     AutoFacets, describe_effective_facets, facets_are_unconstrained, resolve_facets,
 };
@@ -436,22 +437,18 @@ fn effective_selection_summary(
     since_explicit: bool,
     mode: AnalysisMode,
 ) -> String {
-    let base = if base_auto {
-        format!("base={base_name} (auto-detected)")
-    } else {
-        format!("base={base_name}")
-    };
-    let since = format!(
-        "since={} ({})",
-        since.map_or_else(|| "none".to_owned(), |since| since.to_string()),
-        since_cutoff_reason(since_explicit, mode)
-    );
-    [
-        format!("selection: {}", describe_effective_facets(facets)),
-        base,
-        since,
-    ]
-    .join("; ")
+    selection_announcement(
+        facets,
+        Some(AnnouncedBase {
+            name: base_name,
+            auto: base_auto,
+        }),
+        None,
+        Some(AnnouncedSince {
+            cutoff: since,
+            reason: since_cutoff_reason(since_explicit, mode),
+        }),
+    )
 }
 
 /// How many facet-matching candidates were excluded, by reason.
