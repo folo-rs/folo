@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::pal::AbstractProcessor;
 use crate::pal::windows::{ProcessorGroupIndex, ProcessorIndexInGroup};
-use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
+use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct ProcessorImpl {
@@ -15,6 +15,8 @@ pub(crate) struct ProcessorImpl {
     pub(crate) memory_region_id: MemoryRegionId,
 
     pub(crate) efficiency_class: EfficiencyClass,
+
+    pub(crate) relative_speed: RelativeSpeed,
 }
 
 impl ProcessorImpl {
@@ -24,6 +26,7 @@ impl ProcessorImpl {
         id: ProcessorId,
         memory_region_id: MemoryRegionId,
         efficiency_class: EfficiencyClass,
+        relative_speed: RelativeSpeed,
     ) -> Self {
         Self {
             group_index,
@@ -31,6 +34,7 @@ impl ProcessorImpl {
             id,
             memory_region_id,
             efficiency_class,
+            relative_speed,
         }
     }
 }
@@ -56,6 +60,10 @@ impl AbstractProcessor for ProcessorImpl {
 
     fn efficiency_class(&self) -> EfficiencyClass {
         self.efficiency_class
+    }
+
+    fn relative_speed(&self) -> RelativeSpeed {
+        self.relative_speed
     }
 }
 
@@ -84,16 +92,38 @@ mod tests {
 
     #[test]
     fn smoke_test() {
-        let processor = ProcessorImpl::new(0, 1, 2, 3, EfficiencyClass::Performance);
+        let processor = ProcessorImpl::new(
+            0,
+            1,
+            2,
+            3,
+            EfficiencyClass::Performance,
+            RelativeSpeed::from_raw(3600),
+        );
 
         assert_eq!(processor.id(), 2);
         assert_eq!(processor.memory_region_id(), 3);
         assert_eq!(processor.efficiency_class(), EfficiencyClass::Performance);
+        assert_eq!(processor.relative_speed().as_u32(), 3600);
 
-        let processor2 = ProcessorImpl::new(0, 1, 2, 3, EfficiencyClass::Performance);
+        let processor2 = ProcessorImpl::new(
+            0,
+            1,
+            2,
+            3,
+            EfficiencyClass::Performance,
+            RelativeSpeed::from_raw(3600),
+        );
         assert_eq!(processor, processor2);
 
-        let processor3 = ProcessorImpl::new(0, 1, 4, 3, EfficiencyClass::Performance);
+        let processor3 = ProcessorImpl::new(
+            0,
+            1,
+            4,
+            3,
+            EfficiencyClass::Performance,
+            RelativeSpeed::from_raw(3600),
+        );
         assert_ne!(processor, processor3);
         assert!(processor < processor3);
         assert!(processor3 > processor);
@@ -102,7 +132,14 @@ mod tests {
     #[test]
     fn display_shows_processor_id_and_group_info() {
         // group_index=1, index_in_group=3, id=7
-        let processor = ProcessorImpl::new(1, 3, 7, 0, EfficiencyClass::Performance);
+        let processor = ProcessorImpl::new(
+            1,
+            3,
+            7,
+            0,
+            EfficiencyClass::Performance,
+            RelativeSpeed::SYNTHETIC,
+        );
 
         let display_output = processor.to_string();
 
@@ -118,7 +155,14 @@ mod tests {
 
     #[test]
     fn as_ref_returns_self() {
-        let processor = ProcessorImpl::new(0, 2, 5, 1, EfficiencyClass::Efficiency);
+        let processor = ProcessorImpl::new(
+            0,
+            2,
+            5,
+            1,
+            EfficiencyClass::Efficiency,
+            RelativeSpeed::SYNTHETIC,
+        );
 
         let processor_ref: &ProcessorImpl = processor.as_ref();
 

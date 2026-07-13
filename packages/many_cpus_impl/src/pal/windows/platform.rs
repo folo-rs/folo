@@ -21,7 +21,7 @@ use windows::core::HRESULT;
 
 use crate::pal::windows::{Bindings, BindingsFacade, ProcessorGroupIndex, ProcessorIndexInGroup};
 use crate::pal::{GroupMask, Platform, ProcessorFacade, ProcessorImpl};
-use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
+use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 
 /// Singleton instance of `BuildTargetPlatform`, used by public API types
 /// to hook up to the correct PAL implementation.
@@ -82,6 +82,7 @@ impl Platform for BuildTargetPlatform {
 
         let efficiency_classes = self.get_processor_efficiency_classes();
         let memory_regions = self.get_processor_memory_regions();
+        let relative_speeds = self.get_processor_relative_speeds();
         let allowed_processors = self.processors_allowed_by_job_constraints();
 
         // We are required to return all the processors ordered by the processor ID.
@@ -111,6 +112,8 @@ impl Platform for BuildTargetPlatform {
 
                 let efficiency_class = *efficiency_classes.get(processor_id as usize).expect("we expect to have the efficiency class for every processor ID unless the platform lied to us at some point");
 
+                let relative_speed = *relative_speeds.get(processor_id as usize).expect("we expect to have the relative speed for every processor ID unless the platform lied to us at some point");
+
                 Some(ProcessorImpl::new(
                     group_index
                         .try_into()
@@ -118,7 +121,8 @@ impl Platform for BuildTargetPlatform {
                     index_in_group,
                     processor_id,
                     memory_region_index,
-                    efficiency_class
+                    efficiency_class,
+                    relative_speed,
                 ))
             })
         ).expect(
@@ -599,6 +603,21 @@ impl BuildTargetPlatform {
             .into_boxed_slice()
     }
 
+    /// Gets the relative speed of all processors on the system, ordered by processor ID.
+    /// This also returns data for offline processors but the value for those is unspecified.
+    #[must_use]
+    fn get_processor_relative_speeds(&self) -> Box<[RelativeSpeed]> {
+        // The underlying API reports the nominal maximum clock frequency (MHz) per processor,
+        // which we surface directly as the relative speed. Processors the platform reports no
+        // value for (0 MHz) map to the synthetic minimum via `RelativeSpeed::from_raw()`.
+        self.bindings
+            .get_processor_max_mhz(self.max_processor_count())
+            .into_iter()
+            .map(RelativeSpeed::from_raw)
+            .collect_vec()
+            .into_boxed_slice()
+    }
+
     /// Gets the efficiency classes of all processors on the system, ordered by processor ID.
     /// This also returns data for offline processors.
     #[must_use]
@@ -926,6 +945,33 @@ mod tests {
         assert_eq!(p3.as_target().group_index, 0);
         assert_eq!(p3.as_target().index_in_group, 3);
         assert_eq!(p3.as_target().memory_region_id, 0);
+    }
+
+    #[test]
+    fn get_all_processors_reports_relative_speed() {
+        // A simple single-group system with 4 logical processors. The simulated layout reports a
+        // distinct nominal clock speed per processor - processor `i` reports `(i + 1) * 1000` MHz -
+        // which must surface unchanged as the processor's relative speed.
+        let mut bindings = MockBindings::new();
+        simulate_processor_layout(
+            &mut bindings,
+            [4],
+            [4],
+            [vec![0, 0, 0, 0]],
+            [vec![0, 0, 0, 0]],
+            None,
+        );
+
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
+
+        let processors = platform.get_all_processors();
+
+        assert_eq!(processors.len(), 4);
+
+        for (index, processor) in processors.iter().enumerate() {
+            let expected = (u32::try_from(index).unwrap() + 1) * 1000;
+            assert_eq!(processor.as_target().relative_speed.as_u32(), expected);
+        }
     }
 
     #[test]
@@ -1320,6 +1366,7 @@ mod tests {
             &group_active_counts,
             &efficiency_ratings_per_group,
         );
+        simulate_get_relative_speeds(bindings);
 
         // Transform the booleans to IDs.
         let job_affinitized_processors_per_group =
@@ -1376,6 +1423,22 @@ mod tests {
 
             move |group_number| u32::from(group_max_counts[group_number as usize])
         });
+    }
+
+    /// Registers a default `get_processor_max_mhz` expectation that reports a distinct nominal
+    /// clock speed per processor ID: processor `i` reports `(i + 1) * 1000` MHz. This gives every
+    /// simulated processor a unique, non-synthetic relative speed so tests can observe the value
+    /// flowing through `get_all_processors()`.
+    fn simulate_get_relative_speeds(bindings: &mut MockBindings) {
+        bindings
+            .expect_get_processor_max_mhz()
+            .returning(|max_processor_count| {
+                (0..max_processor_count)
+                    .map(|processor_id| {
+                        (u32::try_from(processor_id).expect("processor ID fits in u32") + 1) * 1000
+                    })
+                    .collect_vec()
+            });
     }
 
     fn simulate_get_numa_relations(

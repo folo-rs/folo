@@ -1,7 +1,7 @@
 use derive_more::derive::Display;
 
 use crate::pal::AbstractProcessor;
-use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
+use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 
 /// A fallback processor implementation for unsupported platforms.
 ///
@@ -34,5 +34,11 @@ impl AbstractProcessor for ProcessorImpl {
         // We do not have real topology information, so we assume all processors
         // are performance processors.
         EfficiencyClass::Performance
+    }
+
+    #[cfg_attr(test, mutants::skip)] // Some mutations are not testable due to simulated nature of this PAL.
+    fn relative_speed(&self) -> RelativeSpeed {
+        // We do not have real speed information, so every processor reports the synthetic value.
+        RelativeSpeed::SYNTHETIC
     }
 }

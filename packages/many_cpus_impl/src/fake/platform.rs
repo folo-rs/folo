@@ -11,7 +11,7 @@ use rand::rng;
 
 use crate::fake::HardwareBuilder;
 use crate::pal::{AbstractProcessor, Platform, ProcessorFacade};
-use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
+use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 
 /// A fake processor for use in fake hardware.
 ///
@@ -22,14 +22,15 @@ pub(crate) struct FakeProcessor {
     id: ProcessorId,
     memory_region_id: MemoryRegionId,
     efficiency_class: EfficiencyClass,
+    relative_speed: RelativeSpeed,
 }
 
 impl Display for FakeProcessor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "FakeProcessor({} in region {}, {:?})",
-            self.id, self.memory_region_id, self.efficiency_class
+            "FakeProcessor({} in region {}, {:?}, speed {})",
+            self.id, self.memory_region_id, self.efficiency_class, self.relative_speed
         )
     }
 }
@@ -40,11 +41,13 @@ impl FakeProcessor {
         id: ProcessorId,
         memory_region_id: MemoryRegionId,
         efficiency_class: EfficiencyClass,
+        relative_speed: RelativeSpeed,
     ) -> Self {
         Self {
             id,
             memory_region_id,
             efficiency_class,
+            relative_speed,
         }
     }
 }
@@ -60,6 +63,10 @@ impl AbstractProcessor for FakeProcessor {
 
     fn efficiency_class(&self) -> EfficiencyClass {
         self.efficiency_class
+    }
+
+    fn relative_speed(&self) -> RelativeSpeed {
+        self.relative_speed
     }
 }
 
@@ -101,7 +108,14 @@ impl FakePlatform {
 
         let processors: Vec<FakeProcessor> = configured_processors
             .iter()
-            .map(|p| FakeProcessor::new(p.id, p.memory_region_id, p.efficiency_class))
+            .map(|p| {
+                FakeProcessor::new(
+                    p.id,
+                    p.memory_region_id,
+                    p.efficiency_class,
+                    p.relative_speed,
+                )
+            })
             .collect();
 
         let max_processor_id = processors.iter().map(|p| p.id).max().unwrap_or(0);
@@ -416,19 +430,25 @@ mod tests {
 
     #[test]
     fn fake_processor_display_includes_all_fields() {
-        let processor = FakeProcessor::new(5, 2, EfficiencyClass::Efficiency);
+        let processor = FakeProcessor::new(
+            5,
+            2,
+            EfficiencyClass::Efficiency,
+            RelativeSpeed::from_raw(3600),
+        );
 
         let display = format!("{processor}");
 
         assert!(display.contains('5'));
         assert!(display.contains('2'));
         assert!(display.contains("Efficiency"));
+        assert!(display.contains("3600"));
     }
 
     #[test]
     fn fake_processor_efficiency_class_returns_configured_value() {
-        let perf = FakeProcessor::new(0, 0, EfficiencyClass::Performance);
-        let eff = FakeProcessor::new(1, 0, EfficiencyClass::Efficiency);
+        let perf = FakeProcessor::new(0, 0, EfficiencyClass::Performance, RelativeSpeed::SYNTHETIC);
+        let eff = FakeProcessor::new(1, 0, EfficiencyClass::Efficiency, RelativeSpeed::SYNTHETIC);
 
         assert_eq!(perf.efficiency_class(), EfficiencyClass::Performance);
         assert_eq!(eff.efficiency_class(), EfficiencyClass::Efficiency);
@@ -436,15 +456,48 @@ mod tests {
 
     #[test]
     fn fake_processor_id_returns_configured_value() {
-        let processor = FakeProcessor::new(42, 0, EfficiencyClass::Performance);
+        let processor = FakeProcessor::new(
+            42,
+            0,
+            EfficiencyClass::Performance,
+            RelativeSpeed::SYNTHETIC,
+        );
 
         assert_eq!(processor.id(), 42);
     }
 
     #[test]
     fn fake_processor_memory_region_id_returns_configured_value() {
-        let processor = FakeProcessor::new(0, 7, EfficiencyClass::Performance);
+        let processor =
+            FakeProcessor::new(0, 7, EfficiencyClass::Performance, RelativeSpeed::SYNTHETIC);
 
         assert_eq!(processor.memory_region_id(), 7);
+    }
+
+    #[test]
+    fn fake_processor_relative_speed_returns_configured_value() {
+        let processor = FakeProcessor::new(
+            0,
+            0,
+            EfficiencyClass::Performance,
+            RelativeSpeed::from_raw(2400),
+        );
+
+        assert_eq!(processor.relative_speed().as_u32(), 2400);
+    }
+
+    #[test]
+    fn relative_speed_flows_through_builder() {
+        let builder = HardwareBuilder::new()
+            .processor(ProcessorBuilder::new().id(0).relative_speed(nz!(1800)))
+            .processor(ProcessorBuilder::new().id(1));
+        let backend = FakePlatform::from_builder(&builder);
+
+        // Explicitly configured speed is preserved; the unconfigured one falls back to synthetic.
+        assert_eq!(backend.processors[0].relative_speed().as_u32(), 1800);
+        assert_eq!(
+            backend.processors[1].relative_speed(),
+            RelativeSpeed::SYNTHETIC
+        );
     }
 }

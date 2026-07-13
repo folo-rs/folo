@@ -9,7 +9,7 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use many_cpus::{
     EfficiencyClass, MemoryRegionId, Processor, ProcessorId, ProcessorSet, ProcessorSetBuilder,
-    ResourceQuota, SystemHardware,
+    RelativeSpeed, ResourceQuota, SystemHardware,
 };
 use static_assertions::assert_impl_all;
 
@@ -18,10 +18,12 @@ assert_impl_all!(ProcessorSet: Send, Sync, UnwindSafe, RefUnwindSafe);
 assert_impl_all!(ProcessorSetBuilder: Send, Sync);
 assert_impl_all!(Processor: Send, Sync, UnwindSafe, RefUnwindSafe);
 assert_impl_all!(ResourceQuota: Send, Sync, UnwindSafe, RefUnwindSafe);
+assert_impl_all!(RelativeSpeed: Send, Sync, UnwindSafe, RefUnwindSafe);
 
 fn require_processor_id(_: ProcessorId) {}
 fn require_memory_region_id(_: MemoryRegionId) {}
 fn require_efficiency_class(_: EfficiencyClass) {}
+fn require_relative_speed(_: RelativeSpeed) {}
 
 #[test]
 fn system_hardware_inspection_via_re_exports() {
@@ -44,6 +46,7 @@ fn processor_set_basics_via_re_exports() {
     require_processor_id(any_processor.id());
     require_memory_region_id(any_processor.memory_region_id());
     require_efficiency_class(any_processor.efficiency_class());
+    require_relative_speed(any_processor.relative_speed());
 }
 
 #[test]
@@ -73,7 +76,7 @@ mod with_test_util {
     #[test]
     fn fake_processor_builder_constructor_via_re_exports() {
         let builder = HardwareBuilder::new()
-            .processor(ProcessorBuilder::new().id(0))
+            .processor(ProcessorBuilder::new().id(0).relative_speed(nz!(3600)))
             .processor(ProcessorBuilder::new().id(1).memory_region(1));
         let hardware = SystemHardware::fake(builder);
         assert!(hardware.max_processor_count() >= 2);

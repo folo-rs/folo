@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use derive_more::derive::AsRef;
 
 use crate::pal::{AbstractProcessor, ProcessorFacade};
-use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
+use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 
 /// A processor present on the system and available to the current process.
 #[derive(AsRef, Clone)]
@@ -94,6 +94,38 @@ impl Processor {
     pub fn efficiency_class(&self) -> EfficiencyClass {
         self.inner.efficiency_class()
     }
+
+    /// A relative indicator of the processor's nominal speed.
+    ///
+    /// This refines [`efficiency_class()`][Self::efficiency_class] with a finer-grained value that
+    /// helps distinguish processors of different underlying types on the same system. Processors
+    /// of the same type report the same value, so it does not uniquely identify a processor - use
+    /// [`id()`][Self::id] for that.
+    ///
+    /// The value is only meaningful within a single system and is **not** comparable across
+    /// systems or operating systems. See [`RelativeSpeed`] for details.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use many_cpus::SystemHardware;
+    ///
+    /// let processors = SystemHardware::current().processors();
+    ///
+    /// for processor in processors {
+    ///     println!(
+    ///         "Processor {} has relative speed {}",
+    ///         processor.id(),
+    ///         processor.relative_speed(),
+    ///     );
+    /// }
+    /// ```
+    #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
+    #[inline]
+    #[must_use]
+    pub fn relative_speed(&self) -> RelativeSpeed {
+        self.inner.relative_speed()
+    }
 }
 
 impl PartialEq for Processor {
@@ -146,7 +178,12 @@ mod tests {
 
     #[test]
     fn smoke_test() {
-        let pal_processor = FakeProcessor::new(42, 13, EfficiencyClass::Efficiency);
+        let pal_processor = FakeProcessor::new(
+            42,
+            13,
+            EfficiencyClass::Efficiency,
+            RelativeSpeed::from_raw(3600),
+        );
 
         let processor = Processor::new(pal_processor.into());
 
@@ -154,6 +191,7 @@ mod tests {
         assert_eq!(processor.id(), 42);
         assert_eq!(processor.memory_region_id(), 13);
         assert_eq!(processor.efficiency_class(), EfficiencyClass::Efficiency);
+        assert_eq!(processor.relative_speed().as_u32(), 3600);
 
         // A clone is a legit clone.
         let processor_clone = processor.clone();

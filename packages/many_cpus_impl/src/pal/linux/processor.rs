@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use crate::pal::AbstractProcessor;
-use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
+use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 
 /// A processor present on the system and available to the current process.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -9,6 +9,7 @@ pub(crate) struct ProcessorImpl {
     pub(crate) id: ProcessorId,
     pub(crate) memory_region_id: MemoryRegionId,
     pub(crate) efficiency_class: EfficiencyClass,
+    pub(crate) relative_speed: RelativeSpeed,
 
     pub(crate) is_active: bool,
 }
@@ -30,6 +31,10 @@ impl AbstractProcessor for ProcessorImpl {
 
     fn efficiency_class(&self) -> EfficiencyClass {
         self.efficiency_class
+    }
+
+    fn relative_speed(&self) -> RelativeSpeed {
+        self.relative_speed
     }
 }
 
@@ -62,17 +67,20 @@ mod tests {
             id: 2,
             memory_region_id: 3,
             efficiency_class: EfficiencyClass::Performance,
+            relative_speed: RelativeSpeed::from_raw(4890),
             is_active: true,
         };
 
         assert_eq!(processor.id(), 2);
         assert_eq!(processor.memory_region_id(), 3);
         assert_eq!(processor.efficiency_class(), EfficiencyClass::Performance);
+        assert_eq!(processor.relative_speed().as_u32(), 4890);
 
         let processor2 = ProcessorImpl {
             id: 2,
             memory_region_id: 3,
             efficiency_class: EfficiencyClass::Performance,
+            relative_speed: RelativeSpeed::from_raw(4890),
             is_active: true,
         };
 
@@ -82,6 +90,7 @@ mod tests {
             id: 4,
             memory_region_id: 3,
             efficiency_class: EfficiencyClass::Performance,
+            relative_speed: RelativeSpeed::from_raw(4890),
             is_active: true,
         };
 
@@ -96,6 +105,7 @@ mod tests {
             id: 5,
             memory_region_id: 2,
             efficiency_class: EfficiencyClass::Efficiency,
+            relative_speed: RelativeSpeed::from_raw(2400),
             is_active: true,
         };
 
@@ -117,6 +127,7 @@ mod tests {
             id: 7,
             memory_region_id: 1,
             efficiency_class: EfficiencyClass::Performance,
+            relative_speed: RelativeSpeed::from_raw(3600),
             is_active: true,
         };
 

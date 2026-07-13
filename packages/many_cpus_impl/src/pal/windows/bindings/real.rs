@@ -5,6 +5,9 @@ use windows::Win32::System::JobObjects::{
     JobObjectGroupInformationEx, QueryInformationJobObject,
 };
 use windows::Win32::System::Kernel::PROCESSOR_NUMBER;
+use windows::Win32::System::Power::{
+    CallNtPowerInformation, PROCESSOR_POWER_INFORMATION, ProcessorInformation,
+};
 use windows::Win32::System::SystemInformation::{
     GROUP_AFFINITY, GetLogicalProcessorInformationEx, LOGICAL_PROCESSOR_RELATIONSHIP,
     SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
@@ -207,6 +210,53 @@ impl Bindings for BuildTargetBindings {
             .expect("platform refused to provide the current thread's legacy processor affinity");
 
         aff
+    }
+
+    fn get_processor_max_mhz(&self, max_processor_count: usize) -> Vec<u32> {
+        // `CallNtPowerInformation(ProcessorInformation)` fills one PROCESSOR_POWER_INFORMATION per
+        // logical processor, ordered by processor number. `MaxMhz` is the nominal maximum clock
+        // frequency which - unlike `CurrentMhz` - is stable and does not fluctuate with power
+        // management or thermal throttling, making it a reliable value for identifying processors.
+        //
+        // This is a legacy API that predates processor groups: on systems with more than one
+        // processor group (more than 64 logical processors) it only reports processors in the
+        // calling thread's group. Processors it does not report are left at 0, which the caller
+        // treats as "unknown".
+        let mut buffer = vec![PROCESSOR_POWER_INFORMATION::default(); max_processor_count];
+
+        let buffer_len_bytes: u32 = max_processor_count
+            .checked_mul(size_of::<PROCESSOR_POWER_INFORMATION>())
+            .and_then(|len| u32::try_from(len).ok())
+            .expect("processor power information buffer size overflowed u32");
+
+        // SAFETY: `ProcessorInformation` requires no input buffer; we provide an output buffer
+        // large enough for `max_processor_count` entries and declare its exact size in bytes.
+        unsafe {
+            CallNtPowerInformation(
+                ProcessorInformation,
+                None,
+                0,
+                Some(buffer.as_mut_ptr().cast()),
+                buffer_len_bytes,
+            )
+        }
+        .ok()
+        .expect("platform refused to provide processor power information");
+
+        let mut max_mhz_by_processor = vec![0_u32; max_processor_count];
+
+        for info in &buffer {
+            // Skip entries the platform did not fill - a real processor never reports 0 MHz.
+            if info.MaxMhz == 0 {
+                continue;
+            }
+
+            if let Some(slot) = max_mhz_by_processor.get_mut(info.Number as usize) {
+                *slot = info.MaxMhz;
+            }
+        }
+
+        max_mhz_by_processor
     }
 
     // Excluded from coverage because the "not in job" branches cannot be tested in automation,

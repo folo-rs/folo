@@ -73,6 +73,16 @@ impl AbstractProcessor for ProcessorFacade {
             Self::Fake(p) => p.efficiency_class(),
         }
     }
+
+    fn relative_speed(&self) -> crate::RelativeSpeed {
+        match self {
+            Self::Target(p) => p.relative_speed(),
+            #[cfg(test)]
+            Self::Fallback(p) => p.relative_speed(),
+            #[cfg(any(test, feature = "test-util"))]
+            Self::Fake(p) => p.relative_speed(),
+        }
+    }
 }
 
 impl From<ProcessorImpl> for ProcessorFacade {

@@ -150,6 +150,14 @@ impl Bindings for BindingsFacade {
             Self::Mock(bindings) => bindings.get_current_job_cpu_rate_control(),
         }
     }
+
+    fn get_processor_max_mhz(&self, max_processor_count: usize) -> Vec<u32> {
+        match self {
+            Self::Target(bindings) => bindings.get_processor_max_mhz(max_processor_count),
+            #[cfg(test)]
+            Self::Mock(bindings) => bindings.get_processor_max_mhz(max_processor_count),
+        }
+    }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.

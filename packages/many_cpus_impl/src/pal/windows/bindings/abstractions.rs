@@ -37,5 +37,10 @@ pub(crate) trait Bindings: Debug + Send + Sync + 'static {
 
     fn get_current_job_cpu_rate_control(&self) -> Option<JOBOBJECT_CPU_RATE_CONTROL_INFORMATION>;
 
+    /// Returns the nominal maximum clock frequency in MHz of each logical processor, indexed by
+    /// processor number, for up to `max_processor_count` processors. Processors for which the
+    /// platform reports no value hold 0.
+    fn get_processor_max_mhz(&self, max_processor_count: usize) -> Vec<u32>;
+
     fn get_current_thread_legacy_group_affinity(&self) -> GROUP_AFFINITY;
 }

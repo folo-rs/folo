@@ -9,7 +9,7 @@ use nonempty::NonEmpty;
 use crate::pal::linux::filesystem::FilesystemFacade;
 use crate::pal::linux::{Bindings, BindingsFacade, Filesystem};
 use crate::pal::{Platform, ProcessorFacade, ProcessorImpl};
-use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
+use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 
 /// Singleton instance of `BuildTargetPlatform`, used by public API types
 /// to hook up to the correct PAL implementation.
@@ -234,6 +234,7 @@ impl BuildTargetPlatform {
                 id: info.index,
                 memory_region_id: memory_region,
                 efficiency_class,
+                relative_speed: RelativeSpeed::from_raw(info.bogomips),
                 is_active: is_online,
             }
         });
@@ -682,17 +683,20 @@ mod tests {
             p0.as_target().efficiency_class,
             EfficiencyClass::Performance
         );
+        assert_eq!(p0.as_target().relative_speed.as_u32(), 3400);
 
         let p1 = &processors[1];
         assert_eq!(p1.as_target().id, 1);
         assert_eq!(p1.as_target().memory_region_id, 0);
         assert_eq!(p1.as_target().efficiency_class, EfficiencyClass::Efficiency);
+        assert_eq!(p1.as_target().relative_speed.as_u32(), 2000);
 
         // Node 1
         let p2 = &processors[2];
         assert_eq!(p2.as_target().id, 2);
         assert_eq!(p2.as_target().memory_region_id, 1);
         assert_eq!(p2.as_target().efficiency_class, EfficiencyClass::Efficiency);
+        assert_eq!(p2.as_target().relative_speed.as_u32(), 2000);
 
         let p3 = &processors[3];
         assert_eq!(p3.as_target().id, 3);
@@ -701,6 +705,7 @@ mod tests {
             p3.as_target().efficiency_class,
             EfficiencyClass::Performance
         );
+        assert_eq!(p3.as_target().relative_speed.as_u32(), 3400);
     }
 
     #[test]

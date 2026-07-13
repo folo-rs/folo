@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::num::NonZero;
 
 use crate::fake::ProcessorBuilder;
-use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
+use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 
 /// A processor with a resolved ID, ready to be used by the backend.
 #[derive(Clone, Debug)]
@@ -12,6 +12,7 @@ pub(crate) struct ResolvedProcessor {
     pub(crate) id: ProcessorId,
     pub(crate) memory_region_id: MemoryRegionId,
     pub(crate) efficiency_class: EfficiencyClass,
+    pub(crate) relative_speed: RelativeSpeed,
 }
 
 /// Builder for configuring fake hardware.
@@ -244,6 +245,7 @@ impl HardwareBuilder {
                 id,
                 memory_region_id: p.memory_region_id,
                 efficiency_class: p.efficiency_class,
+                relative_speed: p.relative_speed,
             });
         }
 

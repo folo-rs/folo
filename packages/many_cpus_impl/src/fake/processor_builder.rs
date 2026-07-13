@@ -1,11 +1,14 @@
 //! Builder for configuring individual fake processors.
 
-use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
+use std::num::NonZero;
+
+use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 
 /// Builder for configuring an individual fake processor.
 ///
-/// Each fake processor has an ID, a memory region, and an efficiency class.
-/// By default, processors are placed in memory region 0 with [`EfficiencyClass::Performance`].
+/// Each fake processor has an ID, a memory region, an efficiency class and a relative speed.
+/// By default, processors are placed in memory region 0 with [`EfficiencyClass::Performance`]
+/// and the synthetic minimum relative speed.
 ///
 /// Processor IDs are assigned automatically by default. If you need a specific ID,
 /// use [`id()`][Self::id] to set it explicitly.
@@ -29,6 +32,7 @@ pub struct ProcessorBuilder {
     pub(crate) explicit_id: Option<ProcessorId>,
     pub(crate) memory_region_id: MemoryRegionId,
     pub(crate) efficiency_class: EfficiencyClass,
+    pub(crate) relative_speed: RelativeSpeed,
 }
 
 impl Default for ProcessorBuilder {
@@ -40,15 +44,16 @@ impl Default for ProcessorBuilder {
 impl ProcessorBuilder {
     /// Creates a new processor builder with automatic ID assignment.
     ///
-    /// The processor is placed in memory region 0 with [`EfficiencyClass::Performance`] by default.
-    /// The ID will be automatically assigned when the processor is added to a
-    /// [`HardwareBuilder`][super::HardwareBuilder].
+    /// The processor is placed in memory region 0 with [`EfficiencyClass::Performance`] and the
+    /// synthetic minimum relative speed by default. The ID will be automatically assigned when the
+    /// processor is added to a [`HardwareBuilder`][super::HardwareBuilder].
     #[must_use]
     pub fn new() -> Self {
         Self {
             explicit_id: None,
             memory_region_id: 0,
             efficiency_class: EfficiencyClass::Performance,
+            relative_speed: RelativeSpeed::SYNTHETIC,
         }
     }
 
@@ -80,6 +85,15 @@ impl ProcessorBuilder {
         self.efficiency_class = efficiency_class;
         self
     }
+
+    /// Sets the [relative speed][RelativeSpeed] reported for this processor.
+    ///
+    /// If not called, the processor reports the synthetic minimum relative speed.
+    #[must_use]
+    pub fn relative_speed(mut self, relative_speed: NonZero<u32>) -> Self {
+        self.relative_speed = RelativeSpeed::from_raw(relative_speed.get());
+        self
+    }
 }
 
 #[cfg(test)]
@@ -87,6 +101,7 @@ impl ProcessorBuilder {
 mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
 
+    use new_zealand::nz;
     use static_assertions::assert_impl_all;
 
     use super::*;
@@ -107,6 +122,7 @@ mod tests {
             default_builder.efficiency_class,
             new_builder.efficiency_class
         );
+        assert_eq!(default_builder.relative_speed, new_builder.relative_speed);
     }
 
     #[test]
@@ -116,6 +132,7 @@ mod tests {
         assert_eq!(builder.explicit_id, None);
         assert_eq!(builder.memory_region_id, 0);
         assert_eq!(builder.efficiency_class, EfficiencyClass::Performance);
+        assert_eq!(builder.relative_speed, RelativeSpeed::SYNTHETIC);
     }
 
     #[test]
@@ -126,14 +143,23 @@ mod tests {
     }
 
     #[test]
+    fn relative_speed_is_respected() {
+        let builder = ProcessorBuilder::new().relative_speed(nz!(3600));
+
+        assert_eq!(builder.relative_speed.as_u32(), 3600);
+    }
+
+    #[test]
     fn builder_chaining() {
         let builder = ProcessorBuilder::new()
             .id(3)
             .memory_region(2)
-            .efficiency_class(EfficiencyClass::Efficiency);
+            .efficiency_class(EfficiencyClass::Efficiency)
+            .relative_speed(nz!(2400));
 
         assert_eq!(builder.explicit_id, Some(3));
         assert_eq!(builder.memory_region_id, 2);
         assert_eq!(builder.efficiency_class, EfficiencyClass::Efficiency);
+        assert_eq!(builder.relative_speed.as_u32(), 2400);
     }
 }
