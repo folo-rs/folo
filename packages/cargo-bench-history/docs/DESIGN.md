@@ -746,6 +746,13 @@ report with false positives. Because no engine is exempt from noise, **every** c
 p-value enters a single **Benjamini–Hochberg** false-discovery-rate procedure — there is no
 bypass — and only survivors are reported.
 
+Because a surfaced finding has, by construction, already cleared these gates, the detector
+**confidence** (`1 - p_value`) is *not* a report field: rendering it would restate a binary
+that the report already conveys by the finding's mere presence, and its exact value is a
+statistical intermediate meaningless to a reader. It is surfaced only through the
+`--verbose` diagnostic channel — one note per emitted finding — so the value behind each
+emit decision stays reconstructible from the logs without cluttering the report.
+
 All of this math lives in a pure, Miri-safe statistics crate (`cbh_stats`), unit-tested
 with named, value-asserting cases on hand-computable inputs rather than threshold-mutation
 guards, so the whole detector is verifiable without real-time delays.
@@ -832,7 +839,7 @@ of history the findings describe — annotated `+ uncommitted changes` when the 
 was dirty, so a reader (or the auto-filed regression issue) can tie the report to an exact
 commit. Text goes to stdout as one paragraph per finding — the benchmark id on its own
 line as a chapter title, then a direction-coloured headline pairing the relative-change
-percent with the metric and its confidence, a dimmed detail line, and (in history mode
+percent with the metric, a dimmed detail line, and (in history mode
 only) a small line chart of the series — with colour enabled only
 when stdout is a terminal and not disabled by environment. The text and Markdown reports
 group findings under a per-set header, which also states the **facet-filter flags** that

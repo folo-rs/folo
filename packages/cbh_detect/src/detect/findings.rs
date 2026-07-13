@@ -255,6 +255,12 @@ pub struct Finding {
     pub relative_delta: f64,
     /// How confident the detector is (`1 - p_value` of the significance test that
     /// confirmed the move).
+    ///
+    /// A statistical intermediate carried out of detection for verbose diagnostics
+    /// only — the significance gate and false-discovery filter already decide
+    /// whether a finding surfaces, so the raw value is *not* rendered in any report
+    /// (text, Markdown, or JSON); it is surfaced only through the verbose note the
+    /// analyze pipeline emits for each reported finding.
     pub confidence: f64,
     /// Commit the change is attributed to, if known.
     pub commit: Option<String>,

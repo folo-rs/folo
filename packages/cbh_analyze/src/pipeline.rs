@@ -257,6 +257,32 @@ where
         "change detection (find_changes: per-series detectors + FDR filter)",
         detect_started.elapsed(),
     );
+    // The detector confidence (`1 - p_value`) is a statistical intermediate, not a
+    // report field: a reported finding has already cleared the significance gate and
+    // the false-discovery filter, so the raw percentage is meaningless to a reader.
+    // Surface it here, in verbose mode only, so the value behind each emit decision
+    // stays reconstructible from the logs without cluttering the report.
+    reporter.if_enabled(|notes| {
+        for finding in &findings {
+            let direction = if finding.is_regression() {
+                "regression"
+            } else {
+                "improvement"
+            };
+            notes.note(&format!(
+                "reporting {direction} in {metric} on {id} \
+                 [{engine}/{triple}/{machine}]: detector confidence {confidence:.0}% \
+                 (1 - p_value of the significance test) cleared the significance gate \
+                 and the Benjamini–Hochberg false-discovery filter, so the change is emitted",
+                metric = finding.kind.as_str(),
+                id = finding.id.qualified(),
+                engine = finding.set.engine,
+                triple = finding.set.target_triple,
+                machine = finding.set.machine_key,
+                confidence = finding.confidence * 100.0,
+            ));
+        }
+    });
     let regressions = findings
         .iter()
         .filter(|finding| finding.is_regression())
@@ -1832,6 +1858,37 @@ mod tests {
         ))
         .expect("a flagged regression must not fail the analysis");
         assert_eq!(regressions, 1, "the seeded step is a flagged regression");
+    }
+
+    #[test]
+    fn verbose_notes_report_the_confidence_behind_each_emitted_finding() {
+        // The confidence percentage is no longer a report field, but it must remain
+        // reconstructible in verbose mode: for every emitted finding a note states the
+        // value and that it cleared the gates that decide emission.
+        let storage = MemoryStorage::new();
+        seed_linear_step(&storage);
+        let git = linear6_git();
+
+        let (report, regressions, reporter) = analyze_json(&git, &storage, "folo", &options());
+        assert_eq!(regressions, 1, "the seeded step is a flagged regression");
+
+        assert!(
+            reporter.contains("detector confidence")
+                && reporter.contains("cleared the significance gate"),
+            "a verbose note should surface the finding's confidence: {:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains("nm/nm::observe/pull"),
+            "the confidence note should name the benchmark it belongs to: {:?}",
+            reporter.notes()
+        );
+        // The rendered report itself never carries the confidence — it lives in the
+        // verbose channel alone.
+        assert!(
+            !report.contains("confidence"),
+            "the JSON report must not carry the confidence: {report}"
+        );
     }
 
     #[test]
