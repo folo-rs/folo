@@ -168,6 +168,8 @@ async fn analyze_markdown_output_renders_blocks() {
     // the set `##`), then a bold percentage headline naming the metric.
     assert!(report.contains("\n### `"), "{report}");
     assert!(report.contains("**+"), "{report}");
+    // The headline names the metric in backticks, not just the direction arrow.
+    assert!(report.contains("`instruction_count`"), "{report}");
     assert!(report.contains("via change point"), "{report}");
 }
 
@@ -229,6 +231,8 @@ async fn analyze_markdown_summary_renders_a_flat_report() {
     // heading level up.
     assert!(summary.contains("\n## `"), "{summary}");
     assert!(summary.contains("**+"), "{summary}");
+    // The headline names the metric in backticks, not just the direction arrow.
+    assert!(summary.contains("`instruction_count`"), "{summary}");
     // A single seeded regression is well within the top-20 cap, so no truncation note
     // is added.
     assert!(

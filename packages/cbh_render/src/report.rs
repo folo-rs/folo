@@ -1365,13 +1365,13 @@ mod tests {
         // that follows carries the metric, no longer the id.
         assert!(report.contains("nm/nm::observe/pull"), "{report}");
         assert!(report.contains("+30.00% instruction_count"), "{report}");
-        // The detail line carries the move; the meaningless confidence percentage is
-        // no longer rendered anywhere.
+        // The detail line carries the move; the legacy `(NN% confidence)` suffix is
+        // no longer rendered on the headline.
         assert!(
             report.contains("regression via change point · 100 → 130"),
             "{report}"
         );
-        assert!(!report.contains("confidence"), "{report}");
+        assert!(!report.contains(" confidence)"), "{report}");
     }
 
     #[test]
@@ -1537,13 +1537,13 @@ mod tests {
         assert!(!report.contains("—"), "{report}");
         // An active finding carries no recovered suffix.
         assert!(!report.contains("_(recovered)_"), "{report}");
-        // The detail line carries the move; the meaningless confidence percentage is
-        // no longer rendered anywhere.
+        // The detail line carries the move; the legacy `(NN% confidence)` suffix is
+        // no longer rendered on the headline.
         assert!(
             report.contains("regression via change point · 100 → 130"),
             "{report}"
         );
-        assert!(!report.contains("confidence"), "{report}");
+        assert!(!report.contains(" confidence)"), "{report}");
     }
 
     #[test]
