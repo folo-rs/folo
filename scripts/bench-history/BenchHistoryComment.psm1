@@ -561,7 +561,7 @@ function Format-InProgressBody {
         $Marker
         $script:InProgressMarker
         ''
-        "### Benchmark history (vs ``main``)"
+        "### Performance impact (vs ``main``)"
         ''
         $scope
         ''

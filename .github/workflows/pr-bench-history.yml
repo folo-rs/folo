@@ -424,7 +424,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
 
-          $header = "### Benchmark history (vs ``main``)"
+          $header = "### Performance impact (vs ``main``)"
 
           # Record which commit these numbers describe: a human-visible line and, embedded once in the
           # body via the shared prefix, a hidden full-SHA marker the mark-stale job parses on the next
