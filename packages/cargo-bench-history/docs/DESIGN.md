@@ -496,7 +496,10 @@ Regardless of `--verbose`, every query run (`analyze`, `list`, `prune`, `examine
 one-line **effective-selection** summary to stderr — the engine, target-triple, and
 machine-key facets (each marked when auto-detected), the resolved base branch, and the
 `--since` cutoff — so the user always sees what was actually searched, not just
-what they typed. Two empty outcomes also explain themselves in the stdout report without
+what they typed. The `bless` / `unbless` mutation commands print the same line, naming the
+facets and the context commit they act at (defaulted to `HEAD` unless `--context` is given;
+`bless` also names its base branch), so a manual acceptance states exactly which partition
+and commit it touched. Two empty outcomes also explain themselves in the stdout report without
 verbose diagnostics: when facet-matching runs were stored but none entered the analysis the
 hint breaks down why, and when the effective (possibly auto-detected) partition holds no
 runs at all the hint names that partition and suggests widening it. A zero-run outcome is

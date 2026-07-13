@@ -33,6 +33,7 @@
 //!
 //! [`cargo-bench-history`]: https://github.com/folo-rs/folo
 
+mod announce;
 mod bless;
 mod dataset;
 mod error;
@@ -55,8 +56,7 @@ pub use error::AnalyzeError;
 pub use examine::execute as examine;
 pub(crate) use facets::{AutoFacets, resolve_facets};
 pub(crate) use history::{
-    DirtyTipPolicy, ResolvedHistory, dirty_base_exception_warning, resolve_base_ref,
-    resolve_history,
+    DirtyTipPolicy, ResolvedHistory, dirty_base_exception_warning, resolve_history,
 };
 pub use list::execute as list;
 pub(crate) use load::{RunIndex, facet_filtered_candidates};

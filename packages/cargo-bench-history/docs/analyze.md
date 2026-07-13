@@ -218,5 +218,8 @@ The line is most valuable when a query comes back empty. When the effective — 
 auto-detected — partition holds no stored runs at all, the stdout report's hint names that
 partition and suggests widening it (for instance `--target-triple all`), so an
 auto-detected facet that quietly missed is distinguished from a genuinely empty project. The
-enumerating commands (`list`, `prune`, `examine`) resolve their dataset through the same path
-and so emit the same line.
+other selection-driven commands emit the same line through one shared announcement builder:
+`list`, `prune`, and `examine` name the same facets, base branch, and `--since` cutoff, while
+the `bless` / `unbless` mutation commands name the facets and the context commit they act at
+(`bless` also names its base branch), so the wording is identical wherever auto-detection can
+surprise you.

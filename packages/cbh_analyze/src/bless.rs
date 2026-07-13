@@ -31,9 +31,11 @@ use cbh_storage::{Storage, build_storage, finish_with_flush};
 use jiff::Timestamp;
 use tick::Clock;
 
+use super::announce::{AnnouncedBase, AnnouncedContext, selection_announcement};
+use super::history::resolve_base;
 use super::{
-    AutoFacets, Selection, detect_auto_facets, facet_filtered_candidates, resolve_base_ref,
-    resolve_facets, resolve_now,
+    AutoFacets, Selection, detect_auto_facets, facet_filtered_candidates, resolve_facets,
+    resolve_now,
 };
 use crate::AnalyzeError;
 
@@ -176,13 +178,35 @@ where
     // Blessing is base-branch-only: a feature-branch blessing would silently
     // vanish (or duplicate) once the branch is squash-merged, so it is refused
     // outright with no `--force` escape hatch.
-    let base = resolve_base_ref(git, config, options.base.as_deref())
+    let base = resolve_base(git, config, options.base.as_deref())
         .await?
         .ok_or_else(|| AnalyzeError::Bless {
             message: "could not determine the base branch; specify it with --base".to_owned(),
         })?;
+
+    let selection = Selection::from_bless(options);
+    let facets = resolve_facets(&selection, Some(auto))?;
+
+    // The always-on effective-selection announcement: one line, printed regardless
+    // of `--verbose`, naming the resolved (possibly auto-detected) partition, base
+    // branch, and context commit, so a plain run never hides a value it defaulted.
+    // Emitted before the base-branch guard so even that refusal states what was
+    // selected.
+    reporter.announce(&selection_announcement(
+        &facets,
+        Some(AnnouncedBase {
+            name: &base.name,
+            auto: options.base.is_none(),
+        }),
+        Some(AnnouncedContext {
+            short,
+            defaulted_head: options.context.is_none(),
+        }),
+        None,
+    ));
+
     let on_base = git
-        .merge_base(&head, &base)
+        .merge_base(&head, &base.commit)
         .await
         .map_err(AnalyzeError::Io)?
         .as_deref()
@@ -193,7 +217,7 @@ where
                 "the context commit {short} is not on the base branch {}; blessings are only \
                  allowed on the base branch, since a feature-branch blessing would not survive \
                  a squash merge",
-                short_commit_id(&base)
+                short_commit_id(&base.commit)
             ),
         });
     }
@@ -206,8 +230,6 @@ where
     let working_tree_dirty =
         options.context.is_none() && git.is_dirty().await.map_err(AnalyzeError::Io)?;
 
-    let selection = Selection::from_bless(options);
-    let facets = resolve_facets(&selection, Some(auto))?;
     let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
     let clean_at_head: Vec<StorageKey> = candidates
         .into_iter()
@@ -281,6 +303,21 @@ where
 
     let selection = Selection::from_unbless(options);
     let facets = resolve_facets(&selection, Some(auto))?;
+
+    // The always-on effective-selection announcement: one line, printed regardless
+    // of `--verbose`, naming the resolved (possibly auto-detected) partition and the
+    // context commit whose blessings are being removed. `unbless` acts purely at a
+    // commit and never resolves a base branch, so no base segment appears.
+    reporter.announce(&selection_announcement(
+        &facets,
+        None,
+        Some(AnnouncedContext {
+            short,
+            defaulted_head: options.context.is_none(),
+        }),
+        None,
+    ));
+
     let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
     let blessings_at_head: Vec<String> = candidates
         .into_iter()
@@ -697,5 +734,81 @@ mod tests {
             }
             other => panic!("expected a bless error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn bless_announces_the_effective_selection() {
+        let storage = MemoryStorage::new();
+        block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes())).unwrap();
+        let reporter = RecordingReporter::new();
+        block_on(bless_with(
+            &master_git(),
+            &storage,
+            "folo",
+            &config(),
+            &bless_options(&["all_the_time/read_cell"]),
+            &auto(),
+            ts(1_700_000_000),
+            "0.0.1",
+            &reporter,
+        ))
+        .unwrap();
+        // The auto-detected partition, auto-detected base branch, and the context
+        // commit (defaulted to HEAD) are all named on the always-on line.
+        assert!(
+            reporter.announced("target-triple=x86_64-unknown-linux-gnu (auto-detected)"),
+            "{:?}",
+            reporter.announcements()
+        );
+        assert!(
+            reporter.announced("machine-key=synthetic (auto-detected)"),
+            "{:?}",
+            reporter.announcements()
+        );
+        assert!(
+            reporter.announced("base=master (auto-detected)"),
+            "{:?}",
+            reporter.announcements()
+        );
+        assert!(
+            reporter.announced("context=c2 (defaulted to HEAD)"),
+            "{:?}",
+            reporter.announcements()
+        );
+    }
+
+    #[test]
+    fn unbless_announces_the_effective_selection_without_a_base() {
+        let storage = MemoryStorage::new();
+        block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes())).unwrap();
+        let git = master_git();
+        drive_bless(&storage, &git, &bless_options(&["all_the_time/read_cell"])).unwrap();
+        let reporter = RecordingReporter::new();
+        block_on(unbless_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &UnblessOptions::default(),
+            &auto(),
+            &reporter,
+        ))
+        .unwrap();
+        assert!(
+            reporter.announced("machine-key=synthetic (auto-detected)"),
+            "{:?}",
+            reporter.announcements()
+        );
+        assert!(
+            reporter.announced("context=c2 (defaulted to HEAD)"),
+            "{:?}",
+            reporter.announcements()
+        );
+        // `unbless` resolves no base branch, so the line carries no base segment.
+        assert!(
+            !reporter.announced("base="),
+            "{:?}",
+            reporter.announcements()
+        );
     }
 }

@@ -325,15 +325,3 @@ pub(crate) async fn resolve_base<G: GitHistory>(
     }
     Ok(None)
 }
-
-/// Resolves just the base ref's commit ID (discarding its display name), for
-/// callers such as `bless` that compare against the commit but never name it.
-pub(crate) async fn resolve_base_ref<G: GitHistory>(
-    git: &G,
-    config: &Config,
-    base: Option<&str>,
-) -> Result<Option<String>, AnalyzeError> {
-    Ok(resolve_base(git, config, base)
-        .await?
-        .map(|resolved| resolved.commit))
-}
