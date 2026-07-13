@@ -417,10 +417,7 @@ fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, chart_enabled:
     } else {
         format!(" {}", "(recovered)".dimmed())
     };
-    lines.push(format!(
-        "  {headline} {}{status}",
-        finding.kind.as_str(),
-    ));
+    lines.push(format!("  {headline} {}{status}", finding.kind.as_str()));
 
     lines.push(format!("    {}", detail_text(finding)).dimmed().to_string());
 
@@ -1367,10 +1364,7 @@ mod tests {
         // The benchmark id leads on its own chapter-title line; the change headline
         // that follows carries the metric, no longer the id.
         assert!(report.contains("nm/nm::observe/pull"), "{report}");
-        assert!(
-            report.contains("+30.00% instruction_count"),
-            "{report}"
-        );
+        assert!(report.contains("+30.00% instruction_count"), "{report}");
         // The detail line carries the move; the meaningless confidence percentage is
         // no longer rendered anywhere.
         assert!(
@@ -2303,10 +2297,7 @@ mod tests {
         );
 
         let text = render(&input, ReportFormat::Text, false);
-        assert!(
-            text.contains("+30.00% instruction_count"),
-            "{text}"
-        );
+        assert!(text.contains("+30.00% instruction_count"), "{text}");
         assert!(!text.contains("`instruction_count`"), "{text}");
     }
 }

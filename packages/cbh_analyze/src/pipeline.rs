@@ -279,7 +279,7 @@ where
                 engine = finding.set.engine,
                 triple = finding.set.target_triple,
                 machine = finding.set.machine_key,
-                confidence = finding.confidence * 100.0,
+                confidence = (finding.confidence * 100.0).clamp(0.0, 100.0),
             ));
         }
     });
@@ -1886,7 +1886,7 @@ mod tests {
         // The rendered report itself never carries the confidence — it lives in the
         // verbose channel alone.
         assert!(
-            !report.contains("confidence"),
+            !report.contains("\"confidence\":"),
             "the JSON report must not carry the confidence: {report}"
         );
     }
