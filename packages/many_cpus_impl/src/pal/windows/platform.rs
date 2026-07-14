@@ -607,15 +607,45 @@ impl BuildTargetPlatform {
     /// This also returns data for offline processors but the value for those is unspecified.
     #[must_use]
     fn get_processor_relative_speeds(&self) -> Box<[RelativeSpeed]> {
-        // The underlying API reports the nominal maximum clock frequency (MHz) per processor,
-        // which we surface directly as the relative speed. Processors the platform reports no
-        // value for (0 MHz) map to the synthetic minimum via `RelativeSpeed::from_raw()`.
-        self.bindings
-            .get_processor_max_mhz(self.max_processor_count())
-            .into_iter()
-            .map(RelativeSpeed::from_raw)
-            .collect_vec()
-            .into_boxed_slice()
+        // The underlying `CallNtPowerInformation` API predates processor groups and only reports
+        // the processors in the calling thread's group, so we query each active group in turn and
+        // place every processor's value at its global processor ID. This covers all processors
+        // regardless of how many processor groups exist. The nominal maximum clock frequency (MHz)
+        // is surfaced directly as the relative speed; processors the platform reports no value for
+        // (0 MHz) map to the synthetic minimum via `RelativeSpeed::from_raw()`.
+        let group_metas = self.get_processor_group_metas();
+
+        let mut relative_speeds = vec![RelativeSpeed::SYNTHETIC; self.max_processor_count()];
+
+        for (group_index, meta) in group_metas.iter().enumerate() {
+            // A group with no active processors cannot be entered (there is nothing to schedule
+            // this thread onto) and has no processors to report, so we skip it.
+            if meta.active_processors == 0 {
+                continue;
+            }
+
+            let group_number = ProcessorGroupIndex::try_from(group_index)
+                .expect("processor group index cannot exceed the platform maximum of u16::MAX");
+
+            let group_max_mhz = self
+                .bindings
+                .get_processor_group_max_mhz(group_number, usize::from(meta.max_processors));
+
+            for (index_in_group, &max_mhz) in group_max_mhz.iter().enumerate() {
+                let index_in_group = ProcessorId::try_from(index_in_group)
+                    .expect("processor index within a group cannot exceed 64, so it always fits");
+
+                let processor_id = meta.start_offset.checked_add(index_in_group).expect(
+                    "processor ID overflowed - only possible if the platform lied about group sizes",
+                );
+
+                if let Some(slot) = relative_speeds.get_mut(processor_id as usize) {
+                    *slot = RelativeSpeed::from_raw(max_mhz);
+                }
+            }
+        }
+
+        relative_speeds.into_boxed_slice()
     }
 
     /// Gets the efficiency classes of all processors on the system, ordered by processor ID.
@@ -959,6 +989,34 @@ mod tests {
             [4],
             [vec![0, 0, 0, 0]],
             [vec![0, 0, 0, 0]],
+            None,
+        );
+
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
+
+        let processors = platform.get_all_processors();
+
+        assert_eq!(processors.len(), 4);
+
+        for (index, processor) in processors.iter().enumerate() {
+            let expected = (u32::try_from(index).unwrap() + 1) * 1000;
+            assert_eq!(processor.as_target().relative_speed.as_u32(), expected);
+        }
+    }
+
+    #[test]
+    fn get_all_processors_reports_relative_speed_across_groups() {
+        // Two processor groups with two logical processors each. Windows reports processor power
+        // information one group at a time, so this proves that processors in every group - not just
+        // the first - receive their reported relative speed. Processor `i` (global ID) reports
+        // `(i + 1) * 1000` MHz, and the two groups occupy processor IDs 0..2 and 2..4.
+        let mut bindings = MockBindings::new();
+        simulate_processor_layout(
+            &mut bindings,
+            [2, 2],
+            [2, 2],
+            [vec![0, 0], vec![0, 0]],
+            [vec![0, 0], vec![1, 1]],
             None,
         );
 
@@ -1366,7 +1424,7 @@ mod tests {
             &group_active_counts,
             &efficiency_ratings_per_group,
         );
-        simulate_get_relative_speeds(bindings);
+        simulate_get_relative_speeds(bindings, &group_max_counts);
 
         // Transform the booleans to IDs.
         let job_affinitized_processors_per_group =
@@ -1425,17 +1483,31 @@ mod tests {
         });
     }
 
-    /// Registers a default `get_processor_max_mhz` expectation that reports a distinct nominal
-    /// clock speed per processor ID: processor `i` reports `(i + 1) * 1000` MHz. This gives every
-    /// simulated processor a unique, non-synthetic relative speed so tests can observe the value
-    /// flowing through `get_all_processors()`.
-    fn simulate_get_relative_speeds(bindings: &mut MockBindings) {
+    /// Registers a default `get_processor_group_max_mhz` expectation that reports a distinct nominal
+    /// clock speed per *global* processor ID: processor `i` reports `(i + 1) * 1000` MHz. Because
+    /// the binding is queried one processor group at a time, we reconstruct each processor's global
+    /// ID from the group's start offset (the sum of the preceding groups' max sizes). This gives
+    /// every simulated processor a unique, non-synthetic relative speed so tests can observe the
+    /// value flowing through `get_all_processors()` for processors in every group.
+    fn simulate_get_relative_speeds(
+        bindings: &mut MockBindings,
+        group_max_counts: &Arc<[ProcessorIndexInGroup]>,
+    ) {
+        let group_max_counts = Arc::clone(group_max_counts);
+
         bindings
-            .expect_get_processor_max_mhz()
-            .returning(|max_processor_count| {
-                (0..max_processor_count)
-                    .map(|processor_id| {
-                        (u32::try_from(processor_id).expect("processor ID fits in u32") + 1) * 1000
+            .expect_get_processor_group_max_mhz()
+            .returning(move |group_number, group_size| {
+                let start_offset: u32 = group_max_counts[..group_number as usize]
+                    .iter()
+                    .map(|&count| u32::from(count))
+                    .sum();
+
+                (0..group_size)
+                    .map(|index_in_group| {
+                        let processor_id = start_offset
+                            + u32::try_from(index_in_group).expect("processor ID fits in u32");
+                        (processor_id + 1) * 1000
                     })
                     .collect_vec()
             });

@@ -16,7 +16,7 @@ use windows::Win32::System::Threading::{
     GetActiveProcessorCount, GetCurrentProcess, GetCurrentProcessorNumberEx, GetCurrentThread,
     GetMaximumProcessorCount, GetMaximumProcessorGroupCount, GetNumaHighestNodeNumber,
     GetProcessDefaultCpuSetMasks, GetThreadGroupAffinity, GetThreadSelectedCpuSetMasks,
-    SetThreadSelectedCpuSetMasks,
+    SetThreadGroupAffinity, SetThreadSelectedCpuSetMasks,
 };
 use windows::core::{BOOL, Result};
 
@@ -212,26 +212,53 @@ impl Bindings for BuildTargetBindings {
         aff
     }
 
-    fn get_processor_max_mhz(&self, max_processor_count: usize) -> Vec<u32> {
+    fn get_processor_group_max_mhz(&self, group_number: u16, group_size: usize) -> Vec<u32> {
         // `CallNtPowerInformation(ProcessorInformation)` fills one PROCESSOR_POWER_INFORMATION per
-        // logical processor, ordered by processor number. `MaxMhz` is the nominal maximum clock
-        // frequency which - unlike `CurrentMhz` - is stable and does not fluctuate with power
-        // management or thermal throttling, making it a reliable value for identifying processors.
+        // logical processor, ordered by the processor's index within its group. `MaxMhz` is the
+        // nominal maximum clock frequency which - unlike `CurrentMhz` - is stable and does not
+        // fluctuate with power management or thermal throttling, making it a reliable value for
+        // identifying processors.
         //
-        // This is a legacy API that predates processor groups: on systems with more than one
-        // processor group (more than 64 logical processors) it only reports processors in the
-        // calling thread's group. Processors it does not report are left at 0, which the caller
-        // treats as "unknown".
-        let mut buffer = vec![PROCESSOR_POWER_INFORMATION::default(); max_processor_count];
+        // This is a legacy API that predates processor groups: it only reports the processors in
+        // the processor group that the calling thread currently belongs to. To read every group on
+        // systems with more than one processor group (more than 64 logical processors) we move this
+        // thread into `group_number` for the duration of the query and restore its original group
+        // affinity afterwards. The caller is responsible for querying every group in turn.
 
-        let buffer_len_bytes: u32 = max_processor_count
+        // SAFETY: No safety requirements. Does not require closing the handle.
+        let current_thread = unsafe { GetCurrentThread() };
+
+        // The caller guarantees the group has at least one active processor, and active processors
+        // occupy the low index positions, so the first processor in the group is always a valid
+        // target. We only need to enter the group to observe it, not to schedule real work.
+        let target_affinity = GROUP_AFFINITY {
+            Mask: 1,
+            Group: group_number,
+            ..Default::default()
+        };
+
+        let mut previous_affinity = GROUP_AFFINITY::default();
+
+        // SAFETY: All pointers we pass are valid for the duration of the call.
+        unsafe {
+            SetThreadGroupAffinity(
+                current_thread,
+                &raw const target_affinity,
+                Some(&raw mut previous_affinity),
+            )
+        }
+        .expect("platform refused to move the current thread to the target processor group");
+
+        let mut buffer = vec![PROCESSOR_POWER_INFORMATION::default(); group_size];
+
+        let buffer_len_bytes: u32 = group_size
             .checked_mul(size_of::<PROCESSOR_POWER_INFORMATION>())
             .and_then(|len| u32::try_from(len).ok())
             .expect("processor power information buffer size overflowed u32");
 
         // SAFETY: `ProcessorInformation` requires no input buffer; we provide an output buffer
-        // large enough for `max_processor_count` entries and declare its exact size in bytes.
-        unsafe {
+        // large enough for `group_size` entries and declare its exact size in bytes.
+        let query_result = unsafe {
             CallNtPowerInformation(
                 ProcessorInformation,
                 None,
@@ -240,23 +267,20 @@ impl Bindings for BuildTargetBindings {
                 buffer_len_bytes,
             )
         }
-        .ok()
-        .expect("platform refused to provide processor power information");
+        .ok();
 
-        let mut max_mhz_by_processor = vec![0_u32; max_processor_count];
+        // Restore the original affinity before reacting to any query failure, so we never leave
+        // the thread stranded in a processor group it did not start in.
+        // SAFETY: The pointer we pass is valid for the duration of the call.
+        unsafe { SetThreadGroupAffinity(current_thread, &raw const previous_affinity, None) }
+            .expect("platform refused to restore the current thread's original processor group");
 
-        for info in &buffer {
-            // Skip entries the platform did not fill - a real processor never reports 0 MHz.
-            if info.MaxMhz == 0 {
-                continue;
-            }
+        query_result.expect("platform refused to provide processor power information");
 
-            if let Some(slot) = max_mhz_by_processor.get_mut(info.Number as usize) {
-                *slot = info.MaxMhz;
-            }
-        }
-
-        max_mhz_by_processor
+        // The array holds one entry per processor in the group, ordered by the processor's index
+        // within the group, so we surface `MaxMhz` in that same order for the caller to map onto
+        // global processor IDs.
+        buffer.iter().map(|info| info.MaxMhz).collect()
     }
 
     // Excluded from coverage because the "not in job" branches cannot be tested in automation,
