@@ -151,13 +151,11 @@ impl Bindings for BindingsFacade {
         }
     }
 
-    fn get_processor_group_max_mhz(&self, group_number: u16, group_size: usize) -> Vec<u32> {
+    fn get_processor_max_mhz(&self, max_processor_count: usize) -> Vec<u32> {
         match self {
-            Self::Target(bindings) => {
-                bindings.get_processor_group_max_mhz(group_number, group_size)
-            }
+            Self::Target(bindings) => bindings.get_processor_max_mhz(max_processor_count),
             #[cfg(test)]
-            Self::Mock(bindings) => bindings.get_processor_group_max_mhz(group_number, group_size),
+            Self::Mock(bindings) => bindings.get_processor_max_mhz(max_processor_count),
         }
     }
 }

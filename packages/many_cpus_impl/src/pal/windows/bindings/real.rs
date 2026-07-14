@@ -1,13 +1,12 @@
 use std::fmt::Debug;
+use std::iter;
 
 use windows::Win32::System::JobObjects::{
     IsProcessInJob, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION, JobObjectCpuRateControlInformation,
     JobObjectGroupInformationEx, QueryInformationJobObject,
 };
 use windows::Win32::System::Kernel::PROCESSOR_NUMBER;
-use windows::Win32::System::Power::{
-    CallNtPowerInformation, PROCESSOR_POWER_INFORMATION, ProcessorInformation,
-};
+use windows::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RegGetValueW};
 use windows::Win32::System::SystemInformation::{
     GROUP_AFFINITY, GetLogicalProcessorInformationEx, LOGICAL_PROCESSOR_RELATIONSHIP,
     SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX,
@@ -16,9 +15,9 @@ use windows::Win32::System::Threading::{
     GetActiveProcessorCount, GetCurrentProcess, GetCurrentProcessorNumberEx, GetCurrentThread,
     GetMaximumProcessorCount, GetMaximumProcessorGroupCount, GetNumaHighestNodeNumber,
     GetProcessDefaultCpuSetMasks, GetThreadGroupAffinity, GetThreadSelectedCpuSetMasks,
-    SetThreadGroupAffinity, SetThreadSelectedCpuSetMasks,
+    SetThreadSelectedCpuSetMasks,
 };
-use windows::core::{BOOL, Result};
+use windows::core::{BOOL, PCWSTR, Result};
 
 use crate::pal::windows::Bindings;
 
@@ -212,75 +211,20 @@ impl Bindings for BuildTargetBindings {
         aff
     }
 
-    fn get_processor_group_max_mhz(&self, group_number: u16, group_size: usize) -> Vec<u32> {
-        // `CallNtPowerInformation(ProcessorInformation)` fills one PROCESSOR_POWER_INFORMATION per
-        // logical processor, ordered by the processor's index within its group. `MaxMhz` is the
-        // nominal maximum clock frequency which - unlike `CurrentMhz` - is stable and does not
-        // fluctuate with power management or thermal throttling, making it a reliable value for
-        // identifying processors.
+    fn get_processor_max_mhz(&self, max_processor_count: usize) -> Vec<u32> {
+        // Windows records the nominal maximum clock frequency of each logical processor in the
+        // registry under `HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\<id>` as the `~MHz`
+        // value. The kernel populates these entries at boot for every logical processor across all
+        // processor groups, so reading them is a fully passive operation: it never changes the
+        // affinity or any other runtime state of the calling thread and it is not limited to the
+        // 64 processors of a single processor group the way the legacy power-information API is.
         //
-        // This is a legacy API that predates processor groups: it only reports the processors in
-        // the processor group that the calling thread currently belongs to. To read every group on
-        // systems with more than one processor group (more than 64 logical processors) we move this
-        // thread into `group_number` for the duration of the query and restore its original group
-        // affinity afterwards. The caller is responsible for querying every group in turn.
-
-        // SAFETY: No safety requirements. Does not require closing the handle.
-        let current_thread = unsafe { GetCurrentThread() };
-
-        // The caller guarantees the group has at least one active processor, and active processors
-        // occupy the low index positions, so the first processor in the group is always a valid
-        // target. We only need to enter the group to observe it, not to schedule real work.
-        let target_affinity = GROUP_AFFINITY {
-            Mask: 1,
-            Group: group_number,
-            ..Default::default()
-        };
-
-        let mut previous_affinity = GROUP_AFFINITY::default();
-
-        // SAFETY: All pointers we pass are valid for the duration of the call.
-        unsafe {
-            SetThreadGroupAffinity(
-                current_thread,
-                &raw const target_affinity,
-                Some(&raw mut previous_affinity),
-            )
-        }
-        .expect("platform refused to move the current thread to the target processor group");
-
-        let mut buffer = vec![PROCESSOR_POWER_INFORMATION::default(); group_size];
-
-        let buffer_len_bytes: u32 = group_size
-            .checked_mul(size_of::<PROCESSOR_POWER_INFORMATION>())
-            .and_then(|len| u32::try_from(len).ok())
-            .expect("processor power information buffer size overflowed u32");
-
-        // SAFETY: `ProcessorInformation` requires no input buffer; we provide an output buffer
-        // large enough for `group_size` entries and declare its exact size in bytes.
-        let query_result = unsafe {
-            CallNtPowerInformation(
-                ProcessorInformation,
-                None,
-                0,
-                Some(buffer.as_mut_ptr().cast()),
-                buffer_len_bytes,
-            )
-        }
-        .ok();
-
-        // Restore the original affinity before reacting to any query failure, so we never leave
-        // the thread stranded in a processor group it did not start in.
-        // SAFETY: The pointer we pass is valid for the duration of the call.
-        unsafe { SetThreadGroupAffinity(current_thread, &raw const previous_affinity, None) }
-            .expect("platform refused to restore the current thread's original processor group");
-
-        query_result.expect("platform refused to provide processor power information");
-
-        // The array holds one entry per processor in the group, ordered by the processor's index
-        // within the group, so we surface `MaxMhz` in that same order for the caller to map onto
-        // global processor IDs.
-        buffer.iter().map(|info| info.MaxMhz).collect()
+        // The `~MHz` value is the nominal maximum clock and - unlike a live "current MHz" reading -
+        // is stable and does not fluctuate with power management or thermal throttling, making it a
+        // reliable value for identifying processors.
+        (0..max_processor_count)
+            .map(read_processor_nominal_max_mhz)
+            .collect()
     }
 
     // Excluded from coverage because the "not in job" branches cannot be tested in automation,
@@ -323,4 +267,47 @@ impl Bindings for BuildTargetBindings {
 
         Some(result)
     }
+}
+
+/// Reads the nominal maximum clock frequency in MHz that Windows recorded for a single logical
+/// processor in the registry, returning 0 when the platform records no value for that processor.
+///
+/// The value lives at `HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\<processor_id>\~MHz` and
+/// is populated by the kernel at boot for every logical processor, so this read is passive and
+/// covers all processor groups without touching any thread's affinity.
+fn read_processor_nominal_max_mhz(processor_id: usize) -> u32 {
+    let subkey = to_nul_terminated_wide(&format!(
+        "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\{processor_id}"
+    ));
+    let value_name = to_nul_terminated_wide("~MHz");
+
+    let mut value: u32 = 0;
+    let mut value_size_bytes: u32 =
+        u32::try_from(size_of::<u32>()).expect("the size of a u32 always fits in a u32");
+
+    // SAFETY: `subkey` and `value_name` are NUL-terminated UTF-16 strings that outlive the call.
+    // `value` and `value_size_bytes` are valid for writes for the duration of the call, and
+    // `value_size_bytes` truthfully declares the size of the `value` buffer. `RRF_RT_REG_DWORD`
+    // restricts the query to REG_DWORD values, matching the `u32` buffer we provide.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            PCWSTR(subkey.as_ptr()),
+            PCWSTR(value_name.as_ptr()),
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&raw mut value).cast()),
+            Some(&raw mut value_size_bytes),
+        )
+    };
+
+    // A missing or unreadable entry (for example an offline processor the kernel never populated)
+    // is reported as 0, which the caller maps onto the synthetic relative speed.
+    if status.is_ok() { value } else { 0 }
+}
+
+/// Encodes a string as a NUL-terminated wide (UTF-16) string, as expected by the wide-character
+/// Windows registry API.
+fn to_nul_terminated_wide(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(iter::once(0)).collect()
 }

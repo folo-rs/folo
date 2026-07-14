@@ -37,15 +37,13 @@ pub(crate) trait Bindings: Debug + Send + Sync + 'static {
 
     fn get_current_job_cpu_rate_control(&self) -> Option<JOBOBJECT_CPU_RATE_CONTROL_INFORMATION>;
 
-    /// Returns the nominal maximum clock frequency in MHz of the processors in the processor group
-    /// identified by `group_number`, indexed by each processor's index within the group, for up to
-    /// `group_size` processors. Processors for which the platform reports no value hold 0.
+    /// Returns the nominal maximum clock frequency in MHz of each logical processor, indexed by
+    /// processor ID, for up to `max_processor_count` processors. Processors for which the platform
+    /// reports no value hold 0.
     ///
-    /// The underlying operating system query only reports the calling thread's processor group, so
-    /// this moves the calling thread into `group_number` for the duration of the query. The caller
-    /// must only pass a `group_number` that has at least one active processor and must query every
-    /// group in turn to obtain the values for all processors on the system.
-    fn get_processor_group_max_mhz(&self, group_number: u16, group_size: usize) -> Vec<u32>;
+    /// This is a passive read that covers every processor across all processor groups without
+    /// changing the affinity or any other runtime state of the calling thread.
+    fn get_processor_max_mhz(&self, max_processor_count: usize) -> Vec<u32>;
 
     fn get_current_thread_legacy_group_affinity(&self) -> GROUP_AFFINITY;
 }
