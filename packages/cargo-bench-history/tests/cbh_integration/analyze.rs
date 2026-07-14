@@ -1202,13 +1202,14 @@ async fn analyze_orders_by_topology_not_commit_time() {
     assert_eq!(parsed["findings"][0]["latest"], 130.0, "{report}");
 }
 
-/// Branch mode judges a feature branch by its *latest* regime, not its journey:
-/// a branch that first improved and then regressed is reported as a regression,
-/// and `flipped_at` points at the commit where the latest (worse) regime began.
+/// Branch mode judges a feature branch by its *tip commit*, not its journey:
+/// a branch that first improved and then regressed is reported as a regression
+/// against the base, since only the tip commit lands in the base on merge. The
+/// intermediate improvement is not attributed as a within-branch flip.
 /// The JSON also advertises the resolved mode and the downstream `notable` signal.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_branch_mode_reports_the_latest_regime_with_a_flip() {
+async fn analyze_branch_mode_reports_the_tip_commit_state() {
     let workspace = Workspace::repo(&storage_only_config());
     // A flat clean baseline on master.
     workspace.commit_dated("2024-01-01", "c1");
@@ -1246,8 +1247,8 @@ async fn analyze_branch_mode_reports_the_latest_regime_with_a_flip() {
     assert_eq!(finding["baseline"], 100.0, "{report}");
     assert_eq!(finding["latest"], 130.0, "{report}");
     assert!(
-        finding["flipped_at"].is_string(),
-        "the flip should name the commit the latest regime began at: {report}"
+        finding["flipped_at"].is_null(),
+        "branch mode judges the tip commit alone, with no within-branch flip: {report}"
     );
     assert!(
         finding.get("series").is_none(),

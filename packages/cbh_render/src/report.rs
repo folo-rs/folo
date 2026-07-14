@@ -489,14 +489,11 @@ fn detail_text(finding: &Finding) -> String {
         format_value(finding.latest),
         finding.commit.as_deref().unwrap_or("unknown"),
     );
-    if let Some(flipped_at) = &finding.flipped_at {
+    // `flipped_at` is set only on an inactive (recovered) history-mode spike, naming
+    // the commit where the level returned to baseline; branch mode never sets it.
+    if let Some(recovered_at) = &finding.flipped_at {
         use std::fmt::Write as _;
-        let verb = if finding.active {
-            "flips at"
-        } else {
-            "recovers at"
-        };
-        write!(detail, " · {verb} {flipped_at}").expect("writing to a String is infallible");
+        write!(detail, " · recovers at {recovered_at}").expect("writing to a String is infallible");
     }
     detail
 }
