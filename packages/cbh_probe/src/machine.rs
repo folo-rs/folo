@@ -81,10 +81,14 @@ fn normalize_brand(brand: &str) -> String {
 }
 
 /// Renders a speed histogram to a canonical `speedxcount` list joined by commas,
-/// for example `3141x4,6283x2` (pure). An empty histogram renders as an empty
-/// string.
+/// for example `3141x4,6283x2` (pure). Entries are sorted ascending before
+/// rendering so equivalent histograms hash identically regardless of the order in
+/// which their `(speed, count)` pairs are supplied. An empty histogram renders as
+/// an empty string.
 fn render_speed_histogram(speeds: &[(u64, usize)]) -> String {
-    speeds
+    let mut sorted = speeds.to_vec();
+    sorted.sort_unstable();
+    sorted
         .iter()
         .map(|(speed, count)| format!("{speed}x{count}"))
         .collect::<Vec<_>>()
@@ -277,6 +281,16 @@ mod tests {
     }
 
     #[test]
+    fn speed_histogram_order_does_not_change_the_fingerprint() {
+        // `HardwareProfile::processor_speeds` is public, so a caller can supply the
+        // same histogram with its pairs in a different order. Rendering sorts them,
+        // so equivalent hardware still hashes to the same fingerprint.
+        let ascending = profile_with_speeds(8, 1, Some("Brand A"), vec![(3141, 4), (6283, 4)]);
+        let descending = profile_with_speeds(8, 1, Some("Brand A"), vec![(6283, 4), (3141, 4)]);
+        assert_eq!(fingerprint(&ascending), fingerprint(&descending));
+    }
+
+    #[test]
     fn brand_whitespace_differences_do_not_change_the_fingerprint() {
         assert_eq!(
             fingerprint(&profile(8, 1, Some("Intel Xeon  E5"))),
@@ -371,6 +385,14 @@ mod tests {
             "3141x4,6283x2"
         );
         assert_eq!(render_speed_histogram(&[]), "");
+    }
+
+    #[test]
+    fn render_speed_histogram_sorts_pairs_ascending() {
+        assert_eq!(
+            render_speed_histogram(&[(6283, 2), (3141, 4)]),
+            "3141x4,6283x2"
+        );
     }
 
     #[test]
