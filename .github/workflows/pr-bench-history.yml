@@ -2,10 +2,11 @@ name: PR Benchmark history
 
 # Per-push benchmark feedback on pull requests: the PR counterpart of bench-history.yml. Where that
 # workflow collects on every push to `main` and files a rolling ISSUE about long-range trends, this
-# one runs on every push to a PR branch, benchmarks only the packages the PR touched (cargo-delta
-# scoped), compares the PR head's benchmark level against `main` in BRANCH mode, and posts/updates a
-# rolling PR COMMENT with the findings. PR-head points are written into the SAME prod Azure store as
-# the `main` baseline (branch-mode comparison reads a single backend); PR commits are
+# one runs on every push to a PR branch, benchmarks only the packages the PR impacts (the changed
+# packages plus their dependents, cargo-delta scoped), compares the PR head's benchmark level
+# against `main` in BRANCH mode, and posts/updates a rolling PR COMMENT with the findings. PR-head
+# points are written into the SAME prod Azure store as the `main` baseline (branch-mode comparison
+# reads a single backend); PR commits are
 # topologically branch-unique, so they never enter `main`'s history analysis. Findings are advisory:
 # they never gate the merge, only inform. See .github/workflows/design.md (Benchmark history).
 on:
@@ -38,8 +39,9 @@ env:
   PR_COMMIT_MARKER_PREFIX: "<!-- folo-bench-history-commit:"
 
 jobs:
-  # Compute which packages the PR touched (cargo-delta vs origin/main), filtered to the
-  # benchmarkable set (everything except the slow, special-purpose `benchmarks` crate). The result
+  # Compute which packages the PR impacts (cargo-delta vs origin/main: the changed packages plus
+  # their dependents), filtered to the benchmarkable set (everything except the slow,
+  # special-purpose `benchmarks` crate). The result
   # gates the whole workflow: a non-empty set drives collect+analyze, an empty set routes to
   # cleanup. Runs only for same-repo PRs - fork runs cannot federate into Azure (no secrets), so
   # like bench-history.yml's fork gate they are skipped silently; because every downstream job
@@ -86,15 +88,15 @@ jobs:
           # the module analyzes origin/main in a throwaway worktree and cleans up after itself.
           $affected = @(Invoke-CargoDelta -SkipFetch)
           # Drop the excluded `benchmarks` crate BEFORE shaping the outputs, so `skip_all` reflects
-          # the benchmarkable set: a PR that touches only `benchmarks` (or nothing) collects nothing
+          # the benchmarkable set: a PR that impacts only `benchmarks` (or nothing) collects nothing
           # and instead has its stale comment (if any) cleaned up.
           $benchmarkable = @(Select-BenchmarkablePackage -Package $affected)
           $output = Get-DeltaOutput -Affected $benchmarkable
 
           if ($benchmarkable.Count -eq 0) {
-            Write-Host 'No benchmarkable packages touched by this PR; collection will be skipped and any stale rolling comment removed.'
+            Write-Host 'No benchmarkable packages impacted by this PR; collection will be skipped and any stale rolling comment removed.'
           } else {
-            Write-Host "Benchmarkable packages touched by this PR: $($output.Packages)"
+            Write-Host "Benchmarkable packages impacted by this PR: $($output.Packages)"
           }
 
           @(
@@ -190,8 +192,8 @@ jobs:
             Write-Host "No placeholder change needed (the PR already has a rolling comment with results, or the placeholder is current)."
           }
 
-  # Benchmark ONLY the touched packages across the full platform matrix, keyed by the PR head
-  # commit, appending the results into the prod store. Skipped when the PR touches nothing
+  # Benchmark ONLY the impacted packages across the full platform matrix, keyed by the PR head
+  # commit, appending the results into the prod store. Skipped when the PR impacts nothing
   # benchmarkable (delta.skip_all). Mirrors bench-history.yml's collect job, differing only in the
   # checkout (real head SHA, full history) and the package-scoped recipe.
   collect:
@@ -437,12 +439,13 @@ jobs:
           $analyzedLine = "**Analyzed commit:** $env:HEAD_SHA"
 
           # Disclose the collection scope so a reader never mistakes a clean result for the whole
-          # suite: PR runs benchmark ONLY the packages this PR changed (cargo-delta scoped), and the
-          # analyze ghost filter narrows the report to exactly that set. List them explicitly.
+          # suite: PR runs benchmark ONLY the packages this PR impacts - the changed packages plus
+          # their dependents (cargo-delta scoped) - and the analyze ghost filter narrows the report
+          # to exactly that set. List them explicitly.
           $packages = @(($env:PACKAGES -split '\s+') | Where-Object { $_ } | Sort-Object -Unique)
           $renderedPackages = ($packages | ForEach-Object { '`' + $_ + '`' }) -join ', '
           $packageNoun = if ($packages.Count -eq 1) { 'package' } else { 'packages' }
-          $scope = "**Collection scope:** benchmarked the $($packages.Count) $packageNoun this PR changed ($renderedPackages)."
+          $scope = "**Collection scope:** benchmarked the $($packages.Count) $packageNoun impacted by this PR ($renderedPackages)."
           if ($env:NOTABLE -eq 'true') {
             $summary = (Get-Content (Join-Path $env:SCRATCH_DIR 'summary.md') -Raw).TrimEnd()
             $fullReport = "**Full report:** the complete Markdown and JSON reports are attached to this workflow run. [Download the full report bundle]($env:REPORT_ARTIFACT_URL)."

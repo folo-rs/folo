@@ -538,7 +538,7 @@ function Format-InProgressBody {
     # posting a duplicate) and the hidden in-progress marker (so Set-RollingCommentStaleness and
     # Publish-InProgressComment can tell a still-empty placeholder from a comment carrying real results).
     # Mirrors the analyze comment's header and "Collection scope" line - listing exactly the packages
-    # this PR changed, sorted and de-duped the same way - so the placeholder reads as an early form of the
+    # this PR impacts, sorted and de-duped the same way - so the placeholder reads as an early form of the
     # very comment analyze will later overwrite. Factored out (and kept unexported) so the rendering is
     # one testable place, mirroring Add-StalenessBanner.
     [CmdletBinding()]
@@ -555,7 +555,7 @@ function Format-InProgressBody {
     $names = @(($Packages -split '\s+') | Where-Object { $_ } | Sort-Object -Unique)
     $renderedPackages = ($names | ForEach-Object { '`' + $_ + '`' }) -join ', '
     $packageNoun = if ($names.Count -eq 1) { 'package' } else { 'packages' }
-    $scope = "**Collection scope:** benchmarking the $($names.Count) $packageNoun this PR changed ($renderedPackages)."
+    $scope = "**Collection scope:** benchmarking the $($names.Count) $packageNoun impacted by this PR ($renderedPackages)."
 
     $lines = @(
         $Marker

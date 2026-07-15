@@ -62,9 +62,10 @@ gh-collect-bench-history:
     cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- @toolArgs
 
 # The PR counterpart of `gh-collect-bench-history`: collects benchmark history for ONLY the
-# packages a pull request touched (the pr-bench-history.yml `delta` job computes them from
-# cargo-delta and passes them here space-separated, already filtered to the benchmarkable set), into
-# the SAME prod Azure store, keyed by the PR head commit. Scoping to the touched packages is a pure
+# packages a pull request impacts (the pr-bench-history.yml `delta` job computes them from
+# cargo-delta - the changed packages plus their dependents - and passes them here space-separated,
+# already filtered to the benchmarkable set), into the SAME prod Azure store, keyed by the PR head
+# commit. Scoping to the impacted packages is a pure
 # cost optimisation - a PR rarely changes every crate, and the full 4-platform matrix is expensive -
 # and it is safe because branch-mode `analyze` only ever flags a series that has a data point at the
 # branch-unique head commit, i.e. exactly the packages collected here (see
@@ -87,14 +88,14 @@ gh-collect-pr-bench-history packages:
 
     Import-Module ./scripts/bench-history/BenchHistoryCollect.psm1 -Force
 
-    # The delta job passes the touched packages space-separated (the same shape validation.yml's
+    # The delta job passes the impacted packages space-separated (the same shape validation.yml's
     # `just package="..."` gating uses); split them into the array the module scopes on.
     $packageList = @('{{packages}}'.Split([char[]]@(' ', "`t", "`n"), [StringSplitOptions]::RemoveEmptyEntries))
     if ($packageList.Count -eq 0) {
         throw "gh-collect-pr-bench-history requires at least one package to collect; got an empty list. The pr-bench-history workflow must gate this recipe on a non-empty benchmarkable delta."
     }
 
-    Write-Verbose "Collecting PR benchmark history scoped to the touched packages: $($packageList -join ', ')." -Verbose
+    Write-Verbose "Collecting PR benchmark history scoped to the packages impacted by this PR: $($packageList -join ', ')." -Verbose
     $toolArgs = Get-BenchHistoryCollectCommand -RecollectCommitId '' -Package $packageList -Verbose
     cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- @toolArgs
 
@@ -236,9 +237,9 @@ gh-analyze-bench-history dir keydir:
 # filter (only positional id-prefix subjects), and benchmark ids are engine-dependent (Callgrind
 # carries the package, Criterion group ids are crate-prefixed, but alloc_tracker/all_the_time use a
 # bare operation name), so an id-prefix filter would silently drop the measurement-engine series for
-# a touched package. The scoping is instead enforced by `analyze`'s always-on ghost exclusion: it
+# an impacted package. The scoping is instead enforced by `analyze`'s always-on ghost exclusion: it
 # analyzes only benchmarks present at the context commit (HEAD, the PR head), and only the collected
-# (touched) packages have a run there, so every untouched package is dropped as a "ghost" before
+# (impacted) packages have a run there, so every other package is dropped as a "ghost" before
 # detection - for EVERY engine. This exclusion is unconditional and cannot be turned off, so the
 # scoping can never be accidentally defeated. As a bonus the
 # same filter also drops a benchmark this PR removed, so a deletion is never mis-flagged as a
