@@ -197,6 +197,16 @@ fn cases() -> Vec<SignalCase> {
             expected_history: Outcome::Rise,
             expected_branch: Outcome::Rise,
         },
+        // The same obvious doubling as the first case, but with no base side. Branch
+        // mode has nothing to compare the branch against, so it must stay quiet even
+        // though history still sees the rise over the whole series.
+        SignalCase {
+            name: "doubling_without_base",
+            base: Vec::new(),
+            branch: [run_of(100.0, 50), run_of(200.0, 50)].concat(),
+            expected_history: Outcome::Rise,
+            expected_branch: Outcome::Quiet,
+        },
         // The mirror image: a sustained halving. Same mode geometry, opposite direction,
         // so it exercises the improvement-reporting path (surfaced only by branch mode).
         SignalCase {
@@ -231,16 +241,6 @@ fn cases() -> Vec<SignalCase> {
             expected_history: Outcome::Quiet,
             expected_branch: Outcome::Quiet,
         },
-        // The same obvious doubling as the first case, but with no base side. Branch
-        // mode has nothing to compare the branch against, so it must stay quiet even
-        // though history still sees the rise over the whole series.
-        SignalCase {
-            name: "doubling_without_base",
-            base: Vec::new(),
-            branch: [run_of(100.0, 50), run_of(200.0, 50)].concat(),
-            expected_history: Outcome::Rise,
-            expected_branch: Outcome::Quiet,
-        },
         // A stationary but very noisy real-world series (a wall-time metric whose value
         // oscillates between ~13 and ~25-29 across its whole history). A human reads the
         // chart as "noisy, nothing changed", yet a naive change-point split lands on the
@@ -260,6 +260,15 @@ fn cases() -> Vec<SignalCase> {
             expected_history: Outcome::Quiet,
             expected_branch: Outcome::Quiet,
         },
+        // A branch that got slower but was fixed in the last commit.
+        // History sees the regression, but branch sees only the final commit and must stay quiet.
+        SignalCase {
+            name: "branch_with_regression_then_fix",
+            base: run_of(100.0, 50),
+            branch: [run_of(200.0, 49), run_of(100.0, 1)].concat(),
+            expected_history: Outcome::Rise,
+            expected_branch: Outcome::Quiet,
+        }
     ]
 }
 

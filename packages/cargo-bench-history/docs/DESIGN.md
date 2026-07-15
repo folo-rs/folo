@@ -774,10 +774,11 @@ never a silent fall-through to history.
   only by default (steady improvement on the base branch is expected; a flag opts into
   improvements).
 * **branch** — auto-selected otherwise (commits past the merge-base, or a dirty run
-  admitted on the base tip by the exception above). It judges the branch by its **latest
-  regime** against the base — a branch may improve then regress, and we report where it
-  *ended up* rather than mask a late regression behind an early gain — reporting both
-  directions.
+  admitted on the base tip by the exception above). It judges the branch by its **tip
+  commit** against the recent base level — a branch's intermediate commits say nothing
+  about what merging it into the base will do, since only the tip lands there, so the
+  branch's own history is discarded and only the newest commit's runs are compared —
+  reporting both directions.
 
 The two driving scenarios are a scheduled base-branch regression watch (history) and a
 per-PR feature-branch evaluation (branch). Long-range trend analysis is meaningless on one
@@ -788,7 +789,7 @@ or two branch points, which is why the techniques differ by mode:
 | Change-point (Pettitt + engine gating) | ✅ | — |
 | Monotonic drift (Mann–Kendall + Theil–Sen) | ✅ | — |
 | Benjamini–Hochberg false-discovery filter | ✅ | — |
-| Latest-regime vs. base | — | ✅ |
+| Latest-commit vs. base | — | ✅ |
 | Improvements reported | opt-in | ✅ |
 | Resolved (inactive) findings reported | opt-in | — |
 
@@ -816,7 +817,7 @@ Every history-mode finding therefore carries an active flag and an active-from b
   forward: the detectors run on the **active segment only**, so the pre-blessing step is no
   longer re-flagged, while the earlier points still feed the chart and any long-range
   technique that needs context. Blessings are honoured **only in history mode** — branch
-  mode judges the latest state against the base, which is treated as fully blessed by
+  mode judges the tip commit against the base, which is treated as fully blessed by
   construction. A re-baselined finding records the blessing's commit and time for
   provenance.
 
