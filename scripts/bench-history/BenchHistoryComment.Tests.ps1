@@ -830,17 +830,17 @@ Describe 'Publish-InProgressComment (mocked gh api)' {
 }
 
 Describe 'Format-InProgressBody (unexported string transform)' {
-    It 'renders a single changed package with singular wording' {
+    It 'renders a single impacted package with singular wording' {
         InModuleScope BenchHistoryComment {
             $body = Format-InProgressBody -Marker '<!-- folo-bench-history-pr -->' -Packages 'solo'
-            $body.Contains('benchmarking the 1 package this PR changed (`solo`).') | Should -BeTrue
+            $body.Contains('benchmarking the 1 package impacted by this PR (`solo`).') | Should -BeTrue
         }
     }
 
-    It 'sorts and de-duplicates multiple changed packages with plural wording' {
+    It 'sorts and de-duplicates multiple impacted packages with plural wording' {
         InModuleScope BenchHistoryComment {
             $body = Format-InProgressBody -Marker '<!-- folo-bench-history-pr -->' -Packages 'beta alpha beta'
-            $body.Contains('benchmarking the 2 packages this PR changed (`alpha`, `beta`).') | Should -BeTrue
+            $body.Contains('benchmarking the 2 packages impacted by this PR (`alpha`, `beta`).') | Should -BeTrue
         }
     }
 

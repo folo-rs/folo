@@ -210,7 +210,7 @@ workflow files; the comment lives and dies with the pull request. The comment is
 advisory — findings never affect the check's exit code, so a regression note never blocks a
 merge — and it reports detected improvements alongside regressions, or a plain "no regressions"
 state. It also states its **collection scope** — which packages were benchmarked — so a clean
-result is never mistaken for the whole suite being clean when only the changed subset was
+result is never mistaken for the whole suite being clean when only the impacted subset was
 measured. A run *failure* surfaces only as the red check, with no issue and no failure comment,
 because a PR failure is a transient condition, not the persistent one the issue lifecycle
 tracks.
@@ -239,13 +239,14 @@ skips a still-empty placeholder (it has no results to age), leaving the placehol
 the seeding pass. `mark-stale` is gated on the same non-empty delta as collect, so it never races the
 cleanup path that *deletes* the comment when the PR no longer touches anything benchmarkable.
 
-Collection is **delta-scoped**: a preflight job diffs the PR against `main` and benchmarks only
-the touched packages, since re-measuring the whole workspace on every PR push would be
-wasteful. Analysis, by contrast, is deliberately **not** package-scoped — yet it stays correctly
-scoped anyway, by construction rather than by a name filter. `analyze` by default considers only
+Collection is **delta-scoped**: a preflight job runs cargo-delta against `main` and benchmarks only
+the impacted packages — those the PR changed, plus their dependents — since re-measuring the whole
+workspace on every PR push would be wasteful. Analysis, by contrast, is deliberately **not**
+package-scoped — yet it stays correctly scoped anyway, by construction rather than by a name
+filter. `analyze` by default considers only
 benchmarks **present at the context commit** (the PR head), dropping any "ghost" benchmark with
-no run there *before* detection. Because only the touched packages are collected at the PR's
-branch-unique head commit, only they are present there, so every untouched package is excluded
+no run there *before* detection. Because only the impacted packages are collected at the PR's
+branch-unique head commit, only they are present there, so every other package is excluded
 as a ghost automatically — for *every* measurement engine — leaving exactly the collected set to
 analyze. Package scoping thus falls out of *what gets collected*, with no need to filter analysis
 by name, which would in fact be wrong: benchmark identities are engine-dependent (some engines
@@ -256,7 +257,7 @@ re-admit every historical benchmark and defeat the scoping. As a side benefit th
 also drops a benchmark the PR itself *removed*, so a deletion is never mis-reported as a
 regression.
 
-When a PR touches no benchmarkable package — including a PR that touched one earlier and then
+When a PR impacts no benchmarkable package — including a PR that impacted one earlier and then
 reverted it — a lightweight cleanup path removes any rolling comment a prior push left behind
 and posts nothing, so a stale, misleading comment never lingers; it is a no-op when there was
 no comment. PR runs read the shared history cache **restore-only** (never saving), keeping the
