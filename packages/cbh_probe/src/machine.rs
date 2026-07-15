@@ -81,14 +81,24 @@ fn normalize_brand(brand: &str) -> String {
 }
 
 /// Renders a speed histogram to a canonical `speedxcount` list joined by commas,
-/// for example `3141x4,6283x2` (pure). Entries are sorted ascending before
-/// rendering so equivalent histograms hash identically regardless of the order in
-/// which their `(speed, count)` pairs are supplied. An empty histogram renders as
-/// an empty string.
+/// for example `3141x4,6283x2` (pure). Because `HardwareProfile::processor_speeds`
+/// is public, a caller may supply the pairs in any order, split one speed across
+/// several entries, or include zero-count entries. Counts are therefore merged per
+/// speed, zero-count speeds dropped, and the result rendered ascending by speed, so
+/// that any two representations of the same histogram render — and hash —
+/// identically. An empty histogram renders as an empty string.
 fn render_speed_histogram(speeds: &[(u64, usize)]) -> String {
-    let mut sorted = speeds.to_vec();
-    sorted.sort_unstable();
-    sorted
+    let mut merged: BTreeMap<u64, usize> = BTreeMap::new();
+    for &(speed, count) in speeds {
+        if count == 0 {
+            continue;
+        }
+        let total = merged.entry(speed).or_insert(0);
+        *total = total
+            .checked_add(count)
+            .expect("processor count cannot exceed the usize range");
+    }
+    merged
         .iter()
         .map(|(speed, count)| format!("{speed}x{count}"))
         .collect::<Vec<_>>()
@@ -291,6 +301,19 @@ mod tests {
     }
 
     #[test]
+    fn equivalent_speed_histogram_representations_produce_the_same_fingerprint() {
+        // `HardwareProfile::processor_speeds` is public, so a caller can express the
+        // same histogram as split or zero-padded entries. Rendering merges counts
+        // per speed and drops zero counts, so those representations hash alike.
+        let canonical = profile_with_speeds(8, 1, Some("Brand A"), vec![(3141, 4)]);
+        let split = profile_with_speeds(8, 1, Some("Brand A"), vec![(3141, 1), (3141, 3)]);
+        let zero_padded =
+            profile_with_speeds(8, 1, Some("Brand A"), vec![(3141, 4), (6283, 0)]);
+        assert_eq!(fingerprint(&canonical), fingerprint(&split));
+        assert_eq!(fingerprint(&canonical), fingerprint(&zero_padded));
+    }
+
+    #[test]
     fn brand_whitespace_differences_do_not_change_the_fingerprint() {
         assert_eq!(
             fingerprint(&profile(8, 1, Some("Intel Xeon  E5"))),
@@ -393,6 +416,15 @@ mod tests {
             render_speed_histogram(&[(6283, 2), (3141, 4)]),
             "3141x4,6283x2"
         );
+    }
+
+    #[test]
+    fn render_speed_histogram_merges_duplicate_speeds_and_drops_zero_counts() {
+        // Duplicate speeds are summed into a single entry...
+        assert_eq!(render_speed_histogram(&[(3141, 2), (3141, 2)]), "3141x4");
+        // ...and zero-count speeds contribute nothing to the canonical string.
+        assert_eq!(render_speed_histogram(&[(3141, 4), (6283, 0)]), "3141x4");
+        assert_eq!(render_speed_histogram(&[(3141, 0)]), "");
     }
 
     #[test]
