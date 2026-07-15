@@ -162,6 +162,12 @@ mod tests {
         let mut hash_b = DefaultHasher::new();
         b.hash(&mut hash_b);
         assert_eq!(hash_a.finish(), hash_b.finish());
+
+        // Hashing is keyed on `id` alone, so a processor hashes identically to its bare `id`.
+        // This also confirms the hash actually incorporates the id rather than being a no-op.
+        let mut id_hash = DefaultHasher::new();
+        a.id.hash(&mut id_hash);
+        assert_eq!(hash_a.finish(), id_hash.finish());
     }
 
     #[test]

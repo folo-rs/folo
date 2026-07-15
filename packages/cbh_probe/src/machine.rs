@@ -307,8 +307,7 @@ mod tests {
         // per speed and drops zero counts, so those representations hash alike.
         let canonical = profile_with_speeds(8, 1, Some("Brand A"), vec![(3141, 4)]);
         let split = profile_with_speeds(8, 1, Some("Brand A"), vec![(3141, 1), (3141, 3)]);
-        let zero_padded =
-            profile_with_speeds(8, 1, Some("Brand A"), vec![(3141, 4), (6283, 0)]);
+        let zero_padded = profile_with_speeds(8, 1, Some("Brand A"), vec![(3141, 4), (6283, 0)]);
         assert_eq!(fingerprint(&canonical), fingerprint(&split));
         assert_eq!(fingerprint(&canonical), fingerprint(&zero_padded));
     }
