@@ -1,11 +1,12 @@
 use std::fmt::Display;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::pal::AbstractProcessor;
 use crate::pal::windows::{ProcessorGroupIndex, ProcessorIndexInGroup};
 use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug)]
 pub(crate) struct ProcessorImpl {
     pub(crate) group_index: ProcessorGroupIndex,
     pub(crate) index_in_group: ProcessorIndexInGroup,
@@ -82,6 +83,24 @@ impl AsRef<Self> for ProcessorImpl {
     }
 }
 
+// A processor is uniquely identified by its `id`. The other fields are descriptive metadata that
+// never differs between two handles to the same processor, so equality, hashing, and ordering are
+// all keyed on `id` alone. Keeping them in agreement upholds the `Ord`/`Eq` contract:
+// `cmp(a, b) == Equal` exactly when `a == b`.
+impl PartialEq for ProcessorImpl {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for ProcessorImpl {}
+
+impl Hash for ProcessorImpl {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
 impl PartialOrd for ProcessorImpl {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -140,6 +159,41 @@ mod tests {
         assert_ne!(processor, processor3);
         assert!(processor < processor3);
         assert!(processor3 > processor);
+    }
+
+    #[test]
+    fn equal_ids_compare_equal_regardless_of_metadata() {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+
+        // Two handles to the same processor id are equal and order as Equal even when their
+        // descriptive metadata differs, keeping the Ord and Eq/Hash impls mutually consistent.
+        let a = ProcessorImpl::new(
+            0,
+            1,
+            7,
+            3,
+            EfficiencyClass::Performance,
+            RelativeSpeed::from_raw(3600),
+            Some(Arc::from("Brand A")),
+        );
+        let b = ProcessorImpl::new(
+            2,
+            4,
+            7,
+            9,
+            EfficiencyClass::Efficiency,
+            RelativeSpeed::SYNTHETIC,
+            None,
+        );
+
+        assert_eq!(a, b);
+        assert_eq!(a.cmp(&b), std::cmp::Ordering::Equal);
+
+        let mut hash_a = DefaultHasher::new();
+        a.hash(&mut hash_a);
+        let mut hash_b = DefaultHasher::new();
+        b.hash(&mut hash_b);
+        assert_eq!(hash_a.finish(), hash_b.finish());
     }
 
     #[test]
