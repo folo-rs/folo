@@ -236,7 +236,7 @@ gh-analyze-bench-history dir keydir:
 # filter (only positional id-prefix subjects), and benchmark ids are engine-dependent (Callgrind
 # carries the package, Criterion group ids are crate-prefixed, but alloc_tracker/all_the_time use a
 # bare operation name), so an id-prefix filter would silently drop the measurement-engine series for
-# a touched package. The scoping is instead enforced by `analyze`'s DEFAULT ghost exclusion: it
+# a touched package. The scoping is instead enforced by `analyze`'s always-on ghost exclusion: it
 # analyzes only benchmarks present at the context commit (HEAD, the PR head), and only the collected
 # (touched) packages have a run there, so every untouched package is dropped as a "ghost" before
 # detection - for EVERY engine. This exclusion is unconditional and cannot be turned off, so the
