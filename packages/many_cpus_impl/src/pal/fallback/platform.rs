@@ -230,6 +230,14 @@ mod tests {
     }
 
     #[test]
+    fn no_processor_has_a_cpu_brand() {
+        let platform = BuildTargetPlatform;
+        for processor in platform.get_processors().iter() {
+            assert_eq!(processor.cpu_brand(), None);
+        }
+    }
+
+    #[test]
     fn processor_ids_are_sequential() {
         let platform = BuildTargetPlatform;
         for (index, processor) in platform.get_processors().iter().enumerate() {

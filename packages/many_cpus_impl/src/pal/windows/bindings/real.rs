@@ -327,6 +327,11 @@ fn read_processor_nominal_max_mhz(processor_id: usize) -> u32 {
 /// `HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\<processor_id>\ProcessorNameString` and is
 /// populated by the kernel at boot for every logical processor, so this read is passive and covers
 /// all processor groups without touching any thread's affinity.
+//
+// Excluded from coverage because the failure branches (an unreadable or missing registry value, or
+// an empty brand string) cannot be exercised in automation: the kernel always records a non-empty
+// `ProcessorNameString` for every logical processor on the machines that run our tests.
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn read_processor_name_string(processor_id: usize) -> Option<String> {
     let subkey = to_nul_terminated_wide(&format!(
         "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\{processor_id}"
