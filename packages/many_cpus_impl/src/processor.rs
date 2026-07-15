@@ -127,7 +127,7 @@ impl Processor {
         self.inner.relative_speed()
     }
 
-    /// The best-effort CPU brand string of the processor, or `None` when the operating system does
+    /// The best-effort brand string of the processor, or `None` when the operating system does
     /// not report one.
     ///
     /// This is intended for *identification* and diagnostics, not comparison. The exact text and
@@ -150,7 +150,7 @@ impl Processor {
     /// let processors = SystemHardware::current().processors();
     ///
     /// for processor in processors {
-    ///     match processor.cpu_brand() {
+    ///     match processor.brand() {
     ///         Some(brand) => println!("Processor {} is a {brand}", processor.id()),
     ///         None => println!("Processor {} has no reported brand", processor.id()),
     ///     }
@@ -159,8 +159,8 @@ impl Processor {
     #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     #[inline]
     #[must_use]
-    pub fn cpu_brand(&self) -> Option<&str> {
-        self.inner.cpu_brand()
+    pub fn brand(&self) -> Option<&str> {
+        self.inner.brand()
     }
 }
 
@@ -229,7 +229,7 @@ mod tests {
         assert_eq!(processor.memory_region_id(), 13);
         assert_eq!(processor.efficiency_class(), EfficiencyClass::Efficiency);
         assert_eq!(processor.relative_speed().as_u64(), 3600);
-        assert_eq!(processor.cpu_brand(), Some("Example Brand"));
+        assert_eq!(processor.brand(), Some("Example Brand"));
 
         // A clone is a legit clone.
         let processor_clone = processor.clone();

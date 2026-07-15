@@ -198,7 +198,7 @@ pub(crate) fn system_profile() -> HardwareProfile {
         cpu_brand: representative_brand(
             all_processors
                 .iter()
-                .map(|processor| processor.cpu_brand().map(ToOwned::to_owned)),
+                .map(|processor| processor.brand().map(ToOwned::to_owned)),
         ),
         processor_speeds: speed_histogram(
             all_processors

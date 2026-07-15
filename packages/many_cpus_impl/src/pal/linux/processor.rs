@@ -13,8 +13,8 @@ pub(crate) struct ProcessorImpl {
     pub(crate) efficiency_class: EfficiencyClass,
     pub(crate) relative_speed: RelativeSpeed,
 
-    /// Best-effort CPU brand from the `model name` field of `/proc/cpuinfo`, `None` when absent.
-    pub(crate) cpu_brand: Option<Arc<str>>,
+    /// Best-effort brand from the `model name` field of `/proc/cpuinfo`, `None` when absent.
+    pub(crate) brand: Option<Arc<str>>,
 
     pub(crate) is_active: bool,
 }
@@ -42,8 +42,8 @@ impl AbstractProcessor for ProcessorImpl {
         self.relative_speed
     }
 
-    fn cpu_brand(&self) -> Option<&str> {
-        self.cpu_brand.as_deref()
+    fn brand(&self) -> Option<&str> {
+        self.brand.as_deref()
     }
 }
 
@@ -95,7 +95,7 @@ mod tests {
             memory_region_id: 3,
             efficiency_class: EfficiencyClass::Performance,
             relative_speed: RelativeSpeed::from_raw(4890),
-            cpu_brand: Some(Arc::from("Test CPU 3000")),
+            brand: Some(Arc::from("Test CPU 3000")),
             is_active: true,
         };
 
@@ -103,14 +103,14 @@ mod tests {
         assert_eq!(processor.memory_region_id(), 3);
         assert_eq!(processor.efficiency_class(), EfficiencyClass::Performance);
         assert_eq!(processor.relative_speed().as_u64(), 4890);
-        assert_eq!(processor.cpu_brand(), Some("Test CPU 3000"));
+        assert_eq!(processor.brand(), Some("Test CPU 3000"));
 
         let processor2 = ProcessorImpl {
             id: 2,
             memory_region_id: 3,
             efficiency_class: EfficiencyClass::Performance,
             relative_speed: RelativeSpeed::from_raw(4890),
-            cpu_brand: Some(Arc::from("Test CPU 3000")),
+            brand: Some(Arc::from("Test CPU 3000")),
             is_active: true,
         };
 
@@ -121,12 +121,12 @@ mod tests {
             memory_region_id: 3,
             efficiency_class: EfficiencyClass::Performance,
             relative_speed: RelativeSpeed::from_raw(4890),
-            cpu_brand: None,
+            brand: None,
             is_active: true,
         };
 
         assert_ne!(processor, processor3);
-        assert_eq!(processor3.cpu_brand(), None);
+        assert_eq!(processor3.brand(), None);
         assert!(processor < processor3);
         assert!(processor3 > processor);
     }
@@ -142,7 +142,7 @@ mod tests {
             memory_region_id: 3,
             efficiency_class: EfficiencyClass::Performance,
             relative_speed: RelativeSpeed::from_raw(3600),
-            cpu_brand: Some(Arc::from("Brand A")),
+            brand: Some(Arc::from("Brand A")),
             is_active: true,
         };
         let b = ProcessorImpl {
@@ -150,7 +150,7 @@ mod tests {
             memory_region_id: 9,
             efficiency_class: EfficiencyClass::Efficiency,
             relative_speed: RelativeSpeed::SYNTHETIC,
-            cpu_brand: None,
+            brand: None,
             is_active: false,
         };
 
@@ -177,7 +177,7 @@ mod tests {
             memory_region_id: 2,
             efficiency_class: EfficiencyClass::Efficiency,
             relative_speed: RelativeSpeed::from_raw(2400),
-            cpu_brand: None,
+            brand: None,
             is_active: true,
         };
 
@@ -200,7 +200,7 @@ mod tests {
             memory_region_id: 1,
             efficiency_class: EfficiencyClass::Performance,
             relative_speed: RelativeSpeed::from_raw(3600),
-            cpu_brand: None,
+            brand: None,
             is_active: true,
         };
 

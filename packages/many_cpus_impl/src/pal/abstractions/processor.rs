@@ -11,7 +11,7 @@ pub(crate) trait AbstractProcessor:
     fn efficiency_class(&self) -> EfficiencyClass;
     fn relative_speed(&self) -> RelativeSpeed;
 
-    /// The best-effort CPU brand string of the processor, or `None` when the platform does not
+    /// The best-effort brand string of the processor, or `None` when the platform does not
     /// report one.
-    fn cpu_brand(&self) -> Option<&str>;
+    fn brand(&self) -> Option<&str>;
 }

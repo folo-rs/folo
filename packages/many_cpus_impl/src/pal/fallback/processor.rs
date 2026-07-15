@@ -43,7 +43,7 @@ impl AbstractProcessor for ProcessorImpl {
     }
 
     #[cfg_attr(test, mutants::skip)] // Some mutations are not testable due to simulated nature of this PAL.
-    fn cpu_brand(&self) -> Option<&str> {
+    fn brand(&self) -> Option<&str> {
         // We do not have real brand information on the fallback platform.
         None
     }

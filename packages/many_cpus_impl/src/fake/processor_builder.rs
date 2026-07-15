@@ -8,8 +8,8 @@ use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 /// Builder for configuring an individual fake processor.
 ///
 /// Each fake processor has an ID, a memory region, an efficiency class, a relative speed and an
-/// optional CPU brand string. By default, processors are placed in memory region 0 with
-/// [`EfficiencyClass::Performance`], the synthetic minimum relative speed and no CPU brand.
+/// optional brand string. By default, processors are placed in memory region 0 with
+/// [`EfficiencyClass::Performance`], the synthetic minimum relative speed and no brand.
 ///
 /// Processor IDs are assigned automatically by default. If you need a specific ID,
 /// use [`id()`][Self::id] to set it explicitly.
@@ -34,7 +34,7 @@ pub struct ProcessorBuilder {
     pub(crate) memory_region_id: MemoryRegionId,
     pub(crate) efficiency_class: EfficiencyClass,
     pub(crate) relative_speed: RelativeSpeed,
-    pub(crate) cpu_brand: Option<Arc<str>>,
+    pub(crate) brand: Option<Arc<str>>,
 }
 
 impl Default for ProcessorBuilder {
@@ -47,7 +47,7 @@ impl ProcessorBuilder {
     /// Creates a new processor builder with automatic ID assignment.
     ///
     /// The processor is placed in memory region 0 with [`EfficiencyClass::Performance`], the
-    /// synthetic minimum relative speed and no CPU brand by default. The ID will be automatically
+    /// synthetic minimum relative speed and no brand by default. The ID will be automatically
     /// assigned when the processor is added to a [`HardwareBuilder`][super::HardwareBuilder].
     #[must_use]
     pub fn new() -> Self {
@@ -56,7 +56,7 @@ impl ProcessorBuilder {
             memory_region_id: 0,
             efficiency_class: EfficiencyClass::Performance,
             relative_speed: RelativeSpeed::SYNTHETIC,
-            cpu_brand: None,
+            brand: None,
         }
     }
 
@@ -98,12 +98,12 @@ impl ProcessorBuilder {
         self
     }
 
-    /// Sets the CPU brand string reported for this processor.
+    /// Sets the brand string reported for this processor.
     ///
-    /// If not called, the processor reports no CPU brand.
+    /// If not called, the processor reports no brand.
     #[must_use]
-    pub fn cpu_brand(mut self, cpu_brand: &str) -> Self {
-        self.cpu_brand = Some(Arc::from(cpu_brand));
+    pub fn brand(mut self, brand: &str) -> Self {
+        self.brand = Some(Arc::from(brand));
         self
     }
 }
@@ -135,7 +135,7 @@ mod tests {
             new_builder.efficiency_class
         );
         assert_eq!(default_builder.relative_speed, new_builder.relative_speed);
-        assert_eq!(default_builder.cpu_brand, new_builder.cpu_brand);
+        assert_eq!(default_builder.brand, new_builder.brand);
     }
 
     #[test]
@@ -146,7 +146,7 @@ mod tests {
         assert_eq!(builder.memory_region_id, 0);
         assert_eq!(builder.efficiency_class, EfficiencyClass::Performance);
         assert_eq!(builder.relative_speed, RelativeSpeed::SYNTHETIC);
-        assert_eq!(builder.cpu_brand, None);
+        assert_eq!(builder.brand, None);
     }
 
     #[test]
@@ -164,10 +164,10 @@ mod tests {
     }
 
     #[test]
-    fn cpu_brand_is_respected() {
-        let builder = ProcessorBuilder::new().cpu_brand("Example Brand");
+    fn brand_is_respected() {
+        let builder = ProcessorBuilder::new().brand("Example Brand");
 
-        assert_eq!(builder.cpu_brand.as_deref(), Some("Example Brand"));
+        assert_eq!(builder.brand.as_deref(), Some("Example Brand"));
     }
 
     #[test]
@@ -177,12 +177,12 @@ mod tests {
             .memory_region(2)
             .efficiency_class(EfficiencyClass::Efficiency)
             .relative_speed(nz!(2400))
-            .cpu_brand("Chained Brand");
+            .brand("Chained Brand");
 
         assert_eq!(builder.explicit_id, Some(3));
         assert_eq!(builder.memory_region_id, 2);
         assert_eq!(builder.efficiency_class, EfficiencyClass::Efficiency);
         assert_eq!(builder.relative_speed.as_u64(), 2400);
-        assert_eq!(builder.cpu_brand.as_deref(), Some("Chained Brand"));
+        assert_eq!(builder.brand.as_deref(), Some("Chained Brand"));
     }
 }

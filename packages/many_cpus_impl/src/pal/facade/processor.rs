@@ -84,13 +84,13 @@ impl AbstractProcessor for ProcessorFacade {
         }
     }
 
-    fn cpu_brand(&self) -> Option<&str> {
+    fn brand(&self) -> Option<&str> {
         match self {
-            Self::Target(p) => p.cpu_brand(),
+            Self::Target(p) => p.brand(),
             #[cfg(test)]
-            Self::Fallback(p) => p.cpu_brand(),
+            Self::Fallback(p) => p.brand(),
             #[cfg(any(test, feature = "test-util"))]
-            Self::Fake(p) => p.cpu_brand(),
+            Self::Fake(p) => p.brand(),
         }
     }
 }

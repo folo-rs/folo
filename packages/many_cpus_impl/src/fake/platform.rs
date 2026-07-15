@@ -23,7 +23,7 @@ pub(crate) struct FakeProcessor {
     memory_region_id: MemoryRegionId,
     efficiency_class: EfficiencyClass,
     relative_speed: RelativeSpeed,
-    cpu_brand: Option<Arc<str>>,
+    brand: Option<Arc<str>>,
 }
 
 impl Display for FakeProcessor {
@@ -31,11 +31,7 @@ impl Display for FakeProcessor {
         write!(
             f,
             "FakeProcessor({} in region {}, {:?}, speed {}, brand {:?})",
-            self.id,
-            self.memory_region_id,
-            self.efficiency_class,
-            self.relative_speed,
-            self.cpu_brand
+            self.id, self.memory_region_id, self.efficiency_class, self.relative_speed, self.brand
         )
     }
 }
@@ -47,14 +43,14 @@ impl FakeProcessor {
         memory_region_id: MemoryRegionId,
         efficiency_class: EfficiencyClass,
         relative_speed: RelativeSpeed,
-        cpu_brand: Option<Arc<str>>,
+        brand: Option<Arc<str>>,
     ) -> Self {
         Self {
             id,
             memory_region_id,
             efficiency_class,
             relative_speed,
-            cpu_brand,
+            brand,
         }
     }
 }
@@ -76,8 +72,8 @@ impl AbstractProcessor for FakeProcessor {
         self.relative_speed
     }
 
-    fn cpu_brand(&self) -> Option<&str> {
-        self.cpu_brand.as_deref()
+    fn brand(&self) -> Option<&str> {
+        self.brand.as_deref()
     }
 }
 
@@ -125,7 +121,7 @@ impl FakePlatform {
                     p.memory_region_id,
                     p.efficiency_class,
                     p.relative_speed,
-                    p.cpu_brand.clone(),
+                    p.brand.clone(),
                 )
             })
             .collect();
@@ -525,7 +521,7 @@ mod tests {
     }
 
     #[test]
-    fn fake_processor_cpu_brand_returns_configured_value() {
+    fn fake_processor_brand_returns_configured_value() {
         let with_brand = FakeProcessor::new(
             0,
             0,
@@ -541,8 +537,8 @@ mod tests {
             None,
         );
 
-        assert_eq!(with_brand.cpu_brand(), Some("Fake Brand"));
-        assert_eq!(without_brand.cpu_brand(), None);
+        assert_eq!(with_brand.brand(), Some("Fake Brand"));
+        assert_eq!(without_brand.brand(), None);
     }
 
     #[test]
@@ -561,14 +557,14 @@ mod tests {
     }
 
     #[test]
-    fn cpu_brand_flows_through_builder() {
+    fn brand_flows_through_builder() {
         let builder = HardwareBuilder::new()
-            .processor(ProcessorBuilder::new().id(0).cpu_brand("Configured Brand"))
+            .processor(ProcessorBuilder::new().id(0).brand("Configured Brand"))
             .processor(ProcessorBuilder::new().id(1));
         let backend = FakePlatform::from_builder(&builder);
 
         // Explicitly configured brand is preserved; the unconfigured one reports no brand.
-        assert_eq!(backend.processors[0].cpu_brand(), Some("Configured Brand"));
-        assert_eq!(backend.processors[1].cpu_brand(), None);
+        assert_eq!(backend.processors[0].brand(), Some("Configured Brand"));
+        assert_eq!(backend.processors[1].brand(), None);
     }
 }

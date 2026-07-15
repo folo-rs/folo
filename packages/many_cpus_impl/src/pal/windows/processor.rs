@@ -20,7 +20,7 @@ pub(crate) struct ProcessorImpl {
 
     pub(crate) relative_speed: RelativeSpeed,
 
-    pub(crate) cpu_brand: Option<Arc<str>>,
+    pub(crate) brand: Option<Arc<str>>,
 }
 
 impl ProcessorImpl {
@@ -31,7 +31,7 @@ impl ProcessorImpl {
         memory_region_id: MemoryRegionId,
         efficiency_class: EfficiencyClass,
         relative_speed: RelativeSpeed,
-        cpu_brand: Option<Arc<str>>,
+        brand: Option<Arc<str>>,
     ) -> Self {
         Self {
             group_index,
@@ -40,7 +40,7 @@ impl ProcessorImpl {
             memory_region_id,
             efficiency_class,
             relative_speed,
-            cpu_brand,
+            brand,
         }
     }
 }
@@ -72,8 +72,8 @@ impl AbstractProcessor for ProcessorImpl {
         self.relative_speed
     }
 
-    fn cpu_brand(&self) -> Option<&str> {
-        self.cpu_brand.as_deref()
+    fn brand(&self) -> Option<&str> {
+        self.brand.as_deref()
     }
 }
 
@@ -134,7 +134,7 @@ mod tests {
         assert_eq!(processor.memory_region_id(), 3);
         assert_eq!(processor.efficiency_class(), EfficiencyClass::Performance);
         assert_eq!(processor.relative_speed().as_u64(), 3600);
-        assert_eq!(processor.cpu_brand(), Some("Test Brand"));
+        assert_eq!(processor.brand(), Some("Test Brand"));
 
         let processor2 = ProcessorImpl::new(
             0,
@@ -244,6 +244,6 @@ mod tests {
         assert_eq!(processor_ref.id, processor.id);
         assert_eq!(processor_ref.group_index, processor.group_index);
         assert_eq!(processor_ref.index_in_group, processor.index_in_group);
-        assert_eq!(processor_ref.cpu_brand(), None);
+        assert_eq!(processor_ref.brand(), None);
     }
 }

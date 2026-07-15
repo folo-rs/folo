@@ -115,7 +115,7 @@ impl Platform for BuildTargetPlatform {
 
                 let relative_speed = *relative_speeds.get(processor_id as usize).expect("we expect to have the relative speed for every processor ID unless the platform lied to us at some point");
 
-                let cpu_brand = brands.get(processor_id as usize).expect("we expect to have the brand slot for every processor ID unless the platform lied to us at some point").clone();
+                let brand = brands.get(processor_id as usize).expect("we expect to have the brand slot for every processor ID unless the platform lied to us at some point").clone();
 
                 Some(ProcessorImpl::new(
                     group_index
@@ -126,7 +126,7 @@ impl Platform for BuildTargetPlatform {
                     memory_region_index,
                     efficiency_class,
                     relative_speed,
-                    cpu_brand,
+                    brand,
                 ))
             })
         ).expect(
@@ -624,7 +624,7 @@ impl BuildTargetPlatform {
             .into_boxed_slice()
     }
 
-    /// Gets the CPU brand strings of all processors on the system, ordered by processor ID.
+    /// Gets the brand strings of all processors on the system, ordered by processor ID.
     /// This also returns data for offline processors. Processors the platform reports no brand
     /// for map to `None`.
     #[must_use]
@@ -1002,10 +1002,10 @@ mod tests {
     }
 
     #[test]
-    fn get_all_processors_reports_cpu_brand() {
+    fn get_all_processors_reports_brand() {
         // A simple single-group system with 4 logical processors. The simulated layout reports the
         // same brand string for every processor, which must surface unchanged as the processor's
-        // CPU brand.
+        // brand.
         let mut bindings = MockBindings::new();
         simulate_processor_layout(
             &mut bindings,
@@ -1024,7 +1024,7 @@ mod tests {
 
         for processor in &processors {
             assert_eq!(
-                processor.as_target().cpu_brand.as_deref(),
+                processor.as_target().brand.as_deref(),
                 Some("Test Processor Brand")
             );
         }

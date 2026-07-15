@@ -14,7 +14,7 @@ pub(crate) struct ResolvedProcessor {
     pub(crate) memory_region_id: MemoryRegionId,
     pub(crate) efficiency_class: EfficiencyClass,
     pub(crate) relative_speed: RelativeSpeed,
-    pub(crate) cpu_brand: Option<Arc<str>>,
+    pub(crate) brand: Option<Arc<str>>,
 }
 
 /// Builder for configuring fake hardware.
@@ -248,7 +248,7 @@ impl HardwareBuilder {
                 memory_region_id: p.memory_region_id,
                 efficiency_class: p.efficiency_class,
                 relative_speed: p.relative_speed,
-                cpu_brand: p.cpu_brand.clone(),
+                brand: p.brand.clone(),
             });
         }
 
