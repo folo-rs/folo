@@ -230,7 +230,7 @@ impl Bindings for BuildTargetBindings {
     }
 
     fn get_processor_name_strings(&self, max_processor_count: usize) -> Vec<Option<String>> {
-        // Windows records the brand string of each logical processor in the registry under
+        // Windows records the model string of each logical processor in the registry under
         // `HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\<id>` as the `ProcessorNameString`
         // value. The kernel populates these entries at boot for every logical processor across all
         // processor groups, so reading them is a fully passive operation: it never changes the
@@ -320,7 +320,7 @@ fn read_processor_nominal_max_mhz(processor_id: usize) -> u32 {
     if status.is_ok() { value } else { 0 }
 }
 
-/// Reads the brand string that Windows recorded for a single logical processor in the registry,
+/// Reads the model string that Windows recorded for a single logical processor in the registry,
 /// returning `None` when the platform records no value for that processor.
 ///
 /// The value lives at
@@ -329,7 +329,7 @@ fn read_processor_nominal_max_mhz(processor_id: usize) -> u32 {
 /// all processor groups without touching any thread's affinity.
 //
 // Excluded from coverage because the failure branches (an unreadable or missing registry value, or
-// an empty brand string) cannot be exercised in automation: the kernel always records a non-empty
+// an empty model string) cannot be exercised in automation: the kernel always records a non-empty
 // `ProcessorNameString` for every logical processor on the machines that run our tests.
 #[cfg_attr(coverage_nightly, coverage(off))]
 fn read_processor_name_string(processor_id: usize) -> Option<String> {
@@ -385,7 +385,7 @@ fn read_processor_name_string(processor_id: usize) -> Option<String> {
     }
 
     // Trim the trailing NUL terminator that the registry API guarantees, then trim any surrounding
-    // whitespace that some firmware pads the brand string with. Everything the API wrote after the
+    // whitespace that some firmware pads the model string with. Everything the API wrote after the
     // NUL (and the zero-initialized tail of the buffer) is excluded by stopping at the first NUL.
     let units: Vec<u16> = buffer.into_iter().take_while(|&unit| unit != 0).collect();
     let text = String::from_utf16_lossy(&units);

@@ -172,7 +172,7 @@ mod tests {
         context.machine = Some(MachineInfo {
             processors: 8,
             memory_regions: 1,
-            cpu_brand: Some("Test CPU 3000".to_owned()),
+            processor_models: vec!["Test CPU 3000".to_owned()],
             processor_speeds: vec![(3141, 8)],
             fingerprint: "test-fingerprint".to_owned(),
         });

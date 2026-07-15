@@ -20,7 +20,7 @@ pub(crate) struct ProcessorImpl {
 
     pub(crate) relative_speed: RelativeSpeed,
 
-    pub(crate) brand: Option<Arc<str>>,
+    pub(crate) model: Option<Arc<str>>,
 }
 
 impl ProcessorImpl {
@@ -31,7 +31,7 @@ impl ProcessorImpl {
         memory_region_id: MemoryRegionId,
         efficiency_class: EfficiencyClass,
         relative_speed: RelativeSpeed,
-        brand: Option<Arc<str>>,
+        model: Option<Arc<str>>,
     ) -> Self {
         Self {
             group_index,
@@ -40,7 +40,7 @@ impl ProcessorImpl {
             memory_region_id,
             efficiency_class,
             relative_speed,
-            brand,
+            model,
         }
     }
 }
@@ -72,8 +72,8 @@ impl AbstractProcessor for ProcessorImpl {
         self.relative_speed
     }
 
-    fn brand(&self) -> Option<&str> {
-        self.brand.as_deref()
+    fn model(&self) -> Option<&str> {
+        self.model.as_deref()
     }
 }
 
@@ -127,14 +127,14 @@ mod tests {
             3,
             EfficiencyClass::Performance,
             RelativeSpeed::from_raw(3600),
-            Some(Arc::from("Test Brand")),
+            Some(Arc::from("Test Model")),
         );
 
         assert_eq!(processor.id(), 2);
         assert_eq!(processor.memory_region_id(), 3);
         assert_eq!(processor.efficiency_class(), EfficiencyClass::Performance);
         assert_eq!(processor.relative_speed().as_u64(), 3600);
-        assert_eq!(processor.brand(), Some("Test Brand"));
+        assert_eq!(processor.model(), Some("Test Model"));
 
         let processor2 = ProcessorImpl::new(
             0,
@@ -143,7 +143,7 @@ mod tests {
             3,
             EfficiencyClass::Performance,
             RelativeSpeed::from_raw(3600),
-            Some(Arc::from("Test Brand")),
+            Some(Arc::from("Test Model")),
         );
         assert_eq!(processor, processor2);
 
@@ -154,7 +154,7 @@ mod tests {
             3,
             EfficiencyClass::Performance,
             RelativeSpeed::from_raw(3600),
-            Some(Arc::from("Test Brand")),
+            Some(Arc::from("Test Model")),
         );
         assert_ne!(processor, processor3);
         assert!(processor < processor3);
@@ -174,7 +174,7 @@ mod tests {
             3,
             EfficiencyClass::Performance,
             RelativeSpeed::from_raw(3600),
-            Some(Arc::from("Brand A")),
+            Some(Arc::from("Model A")),
         );
         let b = ProcessorImpl::new(
             2,
@@ -244,6 +244,6 @@ mod tests {
         assert_eq!(processor_ref.id, processor.id);
         assert_eq!(processor_ref.group_index, processor.group_index);
         assert_eq!(processor_ref.index_in_group, processor.index_in_group);
-        assert_eq!(processor_ref.brand(), None);
+        assert_eq!(processor_ref.model(), None);
     }
 }

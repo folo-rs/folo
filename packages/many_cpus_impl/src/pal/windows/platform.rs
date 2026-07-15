@@ -83,7 +83,7 @@ impl Platform for BuildTargetPlatform {
         let efficiency_classes = self.get_processor_efficiency_classes();
         let memory_regions = self.get_processor_memory_regions();
         let relative_speeds = self.get_processor_relative_speeds();
-        let brands = self.get_processor_brands();
+        let models = self.get_processor_models();
         let allowed_processors = self.processors_allowed_by_job_constraints();
 
         // We are required to return all the processors ordered by the processor ID.
@@ -115,7 +115,7 @@ impl Platform for BuildTargetPlatform {
 
                 let relative_speed = *relative_speeds.get(processor_id as usize).expect("we expect to have the relative speed for every processor ID unless the platform lied to us at some point");
 
-                let brand = brands.get(processor_id as usize).expect("we expect to have the brand slot for every processor ID unless the platform lied to us at some point").clone();
+                let model = models.get(processor_id as usize).expect("we expect to have the model slot for every processor ID unless the platform lied to us at some point").clone();
 
                 Some(ProcessorImpl::new(
                     group_index
@@ -126,7 +126,7 @@ impl Platform for BuildTargetPlatform {
                     memory_region_index,
                     efficiency_class,
                     relative_speed,
-                    brand,
+                    model,
                 ))
             })
         ).expect(
@@ -624,12 +624,12 @@ impl BuildTargetPlatform {
             .into_boxed_slice()
     }
 
-    /// Gets the brand strings of all processors on the system, ordered by processor ID.
-    /// This also returns data for offline processors. Processors the platform reports no brand
+    /// Gets the model strings of all processors on the system, ordered by processor ID.
+    /// This also returns data for offline processors. Processors the platform reports no model
     /// for map to `None`.
     #[must_use]
-    fn get_processor_brands(&self) -> Box<[Option<Arc<str>>]> {
-        // The bindings surface each processor's brand string by reading the `ProcessorNameString`
+    fn get_processor_models(&self) -> Box<[Option<Arc<str>>]> {
+        // The bindings surface each processor's model string by reading the `ProcessorNameString`
         // value Windows records in the registry for every logical processor across all processor
         // groups. This is a passive read that never changes any thread's affinity.
         self.bindings
@@ -1002,10 +1002,10 @@ mod tests {
     }
 
     #[test]
-    fn get_all_processors_reports_brand() {
+    fn get_all_processors_reports_model() {
         // A simple single-group system with 4 logical processors. The simulated layout reports the
-        // same brand string for every processor, which must surface unchanged as the processor's
-        // brand.
+        // same model string for every processor, which must surface unchanged as the processor's
+        // model.
         let mut bindings = MockBindings::new();
         simulate_processor_layout(
             &mut bindings,
@@ -1024,8 +1024,8 @@ mod tests {
 
         for processor in &processors {
             assert_eq!(
-                processor.as_target().brand.as_deref(),
-                Some("Test Processor Brand")
+                processor.as_target().model.as_deref(),
+                Some("Test Processor Model")
             );
         }
     }
@@ -1455,7 +1455,7 @@ mod tests {
             &efficiency_ratings_per_group,
         );
         simulate_get_relative_speeds(bindings);
-        simulate_get_brands(bindings);
+        simulate_get_models(bindings);
 
         // Transform the booleans to IDs.
         let job_affinitized_processors_per_group =
@@ -1533,16 +1533,16 @@ mod tests {
             });
     }
 
-    /// Registers a default `get_processor_name_strings` expectation that reports the same brand
+    /// Registers a default `get_processor_name_strings` expectation that reports the same model
     /// string for every processor ID, mirroring a homogeneous machine. The binding surfaces one
     /// value per processor across all processor groups, indexed directly by processor ID, so this
-    /// lets tests observe the brand flowing through `get_all_processors()` for processors in every
+    /// lets tests observe the model flowing through `get_all_processors()` for processors in every
     /// group.
-    fn simulate_get_brands(bindings: &mut MockBindings) {
+    fn simulate_get_models(bindings: &mut MockBindings) {
         bindings
             .expect_get_processor_name_strings()
             .returning(move |max_processor_count| {
-                std::iter::repeat_with(|| Some("Test Processor Brand".to_string()))
+                std::iter::repeat_with(|| Some("Test Processor Model".to_string()))
                     .take(max_processor_count)
                     .collect_vec()
             });

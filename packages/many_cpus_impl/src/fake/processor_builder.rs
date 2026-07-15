@@ -8,8 +8,8 @@ use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 /// Builder for configuring an individual fake processor.
 ///
 /// Each fake processor has an ID, a memory region, an efficiency class, a relative speed and an
-/// optional brand string. By default, processors are placed in memory region 0 with
-/// [`EfficiencyClass::Performance`], the synthetic minimum relative speed and no brand.
+/// optional model string. By default, processors are placed in memory region 0 with
+/// [`EfficiencyClass::Performance`], a relative speed of 1 and no model.
 ///
 /// Processor IDs are assigned automatically by default. If you need a specific ID,
 /// use [`id()`][Self::id] to set it explicitly.
@@ -34,7 +34,7 @@ pub struct ProcessorBuilder {
     pub(crate) memory_region_id: MemoryRegionId,
     pub(crate) efficiency_class: EfficiencyClass,
     pub(crate) relative_speed: RelativeSpeed,
-    pub(crate) brand: Option<Arc<str>>,
+    pub(crate) model: Option<Arc<str>>,
 }
 
 impl Default for ProcessorBuilder {
@@ -46,8 +46,8 @@ impl Default for ProcessorBuilder {
 impl ProcessorBuilder {
     /// Creates a new processor builder with automatic ID assignment.
     ///
-    /// The processor is placed in memory region 0 with [`EfficiencyClass::Performance`], the
-    /// synthetic minimum relative speed and no brand by default. The ID will be automatically
+    /// The processor is placed in memory region 0 with [`EfficiencyClass::Performance`], a
+    /// relative speed of 1 and no model by default. The ID will be automatically
     /// assigned when the processor is added to a [`HardwareBuilder`][super::HardwareBuilder].
     #[must_use]
     pub fn new() -> Self {
@@ -56,7 +56,7 @@ impl ProcessorBuilder {
             memory_region_id: 0,
             efficiency_class: EfficiencyClass::Performance,
             relative_speed: RelativeSpeed::SYNTHETIC,
-            brand: None,
+            model: None,
         }
     }
 
@@ -91,19 +91,19 @@ impl ProcessorBuilder {
 
     /// Sets the [relative speed][RelativeSpeed] reported for this processor.
     ///
-    /// If not called, the processor reports the synthetic minimum relative speed.
+    /// If not called, the processor reports a relative speed of 1.
     #[must_use]
     pub fn relative_speed(mut self, relative_speed: NonZero<u64>) -> Self {
         self.relative_speed = RelativeSpeed::from_raw(relative_speed.get());
         self
     }
 
-    /// Sets the brand string reported for this processor.
+    /// Sets the model string reported for this processor.
     ///
-    /// If not called, the processor reports no brand.
+    /// If not called, the processor reports no model.
     #[must_use]
-    pub fn brand(mut self, brand: &str) -> Self {
-        self.brand = Some(Arc::from(brand));
+    pub fn model(mut self, model: &str) -> Self {
+        self.model = Some(Arc::from(model));
         self
     }
 }
@@ -135,7 +135,7 @@ mod tests {
             new_builder.efficiency_class
         );
         assert_eq!(default_builder.relative_speed, new_builder.relative_speed);
-        assert_eq!(default_builder.brand, new_builder.brand);
+        assert_eq!(default_builder.model, new_builder.model);
     }
 
     #[test]
@@ -146,7 +146,7 @@ mod tests {
         assert_eq!(builder.memory_region_id, 0);
         assert_eq!(builder.efficiency_class, EfficiencyClass::Performance);
         assert_eq!(builder.relative_speed, RelativeSpeed::SYNTHETIC);
-        assert_eq!(builder.brand, None);
+        assert_eq!(builder.model, None);
     }
 
     #[test]
@@ -164,10 +164,10 @@ mod tests {
     }
 
     #[test]
-    fn brand_is_respected() {
-        let builder = ProcessorBuilder::new().brand("Example Brand");
+    fn model_is_respected() {
+        let builder = ProcessorBuilder::new().model("Example Model");
 
-        assert_eq!(builder.brand.as_deref(), Some("Example Brand"));
+        assert_eq!(builder.model.as_deref(), Some("Example Model"));
     }
 
     #[test]
@@ -177,12 +177,12 @@ mod tests {
             .memory_region(2)
             .efficiency_class(EfficiencyClass::Efficiency)
             .relative_speed(nz!(2400))
-            .brand("Chained Brand");
+            .model("Chained Model");
 
         assert_eq!(builder.explicit_id, Some(3));
         assert_eq!(builder.memory_region_id, 2);
         assert_eq!(builder.efficiency_class, EfficiencyClass::Efficiency);
         assert_eq!(builder.relative_speed.as_u64(), 2400);
-        assert_eq!(builder.brand.as_deref(), Some("Chained Brand"));
+        assert_eq!(builder.model.as_deref(), Some("Chained Model"));
     }
 }

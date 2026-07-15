@@ -47,7 +47,7 @@ fn processor_set_basics_via_re_exports() {
     require_memory_region_id(any_processor.memory_region_id());
     require_efficiency_class(any_processor.efficiency_class());
     require_relative_speed(any_processor.relative_speed());
-    _ = any_processor.brand();
+    _ = any_processor.model();
 }
 
 #[test]

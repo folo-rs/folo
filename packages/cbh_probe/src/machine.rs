@@ -16,7 +16,7 @@
 //! the individual factors that fed the hash, so a change in the key can be traced —
 //! in verbose logs — to the specific hardware detail that moved.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cbh_model::sanitize_segment;
 use sha2::{Digest, Sha256};
@@ -41,8 +41,13 @@ pub struct HardwareProfile {
     pub processors: usize,
     /// Maximum number of NUMA memory regions the system reports.
     pub memory_regions: usize,
-    /// Best-effort CPU brand string (`None` when it cannot be determined).
-    pub cpu_brand: Option<String>,
+    /// Distinct processor model strings the system reports, sorted ascending.
+    ///
+    /// Populated from every processor's model, then whitespace-normalized,
+    /// deduplicated and sorted, so machines that agree on their set of models hash
+    /// alike regardless of how many processors of each model they have. Empty when no
+    /// model could be determined.
+    pub processor_models: Vec<String>,
     /// Histogram of the per-processor relative speeds the system reports, as
     /// `(speed, count)` pairs sorted ascending by speed.
     ///
@@ -54,30 +59,26 @@ pub struct HardwareProfile {
 
 /// Renders a profile to its canonical, hashable string (pure).
 ///
-/// The factors are emitted in a fixed order as `key=value` lines, prefixed with
-/// the fingerprint version. The brand is normalized so incidental whitespace
-/// differences do not change the key; an absent brand contributes an empty value
-/// so that machines differing only in whether a brand could be read still hash
-/// consistently with their factor set. The speed histogram is rendered in its
-/// fixed ascending order.
+/// The factors are emitted in a fixed order as `key=value` lines, prefixed with the
+/// fingerprint version. Models are rendered as a sorted, deduplicated, comma-joined
+/// list, and the speed histogram in its fixed ascending order, so machines that differ
+/// only cosmetically - in model order, duplicate models, or incidental whitespace - hash
+/// consistently. An absent model set and an empty histogram both contribute an empty
+/// value.
 fn canonical(profile: &HardwareProfile) -> String {
-    let brand = profile
-        .cpu_brand
-        .as_deref()
-        .map(normalize_brand)
-        .unwrap_or_default();
     format!(
-        "{FINGERPRINT_VERSION}\nprocessors={}\nmemory_regions={}\ncpu_brand={brand}\nprocessor_speeds={}",
+        "{FINGERPRINT_VERSION}\nprocessors={}\nmemory_regions={}\nprocessor_models={}\nprocessor_speeds={}",
         profile.processors,
         profile.memory_regions,
+        render_models(&profile.processor_models),
         render_speed_histogram(&profile.processor_speeds),
     )
 }
 
-/// Collapses runs of whitespace to single spaces and trims the ends, so two
-/// identical CPUs whose brand strings differ only cosmetically hash alike (pure).
-fn normalize_brand(brand: &str) -> String {
-    brand.split_whitespace().collect::<Vec<_>>().join(" ")
+/// Collapses runs of whitespace to single spaces and trims the ends, so two identical
+/// processors whose model strings differ only cosmetically hash alike (pure).
+fn normalize_model(model: &str) -> String {
+    model.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Renders a speed histogram to a canonical `speedxcount` list joined by commas,
@@ -118,15 +119,35 @@ fn speed_histogram(speeds: impl IntoIterator<Item = u64>) -> Vec<(u64, usize)> {
     counts.into_iter().collect()
 }
 
-/// Picks a representative CPU brand from a sequence of per-processor brands: the
-/// first non-empty, whitespace-normalized brand, or `None` when none is reported
-/// (pure).
-fn representative_brand(brands: impl IntoIterator<Item = Option<String>>) -> Option<String> {
-    brands
-        .into_iter()
-        .flatten()
-        .map(|brand| normalize_brand(&brand))
-        .find(|brand| !brand.is_empty())
+/// Renders a list of processor models to a canonical, comma-joined string, for example
+/// `AMD EPYC,Intel Xeon` (pure). Because `HardwareProfile::processor_models` is public, a
+/// caller may supply the models in any order, with duplicates, or with cosmetic whitespace
+/// differences. Each model is whitespace-normalized, empties are dropped, and the distinct
+/// models are sorted, so any two representations of the same model set render - and hash -
+/// identically. An empty list renders as an empty string.
+fn render_models(models: &[String]) -> String {
+    let mut distinct: BTreeSet<String> = BTreeSet::new();
+    for model in models {
+        let normalized = normalize_model(model);
+        if !normalized.is_empty() {
+            distinct.insert(normalized);
+        }
+    }
+    distinct.into_iter().collect::<Vec<_>>().join(",")
+}
+
+/// Reduces a sequence of per-processor models to the distinct, whitespace-normalized
+/// models present, sorted ascending (pure). Empty and whitespace-only models are dropped,
+/// so a machine whose processors all report the same model yields a single-entry list.
+fn distinct_models(models: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut distinct: BTreeSet<String> = BTreeSet::new();
+    for model in models {
+        let normalized = normalize_model(&model);
+        if !normalized.is_empty() {
+            distinct.insert(normalized);
+        }
+    }
+    distinct.into_iter().collect()
 }
 
 /// The stable machine fingerprint of `profile`: the lowercase hex of the first
@@ -162,15 +183,17 @@ pub fn resolve_machine_key(override_key: Option<&str>, profile: &HardwareProfile
 ///
 /// It reports the fingerprint version tag and each hardware factor using the same
 /// normalized values that enter the hash, so that when a machine key changes the
-/// specific factor responsible can be identified from a `--verbose` log. An absent
-/// CPU brand is shown as `<none>` (matching the empty value it contributes to the
-/// canonical string) rather than omitted, so its absence is itself visible.
+/// specific factor responsible can be identified from a `--verbose` log. An absent model
+/// set is shown as `<none>` (matching the empty value it contributes to the canonical
+/// string) rather than omitted, so its absence is itself visible.
 #[must_use]
 pub fn describe_fingerprint_components(profile: &HardwareProfile) -> String {
-    let brand = profile.cpu_brand.as_deref().map_or_else(
-        || "<none>".to_owned(),
-        |brand| format!("\"{}\"", normalize_brand(brand)),
-    );
+    let models = render_models(&profile.processor_models);
+    let models = if models.is_empty() {
+        "<none>".to_owned()
+    } else {
+        models
+    };
     let speeds = render_speed_histogram(&profile.processor_speeds);
     let speeds = if speeds.is_empty() {
         "<none>".to_owned()
@@ -178,16 +201,16 @@ pub fn describe_fingerprint_components(profile: &HardwareProfile) -> String {
         speeds
     };
     format!(
-        "version={FINGERPRINT_VERSION}, processors={}, memory_regions={}, cpu_brand={brand}, processor_speeds={speeds}",
+        "version={FINGERPRINT_VERSION}, processors={}, memory_regions={}, processor_models={models}, processor_speeds={speeds}",
         profile.processors, profile.memory_regions,
     )
 }
 
 /// Profiles the host hardware (best effort).
 ///
-/// The processor and memory-region counts, the per-processor speed histogram and
-/// the representative CPU brand all come from `many_cpus`, so the fingerprint is
-/// built from a single, consistent hardware source.
+/// The processor and memory-region counts, the per-processor speed histogram and the
+/// distinct processor models all come from `many_cpus`, so the fingerprint is built from
+/// a single, consistent hardware source.
 #[cfg_attr(test, mutants::skip)] // Queries the host; the pure logic it feeds is tested.
 pub(crate) fn system_profile() -> HardwareProfile {
     let hardware = many_cpus::SystemHardware::current();
@@ -195,10 +218,10 @@ pub(crate) fn system_profile() -> HardwareProfile {
     HardwareProfile {
         processors: hardware.max_processor_count(),
         memory_regions: hardware.max_memory_region_count(),
-        cpu_brand: representative_brand(
+        processor_models: distinct_models(
             all_processors
                 .iter()
-                .map(|processor| processor.brand().map(ToOwned::to_owned)),
+                .map(|processor| processor.model().to_owned()),
         ),
         processor_speeds: speed_histogram(
             all_processors
@@ -213,11 +236,11 @@ pub(crate) fn system_profile() -> HardwareProfile {
 mod tests {
     use super::*;
 
-    fn profile(processors: usize, memory_regions: usize, brand: Option<&str>) -> HardwareProfile {
+    fn profile(processors: usize, memory_regions: usize, models: &[&str]) -> HardwareProfile {
         HardwareProfile {
             processors,
             memory_regions,
-            cpu_brand: brand.map(ToOwned::to_owned),
+            processor_models: models.iter().map(|model| (*model).to_owned()).collect(),
             processor_speeds: Vec::new(),
         }
     }
@@ -225,13 +248,13 @@ mod tests {
     fn profile_with_speeds(
         processors: usize,
         memory_regions: usize,
-        brand: Option<&str>,
+        models: &[&str],
         processor_speeds: Vec<(u64, usize)>,
     ) -> HardwareProfile {
         HardwareProfile {
             processors,
             memory_regions,
-            cpu_brand: brand.map(ToOwned::to_owned),
+            processor_models: models.iter().map(|model| (*model).to_owned()).collect(),
             processor_speeds,
         }
     }
@@ -242,8 +265,8 @@ mod tests {
         // canonical factor string, not a seeded or platform-varying one. If the
         // factor set, ordering, version tag, or hash changes, this must be
         // updated deliberately (and existing history is understood to fork).
-        let key = fingerprint(&profile(8, 1, Some("Test CPU 3000")));
-        assert_eq!(key, "bfa6cd4cc92868db");
+        let key = fingerprint(&profile(8, 1, &["Test CPU 3000"]));
+        assert_eq!(key, "1e3277ddba18263f");
     }
 
     #[test]
@@ -253,15 +276,15 @@ mod tests {
         let key = fingerprint(&profile_with_speeds(
             4,
             1,
-            Some("Test CPU 3000"),
+            &["Test CPU 3000"],
             vec![(3141, 2), (6283, 2)],
         ));
-        assert_eq!(key, "3d4b6c38a6756893");
+        assert_eq!(key, "55e2e3746d2a53be");
     }
 
     #[test]
     fn fingerprint_is_sixteen_lowercase_hex_chars() {
-        let key = fingerprint(&profile(4, 2, None));
+        let key = fingerprint(&profile(4, 2, &[]));
         assert_eq!(key.len(), FINGERPRINT_HEX_LEN);
         assert!(
             key.chars()
@@ -272,21 +295,22 @@ mod tests {
 
     #[test]
     fn distinct_factors_produce_distinct_fingerprints() {
-        let base = fingerprint(&profile(8, 1, Some("Brand A")));
-        assert_ne!(base, fingerprint(&profile(16, 1, Some("Brand A"))));
-        assert_ne!(base, fingerprint(&profile(8, 2, Some("Brand A"))));
-        assert_ne!(base, fingerprint(&profile(8, 1, Some("Brand B"))));
-        assert_ne!(base, fingerprint(&profile(8, 1, None)));
+        let base = fingerprint(&profile(8, 1, &["Model A"]));
+        assert_ne!(base, fingerprint(&profile(16, 1, &["Model A"])));
+        assert_ne!(base, fingerprint(&profile(8, 2, &["Model A"])));
+        assert_ne!(base, fingerprint(&profile(8, 1, &["Model B"])));
+        assert_ne!(base, fingerprint(&profile(8, 1, &["Model A", "Model B"])));
+        assert_ne!(base, fingerprint(&profile(8, 1, &[])));
         assert_ne!(
             base,
-            fingerprint(&profile_with_speeds(8, 1, Some("Brand A"), vec![(3141, 8)])),
+            fingerprint(&profile_with_speeds(8, 1, &["Model A"], vec![(3141, 8)])),
         );
     }
 
     #[test]
     fn distinct_speed_histograms_produce_distinct_fingerprints() {
-        let uniform = profile_with_speeds(8, 1, Some("Brand A"), vec![(3141, 8)]);
-        let hybrid = profile_with_speeds(8, 1, Some("Brand A"), vec![(3141, 4), (6283, 4)]);
+        let uniform = profile_with_speeds(8, 1, &["Model A"], vec![(3141, 8)]);
+        let hybrid = profile_with_speeds(8, 1, &["Model A"], vec![(3141, 4), (6283, 4)]);
         assert_ne!(fingerprint(&uniform), fingerprint(&hybrid));
     }
 
@@ -295,8 +319,8 @@ mod tests {
         // `HardwareProfile::processor_speeds` is public, so a caller can supply the
         // same histogram with its pairs in a different order. Rendering sorts them,
         // so equivalent hardware still hashes to the same fingerprint.
-        let ascending = profile_with_speeds(8, 1, Some("Brand A"), vec![(3141, 4), (6283, 4)]);
-        let descending = profile_with_speeds(8, 1, Some("Brand A"), vec![(6283, 4), (3141, 4)]);
+        let ascending = profile_with_speeds(8, 1, &["Model A"], vec![(3141, 4), (6283, 4)]);
+        let descending = profile_with_speeds(8, 1, &["Model A"], vec![(6283, 4), (3141, 4)]);
         assert_eq!(fingerprint(&ascending), fingerprint(&descending));
     }
 
@@ -305,27 +329,37 @@ mod tests {
         // `HardwareProfile::processor_speeds` is public, so a caller can express the
         // same histogram as split or zero-padded entries. Rendering merges counts
         // per speed and drops zero counts, so those representations hash alike.
-        let canonical = profile_with_speeds(8, 1, Some("Brand A"), vec![(3141, 4)]);
-        let split = profile_with_speeds(8, 1, Some("Brand A"), vec![(3141, 1), (3141, 3)]);
-        let zero_padded = profile_with_speeds(8, 1, Some("Brand A"), vec![(3141, 4), (6283, 0)]);
+        let canonical = profile_with_speeds(8, 1, &["Model A"], vec![(3141, 4)]);
+        let split = profile_with_speeds(8, 1, &["Model A"], vec![(3141, 1), (3141, 3)]);
+        let zero_padded = profile_with_speeds(8, 1, &["Model A"], vec![(3141, 4), (6283, 0)]);
         assert_eq!(fingerprint(&canonical), fingerprint(&split));
         assert_eq!(fingerprint(&canonical), fingerprint(&zero_padded));
     }
 
     #[test]
-    fn brand_whitespace_differences_do_not_change_the_fingerprint() {
+    fn model_order_and_duplicates_do_not_change_the_fingerprint() {
+        // `HardwareProfile::processor_models` is public, so a caller can supply the same
+        // models in a different order or with duplicates. Rendering sorts and dedups them,
+        // so equivalent hardware still hashes to the same fingerprint.
+        let ascending = profile(8, 1, &["Model A", "Model B"]);
+        let shuffled = profile(8, 1, &["Model B", "Model A", "Model A"]);
+        assert_eq!(fingerprint(&ascending), fingerprint(&shuffled));
+    }
+
+    #[test]
+    fn model_whitespace_differences_do_not_change_the_fingerprint() {
         assert_eq!(
-            fingerprint(&profile(8, 1, Some("Intel Xeon  E5"))),
-            fingerprint(&profile(8, 1, Some("  Intel   Xeon E5 "))),
+            fingerprint(&profile(8, 1, &["Intel Xeon  E5"])),
+            fingerprint(&profile(8, 1, &["  Intel   Xeon E5 "])),
         );
     }
 
     #[test]
     fn canonical_is_versioned_and_ordered() {
-        let rendered = canonical(&profile(8, 1, Some("CPU X")));
+        let rendered = canonical(&profile(8, 1, &["CPU X"]));
         assert_eq!(
             rendered,
-            "mk2\nprocessors=8\nmemory_regions=1\ncpu_brand=CPU X\nprocessor_speeds="
+            "mk2\nprocessors=8\nmemory_regions=1\nprocessor_models=CPU X\nprocessor_speeds="
         );
     }
 
@@ -334,36 +368,36 @@ mod tests {
         let rendered = canonical(&profile_with_speeds(
             4,
             1,
-            Some("CPU X"),
+            &["CPU X"],
             vec![(3141, 2), (6283, 2)],
         ));
         assert_eq!(
             rendered,
-            "mk2\nprocessors=4\nmemory_regions=1\ncpu_brand=CPU X\nprocessor_speeds=3141x2,6283x2"
+            "mk2\nprocessors=4\nmemory_regions=1\nprocessor_models=CPU X\nprocessor_speeds=3141x2,6283x2"
         );
     }
 
     #[test]
-    fn canonical_renders_absent_brand_as_empty() {
-        let rendered = canonical(&profile(2, 1, None));
-        assert!(rendered.contains("\ncpu_brand=\n"), "{rendered}");
+    fn canonical_renders_absent_models_as_empty() {
+        let rendered = canonical(&profile(2, 1, &[]));
+        assert!(rendered.contains("\nprocessor_models=\n"), "{rendered}");
     }
 
     #[test]
-    fn normalize_brand_collapses_and_trims_whitespace() {
-        assert_eq!(normalize_brand("  a   b\tc \n"), "a b c");
-        assert_eq!(normalize_brand("   "), "");
+    fn normalize_model_collapses_and_trims_whitespace() {
+        assert_eq!(normalize_model("  a   b\tc \n"), "a b c");
+        assert_eq!(normalize_model("   "), "");
     }
 
     #[test]
     fn resolve_machine_key_uses_fingerprint_without_override() {
-        let hardware = profile(8, 1, Some("CPU X"));
+        let hardware = profile(8, 1, &["CPU X"]);
         assert_eq!(resolve_machine_key(None, &hardware), fingerprint(&hardware));
     }
 
     #[test]
     fn resolve_machine_key_prefers_sanitized_override() {
-        let hardware = profile(8, 1, Some("CPU X"));
+        let hardware = profile(8, 1, &["CPU X"]);
         assert_eq!(
             resolve_machine_key(Some("ci/pool one"), &hardware),
             "ci_pool_one"
@@ -375,21 +409,21 @@ mod tests {
         let described = describe_fingerprint_components(&profile_with_speeds(
             8,
             1,
-            Some("Intel  Xeon  E5"),
+            &["Intel  Xeon  E5", "AMD EPYC"],
             vec![(3141, 6), (6283, 2)],
         ));
         assert_eq!(
             described,
-            "version=mk2, processors=8, memory_regions=1, cpu_brand=\"Intel Xeon E5\", processor_speeds=3141x6,6283x2"
+            "version=mk2, processors=8, memory_regions=1, processor_models=AMD EPYC,Intel Xeon E5, processor_speeds=3141x6,6283x2"
         );
     }
 
     #[test]
     fn describe_components_marks_absent_factors() {
-        let described = describe_fingerprint_components(&profile(4, 2, None));
+        let described = describe_fingerprint_components(&profile(4, 2, &[]));
         assert_eq!(
             described,
-            "version=mk2, processors=4, memory_regions=2, cpu_brand=<none>, processor_speeds=<none>"
+            "version=mk2, processors=4, memory_regions=2, processor_models=<none>, processor_speeds=<none>"
         );
     }
 
@@ -427,20 +461,35 @@ mod tests {
     }
 
     #[test]
-    fn representative_brand_picks_the_first_non_empty_normalized_brand() {
+    fn distinct_models_normalizes_sorts_and_dedups() {
+        // Raw per-processor models arrive in arbitrary order, with duplicates, cosmetic
+        // whitespace and empty entries; the distinct set is normalized and sorted.
+        let models = distinct_models([
+            "  Intel  Xeon  ".to_owned(),
+            "AMD EPYC".to_owned(),
+            "Intel Xeon".to_owned(),
+            String::new(),
+            "   ".to_owned(),
+        ]);
+        assert_eq!(models, vec!["AMD EPYC".to_owned(), "Intel Xeon".to_owned()]);
         assert_eq!(
-            representative_brand([
-                None,
-                Some("   ".to_owned()),
-                Some("  Intel  Xeon  ".to_owned())
-            ]),
-            Some("Intel Xeon".to_owned())
+            distinct_models(std::iter::empty::<String>()),
+            Vec::<String>::new()
         );
-        assert_eq!(representative_brand([None, Some("  ".to_owned())]), None);
+    }
+
+    #[test]
+    fn render_models_joins_sorted_distinct_with_commas() {
         assert_eq!(
-            representative_brand(std::iter::empty::<Option<String>>()),
-            None
+            render_models(&["Intel Xeon".to_owned(), "AMD EPYC".to_owned()]),
+            "AMD EPYC,Intel Xeon"
         );
+        // Duplicates and cosmetic whitespace collapse to a single entry.
+        assert_eq!(
+            render_models(&["AMD EPYC".to_owned(), "  AMD   EPYC ".to_owned()]),
+            "AMD EPYC"
+        );
+        assert_eq!(render_models(&[]), "");
     }
 
     #[test]

@@ -6,6 +6,11 @@ use derive_more::derive::AsRef;
 use crate::pal::{AbstractProcessor, ProcessorFacade};
 use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 
+/// Model string reported for a processor whose model the operating system does not
+/// disclose. The value is metadata for identification only, so a fixed placeholder
+/// spares every caller from inventing its own substitute.
+const UNKNOWN_MODEL: &str = "unknown";
+
 /// A processor present on the system and available to the current process.
 #[derive(AsRef, Clone)]
 pub struct Processor {
@@ -127,19 +132,19 @@ impl Processor {
         self.inner.relative_speed()
     }
 
-    /// The best-effort brand string of the processor, or `None` when the operating system does
-    /// not report one.
+    /// The best-effort model string of the processor.
     ///
-    /// This is intended for *identification* and diagnostics, not comparison. The exact text and
-    /// its availability are platform-specific:
+    /// This is intended for *identification* and diagnostics, not comparison. The exact text is
+    /// platform-specific:
     ///
-    /// * On Linux it is the `model name` field of `/proc/cpuinfo`, which is commonly absent on
-    ///   non-x86 architectures (for example many ARM systems report no `model name`).
+    /// * On Linux it is the `model name` field of `/proc/cpuinfo`.
     /// * On Windows it is the `ProcessorNameString` the firmware records in the registry.
-    /// * On other platforms (including the fallback platform and when running under Miri) it is
-    ///   always `None`.
     ///
-    /// Because the value originates from different sources per platform, never compare a brand read
+    /// When the operating system does not disclose a model (for example many ARM Linux systems
+    /// report no `model name`, and the fallback platform and Miri never report one), this returns
+    /// `"unknown"` so callers always have a string to key on.
+    ///
+    /// Because the value originates from different sources per platform, never compare a model read
     /// on one operating system to one read on another.
     ///
     /// # Example
@@ -150,17 +155,13 @@ impl Processor {
     /// let processors = SystemHardware::current().processors();
     ///
     /// for processor in processors {
-    ///     match processor.brand() {
-    ///         Some(brand) => println!("Processor {} is a {brand}", processor.id()),
-    ///         None => println!("Processor {} has no reported brand", processor.id()),
-    ///     }
+    ///     println!("Processor {} is a {}", processor.id(), processor.model());
     /// }
     /// ```
-    #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
     #[inline]
     #[must_use]
-    pub fn brand(&self) -> Option<&str> {
-        self.inner.brand()
+    pub fn model(&self) -> &str {
+        self.inner.model().unwrap_or(UNKNOWN_MODEL)
     }
 }
 
@@ -219,7 +220,7 @@ mod tests {
             13,
             EfficiencyClass::Efficiency,
             RelativeSpeed::from_raw(3600),
-            Some(std::sync::Arc::from("Example Brand")),
+            Some(std::sync::Arc::from("Example Model")),
         );
 
         let processor = Processor::new(pal_processor.into());
@@ -229,7 +230,7 @@ mod tests {
         assert_eq!(processor.memory_region_id(), 13);
         assert_eq!(processor.efficiency_class(), EfficiencyClass::Efficiency);
         assert_eq!(processor.relative_speed().as_u64(), 3600);
-        assert_eq!(processor.brand(), Some("Example Brand"));
+        assert_eq!(processor.model(), "Example Model");
 
         // A clone is a legit clone.
         let processor_clone = processor.clone();
@@ -253,5 +254,20 @@ mod tests {
         // Debug writes something (anything - as long as it writes something and does not panic).
         let debugged = format!("{processor:?}");
         assert!(!debugged.is_empty());
+    }
+
+    #[test]
+    fn model_falls_back_to_unknown_when_absent() {
+        let pal_processor = FakeProcessor::new(
+            0,
+            0,
+            EfficiencyClass::Performance,
+            RelativeSpeed::from_raw(1),
+            None,
+        );
+
+        let processor = Processor::new(pal_processor.into());
+
+        assert_eq!(processor.model(), "unknown");
     }
 }

@@ -23,15 +23,15 @@ pub(crate) struct FakeProcessor {
     memory_region_id: MemoryRegionId,
     efficiency_class: EfficiencyClass,
     relative_speed: RelativeSpeed,
-    brand: Option<Arc<str>>,
+    model: Option<Arc<str>>,
 }
 
 impl Display for FakeProcessor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "FakeProcessor({} in region {}, {:?}, speed {}, brand {:?})",
-            self.id, self.memory_region_id, self.efficiency_class, self.relative_speed, self.brand
+            "FakeProcessor({} in region {}, {:?}, speed {}, model {:?})",
+            self.id, self.memory_region_id, self.efficiency_class, self.relative_speed, self.model
         )
     }
 }
@@ -43,14 +43,14 @@ impl FakeProcessor {
         memory_region_id: MemoryRegionId,
         efficiency_class: EfficiencyClass,
         relative_speed: RelativeSpeed,
-        brand: Option<Arc<str>>,
+        model: Option<Arc<str>>,
     ) -> Self {
         Self {
             id,
             memory_region_id,
             efficiency_class,
             relative_speed,
-            brand,
+            model,
         }
     }
 }
@@ -72,8 +72,8 @@ impl AbstractProcessor for FakeProcessor {
         self.relative_speed
     }
 
-    fn brand(&self) -> Option<&str> {
-        self.brand.as_deref()
+    fn model(&self) -> Option<&str> {
+        self.model.as_deref()
     }
 }
 
@@ -121,7 +121,7 @@ impl FakePlatform {
                     p.memory_region_id,
                     p.efficiency_class,
                     p.relative_speed,
-                    p.brand.clone(),
+                    p.model.clone(),
                 )
             })
             .collect();
@@ -448,7 +448,7 @@ mod tests {
             2,
             EfficiencyClass::Efficiency,
             RelativeSpeed::from_raw(3600),
-            Some(Arc::from("Test Brand")),
+            Some(Arc::from("Test Model")),
         );
 
         let display = format!("{processor}");
@@ -457,7 +457,7 @@ mod tests {
         assert!(display.contains('2'));
         assert!(display.contains("Efficiency"));
         assert!(display.contains("3600"));
-        assert!(display.contains("Test Brand"));
+        assert!(display.contains("Test Model"));
     }
 
     #[test]
@@ -521,15 +521,15 @@ mod tests {
     }
 
     #[test]
-    fn fake_processor_brand_returns_configured_value() {
-        let with_brand = FakeProcessor::new(
+    fn fake_processor_model_returns_configured_value() {
+        let with_model = FakeProcessor::new(
             0,
             0,
             EfficiencyClass::Performance,
             RelativeSpeed::SYNTHETIC,
-            Some(Arc::from("Fake Brand")),
+            Some(Arc::from("Fake Model")),
         );
-        let without_brand = FakeProcessor::new(
+        let without_model = FakeProcessor::new(
             1,
             0,
             EfficiencyClass::Performance,
@@ -537,8 +537,8 @@ mod tests {
             None,
         );
 
-        assert_eq!(with_brand.brand(), Some("Fake Brand"));
-        assert_eq!(without_brand.brand(), None);
+        assert_eq!(with_model.model(), Some("Fake Model"));
+        assert_eq!(without_model.model(), None);
     }
 
     #[test]
@@ -557,14 +557,14 @@ mod tests {
     }
 
     #[test]
-    fn brand_flows_through_builder() {
+    fn model_flows_through_builder() {
         let builder = HardwareBuilder::new()
-            .processor(ProcessorBuilder::new().id(0).brand("Configured Brand"))
+            .processor(ProcessorBuilder::new().id(0).model("Configured Model"))
             .processor(ProcessorBuilder::new().id(1));
         let backend = FakePlatform::from_builder(&builder);
 
-        // Explicitly configured brand is preserved; the unconfigured one reports no brand.
-        assert_eq!(backend.processors[0].brand(), Some("Configured Brand"));
-        assert_eq!(backend.processors[1].brand(), None);
+        // Explicitly configured model is preserved; the unconfigured one reports no model.
+        assert_eq!(backend.processors[0].model(), Some("Configured Model"));
+        assert_eq!(backend.processors[1].model(), None);
     }
 }

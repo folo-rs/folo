@@ -195,12 +195,12 @@ The goal is a fingerprint equal for pool-equivalent machines and different for g
 different hardware; it is **never** keyed on hostname or serial, since cloud pool nodes
 differ in name but are equivalent. It hashes the stable, pool-equivalent attributes
 available without elevated privileges across platforms — all from the in-workspace
-`many_cpus`: the processor and memory-region counts, a best-effort CPU brand string, and a
-histogram of the per-processor relative speeds (as `(speed, count)` pairs). The speed
-histogram distinguishes machines that agree on their counts and brand but differ in their
-mix of processor speeds (for example a hybrid performance/efficiency core layout versus a
-uniform one). Finer signals such as RAM size were left out for little discriminating value
-in homogeneous CI pools.
+`many_cpus`: the processor and memory-region counts, the distinct processor models present
+(a sorted, deduplicated list), and a histogram of the per-processor relative speeds (as
+`(speed, count)` pairs). The speed histogram distinguishes machines that agree on their
+counts and models but differ in their mix of processor speeds (for example a hybrid
+performance/efficiency core layout versus a uniform one). Finer signals such as RAM size were
+left out for little discriminating value in homogeneous CI pools.
 
 Because the key is persisted and compared across machines and tool versions, it uses a
 **fixed** hash (not a seeded/default hasher) over a version-tagged canonical string,
@@ -210,7 +210,7 @@ the computed fingerprint (it is CLI-only — a committed config would carry a ma
 wrong for some checkouts). The key is computed only for hardware-dependent engines.
 
 The individual factors behind the fingerprint (the version tag, processor and memory-region
-counts, CPU brand, and the per-processor speed histogram) are surfaced for debugging:
+counts, processor models, and the per-processor speed histogram) are surfaced for debugging:
 `collect` and the query commands emit them to standard error under `--verbose`, and the
 standalone `machine-key` command prints the key to standard output (with `--verbose` adding
 the factors to standard error). The
@@ -231,7 +231,7 @@ version, machine key). Git and environment access go through a small abstraction
 logic is unit-testable without a real repo or CI.
 
 The context also carries optional **host-hardware provenance** (`context.machine`): the
-fingerprint factors (processor and memory-region counts, CPU brand, per-processor speed
+fingerprint factors (processor and memory-region counts, processor models, per-processor speed
 histogram) and the auto-detected key they hash to. It is **write-only** — nothing reads it
 back — and exists purely so that a
 later change in a machine key can be traced to the specific factor that moved (for example, a

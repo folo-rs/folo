@@ -1,3 +1,8 @@
+// Only the real Linux and Windows platforms scale OS speed metrics by pi (see
+// `RelativeSpeed::from_os_metric`); everything else reports synthetic speeds, so this import is
+// gated to those builds to avoid an unused-import warning elsewhere (for example under Miri).
+#[cfg(any(test, all(not(miri), any(target_os = "linux", windows))))]
+use std::f64::consts::PI;
 use std::fmt::{self, Display};
 use std::num::NonZero;
 
@@ -83,8 +88,6 @@ impl RelativeSpeed {
     #[cfg(any(test, all(not(miri), any(target_os = "linux", windows))))]
     #[must_use]
     pub(crate) fn from_os_metric(metric: u32) -> Self {
-        use std::f64::consts::PI;
-
         // A u32 scaled by pi is at most about 1.35e10, which is always a non-negative whole number
         // well within u64, so the conversion below neither loses the sign nor overflows.
         #[expect(

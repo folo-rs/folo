@@ -431,9 +431,10 @@ impl InstallCommand {
 #[derive(Args, Debug)]
 struct MachineKeyCommand {
     /// Also emit the individual hardware components that make up the fingerprint
-    /// to standard error (processor count, memory-region count, CPU brand, and
-    /// the fingerprint version), so a change in the key can be traced to which
-    /// factor changed. The key itself always goes to standard output.
+    /// to standard error (processor count, memory-region count, processor models,
+    /// per-processor speed histogram, and the fingerprint version), so a change in
+    /// the key can be traced to which factor changed. The key itself always goes to
+    /// standard output.
     #[arg(long, help_heading = HEADING_ENV)]
     verbose: bool,
 }

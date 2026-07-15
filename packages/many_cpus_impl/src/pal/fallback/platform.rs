@@ -230,10 +230,10 @@ mod tests {
     }
 
     #[test]
-    fn no_processor_has_a_brand() {
+    fn no_processor_has_a_model() {
         let platform = BuildTargetPlatform;
         for processor in platform.get_processors().iter() {
-            assert_eq!(processor.brand(), None);
+            assert_eq!(processor.model(), None);
         }
     }
 

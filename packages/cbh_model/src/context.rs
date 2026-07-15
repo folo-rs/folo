@@ -78,8 +78,11 @@ pub struct MachineInfo {
     pub processors: usize,
     /// Number of NUMA memory regions the host reported.
     pub memory_regions: usize,
-    /// Best-effort CPU brand string (`None` when it could not be determined).
-    pub cpu_brand: Option<String>,
+    /// Distinct processor model strings the host reported, sorted ascending. Empty when
+    /// none could be determined, and defaults to empty when reading older records that
+    /// predate this factor.
+    #[serde(default)]
+    pub processor_models: Vec<String>,
     /// Histogram of the per-processor relative speeds the host reported, as
     /// `(speed, count)` pairs sorted ascending by speed. Empty when no speeds
     /// were reported. Defaults to empty when reading older records that predate
@@ -228,7 +231,7 @@ mod tests {
         with_machine.machine = Some(MachineInfo {
             processors: 8,
             memory_regions: 1,
-            cpu_brand: Some("Test CPU 3000".to_owned()),
+            processor_models: vec!["Test CPU 3000".to_owned()],
             processor_speeds: vec![(3141, 8)],
             fingerprint: "test-fingerprint".to_owned(),
         });

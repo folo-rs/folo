@@ -235,7 +235,7 @@ impl BuildTargetPlatform {
                 memory_region_id: memory_region,
                 efficiency_class,
                 relative_speed: RelativeSpeed::from_os_metric(info.bogomips),
-                brand: info.model_name,
+                model: info.model_name,
                 is_active: is_online,
             }
         });
@@ -293,7 +293,7 @@ impl BuildTargetPlatform {
                             "bogomips" => {
                                 bogomips = value.parse::<f32>().map(|f| f.round() as u32).ok();
                             }
-                            // The processor brand. Absent on many non-x86 architectures, so it is optional.
+                            // The processor model. Absent on many non-x86 architectures, so it is optional.
                             "model name" if !value.is_empty() => {
                                 model_name = Some(Arc::from(value));
                             }
@@ -447,7 +447,7 @@ struct CpuInfo {
     /// cores and any with lower bogomips are considered efficiency cores.
     bogomips: u32,
 
-    /// Best-effort brand from the `model name` field, `None` when the field is absent (as it
+    /// Best-effort model from the `model name` field, `None` when the field is absent (as it
     /// commonly is on non-x86 architectures).
     model_name: Option<Arc<str>>,
 }
@@ -699,10 +699,10 @@ mod tests {
             RelativeSpeed::from_os_metric(3400)
         );
         // The layout simulator reports a `model name` for every processor, which surfaces as the
-        // processor brand.
+        // processor model.
         assert_eq!(
-            p0.as_target().brand.as_deref(),
-            Some("Test Processor Brand")
+            p0.as_target().model.as_deref(),
+            Some("Test Processor Model")
         );
 
         let p1 = &processors[1];
@@ -899,7 +899,7 @@ mod tests {
         for (processor_index, bogomips) in processor_index.iter().zip(bogomips_per_processor.iter())
         {
             writeln!(cpuinfo, "processor       : {processor_index}").unwrap();
-            writeln!(cpuinfo, "model name      : Test Processor Brand").unwrap();
+            writeln!(cpuinfo, "model name      : Test Processor Model").unwrap();
             writeln!(cpuinfo, "bogomips        : {bogomips}").unwrap();
             writeln!(cpuinfo, "whatever        : 123").unwrap();
             writeln!(cpuinfo, "other           : ignored").unwrap();
@@ -1659,8 +1659,8 @@ CPU revision    : 1
             p0.as_target().efficiency_class,
             EfficiencyClass::Performance
         );
-        // This ARM-style cpuinfo has no `model name` field, so no brand is reported.
-        assert_eq!(p0.as_target().brand, None);
+        // This ARM-style cpuinfo has no `model name` field, so no model is reported.
+        assert_eq!(p0.as_target().model, None);
 
         let p1 = &processors[1];
         assert_eq!(p1.as_target().id, 1);
@@ -1672,9 +1672,9 @@ CPU revision    : 1
     }
 
     #[test]
-    fn cpuinfo_with_empty_model_name_reports_no_brand() {
+    fn cpuinfo_with_empty_model_name_reports_no_model() {
         // A `model name` field that is present but blank must be treated as absent rather than
-        // surfacing an empty brand string, so the guard that rejects an empty value matters.
+        // surfacing an empty model string, so the guard that rejects an empty value matters.
         let mut fs = MockFilesystem::new();
 
         let cpuinfo = "processor       : 0
@@ -1712,7 +1712,7 @@ model name      :
         let processors = platform.get_all_processors();
 
         assert_eq!(processors.len(), 1);
-        assert_eq!(processors[0].as_target().brand, None);
+        assert_eq!(processors[0].as_target().model, None);
     }
 
     #[test]
