@@ -1719,7 +1719,7 @@ async fn analyze_criterion_feature_branch_admits_dirty_snapshots() {
 /// commit — so a regression on a since-removed benchmark is not re-flagged.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_excludes_ghost_benchmarks_by_default() {
+async fn analyze_excludes_ghost_benchmarks() {
     let workspace = Workspace::repo(&storage_only_config());
     // `bench_000` runs flat through the tip; `bench_001` climbs into a regression but
     // is dropped from the suite at the tip commit, so it is a ghost there.

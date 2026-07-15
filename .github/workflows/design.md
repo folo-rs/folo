@@ -242,7 +242,7 @@ cleanup path that *deletes* the comment when the PR no longer touches anything b
 Collection is **delta-scoped**: a preflight job diffs the PR against `main` and benchmarks only
 the touched packages, since re-measuring the whole workspace on every PR push would be
 wasteful. Analysis, by contrast, is deliberately **not** package-scoped — yet it stays correctly
-scoped anyway, by construction rather than by a name filter. `analyze` by default considers only
+scoped anyway, by construction rather than by a name filter. `analyze` considers only
 benchmarks **present at the context commit** (the PR head), dropping any "ghost" benchmark with
 no run there *before* detection. Because only the touched packages are collected at the PR's
 branch-unique head commit, only they are present there, so every untouched package is excluded
