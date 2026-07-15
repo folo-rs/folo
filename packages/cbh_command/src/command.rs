@@ -223,11 +223,6 @@ pub struct AnalyzeOptions {
     /// state no longer reflects (a regression that later recovered). Hidden by
     /// default since they need no action.
     pub include_inactive: bool,
-    /// Analyze every benchmark found in the data set, including "ghosts" — ones
-    /// no longer present at the context commit. By default only benchmarks
-    /// measured at the context commit (the current suite) are analyzed, so a
-    /// renamed or removed benchmark is not re-flagged.
-    pub include_ghosts: bool,
     /// Emit detailed diagnostic notes to standard error describing each step.
     pub verbose: bool,
     /// Emit per-stage wall-clock timings to standard error, independent of

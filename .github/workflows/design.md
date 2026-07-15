@@ -243,7 +243,7 @@ Collection is **delta-scoped**: a preflight job runs cargo-delta against `main` 
 the impacted packages — those the PR changed, plus their dependents — since re-measuring the whole
 workspace on every PR push would be wasteful. Analysis, by contrast, is deliberately **not**
 package-scoped — yet it stays correctly scoped anyway, by construction rather than by a name
-filter. `analyze` by default considers only
+filter. `analyze` considers only
 benchmarks **present at the context commit** (the PR head), dropping any "ghost" benchmark with
 no run there *before* detection. Because only the impacted packages are collected at the PR's
 branch-unique head commit, only they are present there, so every other package is excluded
@@ -252,8 +252,8 @@ analyze. Package scoping thus falls out of *what gets collected*, with no need t
 by name, which would in fact be wrong: benchmark identities are engine-dependent (some engines
 identify a series by bare operation name with no package prefix), so a name filter would silently
 drop those series and turn a real regression into a false negative. The PR analysis therefore
-relies on that default ghost exclusion and must never pass `--include-ghosts`, which would
-re-admit every historical benchmark and defeat the scoping. As a side benefit the same filter
+relies on that ghost exclusion, which is unconditional and cannot be turned off. As a side
+benefit the same filter
 also drops a benchmark the PR itself *removed*, so a deletion is never mis-reported as a
 regression.
 

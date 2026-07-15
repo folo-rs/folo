@@ -268,7 +268,7 @@ fn cases() -> Vec<SignalCase> {
             branch: [run_of(200.0, 49), run_of(100.0, 1)].concat(),
             expected_history: Outcome::Rise,
             expected_branch: Outcome::Quiet,
-        }
+        },
     ]
 }
 

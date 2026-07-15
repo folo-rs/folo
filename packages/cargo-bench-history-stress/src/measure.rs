@@ -272,7 +272,6 @@ fn build_options(
         markdown_summary: None,
         include_improvements: true,
         include_inactive: false,
-        include_ghosts: true,
         verbose: false,
         timing,
     }
