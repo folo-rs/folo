@@ -370,7 +370,8 @@ jobs:
           path: ${{ steps.scratch.outputs.dir }}/machine-keys
 
       # the PR head are analyzed) restricts it to exactly the collected packages, so no per-package
-      # filter is needed - the recipe must not pass `--include-ghosts`. See the recipe / design.md.
+      # filter is needed - and the ghost exclusion is unconditional, so it can never be turned off.
+      # See the recipe / design.md.
       # The third argument is the downloaded machine-key directory whose fingerprints scope the
       # analysis.
       - name: Analyze PR benchmark history

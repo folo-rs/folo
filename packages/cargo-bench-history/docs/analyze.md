@@ -27,7 +27,7 @@ reactor-free and unchanged under Miri while still scaling on real hardware.
 flowchart TD
   EXEC["analyze"] --> SD["select data set (the load)"]
   SD --> DS[("series + run tallies + blessings")]
-  DS --> GF["drop ghost benchmarks\n(absent at context commit; unless --include-ghosts)"]
+  DS --> GF["drop ghost benchmarks\n(absent at context commit)"]
   GF --> AB["apply blessings (history re-baseline)"]
   AB --> FC["detect changes (per series)"]
   FC --> SUM["per-set summaries"]
@@ -39,7 +39,7 @@ else is bookkeeping. The **ghost filter** between the load and detect is a cheap
 per-series pass: it drops every reconstructed series whose benchmark has no run at the
 context commit (the analyzed tip), so a benchmark that no longer exists is not re-flagged.
 It runs before blessings and detection so ghosts never enter the false-discovery
-correction; `--include-ghosts` skips it. Each analysis mode (`history`, `branch`) is a
+correction. Each analysis mode (`history`, `branch`) is a
 separate
 invocation with its own load — there is no dataset cache across modes — and the mode is
 auto-detected once per run from git topology.

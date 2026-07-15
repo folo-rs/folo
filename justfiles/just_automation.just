@@ -239,9 +239,9 @@ gh-analyze-bench-history dir keydir:
 # a touched package. The scoping is instead enforced by `analyze`'s DEFAULT ghost exclusion: it
 # analyzes only benchmarks present at the context commit (HEAD, the PR head), and only the collected
 # (touched) packages have a run there, so every untouched package is dropped as a "ghost" before
-# detection - for EVERY engine. This recipe therefore MUST NOT pass `--include-ghosts`: that flag
-# re-admits every historical benchmark in the store and would defeat the scoping. As a bonus the
-# same default also drops a benchmark this PR removed, so a deletion is never mis-flagged as a
+# detection - for EVERY engine. This exclusion is unconditional and cannot be turned off, so the
+# scoping can never be accidentally defeated. As a bonus the
+# same filter also drops a benchmark this PR removed, so a deletion is never mis-flagged as a
 # regression. See .github/workflows/design.md for the full invariant.
 #
 # {{dir}} is a scratch directory OUTSIDE the repo checkout (the `analyze` job passes the runner temp
