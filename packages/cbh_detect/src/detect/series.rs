@@ -1159,7 +1159,7 @@ mod tests {
     fn retain_present_at_context_empties_when_the_context_has_no_runs() {
         // c2 is an analyzed commit that carries no runs. Every benchmark is a ghost,
         // so the list empties — the caller turns this into the "collect at the
-        // context commit / --include-ghosts" hint.
+        // context commit" hint.
         let objects = vec![
             clean_multi("c0", 100, &[("pkga", 10.0)]),
             clean_multi("c1", 200, &[("pkga", 11.0)]),

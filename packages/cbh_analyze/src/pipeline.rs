@@ -197,16 +197,13 @@ where
 
     let mut series = dataset.series;
 
-    // Ghost filtering (default): analyze only benchmarks that still exist at the
-    // context commit. A benchmark that appears only for past commits — renamed,
-    // removed, or replaced — is a "ghost"; re-flagging it is noise. Dropping
-    // ghosts *before* detection also keeps them out of the false-discovery-rate
+    // Ghost filtering: analyze only benchmarks that still exist at the context
+    // commit. A benchmark that appears only for past commits — renamed, removed,
+    // or replaced — is a "ghost"; re-flagging it is noise. Dropping ghosts
+    // *before* detection also keeps them out of the false-discovery-rate
     // correction, so a removed benchmark cannot dilute the correction for real
-    // ones. `--include-ghosts` opts out and analyzes every benchmark in the data
-    // set. Presence is read from the raw points, independent of re-baselining.
-    let ghosts_excluded = if options.include_ghosts {
-        0
-    } else {
+    // ones. Presence is read from the raw points, independent of re-baselining.
+    let ghosts_excluded = {
         let ghost_started = Instant::now();
         let ghosts = retain_present_at_context(&mut series, &dataset.tip_commit);
         for (set, id) in &ghosts {
@@ -340,8 +337,7 @@ fn all_ghosts_hint(tip_commit: &str) -> String {
         "Runs were analyzed, but every benchmark was filtered as a ghost — none is \
          present at the context commit {}. This usually means the context commit has \
         no stored runs (collect at the context commit), or its benchmark set differs \
-        from history. Pass --include-ghosts to analyze every benchmark, including \
-        removed ones.",
+        from history.",
         short_commit(tip_commit)
     )
 }
@@ -575,18 +571,6 @@ mod tests {
 
     fn options() -> AnalyzeOptions {
         AnalyzeOptions::default()
-    }
-
-    /// Options that also analyze ghost benchmarks — ones absent at the context
-    /// commit. Several counting/faceting fixtures seed history that stops short of
-    /// the `linear_git` tip (`c3` carries no runs), so the default ghost filter
-    /// would empty the analysis; these tests exercise loading and tallying over the
-    /// full data set, not tip-presence, so they opt the filter off.
-    fn ghost_options() -> AnalyzeOptions {
-        AnalyzeOptions {
-            include_ghosts: true,
-            ..AnalyzeOptions::default()
-        }
     }
 
     /// A fixed clock anchor for the history-mode default `--since` window in unit
@@ -982,9 +966,12 @@ mod tests {
     #[test]
     fn per_set_report_counts_runs_and_series_independently() {
         let storage = MemoryStorage::new();
-        // Set A — callgrind/linux/synthetic: three runs (c0..c2), each carrying two
+        // Both sets run through the `linear_git` tip (`c3`) so neither benchmark is a
+        // ghost there and the always-on tip filter keeps every series.
+        //
+        // Set A — callgrind/linux/synthetic: three runs (c1..c3), each carrying two
         // metrics so the set reconstructs two distinct series.
-        for index in 0..3 {
+        for index in 1..4 {
             let commit = format!("c{index}");
             let second = i64::from(index);
             store(
@@ -993,10 +980,10 @@ mod tests {
                 &two_metric_set(second, &commit, 100.0, 200.0),
             );
         }
-        // Set B — callgrind/darwin/synthetic: two runs (c0..c1), each carrying one
+        // Set B — callgrind/darwin/synthetic: two runs (c2..c3), each carrying one
         // metric so the set reconstructs a single series. Distinct run AND series
         // counts from set A make an `==`/`!=` swap in either per-set tally observable.
-        for index in 0..2 {
+        for index in 2..4 {
             let commit = format!("c{index}");
             let second = i64::from(index);
             store(
@@ -1007,7 +994,7 @@ mod tests {
         }
 
         let git = linear_git();
-        let (report, _, _) = analyze_json(&git, &storage, "folo", &ghost_options());
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &options());
 
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         let sets = parsed["sets"].as_array().unwrap();
@@ -1056,7 +1043,7 @@ mod tests {
     }
 
     #[test]
-    fn a_ghost_benchmark_is_excluded_by_default_and_kept_with_the_flag() {
+    fn a_ghost_benchmark_is_excluded() {
         // `kept` is measured through the tip (c0..c3); `ghost` disappears after c2.
         // The tip is c3, so `ghost` is no longer part of the current suite there.
         let storage = MemoryStorage::new();
@@ -1082,8 +1069,8 @@ mod tests {
         );
         let git = linear_git();
 
-        // Default: the ghost is filtered out before detection, and the verbose trail
-        // names it and the context commit it is absent from.
+        // The ghost is filtered out before detection, and the verbose trail names it
+        // and the context commit it is absent from.
         let (report, _, reporter) = analyze_json(&git, &storage, "folo", &options());
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["ghosts_excluded"], 1, "{report}");
@@ -1098,18 +1085,12 @@ mod tests {
             "{:?}",
             reporter.notes()
         );
-
-        // --include-ghosts analyzes both benchmarks and drops nothing.
-        let (report, _, _) = analyze_json(&git, &storage, "folo", &ghost_options());
-        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-        assert_eq!(parsed["ghosts_excluded"], 0, "{report}");
-        assert_eq!(parsed["series"], 2, "both benchmarks analyzed, {report}");
     }
 
     #[test]
     fn an_all_ghosts_analysis_emits_the_dedicated_hint() {
         // Every benchmark disappears before the tip (data stops at c2, tip is c3), so
-        // the default filter empties the analysis. The empty outcome must read as an
+        // the filter empties the analysis. The empty outcome must read as an
         // all-ghosts case, distinct from a bare "no data".
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
@@ -1124,7 +1105,10 @@ mod tests {
         assert_eq!(parsed["runs"], 3, "the runs still loaded, {report}");
         let hint = parsed["hint"].as_str().unwrap_or_default();
         assert!(hint.contains("filtered as a ghost"), "{report}");
-        assert!(hint.contains("--include-ghosts"), "{report}");
+        assert!(
+            hint.contains("context commit"),
+            "the hint names the context commit: {report}"
+        );
     }
 
     #[test]
@@ -1538,18 +1522,19 @@ mod tests {
     fn target_triple_facet_selects_the_windows_set() {
         // Two sets differing only by triple; an explicit `--target-triple` reports
         // just the matching one, even though the auto-detected default is Linux.
+        // Both are seeded at the `linear_git` tip (`c3`) so the tip filter keeps them.
         let storage = MemoryStorage::new();
-        store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
+        store(&storage, &clean_key("c3"), &ir_set(3, "c3", 100.0));
         store(
             &storage,
-            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/c0/clean.json",
-            &ir_set(0, "c0", 100.0),
+            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/c3/clean.json",
+            &ir_set(3, "c3", 100.0),
         );
         let git = linear_git();
 
         let opts = AnalyzeOptions {
             target_triple: vec!["x86_64-pc-windows-msvc".to_owned()],
-            ..ghost_options()
+            ..options()
         };
         let (report, _, _) = analyze_json(&git, &storage, "folo", &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
@@ -1564,18 +1549,19 @@ mod tests {
     #[test]
     fn target_triple_facet_selects_one_set() {
         // Two sets differing only by triple; `--target-triple` reports just the one.
+        // Both are seeded at the `linear_git` tip (`c3`) so the tip filter keeps them.
         let storage = MemoryStorage::new();
-        store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
+        store(&storage, &clean_key("c3"), &ir_set(3, "c3", 100.0));
         store(
             &storage,
-            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/c0/clean.json",
-            &ir_set(0, "c0", 100.0),
+            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/c3/clean.json",
+            &ir_set(3, "c3", 100.0),
         );
         let git = linear_git();
 
         let opts = AnalyzeOptions {
             target_triple: vec!["x86_64-unknown-linux-gnu".to_owned()],
-            ..ghost_options()
+            ..options()
         };
         let (report, _, _) = analyze_json(&git, &storage, "folo", &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
@@ -1589,16 +1575,18 @@ mod tests {
 
     #[test]
     fn two_sets_produce_two_report_sections() {
+        // Both sets are seeded at the `linear_git` tip (`c3`) so the tip filter keeps
+        // each and every partition is reported.
         let storage = MemoryStorage::new();
-        store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
+        store(&storage, &clean_key("c3"), &ir_set(3, "c3", 100.0));
         store(
             &storage,
-            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/c0/clean.json",
-            &ir_set(0, "c0", 100.0),
+            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/c3/clean.json",
+            &ir_set(3, "c3", 100.0),
         );
         let git = linear_git();
 
-        let (report, _, _) = analyze_json(&git, &storage, "folo", &ghost_options());
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &options());
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["sets"].as_array().unwrap().len(), 2, "{report}");
     }

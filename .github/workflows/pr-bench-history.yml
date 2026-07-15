@@ -352,11 +352,6 @@ jobs:
           restore-keys: |
             bench-history-cache-
 
-      # Renders report.md (full Markdown), report.json (full JSON), summary.md (the condensed
-      # top-findings Markdown) and notable.txt into the scratch directory, in BRANCH mode (PR head
-      # vs origin/main), including improvements as well as regressions. Findings never fail the
-      # recipe (the tool always exits 0); the PR comment is advisory, not a gate. Analysis is
-      # deliberately run UNSCOPED: `analyze`'s default ghost-exclusion (only benchmarks present at
       # Download every collect leg's machine-key file (one per-platform artifact) into a single
       # directory so the analysis can thread the EXACT fingerprints collected this run into its
       # `--machine-key` filter. The default (no merge-multiple) keeps one subdirectory per artifact;
@@ -369,8 +364,14 @@ jobs:
           pattern: pr-bench-history-machine-key-*
           path: ${{ steps.scratch.outputs.dir }}/machine-keys
 
+      # Renders report.md (full Markdown), report.json (full JSON), summary.md (the condensed
+      # top-findings Markdown) and notable.txt into the scratch directory, in BRANCH mode (PR head
+      # vs origin/main), including improvements as well as regressions. Findings never fail the
+      # recipe (the tool always exits 0); the PR comment is advisory, not a gate. Analysis is
+      # deliberately run UNSCOPED: `analyze`'s always-on ghost-exclusion (only benchmarks present at
       # the PR head are analyzed) restricts it to exactly the collected packages, so no per-package
-      # filter is needed - the recipe must not pass `--include-ghosts`. See the recipe / design.md.
+      # filter is needed - and the ghost exclusion is unconditional, so it can never be turned off.
+      # See the recipe / design.md.
       # The third argument is the downloaded machine-key directory whose fingerprints scope the
       # analysis.
       - name: Analyze PR benchmark history
