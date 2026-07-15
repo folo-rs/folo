@@ -2,7 +2,7 @@ use std::hint::black_box;
 use std::mem::offset_of;
 use std::num::NonZero;
 use std::ptr::NonNull;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use folo_ffi::NativeBuffer;
 use itertools::Itertools;
@@ -83,6 +83,7 @@ impl Platform for BuildTargetPlatform {
         let efficiency_classes = self.get_processor_efficiency_classes();
         let memory_regions = self.get_processor_memory_regions();
         let relative_speeds = self.get_processor_relative_speeds();
+        let brands = self.get_processor_brands();
         let allowed_processors = self.processors_allowed_by_job_constraints();
 
         // We are required to return all the processors ordered by the processor ID.
@@ -114,6 +115,8 @@ impl Platform for BuildTargetPlatform {
 
                 let relative_speed = *relative_speeds.get(processor_id as usize).expect("we expect to have the relative speed for every processor ID unless the platform lied to us at some point");
 
+                let cpu_brand = brands.get(processor_id as usize).expect("we expect to have the brand slot for every processor ID unless the platform lied to us at some point").clone();
+
                 Some(ProcessorImpl::new(
                     group_index
                         .try_into()
@@ -123,6 +126,7 @@ impl Platform for BuildTargetPlatform {
                     memory_region_index,
                     efficiency_class,
                     relative_speed,
+                    cpu_brand,
                 ))
             })
         ).expect(
@@ -610,12 +614,28 @@ impl BuildTargetPlatform {
         // The bindings surface each processor's nominal maximum clock frequency (MHz) by reading
         // the values Windows records in the registry for every logical processor across all
         // processor groups. This is a passive read that never changes any thread's affinity. The
-        // MHz value is surfaced directly as the relative speed; processors the platform reports no
-        // value for (0 MHz) map to the synthetic minimum via `RelativeSpeed::from_raw()`.
+        // MHz value is scaled into the abstract relative-speed domain by `from_os_metric`;
+        // processors the platform reports no value for (0 MHz) map to the synthetic minimum.
         self.bindings
             .get_processor_max_mhz(self.max_processor_count())
             .into_iter()
-            .map(RelativeSpeed::from_raw)
+            .map(RelativeSpeed::from_os_metric)
+            .collect_vec()
+            .into_boxed_slice()
+    }
+
+    /// Gets the CPU brand strings of all processors on the system, ordered by processor ID.
+    /// This also returns data for offline processors. Processors the platform reports no brand
+    /// for map to `None`.
+    #[must_use]
+    fn get_processor_brands(&self) -> Box<[Option<Arc<str>>]> {
+        // The bindings surface each processor's brand string by reading the `ProcessorNameString`
+        // value Windows records in the registry for every logical processor across all processor
+        // groups. This is a passive read that never changes any thread's affinity.
+        self.bindings
+            .get_processor_name_strings(self.max_processor_count())
+            .into_iter()
+            .map(|name| name.map(Arc::from))
             .collect_vec()
             .into_boxed_slice()
     }
@@ -971,8 +991,40 @@ mod tests {
         assert_eq!(processors.len(), 4);
 
         for (index, processor) in processors.iter().enumerate() {
-            let expected = (u32::try_from(index).unwrap() + 1) * 1000;
-            assert_eq!(processor.as_target().relative_speed.as_u32(), expected);
+            let expected_mhz = (u32::try_from(index).unwrap() + 1) * 1000;
+            assert_eq!(
+                processor.as_target().relative_speed,
+                RelativeSpeed::from_os_metric(expected_mhz)
+            );
+        }
+    }
+
+    #[test]
+    fn get_all_processors_reports_cpu_brand() {
+        // A simple single-group system with 4 logical processors. The simulated layout reports the
+        // same brand string for every processor, which must surface unchanged as the processor's
+        // CPU brand.
+        let mut bindings = MockBindings::new();
+        simulate_processor_layout(
+            &mut bindings,
+            [4],
+            [4],
+            [vec![0, 0, 0, 0]],
+            [vec![0, 0, 0, 0]],
+            None,
+        );
+
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
+
+        let processors = platform.get_all_processors();
+
+        assert_eq!(processors.len(), 4);
+
+        for processor in &processors {
+            assert_eq!(
+                processor.as_target().cpu_brand.as_deref(),
+                Some("Test Processor Brand")
+            );
         }
     }
 
@@ -1000,8 +1052,11 @@ mod tests {
         assert_eq!(processors.len(), 4);
 
         for (index, processor) in processors.iter().enumerate() {
-            let expected = (u32::try_from(index).unwrap() + 1) * 1000;
-            assert_eq!(processor.as_target().relative_speed.as_u32(), expected);
+            let expected_mhz = (u32::try_from(index).unwrap() + 1) * 1000;
+            assert_eq!(
+                processor.as_target().relative_speed,
+                RelativeSpeed::from_os_metric(expected_mhz)
+            );
         }
     }
 
@@ -1398,6 +1453,7 @@ mod tests {
             &efficiency_ratings_per_group,
         );
         simulate_get_relative_speeds(bindings);
+        simulate_get_brands(bindings);
 
         // Transform the booleans to IDs.
         let job_affinitized_processors_per_group =
@@ -1471,6 +1527,21 @@ mod tests {
                             u32::try_from(processor_id).expect("processor ID fits in u32");
                         (processor_id + 1) * 1000
                     })
+                    .collect_vec()
+            });
+    }
+
+    /// Registers a default `get_processor_name_strings` expectation that reports the same brand
+    /// string for every processor ID, mirroring a homogeneous machine. The binding surfaces one
+    /// value per processor across all processor groups, indexed directly by processor ID, so this
+    /// lets tests observe the brand flowing through `get_all_processors()` for processors in every
+    /// group.
+    fn simulate_get_brands(bindings: &mut MockBindings) {
+        bindings
+            .expect_get_processor_name_strings()
+            .returning(move |max_processor_count| {
+                std::iter::repeat_with(|| Some("Test Processor Brand".to_string()))
+                    .take(max_processor_count)
                     .collect_vec()
             });
     }

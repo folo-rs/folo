@@ -158,6 +158,14 @@ impl Bindings for BindingsFacade {
             Self::Mock(bindings) => bindings.get_processor_max_mhz(max_processor_count),
         }
     }
+
+    fn get_processor_name_strings(&self, max_processor_count: usize) -> Vec<Option<String>> {
+        match self {
+            Self::Target(bindings) => bindings.get_processor_name_strings(max_processor_count),
+            #[cfg(test)]
+            Self::Mock(bindings) => bindings.get_processor_name_strings(max_processor_count),
+        }
+    }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.

@@ -41,4 +41,10 @@ impl AbstractProcessor for ProcessorImpl {
         // We do not have real speed information, so every processor reports the synthetic value.
         RelativeSpeed::SYNTHETIC
     }
+
+    #[cfg_attr(test, mutants::skip)] // Some mutations are not testable due to simulated nature of this PAL.
+    fn cpu_brand(&self) -> Option<&str> {
+        // We do not have real brand information on the fallback platform.
+        None
+    }
 }

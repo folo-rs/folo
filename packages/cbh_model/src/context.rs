@@ -80,6 +80,12 @@ pub struct MachineInfo {
     pub memory_regions: usize,
     /// Best-effort CPU brand string (`None` when it could not be determined).
     pub cpu_brand: Option<String>,
+    /// Histogram of the per-processor relative speeds the host reported, as
+    /// `(speed, count)` pairs sorted ascending by speed. Empty when no speeds
+    /// were reported. Defaults to empty when reading older records that predate
+    /// this factor.
+    #[serde(default)]
+    pub processor_speeds: Vec<(u64, usize)>,
     /// The hardware fingerprint these factors hash to: the host's auto-detected
     /// identity, recorded regardless of the machine key the run was partitioned
     /// under (see the type-level note).
@@ -223,6 +229,7 @@ mod tests {
             processors: 8,
             memory_regions: 1,
             cpu_brand: Some("Test CPU 3000".to_owned()),
+            processor_speeds: vec![(3141, 8)],
             fingerprint: "d3ddd69dcf3b84ea".to_owned(),
         });
         let json = serde_json::to_string(&with_machine).unwrap();

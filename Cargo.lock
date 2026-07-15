@@ -646,7 +646,6 @@ dependencies = [
  "many_cpus",
  "mutants",
  "sha2",
- "tokio",
 ]
 
 [[package]]

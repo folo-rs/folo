@@ -1,7 +1,7 @@
 //! Fake hardware backend implementation.
 
 use std::fmt::{self, Display};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use std::thread::ThreadId;
 
 use foldhash::{HashMap, HashMapExt};
@@ -17,12 +17,13 @@ use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 ///
 /// This is distinct from the test-only `FakeProcessor` in `pal/mocks.rs` because it needs
 /// to be available when `test-util` feature is enabled, not just in test mode.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct FakeProcessor {
     id: ProcessorId,
     memory_region_id: MemoryRegionId,
     efficiency_class: EfficiencyClass,
     relative_speed: RelativeSpeed,
+    cpu_brand: Option<Arc<str>>,
 }
 
 impl Display for FakeProcessor {
@@ -42,12 +43,14 @@ impl FakeProcessor {
         memory_region_id: MemoryRegionId,
         efficiency_class: EfficiencyClass,
         relative_speed: RelativeSpeed,
+        cpu_brand: Option<Arc<str>>,
     ) -> Self {
         Self {
             id,
             memory_region_id,
             efficiency_class,
             relative_speed,
+            cpu_brand,
         }
     }
 }
@@ -67,6 +70,10 @@ impl AbstractProcessor for FakeProcessor {
 
     fn relative_speed(&self) -> RelativeSpeed {
         self.relative_speed
+    }
+
+    fn cpu_brand(&self) -> Option<&str> {
+        self.cpu_brand.as_deref()
     }
 }
 
@@ -114,6 +121,7 @@ impl FakePlatform {
                     p.memory_region_id,
                     p.efficiency_class,
                     p.relative_speed,
+                    p.cpu_brand.clone(),
                 )
             })
             .collect();
@@ -199,7 +207,7 @@ impl Platform for FakePlatform {
         let facades: Vec<ProcessorFacade> = self
             .processors
             .iter()
-            .map(|p| ProcessorFacade::Fake(*p))
+            .map(|p| ProcessorFacade::Fake(p.clone()))
             .collect();
 
         NonEmpty::from_vec(facades).expect("at least one processor was configured")
@@ -368,13 +376,14 @@ mod tests {
 
         // Create a NonEmpty with a single processor facade.
         let processor = backend.get_all_processors().head;
+        let processor_id = processor.id();
         let processors = NonEmpty::singleton(processor);
 
         backend.pin_current_thread_to(&processors);
 
         // After pinning, current_processor_id should return the pinned processor.
         let id = backend.current_processor_id();
-        assert_eq!(id, processor.id());
+        assert_eq!(id, processor_id);
     }
 
     #[test]
@@ -395,8 +404,10 @@ mod tests {
         // Pin to processor 0 and 1.
         let all = backend.get_all_processors();
         let mut iter = all.iter();
-        let p0 = *iter.next().unwrap();
-        let p1 = *iter.next().unwrap();
+        let p0 = iter.next().unwrap().clone();
+        let p1 = iter.next().unwrap().clone();
+        let p0_id = p0.id();
+        let p1_id = p1.id();
         let pinned = NonEmpty::from((p0, vec![p1]));
 
         backend.pin_current_thread_to(&pinned);
@@ -404,8 +415,8 @@ mod tests {
         let thread_processors = backend.current_thread_processors();
 
         assert_eq!(thread_processors.len(), 2);
-        assert!(thread_processors.iter().any(|&id| id == p0.id()));
-        assert!(thread_processors.iter().any(|&id| id == p1.id()));
+        assert!(thread_processors.iter().any(|&id| id == p0_id));
+        assert!(thread_processors.iter().any(|&id| id == p1_id));
     }
 
     #[test]
@@ -415,9 +426,11 @@ mod tests {
 
         // Pin to processors 2 and 3 only.
         let all = backend.get_all_processors();
-        let processors_vec: Vec<_> = all.iter().copied().collect();
-        let p2 = processors_vec[2];
-        let p3 = processors_vec[3];
+        let processors_vec: Vec<_> = all.iter().cloned().collect();
+        let p2 = processors_vec[2].clone();
+        let p3 = processors_vec[3].clone();
+        let p2_id = p2.id();
+        let p3_id = p3.id();
         let pinned = NonEmpty::from((p2, vec![p3]));
 
         backend.pin_current_thread_to(&pinned);
@@ -425,7 +438,7 @@ mod tests {
         let id = backend.current_processor_id();
 
         // The returned ID must be one of the pinned processors.
-        assert!(id == p2.id() || id == p3.id());
+        assert!(id == p2_id || id == p3_id);
     }
 
     #[test]
@@ -435,6 +448,7 @@ mod tests {
             2,
             EfficiencyClass::Efficiency,
             RelativeSpeed::from_raw(3600),
+            None,
         );
 
         let display = format!("{processor}");
@@ -447,8 +461,20 @@ mod tests {
 
     #[test]
     fn fake_processor_efficiency_class_returns_configured_value() {
-        let perf = FakeProcessor::new(0, 0, EfficiencyClass::Performance, RelativeSpeed::SYNTHETIC);
-        let eff = FakeProcessor::new(1, 0, EfficiencyClass::Efficiency, RelativeSpeed::SYNTHETIC);
+        let perf = FakeProcessor::new(
+            0,
+            0,
+            EfficiencyClass::Performance,
+            RelativeSpeed::SYNTHETIC,
+            None,
+        );
+        let eff = FakeProcessor::new(
+            1,
+            0,
+            EfficiencyClass::Efficiency,
+            RelativeSpeed::SYNTHETIC,
+            None,
+        );
 
         assert_eq!(perf.efficiency_class(), EfficiencyClass::Performance);
         assert_eq!(eff.efficiency_class(), EfficiencyClass::Efficiency);
@@ -461,6 +487,7 @@ mod tests {
             0,
             EfficiencyClass::Performance,
             RelativeSpeed::SYNTHETIC,
+            None,
         );
 
         assert_eq!(processor.id(), 42);
@@ -468,8 +495,13 @@ mod tests {
 
     #[test]
     fn fake_processor_memory_region_id_returns_configured_value() {
-        let processor =
-            FakeProcessor::new(0, 7, EfficiencyClass::Performance, RelativeSpeed::SYNTHETIC);
+        let processor = FakeProcessor::new(
+            0,
+            7,
+            EfficiencyClass::Performance,
+            RelativeSpeed::SYNTHETIC,
+            None,
+        );
 
         assert_eq!(processor.memory_region_id(), 7);
     }
@@ -481,9 +513,31 @@ mod tests {
             0,
             EfficiencyClass::Performance,
             RelativeSpeed::from_raw(2400),
+            None,
         );
 
-        assert_eq!(processor.relative_speed().as_u32(), 2400);
+        assert_eq!(processor.relative_speed().as_u64(), 2400);
+    }
+
+    #[test]
+    fn fake_processor_cpu_brand_returns_configured_value() {
+        let with_brand = FakeProcessor::new(
+            0,
+            0,
+            EfficiencyClass::Performance,
+            RelativeSpeed::SYNTHETIC,
+            Some(Arc::from("Fake Brand")),
+        );
+        let without_brand = FakeProcessor::new(
+            1,
+            0,
+            EfficiencyClass::Performance,
+            RelativeSpeed::SYNTHETIC,
+            None,
+        );
+
+        assert_eq!(with_brand.cpu_brand(), Some("Fake Brand"));
+        assert_eq!(without_brand.cpu_brand(), None);
     }
 
     #[test]
@@ -494,10 +548,22 @@ mod tests {
         let backend = FakePlatform::from_builder(&builder);
 
         // Explicitly configured speed is preserved; the unconfigured one falls back to synthetic.
-        assert_eq!(backend.processors[0].relative_speed().as_u32(), 1800);
+        assert_eq!(backend.processors[0].relative_speed().as_u64(), 1800);
         assert_eq!(
             backend.processors[1].relative_speed(),
             RelativeSpeed::SYNTHETIC
         );
+    }
+
+    #[test]
+    fn cpu_brand_flows_through_builder() {
+        let builder = HardwareBuilder::new()
+            .processor(ProcessorBuilder::new().id(0).cpu_brand("Configured Brand"))
+            .processor(ProcessorBuilder::new().id(1));
+        let backend = FakePlatform::from_builder(&builder);
+
+        // Explicitly configured brand is preserved; the unconfigured one reports no brand.
+        assert_eq!(backend.processors[0].cpu_brand(), Some("Configured Brand"));
+        assert_eq!(backend.processors[1].cpu_brand(), None);
     }
 }

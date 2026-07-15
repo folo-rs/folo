@@ -71,6 +71,7 @@ mod tests {
             0,
             EfficiencyClass::Performance,
             RelativeSpeed::SYNTHETIC,
+            None,
         );
         let p7 = ProcessorImpl::new(
             0,
@@ -79,6 +80,7 @@ mod tests {
             0,
             EfficiencyClass::Performance,
             RelativeSpeed::SYNTHETIC,
+            None,
         );
 
         mask.add(&p0);
@@ -96,6 +98,7 @@ mod tests {
             0,
             EfficiencyClass::Performance,
             RelativeSpeed::SYNTHETIC,
+            None,
         );
 
         mask.add(&p0_g1);
@@ -115,6 +118,7 @@ mod tests {
             0,
             EfficiencyClass::Performance,
             RelativeSpeed::SYNTHETIC,
+            None,
         );
         let p_g1 = ProcessorImpl::new(
             1,
@@ -123,6 +127,7 @@ mod tests {
             0,
             EfficiencyClass::Performance,
             RelativeSpeed::SYNTHETIC,
+            None,
         );
 
         mask.add(&p_g0);
@@ -155,6 +160,7 @@ mod tests {
             0,
             EfficiencyClass::Performance,
             RelativeSpeed::SYNTHETIC,
+            None,
         );
         let p3 = ProcessorImpl::new(
             0,
@@ -163,6 +169,7 @@ mod tests {
             0,
             EfficiencyClass::Performance,
             RelativeSpeed::SYNTHETIC,
+            None,
         );
         let p7 = ProcessorImpl::new(
             0,
@@ -171,6 +178,7 @@ mod tests {
             0,
             EfficiencyClass::Performance,
             RelativeSpeed::SYNTHETIC,
+            None,
         );
 
         mask.add(&p0);

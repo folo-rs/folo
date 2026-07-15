@@ -99,7 +99,7 @@ impl EnvironmentProbe for SystemProbe {
 
     #[cfg_attr(test, mutants::skip)] // Queries the host hardware; the fingerprint logic is tested.
     async fn hardware(&self) -> HardwareProfile {
-        system_profile().await
+        system_profile()
     }
 }
 

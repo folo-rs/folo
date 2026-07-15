@@ -1,15 +1,19 @@
 use std::fmt::Display;
+use std::sync::Arc;
 
 use crate::pal::AbstractProcessor;
 use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 
 /// A processor present on the system and available to the current process.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct ProcessorImpl {
     pub(crate) id: ProcessorId,
     pub(crate) memory_region_id: MemoryRegionId,
     pub(crate) efficiency_class: EfficiencyClass,
     pub(crate) relative_speed: RelativeSpeed,
+
+    /// Best-effort CPU brand from the `model name` field of `/proc/cpuinfo`, `None` when absent.
+    pub(crate) cpu_brand: Option<Arc<str>>,
 
     pub(crate) is_active: bool,
 }
@@ -35,6 +39,10 @@ impl AbstractProcessor for ProcessorImpl {
 
     fn relative_speed(&self) -> RelativeSpeed {
         self.relative_speed
+    }
+
+    fn cpu_brand(&self) -> Option<&str> {
+        self.cpu_brand.as_deref()
     }
 }
 
@@ -68,19 +76,22 @@ mod tests {
             memory_region_id: 3,
             efficiency_class: EfficiencyClass::Performance,
             relative_speed: RelativeSpeed::from_raw(4890),
+            cpu_brand: Some(Arc::from("Test CPU 3000")),
             is_active: true,
         };
 
         assert_eq!(processor.id(), 2);
         assert_eq!(processor.memory_region_id(), 3);
         assert_eq!(processor.efficiency_class(), EfficiencyClass::Performance);
-        assert_eq!(processor.relative_speed().as_u32(), 4890);
+        assert_eq!(processor.relative_speed().as_u64(), 4890);
+        assert_eq!(processor.cpu_brand(), Some("Test CPU 3000"));
 
         let processor2 = ProcessorImpl {
             id: 2,
             memory_region_id: 3,
             efficiency_class: EfficiencyClass::Performance,
             relative_speed: RelativeSpeed::from_raw(4890),
+            cpu_brand: Some(Arc::from("Test CPU 3000")),
             is_active: true,
         };
 
@@ -91,10 +102,12 @@ mod tests {
             memory_region_id: 3,
             efficiency_class: EfficiencyClass::Performance,
             relative_speed: RelativeSpeed::from_raw(4890),
+            cpu_brand: None,
             is_active: true,
         };
 
         assert_ne!(processor, processor3);
+        assert_eq!(processor3.cpu_brand(), None);
         assert!(processor < processor3);
         assert!(processor3 > processor);
     }
@@ -106,6 +119,7 @@ mod tests {
             memory_region_id: 2,
             efficiency_class: EfficiencyClass::Efficiency,
             relative_speed: RelativeSpeed::from_raw(2400),
+            cpu_brand: None,
             is_active: true,
         };
 
@@ -128,6 +142,7 @@ mod tests {
             memory_region_id: 1,
             efficiency_class: EfficiencyClass::Performance,
             relative_speed: RelativeSpeed::from_raw(3600),
+            cpu_brand: None,
             is_active: true,
         };
 

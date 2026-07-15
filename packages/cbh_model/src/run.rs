@@ -173,6 +173,7 @@ mod tests {
             processors: 8,
             memory_regions: 1,
             cpu_brand: Some("Test CPU 3000".to_owned()),
+            processor_speeds: vec![(3141, 8)],
             fingerprint: "d3ddd69dcf3b84ea".to_owned(),
         });
         context

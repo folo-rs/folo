@@ -126,6 +126,42 @@ impl Processor {
     pub fn relative_speed(&self) -> RelativeSpeed {
         self.inner.relative_speed()
     }
+
+    /// The best-effort CPU brand string of the processor, or `None` when the operating system does
+    /// not report one.
+    ///
+    /// This is intended for *identification* and diagnostics, not comparison. The exact text and
+    /// its availability are platform-specific:
+    ///
+    /// * On Linux it is the `model name` field of `/proc/cpuinfo`, which is commonly absent on
+    ///   non-x86 architectures (for example many ARM systems report no `model name`).
+    /// * On Windows it is the `ProcessorNameString` the firmware records in the registry.
+    /// * On other platforms (including the fallback platform and when running under Miri) it is
+    ///   always `None`.
+    ///
+    /// Because the value originates from different sources per platform, never compare a brand read
+    /// on one operating system to one read on another.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use many_cpus::SystemHardware;
+    ///
+    /// let processors = SystemHardware::current().processors();
+    ///
+    /// for processor in processors {
+    ///     match processor.cpu_brand() {
+    ///         Some(brand) => println!("Processor {} is a {brand}", processor.id()),
+    ///         None => println!("Processor {} has no reported brand", processor.id()),
+    ///     }
+    /// }
+    /// ```
+    #[cfg_attr(test, mutants::skip)] // Trivial delegation, do not waste time on mutation.
+    #[inline]
+    #[must_use]
+    pub fn cpu_brand(&self) -> Option<&str> {
+        self.inner.cpu_brand()
+    }
 }
 
 impl PartialEq for Processor {
@@ -183,6 +219,7 @@ mod tests {
             13,
             EfficiencyClass::Efficiency,
             RelativeSpeed::from_raw(3600),
+            Some(std::sync::Arc::from("Example Brand")),
         );
 
         let processor = Processor::new(pal_processor.into());
@@ -191,7 +228,8 @@ mod tests {
         assert_eq!(processor.id(), 42);
         assert_eq!(processor.memory_region_id(), 13);
         assert_eq!(processor.efficiency_class(), EfficiencyClass::Efficiency);
-        assert_eq!(processor.relative_speed().as_u32(), 3600);
+        assert_eq!(processor.relative_speed().as_u64(), 3600);
+        assert_eq!(processor.cpu_brand(), Some("Example Brand"));
 
         // A clone is a legit clone.
         let processor_clone = processor.clone();

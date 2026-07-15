@@ -1,10 +1,11 @@
 use std::fmt::Display;
+use std::sync::Arc;
 
 use crate::pal::AbstractProcessor;
 use crate::pal::windows::{ProcessorGroupIndex, ProcessorIndexInGroup};
 use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct ProcessorImpl {
     pub(crate) group_index: ProcessorGroupIndex,
     pub(crate) index_in_group: ProcessorIndexInGroup,
@@ -17,6 +18,8 @@ pub(crate) struct ProcessorImpl {
     pub(crate) efficiency_class: EfficiencyClass,
 
     pub(crate) relative_speed: RelativeSpeed,
+
+    pub(crate) cpu_brand: Option<Arc<str>>,
 }
 
 impl ProcessorImpl {
@@ -27,6 +30,7 @@ impl ProcessorImpl {
         memory_region_id: MemoryRegionId,
         efficiency_class: EfficiencyClass,
         relative_speed: RelativeSpeed,
+        cpu_brand: Option<Arc<str>>,
     ) -> Self {
         Self {
             group_index,
@@ -35,6 +39,7 @@ impl ProcessorImpl {
             memory_region_id,
             efficiency_class,
             relative_speed,
+            cpu_brand,
         }
     }
 }
@@ -64,6 +69,10 @@ impl AbstractProcessor for ProcessorImpl {
 
     fn relative_speed(&self) -> RelativeSpeed {
         self.relative_speed
+    }
+
+    fn cpu_brand(&self) -> Option<&str> {
+        self.cpu_brand.as_deref()
     }
 }
 
@@ -99,12 +108,14 @@ mod tests {
             3,
             EfficiencyClass::Performance,
             RelativeSpeed::from_raw(3600),
+            Some(Arc::from("Test Brand")),
         );
 
         assert_eq!(processor.id(), 2);
         assert_eq!(processor.memory_region_id(), 3);
         assert_eq!(processor.efficiency_class(), EfficiencyClass::Performance);
-        assert_eq!(processor.relative_speed().as_u32(), 3600);
+        assert_eq!(processor.relative_speed().as_u64(), 3600);
+        assert_eq!(processor.cpu_brand(), Some("Test Brand"));
 
         let processor2 = ProcessorImpl::new(
             0,
@@ -113,6 +124,7 @@ mod tests {
             3,
             EfficiencyClass::Performance,
             RelativeSpeed::from_raw(3600),
+            Some(Arc::from("Test Brand")),
         );
         assert_eq!(processor, processor2);
 
@@ -123,6 +135,7 @@ mod tests {
             3,
             EfficiencyClass::Performance,
             RelativeSpeed::from_raw(3600),
+            Some(Arc::from("Test Brand")),
         );
         assert_ne!(processor, processor3);
         assert!(processor < processor3);
@@ -139,6 +152,7 @@ mod tests {
             0,
             EfficiencyClass::Performance,
             RelativeSpeed::SYNTHETIC,
+            None,
         );
 
         let display_output = processor.to_string();
@@ -162,6 +176,7 @@ mod tests {
             1,
             EfficiencyClass::Efficiency,
             RelativeSpeed::SYNTHETIC,
+            None,
         );
 
         let processor_ref: &ProcessorImpl = processor.as_ref();
@@ -169,5 +184,6 @@ mod tests {
         assert_eq!(processor_ref.id, processor.id);
         assert_eq!(processor_ref.group_index, processor.group_index);
         assert_eq!(processor_ref.index_in_group, processor.index_in_group);
+        assert_eq!(processor_ref.cpu_brand(), None);
     }
 }

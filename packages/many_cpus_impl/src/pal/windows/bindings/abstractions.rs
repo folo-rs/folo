@@ -48,5 +48,16 @@ pub(crate) trait Bindings: Debug + Send + Sync + 'static {
     /// changing the affinity or any other runtime state of the calling thread.
     fn get_processor_max_mhz(&self, max_processor_count: usize) -> Vec<u32>;
 
+    /// Returns the brand string of each logical processor, indexed by processor ID.
+    ///
+    /// The returned `Vec` always has length exactly `max_processor_count`, with entry `i` holding
+    /// the value for processor ID `i` (covering every processor ID in `0..max_processor_count`).
+    /// Processors for which the platform reports no brand (for example offline processors) hold
+    /// `None`.
+    ///
+    /// This is a passive read that covers every processor across all processor groups without
+    /// changing the affinity or any other runtime state of the calling thread.
+    fn get_processor_name_strings(&self, max_processor_count: usize) -> Vec<Option<String>>;
+
     fn get_current_thread_legacy_group_affinity(&self) -> GROUP_AFFINITY;
 }

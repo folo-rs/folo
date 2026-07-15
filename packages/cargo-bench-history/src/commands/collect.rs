@@ -480,6 +480,7 @@ fn machine_info(hardware: &HardwareProfile) -> MachineInfo {
         processors: hardware.processors,
         memory_regions: hardware.memory_regions,
         cpu_brand: hardware.cpu_brand.clone(),
+        processor_speeds: hardware.processor_speeds.clone(),
         fingerprint: resolve_machine_key(None, hardware),
     }
 }
@@ -1328,6 +1329,7 @@ mod tests {
                     processors: 8,
                     memory_regions: 1,
                     cpu_brand: Some("Test CPU 3000".to_owned()),
+                    processor_speeds: vec![(3141, 8)],
                 },
             }
         }

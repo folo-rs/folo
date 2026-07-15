@@ -56,6 +56,7 @@ mod tests {
             processors,
             memory_regions,
             cpu_brand: brand.map(ToOwned::to_owned),
+            processor_speeds: Vec::new(),
         }
     }
 

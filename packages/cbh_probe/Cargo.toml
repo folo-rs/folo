@@ -21,11 +21,9 @@ cbh_git = { workspace = true }
 cbh_model = { workspace = true }
 many_cpus = { workspace = true }
 sha2 = { workspace = true }
-tokio = { workspace = true, features = ["fs", "process"] }
 
 [dev-dependencies]
 mutants = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true

@@ -4,10 +4,14 @@ use std::hash::Hash;
 use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 
 pub(crate) trait AbstractProcessor:
-    Clone + Copy + Debug + Display + Eq + Hash + PartialEq + Send
+    Clone + Debug + Display + Eq + Hash + PartialEq + Send
 {
     fn id(&self) -> ProcessorId;
     fn memory_region_id(&self) -> MemoryRegionId;
     fn efficiency_class(&self) -> EfficiencyClass;
     fn relative_speed(&self) -> RelativeSpeed;
+
+    /// The best-effort CPU brand string of the processor, or `None` when the platform does not
+    /// report one.
+    fn cpu_brand(&self) -> Option<&str>;
 }

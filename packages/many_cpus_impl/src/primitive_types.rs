@@ -54,25 +54,53 @@ pub enum EfficiencyClass {
 /// systems because the underlying platform metrics differ:
 ///
 /// * On Linux the value is derived from the `bogomips` reported by `/proc/cpuinfo`.
-/// * On Windows the value is the nominal maximum clock frequency in MHz.
+/// * On Windows the value is derived from the nominal maximum clock frequency (MHz).
 /// * On platforms without a suitable metric (including the fallback platform and when running
 ///   under Miri) every processor reports the same synthetic value.
 ///
-/// Because the metrics differ, never compare a `RelativeSpeed` obtained on one machine to one
-/// obtained on another, and never interpret the number as a physical unit.
+/// Where a real metric is available it is scaled by an abstract constant before being stored, so
+/// the number deliberately does not equal any raw MHz-style figure. Never interpret the value as a
+/// physical unit and never compare a `RelativeSpeed` obtained on one machine to one obtained on
+/// another.
 ///
 /// [1]: crate::Processor::id
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct RelativeSpeed(NonZero<u32>);
+pub struct RelativeSpeed(NonZero<u64>);
 
 impl RelativeSpeed {
     /// The value reported when no real speed information is available for a processor.
-    pub(crate) const SYNTHETIC: Self = Self(NonZero::<u32>::MIN);
+    pub(crate) const SYNTHETIC: Self = Self(NonZero::<u64>::MIN);
 
-    /// Constructs a value from a raw platform metric, mapping a missing metric (zero) to the
-    /// synthetic minimum so the value is always non-zero.
+    /// Constructs a value from a raw OS-reported speed metric, such as the Linux `bogomips` or the
+    /// Windows nominal maximum clock frequency in MHz.
+    ///
+    /// A `RelativeSpeed` is an abstract relative indicator, not a physical clock-frequency reading,
+    /// so the raw metric is scaled by pi before it is stored. This removes any obvious numeric
+    /// resemblance to the underlying MHz-style figure while preserving the ordering between
+    /// processors. A missing metric (zero) stays zero and maps to the synthetic minimum.
+    // Only the real Linux and Windows platforms feed OS metrics in; the fallback (used on other
+    // platforms and under Miri) reports synthetic speeds, so gate this out there to avoid dead code.
+    #[cfg(any(test, all(not(miri), any(target_os = "linux", windows))))]
     #[must_use]
-    pub(crate) fn from_raw(value: u32) -> Self {
+    pub(crate) fn from_os_metric(metric: u32) -> Self {
+        use std::f64::consts::PI;
+
+        // A u32 scaled by pi is at most about 1.35e10, which is always a non-negative whole number
+        // well within u64, so the conversion below neither loses the sign nor overflows.
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a u32 scaled by pi is non-negative and far below u64::MAX"
+        )]
+        let scaled = (f64::from(metric) * PI) as u64;
+
+        Self::from_raw(scaled)
+    }
+
+    /// Constructs a value from a raw numeric value, mapping a missing value (zero) to the synthetic
+    /// minimum so the value is always non-zero.
+    #[must_use]
+    pub(crate) fn from_raw(value: u64) -> Self {
         match NonZero::new(value) {
             Some(value) => Self(value),
             None => Self::SYNTHETIC,
@@ -84,7 +112,7 @@ impl RelativeSpeed {
     /// This is only meaningful for comparing or identifying processors on the same system - see
     /// the [type-level documentation][Self] for details.
     #[must_use]
-    pub fn as_u32(self) -> u32 {
+    pub fn as_u64(self) -> u64 {
         self.0.get()
     }
 }
@@ -109,13 +137,26 @@ mod tests {
 
     #[test]
     fn relative_speed_from_raw_preserves_positive_value() {
-        assert_eq!(RelativeSpeed::from_raw(4890).as_u32(), 4890);
+        assert_eq!(RelativeSpeed::from_raw(4890).as_u64(), 4890);
     }
 
     #[test]
     fn relative_speed_from_raw_maps_zero_to_synthetic() {
         assert_eq!(RelativeSpeed::from_raw(0), RelativeSpeed::SYNTHETIC);
-        assert_eq!(RelativeSpeed::from_raw(0).as_u32(), 1);
+        assert_eq!(RelativeSpeed::from_raw(0).as_u64(), 1);
+    }
+
+    #[test]
+    fn relative_speed_from_os_metric_scales_by_pi() {
+        // The raw metric is multiplied by pi, then truncated: 1000 * pi = 3141.59..., 2000 * pi =
+        // 6283.18.... This deliberately makes the stored number unlike the raw MHz-style figure.
+        assert_eq!(RelativeSpeed::from_os_metric(1000).as_u64(), 3141);
+        assert_eq!(RelativeSpeed::from_os_metric(2000).as_u64(), 6283);
+    }
+
+    #[test]
+    fn relative_speed_from_os_metric_maps_zero_to_synthetic() {
+        assert_eq!(RelativeSpeed::from_os_metric(0), RelativeSpeed::SYNTHETIC);
     }
 
     #[test]

@@ -293,8 +293,9 @@ impl SystemHardware {
         let mut all_processors = vec![None; max_processor_count];
 
         for processor in all_pal_processors {
+            let processor_id = processor.id() as usize;
             *all_processors
-                .get_mut(processor.id() as usize)
+                .get_mut(processor_id)
                 .expect("encountered processor with ID above max_processor_id") =
                 Some(Processor::new(processor));
         }
