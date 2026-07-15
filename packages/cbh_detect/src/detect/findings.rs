@@ -138,8 +138,8 @@ impl Default for AnalysisConfig {
 pub enum AnalysisMode {
     /// Long-range trend and change-point analysis over a base branch's history.
     History,
-    /// Latest-state comparison of a feature branch against its base, ignoring the
-    /// intermediate stages the branch passed through.
+    /// Latest-commit comparison of a feature branch's tip against its base,
+    /// ignoring the intermediate commits the branch passed through.
     Branch,
 }
 
@@ -258,11 +258,10 @@ pub struct Finding {
     pub confidence: f64,
     /// Commit the change is attributed to, if known.
     pub commit: Option<String>,
-    /// Where, within a feature branch, the latest regime began — set only in
-    /// branch mode when a within-branch flip is located, naming the commit the
-    /// move starts at, so a "got worse late in the branch" finding can point at it.
-    /// In history mode, an inactive (recovered) finding sets this to the commit at
-    /// which the level returned to baseline.
+    /// Where a recovered spike returned to baseline: set only in history mode on an
+    /// inactive finding, naming the commit at which the level came back down. Branch
+    /// mode never sets it — it judges the tip commit alone, with no within-branch
+    /// flip to attribute.
     pub flipped_at: Option<String>,
     /// Whether the change is still reflected in the latest measured state. An active
     /// finding's current level still differs from baseline; an inactive one has
@@ -719,48 +718,28 @@ fn split_at_merge_base(
     (base, branch)
 }
 
-/// The branch's *latest regime* and where it began.
+/// The branch tip's latest measured state.
 ///
-/// A feature branch may have changed direction partway through (improved, then
-/// regressed). We care only about its current state, so a Pettitt split on the
-/// branch values isolates the most recent regime; the split is accepted only when
-/// the within-branch move is practically meaningful, otherwise the whole branch is
-/// one regime with no flip point. Too few points to split leaves the branch whole.
-fn latest_regime<'a>(
-    branch: &[&'a SeriesPoint],
-    config: &AnalysisConfig,
-) -> (Vec<&'a SeriesPoint>, Option<String>) {
-    let whole = || (branch.to_vec(), None);
-    if branch.len() < 3 {
-        return whole();
-    }
-    let values: Vec<f64> = branch.iter().map(|point| point.value).collect();
-    let Some(change) = stats::pettitt(&values) else {
-        return whole();
+/// A feature branch's own history says nothing about what merging it into the base
+/// will do — only its tip commit lands there — so branch mode judges the newest
+/// commit's latest state, not a reconstructed within-branch regime. `branch` is
+/// sorted by `(topo_index, dirty, object_ordinal)`, so that state is the contiguous
+/// suffix sharing the last point's commit *and* dirty flag: the tip's committed
+/// (clean) runs, or — when the working tree is dirty — the dirty snapshots taken on
+/// top of it, which supersede the clean run as the newer state. Either way any
+/// repeated (`--best-of`) observations in that cohort are kept. Mixing a clean tip
+/// run with the dirty snapshots above it would blur two distinct states into one
+/// spuriously noisy sample, so only the latest cohort is returned. An empty branch
+/// yields no points.
+fn latest_commit_points<'a>(branch: &[&'a SeriesPoint]) -> Vec<&'a SeriesPoint> {
+    let Some(&last) = branch.last() else {
+        return Vec::new();
     };
-    let tau = change.index;
-    let (Some(before), Some(after)) = (values.get(..tau), values.get(tau..)) else {
-        return whole();
-    };
-    // `pettitt` reports a split index in `1..=n-1`, so both sides are non-empty;
-    // an empty side would short-circuit on the `median` guard below regardless.
-    let (Some(before_median), Some(after_median)) = (stats::median(before), stats::median(after))
-    else {
-        return whole();
-    };
-    // Only treat the split as a real direction change when the within-branch move
-    // clears the practical floor; otherwise the branch is a single regime.
-    if relative_delta_of(after_median - before_median, before_median).abs()
-        < config.practical_relative
-    {
-        return whole();
-    }
-    let after_points = branch
-        .get(tau..)
-        .map(<[&SeriesPoint]>::to_vec)
-        .unwrap_or_default();
-    let flipped_at = branch.get(tau).and_then(|&point| owned_commit(point));
-    (after_points, flipped_at)
+    branch
+        .iter()
+        .filter(|point| point.topo_index == last.topo_index && point.dirty == last.dirty)
+        .copied()
+        .collect()
 }
 
 /// Compares a `before` sample against an `after` sample on the same series and, if
@@ -784,7 +763,6 @@ fn compare_samples(
     config: &AnalysisConfig,
     practical_floor: f64,
     commit: Option<String>,
-    flipped_at: Option<String>,
 ) -> Option<Candidate> {
     let before_values: Vec<f64> = before.iter().map(|point| point.value).collect();
     let after_values: Vec<f64> = after.iter().map(|point| point.value).collect();
@@ -853,7 +831,7 @@ fn compare_samples(
             relative_delta,
             confidence: (1.0 - effective_p).clamp(0.0, 1.0),
             commit,
-            flipped_at,
+            flipped_at: None,
             active: true,
             active_from: 0,
             blessed_at: None,
@@ -867,12 +845,13 @@ fn compare_samples(
     })
 }
 
-/// Evaluates a series in *branch* mode: compares the branch's latest state against
+/// Evaluates a series in *branch* mode: compares the branch's tip commit against
 /// the recent base level, in either direction.
 ///
-/// The branch's intermediate stages are ignored — only its latest regime matters
-/// (see [`latest_regime`]). A new benchmark introduced on the branch (no base-side
-/// points) or an empty branch yields nothing, since there is no baseline to compare.
+/// The branch's intermediate commits are ignored — only its newest commit's runs
+/// matter (see [`latest_commit_points`]), since that is the state a merge lands in
+/// the base. A new benchmark introduced on the branch (no base-side points) or an
+/// empty branch yields nothing, since there is no baseline to compare.
 fn evaluate_branch(
     series: &Series,
     config: &AnalysisConfig,
@@ -882,7 +861,7 @@ fn evaluate_branch(
     // An empty base or branch yields nothing: `compare_samples` returns `None` once
     // either sample's median is absent, so no explicit emptiness guard is needed.
     let base_window = recent(&base, config.compare_window);
-    let (latest_points, flipped_at) = latest_regime(&branch, config);
+    let latest_points = latest_commit_points(&branch);
     let commit = branch.last().and_then(|&point| owned_commit(point));
     compare_samples(
         series,
@@ -891,7 +870,6 @@ fn evaluate_branch(
         config,
         config.branch_practical_relative,
         commit,
-        flipped_at,
     )
 }
 
@@ -2100,9 +2078,10 @@ mod tests {
     }
 
     #[test]
-    fn branch_mode_reports_the_latest_state_after_an_intermediate_flip() {
-        // The branch first improved (80) then regressed (130): we report the latest
-        // state (worse than the 100 base) and point at where it flipped.
+    fn branch_mode_reports_the_tip_state_after_an_intermediate_change() {
+        // The branch first improved (80) then regressed (130): only the tip commit
+        // lands in the base, so we report the tip state (worse than the 100 base)
+        // and attribute nothing to the branch's own intermediate history.
         let series = placed_series(&[
             (0, 100.0, false),
             (1, 100.0, false),
@@ -2117,8 +2096,9 @@ mod tests {
         let finding = only(branch_changes(&[series], Some(2)));
         assert_eq!(finding.direction, Direction::Regression);
         assert_eq!(finding.latest, 130.0);
-        // The flip is attributed to the first commit of the worsened regime.
-        assert_eq!(finding.flipped_at.as_deref(), Some("commit6"));
+        // Branch mode judges the tip commit alone, so no within-branch flip is
+        // attributed.
+        assert_eq!(finding.flipped_at, None);
     }
 
     #[test]
@@ -2315,15 +2295,7 @@ mod tests {
         let series = wall_series(&[100.0], 1.0);
         let before_refs: Vec<&SeriesPoint> = before.iter().collect();
         let after_refs: Vec<&SeriesPoint> = after.iter().collect();
-        compare_samples(
-            &series,
-            &before_refs,
-            &after_refs,
-            config,
-            floor,
-            None,
-            None,
-        )
+        compare_samples(&series, &before_refs, &after_refs, config, floor, None)
     }
 
     /// Compares the `before` and `after` samples with the default configuration.
@@ -2412,30 +2384,41 @@ mod tests {
     }
 
     #[test]
-    fn latest_regime_splits_a_three_point_branch_at_a_real_flip() {
-        // Three points is the minimum to split; `branch.len() < 3` must be a strict
-        // `<` (a `<=`/`==` mutant would keep the branch whole). The 100 -> 130 jump
-        // is a real within-branch flip, so the latest regime is the two 130 points.
-        let series = series_of(&[100.0, 130.0, 130.0]);
+    fn latest_commit_points_returns_only_the_newest_commit() {
+        // Two branch commits (topo 3 and topo 5); the newer carries two clean runs
+        // (a `--best-of` pair). Only the newest commit's runs are returned — the tip
+        // is what a merge lands in the base.
+        let series = placed_series(&[(3, 100.0, false), (5, 130.0, false), (5, 130.0, false)]);
         let branch: Vec<&SeriesPoint> = series.points.iter().collect();
-        let (points, flipped) = latest_regime(&branch, &AnalysisConfig::default());
-        assert_eq!(points.len(), 2);
-        assert!(flipped.is_some());
+        let latest = latest_commit_points(&branch);
+        assert_eq!(latest.len(), 2);
+        assert!(latest.iter().all(|point| point.topo_index == 5));
     }
 
     #[test]
-    fn latest_regime_splits_when_the_within_branch_move_is_exactly_at_the_floor() {
-        // The within-branch move (100 -> 103) is exactly the practical floor, so the
-        // split stands: the floor gate must be a strict `<`, not a `<=`.
-        let series = series_of(&[100.0, 103.0, 103.0]);
+    fn latest_commit_points_prefers_dirty_snapshots_over_the_clean_tip() {
+        // The tip commit (topo 5) has a committed clean run plus two dirty snapshots
+        // taken on top of it. The dirty snapshots are the newer state, so only they
+        // are returned — mixing in the clean run would blur two states into one.
+        let series = placed_series(&[
+            (3, 100.0, false),
+            (5, 130.0, false),
+            (5, 131.0, true),
+            (5, 131.0, true),
+        ]);
         let branch: Vec<&SeriesPoint> = series.points.iter().collect();
-        let config = AnalysisConfig {
-            practical_relative: 3.0 / 100.0,
-            ..AnalysisConfig::default()
-        };
-        let (points, flipped) = latest_regime(&branch, &config);
-        assert_eq!(points.len(), 2);
-        assert!(flipped.is_some());
+        let latest = latest_commit_points(&branch);
+        assert_eq!(latest.len(), 2);
+        assert!(
+            latest
+                .iter()
+                .all(|point| point.topo_index == 5 && point.dirty)
+        );
+    }
+
+    #[test]
+    fn latest_commit_points_of_an_empty_branch_is_empty() {
+        assert!(latest_commit_points(&[]).is_empty());
     }
 
     #[test]

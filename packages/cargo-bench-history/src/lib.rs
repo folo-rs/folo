@@ -114,7 +114,7 @@
 //! of benchmarks. Findings are *advisory*: the exit code reflects only whether the
 //! analysis ran, never what it found. Downstream automation reads the
 //! machine-readable signal from the `json` report — `mode`, the boolean `notable`
-//! (any finding survived), each finding's `direction`/`flipped_at`, and the full
+//! (any finding survived), each finding's `direction`, and the full
 //! per-finding `series` for charting. See [Analyze modes](#analyze-modes) below.
 //!
 //! ## `list`
@@ -221,9 +221,9 @@
 //!   `--include-improvements` is given. A spike that has since recovered is
 //!   suppressed by default; `--include-inactive` surfaces such resolved findings.
 //! * **branch** — "how does my feature compare" (selected for a feature branch, or
-//!   a dirty base checkout). It judges the branch by its **latest** state versus the
-//!   base, reporting both regressions and improvements; the finding's `flipped_at`
-//!   names the commit a regime began at.
+//!   a dirty base checkout). It judges the branch by its **tip commit** versus the
+//!   base — the intermediate commits are ignored, since only the tip lands in the
+//!   base on merge — reporting both regressions and improvements.
 //!
 //! # Configuration
 //!
