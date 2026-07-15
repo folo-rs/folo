@@ -973,7 +973,9 @@ mod tests {
     fn get_all_processors_reports_relative_speed() {
         // A simple single-group system with 4 logical processors. The simulated layout reports a
         // distinct nominal clock speed per processor - processor `i` reports `(i + 1) * 1000` MHz -
-        // which must surface unchanged as the processor's relative speed.
+        // which is scaled by `RelativeSpeed::from_os_metric` into the processor's relative speed.
+        // The raw MHz figure is deliberately scaled (by pi), not surfaced unchanged, so the
+        // assertion below compares against `from_os_metric` rather than the raw MHz value.
         let mut bindings = MockBindings::new();
         simulate_processor_layout(
             &mut bindings,

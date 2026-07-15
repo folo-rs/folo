@@ -30,8 +30,12 @@ impl Display for FakeProcessor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "FakeProcessor({} in region {}, {:?}, speed {})",
-            self.id, self.memory_region_id, self.efficiency_class, self.relative_speed
+            "FakeProcessor({} in region {}, {:?}, speed {}, brand {:?})",
+            self.id,
+            self.memory_region_id,
+            self.efficiency_class,
+            self.relative_speed,
+            self.cpu_brand
         )
     }
 }
@@ -448,7 +452,7 @@ mod tests {
             2,
             EfficiencyClass::Efficiency,
             RelativeSpeed::from_raw(3600),
-            None,
+            Some(Arc::from("Test Brand")),
         );
 
         let display = format!("{processor}");
@@ -457,6 +461,7 @@ mod tests {
         assert!(display.contains('2'));
         assert!(display.contains("Efficiency"));
         assert!(display.contains("3600"));
+        assert!(display.contains("Test Brand"));
     }
 
     #[test]
