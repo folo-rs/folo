@@ -9,10 +9,45 @@
 //! (see [`ReporterExt::announce`](cbh_diag::ReporterExt::announce)), so a plain run
 //! never hides a value it defaulted.
 
-use cbh_detect::DiscriminantSetQuery;
+use cbh_detect::{DiscriminantSetQuery, FacetFilter};
+use cbh_diag::{Reporter, ReporterExt};
 use jiff::Timestamp;
 
 use super::facets::describe_effective_facets;
+
+/// The always-on notice explaining that machine-independent (`synthetic`)
+/// benchmarks are included alongside this machine's data — or `None` when it does
+/// not apply.
+///
+/// It applies exactly when the machine-key facet was auto-detected: a `synthetic`
+/// set carries no machine key, so it is included whatever the detected key is.
+/// Naming that keeps a plain run from silently mixing in data the user did not
+/// obviously ask for.
+pub(crate) fn machine_independent_inclusion_notice(
+    facets: &DiscriminantSetQuery,
+) -> Option<&'static str> {
+    matches!(facets.machine_key, FacetFilter::Auto(_)).then_some(
+        "Machine-independent benchmarks targeting the 'synthetic' machine key are also \
+         included when using auto-detected machine key",
+    )
+}
+
+/// Emits the always-on effective-selection `summary`, then the
+/// machine-independent-inclusion notice when it applies (see
+/// [`machine_independent_inclusion_notice`]).
+///
+/// Every command's selection announcement flows through here so the notice appears
+/// on its own line wherever the summary does.
+pub(crate) fn announce_selection(
+    reporter: &dyn Reporter,
+    facets: &DiscriminantSetQuery,
+    summary: &str,
+) {
+    reporter.announce(summary);
+    if let Some(notice) = machine_independent_inclusion_notice(facets) {
+        reporter.announce(notice);
+    }
+}
 
 /// The resolved base branch a run split history against, for the announcement.
 pub(crate) struct AnnouncedBase<'a> {
@@ -186,6 +221,34 @@ mod tests {
         assert!(
             no_cutoff.contains("; since=none (no default look-back)"),
             "{no_cutoff}"
+        );
+    }
+
+    #[test]
+    fn machine_key_auto_triggers_the_synthetic_inclusion_notice() {
+        // Auto-detected machine key: synthetic sets ride along, so the notice fires.
+        let auto = DiscriminantSetQuery {
+            engine: FacetFilter::All,
+            target_triple: FacetFilter::Auto("x86_64-pc-windows-msvc".to_owned()),
+            machine_key: FacetFilter::Auto("abcd".to_owned()),
+        };
+        assert_eq!(
+            machine_independent_inclusion_notice(&auto),
+            Some(
+                "Machine-independent benchmarks targeting the 'synthetic' machine key are also \
+                 included when using auto-detected machine key"
+            )
+        );
+
+        // Explicit or unconstrained machine key: no auto default to explain.
+        let explicit = DiscriminantSetQuery {
+            machine_key: FacetFilter::Explicit(nonempty!["abcd".to_owned()]),
+            ..DiscriminantSetQuery::default()
+        };
+        assert_eq!(machine_independent_inclusion_notice(&explicit), None);
+        assert_eq!(
+            machine_independent_inclusion_notice(&DiscriminantSetQuery::default()),
+            None
         );
     }
 

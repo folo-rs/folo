@@ -56,6 +56,7 @@ pub async fn execute(
     workspace_dir: &Path,
     clock_override: Option<Clock>,
     storage_override: Option<StorageFacade>,
+    auto_override: Option<AutoFacets>,
 ) -> Result<(RenderedReports, usize), AnalyzeError> {
     // Per-object notes follow `--verbose`; stage timings are emitted under either
     // `--verbose` or the programmatic `timing` flag (the stress harness sets the
@@ -82,7 +83,7 @@ pub async fn execute(
     storage.synchronize_cache(&project_id, &reporter).await?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
-    let auto = detect_auto_facets().await?;
+    let auto = resolve_auto_facets(auto_override).await?;
 
     let now = resolve_now(clock_override);
     let color = should_colorize(
@@ -147,6 +148,22 @@ pub(crate) async fn detect_auto_facets() -> Result<AutoFacets, AnalyzeError> {
         triple: toolchain.host.unwrap_or_default(),
         machine_key: resolve_machine_key(None, &hardware),
     })
+}
+
+/// Resolves the auto-detect facets for a query command, preferring an injected
+/// override over probing the host.
+///
+/// Production passes `None` and probes via [`detect_auto_facets`]; the binary's
+/// integration tests inject deterministic [`AutoFacets`] through the `Overrides`
+/// test hook so the suite is independent of the host it runs on.
+#[cfg_attr(test, mutants::skip)] // Trivial override-or-probe selection; the probe path is host-dependent.
+pub(crate) async fn resolve_auto_facets(
+    auto_override: Option<AutoFacets>,
+) -> Result<AutoFacets, AnalyzeError> {
+    match auto_override {
+        Some(auto) => Ok(auto),
+        None => detect_auto_facets().await,
+    }
 }
 
 /// Storage- and git-generic `analyze`: facet-filter the stored objects, resolve
@@ -994,7 +1011,14 @@ mod tests {
         }
 
         let git = linear_git();
-        let (report, _, _) = analyze_json(&git, &storage, "folo", &options());
+        // The two sets live under different triples, and synthetic sets obey the
+        // target-triple facet, so an auto-detected triple would report only its own.
+        // Widen to `all` to exercise the per-set tallies across both partitions.
+        let opts = AnalyzeOptions {
+            target_triple: vec!["all".to_owned()],
+            ..options()
+        };
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &opts);
 
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         let sets = parsed["sets"].as_array().unwrap();
@@ -1576,7 +1600,9 @@ mod tests {
     #[test]
     fn two_sets_produce_two_report_sections() {
         // Both sets are seeded at the `linear_git` tip (`c3`) so the tip filter keeps
-        // each and every partition is reported.
+        // each and every partition is reported. They differ only by triple, and
+        // synthetic sets obey the target-triple facet, so the query widens to
+        // `--target-triple all` to search both partitions rather than just the host's.
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c3"), &ir_set(3, "c3", 100.0));
         store(
@@ -1586,7 +1612,11 @@ mod tests {
         );
         let git = linear_git();
 
-        let (report, _, _) = analyze_json(&git, &storage, "folo", &options());
+        let opts = AnalyzeOptions {
+            target_triple: vec!["all".to_owned()],
+            ..options()
+        };
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["sets"].as_array().unwrap().len(), 2, "{report}");
     }

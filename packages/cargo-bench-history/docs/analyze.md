@@ -222,3 +222,9 @@ other selection-driven commands emit the same line through one shared announceme
 the `bless` / `unbless` mutation commands name the facets and the context commit they act at
 (`bless` also names its base branch), so the wording is identical wherever auto-detection can
 surprise you.
+
+When the machine-key facet was auto-detected, the same channel adds one more line noting that
+machine-independent `synthetic` benchmarks (Callgrind, `alloc_tracker`) ride along: they carry
+no machine key, so the host-fingerprint default cannot exclude them. They still obey the
+target-triple facet, so this only mixes in the synthetic sets built for the queried triple —
+the notice explains an inclusion that is otherwise easy to miss.

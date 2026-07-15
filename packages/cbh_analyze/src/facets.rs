@@ -17,12 +17,16 @@ use crate::AnalyzeError;
 /// the hardware fingerprint); tests pass deterministic literals. There is no auto
 /// engine — a bare query analyzes every engine — so only the triple and machine
 /// key are detected.
+///
+/// Exposed so integration tests can inject deterministic values through the
+/// binary's `Overrides` test hook, keeping the suite independent of the host it
+/// runs on.
 #[derive(Clone, Debug)]
-pub(crate) struct AutoFacets {
+pub struct AutoFacets {
     /// The host target triple (`rustc -vV` host).
-    pub(crate) triple: String,
+    pub triple: String,
     /// The host machine fingerprint.
-    pub(crate) machine_key: String,
+    pub machine_key: String,
 }
 
 /// Resolves one facet's raw command-line values into a [`FacetFilter`].

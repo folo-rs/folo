@@ -6,8 +6,9 @@ use crate::harness::*;
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn backfill_stores_one_clean_object_per_commit_and_restores_checkout() {
-    let workspace =
-        Workspace::clean_repo(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
+    let workspace = Workspace::clean_repo(&storage_only_config())
+        .with_bench(&["--summary", "grp=single"])
+        .with_real_auto_facets();
     let c1 = workspace.commit("c1");
     let c2 = workspace.commit("c2");
     let branch_before = workspace.current_branch();

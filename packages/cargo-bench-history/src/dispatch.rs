@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 
+use cbh_analyze::AutoFacets;
 use cbh_storage::StorageOverride;
 use tick::Clock;
 
@@ -38,6 +39,11 @@ pub struct Overrides {
     /// against an Azurite backend behind a locally-faked Entra token and a
     /// certificate-trusting transport, which no configuration could produce.
     pub storage_override: Option<StorageOverride>,
+    /// The auto-detected discriminant facets (host target triple + machine key) the
+    /// query commands default to when a facet is omitted. `None` probes the host;
+    /// integration tests inject fixed values so the suite is independent of the host
+    /// it runs on (a `synthetic` set's inclusion now depends on the auto triple).
+    pub auto_facets: Option<AutoFacets>,
 }
 
 /// Executes a parsed command.
@@ -78,6 +84,7 @@ pub async fn run_with_overrides(
         bench_command,
         clock,
         storage_override,
+        auto_facets,
     } = overrides;
     let workspace_dir = match workspace_dir {
         Some(dir) => dir,
@@ -98,22 +105,24 @@ pub async fn run_with_overrides(
         }
         Command::Install(options) => commands::install(options, workspace_dir).await,
         Command::Analyze(options) => {
-            commands::analyze(options, workspace_dir, clock, storage_override).await
+            commands::analyze(options, workspace_dir, clock, storage_override, auto_facets).await
         }
         Command::List(options) => {
-            commands::list(options, workspace_dir, clock, storage_override).await
+            commands::list(options, workspace_dir, clock, storage_override, auto_facets).await
         }
         Command::Examine(options) => {
-            commands::examine(options, workspace_dir, clock, storage_override).await
+            commands::examine(options, workspace_dir, clock, storage_override, auto_facets).await
         }
         Command::Prune(options) => {
-            commands::prune(options, workspace_dir, clock, storage_override).await
+            commands::prune(options, workspace_dir, clock, storage_override, auto_facets).await
         }
         Command::Backfill(options) => {
             commands::backfill(options, workspace_dir, bench_command).await
         }
-        Command::Bless(options) => commands::bless(options, workspace_dir, clock).await,
-        Command::Unbless(options) => commands::unbless(options, workspace_dir).await,
+        Command::Bless(options) => {
+            commands::bless(options, workspace_dir, clock, auto_facets).await
+        }
+        Command::Unbless(options) => commands::unbless(options, workspace_dir, auto_facets).await,
         Command::MachineKey(options) => commands::machine_key(options).await,
     }
 }

@@ -11,7 +11,7 @@
 
 use std::path::Path;
 
-use cbh_analyze::RenderedReports;
+use cbh_analyze::{AutoFacets, RenderedReports};
 use cbh_diag::StderrReporter;
 use cbh_storage::StorageFacade;
 use tick::Clock;
@@ -32,9 +32,10 @@ pub(crate) async fn analyze(
     workspace_dir: &Path,
     clock: Option<Clock>,
     storage_override: Option<StorageFacade>,
+    auto_facets: Option<AutoFacets>,
 ) -> Result<RunOutcome, RunError> {
     let (rendered, regressions) =
-        cbh_analyze::analyze(options, workspace_dir, clock, storage_override).await?;
+        cbh_analyze::analyze(options, workspace_dir, clock, storage_override, auto_facets).await?;
     write_rendered(
         workspace_dir,
         options.verbose,
@@ -60,8 +61,10 @@ pub(crate) async fn list(
     workspace_dir: &Path,
     clock: Option<Clock>,
     storage_override: Option<StorageFacade>,
+    auto_facets: Option<AutoFacets>,
 ) -> Result<RunOutcome, RunError> {
-    let rendered = cbh_analyze::list(options, workspace_dir, clock, storage_override).await?;
+    let rendered =
+        cbh_analyze::list(options, workspace_dir, clock, storage_override, auto_facets).await?;
     write_rendered(
         workspace_dir,
         options.verbose,
@@ -86,8 +89,10 @@ pub(crate) async fn examine(
     workspace_dir: &Path,
     clock: Option<Clock>,
     storage_override: Option<StorageFacade>,
+    auto_facets: Option<AutoFacets>,
 ) -> Result<RunOutcome, RunError> {
-    let rendered = cbh_analyze::examine(options, workspace_dir, clock, storage_override).await?;
+    let rendered =
+        cbh_analyze::examine(options, workspace_dir, clock, storage_override, auto_facets).await?;
     write_rendered(
         workspace_dir,
         options.verbose,
@@ -112,8 +117,10 @@ pub(crate) async fn prune(
     workspace_dir: &Path,
     clock: Option<Clock>,
     storage_override: Option<StorageFacade>,
+    auto_facets: Option<AutoFacets>,
 ) -> Result<RunOutcome, RunError> {
-    let rendered = cbh_analyze::prune(options, workspace_dir, clock, storage_override).await?;
+    let rendered =
+        cbh_analyze::prune(options, workspace_dir, clock, storage_override, auto_facets).await?;
     write_rendered(
         workspace_dir,
         options.verbose,
@@ -138,8 +145,9 @@ pub(crate) async fn bless(
     options: &BlessOptions,
     workspace_dir: &Path,
     clock: Option<Clock>,
+    auto_facets: Option<AutoFacets>,
 ) -> Result<RunOutcome, RunError> {
-    let message = cbh_analyze::bless(options, workspace_dir, clock).await?;
+    let message = cbh_analyze::bless(options, workspace_dir, clock, auto_facets).await?;
     Ok(RunOutcome::Completed { message })
 }
 
@@ -152,8 +160,9 @@ pub(crate) async fn bless(
 pub(crate) async fn unbless(
     options: &UnblessOptions,
     workspace_dir: &Path,
+    auto_facets: Option<AutoFacets>,
 ) -> Result<RunOutcome, RunError> {
-    let message = cbh_analyze::unbless(options, workspace_dir).await?;
+    let message = cbh_analyze::unbless(options, workspace_dir, auto_facets).await?;
     Ok(RunOutcome::Completed { message })
 }
 

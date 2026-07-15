@@ -199,7 +199,10 @@ async fn examine_facet_selection_mirrors_analyze() {
     workspace.seed_callgrind_in("x86_64-unknown-linux-gnu", "synthetic", "c1", 100.0);
     workspace.seed_callgrind_in("x86_64-pc-windows-msvc", "synthetic", "c1", 50.0);
 
-    // Unfiltered, both comparable sets pivot.
+    // Across triples (`--target-triple all`), both comparable sets pivot. An
+    // auto-detected triple would scope to the host's set alone — even for these
+    // machine-independent synthetic sets, which obey the target-triple facet — so
+    // widening to `all` is what surfaces both pools here.
     let message = workspace
         .drive_json(&[
             "examine",
@@ -207,6 +210,8 @@ async fn examine_facet_selection_mirrors_analyze() {
             "nm/nm::observe/pull",
             "--metric",
             "instruction_count",
+            "--target-triple",
+            "all",
         ])
         .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
