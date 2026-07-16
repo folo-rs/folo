@@ -12,7 +12,7 @@ rust-version = "1.93"
 [workspace.dependencies]
 all_the_time = { version = "0.6.0", path = "packages/all_the_time", default-features = false }
 alloc_tracker = { version = "0.7.0", path = "packages/alloc_tracker", default-features = false }
-anyspawn = { version = "0.5.4", default-features = false }
+anyspawn = { version = "0.6.0", default-features = false }
 arc-swap = { version = "1.7.0", default-features = false }
 async-trait = { version = "0.1.89", default-features = false }
 awaiter_set = { version = "0.1.9", path = "packages/awaiter_set", default-features = false }
@@ -66,7 +66,7 @@ futures-core = { version = "0.3.32", default-features = false }
 # and the installed runner causes `*_cg` benches to fail at runtime with VersionMismatch.
 # Pinned with `=` to prevent `cargo update` from drifting Cargo.lock away from the installed
 # runner version. When bumping, update all three locations together.
-gungraun = { version = "=0.19.3", default-features = false }
+gungraun = { version = "=0.19.4", default-features = false }
 hash_hasher = { version = "2.0.0", default-features = false }
 hashbrown = { version = "0.17.1", default-features = false }
 heapless = { version = "0.9.1", default-features = false }
@@ -83,7 +83,7 @@ linked_macros_impl = { version = "=1.0.16", path = "packages/linked_macros_impl"
 many_cpus = { version = "2.4.11", path = "packages/many_cpus", default-features = false }
 many_cpus_impl = { version = "=2.4.11", path = "packages/many_cpus_impl", default-features = false }
 mimalloc = { version = "0.1.52", default-features = false }
-mockall = { version = "0.14.0", default-features = false }
+mockall = { version = "0.15.0", default-features = false }
 mutants = { version = "0.0.4", default-features = false }
 negative-impl = { version = "0.1.0", default-features = false }
 new_zealand = { version = "1.0.7", path = "packages/new_zealand", default-features = false }
@@ -123,9 +123,9 @@ smallvec = { version = "1.15.0", default-features = false }
 static_assertions = { version = "1.1.0", default-features = false }
 syn = { version = "2.0.117", default-features = false }
 tempfile = { version = "3.20.0", default-features = false }
-thread_aware = { version = "0.7.4", default-features = false }
+thread_aware = { version = "0.8.0", default-features = false }
 threadpool = { version = "1.8.1", default-features = false }
-tick = { version = "0.3.0", default-features = false }
+tick = { version = "0.4.0", default-features = false }
 tokio = { version = "1.49.0", default-features = false }
 toml = { version = "1.1.2", default-features = false }
 toml_edit = { version = "0.25.12", default-features = false }
