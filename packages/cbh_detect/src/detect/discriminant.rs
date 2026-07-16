@@ -15,8 +15,12 @@ use nonempty::NonEmpty;
 /// A resolved filter for one discriminant facet (engine, target triple, or
 /// machine key).
 ///
-/// The variant records how the value was supplied so [`DiscriminantSetQuery::matches`]
-/// can distinguish an auto-detected default from a deliberate user scope.
+/// The variant records how the value was supplied. This does not change
+/// filtering — [`DiscriminantSetQuery::matches`] treats [`Auto`](Self::Auto)
+/// and [`Explicit`](Self::Explicit) alike, matching by value equality — but it
+/// drives user-facing diagnostics: marking an auto-detected value in the
+/// verbose selection trail and phrasing the machine-independent inclusion
+/// notice.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum FacetFilter {
     /// Unconstrained: every set passes. Produced by the `all` keyword, and by
