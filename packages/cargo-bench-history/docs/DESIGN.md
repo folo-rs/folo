@@ -178,10 +178,14 @@ Each facet is repeatable, unions its values, and accepts the literal `all` to wi
 dimension. Omitting a facet **auto-detects the current machine**: the triple defaults to
 the host triple and the machine key to the host fingerprint, so a bare query reports *this*
 machine's data; engine has no machine-derived value, so it defaults to all engines. A
-`synthetic` set always passes the machine-key facet regardless of its value, so
-auto-detecting the host fingerprint still includes every hardware-independent set. A facet
-that matches several sets yields one report per set — parallel data sets analyzed
-individually.
+`synthetic` set always passes the **machine-key** facet regardless of its value (it carries
+no machine), so auto-detecting the host fingerprint still includes the hardware-independent
+sets. It still obeys the **target-triple** facet, though — a per-architecture instruction
+count or allocation profile is a distinct measurement — so a bare query mixes in only the
+synthetic sets built for *this* triple, never foreign-triple ones. Because that inclusion is
+easy to overlook, a query whose machine-key facet was auto-detected prints a one-line notice
+that machine-independent `synthetic` benchmarks ride along. A facet that matches several
+sets yields one report per set — parallel data sets analyzed individually.
 
 The commands divide into **create** and **query** roles. `collect` and `backfill` record
 new data into exactly one machine's reality, so they auto-detect every facet and accept

@@ -312,6 +312,7 @@ mod dispatch;
 mod outcome;
 mod output;
 
+pub use cbh_analyze::AutoFacets;
 pub use cbh_cli::{Cli, EarlyExit};
 pub use cbh_command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,

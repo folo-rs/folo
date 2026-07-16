@@ -15,8 +15,12 @@ use nonempty::NonEmpty;
 /// A resolved filter for one discriminant facet (engine, target triple, or
 /// machine key).
 ///
-/// The variant records how the value was supplied so [`DiscriminantSetQuery::matches`]
-/// can apply the hardware-independent exemption only where intended.
+/// The variant records how the value was supplied. This does not change
+/// filtering — [`DiscriminantSetQuery::matches`] treats [`Auto`](Self::Auto)
+/// and [`Explicit`](Self::Explicit) alike, matching by value equality — but it
+/// drives user-facing diagnostics: marking an auto-detected value in the
+/// verbose selection trail and phrasing the machine-independent inclusion
+/// notice.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum FacetFilter {
     /// Unconstrained: every set passes. Produced by the `all` keyword, and by
@@ -24,8 +28,6 @@ pub enum FacetFilter {
     #[default]
     All,
     /// The auto-detected current-machine value, used when the facet is omitted.
-    /// A `synthetic` set is exempt, so a bare query still surfaces
-    /// engine-independent history alongside this machine's data.
     Auto(String),
     /// Explicit user-provided values; a set passes if it equals one of them
     /// (case-insensitive). Never empty — an omitted facet resolves to
@@ -37,20 +39,20 @@ pub enum FacetFilter {
 impl FacetFilter {
     /// Whether `actual` passes this filter.
     ///
-    /// `synthetic` marks a hardware-independent set; `exempt_explicit` controls
-    /// whether such a set is also exempt from explicit values (true for the
-    /// machine-key facet — `synthetic` means "no machine" — false for the target
-    /// triple, where an explicit value is a deliberate scope).
-    fn passes(&self, actual: &str, synthetic: bool, exempt_explicit: bool) -> bool {
+    /// `exempt` marks a set that ignores this facet entirely (used for the
+    /// machine-key facet on a `synthetic` set — `synthetic` means "no machine",
+    /// so its results belong to every machine's universe regardless of whether
+    /// the facet was auto-detected or explicit).
+    fn passes(&self, actual: &str, exempt: bool) -> bool {
+        if exempt {
+            return true;
+        }
         match self {
             Self::All => true,
-            Self::Auto(value) => synthetic || value.eq_ignore_ascii_case(actual),
-            Self::Explicit(values) => {
-                (exempt_explicit && synthetic)
-                    || values
-                        .iter()
-                        .any(|value| value.eq_ignore_ascii_case(actual))
-            }
+            Self::Auto(value) => value.eq_ignore_ascii_case(actual),
+            Self::Explicit(values) => values
+                .iter()
+                .any(|value| value.eq_ignore_ascii_case(actual)),
         }
     }
 }
@@ -77,19 +79,17 @@ impl DiscriminantSetQuery {
     /// Whether `set` passes every facet filter.
     ///
     /// Hardware-independent (`synthetic`) sets — Callgrind and `alloc_tracker` —
-    /// are exempt from the machine-key facet entirely (their results belong to
-    /// every machine's universe) and from an *auto-detected* target-triple facet
-    /// (the recorded triple is an artifact, e.g. Callgrind pins Linux). An
-    /// explicit `--target-triple` still filters them, as the user asked for that
-    /// precise slice.
+    /// are exempt from the machine-key facet entirely: their results are not tied
+    /// to any one machine, so they belong to every machine's universe. They still
+    /// obey the target-triple facet, because even hardware-independent counts are
+    /// not comparable across architectures (a per-architecture instruction count
+    /// or allocation profile is a different measurement).
     #[must_use]
     pub fn matches(&self, set: &DiscriminantSet) -> bool {
         let synthetic = set.is_synthetic();
-        self.engine.passes(&set.engine, false, false)
-            && self
-                .target_triple
-                .passes(&set.target_triple, synthetic, false)
-            && self.machine_key.passes(&set.machine_key, synthetic, true)
+        self.engine.passes(&set.engine, false)
+            && self.target_triple.passes(&set.target_triple, false)
+            && self.machine_key.passes(&set.machine_key, synthetic)
     }
 }
 
@@ -174,17 +174,26 @@ mod tests {
     }
 
     #[test]
-    fn synthetic_set_is_exempt_from_an_auto_detected_triple_but_not_an_explicit_one() {
+    fn synthetic_set_obeys_the_target_triple_facet() {
         let synthetic = set("x86_64-unknown-linux-gnu"); // machine = synthetic
-        // An auto-detected (omitted) triple does not hide engine-independent data.
+        // A matching auto-detected triple includes it.
         assert!(
             DiscriminantSetQuery {
+                target_triple: FacetFilter::Auto("x86_64-unknown-linux-gnu".to_owned()),
+                ..DiscriminantSetQuery::default()
+            }
+            .matches(&synthetic)
+        );
+        // A different auto-detected triple excludes it: even hardware-independent
+        // counts are not comparable across architectures.
+        assert!(
+            !DiscriminantSetQuery {
                 target_triple: FacetFilter::Auto("x86_64-pc-windows-msvc".to_owned()),
                 ..DiscriminantSetQuery::default()
             }
             .matches(&synthetic)
         );
-        // An explicit triple is a deliberate scope and filters even synthetic sets.
+        // An explicit non-matching triple also excludes it.
         assert!(
             !DiscriminantSetQuery {
                 target_triple: FacetFilter::Explicit(nonempty![

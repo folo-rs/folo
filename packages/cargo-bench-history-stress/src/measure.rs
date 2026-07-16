@@ -285,6 +285,7 @@ fn overrides(workspace: &Path, anchor: Timestamp) -> Overrides {
         bench_command: None,
         clock: Some(Clock::new_frozen_at(anchor)),
         storage_override: None,
+        auto_facets: None,
     }
 }
 

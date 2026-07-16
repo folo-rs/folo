@@ -31,8 +31,8 @@ use tick::Clock;
 
 use super::{
     AutoFacets, ReportFormat, RunIndex, Selection, Series, SeriesFilter, apply_blessings,
-    detect_auto_facets, dirty_base_exception_warning, empty_history_hint,
-    facet_filtered_candidates, resolve_facets, resolve_now, select_dataset,
+    dirty_base_exception_warning, empty_history_hint, facet_filtered_candidates,
+    resolve_auto_facets, resolve_facets, resolve_now, select_dataset,
 };
 use crate::{AnalyzeError, RenderedReports, ReportRequest};
 
@@ -52,6 +52,7 @@ pub async fn execute(
     workspace_dir: &Path,
     clock_override: Option<Clock>,
     storage_override: Option<StorageFacade>,
+    auto_override: Option<AutoFacets>,
 ) -> Result<RenderedReports, AnalyzeError> {
     let reporter = StderrReporter::new(options.verbose);
 
@@ -73,7 +74,7 @@ pub async fn execute(
     storage.synchronize_cache(&project_id, &reporter).await?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
-    let auto = detect_auto_facets().await?;
+    let auto = resolve_auto_facets(auto_override).await?;
 
     let now = resolve_now(clock_override);
     // The object-load and detection work shares the ambient Tokio worker threads

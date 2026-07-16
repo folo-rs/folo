@@ -54,14 +54,15 @@ pub(crate) use cbh_render::{ChartColor, ReportFormat, chart, format_value};
 pub(crate) use dataset::{empty_history_hint, select_dataset};
 pub use error::AnalyzeError;
 pub use examine::execute as examine;
-pub(crate) use facets::{AutoFacets, resolve_facets};
+pub use facets::AutoFacets;
+pub(crate) use facets::resolve_facets;
 pub(crate) use history::{
     DirtyTipPolicy, ResolvedHistory, dirty_base_exception_warning, resolve_history,
 };
 pub use list::execute as list;
 pub(crate) use load::{RunIndex, facet_filtered_candidates};
 pub use pipeline::execute as analyze;
-pub(crate) use pipeline::{detect_auto_facets, resolve_now};
+pub(crate) use pipeline::{resolve_auto_facets, resolve_now};
 pub use prune::execute as prune;
 pub use report::RenderedReports;
 pub(crate) use report::ReportRequest;
