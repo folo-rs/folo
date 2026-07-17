@@ -51,17 +51,18 @@ mod tests {
 
     use super::*;
 
-    fn profile(processors: usize, memory_regions: usize, brand: Option<&str>) -> HardwareProfile {
+    fn profile(processors: usize, memory_regions: usize, models: &[&str]) -> HardwareProfile {
         HardwareProfile {
             processors,
             memory_regions,
-            cpu_brand: brand.map(ToOwned::to_owned),
+            processor_models: models.iter().map(|model| (*model).to_owned()).collect(),
+            processor_speeds: Vec::new(),
         }
     }
 
     #[test]
     fn outcome_message_is_the_fingerprint() {
-        let hardware = profile(8, 1, Some("Test CPU 3000"));
+        let hardware = profile(8, 1, &["Test CPU 3000"]);
         let reporter = RecordingReporter::new();
 
         let outcome = machine_key_outcome(&hardware, &reporter);
@@ -74,7 +75,7 @@ mod tests {
 
     #[test]
     fn verbose_note_lists_the_components() {
-        let hardware = profile(8, 1, Some("Test CPU 3000"));
+        let hardware = profile(8, 1, &["Test CPU 3000"]);
         let reporter = RecordingReporter::new();
 
         let _ = machine_key_outcome(&hardware, &reporter);
@@ -82,7 +83,7 @@ mod tests {
         assert!(
             reporter.contains("machine-key components:")
                 && reporter.contains("processors=8")
-                && reporter.contains("cpu_brand=\"Test CPU 3000\""),
+                && reporter.contains("processor_models=Test CPU 3000"),
             "{:?}",
             reporter.notes()
         );

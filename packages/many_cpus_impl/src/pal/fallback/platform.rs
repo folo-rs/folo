@@ -196,7 +196,7 @@ impl Platform for BuildTargetPlatform {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use crate::EfficiencyClass;
+    use crate::{EfficiencyClass, RelativeSpeed};
 
     #[test]
     fn has_at_least_one_processor() {
@@ -218,6 +218,22 @@ mod tests {
         let platform = BuildTargetPlatform;
         for processor in platform.get_processors().iter() {
             assert_eq!(processor.efficiency_class(), EfficiencyClass::Performance);
+        }
+    }
+
+    #[test]
+    fn all_processors_have_fallback_relative_speed() {
+        let platform = BuildTargetPlatform;
+        for processor in platform.get_processors().iter() {
+            assert_eq!(processor.relative_speed(), RelativeSpeed::UNDETERMINED);
+        }
+    }
+
+    #[test]
+    fn no_processor_has_a_model() {
+        let platform = BuildTargetPlatform;
+        for processor in platform.get_processors().iter() {
+            assert_eq!(processor.model(), None);
         }
     }
 

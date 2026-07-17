@@ -184,9 +184,9 @@
 //! hardware-dependent results with, so CI captures it to thread the exact keys a
 //! collection produced into the matching `analyze` selection (see the per-push and
 //! per-PR workflows). Under `--verbose` the individual factors behind the
-//! fingerprint (processor count, memory regions, CPU brand, and the factor-set
-//! version tag) are written to standard error, so a change in the key can be traced
-//! to the specific factor that moved.
+//! fingerprint (processor count, memory regions, processor models, the per-processor
+//! speed histogram, and the factor-set version tag) are written to standard error, so
+//! a change in the key can be traced to the specific factor that moved.
 //!
 //! # Selecting data: options shared by the query commands
 //!

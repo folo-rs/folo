@@ -1,10 +1,11 @@
 use std::fmt::Display;
+use std::sync::Arc;
 
 use crate::pal::AbstractProcessor;
 use crate::pal::windows::{ProcessorGroupIndex, ProcessorIndexInGroup};
-use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
+use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug)]
 pub(crate) struct ProcessorImpl {
     pub(crate) group_index: ProcessorGroupIndex,
     pub(crate) index_in_group: ProcessorIndexInGroup,
@@ -15,6 +16,10 @@ pub(crate) struct ProcessorImpl {
     pub(crate) memory_region_id: MemoryRegionId,
 
     pub(crate) efficiency_class: EfficiencyClass,
+
+    pub(crate) relative_speed: RelativeSpeed,
+
+    pub(crate) model: Option<Arc<str>>,
 }
 
 impl ProcessorImpl {
@@ -24,6 +29,8 @@ impl ProcessorImpl {
         id: ProcessorId,
         memory_region_id: MemoryRegionId,
         efficiency_class: EfficiencyClass,
+        relative_speed: RelativeSpeed,
+        model: Option<Arc<str>>,
     ) -> Self {
         Self {
             group_index,
@@ -31,6 +38,8 @@ impl ProcessorImpl {
             id,
             memory_region_id,
             efficiency_class,
+            relative_speed,
+            model,
         }
     }
 }
@@ -57,23 +66,19 @@ impl AbstractProcessor for ProcessorImpl {
     fn efficiency_class(&self) -> EfficiencyClass {
         self.efficiency_class
     }
+
+    fn relative_speed(&self) -> RelativeSpeed {
+        self.relative_speed
+    }
+
+    fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
 }
 
 impl AsRef<Self> for ProcessorImpl {
     fn as_ref(&self) -> &Self {
         self
-    }
-}
-
-impl PartialOrd for ProcessorImpl {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for ProcessorImpl {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.id.cmp(&other.id)
     }
 }
 
@@ -84,25 +89,35 @@ mod tests {
 
     #[test]
     fn smoke_test() {
-        let processor = ProcessorImpl::new(0, 1, 2, 3, EfficiencyClass::Performance);
+        let processor = ProcessorImpl::new(
+            0,
+            1,
+            2,
+            3,
+            EfficiencyClass::Performance,
+            RelativeSpeed::from_raw(3600),
+            Some(Arc::from("Test Model")),
+        );
 
         assert_eq!(processor.id(), 2);
         assert_eq!(processor.memory_region_id(), 3);
         assert_eq!(processor.efficiency_class(), EfficiencyClass::Performance);
-
-        let processor2 = ProcessorImpl::new(0, 1, 2, 3, EfficiencyClass::Performance);
-        assert_eq!(processor, processor2);
-
-        let processor3 = ProcessorImpl::new(0, 1, 4, 3, EfficiencyClass::Performance);
-        assert_ne!(processor, processor3);
-        assert!(processor < processor3);
-        assert!(processor3 > processor);
+        assert_eq!(processor.relative_speed().as_u64(), 3600);
+        assert_eq!(processor.model(), Some("Test Model"));
     }
 
     #[test]
     fn display_shows_processor_id_and_group_info() {
         // group_index=1, index_in_group=3, id=7
-        let processor = ProcessorImpl::new(1, 3, 7, 0, EfficiencyClass::Performance);
+        let processor = ProcessorImpl::new(
+            1,
+            3,
+            7,
+            0,
+            EfficiencyClass::Performance,
+            RelativeSpeed::from_raw(1),
+            None,
+        );
 
         let display_output = processor.to_string();
 
@@ -118,12 +133,21 @@ mod tests {
 
     #[test]
     fn as_ref_returns_self() {
-        let processor = ProcessorImpl::new(0, 2, 5, 1, EfficiencyClass::Efficiency);
+        let processor = ProcessorImpl::new(
+            0,
+            2,
+            5,
+            1,
+            EfficiencyClass::Efficiency,
+            RelativeSpeed::from_raw(1),
+            None,
+        );
 
         let processor_ref: &ProcessorImpl = processor.as_ref();
 
         assert_eq!(processor_ref.id, processor.id);
         assert_eq!(processor_ref.group_index, processor.group_index);
         assert_eq!(processor_ref.index_in_group, processor.index_in_group);
+        assert_eq!(processor_ref.model(), None);
     }
 }

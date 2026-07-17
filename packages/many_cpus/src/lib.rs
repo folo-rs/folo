@@ -339,5 +339,5 @@
 pub use many_cpus_impl::fake;
 pub use many_cpus_impl::{
     EfficiencyClass, MemoryRegionId, Processor, ProcessorId, ProcessorSet, ProcessorSetBuilder,
-    ResourceQuota, SystemHardware,
+    RelativeSpeed, ResourceQuota, SystemHardware,
 };

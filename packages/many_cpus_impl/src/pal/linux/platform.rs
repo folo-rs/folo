@@ -1,6 +1,6 @@
 use std::iter::once;
 use std::mem;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use foldhash::HashMap;
 use itertools::Itertools;
@@ -9,7 +9,7 @@ use nonempty::NonEmpty;
 use crate::pal::linux::filesystem::FilesystemFacade;
 use crate::pal::linux::{Bindings, BindingsFacade, Filesystem};
 use crate::pal::{Platform, ProcessorFacade, ProcessorImpl};
-use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
+use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 
 /// Singleton instance of `BuildTargetPlatform`, used by public API types
 /// to hook up to the correct PAL implementation.
@@ -138,7 +138,7 @@ impl BuildTargetPlatform {
                 self.get_all_processors_impl()
                     .iter()
                     .filter(|p| p.is_active)
-                    .copied()
+                    .cloned()
                     .map(ProcessorFacade::Target)
                     .collect_vec())
                     .expect("found 0 active processors - impossible because this code is running on an active processor")
@@ -234,6 +234,8 @@ impl BuildTargetPlatform {
                 id: info.index,
                 memory_region_id: memory_region,
                 efficiency_class,
+                relative_speed: RelativeSpeed::from_os_metric(info.bogomips),
+                model: info.model_name,
                 is_active: is_online,
             }
         });
@@ -275,6 +277,7 @@ impl BuildTargetPlatform {
 
                     let mut index = None;
                     let mut bogomips = None;
+                    let mut model_name = None;
 
                     for line in lines {
                         let (key, value) = line
@@ -290,6 +293,10 @@ impl BuildTargetPlatform {
                             "bogomips" => {
                                 bogomips = value.parse::<f32>().map(|f| f.round() as u32).ok();
                             }
+                            // The processor model. Absent on many non-x86 architectures, so it is optional.
+                            "model name" if !value.is_empty() => {
+                                model_name = Some(Arc::from(value));
+                            }
                             _ => {}
                         }
                     }
@@ -298,6 +305,7 @@ impl BuildTargetPlatform {
                         index: index.expect("processor index not found for processor"),
                         bogomips: bogomips
                             .expect("processor bogomips not found for processor"),
+                        model_name,
                     })
                 })
                 .collect_vec(),
@@ -438,6 +446,10 @@ struct CpuInfo {
     /// performance cores, where the processors with max bogomips are considered performance
     /// cores and any with lower bogomips are considered efficiency cores.
     bogomips: u32,
+
+    /// Best-effort model from the `model name` field, `None` when the field is absent (as it
+    /// commonly is on non-x86 architectures).
+    model_name: Option<Arc<str>>,
 }
 
 /// This is the relative path of the cgroup the current process belongs to (e.g. `/foo/bar`)
@@ -682,17 +694,35 @@ mod tests {
             p0.as_target().efficiency_class,
             EfficiencyClass::Performance
         );
+        assert_eq!(
+            p0.as_target().relative_speed,
+            RelativeSpeed::from_os_metric(3400)
+        );
+        // The layout simulator reports a `model name` for every processor, which surfaces as the
+        // processor model.
+        assert_eq!(
+            p0.as_target().model.as_deref(),
+            Some("Test Processor Model")
+        );
 
         let p1 = &processors[1];
         assert_eq!(p1.as_target().id, 1);
         assert_eq!(p1.as_target().memory_region_id, 0);
         assert_eq!(p1.as_target().efficiency_class, EfficiencyClass::Efficiency);
+        assert_eq!(
+            p1.as_target().relative_speed,
+            RelativeSpeed::from_os_metric(2000)
+        );
 
         // Node 1
         let p2 = &processors[2];
         assert_eq!(p2.as_target().id, 2);
         assert_eq!(p2.as_target().memory_region_id, 1);
         assert_eq!(p2.as_target().efficiency_class, EfficiencyClass::Efficiency);
+        assert_eq!(
+            p2.as_target().relative_speed,
+            RelativeSpeed::from_os_metric(2000)
+        );
 
         let p3 = &processors[3];
         assert_eq!(p3.as_target().id, 3);
@@ -700,6 +730,10 @@ mod tests {
         assert_eq!(
             p3.as_target().efficiency_class,
             EfficiencyClass::Performance
+        );
+        assert_eq!(
+            p3.as_target().relative_speed,
+            RelativeSpeed::from_os_metric(3400)
         );
     }
 
@@ -865,6 +899,7 @@ mod tests {
         for (processor_index, bogomips) in processor_index.iter().zip(bogomips_per_processor.iter())
         {
             writeln!(cpuinfo, "processor       : {processor_index}").unwrap();
+            writeln!(cpuinfo, "model name      : Test Processor Model").unwrap();
             writeln!(cpuinfo, "bogomips        : {bogomips}").unwrap();
             writeln!(cpuinfo, "whatever        : 123").unwrap();
             writeln!(cpuinfo, "other           : ignored").unwrap();
@@ -1624,6 +1659,8 @@ CPU revision    : 1
             p0.as_target().efficiency_class,
             EfficiencyClass::Performance
         );
+        // This ARM-style cpuinfo has no `model name` field, so no model is reported.
+        assert_eq!(p0.as_target().model, None);
 
         let p1 = &processors[1];
         assert_eq!(p1.as_target().id, 1);
@@ -1632,6 +1669,50 @@ CPU revision    : 1
             p1.as_target().efficiency_class,
             EfficiencyClass::Performance
         );
+    }
+
+    #[test]
+    fn cpuinfo_with_empty_model_name_reports_no_model() {
+        // A `model name` field that is present but blank must be treated as absent rather than
+        // surfacing an empty model string, so the guard that rejects an empty value matters.
+        let mut fs = MockFilesystem::new();
+
+        let cpuinfo = "processor       : 0
+bogomips        : 50.00
+model name      :
+";
+
+        fs.expect_get_cpuinfo_contents()
+            .times(1)
+            .return_const(cpuinfo.to_string());
+
+        fs.expect_get_numa_node_possible_contents()
+            .times(1)
+            .return_const(Some("0\n".to_string()));
+
+        fs.expect_get_numa_node_cpulist_contents()
+            .withf(move |n| *n == 0)
+            .times(1)
+            .return_const("0\n".to_string());
+
+        fs.expect_get_cpu_online_contents()
+            .withf(move |p| *p == 0)
+            .times(1)
+            .return_const(Some("1\n".to_string()));
+
+        fs.expect_get_proc_self_status_contents()
+            .times(1)
+            .return_const("Cpus_allowed_list: 0".to_string());
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(MockBindings::new()),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        let processors = platform.get_all_processors();
+
+        assert_eq!(processors.len(), 1);
+        assert_eq!(processors[0].as_target().model, None);
     }
 
     #[test]
