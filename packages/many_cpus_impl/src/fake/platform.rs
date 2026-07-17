@@ -17,7 +17,7 @@ use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 ///
 /// This is distinct from the test-only `FakeProcessor` in `pal/mocks.rs` because it needs
 /// to be available when `test-util` feature is enabled, not just in test mode.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug)]
 pub(crate) struct FakeProcessor {
     id: ProcessorId,
     memory_region_id: MemoryRegionId,

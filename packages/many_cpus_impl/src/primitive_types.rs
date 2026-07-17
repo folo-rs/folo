@@ -56,17 +56,8 @@ pub enum EfficiencyClass {
 ///
 /// The value is only meaningful *within a single system*, where a larger value indicates a
 /// nominally faster processor. It is **not** comparable across different systems or operating
-/// systems because the underlying platform metrics differ:
-///
-/// * On Linux the value is derived from the `bogomips` reported by `/proc/cpuinfo`.
-/// * On Windows the value is derived from the nominal maximum clock frequency (MHz).
-/// * On platforms without a suitable metric (including the fallback platform and when running
-///   under Miri) every processor reports the same synthetic value.
-///
-/// Where a real metric is available it is scaled by an abstract constant before being stored, so
-/// the number deliberately does not equal any raw MHz-style figure. Never interpret the value as a
-/// physical unit and never compare a `RelativeSpeed` obtained on one machine to one obtained on
-/// another.
+/// systems, and it is not a physical unit - never interpret it as a clock frequency or compare
+/// a `RelativeSpeed` obtained on one machine to one obtained on another.
 ///
 /// [1]: crate::Processor::id
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

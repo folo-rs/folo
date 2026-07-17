@@ -10,7 +10,7 @@ use crate::fake::platform::FakeProcessor;
 use crate::pal::fallback::ProcessorImpl as FallbackProcessor;
 use crate::pal::{AbstractProcessor, ProcessorImpl};
 
-#[derive(Clone, Display, Eq, Hash, PartialEq)]
+#[derive(Clone, Display)]
 pub(crate) enum ProcessorFacade {
     Target(ProcessorImpl),
 

@@ -7,7 +7,7 @@ use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 ///
 /// This processor always reports itself as being in memory region 0 with Performance efficiency
 /// class. The actual hardware topology is not inspected on unsupported platforms.
-#[derive(Clone, Copy, Debug, Display, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Display)]
 #[display("ProcessorImpl({id})")]
 pub(crate) struct ProcessorImpl {
     id: ProcessorId,

@@ -1,5 +1,4 @@
 use std::fmt::Display;
-use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::pal::AbstractProcessor;
@@ -13,7 +12,7 @@ pub(crate) struct ProcessorImpl {
     pub(crate) efficiency_class: EfficiencyClass,
     pub(crate) relative_speed: RelativeSpeed,
 
-    /// Best-effort model from the `model name` field of `/proc/cpuinfo`, `None` when absent.
+    /// Model from the `model name` field of `/proc/cpuinfo`, `None` when absent.
     pub(crate) model: Option<Arc<str>>,
 
     pub(crate) is_active: bool,
@@ -47,9 +46,9 @@ impl AbstractProcessor for ProcessorImpl {
     }
 }
 
-// A processor is uniquely identified by its `id`. The other fields are descriptive metadata that
-// never differs between two handles to the same processor, so equality, hashing, and ordering are
-// all keyed on `id` alone. Keeping them in agreement upholds the `Ord`/`Eq` contract:
+// Linux returns its processor list sorted by `id` (see `platform.rs`), so `ProcessorImpl` orders
+// by `id`. The other fields are descriptive metadata that never differs between two handles to the
+// same processor, so equality and ordering are both keyed on `id` alone, keeping them in agreement:
 // `cmp(a, b) == Equal` exactly when `a == b`.
 impl PartialEq for ProcessorImpl {
     fn eq(&self, other: &Self) -> bool {
@@ -58,12 +57,6 @@ impl PartialEq for ProcessorImpl {
 }
 
 impl Eq for ProcessorImpl {}
-
-impl Hash for ProcessorImpl {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
-    }
-}
 
 impl PartialOrd for ProcessorImpl {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
@@ -133,10 +126,8 @@ mod tests {
 
     #[test]
     fn equal_ids_compare_equal_regardless_of_metadata() {
-        use std::hash::{DefaultHasher, Hash, Hasher};
-
         // Two handles to the same processor id are equal and order as Equal even when their
-        // descriptive metadata differs, keeping the Ord and Eq/Hash impls mutually consistent.
+        // descriptive metadata differs, keeping the Eq and Ord impls mutually consistent.
         let a = ProcessorImpl {
             id: 7,
             memory_region_id: 3,
@@ -156,18 +147,6 @@ mod tests {
 
         assert_eq!(a, b);
         assert_eq!(a.cmp(&b), std::cmp::Ordering::Equal);
-
-        let mut hash_a = DefaultHasher::new();
-        a.hash(&mut hash_a);
-        let mut hash_b = DefaultHasher::new();
-        b.hash(&mut hash_b);
-        assert_eq!(hash_a.finish(), hash_b.finish());
-
-        // Hashing is keyed on `id` alone, so a processor hashes identically to its bare `id`.
-        // This also confirms the hash actually incorporates the id rather than being a no-op.
-        let mut id_hash = DefaultHasher::new();
-        a.id.hash(&mut id_hash);
-        assert_eq!(hash_a.finish(), id_hash.finish());
     }
 
     #[test]
