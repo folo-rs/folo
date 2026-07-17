@@ -39,7 +39,7 @@ impl AbstractProcessor for ProcessorImpl {
     #[cfg_attr(test, mutants::skip)] // Some mutations are not testable due to simulated nature of this PAL.
     fn relative_speed(&self) -> RelativeSpeed {
         // We do not have real speed information, so every processor reports the fallback value.
-        RelativeSpeed::undetermined()
+        RelativeSpeed::UNDETERMINED
     }
 
     #[cfg_attr(test, mutants::skip)] // Some mutations are not testable due to simulated nature of this PAL.

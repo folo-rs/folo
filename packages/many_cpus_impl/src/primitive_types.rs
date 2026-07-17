@@ -64,6 +64,14 @@ pub enum EfficiencyClass {
 pub struct RelativeSpeed(NonZero<u64>);
 
 impl RelativeSpeed {
+    /// The value reported for a processor whose nominal speed the operating system does not
+    /// disclose.
+    ///
+    /// This is a sentinel (`u64::MAX`) chosen to be unmistakably not a real speed reading, so it
+    /// cannot be confused with the small values that genuine metrics or tests produce. Nothing may
+    /// depend on the specific value.
+    pub(crate) const UNDETERMINED: Self = Self(NonZero::<u64>::MAX);
+
     /// Constructs a value from a raw OS-reported speed metric, such as the Linux `bogomips` or the
     /// Windows nominal maximum clock frequency in MHz.
     ///
@@ -76,8 +84,9 @@ impl RelativeSpeed {
     #[cfg(any(test, all(not(miri), any(target_os = "linux", windows))))]
     #[must_use]
     pub(crate) fn from_os_metric(metric: u32) -> Self {
-        // A u32 scaled by pi is at most about 1.35e10, which is always a non-negative whole number
-        // well within u64, so the conversion below neither loses the sign nor overflows.
+        // A u32 scaled by pi is non-negative and at most about 1.35e10, far below u64::MAX, so the
+        // cast below only drops the fractional part (the truncation we intend) without losing the
+        // sign or overflowing.
         #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
@@ -89,27 +98,13 @@ impl RelativeSpeed {
     }
 
     /// Constructs a value from a raw numeric value. A missing value (zero) has no real speed metric
-    /// behind it, so it maps to the `undetermined` fallback to keep the value non-zero.
+    /// behind it, so it maps to the `UNDETERMINED` sentinel to keep the value non-zero.
     #[must_use]
     pub(crate) fn from_raw(value: u64) -> Self {
         match NonZero::new(value) {
             Some(value) => Self(value),
-            None => Self::undetermined(),
+            None => Self::UNDETERMINED,
         }
-    }
-
-    /// The value reported for a processor whose nominal speed the operating system does not
-    /// disclose.
-    ///
-    /// This is derived from the current process ID, so the specific value varies between runs.
-    /// Nothing may depend on it - it exists only to provide a non-zero value when no real speed
-    /// metric is available.
-    #[cfg_attr(test, mutants::skip)] // Derives from the process ID, an environment value with no fixed contract to assert.
-    #[must_use]
-    pub(crate) fn undetermined() -> Self {
-        // A running process always has a non-zero ID, but uphold the NonZero invariant defensively
-        // rather than assume it.
-        Self(NonZero::new(u64::from(std::process::id())).unwrap_or(NonZero::<u64>::MIN))
     }
 
     /// The underlying numeric value.
@@ -147,7 +142,7 @@ mod tests {
 
     #[test]
     fn relative_speed_from_raw_maps_zero_to_undetermined() {
-        assert_eq!(RelativeSpeed::from_raw(0), RelativeSpeed::undetermined());
+        assert_eq!(RelativeSpeed::from_raw(0), RelativeSpeed::UNDETERMINED);
     }
 
     #[test]
@@ -162,7 +157,7 @@ mod tests {
     fn relative_speed_from_os_metric_maps_zero_to_undetermined() {
         assert_eq!(
             RelativeSpeed::from_os_metric(0),
-            RelativeSpeed::undetermined()
+            RelativeSpeed::UNDETERMINED
         );
     }
 
