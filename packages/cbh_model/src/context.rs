@@ -78,15 +78,13 @@ pub struct MachineInfo {
     pub processors: usize,
     /// Number of NUMA memory regions the host reported.
     pub memory_regions: usize,
-    /// Distinct processor model strings the host reported, sorted ascending. Empty when
-    /// none could be determined, and defaults to empty when reading older records that
-    /// predate this factor.
+    /// Distinct processor model strings the host reported, sorted ascending.
+    /// Defaults to empty when reading older records that predate this factor.
     #[serde(default)]
     pub processor_models: Vec<String>,
     /// Histogram of the per-processor relative speeds the host reported, as
-    /// `(speed, count)` pairs sorted ascending by speed. Empty when no speeds
-    /// were reported. Defaults to empty when reading older records that predate
-    /// this factor.
+    /// `(speed, count)` pairs sorted ascending by speed. Defaults to empty when
+    /// reading older records that predate this factor.
     #[serde(default)]
     pub processor_speeds: Vec<(u64, usize)>,
     /// The hardware fingerprint these factors hash to: the host's auto-detected

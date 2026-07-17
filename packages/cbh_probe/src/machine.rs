@@ -45,8 +45,7 @@ pub struct HardwareProfile {
     ///
     /// Populated from every processor's model, then whitespace-normalized,
     /// deduplicated and sorted, so machines that agree on their set of models hash
-    /// alike regardless of how many processors of each model they have. Empty when no
-    /// model could be determined.
+    /// alike regardless of how many processors of each model they have.
     pub processor_models: Vec<String>,
     /// Histogram of the per-processor relative speeds the system reports, as
     /// `(speed, count)` pairs sorted ascending by speed.
