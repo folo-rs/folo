@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "all_the_time"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "alloc_tracker",
  "cpu-time",
@@ -424,7 +424,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cargo-bench-history"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "async-trait",
  "azure_core",
@@ -511,7 +511,7 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "cbh_analyze"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "anyspawn",
  "cbh_command",
@@ -534,7 +534,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_cli"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "cbh_command",
  "cbh_model",
@@ -544,7 +544,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_codec"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "alloc_tracker",
  "cbh_model",
@@ -556,7 +556,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_command"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "cbh_model",
  "mutants",
@@ -564,7 +564,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_config"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "cbh_command",
  "mutants",
@@ -576,7 +576,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_detect"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "anyspawn",
  "cbh_model",
@@ -595,14 +595,14 @@ dependencies = [
 
 [[package]]
 name = "cbh_diag"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "mutants",
 ]
 
 [[package]]
 name = "cbh_engines"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -619,7 +619,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_git"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "cbh_model",
  "futures",
@@ -630,7 +630,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_model"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "criterion",
  "jiff",
@@ -642,7 +642,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_probe"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "cbh_git",
  "cbh_model",
@@ -653,7 +653,7 @@ dependencies = [
 
 [[package]]
 name = "cbh_render"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "cbh_detect",
  "cbh_model",
@@ -667,14 +667,14 @@ dependencies = [
 
 [[package]]
 name = "cbh_stats"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "mutants",
 ]
 
 [[package]]
 name = "cbh_storage"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "async-trait",
  "azure_core",
@@ -2035,7 +2035,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "many_cpus"
-version = "2.4.12"
+version = "2.4.13"
 dependencies = [
  "many_cpus_impl",
  "new_zealand",
@@ -2045,7 +2045,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_benchmarking"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "cpulist",
  "criterion",
@@ -2061,7 +2061,7 @@ dependencies = [
 
 [[package]]
 name = "many_cpus_impl"
-version = "2.4.12"
+version = "2.4.13"
 dependencies = [
  "cpulist",
  "criterion",
@@ -2388,7 +2388,7 @@ dependencies = [
 
 [[package]]
 name = "par_bench"
-version = "0.2.48"
+version = "0.2.49"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
@@ -2812,7 +2812,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "region_cached"
-version = "1.0.27"
+version = "1.0.28"
 dependencies = [
  "arc-swap",
  "axum",
@@ -2834,7 +2834,7 @@ dependencies = [
 
 [[package]]
 name = "region_local"
-version = "1.0.27"
+version = "1.0.28"
 dependencies = [
  "arc-swap",
  "axum",
@@ -3849,7 +3849,7 @@ dependencies = [
 
 [[package]]
 name = "vicinal"
-version = "0.1.32"
+version = "0.1.33"
 dependencies = [
  "all_the_time",
  "alloc_tracker",
