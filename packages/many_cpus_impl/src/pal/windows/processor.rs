@@ -115,7 +115,7 @@ mod tests {
             7,
             0,
             EfficiencyClass::Performance,
-            RelativeSpeed::SYNTHETIC,
+            RelativeSpeed::from_raw(1),
             None,
         );
 
@@ -139,7 +139,7 @@ mod tests {
             5,
             1,
             EfficiencyClass::Efficiency,
-            RelativeSpeed::SYNTHETIC,
+            RelativeSpeed::from_raw(1),
             None,
         );
 

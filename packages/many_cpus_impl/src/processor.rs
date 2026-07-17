@@ -145,6 +145,9 @@ impl Processor {
     /// meaningful within a single system and is **not** comparable across systems or operating
     /// systems.
     ///
+    /// The exact string may change between versions of `many_cpus`; the same processor can report a
+    /// different model after an upgrade, and such a change is not considered a breaking change.
+    ///
     /// # Example
     ///
     /// ```

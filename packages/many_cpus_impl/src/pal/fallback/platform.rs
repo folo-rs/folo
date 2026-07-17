@@ -222,10 +222,10 @@ mod tests {
     }
 
     #[test]
-    fn all_processors_have_synthetic_relative_speed() {
+    fn all_processors_have_fallback_relative_speed() {
         let platform = BuildTargetPlatform;
         for processor in platform.get_processors().iter() {
-            assert_eq!(processor.relative_speed(), RelativeSpeed::SYNTHETIC);
+            assert_eq!(processor.relative_speed(), RelativeSpeed::undetermined());
         }
     }
 

@@ -140,7 +140,7 @@ mod tests {
             id: 7,
             memory_region_id: 9,
             efficiency_class: EfficiencyClass::Efficiency,
-            relative_speed: RelativeSpeed::SYNTHETIC,
+            relative_speed: RelativeSpeed::from_raw(1),
             model: None,
             is_active: false,
         };

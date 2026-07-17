@@ -316,7 +316,7 @@ fn read_processor_nominal_max_mhz(processor_id: usize) -> u32 {
     };
 
     // A missing or unreadable entry (for example an offline processor the kernel never populated)
-    // is reported as 0, which the caller maps onto the synthetic relative speed.
+    // is reported as 0, which the caller maps onto a fallback relative speed.
     if status.is_ok() { value } else { 0 }
 }
 

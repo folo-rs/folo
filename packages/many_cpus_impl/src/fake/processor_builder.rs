@@ -55,7 +55,7 @@ impl ProcessorBuilder {
             explicit_id: None,
             memory_region_id: 0,
             efficiency_class: EfficiencyClass::Performance,
-            relative_speed: RelativeSpeed::SYNTHETIC,
+            relative_speed: RelativeSpeed::from_raw(1),
             model: None,
         }
     }
@@ -145,7 +145,7 @@ mod tests {
         assert_eq!(builder.explicit_id, None);
         assert_eq!(builder.memory_region_id, 0);
         assert_eq!(builder.efficiency_class, EfficiencyClass::Performance);
-        assert_eq!(builder.relative_speed, RelativeSpeed::SYNTHETIC);
+        assert_eq!(builder.relative_speed, RelativeSpeed::from_raw(1));
         assert_eq!(builder.model, None);
     }
 

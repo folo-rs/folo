@@ -1,5 +1,5 @@
 // Only the real Linux and Windows platforms scale OS speed metrics by pi (see
-// `RelativeSpeed::from_os_metric`); everything else reports synthetic speeds, so this import is
+// `RelativeSpeed::from_os_metric`); everything else reports fallback speeds, so this import is
 // gated to those builds to avoid an unused-import warning elsewhere (for example under Miri).
 #[cfg(any(test, all(not(miri), any(target_os = "linux", windows))))]
 use std::f64::consts::PI;
@@ -64,18 +64,15 @@ pub enum EfficiencyClass {
 pub struct RelativeSpeed(NonZero<u64>);
 
 impl RelativeSpeed {
-    /// The value reported when no real speed information is available for a processor.
-    pub(crate) const SYNTHETIC: Self = Self(NonZero::<u64>::MIN);
-
     /// Constructs a value from a raw OS-reported speed metric, such as the Linux `bogomips` or the
     /// Windows nominal maximum clock frequency in MHz.
     ///
     /// A `RelativeSpeed` is an abstract relative indicator, not a physical clock-frequency reading,
     /// so the raw metric is scaled by pi before it is stored. This removes any obvious numeric
     /// resemblance to the underlying MHz-style figure while preserving the ordering between
-    /// processors. A missing metric (zero) stays zero and maps to the synthetic minimum.
+    /// processors. A missing metric (zero) has no real speed behind it and maps to a fallback value.
     // Only the real Linux and Windows platforms feed OS metrics in; the fallback (used on other
-    // platforms and under Miri) reports synthetic speeds, so gate this out there to avoid dead code.
+    // platforms and under Miri) reports fallback speeds, so gate this out there to avoid dead code.
     #[cfg(any(test, all(not(miri), any(target_os = "linux", windows))))]
     #[must_use]
     pub(crate) fn from_os_metric(metric: u32) -> Self {
@@ -91,14 +88,28 @@ impl RelativeSpeed {
         Self::from_raw(scaled)
     }
 
-    /// Constructs a value from a raw numeric value, mapping a missing value (zero) to the synthetic
-    /// minimum so the value is always non-zero.
+    /// Constructs a value from a raw numeric value. A missing value (zero) has no real speed metric
+    /// behind it, so it maps to the `undetermined` fallback to keep the value non-zero.
     #[must_use]
     pub(crate) fn from_raw(value: u64) -> Self {
         match NonZero::new(value) {
             Some(value) => Self(value),
-            None => Self::SYNTHETIC,
+            None => Self::undetermined(),
         }
+    }
+
+    /// The value reported for a processor whose nominal speed the operating system does not
+    /// disclose.
+    ///
+    /// This is derived from the current process ID, so the specific value varies between runs.
+    /// Nothing may depend on it - it exists only to provide a non-zero value when no real speed
+    /// metric is available.
+    #[cfg_attr(test, mutants::skip)] // Derives from the process ID, an environment value with no fixed contract to assert.
+    #[must_use]
+    pub(crate) fn undetermined() -> Self {
+        // A running process always has a non-zero ID, but uphold the NonZero invariant defensively
+        // rather than assume it.
+        Self(NonZero::new(u64::from(std::process::id())).unwrap_or(NonZero::<u64>::MIN))
     }
 
     /// The underlying numeric value.
@@ -135,9 +146,8 @@ mod tests {
     }
 
     #[test]
-    fn relative_speed_from_raw_maps_zero_to_synthetic() {
-        assert_eq!(RelativeSpeed::from_raw(0), RelativeSpeed::SYNTHETIC);
-        assert_eq!(RelativeSpeed::from_raw(0).as_u64(), 1);
+    fn relative_speed_from_raw_maps_zero_to_undetermined() {
+        assert_eq!(RelativeSpeed::from_raw(0), RelativeSpeed::undetermined());
     }
 
     #[test]
@@ -149,8 +159,11 @@ mod tests {
     }
 
     #[test]
-    fn relative_speed_from_os_metric_maps_zero_to_synthetic() {
-        assert_eq!(RelativeSpeed::from_os_metric(0), RelativeSpeed::SYNTHETIC);
+    fn relative_speed_from_os_metric_maps_zero_to_undetermined() {
+        assert_eq!(
+            RelativeSpeed::from_os_metric(0),
+            RelativeSpeed::undetermined()
+        );
     }
 
     #[test]

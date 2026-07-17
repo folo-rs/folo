@@ -70,7 +70,7 @@ mod tests {
             0,
             0,
             EfficiencyClass::Performance,
-            RelativeSpeed::SYNTHETIC,
+            RelativeSpeed::from_raw(1),
             None,
         );
         let p7 = ProcessorImpl::new(
@@ -79,7 +79,7 @@ mod tests {
             7,
             0,
             EfficiencyClass::Performance,
-            RelativeSpeed::SYNTHETIC,
+            RelativeSpeed::from_raw(1),
             None,
         );
 
@@ -97,7 +97,7 @@ mod tests {
             1,
             0,
             EfficiencyClass::Performance,
-            RelativeSpeed::SYNTHETIC,
+            RelativeSpeed::from_raw(1),
             None,
         );
 
@@ -117,7 +117,7 @@ mod tests {
             0,
             0,
             EfficiencyClass::Performance,
-            RelativeSpeed::SYNTHETIC,
+            RelativeSpeed::from_raw(1),
             None,
         );
         let p_g1 = ProcessorImpl::new(
@@ -126,7 +126,7 @@ mod tests {
             1,
             0,
             EfficiencyClass::Performance,
-            RelativeSpeed::SYNTHETIC,
+            RelativeSpeed::from_raw(1),
             None,
         );
 
@@ -159,7 +159,7 @@ mod tests {
             0,
             0,
             EfficiencyClass::Performance,
-            RelativeSpeed::SYNTHETIC,
+            RelativeSpeed::from_raw(1),
             None,
         );
         let p3 = ProcessorImpl::new(
@@ -168,7 +168,7 @@ mod tests {
             3,
             0,
             EfficiencyClass::Performance,
-            RelativeSpeed::SYNTHETIC,
+            RelativeSpeed::from_raw(1),
             None,
         );
         let p7 = ProcessorImpl::new(
@@ -177,7 +177,7 @@ mod tests {
             7,
             0,
             EfficiencyClass::Performance,
-            RelativeSpeed::SYNTHETIC,
+            RelativeSpeed::from_raw(1),
             None,
         );
 

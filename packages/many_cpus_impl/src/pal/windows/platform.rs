@@ -615,7 +615,7 @@ impl BuildTargetPlatform {
         // the values Windows records in the registry for every logical processor across all
         // processor groups. This is a passive read that never changes any thread's affinity. The
         // MHz value is scaled into the abstract relative-speed domain by `from_os_metric`;
-        // processors the platform reports no value for (0 MHz) map to the synthetic minimum.
+        // processors the platform reports no value for (0 MHz) map to a fallback value.
         self.bindings
             .get_processor_max_mhz(self.max_processor_count())
             .into_iter()
@@ -1517,8 +1517,8 @@ mod tests {
     /// Registers a default `get_processor_max_mhz` expectation that reports a distinct nominal clock
     /// speed per processor ID: processor `i` reports `(i + 1) * 1000` MHz. The binding surfaces one
     /// value per processor across all processor groups, indexed directly by processor ID, so this
-    /// gives every simulated processor a unique, non-synthetic relative speed and lets tests observe
-    /// the value flowing through `get_all_processors()` for processors in every group.
+    /// gives every simulated processor a unique, real (non-fallback) relative speed and lets tests
+    /// observe the value flowing through `get_all_processors()` for processors in every group.
     fn simulate_get_relative_speeds(bindings: &mut MockBindings) {
         bindings
             .expect_get_processor_max_mhz()

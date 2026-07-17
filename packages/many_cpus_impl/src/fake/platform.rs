@@ -466,14 +466,14 @@ mod tests {
             0,
             0,
             EfficiencyClass::Performance,
-            RelativeSpeed::SYNTHETIC,
+            RelativeSpeed::from_raw(1),
             None,
         );
         let eff = FakeProcessor::new(
             1,
             0,
             EfficiencyClass::Efficiency,
-            RelativeSpeed::SYNTHETIC,
+            RelativeSpeed::from_raw(1),
             None,
         );
 
@@ -487,7 +487,7 @@ mod tests {
             42,
             0,
             EfficiencyClass::Performance,
-            RelativeSpeed::SYNTHETIC,
+            RelativeSpeed::from_raw(1),
             None,
         );
 
@@ -500,7 +500,7 @@ mod tests {
             0,
             7,
             EfficiencyClass::Performance,
-            RelativeSpeed::SYNTHETIC,
+            RelativeSpeed::from_raw(1),
             None,
         );
 
@@ -526,14 +526,14 @@ mod tests {
             0,
             0,
             EfficiencyClass::Performance,
-            RelativeSpeed::SYNTHETIC,
+            RelativeSpeed::from_raw(1),
             Some(Arc::from("Fake Model")),
         );
         let without_model = FakeProcessor::new(
             1,
             0,
             EfficiencyClass::Performance,
-            RelativeSpeed::SYNTHETIC,
+            RelativeSpeed::from_raw(1),
             None,
         );
 
@@ -548,11 +548,11 @@ mod tests {
             .processor(ProcessorBuilder::new().id(1));
         let backend = FakePlatform::from_builder(&builder);
 
-        // Explicitly configured speed is preserved; the unconfigured one falls back to synthetic.
+        // Explicitly configured speed is preserved; the unconfigured one uses the default of 1.
         assert_eq!(backend.processors[0].relative_speed().as_u64(), 1800);
         assert_eq!(
             backend.processors[1].relative_speed(),
-            RelativeSpeed::SYNTHETIC
+            RelativeSpeed::from_raw(1)
         );
     }
 
