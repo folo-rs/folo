@@ -25,9 +25,9 @@ const WORK_PROCESSOR_TIME_TARGET: Duration = Duration::from_millis(100);
 /// so a heavily loaded host cannot let real time elapse without the work being
 /// counted.
 ///
-/// Thread processor time is a subset of process processor time, so reaching the
-/// target on this thread guarantees the process-wide clock has advanced by at
-/// least as much — making the bound valid for both thread and process spans.
+/// Thread processor time is a subset of process-wide processor time, so reaching
+/// the target on this thread guarantees the process-wide clock has advanced by at
+/// least as much, making the bound valid for both thread and process spans.
 ///
 /// Returns the number of operations performed.
 fn perform_measurable_cpu_work() -> u64 {
