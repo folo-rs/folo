@@ -98,7 +98,8 @@ fn real_platform_thread_span_measures_nonzero_time() {
     // Verify that the span recorded measurable processor time
     let total_time = report_processor_time(&session, "thread_work");
 
-    // With 50ms+ of intensive work, we must get a non-zero measurement
+    // The work loop consumes WORK_PROCESSOR_TIME_TARGET of processor time, so we
+    // must get a non-zero measurement.
     assert!(
         total_time > Duration::ZERO,
         "Expected measurable processor time for intensive work, but got {total_time:?}"
@@ -136,7 +137,8 @@ fn real_platform_process_span_measures_nonzero_time() {
     // Verify that the span recorded measurable processor time
     let total_time = report_processor_time(&session, "process_work");
 
-    // With 50ms+ of intensive work, we must get a non-zero measurement
+    // The work loop consumes WORK_PROCESSOR_TIME_TARGET of processor time, so we
+    // must get a non-zero measurement.
     assert!(
         total_time > Duration::ZERO,
         "Expected measurable processor time for intensive work, but got {total_time:?}"
