@@ -1,0 +1,42 @@
+[package]
+# Cargo names binaries from the package name and expects dashes; the `cargo-`
+# prefix makes the binary invocable as the `cargo bench-history-faker` subcommand.
+name = "cargo-bench-history-faker"
+description = "Unsupported synthetic benchmark-output generator for validating cargo-bench-history end to end; no stable API or CLI"
+publish = true
+version = "0.0.5"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.binstall]
+# Prebuilt binaries are published by .github/workflows/release.yml (see
+# docs/release-automation.md). release-plz tags releases as `<crate>-v<version>`,
+# which cargo-binstall's auto-detection does not derive, so the URL is explicit.
+# Archives are `.zip` on every platform and the binary sits at the archive root.
+pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-v{ version }-{ target }.zip"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "zip"
+
+[lib]
+name = "cargo_bench_history_faker"
+
+[[bin]]
+name = "cargo-bench-history-faker"
+path = "src/main.rs"
+
+[features]
+# Internal-only helper (`binary_path`) for locating the freshly built binary from
+# in-workspace tests that must spawn the real process. Never a public API; see
+# docs/impl-crate-split.md. In-workspace dev-dependencies enable it explicitly.
+private-test-util = []
+
+[dependencies]
+mimalloc = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

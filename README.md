@@ -162,10 +162,10 @@ Auxiliary packages developed and published by this project:
 Packages present in the repo but not relevant to a general audience:
 
 * `benchmarks` - random pile of benchmarks to explore relevant scenarios and guide Folo development.
+* `cargo-bench-history-faker` - unsupported synthetic benchmark-output generator that validates `cargo-bench-history` end to end (in this repo and sibling repos); published as a convenience binary but has no stable API or CLI.
 * `cargo-bench-history-stress` - on-demand stress harness that seeds a synthetic benchmark history and times `cargo-bench-history` analysis modes over it; not published.
 * `folo_ffi` - utilities for working with FFI logic; exists for internal use in Folo packages; no stable API surface.
 * `folo_utils` - utilities for internal use in Folo packages; exists for internal use in Folo packages; no stable API surface.
-* `mock_bench_engine` - test-support stand-in benchmark engine for `cargo-bench-history` integration tests; not published.
 * `testing` - private helpers for testing and examples in Folo packages.
 * `ui_tests` - compile-time UI tests for workspace packages; not published.
 * Various `_impl` packages (and the `linked_macros`/`cbh_*` families) that exist only to separate public and private API surface for implementation purposes; do not reference them directly.

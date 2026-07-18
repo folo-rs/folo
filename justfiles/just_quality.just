@@ -13,14 +13,14 @@ coverage-measure:
     # simply sums up all the data in the target folder, even if it is from old builds.
     cargo +{{ env_var('RUST_NIGHTLY') }} llvm-cov clean --workspace
 
-    # Pre-build the mock benchmark engine once and hand each per-test process its path via
-    # MOCK_BENCH_ENGINE. nextest runs every test in its own process, so this spares each
+    # Pre-build the benchmark faker once and hand each per-test process its path via
+    # CBH_FAKER. nextest runs every test in its own process, so this spares each
     # cargo-bench-history integration test a redundant on-demand Cargo freshness check. The
-    # engine builds into its own dedicated target directory (see `_mock-engine-path`), so
+    # faker builds into its own dedicated target directory (see `_faker-path`), so
     # neither this pre-build nor any residual on-demand build relinks a binary out of the
     # shared coverage tree while another test is spawning it - the transient "No such file or
-    # directory" engine-spawn races previously seen on macOS (issue #332).
-    $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
+    # directory" spawn races previously seen on macOS (issue #332).
+    $env:CBH_FAKER = just _faker-path | Select-Object -Last 1
 
     # This will run tests and generate test coverage data files, to be analyzed separately.
     #
@@ -142,10 +142,10 @@ careful FILTER="":
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
-    # Pre-build the mock benchmark engine once and pass its path via MOCK_BENCH_ENGINE, so the
-    # cargo-bench-history integration tests skip the per-process on-demand engine build (the
+    # Pre-build the benchmark faker once and pass its path via CBH_FAKER, so the
+    # cargo-bench-history integration tests skip the per-process on-demand faker build (the
     # same pattern the `test` and `coverage-measure` recipes use).
-    $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
+    $env:CBH_FAKER = just _faker-path | Select-Object -Last 1
 
     cargo +$env:RUST_NIGHTLY careful test {{ target_package }} --no-fail-fast --all-features {{ FILTER }} --locked
 

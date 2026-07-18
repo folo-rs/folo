@@ -1,13 +1,13 @@
 //! A true end-to-end test that runs the real `cargo bench` against a real
 //! Criterion benchmark and harvests the output the genuine engine writes.
 //!
-//! Every other integration test drives `collect` against a mock engine through the
+//! Every other integration test drives `collect` against the faker through the
 //! `run_with_overrides` entry. That is fast and hermetic, but it cannot exercise
 //! real cargo argument passing, Criterion's actual on-disk layout, or the working
 //! directory cargo gives a benchmark binary. This test closes that gap with the
 //! smallest possible real benchmark.
 //!
-//! Like the mock-engine tests, it pins its own tempdir workspace and target root
+//! Like the faker-driven tests, it pins its own tempdir workspace and target root
 //! through `run_with_overrides` rather than reading the ambient environment: the
 //! production `resolve_target_root` honours a `CARGO_TARGET_DIR` override (so a
 //! real `cargo llvm-cov`-style target directory is respected), which means an
@@ -135,7 +135,7 @@ const FIXTURE_CONFIG: &str = "[project]\nid = \"e2e\"\n";
 #[cfg_attr(coverage_nightly, ignore)] // Heavy real build; llvm-cov shares one target dir.
 #[cfg_attr(
     mutants,
-    ignore = "Heavy real `cargo bench` build (compiles Criterion per run); the collect/harvest pipeline it covers is also driven by the mock-engine integration tests and the resolve_target_root unit test, so it carries no unique mutation signal"
+    ignore = "Heavy real `cargo bench` build (compiles Criterion per run); the collect/harvest pipeline it covers is also driven by the faker-based integration tests and the resolve_target_root unit test, so it carries no unique mutation signal"
 )]
 async fn collect_against_real_criterion_bench_stores_wall_time() {
     let fixture = tempfile::tempdir().unwrap();
@@ -154,7 +154,7 @@ async fn collect_against_real_criterion_bench_stores_wall_time() {
     .unwrap();
 
     // Pin the fixture as the workspace and `<root>/target` as the target root,
-    // exactly as the mock-engine tests do, so the run never reads the ambient
+    // exactly as the faker-driven tests do, so the run never reads the ambient
     // environment. This keeps `cargo bench` (run in the workspace) building and
     // harvesting inside the fixture's own tempdir tree regardless of any ambient
     // `CARGO_TARGET_DIR` — a shared target directory would otherwise expose the

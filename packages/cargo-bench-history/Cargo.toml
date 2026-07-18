@@ -57,12 +57,12 @@ azure_core = { workspace = true }
 azure_identity = { workspace = true, features = ["default"] }
 azure_storage_blob = { workspace = true, features = ["default"] }
 base64 = { workspace = true }
+cargo-bench-history-faker = { path = "../cargo-bench-history-faker", features = ["private-test-util"] }
 cbh_codec = { path = "../cbh_codec" }
 cbh_diag = { path = "../cbh_diag", features = ["private-test-util"] }
 cbh_git = { path = "../cbh_git", features = ["private-test-util"] }
 cbh_storage = { path = "../cbh_storage", features = ["private-test-util"] }
 futures = { workspace = true, features = ["executor"] }
-mock_bench_engine = { path = "../mock_bench_engine" }
 mutants = { workspace = true }
 reqwest = { workspace = true, features = ["gzip", "rustls"] }
 serial_test = { workspace = true }

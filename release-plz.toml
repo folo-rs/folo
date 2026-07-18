@@ -30,6 +30,16 @@ name = "cargo-bench-history"
 version_group = "cargo-bench-history"
 
 [[package]]
+name = "cargo-bench-history-faker"
+
+# The unsupported test-support faker (published lib+bin; see docs/release-automation.md
+# and the package README). It rides in the `cargo-bench-history` version group so the
+# whole CLI family bumps together — a faker-only change bumping the CLI is accepted. Unlike
+# the `cbh_*` impl crates it is not a dependency of the CLI, so the workspace Cargo.toml
+# does not pin it with `=`; the shared group is enough to keep the numbers aligned.
+version_group = "cargo-bench-history"
+
+[[package]]
 name = "cbh_analyze"
 
 # One of the `cargo-bench-history` implementation crates (see docs/impl-crate-split.md):

@@ -508,10 +508,10 @@ impl AzureWorkspace {
     /// harvest at the workspace's own `target/` so it is hermetic.
     async fn drive(&self, args: &[&str]) -> Result<RunOutcome, RunError> {
         let target_root = self.dir.path().join("target");
-        // Drive `collect`/`backfill` against the mock engine instead of `cargo bench`:
+        // Drive `collect`/`backfill` against the faker instead of `cargo bench`:
         // the program plus its fixture-describing arguments form the benchmark
         // command, which the single bench invocation runs to produce engine output.
-        let mut bench_command = vec![mock_bench_engine::binary_path().to_owned()];
+        let mut bench_command = vec![cargo_bench_history_faker::binary_path().to_owned()];
         bench_command.extend(self.bench.iter().cloned());
 
         // Enable verbose reporting so the reporter's `note_with` closures run against

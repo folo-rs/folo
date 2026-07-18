@@ -49,6 +49,10 @@ pub enum CacheSelection {
 pub enum Command {
     /// Run the configured benchmark engines and store the results.
     Collect(CollectOptions),
+    /// Import pre-existing engine output into storage (the collect pipeline
+    /// without running `cargo bench`). Internal and hidden; general-purpose (it
+    /// makes no assumption that the imported output is synthetic).
+    Import(ImportOptions),
     /// Generate a starter configuration file.
     Install(InstallOptions),
     /// Analyze stored history for notable patterns.
@@ -143,6 +147,77 @@ impl Default for CollectOptions {
         }
     }
 }
+
+/// Options for the internal, hidden `import` command.
+///
+/// `import` is the collect pipeline minus the `cargo bench` run: it harvests
+/// pre-existing engine output from `target_dir`, probes the real host context, and
+/// stores per engine. It keeps only collect's context/storage flags and adds the
+/// scan directory plus metadata overrides; it drops every cargo-run and bench-scope
+/// flag (`--package`/`--bench`/`--features`/`--best-of`/`--no-store`/passthrough).
+///
+/// The metadata overrides touch only the storage discriminants (key-affecting
+/// metadata); everything else in the run context stays probed from the real host.
+#[doc(hidden)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImportOptions {
+    /// Path to the configuration file, if overridden.
+    pub config_path: Option<PathBuf>,
+    /// Repository to read git state from and resolve the project against;
+    /// defaults to the working directory.
+    pub repo: Option<PathBuf>,
+    /// Local-storage selection from `--local`; overrides the configured cloud
+    /// backend. `None` means `--local` was not given (use the configured backend).
+    pub local: Option<LocalStorageSelection>,
+    /// The tree to scan for engine output (`--target-dir`). Required and with no
+    /// default: an ungated harvest of the shared `target/` would sweep stale
+    /// leftovers from unrelated runs into one import, so the caller must name the
+    /// tree it curated.
+    pub target_dir: PathBuf,
+    /// Override for the machine fingerprint (hardware-dependent engines), if set.
+    pub machine_key: Option<String>,
+    /// Override for the partition target triple, if set. Applied to both the
+    /// partition key and the recorded `ToolchainInfo.target_triple` so the stored
+    /// object is internally coherent.
+    pub target_triple: Option<String>,
+    /// Override for the commit the run is keyed under, if set. Resolved through git
+    /// (a ref naming no real commit is an error); it avoids a checkout but not the
+    /// existence requirement, and clears the recorded branch since the imported
+    /// data did not come from the current checkout.
+    pub commit: Option<String>,
+    /// Store a dirty snapshot (`dirty-<sec>.json`) keyed by the import-time second
+    /// instead of a clean object.
+    pub dirty: bool,
+    /// Replace an already-stored result for this run's identity instead of
+    /// refusing the import as a duplicate.
+    pub overwrite: bool,
+    /// Treat an already-stored result for this run's identity as a success that
+    /// writes nothing, instead of refusing the import as a duplicate. Mutually
+    /// exclusive with `overwrite`.
+    pub skip_existing: bool,
+    /// Emit detailed diagnostic notes to standard error describing each step.
+    pub verbose: bool,
+}
+
+impl Default for ImportOptions {
+    fn default() -> Self {
+        Self {
+            config_path: None,
+            repo: None,
+            local: None,
+            target_dir: PathBuf::new(),
+            machine_key: None,
+            target_triple: None,
+            commit: None,
+            dirty: false,
+            overwrite: false,
+            skip_existing: false,
+            verbose: false,
+        }
+    }
+}
+
+/// Options for the `install` command.
 #[doc(hidden)]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct InstallOptions {

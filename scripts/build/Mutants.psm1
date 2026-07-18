@@ -68,10 +68,10 @@ function Get-MutantsExcludeArgument {
         '-e', (protect 'packages/testing/**'),
         '-e', (protect 'packages/benchmarks/**'),
 
-        # The mock benchmark engine is a test-support binary (its own never-published
-        # `mock_bench_engine` package, which the integration tests spawn). It is scaffolding,
-        # not shipped code, so mutating it yields no production coverage signal.
-        '-e', (protect 'packages/mock_bench_engine/**'),
+        # The benchmark faker is a test-support binary (its own `cargo-bench-history-faker`
+        # lib+bin package, which the integration tests spawn). It is scaffolding, not shipped
+        # code, so mutating it yields no production coverage signal.
+        '-e', (protect 'packages/cargo-bench-history-faker/**'),
 
         # `testing.rs` is an in-workspace test utility (gated behind the `private-test-util`
         # feature, consumed only by the shell crate's tests). It is scaffolding with no public

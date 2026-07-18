@@ -638,6 +638,39 @@ direction-colored, and it is drawn only when a set has at least two points. The 
 carries no chart (a charting concern the human reports draw from internally, not data a
 consumer reconstructs).
 
+### 7.9 `import`
+
+`import` is an **internal, unsupported** command, hidden from `--help` and carrying no
+stable interface. It exists so any repository in the organization — not just this one — can
+exercise the full storage and analysis pipeline against curated engine output using only
+published binaries, pairing with the `cargo-bench-history-faker` engine. It makes **no
+assumption that the data is synthetic**: real benchmark output imports identically, so
+`import` is simply `collect` with the `cargo bench` run removed.
+
+Concretely, `import` harvests whichever engines already produced output under a **required**
+`--target-dir` and stores the result through the exact same finalize-and-store path
+`collect` uses — same clean/dirty keying, same clean-key refusal / `--overwrite` /
+`--skip-existing` semantics, same dirty-snapshot coexistence, same backend selection. The
+one behavioural difference is that the harvest is **ungated**: with no run to time, there is
+no freshness cutoff, so every matching file in the tree is ingested rather than only those
+modified at or after a run start. That is exactly why `--target-dir` is **required** and
+never defaults to `<repo>/target` — an ungated sweep of the default tree would re-ingest
+unrelated stale output. By default the run takes real host context just as `collect` does:
+it probes the real repository (keying by the current HEAD commit, dirty per the working
+tree) and the real toolchain and hardware.
+
+Four overrides let a caller attribute an imported run to a context other than the current
+host, and they touch **only key-affecting discriminants** — body provenance stays real.
+`--target-triple` sets both the storage-partition triple and the recorded toolchain target
+triple. `--machine-key` sets the machine partition of the hardware-dependent engines only
+(Callgrind and `alloc_tracker` remain `synthetic`); the recorded `MachineInfo` stays the
+real host's. `--commit` is **resolved through git** (an unknown commit is a hard error) and
+keys the run to any existing commit — typically an ancestor — **without checking it out**,
+clearing the branch to `None`; this lets a test attribute a whole synthetic series across
+history from a single HEAD position. `--dirty` records the run as a dirty snapshot rather
+than a clean point. The commit must still exist: `import` never invents git topology, so
+real integration testing still requires a real history.
+
 ## 8. Analysis
 
 A series is built per `(discriminant set, benchmark identity, metric)`, ordered by git

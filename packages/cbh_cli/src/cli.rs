@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use cbh_command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
-    ExamineOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection,
+    ExamineOptions, ImportOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection,
     MachineKeyOptions, PruneOptions, UnblessOptions,
 };
 use cbh_model::BenchmarkIdPrefix;
@@ -93,6 +93,7 @@ impl Cli {
             Subcommand::Bless(command) => Command::Bless(command.into_options()),
             Subcommand::Collect(command) => Command::Collect(command.into_options()),
             Subcommand::Examine(command) => Command::Examine(command.into_options()),
+            Subcommand::Import(command) => Command::Import(command.into_options()),
             Subcommand::Install(command) => Command::Install(command.into_options()),
             Subcommand::List(command) => Command::List(command.into_options()),
             Subcommand::MachineKey(command) => Command::MachineKey(command.into_options()),
@@ -126,6 +127,13 @@ enum Subcommand {
     Bless(BlessCommand),
     /// Run the workspace benchmarks (`cargo bench`) and store the results.
     Collect(CollectCommand),
+    /// Import pre-existing engine output into storage without running a benchmark
+    /// engine (the collect pipeline minus `cargo bench`). Internal and hidden: it
+    /// exists to validate the storage/analysis pipeline against curated engine
+    /// output (for example, output produced by `cargo-bench-history-faker`), so it
+    /// is kept out of the public help.
+    #[command(hide = true)]
+    Import(ImportCommand),
     /// Generate a starter configuration file.
     Install(InstallCommand),
     /// List the data set a matching `analyze` would include, without analyzing it.
@@ -401,6 +409,76 @@ impl CollectCommand {
             passthrough: self.passthrough,
             verbose: self.env.verbose,
             best_of: self.best_of,
+        }
+    }
+}
+
+/// Import pre-existing engine output into storage (the collect pipeline minus the
+/// `cargo bench` run). Internal and hidden.
+///
+/// It keeps collect's environment/storage flags and adds the required scan
+/// directory plus the metadata overrides that let one host synthesize data for
+/// another target triple, machine, or commit. It has no benchmark-scope or feature
+/// flags because it never runs a build.
+#[derive(Args, Debug)]
+struct ImportCommand {
+    #[command(flatten)]
+    env: EnvArgs,
+
+    /// The directory tree to scan for pre-existing engine output. Required, with
+    /// no default: an ungated harvest of the shared `target/` directory would
+    /// sweep stale leftovers from unrelated runs into one import, so the caller
+    /// must name the tree it curated.
+    #[arg(long, value_name = "PATH", help_heading = HEADING_ENV)]
+    target_dir: PathBuf,
+
+    /// Override the machine fingerprint used to partition hardware-dependent
+    /// results (for example, a CI machine-pool name).
+    #[arg(long, value_name = "KEY", help_heading = HEADING_DISCRIMINANT)]
+    machine_key: Option<String>,
+
+    /// Override the target triple the results are partitioned under (and recorded
+    /// against), so a single host can synthesize data for another target.
+    #[arg(long, value_name = "TRIPLE", help_heading = HEADING_DISCRIMINANT)]
+    target_triple: Option<String>,
+
+    /// Override the commit the run is keyed under (default: the current commit).
+    /// Resolved through git, so it must name a real commit; it avoids checking the
+    /// commit out, not the requirement that it exist.
+    #[arg(long, value_name = "COMMIT", help_heading = HEADING_COMMIT)]
+    commit: Option<String>,
+
+    /// Store a dirty snapshot keyed by the import-time second instead of a clean
+    /// object, as if the working tree had uncommitted changes.
+    #[arg(long, help_heading = HEADING_DISCRIMINANT)]
+    dirty: bool,
+
+    /// Replace an already-stored result for this run instead of refusing it as a
+    /// duplicate.
+    #[arg(long, help_heading = HEADING_ENV)]
+    overwrite: bool,
+
+    /// Treat an already-stored result for this run as a success that writes
+    /// nothing, instead of refusing it as a duplicate. Mutually exclusive with
+    /// `--overwrite`.
+    #[arg(long, help_heading = HEADING_ENV, conflicts_with = "overwrite")]
+    skip_existing: bool,
+}
+
+impl ImportCommand {
+    fn into_options(self) -> ImportOptions {
+        ImportOptions {
+            config_path: self.env.config,
+            repo: self.env.repo,
+            local: local_selection(self.env.local),
+            target_dir: self.target_dir,
+            machine_key: self.machine_key,
+            target_triple: self.target_triple,
+            commit: self.commit,
+            dirty: self.dirty,
+            overwrite: self.overwrite,
+            skip_existing: self.skip_existing,
+            verbose: self.env.verbose,
         }
     }
 }
@@ -998,6 +1076,77 @@ mod tests {
         ] {
             assert!(help.contains(command), "help lists {command}: {help}");
         }
+    }
+
+    #[test]
+    fn import_is_hidden_from_help() {
+        // `import` parses (it is registered below) but is deliberately kept out of
+        // the public help, so it must not surface in the top-level command list.
+        let help = Cli::help("cargo-bench-history");
+        assert!(
+            !help.contains("import"),
+            "import is hidden from help: {help}"
+        );
+    }
+
+    #[test]
+    fn import_parses_target_dir_and_metadata_overrides() {
+        let command = parse(&[
+            "import",
+            "--target-dir",
+            "curated/target",
+            "--target-triple",
+            "aarch64-apple-darwin",
+            "--machine-key",
+            "lab-runner-7",
+            "--commit",
+            "release-1.0",
+            "--dirty",
+            "--overwrite",
+        ]);
+        let Command::Import(options) = command else {
+            panic!("expected import command");
+        };
+        assert_eq!(options.target_dir, PathBuf::from("curated/target"));
+        assert_eq!(
+            options.target_triple.as_deref(),
+            Some("aarch64-apple-darwin")
+        );
+        assert_eq!(options.machine_key.as_deref(), Some("lab-runner-7"));
+        assert_eq!(options.commit.as_deref(), Some("release-1.0"));
+        assert!(options.dirty);
+        assert!(options.overwrite);
+        assert!(!options.skip_existing);
+    }
+
+    #[test]
+    fn import_requires_target_dir() {
+        // The harvest is ungated, so the tree to scan must be named explicitly
+        // rather than defaulting to the shared `target/` directory.
+        let error = Cli::from_args(&["cargo-bench-history"], &["import"]).unwrap_err();
+        assert_eq!(error.status, Err(()));
+        assert!(error.output.contains("--target-dir"), "{}", error.output);
+    }
+
+    #[test]
+    fn import_overwrite_and_skip_existing_conflict() {
+        let error = Cli::from_args(
+            &["cargo-bench-history"],
+            &[
+                "import",
+                "--target-dir",
+                "t",
+                "--overwrite",
+                "--skip-existing",
+            ],
+        )
+        .unwrap_err();
+        assert_eq!(error.status, Err(()));
+        assert!(
+            error.output.contains("cannot be used with"),
+            "{}",
+            error.output
+        );
     }
 
     #[test]

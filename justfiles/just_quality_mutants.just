@@ -72,16 +72,16 @@ mutants SHARD="" CAREFUL='false':
     # This allows mutations that cause infinite loops to hang as expected.
     $env:MUTATION_TESTING = "1"
 
-    # Mirror the `just test*` recipes: pre-build the `mock_bench_engine` test-support binary
-    # and hand its absolute path to the cargo-bench-history integration tests via
-    # MOCK_BENCH_ENGINE. Without this, those tests build the engine on demand inside every
+    # Mirror the `just test*` recipes: pre-build the `cargo-bench-history-faker` test-support
+    # binary and hand its absolute path to the cargo-bench-history integration tests via
+    # CBH_FAKER. Without this, those tests build the faker on demand inside every
     # mutant's fresh target tree, and under the CPU contention of a full parallel mutation run
     # that per-mutant build can push an otherwise-fast test past the `--timeout` ceiling and
-    # report a spurious TIMEOUT (issue #349). The engine is excluded from mutation (see
+    # report a spurious TIMEOUT (issue #349). The faker is excluded from mutation (see
     # Get-MutantsExcludeArgument), so a pre-built binary masks no mutant. Build it before
     # RUSTFLAGS gains `--cfg mutants` below so the artifact matches the one `just test`
     # produces and neither run churns the other's cache.
-    $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
+    $env:CBH_FAKER = just _faker-path | Select-Object -Last 1
 
     # Enable the `mutants` cfg so tests carrying `#[cfg_attr(mutants, ignore = "<why>")]`
     # opt out of mutation runs. cargo-mutants defines no cfg of its own, but it preserves
