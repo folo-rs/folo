@@ -16,7 +16,7 @@
 //! (for example) `MachineInfo` always records this machine's provenance even when
 //! `--machine-key` repartitions the run.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use cbh_config::{
     load_config, resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo,
@@ -84,11 +84,7 @@ pub(crate) async fn execute(
     // against the repository base, matching `collect`'s target-root resolution).
     // The harvest is ungated, so the caller must name the tree it curated rather
     // than have the shared `target/` directory swept for stale leftovers.
-    let target_root = if options.target_dir.is_absolute() {
-        options.target_dir.clone()
-    } else {
-        base.join(&options.target_dir)
-    };
+    let target_root = resolve_target_root(&options.target_dir, base)?;
     reporter.note_with(|| {
         format!(
             "scanning for engine output (ungated, curated tree): {}",
@@ -117,6 +113,30 @@ pub(crate) async fn execute(
         .flush_pending_invalidation(&project_id, &reporter)
         .await;
     finish_with_flush(result, flush)
+}
+
+/// Resolves the required `--target-dir` into an absolute scan root.
+///
+/// The harvest is ungated, so an empty `target_dir` would let `base.join("")`
+/// sweep the repository root and pull stale, unrelated engine output into the
+/// import; reject it up front instead. The CLI always supplies a value (clap
+/// requires it), but a programmatic caller can leave it empty (it defaults to an
+/// empty [`PathBuf`] in [`ImportOptions`]), so the guard lives here rather than
+/// relying on argument parsing. A relative path resolves against the repository
+/// base, matching `collect`'s target-root resolution; an absolute path is taken
+/// as given.
+fn resolve_target_root(target_dir: &Path, base: &Path) -> Result<PathBuf, RunError> {
+    if target_dir.as_os_str().is_empty() {
+        return Err(RunError::Import {
+            message: "import requires a non-empty --target-dir naming the curated output tree"
+                .to_owned(),
+        });
+    }
+    Ok(if target_dir.is_absolute() {
+        target_dir.to_path_buf()
+    } else {
+        base.join(target_dir)
+    })
 }
 
 /// Orchestrates an import against injected collaborators.
@@ -554,6 +574,39 @@ mod tests {
             storage.keys().is_empty(),
             "an unresolved commit stores nothing"
         );
+    }
+
+    #[test]
+    fn resolve_target_root_rejects_an_empty_target_dir() {
+        let error = resolve_target_root(&PathBuf::new(), &PathBuf::from("/work")).unwrap_err();
+        let RunError::Import { message } = error else {
+            panic!("expected an import error, got {error:?}");
+        };
+        assert!(message.contains("--target-dir"), "{message}");
+    }
+
+    #[test]
+    fn resolve_target_root_resolves_a_relative_dir_against_the_base() {
+        let base = if cfg!(windows) {
+            PathBuf::from(r"C:\work")
+        } else {
+            PathBuf::from("/work")
+        };
+        let resolved = resolve_target_root(&PathBuf::from("out"), &base).unwrap();
+        assert_eq!(resolved, base.join("out"));
+        assert!(resolved.is_absolute());
+    }
+
+    #[test]
+    fn resolve_target_root_honors_an_absolute_dir() {
+        let absolute = if cfg!(windows) {
+            r"C:\custom\out"
+        } else {
+            "/custom/out"
+        };
+        let resolved =
+            resolve_target_root(&PathBuf::from(absolute), &PathBuf::from("ignored-base")).unwrap();
+        assert_eq!(resolved, PathBuf::from(absolute));
     }
 
     #[test]
