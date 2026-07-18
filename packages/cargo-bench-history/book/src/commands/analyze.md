@@ -21,7 +21,9 @@ one:
   long-range change-point detection, drift detection, and false-discovery correction, and
   reports regressions only by default.
 - **branch** — the feature-branch view (commits past the merge-base). It judges the branch by
-  its latest regime against the base and reports both regressions and improvements.
+  its tip commit's latest state against the base and reports both regressions and improvements.
+  Only the tip commit lands in the base on merge, so the branch's own intermediate history is
+  ignored.
 
 See [Analysis](../concepts/analysis.md) for what each mode detects.
 
@@ -37,8 +39,9 @@ See [Analysis](../concepts/analysis.md) for what each mode detects.
   history accumulates.
 - Positional prefix subjects scope the analysis to benchmarks whose id starts with a prefix.
   There is no metric filter — metrics are an internal detail.
-- By default, **ghost** benchmarks (identities with no run at the context commit) are
-  dropped before detection; `--include-ghosts` opts back in.
+- **Ghost** benchmarks (identities with no run at the context commit — deleted, renamed, or
+  replaced) are always dropped before detection, since re-flagging a benchmark that no longer
+  exists is noise.
 
 ## Output
 

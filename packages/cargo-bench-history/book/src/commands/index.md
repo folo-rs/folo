@@ -28,6 +28,6 @@ prefixes for `bless`, commits for `prune`, and the range endpoints for `backfill
 
 `analyze`, `list`, `prune`, and `examine` share one data-set-selection pipeline, so the
 same selection flags mean the same thing across all four. The analysis-only flags
-(`--include-improvements`, `--include-inactive`, `--include-ghosts`) and the analyze-only
+(`--include-improvements`, `--include-inactive`) and the analyze-only
 condensed Markdown summary are exceptions: only `analyze` detects; the others reuse the
 selection but never analyze.

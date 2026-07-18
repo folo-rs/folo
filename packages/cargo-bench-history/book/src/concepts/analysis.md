@@ -47,14 +47,15 @@ modes, auto-detected from git topology (there is no flag to force a mode):
 | Change-point (Pettitt + engine gating) | ✅ | — |
 | Monotonic drift (Mann–Kendall + Theil–Sen) | ✅ | — |
 | Benjamini–Hochberg false-discovery filter | ✅ | — |
-| Latest-regime vs. base | — | ✅ |
+| Tip commit vs. base | — | ✅ |
 | Improvements reported | opt-in | ✅ |
 | Resolved (inactive) findings reported | opt-in | — |
 
 - **history** — the base-branch view: long-range change-point, drift, and false-discovery
   techniques; reports regressions only by default.
-- **branch** — the feature-branch view: judges the branch by its latest regime against the
-  base, reporting both directions.
+- **branch** — the feature-branch view: judges the tip commit's latest state against the
+  base, reporting both directions. Only the tip commit lands in the base on merge, so the
+  branch's own intermediate history is ignored.
 
 ## Re-baselining
 
