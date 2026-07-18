@@ -373,7 +373,12 @@ impl BenchOutputSource for FsBenchOutputSource {
 /// Callers apply it per boundary via [`Option::map`], so a disabled gate (`None`)
 /// stays `None` and admits every candidate file.
 fn freshness_threshold(since: SystemTime) -> SystemTime {
-    since.checked_sub(MTIME_SLACK).unwrap_or(since)
+    let since_epoch = since
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO);
+    SystemTime::UNIX_EPOCH
+        .checked_add(since_epoch.saturating_sub(MTIME_SLACK))
+        .unwrap_or(SystemTime::UNIX_EPOCH)
 }
 
 /// Renders a freshness threshold for a diagnostic note.
@@ -480,6 +485,23 @@ mod tests {
     fn format_mtime_renders_a_known_instant_as_rfc3339() {
         let time = SystemTime::UNIX_EPOCH + Duration::from_secs(3);
         assert_eq!(format_mtime(time), "1970-01-01T00:00:03Z");
+    }
+
+    #[test]
+    fn freshness_threshold_subtracts_the_slack() {
+        let since = SystemTime::UNIX_EPOCH + Duration::from_secs(50);
+        assert_eq!(
+            freshness_threshold(since),
+            SystemTime::UNIX_EPOCH + Duration::from_secs(50) - MTIME_SLACK
+        );
+    }
+
+    #[test]
+    fn freshness_threshold_saturates_at_the_epoch_for_near_epoch_boundaries() {
+        // A boundary within MTIME_SLACK of the epoch must not push the cutoff
+        // forward: saturating at the epoch keeps every old file admitted.
+        let since = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+        assert_eq!(freshness_threshold(since), SystemTime::UNIX_EPOCH);
     }
 
     #[test]
