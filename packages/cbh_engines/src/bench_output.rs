@@ -488,6 +488,20 @@ mod tests {
     }
 
     #[test]
+    fn format_threshold_describes_a_disabled_gate_in_words() {
+        assert_eq!(
+            format_threshold(None),
+            "the beginning of time (freshness gate disabled)"
+        );
+    }
+
+    #[test]
+    fn format_threshold_renders_an_enabled_gate_as_its_instant() {
+        let time = SystemTime::UNIX_EPOCH + Duration::from_secs(3);
+        assert_eq!(format_threshold(Some(time)), "1970-01-01T00:00:03Z");
+    }
+
+    #[test]
     fn freshness_threshold_subtracts_the_slack() {
         let since = SystemTime::UNIX_EPOCH + Duration::from_secs(50);
         assert_eq!(
