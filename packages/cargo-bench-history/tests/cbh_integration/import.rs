@@ -36,6 +36,12 @@ fn run_faker_binary(target_dir: &Path, args: &[&str]) {
 /// human-readable completion message. Drives the real hidden `import` command
 /// through the production entry, keying the run to `commit` via `--commit` so no
 /// checkout is needed to attribute the imported data to a historical commit.
+///
+/// The run is keyed under [`HARNESS_AUTO_TRIPLE`] via `--target-triple` so the
+/// synthetic callgrind set matches the auto-detected target-triple facet a drive
+/// injects into the reporting commands. That makes the round-trip host-independent
+/// (the real host triple would only match on Linux), rather than relying on the
+/// probed toolchain host.
 async fn import_for_commit(workspace: &Workspace, target_dir: &Path, commit: &str) -> String {
     let outcome = workspace
         .drive(&[
@@ -44,6 +50,8 @@ async fn import_for_commit(workspace: &Workspace, target_dir: &Path, commit: &st
             target_dir.to_str().unwrap(),
             "--commit",
             commit,
+            "--target-triple",
+            HARNESS_AUTO_TRIPLE,
         ])
         .await
         .unwrap();
