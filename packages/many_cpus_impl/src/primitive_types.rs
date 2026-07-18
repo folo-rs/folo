@@ -99,6 +99,10 @@ impl RelativeSpeed {
 
     /// Constructs a value from a raw numeric value. A missing value (zero) has no real speed metric
     /// behind it, so it maps to the `UNDETERMINED` sentinel to keep the value non-zero.
+    // Raw speed values only originate on the real Linux and Windows platforms (via
+    // `from_os_metric`), in the fake platform, or in tests; other builds report fallback speeds, so
+    // gate this out there to avoid dead code (for example on macOS or under Miri).
+    #[cfg(any(test, feature = "test-util", all(not(miri), any(target_os = "linux", windows))))]
     #[must_use]
     pub(crate) fn from_raw(value: u64) -> Self {
         match NonZero::new(value) {
