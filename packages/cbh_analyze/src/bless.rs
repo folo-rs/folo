@@ -31,10 +31,12 @@ use cbh_storage::{Storage, build_storage, finish_with_flush};
 use jiff::Timestamp;
 use tick::Clock;
 
-use super::announce::{AnnouncedBase, AnnouncedContext, selection_announcement};
+use super::announce::{
+    AnnouncedBase, AnnouncedContext, announce_selection, selection_announcement,
+};
 use super::history::resolve_base;
 use super::{
-    AutoFacets, Selection, detect_auto_facets, facet_filtered_candidates, resolve_facets,
+    AutoFacets, Selection, facet_filtered_candidates, resolve_auto_facets, resolve_facets,
     resolve_now,
 };
 use crate::AnalyzeError;
@@ -55,6 +57,7 @@ pub async fn bless(
     options: &BlessOptions,
     workspace_dir: &Path,
     clock_override: Option<Clock>,
+    auto_override: Option<AutoFacets>,
 ) -> Result<String, AnalyzeError> {
     let reporter = StderrReporter::new(options.verbose);
 
@@ -67,7 +70,7 @@ pub async fn bless(
     let storage = build_storage(local.as_deref(), &config, workspace_dir, None)?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
-    let auto = detect_auto_facets().await?;
+    let auto = resolve_auto_facets(auto_override).await?;
 
     let now = resolve_now(clock_override);
     let result = bless_with(
@@ -103,6 +106,7 @@ pub async fn bless(
 pub async fn unbless(
     options: &UnblessOptions,
     workspace_dir: &Path,
+    auto_override: Option<AutoFacets>,
 ) -> Result<String, AnalyzeError> {
     let reporter = StderrReporter::new(options.verbose);
 
@@ -115,7 +119,7 @@ pub async fn unbless(
     let storage = build_storage(local.as_deref(), &config, workspace_dir, None)?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
-    let auto = detect_auto_facets().await?;
+    let auto = resolve_auto_facets(auto_override).await?;
 
     let result = unbless_with(
         &git,
@@ -191,19 +195,24 @@ where
     // of `--verbose`, naming the resolved (possibly auto-detected) partition, base
     // branch, and context commit, so a plain run never hides a value it defaulted.
     // Emitted before the base-branch guard so even that refusal states what was
-    // selected.
-    reporter.announce(&selection_announcement(
+    // selected. When the machine key was auto-detected, a follow-up notice states
+    // that the machine-independent `synthetic` sets are included regardless.
+    announce_selection(
+        reporter,
         &facets,
-        Some(AnnouncedBase {
-            name: &base.name,
-            auto: options.base.is_none(),
-        }),
-        Some(AnnouncedContext {
-            short,
-            defaulted_head: options.context.is_none(),
-        }),
-        None,
-    ));
+        &selection_announcement(
+            &facets,
+            Some(AnnouncedBase {
+                name: &base.name,
+                auto: options.base.is_none(),
+            }),
+            Some(AnnouncedContext {
+                short,
+                defaulted_head: options.context.is_none(),
+            }),
+            None,
+        ),
+    );
 
     let on_base = git
         .merge_base(&head, &base.commit)
@@ -307,16 +316,22 @@ where
     // The always-on effective-selection announcement: one line, printed regardless
     // of `--verbose`, naming the resolved (possibly auto-detected) partition and the
     // context commit whose blessings are being removed. `unbless` acts purely at a
-    // commit and never resolves a base branch, so no base segment appears.
-    reporter.announce(&selection_announcement(
+    // commit and never resolves a base branch, so no base segment appears. When the
+    // machine key was auto-detected, a follow-up notice states that the
+    // machine-independent `synthetic` sets are unblessed regardless.
+    announce_selection(
+        reporter,
         &facets,
-        None,
-        Some(AnnouncedContext {
-            short,
-            defaulted_head: options.context.is_none(),
-        }),
-        None,
-    ));
+        &selection_announcement(
+            &facets,
+            None,
+            Some(AnnouncedContext {
+                short,
+                defaulted_head: options.context.is_none(),
+            }),
+            None,
+        ),
+    );
 
     let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
     let blessings_at_head: Vec<String> = candidates

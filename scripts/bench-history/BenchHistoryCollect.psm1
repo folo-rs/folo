@@ -19,7 +19,7 @@
 #
 # Collection scope is orthogonal to the mode: with no explicit package list the whole workspace is
 # benched except the special-purpose `benchmarks` crate (the push-to-main default); the PR workflow
-# instead passes the delta-affected packages so it benches only what the PR touched.
+# instead passes the delta-affected packages so it benches only what the PR impacts.
 # Select-BenchmarkablePackage is the shared helper that drops `benchmarks` from a delta-affected set
 # before both the scope decision and the "is there anything to bench at all" gate.
 
@@ -88,7 +88,7 @@ function Get-BenchHistoryCollectCommand {
     # debuggable from the log alone.
     $packages = @($Package | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     if ($packages.Count -gt 0) {
-        # Explicit package scoping (PR workflow): one `--package <name>` per touched crate.
+        # Explicit package scoping (PR workflow): one `--package <name>` per impacted crate.
         $selection = @()
         foreach ($name in $packages) { $selection += @('--package', $name) }
         Write-Verbose ("Scoping collection to the delta-affected packages: " +

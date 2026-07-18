@@ -110,10 +110,10 @@ pub struct ReportInput<'a> {
     /// tip (the working-tree-dirty exception). Absent in the normal case.
     pub warning: Option<&'a str>,
     /// How many benchmarks were dropped as "ghosts" — present only for past commits,
-    /// not at the context commit — before detection. Zero when `--include-ghosts`
-    /// disabled the filter or nothing was dropped. Carried for the JSON report so a
-    /// machine consumer sees that scoping happened; the text and Markdown reports
-    /// surface it only through the verbose trail and the empty-outcome hint.
+    /// not at the context commit — before detection. Zero when nothing was dropped.
+    /// Carried for the JSON report so a machine consumer sees that scoping happened;
+    /// the text and Markdown reports surface it only through the verbose trail and the
+    /// empty-outcome hint.
     pub ghosts_excluded: usize,
 }
 
@@ -234,7 +234,7 @@ struct JsonReport<'a> {
     /// Number of flagged improvements.
     improvements: usize,
     /// Benchmarks dropped as ghosts (present only for past commits, not at the
-    /// context commit) before detection. Zero when `--include-ghosts` was passed.
+    /// context commit) before detection. Zero when nothing was dropped.
     ghosts_excluded: usize,
     /// A diagnostic hint when stored runs existed but none were analyzed.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -489,14 +489,11 @@ fn detail_text(finding: &Finding) -> String {
         format_value(finding.latest),
         finding.commit.as_deref().unwrap_or("unknown"),
     );
-    if let Some(flipped_at) = &finding.flipped_at {
+    // `flipped_at` is set only on an inactive (recovered) history-mode spike, naming
+    // the commit where the level returned to baseline; branch mode never sets it.
+    if let Some(recovered_at) = &finding.flipped_at {
         use std::fmt::Write as _;
-        let verb = if finding.active {
-            "flips at"
-        } else {
-            "recovers at"
-        };
-        write!(detail, " · {verb} {flipped_at}").expect("writing to a String is infallible");
+        write!(detail, " · recovers at {recovered_at}").expect("writing to a String is infallible");
     }
     detail
 }

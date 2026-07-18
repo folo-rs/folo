@@ -27,7 +27,7 @@ reactor-free and unchanged under Miri while still scaling on real hardware.
 flowchart TD
   EXEC["analyze"] --> SD["select data set (the load)"]
   SD --> DS[("series + run tallies + blessings")]
-  DS --> GF["drop ghost benchmarks\n(absent at context commit; unless --include-ghosts)"]
+  DS --> GF["drop ghost benchmarks\n(absent at context commit)"]
   GF --> AB["apply blessings (history re-baseline)"]
   AB --> FC["detect changes (per series)"]
   FC --> SUM["per-set summaries"]
@@ -39,10 +39,9 @@ else is bookkeeping. The **ghost filter** between the load and detect is a cheap
 per-series pass: it drops every reconstructed series whose benchmark has no run at the
 context commit (the analyzed tip), so a benchmark that no longer exists is not re-flagged.
 It runs before blessings and detection so ghosts never enter the false-discovery
-correction; `--include-ghosts` skips it. Each analysis mode (`history`, `branch`) is a
-separate
-invocation with its own load — there is no dataset cache across modes — and the mode is
-auto-detected once per run from git topology.
+correction. Each analysis mode (`history`, `branch`) is a separate invocation with its own
+load — there is no dataset cache across modes — and the mode is auto-detected once per run
+from git topology.
 
 The read-only `examine` command is a **lighter consumer of the same load**: it runs Phase 1
 and Phase 2/3 through the identical `select_dataset` pipeline, then narrows to a single
@@ -223,3 +222,9 @@ other selection-driven commands emit the same line through one shared announceme
 the `bless` / `unbless` mutation commands name the facets and the context commit they act at
 (`bless` also names its base branch), so the wording is identical wherever auto-detection can
 surprise you.
+
+When the machine-key facet was auto-detected, the same channel adds one more line noting that
+machine-independent `synthetic` benchmarks (Callgrind, `alloc_tracker`) ride along: they carry
+no machine key, so the host-fingerprint default cannot exclude them. They still obey the
+target-triple facet, so this only mixes in the synthetic sets built for the queried triple —
+the notice explains an inclusion that is otherwise easy to miss.

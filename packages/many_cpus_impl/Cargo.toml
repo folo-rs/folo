@@ -2,7 +2,7 @@
 name = "many_cpus_impl"
 description = "Implementation crate for many_cpus - do not reference directly"
 publish = true
-version = "2.4.11"
+version = "2.4.13"
 
 authors.workspace = true
 edition.workspace = true
@@ -44,6 +44,7 @@ smallvec = { workspace = true }
 windows = { workspace = true, features = [
     "Win32_System_JobObjects",
     "Win32_System_Kernel",
+    "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
 ] }

@@ -731,23 +731,22 @@ async fn analyze_alloc_tracker_ignores_gaps_in_a_sparse_history() {
     // `allocate_vec` is measured only at every other commit; the intervening
     // commits measure `free_box` instead, leaving `allocate_vec` unobserved there.
     // Its step spans the gaps: three baseline observations, then three raised ones.
+    // The history ends on an `allocate_vec` commit so that series is present at the
+    // tip and survives the ghost filter (`free_box` is the ghost here, and being
+    // flat it produces no finding regardless).
     let mut day = 1;
     for bytes in [200.0, 200.0, 200.0, 260.0, 260.0, 260.0] {
         workspace.commit_dated(&format!("2024-04-{day:02}"), &format!("g{day}"));
-        workspace.seed_alloc_tracker(&format!("g{day}"), "allocate_vec", bytes, 2.0);
+        workspace.seed_alloc_tracker(&format!("g{day}"), "free_box", 8.0, 1.0);
         day += 1;
         workspace.commit_dated(&format!("2024-04-{day:02}"), &format!("g{day}"));
-        workspace.seed_alloc_tracker(&format!("g{day}"), "free_box", 8.0, 1.0);
+        workspace.seed_alloc_tracker(&format!("g{day}"), "allocate_vec", bytes, 2.0);
         day += 1;
     }
 
     // Only `allocate_vec`'s allocated-bytes step is a finding. A gap read as a drop
     // to zero would manufacture wild swings; instead the series is contiguous.
-    //
-    // The sparse history ends on a `free_box` commit, so `allocate_vec` is absent at
-    // the tip and the default ghost filter would drop it. This test is about gap
-    // reconstruction, not tip presence, so it analyzes every benchmark.
-    let report = workspace.drive_json(&["analyze", "--include-ghosts"]).await;
+    let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
         parsed["regressions"], 1,
@@ -1202,13 +1201,14 @@ async fn analyze_orders_by_topology_not_commit_time() {
     assert_eq!(parsed["findings"][0]["latest"], 130.0, "{report}");
 }
 
-/// Branch mode judges a feature branch by its *latest* regime, not its journey:
-/// a branch that first improved and then regressed is reported as a regression,
-/// and `flipped_at` points at the commit where the latest (worse) regime began.
+/// Branch mode judges a feature branch by its *tip commit*, not its journey:
+/// a branch that first improved and then regressed is reported as a regression
+/// against the base, since only the tip commit lands in the base on merge. The
+/// intermediate improvement is not attributed as a within-branch flip.
 /// The JSON also advertises the resolved mode and the downstream `notable` signal.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_branch_mode_reports_the_latest_regime_with_a_flip() {
+async fn analyze_branch_mode_reports_the_tip_commit_state() {
     let workspace = Workspace::repo(&storage_only_config());
     // A flat clean baseline on master.
     workspace.commit_dated("2024-01-01", "c1");
@@ -1246,8 +1246,8 @@ async fn analyze_branch_mode_reports_the_latest_regime_with_a_flip() {
     assert_eq!(finding["baseline"], 100.0, "{report}");
     assert_eq!(finding["latest"], 130.0, "{report}");
     assert!(
-        finding["flipped_at"].is_string(),
-        "the flip should name the commit the latest regime began at: {report}"
+        finding["flipped_at"].is_null(),
+        "branch mode judges the tip commit alone, with no within-branch flip: {report}"
     );
     assert!(
         finding.get("series").is_none(),
@@ -1523,16 +1523,13 @@ async fn analyze_feature_that_merged_master_admits_dirty_off_chain_merge_base() 
 #[cfg_attr(miri, ignore)]
 async fn analyze_criterion_machine_keys_stay_isolated() {
     let workspace = Workspace::repo(&storage_only_config());
-    // Same commits, same Windows/x86_64 triple, two distinct machine keys.
+    // Same commits, same Windows/x86_64 triple, two distinct machine keys. `mk-flat`
+    // stays flat across the full d1..d8 history (the same commits the rising machine
+    // uses), so it is present at the tip and never regresses.
     workspace.seed_rising_criterion_history("mk-rising");
-    workspace.commit_dated("2024-02-01", "d1");
-    workspace.seed_criterion("d1", "mk-flat", 20.0);
-    workspace.commit_dated("2024-02-02", "d2");
-    workspace.seed_criterion("d2", "mk-flat", 20.0);
-    workspace.commit_dated("2024-02-03", "d3");
-    workspace.seed_criterion("d3", "mk-flat", 20.0);
-    workspace.commit_dated("2024-02-04", "d4");
-    workspace.seed_criterion("d4", "mk-flat", 20.0);
+    for label in ["d1", "d2", "d3", "d4", "d5", "d6", "d7", "d8"] {
+        workspace.seed_criterion(label, "mk-flat", 20.0);
+    }
 
     let report = workspace
         .drive_json(&[
@@ -1541,10 +1538,6 @@ async fn analyze_criterion_machine_keys_stay_isolated() {
             "x86_64-pc-windows-msvc",
             "--machine-key",
             "all",
-            // The flat machine stops collecting at d4 while the rising history runs to
-            // d8, so `mk-flat` is a ghost at the tip. This test is about machine-key
-            // isolation, not tip presence, so it analyzes every benchmark.
-            "--include-ghosts",
         ])
         .await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
@@ -1722,12 +1715,11 @@ async fn analyze_criterion_feature_branch_admits_dirty_snapshots() {
     );
 }
 
-/// By default `analyze` ignores "ghost" benchmarks — ones no longer present at the
-/// context commit — so a regression on a since-removed benchmark is not re-flagged.
-/// `--include-ghosts` opts back in and the removed benchmark's regression surfaces.
+/// `analyze` ignores "ghost" benchmarks — ones no longer present at the context
+/// commit — so a regression on a since-removed benchmark is not re-flagged.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_excludes_ghost_benchmarks_by_default() {
+async fn analyze_excludes_ghost_benchmarks() {
     let workspace = Workspace::repo(&storage_only_config());
     // `bench_000` runs flat through the tip; `bench_001` climbs into a regression but
     // is dropped from the suite at the tip commit, so it is a ghost there.
@@ -1746,7 +1738,7 @@ async fn analyze_excludes_ghost_benchmarks_by_default() {
     workspace.commit_dated("2024-01-07", "c7");
     workspace.seed_many_callgrind("c7", &[100.0]);
 
-    // Default: the ghost's regression is filtered out, and the JSON reports the count.
+    // The ghost's regression is filtered out, and the JSON reports the count.
     let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["regressions"], 0, "{report}");
@@ -1754,15 +1746,5 @@ async fn analyze_excludes_ghost_benchmarks_by_default() {
     assert!(
         !report.contains("many::bench_001"),
         "the ghost benchmark must not appear: {report}"
-    );
-
-    // --include-ghosts analyzes the removed benchmark and surfaces its regression.
-    let report = workspace.drive_json(&["analyze", "--include-ghosts"]).await;
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-    assert_eq!(parsed["regressions"], 1, "{report}");
-    assert_eq!(parsed["ghosts_excluded"], 0, "{report}");
-    assert!(
-        report.contains("many::bench_001"),
-        "the removed benchmark's regression must surface: {report}"
     );
 }

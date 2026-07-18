@@ -517,7 +517,8 @@ async fn collect_criterion_collects_distinct_cases_as_records() {
 #[cfg_attr(miri, ignore)]
 async fn collect_then_analyze_round_trips_a_sanitizing_project_id() {
     let workspace = Workspace::clean_repo(&storage_only_config_with_id("my proj/sub"))
-        .with_bench(&["--summary", "grp=single"]);
+        .with_bench(&["--summary", "grp=single"])
+        .with_real_auto_facets();
 
     workspace.drive(&["collect"]).await.unwrap();
 
@@ -551,7 +552,8 @@ async fn collect_then_analyze_round_trips_a_sanitizing_project_id() {
 #[cfg_attr(miri, ignore)]
 async fn collect_then_analyze_preserves_unusual_identity_characters() {
     let workspace = Workspace::clean_repo(&storage_only_config())
-        .with_bench(&["--criterion", "time.capture|mide tiempo|tamaño 4=18.5"]);
+        .with_bench(&["--criterion", "time.capture|mide tiempo|tamaño 4=18.5"])
+        .with_real_auto_facets();
 
     workspace
         .drive(&["collect", "--machine-key", "pool"])

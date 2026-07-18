@@ -31,8 +31,8 @@ use tick::Clock;
 
 use super::{
     AutoFacets, ReportFormat, RunIndex, Selection, Series, SeriesFilter, apply_blessings,
-    detect_auto_facets, dirty_base_exception_warning, empty_history_hint,
-    facet_filtered_candidates, resolve_facets, resolve_now, select_dataset,
+    dirty_base_exception_warning, empty_history_hint, facet_filtered_candidates,
+    resolve_auto_facets, resolve_facets, resolve_now, select_dataset,
 };
 use crate::{AnalyzeError, RenderedReports, ReportRequest};
 
@@ -52,6 +52,7 @@ pub async fn execute(
     workspace_dir: &Path,
     clock_override: Option<Clock>,
     storage_override: Option<StorageFacade>,
+    auto_override: Option<AutoFacets>,
 ) -> Result<RenderedReports, AnalyzeError> {
     let reporter = StderrReporter::new(options.verbose);
 
@@ -73,7 +74,7 @@ pub async fn execute(
     storage.synchronize_cache(&project_id, &reporter).await?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
-    let auto = detect_auto_facets().await?;
+    let auto = resolve_auto_facets(auto_override).await?;
 
     let now = resolve_now(clock_override);
     // The object-load and detection work shares the ambient Tokio worker threads
@@ -273,6 +274,27 @@ fn series_noun(count: usize) -> String {
     format!("{count} series")
 }
 
+/// Renders one commit's line for the text listing, annotating only the runs that
+/// deviate from the norm.
+///
+/// Almost every commit carries exactly one clean run and no dirty snapshot, so that
+/// case renders as the bare commit with no counts. A clean count other than one, or
+/// any dirty snapshots, is spelled out so the exception stands out instead of being
+/// buried in noise repeated on every line.
+fn commit_line(commit: &CommitEntry) -> String {
+    let clean = if commit.clean == 1 {
+        String::new()
+    } else {
+        format!("  {}", count_noun(commit.clean, "clean run"))
+    };
+    let dirty = if commit.dirty == 0 {
+        String::new()
+    } else {
+        format!(" + {}", count_noun(commit.dirty, "dirty run"))
+    };
+    format!("    {}{clean}{dirty}", commit.commit)
+}
+
 /// Renders the data-set preview in the requested format, appending the diagnostic
 /// hint and ephemeral-data warning (if any).
 fn render_listing(
@@ -304,13 +326,7 @@ fn render_listing_text(listing: &Listing, hint: Option<&str>, warning: Option<&s
                 count_noun(set.commits.len(), "commit")
             ));
             for commit in &set.commits {
-                lines.push(format!(
-                    "    {}  {} ({} clean, {} dirty)",
-                    commit.commit,
-                    count_noun(commit.runs, "run"),
-                    commit.clean,
-                    commit.dirty
-                ));
+                lines.push(commit_line(commit));
             }
         }
         lines.push(String::new());
@@ -1278,6 +1294,62 @@ mod tests {
         assert!(report.contains("2 series"), "{report}");
         assert!(!report.contains("seriess"), "{report}");
         assert!(report.contains("1 discriminant set"), "{report}");
+    }
+
+    #[test]
+    fn commit_line_omits_counts_for_a_single_clean_run() {
+        let line = commit_line(&CommitEntry {
+            commit: "abc123".to_owned(),
+            runs: 1,
+            clean: 1,
+            dirty: 0,
+        });
+        // The overwhelming common case: no counts, just the commit.
+        assert_eq!(line, "    abc123");
+    }
+
+    #[test]
+    fn commit_line_appends_only_dirty_runs_when_clean_is_the_norm() {
+        let line = commit_line(&CommitEntry {
+            commit: "abc123".to_owned(),
+            runs: 4,
+            clean: 1,
+            dirty: 3,
+        });
+        assert_eq!(line, "    abc123 + 3 dirty runs");
+    }
+
+    #[test]
+    fn commit_line_singularizes_a_lone_dirty_run() {
+        let line = commit_line(&CommitEntry {
+            commit: "abc123".to_owned(),
+            runs: 2,
+            clean: 1,
+            dirty: 1,
+        });
+        assert_eq!(line, "    abc123 + 1 dirty run");
+    }
+
+    #[test]
+    fn commit_line_spells_out_a_non_unit_clean_count() {
+        let line = commit_line(&CommitEntry {
+            commit: "abc123".to_owned(),
+            runs: 2,
+            clean: 2,
+            dirty: 0,
+        });
+        assert_eq!(line, "    abc123  2 clean runs");
+    }
+
+    #[test]
+    fn commit_line_reports_both_clean_and_dirty_deviations() {
+        let line = commit_line(&CommitEntry {
+            commit: "abc123".to_owned(),
+            runs: 3,
+            clean: 0,
+            dirty: 1,
+        });
+        assert_eq!(line, "    abc123  0 clean runs + 1 dirty run");
     }
 
     #[test]

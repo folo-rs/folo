@@ -178,10 +178,14 @@ Each facet is repeatable, unions its values, and accepts the literal `all` to wi
 dimension. Omitting a facet **auto-detects the current machine**: the triple defaults to
 the host triple and the machine key to the host fingerprint, so a bare query reports *this*
 machine's data; engine has no machine-derived value, so it defaults to all engines. A
-`synthetic` set always passes the machine-key facet regardless of its value, so
-auto-detecting the host fingerprint still includes every hardware-independent set. A facet
-that matches several sets yields one report per set — parallel data sets analyzed
-individually.
+`synthetic` set always passes the **machine-key** facet regardless of its value (it carries
+no machine), so auto-detecting the host fingerprint still includes the hardware-independent
+sets. It still obeys the **target-triple** facet, though — a per-architecture instruction
+count or allocation profile is a distinct measurement — so a bare query mixes in only the
+synthetic sets built for *this* triple, never foreign-triple ones. Because that inclusion is
+easy to overlook, a query whose machine-key facet was auto-detected prints a one-line notice
+that machine-independent `synthetic` benchmarks ride along. A facet that matches several
+sets yields one report per set — parallel data sets analyzed individually.
 
 The commands divide into **create** and **query** roles. `collect` and `backfill` record
 new data into exactly one machine's reality, so they auto-detect every facet and accept
@@ -194,10 +198,13 @@ full repeatable, `all`-aware, auto-detecting facet model.
 The goal is a fingerprint equal for pool-equivalent machines and different for genuinely
 different hardware; it is **never** keyed on hostname or serial, since cloud pool nodes
 differ in name but are equivalent. It hashes the stable, pool-equivalent attributes
-available without elevated privileges across platforms — the processor and memory-region
-counts (from the in-workspace `many_cpus`) and a best-effort CPU brand string. Finer
-signals such as RAM size or base frequency were left out for little discriminating value
-in homogeneous CI pools.
+available without elevated privileges across platforms — all from the in-workspace
+`many_cpus`: the processor and memory-region counts, the distinct processor models present
+(a sorted, deduplicated list), and a histogram of the per-processor relative speeds (as
+`(speed, count)` pairs). The speed histogram distinguishes machines that agree on their
+counts and models but differ in their mix of processor speeds (for example a hybrid
+performance/efficiency core layout versus a uniform one). Finer signals such as RAM size were
+left out for little discriminating value in homogeneous CI pools.
 
 Because the key is persisted and compared across machines and tool versions, it uses a
 **fixed** hash (not a seeded/default hasher) over a version-tagged canonical string,
@@ -207,9 +214,10 @@ the computed fingerprint (it is CLI-only — a committed config would carry a ma
 wrong for some checkouts). The key is computed only for hardware-dependent engines.
 
 The individual factors behind the fingerprint (the version tag, processor and memory-region
-counts, and CPU brand) are surfaced for debugging: `collect` and the query commands emit
-them to standard error under `--verbose`, and the standalone `machine-key` command prints
-the key to standard output (with `--verbose` adding the factors to standard error). The
+counts, processor models, and the per-processor speed histogram) are surfaced for debugging:
+`collect` and the query commands emit them to standard error under `--verbose`, and the
+standalone `machine-key` command prints the key to standard output (with `--verbose` adding
+the factors to standard error). The
 latter exists so CI can capture the real per-runner key and thread it into a later `analyze`
 selection, now that runs are keyed by the auto-detected fingerprint rather than a fixed pin.
 The same factors and resulting fingerprint are also recorded on every stored run as
@@ -227,8 +235,9 @@ version, machine key). Git and environment access go through a small abstraction
 logic is unit-testable without a real repo or CI.
 
 The context also carries optional **host-hardware provenance** (`context.machine`): the
-fingerprint factors (processor and memory-region counts, CPU brand) and the auto-detected
-key they hash to. It is **write-only** — nothing reads it back — and exists purely so that a
+fingerprint factors (processor and memory-region counts, processor models, per-processor speed
+histogram) and the auto-detected key they hash to. It is **write-only** — nothing reads it
+back — and exists purely so that a
 later change in a machine key can be traced to the specific factor that moved (for example, a
 runner pool swapping CPU models). It records the auto-detected fingerprint regardless of any
 `--machine-key` override, and is an additive, backward-compatible field (absent on runs
@@ -465,19 +474,18 @@ omitted. Positional prefix subjects scope the analysis to benchmarks
 whose id starts with a prefix; there is no metric filter, since metrics are an internal
 detail users are not expected to know.
 
-By default `analyze` also drops **ghost benchmarks** — benchmark identities that appear in
+`analyze` also drops **ghost benchmarks** — benchmark identities that appear in
 the selected data set but have no run at the **context commit** (the resolved `--context`,
 `HEAD` by default). In a long-lived project benchmarks are renamed, removed, or replaced, and
 re-flagging a change on a benchmark that no longer exists is noise; presence is judged
 per discriminant set (a set behind on collection at the context commit legitimately differs
 from another) and a present benchmark keeps all its metric-kind series. The filter runs
 before detection, so ghosts never contribute p-values to the false-discovery-rate correction.
-`--include-ghosts` opts back in and analyzes every benchmark in the data set. If a set has no
-runs at the context commit at all (`HEAD` was never collected or a collect failed),
-every benchmark is a ghost and the set analyzes empty with a dedicated
-hint pointing at `--include-ghosts` — an empty outcome the tool explains rather than guesses
+If a set has no runs at the context commit at all (`HEAD` was never collected or a collect
+failed), every benchmark is a ghost and the set analyzes empty with a dedicated
+hint — an empty outcome the tool explains rather than guesses
 around. Because it changes only which reconstructed series are detected on (not which runs
-are selected), `--include-ghosts` is analyze-only and outside the selection lockstep (§8.5).
+are selected), the ghost filter is analyze-only and outside the selection lockstep (§8.5).
 
 Output toggles select which renderings one analysis pass emits — text to stdout by default,
 with file toggles that compose so a single pass can emit text, Markdown, and JSON at once;
@@ -807,10 +815,11 @@ never a silent fall-through to history.
   only by default (steady improvement on the base branch is expected; a flag opts into
   improvements).
 * **branch** — auto-selected otherwise (commits past the merge-base, or a dirty run
-  admitted on the base tip by the exception above). It judges the branch by its **latest
-  regime** against the base — a branch may improve then regress, and we report where it
-  *ended up* rather than mask a late regression behind an early gain — reporting both
-  directions.
+  admitted on the base tip by the exception above). It judges the branch by its **tip
+  commit** against the recent base level — a branch's intermediate commits say nothing
+  about what merging it into the base will do, since only the tip lands there, so the
+  branch's own history is discarded and only the newest commit's runs are compared —
+  reporting both directions.
 
 The two driving scenarios are a scheduled base-branch regression watch (history) and a
 per-PR feature-branch evaluation (branch). Long-range trend analysis is meaningless on one
@@ -821,7 +830,7 @@ or two branch points, which is why the techniques differ by mode:
 | Change-point (Pettitt + engine gating) | ✅ | — |
 | Monotonic drift (Mann–Kendall + Theil–Sen) | ✅ | — |
 | Benjamini–Hochberg false-discovery filter | ✅ | — |
-| Latest-regime vs. base | — | ✅ |
+| Latest-commit vs. base | — | ✅ |
 | Improvements reported | opt-in | ✅ |
 | Resolved (inactive) findings reported | opt-in | — |
 
@@ -829,8 +838,8 @@ Modes apply to `analyze` only; `list`, `prune`, and `examine` reuse the same dat
 *selection* but never analyze, so the mode selection and improvement/inactive flags are
 analyze-only and not part of the selection lockstep. The **ghost filter** (§7.3) is likewise
 analyze-only and outside the lockstep: it applies in both modes, dropping — before detection
-— any benchmark absent at the context commit (the analyzed tip) unless `--include-ghosts` is
-passed. In branch mode a benchmark removed on the branch is a ghost and a benchmark newly
+— any benchmark absent at the context commit (the analyzed tip). In branch mode a benchmark
+removed on the branch is a ghost and a benchmark newly
 added on the branch is present and kept; dirty snapshots at the branch tip count as present
 via the base-tip dirty exception.
 
@@ -849,7 +858,7 @@ Every history-mode finding therefore carries an active flag and an active-from b
   forward: the detectors run on the **active segment only**, so the pre-blessing step is no
   longer re-flagged, while the earlier points still feed the chart and any long-range
   technique that needs context. Blessings are honoured **only in history mode** — branch
-  mode judges the latest state against the base, which is treated as fully blessed by
+  mode judges the tip commit against the base, which is treated as fully blessed by
   construction. A re-baselined finding records the blessing's commit and time for
   provenance.
 

@@ -509,9 +509,10 @@ impl InstallCommand {
 #[derive(Args, Debug)]
 struct MachineKeyCommand {
     /// Also emit the individual hardware components that make up the fingerprint
-    /// to standard error (processor count, memory-region count, CPU brand, and
-    /// the fingerprint version), so a change in the key can be traced to which
-    /// factor changed. The key itself always goes to standard output.
+    /// to standard error (processor count, memory-region count, processor models,
+    /// per-processor speed histogram, and the fingerprint version), so a change in
+    /// the key can be traced to which factor changed. The key itself always goes to
+    /// standard output.
     #[arg(long, help_heading = HEADING_ENV)]
     verbose: bool,
 }
@@ -565,13 +566,6 @@ struct AnalyzeCommand {
     #[arg(long, help_heading = HEADING_ANALYSIS)]
     include_inactive: bool,
 
-    /// Analyze every benchmark in the data set, including "ghosts" no longer
-    /// present at the context commit. By default only benchmarks measured at the
-    /// context commit (the current suite) are analyzed, so a renamed or removed
-    /// benchmark is not re-flagged.
-    #[arg(long, help_heading = HEADING_ANALYSIS)]
-    include_ghosts: bool,
-
     /// Also write a condensed Markdown summary — only the most significant findings
     /// — to this path (a relative path resolves against the working directory). The
     /// full `--markdown` report carries every finding; this summary is capped so a
@@ -601,7 +595,6 @@ impl AnalyzeCommand {
             markdown_summary: self.markdown_summary,
             include_improvements: self.include_improvements,
             include_inactive: self.include_inactive,
-            include_ghosts: self.include_ghosts,
             verbose: self.env.verbose,
             timing: false,
         }
@@ -1727,22 +1720,6 @@ mod tests {
             panic!("expected analyze command");
         };
         assert!(!options.include_inactive);
-    }
-
-    #[test]
-    fn analyze_parses_include_ghosts_switch() {
-        let Command::Analyze(options) = parse(&["analyze", "--include-ghosts"]) else {
-            panic!("expected analyze command");
-        };
-        assert!(options.include_ghosts);
-
-        let Command::Analyze(options) = parse(&["analyze"]) else {
-            panic!("expected analyze command");
-        };
-        assert!(
-            !options.include_ghosts,
-            "ghost filtering is on by default (the flag opts out of it)"
-        );
     }
 
     #[test]

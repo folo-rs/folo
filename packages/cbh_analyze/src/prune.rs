@@ -34,10 +34,10 @@ use jiff::Timestamp;
 use serde::Serialize;
 use tick::Clock;
 
-use super::announce::{AnnouncedBase, AnnouncedSince, selection_announcement};
+use super::announce::{AnnouncedBase, AnnouncedSince, announce_selection, selection_announcement};
 use super::{
     AutoFacets, DirtyTipPolicy, ReportFormat, ResolvedHistory, Selection, before_since_cutoff,
-    detect_auto_facets, facet_filtered_candidates, parse_since, resolve_facets, resolve_history,
+    facet_filtered_candidates, parse_since, resolve_auto_facets, resolve_facets, resolve_history,
     resolve_now,
 };
 use crate::{AnalyzeError, RenderedReports, ReportRequest};
@@ -109,6 +109,7 @@ pub async fn execute(
     workspace_dir: &Path,
     clock_override: Option<Clock>,
     storage_override: Option<StorageFacade>,
+    auto_override: Option<AutoFacets>,
 ) -> Result<RenderedReports, AnalyzeError> {
     let reporter = StderrReporter::new(options.verbose);
 
@@ -130,7 +131,7 @@ pub async fn execute(
     storage.synchronize_cache(&project_id, &reporter).await?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
-    let auto = detect_auto_facets().await?;
+    let auto = resolve_auto_facets(auto_override).await?;
 
     let now = resolve_now(clock_override);
     let result = prune_with(
@@ -202,19 +203,24 @@ where
     // of `--verbose`, naming the resolved (possibly auto-detected) partition, base
     // branch, and `--since` cutoff a plain run would otherwise resolve silently.
     // Emitted before the `--prune-base` guard so even that refusal states what was
-    // selected.
-    reporter.announce(&selection_announcement(
+    // selected. When the machine key was auto-detected, a follow-up notice states
+    // that the machine-independent `synthetic` sets are pruned along with it.
+    announce_selection(
+        reporter,
         &facets,
-        Some(AnnouncedBase {
-            name: &base_name,
-            auto: options.base.is_none(),
-        }),
-        None,
-        Some(AnnouncedSince {
-            cutoff: since,
-            reason: prune_since_reason(options.since.is_some()),
-        }),
-    ));
+        &selection_announcement(
+            &facets,
+            Some(AnnouncedBase {
+                name: &base_name,
+                auto: options.base.is_none(),
+            }),
+            None,
+            Some(AnnouncedSince {
+                cutoff: since,
+                reason: prune_since_reason(options.since.is_some()),
+            }),
+        ),
+    );
 
     // The `--prune-base` guard: when the context resolves onto the base branch
     // itself (`context == base`), the whole selection is base-branch history.

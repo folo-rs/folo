@@ -4,7 +4,7 @@
 name = "cbh_probe"
 description = "Implementation crate for cargo-bench-history - do not reference directly"
 publish = true
-version = "0.0.5"
+version = "0.0.7"
 
 authors.workspace = true
 edition.workspace = true
@@ -21,11 +21,9 @@ cbh_git = { workspace = true }
 cbh_model = { workspace = true }
 many_cpus = { workspace = true }
 sha2 = { workspace = true }
-tokio = { workspace = true, features = ["fs", "process"] }
 
 [dev-dependencies]
 mutants = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true

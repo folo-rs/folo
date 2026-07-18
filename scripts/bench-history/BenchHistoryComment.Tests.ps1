@@ -398,7 +398,7 @@ Describe 'Set-RollingCommentStaleness (mocked gh api)' {
                 if ($args -contains 'PATCH') { $global:LASTEXITCODE = 0; return '{"id":42,"html_url":"https://github.com/o/r/pull/5#issuecomment-42"}' }
                 foreach ($a in $args) { if ($a -like 'repos/*/compare/*') { $global:LASTEXITCODE = 0; return '{"status":"ahead","ahead_by":3}' } }
                 $global:LASTEXITCODE = 0
-                return '[{"id":42,"body":"<!-- folo-bench-history-pr -->\n<!-- folo-bench-history-commit:1111111111111111111111111111111111111111 -->\n\n### Benchmark history\nold findings","html_url":"https://github.com/o/r/pull/5#issuecomment-42"}]'
+                return '[{"id":42,"body":"<!-- folo-bench-history-pr -->\n<!-- folo-bench-history-commit:1111111111111111111111111111111111111111 -->\n\n### Performance impact\nold findings","html_url":"https://github.com/o/r/pull/5#issuecomment-42"}]'
             }
         }
 
@@ -556,7 +556,7 @@ Describe 'Set-RollingCommentStaleness (mocked gh api)' {
             Mock gh -ModuleName BenchHistoryComment {
                 if ($args -contains 'PATCH') { $global:LASTEXITCODE = 0; return '{"id":42}' }
                 $global:LASTEXITCODE = 0
-                return '[{"id":42,"body":"<!-- folo-bench-history-pr -->\n<!-- folo-bench-history-in-progress -->\n\n### Benchmark history (vs `main`)\n\nbenchmarking in progress","html_url":"u"}]'
+                return '[{"id":42,"body":"<!-- folo-bench-history-pr -->\n<!-- folo-bench-history-in-progress -->\n\n### Performance impact (vs `main`)\n\nbenchmarking in progress","html_url":"u"}]'
             }
         }
 
@@ -632,13 +632,13 @@ Describe 'Add-StalenessBanner (unexported string transform)' {
                     '> [!WARNING]'
                     '> a banner that was never closed'
                     ''
-                    '### Benchmark history'
+                    '### Performance impact'
                     'precious findings that must not vanish'
                 ) -join "`n"
 
                 $result = Add-StalenessBanner -Body $body -Warning 'fresh warning' -Marker $marker
 
-                $result | Should -BeLike '*### Benchmark history*'
+                $result | Should -BeLike '*### Performance impact*'
                 $result | Should -BeLike '*precious findings that must not vanish*'
                 # The fresh banner is still inserted after the marker.
                 $result | Should -BeLike '*fresh warning*'
@@ -830,17 +830,17 @@ Describe 'Publish-InProgressComment (mocked gh api)' {
 }
 
 Describe 'Format-InProgressBody (unexported string transform)' {
-    It 'renders a single changed package with singular wording' {
+    It 'renders a single impacted package with singular wording' {
         InModuleScope BenchHistoryComment {
             $body = Format-InProgressBody -Marker '<!-- folo-bench-history-pr -->' -Packages 'solo'
-            $body.Contains('benchmarking the 1 package this PR changed (`solo`).') | Should -BeTrue
+            $body.Contains('benchmarking the 1 package impacted by this PR (`solo`).') | Should -BeTrue
         }
     }
 
-    It 'sorts and de-duplicates multiple changed packages with plural wording' {
+    It 'sorts and de-duplicates multiple impacted packages with plural wording' {
         InModuleScope BenchHistoryComment {
             $body = Format-InProgressBody -Marker '<!-- folo-bench-history-pr -->' -Packages 'beta alpha beta'
-            $body.Contains('benchmarking the 2 packages this PR changed (`alpha`, `beta`).') | Should -BeTrue
+            $body.Contains('benchmarking the 2 packages impacted by this PR (`alpha`, `beta`).') | Should -BeTrue
         }
     }
 
@@ -850,7 +850,7 @@ Describe 'Format-InProgressBody (unexported string transform)' {
             $lines = $body -split "`n"
             $lines[0] | Should -Be '<!-- folo-bench-history-pr -->'
             $lines[1] | Should -Be $script:InProgressMarker
-            $body.Contains('### Benchmark history (vs `main`)') | Should -BeTrue
+            $body.Contains('### Performance impact (vs `main`)') | Should -BeTrue
             $body | Should -BeLike '*Benchmarking in progress*'
         }
     }

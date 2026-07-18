@@ -272,7 +272,6 @@ fn build_options(
         markdown_summary: None,
         include_improvements: true,
         include_inactive: false,
-        include_ghosts: true,
         verbose: false,
         timing,
     }
@@ -286,6 +285,7 @@ fn overrides(workspace: &Path, anchor: Timestamp) -> Overrides {
         bench_command: None,
         clock: Some(Clock::new_frozen_at(anchor)),
         storage_override: None,
+        auto_facets: None,
     }
 }
 

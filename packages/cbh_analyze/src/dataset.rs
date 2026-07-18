@@ -14,7 +14,7 @@ use cbh_model::{BenchmarkIdPrefix, BlessingRecord, DiscriminantSet, StorageKey};
 use cbh_storage::Storage;
 use jiff::Timestamp;
 
-use super::announce::{AnnouncedBase, AnnouncedSince, selection_announcement};
+use super::announce::{AnnouncedBase, AnnouncedSince, announce_selection, selection_announcement};
 use super::facets::{
     AutoFacets, describe_effective_facets, facets_are_unconstrained, resolve_facets,
 };
@@ -195,14 +195,20 @@ where
     // The always-on effective-selection announcement: one line, printed regardless
     // of `--verbose`, naming the resolved (possibly auto-detected) partition, base
     // branch, and look-back window a plain run would otherwise resolve silently.
-    reporter.announce(&effective_selection_summary(
+    // When the machine key was auto-detected, a follow-up notice states that the
+    // machine-independent `synthetic` sets ride along regardless of that key.
+    announce_selection(
+        reporter,
         &facets,
-        &base_name,
-        selection.base.is_none(),
-        since,
-        selection.since.is_some(),
-        mode,
-    ));
+        &effective_selection_summary(
+            &facets,
+            &base_name,
+            selection.base.is_none(),
+            since,
+            selection.since.is_some(),
+            mode,
+        ),
+    );
 
     // Tally why candidates do not enter the analysis, so a `0 runs` outcome can
     // explain itself (via `--verbose` per object, and via a summary hint when

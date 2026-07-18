@@ -8,8 +8,8 @@ use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) use cargo_bench_history::{
-    BenchmarkId, BenchmarkResult, Cli, Command, EnvironmentInfo, GitInfo, Metric, MetricKind,
-    Overrides, Run, RunContext, RunError, RunOutcome, SCHEMA_VERSION, ToolchainInfo,
+    AutoFacets, BenchmarkId, BenchmarkResult, Cli, Command, EnvironmentInfo, GitInfo, Metric,
+    MetricKind, Overrides, Run, RunContext, RunError, RunOutcome, SCHEMA_VERSION, ToolchainInfo,
     default_template, run, run_with_overrides,
 };
 use cbh_codec as codec;
@@ -23,6 +23,20 @@ use tick::Clock;
 /// The tool version recorded with each run. The integration test compiles within
 /// the package, so its `CARGO_PKG_VERSION` matches the version `collect` records.
 pub(crate) const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The target triple the harness pins the auto-detected facet to, matching the
+/// triple the seed helpers write their synthetic partitions under. Pinning it
+/// keeps the suite host-independent: synthetic sets now obey the target-triple
+/// facet (a `list`/`analyze` with an auto triple no longer sees foreign-triple
+/// data), so a bare query must auto-detect the seeded triple regardless of the
+/// host the test runs on.
+pub(crate) const HARNESS_AUTO_TRIPLE: &str = "x86_64-unknown-linux-gnu";
+
+/// The machine key the harness pins the auto-detected facet to. Chosen not to
+/// collide with any seeded machine key, so an auto machine-key query still
+/// matches only the machine-key-exempt synthetic sets, never a hardware-keyed
+/// partition (which the tests always select with an explicit `--machine-key`).
+pub(crate) const HARNESS_AUTO_MACHINE_KEY: &str = "harness-auto-machine";
 
 /// A process-global base repository template: a `master`-branch repo carrying the
 /// volatile-directory excludes and one empty `root` commit, built once via the real
@@ -396,6 +410,14 @@ pub(crate) struct Workspace {
     /// tests that exercise the no-storage-configured error path, and azure tests use
     /// their own workspace type entirely.
     inject_local: bool,
+    /// Whether [`drive`](Self::drive) uses real host auto-detection for the query
+    /// facets instead of the pinned [`HARNESS_AUTO_TRIPLE`]/[`HARNESS_AUTO_MACHINE_KEY`].
+    /// The standard constructors pin the facets so seeded-partition tests are
+    /// host-independent; [`with_real_auto_facets`](Self::with_real_auto_facets)
+    /// enables real detection for the `collect`→`analyze` round-trip tests, whose
+    /// whole point is that a real `collect` (which stamps the host triple) and a
+    /// bare `analyze` resolve the *same* host partition.
+    real_auto_facets: bool,
 }
 
 impl Drop for Workspace {
@@ -420,6 +442,7 @@ impl Workspace {
             bench: Vec::new(),
             graph: RefCell::new(GitGraph::new(root, "master")),
             inject_local: true,
+            real_auto_facets: false,
         };
         let cargo_dir = workspace.root().join(".cargo");
         fs::create_dir_all(&cargo_dir).unwrap();
@@ -455,6 +478,7 @@ impl Workspace {
             bench: Vec::new(),
             graph: RefCell::new(GitGraph::new(root, "master")),
             inject_local: false,
+            real_auto_facets: false,
         }
     }
 
@@ -469,6 +493,7 @@ impl Workspace {
             bench: Vec::new(),
             graph: RefCell::new(GitGraph::new(root, "master")),
             inject_local: true,
+            real_auto_facets: false,
         };
         let path = workspace.root().join(relative);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -491,6 +516,32 @@ impl Workspace {
     pub(crate) fn without_local_storage(mut self) -> Self {
         self.inject_local = false;
         self
+    }
+
+    /// Uses real host auto-detection for the query facets instead of the pinned
+    /// harness defaults (consuming builder). Reserved for `collect`→`analyze`
+    /// round-trip tests: a real `collect` stamps the host triple, so a bare
+    /// `analyze` must auto-detect that same host triple to find the run. Every
+    /// other test seeds a fixed-triple partition and relies on the pin.
+    pub(crate) fn with_real_auto_facets(mut self) -> Self {
+        self.real_auto_facets = true;
+        self
+    }
+
+    /// The auto-detected facet override a drive injects through `Overrides`.
+    ///
+    /// Pinned to [`HARNESS_AUTO_TRIPLE`]/[`HARNESS_AUTO_MACHINE_KEY`] by default so
+    /// the suite is host-independent; `None` (real detection) when
+    /// [`with_real_auto_facets`](Self::with_real_auto_facets) opted in.
+    fn auto_facets_override(&self) -> Option<AutoFacets> {
+        if self.real_auto_facets {
+            None
+        } else {
+            Some(AutoFacets {
+                triple: HARNESS_AUTO_TRIPLE.to_owned(),
+                machine_key: HARNESS_AUTO_MACHINE_KEY.to_owned(),
+            })
+        }
     }
 
     /// Builds the effective CLI arguments for a drive, injecting `--verbose` for
@@ -824,6 +875,7 @@ impl Workspace {
                 bench_command: Some(bench_command),
                 clock: Some(Clock::new_frozen_at(analysis_now())),
                 storage_override: None,
+                auto_facets: self.auto_facets_override(),
             },
         )
         .await
@@ -862,6 +914,7 @@ impl Workspace {
                 bench_command: Some(bench_command),
                 clock: Some(Clock::new_frozen_at(analysis_now())),
                 storage_override: None,
+                auto_facets: self.auto_facets_override(),
             },
         )
         .await
