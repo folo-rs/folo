@@ -442,46 +442,7 @@ Describe 'ConvertTo-MatrixJson' {
     }
 }
 
-Describe 'Invoke-WithRetry' {
-    BeforeEach {
-        Mock Start-Sleep -ModuleName ReleaseAutomation { }
-    }
-
-    It 'runs the action once when it succeeds immediately' {
-        $script:calls = 0
-        Invoke-WithRetry -Attempt 3 -DelaySeconds 1 -Action { $script:calls++ }
-        $script:calls | Should -Be 1
-        Should -Invoke Start-Sleep -ModuleName ReleaseAutomation -Times 0 -Exactly
-    }
-
-    It 'retries until the action succeeds' {
-        $script:calls = 0
-        Invoke-WithRetry -Attempt 5 -DelaySeconds 1 -Action {
-            $script:calls++
-            if ($script:calls -lt 3) { throw 'transient' }
-        }
-        $script:calls | Should -Be 3
-        Should -Invoke Start-Sleep -ModuleName ReleaseAutomation -Times 2 -Exactly
-    }
-
-    It 'rethrows after exhausting all attempts' {
-        $script:calls = 0
-        { Invoke-WithRetry -Attempt 3 -DelaySeconds 1 -Action { $script:calls++; throw 'always' } } |
-            Should -Throw
-        $script:calls | Should -Be 3
-    }
-
-    It 'does not sleep after the final failed attempt' {
-        { Invoke-WithRetry -Attempt 2 -DelaySeconds 1 -Action { throw 'always' } } | Should -Throw
-        Should -Invoke Start-Sleep -ModuleName ReleaseAutomation -Times 1 -Exactly
-    }
-}
-
 Describe 'Invoke-ReleasePublish (mocked release-plz)' {
-    BeforeEach {
-        Mock Start-Sleep -ModuleName ReleaseAutomation { }
-    }
-
     It 'invokes release-plz once with the composed config on success' {
         Mock release-plz -ModuleName ReleaseAutomation { $global:LASTEXITCODE = 0 }
         Invoke-ReleasePublish -ConfigPath '/tmp/ci.toml' -Attempt 3 -DelaySeconds 0

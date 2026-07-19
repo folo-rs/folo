@@ -78,6 +78,7 @@ Describe 'Find-RollingComment (mocked gh api)' {
     Context 'when gh fails' {
         BeforeEach {
             Mock gh -ModuleName BenchHistoryComment { $global:LASTEXITCODE = 1; 'HTTP 503: Service Unavailable' }
+            Mock Start-Sleep -ModuleName Retry { }
         }
 
         It 'throws, surfacing the gh output' {

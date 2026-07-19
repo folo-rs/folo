@@ -338,6 +338,37 @@ the mostly-cached setup time it would save. Toolchain versions are defined once 
 `constants.env` and `rust-toolchain.toml` and reach the workflows through the `just`
 commands they call, so no version is ever duplicated into a workflow file.
 
+## Transient-fault handling
+
+CI touches unreliable infrastructure — package mirrors, the GitHub API, runner disks — where a
+single blip (an HTTP 5xx, a rate-limit refusal, a dropped connection, a runner disk I/O error)
+is not a real failure and must not fail a whole job. Such faults are retried automatically, and
+at the lowest feasible level: one flaky download or one API read is re-attempted in place rather
+than restarting the job around it. A shared helper, `scripts/utility/Retry.psm1`, is the single
+place that logic lives: `Invoke-WithRetry` re-runs an action a few times with exponential backoff
+capped at a ceiling, and `Test-TransientFailure` classifies an error message so callers can retry
+only genuinely transient faults.
+
+Retry wraps the operations most exposed to that risk: the in-repo Rust toolchain install (the
+`rustup toolchain install` a runner disk blip once failed with no retry, dropping a whole job on
+one bad sector), the actionlint/shellcheck/azcopy tool downloads (which re-fetch *and* re-verify
+the checksum, so a truncated payload re-downloads rather than being trusted), and the idempotent
+`gh` read calls behind the bench-history modules' `Invoke-GhCapture` seam.
+
+Two lines bound where retry is applied. It never wraps a non-idempotent mutation — creating,
+editing, closing, or deleting an issue or comment — because a retry after a fault that already
+took effect would duplicate it; only reads opt in, via `Invoke-GhCapture -RetryOnFailure`. And it
+retries only *transient* failures: a deterministic error (a 4xx, an auth refusal, a malformed
+request) will fail identically every attempt, so `Test-TransientFailure` lets it surface
+immediately instead of hiding behind slow retries. Reads that already degrade gracefully — those
+returning a neutral result on failure rather than aborting the job — are left as-is, since a
+soft-failing read needs no retry to keep the job alive.
+
+First-party marketplace actions (checkout, cache, artifact up/download, and the like) are trusted
+to retry their own network operations internally, so they are not wrapped in a third-party retry
+action; adding one would trade the minimal-dependency stance for redundant coverage. That trust is
+revisited only if a specific action is observed to flake.
+
 ## Job timeouts
 
 Every job that runs `setup-environment` must budget for a *cold* cache. When the shared

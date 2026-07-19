@@ -49,6 +49,10 @@ $PSNativeCommandUseErrorActionPreference = $true
 Set-StrictMode -Version Latest
 $VerbosePreference = 'Continue'
 
+# The archive download can hit a transient network/disk fault; Invoke-WithRetry re-fetches (and
+# re-verifies the checksum) rather than failing `just install-tools` on a single blip.
+Import-Module (Join-Path $PSScriptRoot 'utility' 'Retry.psm1') -Force
+
 # The pinned azcopy release. Keep $AzCopyVersion and the per-platform digests in
 # $AzCopyBuilds in sync - both come from one GitHub release of azure-storage-azcopy.
 $script:AzCopyVersion = '10.32.4'
@@ -144,14 +148,18 @@ Write-Verbose "Staging the download in temp directory '$($work.FullName)'."
 try {
     $archive = Join-Path $work $build.Asset
     Write-Verbose "Downloading azcopy archive to '$archive'."
-    Invoke-WebRequest -Uri $url -OutFile $archive
+    # Retry the download and its checksum together: a truncated or corrupted fetch fails
+    # verification and is re-fetched, so only a genuinely wrong pinned digest exhausts the attempts.
+    Invoke-WithRetry -Attempt 4 -DelaySeconds 3 -BackoffMultiplier 2 -MaxDelaySeconds 30 -Action {
+        Invoke-WebRequest -Uri $url -OutFile $archive
 
-    Write-Verbose "Verifying the archive SHA-256 against the pinned digest."
-    # Get-FileHash returns uppercase hex; normalize both sides to lowercase so the
-    # comparison cannot fail on case alone.
-    $actual = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($actual -ne $build.Sha256) {
-        throw "azcopy archive SHA-256 mismatch for '$($build.Asset)': expected $($build.Sha256), got $actual."
+        Write-Verbose "Verifying the archive SHA-256 against the pinned digest."
+        # Get-FileHash returns uppercase hex; normalize both sides to lowercase so the
+        # comparison cannot fail on case alone.
+        $actual = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -ne $build.Sha256) {
+            throw "azcopy archive SHA-256 mismatch for '$($build.Asset)': expected $($build.Sha256), got $actual."
+        }
     }
 
     Expand-AzCopyArchive -ArchivePath $archive -ArchiveKind $build.Kind -DestinationDir $work
