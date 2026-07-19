@@ -6,8 +6,9 @@ use crate::harness::*;
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn backfill_stores_one_clean_object_per_commit_and_restores_checkout() {
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
     let workspace = Workspace::clean_repo(&storage_only_config())
-        .with_bench(&["--summary", "grp=single"])
+        .with_bench(&["--callgrind", &bench])
         .with_real_auto_facets();
     let c1 = workspace.commit("c1");
     let c2 = workspace.commit("c2");
@@ -56,8 +57,9 @@ async fn backfill_stores_one_clean_object_per_commit_and_restores_checkout() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn backfill_spans_a_merge_commit_along_first_parent() {
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
     let workspace =
-        Workspace::clean_repo(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
+        Workspace::clean_repo(&storage_only_config()).with_bench(&["--callgrind", &bench]);
     // master:  root - c1 - M - c3   (M merges the side branch into master)
     //                  \   /
     //  side:            sf1 - sf2
@@ -103,9 +105,10 @@ async fn backfill_spans_a_merge_commit_along_first_parent() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn backfill_stops_on_a_failing_commit_by_default() {
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
     let workspace = Workspace::clean_repo(&storage_only_config()).with_bench(&[
-        "--summary",
-        "grp=single",
+        "--callgrind",
+        &bench,
         "--fail-if-exists",
         "BROKEN",
     ]);

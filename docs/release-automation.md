@@ -434,14 +434,6 @@ not yet exist, prints a warning like:
 > manually (`cargo publish`); afterwards configure Trusted Publishing for it on
 > crates.io and re-publish via the GitHub workflow.
 
-`cargo-bench-history-faker` is newly added and has **not** yet been published, so
-it needs exactly this one-time bootstrap: publish its current version manually
-with `cargo publish -p cargo-bench-history-faker`, then configure its Trusted
-Publisher on crates.io (owner `folo-rs`, repo `folo`, workflow `release.yml`) so
-every subsequent release goes through CI like the rest of the family. The other
-binary crates published today already exist on crates.io, so this affects only
-the faker and any future new crates.
-
 ## Prerequisites (one-time)
 
 For the automated flow to function:

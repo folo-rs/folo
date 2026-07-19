@@ -9,26 +9,32 @@
 
 use std::path::Path;
 
-/// The `module_path` of the committed `single` Callgrind fixture, reproduced so the
-/// `single`/`single-alt-pkg` presets keep the exact `BenchmarkId` identity that
-/// existing downstream assertions expect.
-const SINGLE_MODULE_PATH: &str =
-    "fast_time_timestamp_performance_cg::timestamp_capture::timestamp_capture_std_now";
-/// The `function_name` of the committed `single` fixture.
-const SINGLE_FUNCTION: &str = "timestamp_capture_std_now";
-/// The `module_path` of the committed `parametrized` fixture.
-const PARAMETRIZED_MODULE_PATH: &str = "fast_time_timestamp_performance_cg::timestamp_capture::timestamp_capture_instant_saturating_duration_since";
-/// The `function_name` of the committed `parametrized` fixture.
-const PARAMETRIZED_FUNCTION: &str = "timestamp_capture_instant_saturating_duration_since";
-/// The `package_dir` both fixtures report; its final component (`fast_time`)
-/// becomes the package segment of the parsed `BenchmarkId`.
-const SINGLE_PACKAGE_DIR: &str = "/mnt/c/Source/folo/packages/fast_time";
-/// A different `package_dir` keeping the same `module_path`/`function_name`,
-/// simulating an equally named bench target in another package (final component
-/// `other_pkg`).
-const ALT_PACKAGE_DIR: &str = "/work/packages/other_pkg";
+/// A parsed Callgrind case request: its on-disk group, identity, and the three
+/// tracked instruction/branch counts.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct CallgrindCase {
+    /// The on-disk group path under `gungraun/` (may contain `/`).
+    pub group: String,
+    /// The `module_path` recorded in the summary's identity.
+    pub module_path: String,
+    /// The `function_name` recorded in the summary's identity.
+    pub function: String,
+    /// The optional parameter id (`None` for an unparametrized case).
+    pub id: Option<String>,
+    /// The optional `package_dir`; its final component becomes the package segment
+    /// of the parsed `BenchmarkId`.
+    pub package_dir: Option<String>,
+    /// The `Ir` (instructions retired) count.
+    pub ir: u64,
+    /// The `Bc` (conditional branches) count.
+    pub bc: u64,
+    /// The `Bi` (indirect branches) count.
+    pub bi: u64,
+}
 
-/// A parsed Criterion case request: its identity and slope estimate (nanoseconds).
+/// A parsed Criterion case request: its identity, slope estimate (nanoseconds),
+/// and optional dispersion.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct CriterionCase {
@@ -40,6 +46,11 @@ pub struct CriterionCase {
     pub value: String,
     /// The wall-clock slope estimate, in nanoseconds.
     pub nanos: f64,
+    /// Optional dispersion `(std_dev, (ci_low, ci_high))`. When present the case
+    /// records that standard deviation and confidence interval on its estimates;
+    /// when absent it emits a degenerate `(nanos, nanos)` interval and no standard
+    /// deviation, so no dispersion the caller did not request is invented.
+    pub dispersion: Option<(f64, (f64, f64))>,
 }
 
 /// A parsed `alloc_tracker` operation request.
@@ -87,7 +98,6 @@ pub struct TimeOperation {
 /// faithful round-trip; the real capture's many derived and cache-simulation events
 /// are parsed-but-ignored, so they are omitted.
 #[must_use]
-#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn callgrind_summary(
     module_path: &str,
     function_name: &str,
@@ -121,51 +131,48 @@ pub fn callgrind_summary(
     .to_string()
 }
 
-/// Builds one of the fixed-parameter Callgrind presets by name.
+/// Parses a `GROUP|MODULE|FUNCTION[|ID[|PACKAGE_DIR]]=IR/BC/BI` argument into a
+/// [`CallgrindCase`].
 ///
-/// The three presets reproduce the identity and `Ir`/`Bc`/`Bi` of the committed
-/// real fixtures so existing downstream `BenchmarkId` assertions stay green:
-///
-/// * `single` — unparametrized, `Ir` = 36, package `fast_time`.
-/// * `parametrized` — id `two_instants`, `Ir` = 87, package `fast_time`.
-/// * `single-alt-pkg` — same identity as `single` but a different `package_dir`
-///   (package `other_pkg`), to exercise cross-package bench-name collisions.
+/// `GROUP` is the on-disk directory (may contain `/`); `MODULE` and `FUNCTION`
+/// form the identity and must be non-empty. `ID` and `PACKAGE_DIR` are optional
+/// (an empty or omitted component denotes absence). `IR`/`BC`/`BI` are the three
+/// tracked counts.
 ///
 /// # Panics
 ///
-/// Panics on an unknown preset name.
+/// Panics on a malformed argument.
 #[must_use]
-#[cfg_attr(coverage_nightly, coverage(off))]
-pub fn callgrind_preset(kind: &str) -> String {
-    match kind {
-        "single" => callgrind_summary(
-            SINGLE_MODULE_PATH,
-            SINGLE_FUNCTION,
-            None,
-            Some(SINGLE_PACKAGE_DIR),
-            36,
-            4,
-            2,
+pub fn parse_callgrind_arg(value: &str) -> CallgrindCase {
+    let (identity, metrics) = value
+        .split_once('=')
+        .expect("--callgrind value must be GROUP|MODULE|FUNCTION[|ID[|PACKAGE_DIR]]=IR/BC/BI");
+    let parts: Vec<&str> = identity.split('|').collect();
+    let (group, module_path, function, id, package_dir) = match parts.as_slice() {
+        [group, module, function] => (*group, *module, *function, "", ""),
+        [group, module, function, id] => (*group, *module, *function, *id, ""),
+        [group, module, function, id, package] => (*group, *module, *function, *id, *package),
+        _ => panic!(
+            "--callgrind identity must be GROUP|MODULE|FUNCTION[|ID[|PACKAGE_DIR]], got {identity:?}"
         ),
-        "parametrized" => callgrind_summary(
-            PARAMETRIZED_MODULE_PATH,
-            PARAMETRIZED_FUNCTION,
-            Some("two_instants"),
-            Some(SINGLE_PACKAGE_DIR),
-            87,
-            2,
-            1,
-        ),
-        "single-alt-pkg" => callgrind_summary(
-            SINGLE_MODULE_PATH,
-            SINGLE_FUNCTION,
-            None,
-            Some(ALT_PACKAGE_DIR),
-            36,
-            4,
-            2,
-        ),
-        other => panic!("unknown summary kind {other:?}"),
+    };
+    assert!(
+        !group.is_empty() && !module_path.is_empty() && !function.is_empty(),
+        "--callgrind GROUP, MODULE and FUNCTION must be non-empty, got {identity:?}"
+    );
+    let counts: Vec<&str> = metrics.split('/').collect();
+    let [ir, bc, bi] = counts.as_slice() else {
+        panic!("--callgrind metrics must be IR/BC/BI, got {metrics:?}");
+    };
+    CallgrindCase {
+        group: group.to_owned(),
+        module_path: module_path.to_owned(),
+        function: function.to_owned(),
+        id: (!id.is_empty()).then(|| id.to_owned()),
+        package_dir: (!package_dir.is_empty()).then(|| package_dir.to_owned()),
+        ir: ir.parse().expect("IR must be a number"),
+        bc: bc.parse().expect("BC must be a number"),
+        bi: bi.parse().expect("BI must be a number"),
     }
 }
 
@@ -174,7 +181,6 @@ pub fn callgrind_preset(kind: &str) -> String {
 /// `group` may contain `/`, which is split into nested directory segments — real
 /// Gungraun output nests by bench binary then group, so two same-named harnesses in
 /// different packages land in distinct nested directories.
-#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn write_callgrind_summary(target_root: &Path, group: &str, content: &str) {
     let mut dir = target_root.join("gungraun");
     for part in group.split('/') {
@@ -184,7 +190,26 @@ pub fn write_callgrind_summary(target_root: &Path, group: &str, content: &str) {
     std::fs::write(dir.join("summary.json"), content).expect("summary should be writable");
 }
 
-/// Parses a `GROUP|FUNCTION|VALUE=NANOS` argument into a [`CriterionCase`].
+/// Builds a [`CallgrindCase`]'s summary document and writes it under its group.
+///
+/// The thin case-to-filesystem wrapper the binary drives: it serializes the case
+/// through [`callgrind_summary`] and deposits it via [`write_callgrind_summary`],
+/// so every emitted identity and count originates from the parsed case.
+pub fn write_callgrind_case(target_root: &Path, case: &CallgrindCase) {
+    let content = callgrind_summary(
+        &case.module_path,
+        &case.function,
+        case.id.as_deref(),
+        case.package_dir.as_deref(),
+        case.ir,
+        case.bc,
+        case.bi,
+    );
+    write_callgrind_summary(target_root, &case.group, &content);
+}
+
+/// Parses a `GROUP|FUNCTION|VALUE=NANOS[@STDDEV/CILOW:CIHIGH]` argument into a
+/// [`CriterionCase`].
 ///
 /// `VALUE` is optional: both `GROUP|FUNCTION=NANOS` and the value-less
 /// `GROUP|FUNCTION|=NANOS` form denote a case without a parameter. `GROUP` and
@@ -192,15 +217,19 @@ pub fn write_callgrind_summary(target_root: &Path, group: &str, content: &str) {
 /// allowed, so a malformed input fails here with a clear message rather than at a
 /// later filesystem write.
 ///
+/// The optional `@STDDEV/CILOW:CIHIGH` suffix records dispersion: `STDDEV` is the
+/// standard deviation and `CILOW:CIHIGH` the confidence interval on the estimates.
+/// When omitted, the case carries no dispersion and later emits a degenerate
+/// interval with no standard deviation.
+///
 /// # Panics
 ///
 /// Panics on a malformed argument.
 #[must_use]
-#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn parse_criterion_arg(value: &str) -> CriterionCase {
-    let (identity, nanos) = value
+    let (identity, timing) = value
         .split_once('=')
-        .expect("--criterion value must be GROUP|FUNCTION|VALUE=NANOS");
+        .expect("--criterion value must be GROUP|FUNCTION|VALUE=NANOS[@STDDEV/CILOW:CIHIGH]");
     let parts: Vec<&str> = identity.split('|').collect();
     let (group, function, value) = match parts.as_slice() {
         [group, function] => (*group, *function, ""),
@@ -213,16 +242,31 @@ pub fn parse_criterion_arg(value: &str) -> CriterionCase {
         !group.is_empty() && !function.is_empty(),
         "--criterion GROUP and FUNCTION must be non-empty, got {identity:?}"
     );
+    let (nanos, dispersion) = match timing.split_once('@') {
+        Some((nanos, suffix)) => {
+            let (std_dev, ci) = suffix
+                .split_once('/')
+                .expect("--criterion dispersion must be STDDEV/CILOW:CIHIGH");
+            (
+                nanos,
+                Some((
+                    std_dev.parse::<f64>().expect("STDDEV must be a number"),
+                    parse_bounds(ci),
+                )),
+            )
+        }
+        None => (timing, None),
+    };
     CriterionCase {
         group: group.to_owned(),
         function: function.to_owned(),
         value: value.to_owned(),
         nanos: nanos.parse().expect("NANOS must be a number"),
+        dispersion,
     }
 }
 
 /// Writes one Criterion case's `new/benchmark.json` + `new/estimates.json` pair.
-#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn write_criterion_case(target_root: &Path, case: &CriterionCase) {
     // A Criterion group id may legitimately contain `/`; each segment must still be
     // a safe path component before it is flattened into the on-disk directory name.
@@ -257,27 +301,32 @@ pub fn write_criterion_case(target_root: &Path, case: &CriterionCase) {
     std::fs::write(dir.join("benchmark.json"), benchmark.to_string())
         .expect("benchmark.json should be writable");
 
-    // A minimal but schema-valid estimates document: the slope point estimate is
-    // the requested timing, with a narrow confidence interval and small std_dev.
+    // A minimal, schema-valid estimates document driven entirely by the case. The
+    // parser prefers `slope` and reads only the confidence interval bounds and
+    // `std_dev.point_estimate`, so nothing beyond what the case describes is
+    // emitted: without a dispersion request the interval is degenerate
+    // `(nanos, nanos)` and no `std_dev` is written, so no dispersion is invented.
     let nanos = case.nanos;
-    let estimate = |point: f64| {
+    let (ci_low, ci_high) = case.dispersion.map_or((nanos, nanos), |(_, ci)| ci);
+    let estimate = |point: f64, low: f64, high: f64| {
         serde_json::json!({
             "confidence_interval": {
-                "confidence_level": 0.95,
-                "lower_bound": point - 0.5,
-                "upper_bound": point + 0.5,
+                "lower_bound": low,
+                "upper_bound": high,
             },
             "point_estimate": point,
-            "standard_error": 0.1,
         })
     };
-    let estimates = serde_json::json!({
-        "mean": estimate(nanos),
-        "median": estimate(nanos),
-        "median_abs_dev": estimate(0.2),
-        "slope": estimate(nanos),
-        "std_dev": estimate(0.3),
+    let mut estimates = serde_json::json!({
+        "mean": estimate(nanos, ci_low, ci_high),
+        "slope": estimate(nanos, ci_low, ci_high),
     });
+    if let Some((std_dev, _)) = case.dispersion {
+        estimates
+            .as_object_mut()
+            .expect("the estimates document is a JSON object")
+            .insert("std_dev".to_owned(), estimate(std_dev, std_dev, std_dev));
+    }
     std::fs::write(dir.join("estimates.json"), estimates.to_string())
         .expect("estimates.json should be writable");
 }
@@ -289,7 +338,6 @@ pub fn write_criterion_case(target_root: &Path, case: &CriterionCase) {
 ///
 /// Panics on a malformed argument.
 #[must_use]
-#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn parse_alloc_arg(value: &str) -> AllocOperation {
     let (operation, rest) = value
         .split_once('=')
@@ -327,7 +375,6 @@ pub fn parse_alloc_arg(value: &str) -> AllocOperation {
 ///
 /// Panics on a malformed argument.
 #[must_use]
-#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn parse_time_arg(value: &str) -> TimeOperation {
     let (operation, rest) = value
         .split_once('=')
@@ -351,7 +398,6 @@ pub fn parse_time_arg(value: &str) -> TimeOperation {
 /// bounds — nanoseconds for `all_the_time`, bytes or allocation counts for
 /// `alloc_tracker` — so `LOW` must not exceed `HIGH`, otherwise the emitted
 /// dispersion would carry a negative standard deviation and inverted min/max.
-#[cfg_attr(coverage_nightly, coverage(off))]
 fn parse_bounds(bounds: &str) -> (f64, f64) {
     let (low, high) = bounds.split_once(':').expect("interval must be LOW:HIGH");
     let low: f64 = low.parse().expect("LOW must be a number");
@@ -368,7 +414,6 @@ fn parse_bounds(bounds: &str) -> (f64, f64) {
 /// additionally records the confidence interval for both the bytes and
 /// allocation-count metrics, so the adapter's dispersion path is exercised end to
 /// end.
-#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn write_alloc_tracker(target_root: &Path, operation: &AllocOperation) {
     const ITERATIONS: u64 = 4;
     const SPANS: u64 = 6;
@@ -398,7 +443,6 @@ pub fn write_alloc_tracker(target_root: &Path, operation: &AllocOperation) {
 /// Inserts the confidence-interval bounds for one metric (identified by `suffix`)
 /// into an operation output object. Only multi-span output carries an interval; the
 /// slope itself is emitted alongside the base fields.
-#[cfg_attr(coverage_nightly, coverage(off))]
 fn insert_metric_interval(
     fields: &mut serde_json::Map<String, serde_json::Value>,
     suffix: &str,
@@ -415,7 +459,6 @@ fn insert_metric_interval(
 /// slope over a fixed iteration count, and every operation records a span count and
 /// slope. When the request carries a confidence interval the file additionally
 /// records the interval, so the adapter's dispersion path is exercised end to end.
-#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn write_all_the_time(target_root: &Path, operation: &TimeOperation) {
     const ITERATIONS: u64 = 4;
     const SPANS: u64 = 6;
@@ -443,7 +486,6 @@ pub fn write_all_the_time(target_root: &Path, operation: &TimeOperation) {
 /// non-empty, not a current/parent-directory reference, and free of path
 /// separators. Inputs are controlled, so misuse is a loud panic rather than a
 /// silent escape outside the target root.
-#[cfg_attr(coverage_nightly, coverage(off))]
 fn safe_segment(segment: &str) -> &str {
     assert!(
         !segment.is_empty()
@@ -457,7 +499,6 @@ fn safe_segment(segment: &str) -> &str {
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
@@ -487,42 +528,56 @@ mod tests {
     }
 
     #[test]
-    fn single_and_alt_presets_differ_only_in_package_dir() {
-        let single: serde_json::Value =
-            serde_json::from_str(&callgrind_preset("single")).expect("valid JSON");
-        let alt: serde_json::Value =
-            serde_json::from_str(&callgrind_preset("single-alt-pkg")).expect("valid JSON");
-        assert_eq!(single["module_path"], alt["module_path"]);
-        assert_eq!(single["function_name"], alt["function_name"]);
-        assert_ne!(single["package_dir"], alt["package_dir"]);
-        assert_eq!(
-            single["package_dir"],
-            "/mnt/c/Source/folo/packages/fast_time"
-        );
-        assert_eq!(alt["package_dir"], "/work/packages/other_pkg");
+    fn parses_a_full_callgrind_case() {
+        let case = parse_callgrind_arg("shared/foo|a::b::c|c|two_instants|/pkg/fast_time=36/4/2");
+        assert_eq!(case.group, "shared/foo");
+        assert_eq!(case.module_path, "a::b::c");
+        assert_eq!(case.function, "c");
+        assert_eq!(case.id.as_deref(), Some("two_instants"));
+        assert_eq!(case.package_dir.as_deref(), Some("/pkg/fast_time"));
+        assert_eq!(case.ir, 36);
+        assert_eq!(case.bc, 4);
+        assert_eq!(case.bi, 2);
     }
 
     #[test]
-    fn parametrized_preset_carries_its_id_and_ir() {
-        let value: serde_json::Value =
-            serde_json::from_str(&callgrind_preset("parametrized")).expect("valid JSON");
-        assert_eq!(value["id"], "two_instants");
-        let callgrind = &value["profiles"][0]["summaries"]["total"]["summary"]["Callgrind"];
-        assert_eq!(callgrind["Ir"]["metrics"]["Left"]["Int"], 87);
+    fn parses_a_minimal_callgrind_case_with_absent_optionals() {
+        let case = parse_callgrind_arg("grp|m|f=1/0/0");
+        assert!(case.id.is_none());
+        assert!(case.package_dir.is_none());
+        assert_eq!(case.ir, 1);
     }
 
     #[test]
-    #[should_panic(expected = "unknown summary kind")]
-    fn callgrind_preset_rejects_unknown_kind() {
-        drop(callgrind_preset("nope"));
+    fn parses_a_callgrind_case_with_empty_optionals_as_absent() {
+        let case = parse_callgrind_arg("grp|m|f||=5/1/1");
+        assert!(case.id.is_none());
+        assert!(case.package_dir.is_none());
     }
 
     #[test]
-    fn parses_a_valueless_criterion_case() {
+    #[should_panic(expected = "--callgrind metrics must be IR/BC/BI")]
+    fn callgrind_arg_rejects_missing_metrics() {
+        drop(parse_callgrind_arg("grp|m|f=36/4"));
+    }
+
+    #[test]
+    fn parses_a_valueless_criterion_case_without_dispersion() {
         let case = parse_criterion_arg("group|func=12.5");
         assert_eq!(case.group, "group");
         assert_eq!(case.function, "func");
         assert!(case.value.is_empty());
         assert!((case.nanos - 12.5).abs() < f64::EPSILON);
+        assert!(case.dispersion.is_none());
+    }
+
+    #[test]
+    fn parses_a_criterion_case_with_dispersion() {
+        let case = parse_criterion_arg("group|func|val=26.9@0.5/26.4:27.4");
+        assert_eq!(case.value, "val");
+        let (std_dev, (low, high)) = case.dispersion.expect("dispersion parsed");
+        assert!((std_dev - 0.5).abs() < f64::EPSILON);
+        assert!((low - 26.4).abs() < f64::EPSILON);
+        assert!((high - 27.4).abs() < f64::EPSILON);
     }
 }

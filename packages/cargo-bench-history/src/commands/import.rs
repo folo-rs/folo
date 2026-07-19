@@ -370,7 +370,15 @@ mod tests {
         FakeOutput {
             callgrind: vec![RawSummary {
                 path: PathBuf::from("a/summary.json"),
-                content: cargo_bench_history_faker::callgrind_preset("single"),
+                content: cargo_bench_history_faker::callgrind_summary(
+                    "fast_time_timestamp_performance_cg::timestamp_capture::timestamp_capture_std_now",
+                    "timestamp_capture_std_now",
+                    None,
+                    Some("/mnt/c/Source/folo/packages/fast_time"),
+                    36,
+                    4,
+                    2,
+                ),
             }],
             ..FakeOutput::default()
         }
@@ -458,7 +466,7 @@ mod tests {
         assert!(message.contains("Stored 1"), "{message}");
 
         // Format canary: the exact storage key and decompressed body an importer
-        // must produce for the single-case Callgrind preset. Callgrind is
+        // must produce for the single-case Callgrind harvest. Callgrind is
         // hardware-independent, so the machine segment is `synthetic`; the commit
         // and triple come from the probed host.
         let keys = storage.keys();

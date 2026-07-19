@@ -25,16 +25,22 @@ contract. It is published only so sibling repositories can run the binary (via
 
 ## Invariants
 
-* **The Callgrind presets must match the committed parser fixtures.** The
-  `single` / `parametrized` / `single-alt-pkg` presets in `writers.rs` reproduce
-  the exact identity and `Ir`/`Bc`/`Bi` of
-  `packages/cargo-bench-history/tests/fixtures/callgrind/*.summary.json`. If those
-  fixtures change, update the presets in lockstep (and vice versa) — downstream
-  `BenchmarkId` assertions depend on it.
+* **The faker invents nothing — every emitted value comes from the CLI.** Each
+  writer records exactly the identity and metrics its argument specifies; there are
+  no hidden presets or defaults kept in lockstep with a committed fixture. A test
+  that needs a specific identity spells it out in the argument (the
+  `cbh_integration` harness owns the canonical `CALLGRIND_*` fragments its own
+  assertions depend on). Emit only the fields the `cargo-bench-history` parser
+  actually reads, so the output stays a faithful, self-contained stand-in for real
+  engine output — and feeding it real data would work identically.
 * **The CLI flag surface is a contract with `cargo-bench-history`'s tests.** Many
-  call sites pass `--summary`/`--criterion`/`--alloc-tracker`/`--all-the-time`/
+  call sites pass `--callgrind`/`--criterion`/`--alloc-tracker`/`--all-the-time`/
   `--exit-code`/`--fail-if-exists`/`--chdir`. Renaming or removing a flag breaks
   them; grep the whole repo before changing one.
+* **The binary must also run as a cargo subcommand** (`cargo bench-history-faker`),
+  which passes the subcommand name back as the first argument. `main` drops that
+  leading token so the argument grammar is identical whether run directly or via
+  cargo.
 * **Version stays in the `cargo-bench-history` group** (see `release-plz.toml`), so
   a faker-only change bumps the whole CLI family. That is accepted.
 

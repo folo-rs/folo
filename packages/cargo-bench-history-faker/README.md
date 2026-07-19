@@ -25,16 +25,19 @@ source elsewhere), or `cargo install cargo-bench-history-faker` to always build
 from source. Then run it in place of a benchmark engine:
 
 ```text
-cargo-bench-history-faker [--exit-code N] [--summary GROUP=KIND]...
-                          [--criterion GROUP|FUNCTION|VALUE=NANOS]...
+cargo-bench-history-faker [--exit-code N]
+                          [--callgrind GROUP|MODULE|FUNCTION[|ID[|PACKAGE_DIR]]=IR/BC/BI]...
+                          [--criterion GROUP|FUNCTION|VALUE=NANOS[@STDDEV/CILOW:CIHIGH]]...
                           [--alloc-tracker OPERATION=BYTES/COUNT[@BLOW:BHIGH/CLOW:CHIGH]]...
                           [--all-the-time OPERATION=NANOS[@LOW:HIGH]]...
                           [--fail-if-exists PATH] [--chdir DIR]
 ```
 
-Each `--summary`/`--criterion`/`--alloc-tracker`/`--all-the-time` flag may be
-repeated to emit several cases. Output is written under the target root, honoring
-`CARGO_TARGET_DIR` exactly as a real harvest does. To feed the output into a
-history, point `cargo bench-history import` at the same target directory.
+Each `--callgrind`/`--criterion`/`--alloc-tracker`/`--all-the-time` flag may be
+repeated to emit several cases, and every value each case records comes straight
+from its argument — the faker invents nothing. Output is written under the target
+root, honoring `CARGO_TARGET_DIR` exactly as a real harvest does. To feed the
+output into a history, point `cargo bench-history import` at the same target
+directory.
 
-See the crate documentation for the meaning of each flag and preset.
+See the crate documentation for the meaning of each flag.

@@ -132,7 +132,7 @@ its `binary_path()` locator behind the `private-test-util` feature, so `cargo in
 cargo-bench-history` still places only the one real binary on PATH. Tests resolve the binary via
 `cargo_bench_history_faker::binary_path()`; every `just` recipe that runs the suite under nextest
 pre-builds it once and passes `CBH_FAKER` (avoids per-process `cargo build` races). It writes
-per-engine fixture output on demand via repeatable flags (`--summary`/`--criterion`/
+per-engine fixture output on demand via repeatable flags (`--callgrind`/`--criterion`/
 `--alloc-tracker`/`--all-the-time`) and `--fail-if-exists` to simulate a failing commit. The
 value cores behind those writers live in the faker's public `writers` module, so unit and
 fidelity tests can build the exact same documents without spawning a process.

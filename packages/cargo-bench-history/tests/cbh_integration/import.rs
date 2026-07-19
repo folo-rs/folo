@@ -158,7 +158,8 @@ async fn importing_real_faker_binary_output_surfaces_in_list_under_the_overridde
             .root()
             .join("target")
             .join(format!("faker-{index}"));
-        run_faker_binary(&tree, &["--summary", "grp=single"]);
+        let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
+        run_faker_binary(&tree, &["--callgrind", &bench]);
         let outcome = workspace
             .drive(&[
                 "import",
@@ -200,10 +201,9 @@ async fn importing_real_faker_binary_output_surfaces_in_list_under_the_overridde
 
 /// The faker's callgrind value core produces output the *real* parser reads back
 /// into the requested identity and instruction/branch counts, for arbitrary
-/// parameters (not just the fixed presets). This is the self-contained
-/// faker→parser guarantee that replaced the old shared-fixture coupling: if the
-/// faker's document shape drifts from what the parser accepts, this fails. Pure
-/// value core, no filesystem — so it runs under Miri too.
+/// parameters. This is the self-contained faker→parser guarantee: if the faker's
+/// document shape drifts from what the parser accepts, this fails. Pure value core,
+/// no filesystem — so it runs under Miri too.
 #[test]
 fn faker_callgrind_value_core_round_trips_through_the_real_parser() {
     let summary = callgrind_summary(

@@ -17,13 +17,18 @@
 //! the rendered documentation.
 #![doc(hidden)]
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+// This crate is test-support scaffolding — a synthetic benchmark-output generator
+// driven by in-workspace tests and by the published binary. Its code carries no
+// product behavior worth a coverage signal, so coverage is disabled crate-wide
+// rather than per function.
+#![cfg_attr(coverage_nightly, coverage(off))]
 
 mod writers;
 
 pub use writers::{
-    AllocOperation, CriterionCase, TimeOperation, callgrind_preset, callgrind_summary,
-    parse_alloc_arg, parse_criterion_arg, parse_time_arg, write_all_the_time, write_alloc_tracker,
-    write_callgrind_summary, write_criterion_case,
+    AllocOperation, CallgrindCase, CriterionCase, TimeOperation, callgrind_summary,
+    parse_alloc_arg, parse_callgrind_arg, parse_criterion_arg, parse_time_arg, write_all_the_time,
+    write_alloc_tracker, write_callgrind_case, write_callgrind_summary, write_criterion_case,
 };
 
 // `binary_path` shells out to `cargo build` to locate the compiled binary. Only

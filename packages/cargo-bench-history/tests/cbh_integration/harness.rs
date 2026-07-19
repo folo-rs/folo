@@ -38,6 +38,26 @@ pub(crate) const HARNESS_AUTO_TRIPLE: &str = "x86_64-unknown-linux-gnu";
 /// partition (which the tests always select with an explicit `--machine-key`).
 pub(crate) const HARNESS_AUTO_MACHINE_KEY: &str = "harness-auto-machine";
 
+/// Canonical faker `--callgrind` identity/metric fragments, kept in lockstep with
+/// what the `collect` identity assertions expect. A fragment is everything after
+/// the on-disk `GROUP` — `MODULE|FUNCTION[|ID[|PACKAGE_DIR]]=IR/BC/BI`; the
+/// [`callgrind_arg`] helper prepends the group.
+///
+/// `CALLGRIND_SINGLE` is an unparametrized bench in package `fast_time`
+/// (`Ir`/`Bc`/`Bi` = 36/4/2); `CALLGRIND_PARAMETRIZED` adds the `two_instants` id
+/// (87/2/1); `CALLGRIND_SINGLE_ALT_PKG` keeps `CALLGRIND_SINGLE`'s identity but
+/// reports a different `package_dir` (package `other_pkg`), to exercise
+/// cross-package bench-name collisions.
+pub(crate) const CALLGRIND_SINGLE: &str = "fast_time_timestamp_performance_cg::timestamp_capture::timestamp_capture_std_now|timestamp_capture_std_now||/mnt/c/Source/folo/packages/fast_time=36/4/2";
+pub(crate) const CALLGRIND_PARAMETRIZED: &str = "fast_time_timestamp_performance_cg::timestamp_capture::timestamp_capture_instant_saturating_duration_since|timestamp_capture_instant_saturating_duration_since|two_instants|/mnt/c/Source/folo/packages/fast_time=87/2/1";
+pub(crate) const CALLGRIND_SINGLE_ALT_PKG: &str = "fast_time_timestamp_performance_cg::timestamp_capture::timestamp_capture_std_now|timestamp_capture_std_now||/work/packages/other_pkg=36/4/2";
+
+/// Builds a faker `--callgrind` argument value for on-disk `group` from one of the
+/// `CALLGRIND_*` identity/metric fragments (prepends `GROUP|`).
+pub(crate) fn callgrind_arg(group: &str, fragment: &str) -> String {
+    format!("{group}|{fragment}")
+}
+
 /// A process-global base repository template: a `master`-branch repo carrying the
 /// volatile-directory excludes and one empty `root` commit, built once via the real
 /// git commands and copied into each fresh workspace by [`Workspace::init_repo`].
@@ -395,7 +415,7 @@ pub(crate) struct Workspace {
     committer_times: RefCell<HashMap<String, Timestamp>>,
     /// Arguments passed to the mock benchmark engine that `collect`/`backfill` invoke
     /// in place of `cargo bench`. They tell the mock which fixtures to emit (which
-    /// `--summary` / `--criterion` cases, or an `--exit-code`), so each engine's
+    /// `--callgrind` / `--criterion` cases, or an `--exit-code`), so each engine's
     /// output tree is produced by the single benchmark command `collect` invokes.
     bench: Vec<String>,
     /// Streams commit creation through one long-lived `git fast-import` rather than
