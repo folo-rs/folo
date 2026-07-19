@@ -8,7 +8,8 @@ every metric as noisy and never trusts a value as exact.
 
 ## Two finding methods
 
-Two finding methods are emitted per series and ranked together by descending relative move:
+Two finding methods are evaluated for each series, and the resulting findings are ranked
+together by descending relative move:
 
 1. **Change-point (step)** — the primary finding. A single most-likely level shift is located
    with the Pettitt nonparametric change-point test, attributing the change to the commit at
@@ -76,6 +77,11 @@ form: a flat, globally-ranked findings list where each finding is self-describin
 keys off a top-level "notable" flag and reads each finding's direction, magnitude, and
 attribution. Separately, `analyze` can render a condensed Markdown **summary** — a lossy
 excerpt for a size-limited downstream consumer.
+
+Human-readable findings include a compact chart. History mode shows the full selected
+series, including pre-blessing context; branch mode shows the comparison baseline and a
+bounded recent tail ending at the tip, so the commit being judged remains visible without
+compressing months of history into the same chart.
 
 There is **no severity classification**: a finding's magnitude is conveyed by its
 relative-change percent, and which findings warrant action is left to human or agent judgement.

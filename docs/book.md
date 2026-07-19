@@ -31,14 +31,14 @@ The teaching points that every chapter should reinforce, not just the concept ch
    treated as noisy and gated hard. We would rather miss a marginal move than raise a false alarm.
 3. **Comparability is explicit.** Two results compare only when their *discriminant sets* match;
    everything else is metadata so its effect shows up as a timeline step, not a silent fork.
-4. **Immutable, append-only records.** Runs are never mutated; re-running a clean commit writes
-   nothing. This is what keeps caches valid and history trustworthy.
-5. **Storage is chosen at run time.** Local vs. cloud is a flag/environment decision, never baked
-   into committed config; a machine-specific local path never enters the shared file.
+4. **Append-only by default.** Normal collection never replaces an existing clean run; overwrite
+   and prune are explicit maintenance actions. This keeps caches valid and history trustworthy.
+5. **Storage is chosen at run time.** A shared config may describe Azure, while a local path comes
+   only from a flag or environment variable and never enters the committed file.
 6. **Findings are advisory; JSON is the signal.** The exit code reflects whether analysis *ran*,
    not what it found. Automation reads the machine-readable report.
-7. **Auto-detection over flags.** Analysis mode and the machine key are derived from the
-   environment; there is no flag to force them.
+7. **Prefer auto-detection.** Analysis mode is derived from git topology. Collection derives the
+   machine key from hardware by default but allows an explicit stable key for a machine pool.
 8. **Lower-is-better, always.** Every persisted metric is normalized so a rise is a regression and
    a fall an improvement.
 9. **Git topology orders time.** Series are ordered by first-parent committer-date topology read
@@ -70,7 +70,7 @@ concept pages link up into the commands that exercise them.
 #### Getting started
 
 - **Goal**: one end-to-end walkthrough on local storage, from nothing to a first analysis.
-- **Teach**: the natural command order (install → collect → backfill → analyze → examine →
+- **Teach**: the natural command order (install → backfill → collect → analyze → examine →
   machine-key) and *why a single collect is not enough* (tenet 1).
 - **Carry**: link forward to comparability + analysis for the mechanism.
 
@@ -93,8 +93,8 @@ concept pages link up into the commands that exercise them.
 
 | Page | The single thing it must teach |
 |---|---|
-| `install` | Generates a commented starter config; never clobbers; storage is a run-time choice, not configured here. |
-| `collect` | Harvests whichever engines produced output; always persists (append-only); `--best-of N` min-of-N noise reduction and its two caveats. |
+| `install` | Generates a commented starter config; never clobbers; documents the optional Azure backend without storing a machine-local path. |
+| `collect` | Harvests whichever engines produced output and persists immediately unless dry-running; `--best-of N` min-of-N noise reduction and its caveats. |
 | `backfill` | Reconstructs history over a first-parent commit range in an isolated worktree; resumable and idempotent. |
 | `analyze` | Reconstructs series from topology and reports regressions/drift; target/base/mode auto-selection; findings never set the exit code. |
 | `examine` | Drill-down from a finding to the raw per-commit points of one `(benchmark, metric)` series; no detection, no judgment. |
@@ -127,8 +127,9 @@ concept pages link up into the commands that exercise them.
 - **Teach**: the two finding methods (change-point step vs. monotonic drift) and how one wins per
   series; the noise-aware gates and the practical-magnitude floor; the two auto-selected modes
   (history over the whole series vs. branch judging the *tip commit* against the base — tenet 7);
-  re-baselining via resolved spikes and blessings; the three report formats sharing one pass and
-  the advisory-finding / JSON-is-the-signal split (tenet 6); no severity classification.
+  full-history vs. bounded baseline-and-tip charts; re-baselining via resolved spikes and
+  blessings; the three report formats sharing one pass and the advisory-finding /
+  JSON-is-the-signal split (tenet 6); no severity classification.
 
 ## Maintenance
 

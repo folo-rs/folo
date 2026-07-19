@@ -36,10 +36,10 @@ is via Microsoft Entra ID (OAuth); there are no static credentials in the config
 
 ## Read-through cache (cloud backend, CI)
 
-The read commands ([`analyze`](commands/analyze.md), [`list`](commands/list.md),
-[`prune`](commands/prune.md)) load the whole in-selection history before reconstructing a
-series. Against the cloud backend that is one download per object, so CI would re-fetch
-everything on every run.
+The read commands ([`analyze`](commands/analyze.md), [`examine`](commands/examine.md),
+[`list`](commands/list.md), [`prune`](commands/prune.md)) load the whole in-selection
+history before reconstructing a series. Against the cloud backend that is one download per
+object, so CI would re-fetch everything on every run.
 
 A `--cache <dir>` flag (with an environment fallback) enables an on-disk read-through cache
 that mirrors fetched object bodies. Because stored records are immutable per key, a cached
@@ -54,5 +54,6 @@ standard Actions cache so each run pays the network cost only for objects it has
   find the merge-base with the base branch. On a shallow clone, deepen it
   (`git fetch --unshallow`, or `fetch-depth: 0` in `actions/checkout`) or pass an explicit
   `--base`.
-- Collection is append-only: a same-commit re-run benchmarks every engine (so a broken
-  benchmark is still caught) but writes nothing, keeping caches valid across runs.
+- Run CI collection with `--skip-existing` for append-only behavior: a same-commit re-run
+  still benchmarks every engine (so a broken benchmark is caught) but writes nothing,
+  keeping caches valid across runs.

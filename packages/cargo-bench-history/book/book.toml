@@ -1,6 +1,6 @@
 [book]
 title = "cargo-bench-history"
-description = "A Cargo subcommand that maintains a long-lived history of benchmark results and analyzes it for trends."
+description = "Track benchmark history and detect regressions, improvements, and long-term drift."
 authors = ["Folo contributors"]
 language = "en"
 src = "src"

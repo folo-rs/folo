@@ -1,8 +1,10 @@
 # analyze
 
-`analyze` pieces a series together at query time from git topology, so it requires a
-resolvable git repository (the current checkout by default, or an explicit path). With no
-repo it errors rather than guessing an order.
+`analyze` answers one of two user questions: *has this branch changed performance?* or
+*what regressions and drift are present in the base branch's history?* It reconstructs the
+needed series from git topology, so it requires a resolvable repository (the current
+checkout by default, or an explicit path). With no repository it errors rather than
+guessing an order.
 
 ```console
 cargo bench-history analyze --local=./bench-history
@@ -44,6 +46,12 @@ See [Analysis](../concepts/analysis.md) for what each mode detects.
   exists is noise.
 
 ## Output
+
+Each finding names the benchmark and metric, quantifies the move and confidence, attributes
+it to a commit, and draws a compact chart. History mode charts the full selected series.
+Branch mode charts the comparison baseline followed by the recent observations ending at
+the tip, keeping the one commit being judged visible; intermediate branch points provide
+visual context but do not change the tip-only judgment.
 
 Text goes to stdout by default. File toggles compose, so a single pass can emit text,
 Markdown, and JSON at once; requesting no output at all is an error. A derived, condensed

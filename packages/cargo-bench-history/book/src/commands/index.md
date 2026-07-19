@@ -1,9 +1,8 @@
 # Commands
 
-`cargo-bench-history` exposes nine commands. Every option is filed under a named help
-heading, and option groups are shared across commands, so a given group looks identical
-everywhere it appears. Run `cargo bench-history <command> --help` for the full, current
-flag list.
+The user-facing commands follow the lifecycle of benchmark history: set up storage, record
+runs, analyze what changed, inspect the evidence, and maintain the stored data. Run
+`cargo bench-history <command> --help` for the full, current flag list.
 
 | Command | Purpose |
 |---|---|
@@ -19,15 +18,16 @@ flag list.
 
 ## Shared option groups
 
-The functional groups are: environment and execution, output, benchmark scope, feature
-selection, discriminant selection, commit selection, and data filtering. Subjects are bare
-positional words, never flags — the `runs|discriminants|blessings` selector for `list`,
-prefixes for `bless`, commits for `prune`, and the range endpoints for `backfill`.
+Option names stay consistent across commands: storage and repository selection, output
+formats, benchmark scope, Cargo features, discriminant sets, commit ranges, and data
+filters mean the same thing wherever they appear. Some commands also take a bare subject:
+`runs|discriminants|blessings` for `list`, benchmark prefixes for `bless`, commits for
+`prune`, and range endpoints for `backfill`.
 
 ## Selection lockstep
 
-`analyze`, `list`, `prune`, and `examine` share one data-set-selection pipeline, so the
-same selection flags mean the same thing across all four. The analysis-only flags
-(`--include-improvements`, `--include-inactive`) and the analyze-only
-condensed Markdown summary are exceptions: only `analyze` detects; the others reuse the
-selection but never analyze.
+`analyze`, `list runs`, `prune`, and `examine` apply the same selection rules. You can
+therefore preview a range with `list runs`, inspect one of its series with `examine`, or
+prune it without learning a second set of filters. The analysis-only flags
+(`--include-improvements`, `--include-inactive`) and condensed Markdown summary are
+exceptions because the other commands select data but never detect findings.

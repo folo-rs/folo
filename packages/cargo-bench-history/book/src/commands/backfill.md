@@ -21,9 +21,10 @@ measured, and an interruption leaves you exactly where you were. Between commits
 is reset clean while preserving the ignored build directory for incremental speed.
 
 By default, commits that already have a stored result are listed once up front and skipped
-before their benches run, making backfill resumable and cheap to re-issue; overwrite
-regenerates them. A build or bench failure stops by default (or, with a flag, is recorded
-and skipped with an end-of-run summary), while infrastructure failures always abort.
+before their benches run, making backfill resumable and cheap to re-issue;
+`--overwrite` regenerates them. A build or bench failure stops by default;
+`--ignore-errors` instead continues and includes every failed commit in the end-of-run
+summary. Infrastructure failures always abort.
 
 `--best-of N` carries through to each commit's `collect`, applying the same min-of-N noise
 reduction uniformly across the range.

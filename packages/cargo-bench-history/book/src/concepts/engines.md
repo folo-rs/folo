@@ -16,13 +16,13 @@ run-to-run noise.
 
 ## Why no engine is deterministic
 
-Re-running Callgrind on one unchanged machine often prints the same count every time — the
-counter is deterministic for a fixed binary and fixed input. What is *not* fixed is everything
-feeding it across the commits being compared: a different OS or CPU-microcode patch level, a
-different compiler patch release, the compiler's own nondeterministic code-generation choices
-(inlining, ordering, layout) even at the same version, and Criterion scheduling a different
-iteration count under different background load. Any one of these moves the measured number
-without the code under test changing.
+Re-running Callgrind with the exact same binary and input often prints the same count. A
+history series does not hold those inputs fixed: every commit rebuilds the benchmark, and a
+toolchain, dependency, target-feature, profile, or benchmark-input change can produce a
+different instruction stream. Even the same compiler version can make different
+code-generation choices around inlining, ordering, and layout. Those environmental changes
+are valid observations in the timeline, but they mean no engine's historical values should
+be treated as mathematically exact.
 
 ## What Callgrind persists
 

@@ -6,21 +6,25 @@ reuses [`analyze`](analyze.md)'s selection pipeline and then removes the selecte
 rather than reporting on them.
 
 ```console
-# Preview what would be deleted without deleting anything.
-cargo bench-history prune --local=./bench-history --dry-run <scope>
+# Preview deletion of dirty snapshots without deleting anything.
+cargo bench-history prune --local=./bench-history --dry-run --dirty
+
+# Delete clean runs (and their blessings) from the selected feature-branch commits.
+cargo bench-history prune --local=./bench-history --clean
 ```
 
 ## Deletion scope is required
 
-A deletion scope is required — clean runs (and the blessings riding on them), dirty snapshots
-only, or both — so a bare `prune` is an error that names the three.
+A deletion scope is required: `--clean` removes clean runs and their blessings, `--dirty`
+removes only dirty snapshots, and `--all` removes both. A bare `prune` is therefore an
+error that names the three choices.
 
 ## What prune preserves
 
-Pruning never touches base-branch history: it walks the selected commits from the context back
-to the merge-base with the base and deletes only the context branch's own commits, preserving
-the shared base. Deleting the base branch's own data set wipes the mainline every feature
-analysis compares against, so it is refused unless a confirming flag is passed.
+By default, pruning walks from the context back to its merge-base and deletes only the feature
+branch's own commits, preserving shared base-branch history. If the context is itself on the
+base branch, deletion is refused unless you explicitly confirm it with `--prune-base`; that
+guard protects the mainline data every feature analysis compares against.
 
 A blessing is removed only when the clean run it annotates is removed in the same pass, so
 blessings follow their clean run and are never time-filtered directly. A dry run builds the

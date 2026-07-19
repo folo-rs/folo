@@ -26,5 +26,5 @@ cargo bench-history list blessings --local=./bench-history
   facets it lists every stored partition, so you can find triples and machine keys you do not
   already know.
 - **`blessings`** — audits blessings (see [bless / unbless](bless.md)): the sidecars at the
-  current commit by default, or the most recent blessing of every benchmark across the
-  analysis window.
+  current commit by default. Add `--all` to show the most recent blessing of every
+  benchmark across the analysis window.

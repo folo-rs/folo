@@ -18,7 +18,7 @@ cargo bench-history unbless --local=./bench-history <benchmark-prefix>...
 
 - `bless` takes one or more benchmark-id prefixes matched against the qualified identity, so
   it is deliberately per-benchmark — accepting the benchmark that caused trouble must not
-  silently accept every other benchmark that may be trending badly. An all-switch (mutually
+  silently accept every other benchmark that may be trending badly. `--all` (mutually
   exclusive with prefixes) accepts every benchmark recorded at the commit.
 - Both commands operate on a context ref (default `HEAD`), so any base-branch commit can be
   (un)blessed, not just the checked-out one.

@@ -21,6 +21,6 @@ cargo bench-history --help
 
 ## Next steps
 
-- Write a starter configuration file with [`install`](commands/install.md).
+- Follow the [Getting started](getting-started.md) walkthrough for the end-to-end local flow.
 - Choose where results are stored — see [Storage backends](storage.md).
-- Record your first run with [`collect`](commands/collect.md).
+- Browse the per-command reference under [Commands](commands/index.md).

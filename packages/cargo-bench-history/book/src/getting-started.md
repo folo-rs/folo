@@ -3,21 +3,28 @@
 This walkthrough uses local filesystem storage. For the cloud backend, see
 [Storage backends](storage.md).
 
+> **Before you begin**
+> `cargo-bench-history` records whatever your existing benchmarks emit — it does not create
+> benchmarks for you. Your project needs at least one benchmark a supported engine can
+> harvest (most commonly [Criterion](https://bheisler.github.io/criterion.rs/book/) benches
+> under `benches/`), or `collect` runs but stores nothing. See
+> [Benchmark engines](concepts/engines.md) for the full list.
+
 ```console
 # Write a starter .cargo/bench_history.toml (documents the optional cloud backend).
 cargo bench-history install
 
-# Run the workspace benchmarks for the current commit and store the results locally.
+# Bootstrap history from completed commits. Ending at HEAD~1 leaves the current commit for
+# the collect step below; a single run on its own has nothing to compare against.
+cargo bench-history backfill --local=./bench-history <from-commit> HEAD~1
+
+# Run the workspace benchmarks for the current commit and add the results to that history.
 # Drop --local to store in the cloud backend from the config file.
 cargo bench-history collect --local=./bench-history
 
-# On a noisy runner, run the suite a few times and keep the best (minimum) value per
-# metric, since benchmark interference only ever makes a case slower.
-cargo bench-history collect --local=./bench-history --best-of 3
-
-# Bootstrap history by benching a range of past commits, so analysis has a trend to work
-# with (a single run on its own has nothing to compare against).
-cargo bench-history backfill --local=./bench-history <from-commit> <to-commit>
+# On a noisy runner, use this instead of the preceding collect command to run the suite
+# three times and keep the best (minimum) value per metric.
+# cargo bench-history collect --local=./bench-history --best-of 3
 
 # Analyze the recorded history for regressions and drift.
 cargo bench-history analyze --local=./bench-history
@@ -35,9 +42,9 @@ cargo bench-history machine-key
 ## What just happened
 
 A single `collect` on its own has nothing to compare against — the value of the tool comes
-from *history*. `backfill` seeds that history from existing commits, after which `analyze`
-can reconstruct each benchmark's series in git first-parent order and report level shifts
-and slow drift.
+from *history*. `backfill` seeds that history from existing commits, `collect` adds the
+current commit, and `analyze` reconstructs each benchmark's series in git first-parent order
+to report level shifts and slow drift.
 
 For why a single run is not enough, and how series are ordered and compared, see
 [Comparability and partitioning](concepts/comparability.md) and [Analysis](concepts/analysis.md).

@@ -81,6 +81,10 @@ to fetch a prebuilt binary on supported targets (building from source elsewhere)
 or `cargo install cargo-bench-history` to always build from source. It then runs as
 `cargo bench-history`.
 
+`cargo-bench-history` records whatever your existing benchmarks emit — it does not
+create them for you, so your project needs at least one benchmark a supported engine
+can harvest (most commonly Criterion benches under `benches/`).
+
 To see analysis you first need a history to analyze — a single run has nothing to
 compare against. Grow one by backfilling past commits, then analyze the branch
 you are working on:

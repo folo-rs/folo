@@ -42,10 +42,10 @@ sources:
 
 1. [Install](installation.md) the tool and, optionally, write a starter config with
    [`install`](commands/install.md).
-2. [`collect`](commands/collect.md) runs the workspace benchmarks for the current commit
-   and stores the results.
-3. [`backfill`](commands/backfill.md) seeds history by benching a range of past commits, so
+2. [`backfill`](commands/backfill.md) seeds history by benching a range of past commits, so
    analysis has a trend to work with.
+3. [`collect`](commands/collect.md) runs the workspace benchmarks for the current commit
+   and adds the results to that history.
 4. [`analyze`](commands/analyze.md) reconstructs per-benchmark series and reports
    regressions and drift.
 5. [`examine`](commands/examine.md), [`list`](commands/list.md),

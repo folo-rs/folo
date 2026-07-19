@@ -1,10 +1,10 @@
 # collect
 
-`collect` invokes the workspace's benches with `cargo bench` and harvests whichever engines
-produced output — there is no engine configuration. It enables the combined environment
-every supported engine needs (only Callgrind needs an opt-in variable; the others
-auto-emit) and then inspects each output tree to see which engines actually ran. Off-Linux,
-the Callgrind benches compile to no-ops and simply produce nothing.
+`collect` runs the selected benches with `cargo bench`, automatically harvests every
+supported engine that produced output, and stores one result for the current commit. You
+select packages, bench targets, and Cargo features rather than an engine; engines that did
+not run simply contribute no data. Outside Linux, Callgrind benches compile to no-ops and
+produce nothing.
 
 ```console
 # Store locally.
@@ -30,11 +30,12 @@ Callgrind's deterministic counts make min-of-N a costly no-op for that engine.
 
 ## Storage behaviour
 
-`collect` always persists — there is no separate publish step (`--no-store` runs without
-writing). A clean point writes a deterministic key, refused by default if it already exists;
-overwrite to replace, or skip-existing to treat it as a success and write nothing (the
-append-only mode CI uses). A dirty working tree writes a snapshot that coexists with prior
-snapshots. An engine that harvests zero cases stores nothing.
+By default, `collect` persists immediately — there is no separate publish step.
+`--no-store` is the explicit dry-run exception. A clean point writes a deterministic key and
+is refused by default if it already exists. Use `--overwrite` to replace it, or
+`--skip-existing` to treat the duplicate as a success and write nothing (the append-only
+mode CI uses). A dirty working tree writes a snapshot that coexists with prior snapshots. An
+engine that harvests zero cases stores nothing.
 
 Two non-overlapping partial runs at one commit do **not** merge — each writes the same clean
 key and the second collides. Coverage gaps are expected to come from *different commits*
