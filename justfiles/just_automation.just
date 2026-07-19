@@ -340,6 +340,38 @@ gh-file-pr-comment repo pr marker body_file:
         -Verbose
     Write-Verbose "Rolling PR comment is available at $url." -Verbose
 
+# Defense-in-depth for the analyze post path (see .github/workflows/pr-bench-history.yml and
+# .github/workflows/design.md): a PR benchmark run takes hours, and although a newer push normally
+# supersedes the in-flight run before it posts, a push that RACES this run's final post could still
+# publish results for a commit that is no longer the PR tip. Called right BEFORE gh-file-pr-comment, this
+# reads the LIVE PR head and, when it no longer matches `analyzed_sha` (the head SHA frozen when the run
+# started), injects the same "N commits behind HEAD" / "out of date" staleness banner the mark-stale job
+# uses into the composed `body_file`, so a superseded result is never posted looking fresh. Best-effort:
+# it leaves the body untouched (and never fails) if the live head cannot be read. `repo` is `owner/name`
+# and `pr` the PR number (both validated in the module). Needs GH_TOKEN in the environment (the workflow
+# supplies it).
+[group('automation')]
+[script]
+gh-flag-pr-comment-if-stale repo pr marker analyzed_sha body_file:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+    Import-Module ./scripts/bench-history/BenchHistoryComment.psm1 -Force
+
+    Write-Verbose "Checking whether the composed benchmark comment for {{repo}} PR #{{pr}} is already stale (analyzed {{analyzed_sha}}) before posting." -Verbose
+    $flagged = Add-StalenessBannerIfBehind `
+        -Repo '{{repo}}' `
+        -PrNumber '{{pr}}' `
+        -Marker '{{marker}}' `
+        -AnalyzedSha '{{analyzed_sha}}' `
+        -BodyFile '{{body_file}}' `
+        -Verbose
+    if ($flagged) {
+        Write-Verbose "The PR advanced during the run; a staleness banner was injected into the comment before posting." -Verbose
+    } else {
+        Write-Verbose "The composed results still describe the PR head (or the live head could not be read); posting as composed." -Verbose
+    }
+
 # The release-automation logic lives in scripts/release/ReleaseAutomation.psm1, with a Pester
 # suite (scripts/release/ReleaseAutomation.Tests.ps1) that exercises it against fixtures via
 # `just test-scripts`. The recipes below are thin wrappers that import the module and call its

@@ -675,6 +675,208 @@ Describe 'Add-StalenessBanner (unexported string transform)' {
     }
 }
 
+Describe 'Format-StalenessWarning (unexported string transform)' {
+    Context 'given a related, positive distance' {
+        It 'words the plural and singular forms' {
+            InModuleScope BenchHistoryComment {
+                (Format-StalenessWarning -Distance @{ Related = $true; Behind = 3 }) | Should -BeLike '*3 commits behind HEAD*'
+                (Format-StalenessWarning -Distance @{ Related = $true; Behind = 1 }) | Should -BeLike '*1 commit behind HEAD*'
+                (Format-StalenessWarning -Distance @{ Related = $true; Behind = 1 }) | Should -Not -BeLike '*1 commits*'
+            }
+        }
+    }
+
+    Context 'given an unrelated, zero, or null distance' {
+        It 'falls back to the numberless "out of date" wording' {
+            InModuleScope BenchHistoryComment {
+                # Unrelated histories, a non-positive distance, and a null (failed-lookup) distance all
+                # collapse to the same numberless wording - the branch both staleness paths rely on.
+                (Format-StalenessWarning -Distance @{ Related = $false; Behind = 0 }) | Should -BeLike '*out of date*'
+                (Format-StalenessWarning -Distance @{ Related = $true;  Behind = 0 }) | Should -BeLike '*out of date*'
+                (Format-StalenessWarning -Distance $null) | Should -BeLike '*out of date*'
+                (Format-StalenessWarning -Distance $null) | Should -Not -BeLike '*behind HEAD*'
+            }
+        }
+    }
+}
+
+Describe 'Add-StalenessBannerIfBehind (mocked gh api)' {
+    BeforeAll {
+        $script:SelfMarker       = '<!-- folo-bench-history-pr -->'
+        $script:SelfCommitPrefix = '<!-- folo-bench-history-commit:'
+        $script:SelfAnalyzed     = '1111111111111111111111111111111111111111'
+    }
+
+    BeforeEach {
+        # A freshly composed results body - the dedup marker, the hidden analyzed-commit marker, then
+        # findings - rewritten IN PLACE by the function, so each test starts from a clean copy on disk.
+        $script:SelfBodyFile = Join-Path ([System.IO.Path]::GetTempPath()) ("bh-selfcheck-$([guid]::NewGuid().ToString('n')).md")
+        $composed = @(
+            '<!-- folo-bench-history-pr -->'
+            '<!-- folo-bench-history-commit:1111111111111111111111111111111111111111 -->'
+            ''
+            '### Performance impact (vs `main`)'
+            ''
+            '✅ No benchmark regressions detected against `main`.'
+        ) -join "`n"
+        Set-Content -LiteralPath $script:SelfBodyFile -Value $composed -Encoding utf8 -NoNewline
+    }
+
+    AfterEach {
+        Remove-Item -LiteralPath $script:SelfBodyFile -ErrorAction SilentlyContinue
+    }
+
+    Context 'when the PR has advanced past the analyzed commit' {
+        BeforeEach {
+            # The live PR head has moved on (pulls .head.sha) and is three commits ahead of the analyzed
+            # commit (compare ahead_by), so the composed results are already stale.
+            Mock gh -ModuleName BenchHistoryComment {
+                foreach ($a in $args) { if ($a -like 'repos/*/pulls/*') { $global:LASTEXITCODE = 0; return '2222222222222222222222222222222222222222' } }
+                foreach ($a in $args) { if ($a -like 'repos/*/compare/*') { $global:LASTEXITCODE = 0; return '{"status":"ahead","ahead_by":3}' } }
+                $global:LASTEXITCODE = 0
+                return ''
+            }
+        }
+
+        It 'injects an N-commits-behind banner and preserves the analyzed-commit marker and findings' {
+            $result = Add-StalenessBannerIfBehind -Repo 'o/r' -PrNumber '5' -Marker $script:SelfMarker -AnalyzedSha $script:SelfAnalyzed -BodyFile $script:SelfBodyFile
+            $result | Should -BeTrue
+            $body = Get-Content -LiteralPath $script:SelfBodyFile -Raw
+            $body | Should -BeLike '*3 commits behind HEAD*'
+            $body | Should -BeLike '*[!WARNING]*'
+            # The hidden analyzed-commit marker must survive so a later run can still parse it.
+            $body | Should -BeLike "*$($script:SelfCommitPrefix)$($script:SelfAnalyzed)*"
+            # The findings themselves are preserved, not clobbered by the banner.
+            $body | Should -BeLike '*No benchmark regressions detected*'
+        }
+    }
+
+    Context 'when the PR advanced by exactly one commit' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryComment {
+                foreach ($a in $args) { if ($a -like 'repos/*/pulls/*') { $global:LASTEXITCODE = 0; return '2222222222222222222222222222222222222222' } }
+                foreach ($a in $args) { if ($a -like 'repos/*/compare/*') { $global:LASTEXITCODE = 0; return '{"status":"ahead","ahead_by":1}' } }
+                $global:LASTEXITCODE = 0
+                return ''
+            }
+        }
+
+        It 'uses the singular "commit"' {
+            Add-StalenessBannerIfBehind -Repo 'o/r' -PrNumber '5' -Marker $script:SelfMarker -AnalyzedSha $script:SelfAnalyzed -BodyFile $script:SelfBodyFile | Out-Null
+            $body = Get-Content -LiteralPath $script:SelfBodyFile -Raw
+            $body | Should -BeLike '*1 commit behind HEAD*'
+            $body | Should -Not -BeLike '*1 commits behind*'
+        }
+    }
+
+    Context 'when the PR head shares no history with the analyzed commit (force-push)' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryComment {
+                foreach ($a in $args) { if ($a -like 'repos/*/pulls/*') { $global:LASTEXITCODE = 0; return '2222222222222222222222222222222222222222' } }
+                foreach ($a in $args) { if ($a -like 'repos/*/compare/*') { $global:LASTEXITCODE = 1; return 'gh: No common ancestor for the two commits (HTTP 404)' } }
+                $global:LASTEXITCODE = 0
+                return ''
+            }
+        }
+
+        It 'injects a numberless "out of date" banner' {
+            $result = Add-StalenessBannerIfBehind -Repo 'o/r' -PrNumber '5' -Marker $script:SelfMarker -AnalyzedSha $script:SelfAnalyzed -BodyFile $script:SelfBodyFile
+            $result | Should -BeTrue
+            $body = Get-Content -LiteralPath $script:SelfBodyFile -Raw
+            $body | Should -BeLike '*out of date*'
+            $body | Should -Not -BeLike '*behind HEAD*'
+        }
+    }
+
+    Context 'when the compare lookup fails for a transient reason' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryComment {
+                foreach ($a in $args) { if ($a -like 'repos/*/pulls/*') { $global:LASTEXITCODE = 0; return '2222222222222222222222222222222222222222' } }
+                # A non-404 compare failure is a genuine error Get-CommitsBehind rethrows; the self-check
+                # is best-effort and must degrade to the numberless wording rather than fail the post.
+                foreach ($a in $args) { if ($a -like 'repos/*/compare/*') { $global:LASTEXITCODE = 1; return 'HTTP 500: Internal Server Error' } }
+                $global:LASTEXITCODE = 0
+                return ''
+            }
+        }
+
+        It 'degrades to the numberless "out of date" banner instead of throwing' {
+            $result = Add-StalenessBannerIfBehind -Repo 'o/r' -PrNumber '5' -Marker $script:SelfMarker -AnalyzedSha $script:SelfAnalyzed -BodyFile $script:SelfBodyFile
+            $result | Should -BeTrue
+            $body = Get-Content -LiteralPath $script:SelfBodyFile -Raw
+            $body | Should -BeLike '*out of date*'
+        }
+    }
+
+    Context 'when the PR still points at the analyzed commit' {
+        BeforeEach {
+            # pulls .head.sha returns the SAME sha the run analyzed: the results are current, so the body
+            # must be posted untouched and no compare call is made.
+            Mock gh -ModuleName BenchHistoryComment {
+                foreach ($a in $args) { if ($a -like 'repos/*/pulls/*') { $global:LASTEXITCODE = 0; return '1111111111111111111111111111111111111111' } }
+                $global:LASTEXITCODE = 0
+                return ''
+            }
+        }
+
+        It 'leaves the body unchanged, returns false, and never calls the compare api' {
+            $before = Get-Content -LiteralPath $script:SelfBodyFile -Raw
+            $result = Add-StalenessBannerIfBehind -Repo 'o/r' -PrNumber '5' -Marker $script:SelfMarker -AnalyzedSha $script:SelfAnalyzed -BodyFile $script:SelfBodyFile
+            $result | Should -BeFalse
+            (Get-Content -LiteralPath $script:SelfBodyFile -Raw) | Should -BeExactly $before
+            Should -Invoke gh -ModuleName BenchHistoryComment -ParameterFilter { [bool]($args | Where-Object { $_ -like 'repos/*/compare/*' }) } -Times 0 -Exactly
+        }
+    }
+
+    Context 'when the live PR head cannot be read' {
+        BeforeEach {
+            # The pulls lookup fails (a transient gh/API hiccup): best-effort means post as composed.
+            Mock gh -ModuleName BenchHistoryComment {
+                foreach ($a in $args) { if ($a -like 'repos/*/pulls/*') { $global:LASTEXITCODE = 1; return 'HTTP 503: Service Unavailable' } }
+                $global:LASTEXITCODE = 0
+                return ''
+            }
+        }
+
+        It 'leaves the body unchanged and returns false without throwing' {
+            $before = Get-Content -LiteralPath $script:SelfBodyFile -Raw
+            $result = Add-StalenessBannerIfBehind -Repo 'o/r' -PrNumber '5' -Marker $script:SelfMarker -AnalyzedSha $script:SelfAnalyzed -BodyFile $script:SelfBodyFile
+            $result | Should -BeFalse
+            (Get-Content -LiteralPath $script:SelfBodyFile -Raw) | Should -BeExactly $before
+        }
+    }
+
+    Context 'when the live head comes back malformed' {
+        BeforeEach {
+            Mock gh -ModuleName BenchHistoryComment {
+                foreach ($a in $args) { if ($a -like 'repos/*/pulls/*') { $global:LASTEXITCODE = 0; return 'not-a-sha' } }
+                $global:LASTEXITCODE = 0
+                return ''
+            }
+        }
+
+        It 'posts as composed (false) rather than guessing at staleness' {
+            $before = Get-Content -LiteralPath $script:SelfBodyFile -Raw
+            $result = Add-StalenessBannerIfBehind -Repo 'o/r' -PrNumber '5' -Marker $script:SelfMarker -AnalyzedSha $script:SelfAnalyzed -BodyFile $script:SelfBodyFile
+            $result | Should -BeFalse
+            (Get-Content -LiteralPath $script:SelfBodyFile -Raw) | Should -BeExactly $before
+        }
+    }
+
+    Context 'input validation' {
+        It 'rejects a non-hex analyzed SHA' {
+            { Add-StalenessBannerIfBehind -Repo 'o/r' -PrNumber '5' -Marker $script:SelfMarker -AnalyzedSha 'nope' -BodyFile $script:SelfBodyFile } |
+                Should -Throw '*40-character hex*'
+        }
+
+        It 'throws when the body file is missing' {
+            $missing = Join-Path ([System.IO.Path]::GetTempPath()) ("bh-missing-$([guid]::NewGuid().ToString('n')).md")
+            { Add-StalenessBannerIfBehind -Repo 'o/r' -PrNumber '5' -Marker $script:SelfMarker -AnalyzedSha $script:SelfAnalyzed -BodyFile $missing } |
+                Should -Throw '*does not exist*'
+        }
+    }
+}
+
 Describe 'Publish-InProgressComment (mocked gh api)' {
     BeforeAll {
         # An unsorted, duplicate-free-after-sort package list so the assertions also prove the rendering
