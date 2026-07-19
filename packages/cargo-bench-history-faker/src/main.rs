@@ -40,14 +40,13 @@
 //! fabricated.
 //!
 //! `--alloc-tracker OPERATION=BYTES/COUNT[@BLOW:BHIGH/CLOW:CHIGH]` writes an
-//! `alloc_tracker` `<OPERATION>.json` file reporting `BYTES` mean bytes and `COUNT`
-//! mean allocations per iteration; an optional `@BLOW:BHIGH/CLOW:CHIGH` suffix
-//! additionally records a confidence interval (and matching slope and span count)
-//! for the bytes and allocation-count metrics respectively. `--all-the-time
+//! `alloc_tracker` `<OPERATION>.json` file reporting `BYTES` bytes and `COUNT`
+//! allocations per iteration; an optional `@BLOW:BHIGH/CLOW:CHIGH` suffix
+//! additionally records a confidence interval for the bytes and allocation-count
+//! metrics respectively. `--all-the-time
 //! OPERATION=NANOS[@LOW:HIGH]` writes an `all_the_time` `<OPERATION>.json` file
-//! reporting `NANOS` mean (and slope) processor-time nanoseconds per iteration; an
-//! optional `@LOW:HIGH` suffix additionally records a confidence interval (and a
-//! matching slope and span count).
+//! reporting `NANOS` processor-time nanoseconds per iteration; an optional
+//! `@LOW:HIGH` suffix additionally records a confidence interval.
 //!
 //! `--fail-if-exists PATH` writes no output and exits with code 1 when `PATH`
 //! (resolved relative to the working directory) exists; otherwise it runs normally.
@@ -76,7 +75,7 @@ use std::process::ExitCode;
 use cargo_bench_history_faker::{
     AllocOperation, CallgrindCase, CriterionCase, TimeOperation, parse_alloc_arg,
     parse_callgrind_arg, parse_criterion_arg, parse_time_arg, write_all_the_time,
-    write_alloc_tracker, write_callgrind_case, write_criterion_case,
+    write_alloc_tracker, write_callgrind_cases, write_criterion_cases,
 };
 
 // Install mimalloc as a scalable, general-purpose allocator process-wide: faster
@@ -161,18 +160,10 @@ fn main() -> ExitCode {
     let target_root =
         std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| PathBuf::from("target"), PathBuf::from);
 
-    for case in &callgrind_cases {
-        write_callgrind_case(&target_root, case);
-    }
-    for case in &criterion_cases {
-        write_criterion_case(&target_root, case);
-    }
-    for operation in &alloc_operations {
-        write_alloc_tracker(&target_root, operation);
-    }
-    for operation in &time_operations {
-        write_all_the_time(&target_root, operation);
-    }
+    write_callgrind_cases(&target_root, &callgrind_cases);
+    write_criterion_cases(&target_root, &criterion_cases);
+    write_alloc_tracker(&target_root, &alloc_operations);
+    write_all_the_time(&target_root, &time_operations);
 
     ExitCode::from(exit_code)
 }

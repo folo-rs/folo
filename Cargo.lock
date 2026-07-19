@@ -461,6 +461,7 @@ dependencies = [
 name = "cargo-bench-history-faker"
 version = "0.0.7"
 dependencies = [
+ "folo_utils",
  "mimalloc",
  "serde_json",
 ]

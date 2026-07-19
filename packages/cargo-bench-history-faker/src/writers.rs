@@ -7,7 +7,10 @@
 //!
 //! None of this is a stable API — see the crate root.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use folo_utils::sanitize_file_name;
 
 /// A parsed Callgrind case request: its on-disk group, identity, and the three
 /// tracked instruction/branch counts.
@@ -56,9 +59,7 @@ pub struct CriterionCase {
 /// A parsed `alloc_tracker` operation request.
 ///
 /// Carries its name, per-iteration means, and optional per-metric confidence
-/// intervals `((bytes_low, bytes_high), (count_low, count_high))`. When the
-/// intervals are present the operation file additionally records slopes and span
-/// count for both metrics, mirroring dispersion-bearing output.
+/// intervals `((bytes_low, bytes_high), (count_low, count_high))`.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct AllocOperation {
@@ -75,9 +76,7 @@ pub struct AllocOperation {
 /// A parsed `all_the_time` operation request.
 ///
 /// Carries its name, per-iteration mean, and an optional confidence interval
-/// `(low, high)` in nanoseconds. When the interval is present the operation file
-/// additionally records a slope and span count, mirroring dispersion-bearing
-/// output.
+/// `(low, high)` in nanoseconds.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct TimeOperation {
@@ -182,12 +181,18 @@ pub fn parse_callgrind_arg(value: &str) -> CallgrindCase {
 /// Gungraun output nests by bench binary then group, so two same-named harnesses in
 /// different packages land in distinct nested directories.
 pub fn write_callgrind_summary(target_root: &Path, group: &str, content: &str) {
-    let mut dir = target_root.join("gungraun");
-    for part in group.split('/') {
-        dir.push(safe_segment(part));
-    }
+    let dir = callgrind_group_dir(target_root, group);
     std::fs::create_dir_all(&dir).expect("summary directory should be creatable");
     std::fs::write(dir.join("summary.json"), content).expect("summary should be writable");
+}
+
+/// Returns the sanitized directory for one Callgrind group.
+fn callgrind_group_dir(target_root: &Path, group: &str) -> PathBuf {
+    let mut dir = target_root.join("gungraun");
+    for part in group.split('/') {
+        dir.push(sanitize_file_name(part));
+    }
+    dir
 }
 
 /// Builds a [`CallgrindCase`]'s summary document and writes it under its group.
@@ -206,6 +211,24 @@ pub fn write_callgrind_case(target_root: &Path, case: &CallgrindCase) {
         case.bi,
     );
     write_callgrind_summary(target_root, &case.group, &content);
+}
+
+/// Writes Callgrind cases after rejecting colliding group destinations.
+///
+/// # Panics
+///
+/// Panics if output cannot be written or two groups sanitize to the same summary
+/// path.
+pub fn write_callgrind_cases(target_root: &Path, cases: &[CallgrindCase]) {
+    assert_unique_output_paths(cases.iter().map(|case| {
+        (
+            case.group.clone(),
+            callgrind_group_dir(target_root, &case.group).join("summary.json"),
+        )
+    }));
+    for case in cases {
+        write_callgrind_case(target_root, case);
+    }
 }
 
 /// Parses a `GROUP|FUNCTION[|VALUE]=NANOS[@STDDEV/CILOW:CIHIGH]` argument into a
@@ -266,29 +289,34 @@ pub fn parse_criterion_arg(value: &str) -> CriterionCase {
     }
 }
 
-/// Writes one Criterion case's `new/benchmark.json` + `new/estimates.json` pair.
-pub fn write_criterion_case(target_root: &Path, case: &CriterionCase) {
-    // A Criterion group id may legitimately contain `/`; each segment must still be
-    // a safe path component before it is flattened into the on-disk directory name.
-    for part in case.group.split('/') {
-        safe_segment(part);
-    }
-    let sanitized_group = case.group.replace('/', "_");
+/// Returns the sanitized `new/` directory for one Criterion case.
+fn criterion_case_dir(target_root: &Path, case: &CriterionCase) -> PathBuf {
     let mut dir = target_root
         .join("criterion")
-        .join(sanitized_group)
-        .join(safe_segment(&case.function));
+        .join(sanitize_file_name(&case.group))
+        .join(sanitize_file_name(&case.function));
     if !case.value.is_empty() {
-        dir.push(safe_segment(&case.value));
+        dir.push(sanitize_file_name(&case.value));
     }
     dir.push("new");
-    std::fs::create_dir_all(&dir).expect("criterion directory should be creatable");
+    dir
+}
 
-    let full_id = if case.value.is_empty() {
+/// Returns a Criterion case's unsanitized identity.
+fn criterion_full_id(case: &CriterionCase) -> String {
+    if case.value.is_empty() {
         format!("{}/{}", case.group, case.function)
     } else {
         format!("{}/{}/{}", case.group, case.function, case.value)
-    };
+    }
+}
+
+/// Writes one Criterion case's `new/benchmark.json` + `new/estimates.json` pair.
+pub fn write_criterion_case(target_root: &Path, case: &CriterionCase) {
+    let dir = criterion_case_dir(target_root, case);
+    std::fs::create_dir_all(&dir).expect("criterion directory should be creatable");
+
+    let full_id = criterion_full_id(case);
     let benchmark = serde_json::json!({
         "group_id": case.group,
         "function_id": case.function,
@@ -329,6 +357,24 @@ pub fn write_criterion_case(target_root: &Path, case: &CriterionCase) {
     }
     std::fs::write(dir.join("estimates.json"), estimates.to_string())
         .expect("estimates.json should be writable");
+}
+
+/// Writes Criterion cases after rejecting colliding sanitized destinations.
+///
+/// # Panics
+///
+/// Panics if output cannot be written or two cases sanitize to the same output
+/// directory.
+pub fn write_criterion_cases(target_root: &Path, cases: &[CriterionCase]) {
+    assert_unique_output_paths(cases.iter().map(|case| {
+        (
+            criterion_full_id(case),
+            criterion_case_dir(target_root, case).join("benchmark.json"),
+        )
+    }));
+    for case in cases {
+        write_criterion_case(target_root, case);
+    }
 }
 
 /// Parses an `OPERATION=BYTES/COUNT[@BLOW:BHIGH/CLOW:CHIGH]` argument into an
@@ -406,26 +452,10 @@ fn parse_bounds(bounds: &str) -> (f64, f64) {
     (low, high)
 }
 
-/// Writes one `alloc_tracker` `<operation>.json` file under `alloc_tracker/`.
-///
-/// The shape mirrors the real tool: `total_*` fields derive from the per-iteration
-/// slope over a fixed iteration count, and every operation records a span count and
-/// per-metric slope. When the request carries per-metric intervals the file
-/// additionally records the confidence interval for both the bytes and
-/// allocation-count metrics, so the adapter's dispersion path is exercised end to
-/// end.
-pub fn write_alloc_tracker(target_root: &Path, operation: &AllocOperation) {
-    const ITERATIONS: u64 = 4;
-    const SPANS: u64 = 6;
-    let dir = target_root.join("alloc_tracker");
-    std::fs::create_dir_all(&dir).expect("alloc_tracker directory should be creatable");
-
+/// Builds the parser-visible fields for one `alloc_tracker` operation.
+fn alloc_tracker_output(operation: &AllocOperation) -> serde_json::Value {
     let mut output = serde_json::json!({
         "operation": operation.operation,
-        "total_iterations": ITERATIONS,
-        "total_bytes_allocated": operation.mean_bytes.saturating_mul(ITERATIONS),
-        "total_allocations_count": operation.mean_allocations.saturating_mul(ITERATIONS),
-        "span_count": if operation.intervals.is_some() { SPANS } else { 1 },
         "slope_bytes_per_iteration": operation.mean_bytes,
         "slope_allocations_per_iteration": operation.mean_allocations,
     });
@@ -436,13 +466,30 @@ pub fn write_alloc_tracker(target_root: &Path, operation: &AllocOperation) {
         insert_metric_interval(fields, "bytes_per_iteration", bytes_interval);
         insert_metric_interval(fields, "allocations_per_iteration", count_interval);
     }
-    let file = dir.join(format!("{}.json", safe_segment(&operation.operation)));
-    std::fs::write(file, output.to_string()).expect("alloc_tracker file should be writable");
+    output
 }
 
-/// Inserts the confidence-interval bounds for one metric (identified by `suffix`)
-/// into an operation output object. Only multi-span output carries an interval; the
-/// slope itself is emitted alongside the base fields.
+/// Writes `alloc_tracker` operation files under `alloc_tracker/`.
+///
+/// Only fields read by `cargo-bench-history` are emitted. File names use the same
+/// sanitizer as the real producer while the JSON keeps the original operation
+/// identity.
+///
+/// # Panics
+///
+/// Panics if output cannot be written or two operation names sanitize to the same
+/// file name.
+pub fn write_alloc_tracker(target_root: &Path, operations: &[AllocOperation]) {
+    let outputs = operation_outputs(operations.iter().map(|operation| {
+        (
+            operation.operation.as_str(),
+            alloc_tracker_output(operation),
+        )
+    }));
+    write_operation_outputs(target_root, "alloc_tracker", outputs);
+}
+
+/// Inserts the requested confidence-interval bounds for one operation metric.
 fn insert_metric_interval(
     fields: &mut serde_json::Map<String, serde_json::Value>,
     suffix: &str,
@@ -453,23 +500,10 @@ fn insert_metric_interval(
     fields.insert(format!("interval_high_{suffix}"), serde_json::json!(high));
 }
 
-/// Writes one `all_the_time` `<operation>.json` file under `all_the_time/`.
-///
-/// The shape mirrors the real tool: `total_*` fields derive from the per-iteration
-/// slope over a fixed iteration count, and every operation records a span count and
-/// slope. When the request carries a confidence interval the file additionally
-/// records the interval, so the adapter's dispersion path is exercised end to end.
-pub fn write_all_the_time(target_root: &Path, operation: &TimeOperation) {
-    const ITERATIONS: u64 = 4;
-    const SPANS: u64 = 6;
-    let dir = target_root.join("all_the_time");
-    std::fs::create_dir_all(&dir).expect("all_the_time directory should be creatable");
-
+/// Builds the parser-visible fields for one `all_the_time` operation.
+fn all_the_time_output(operation: &TimeOperation) -> serde_json::Value {
     let mut output = serde_json::json!({
         "operation": operation.operation,
-        "total_iterations": ITERATIONS,
-        "total_processor_time_nanos": operation.mean_nanos.saturating_mul(ITERATIONS),
-        "span_count": if operation.interval.is_some() { SPANS } else { 1 },
         "slope_processor_time_nanos": operation.mean_nanos,
     });
     if let Some((low, high)) = operation.interval {
@@ -478,24 +512,87 @@ pub fn write_all_the_time(target_root: &Path, operation: &TimeOperation) {
             .expect("the operation output is a JSON object");
         insert_metric_interval(fields, "processor_time_nanos", (low, high));
     }
-    let file = dir.join(format!("{}.json", safe_segment(&operation.operation)));
-    std::fs::write(file, output.to_string()).expect("all_the_time file should be writable");
+    output
 }
 
-/// Validates that `segment` is safe to use as a single filesystem path component:
-/// non-empty, not a current/parent-directory reference, and free of path
-/// separators. Inputs are controlled, so misuse is a loud panic rather than a
-/// silent escape outside the target root.
-fn safe_segment(segment: &str) -> &str {
-    assert!(
-        !segment.is_empty()
-            && segment != "."
-            && segment != ".."
-            && !segment.contains('/')
-            && !segment.contains('\\'),
-        "unsafe path segment {segment:?}"
+/// Writes `all_the_time` operation files under `all_the_time/`.
+///
+/// Only fields read by `cargo-bench-history` are emitted. File names use the same
+/// sanitizer as the real producer while the JSON keeps the original operation
+/// identity.
+///
+/// # Panics
+///
+/// Panics if output cannot be written or two operation names sanitize to the same
+/// file name.
+pub fn write_all_the_time(target_root: &Path, operations: &[TimeOperation]) {
+    let outputs = operation_outputs(
+        operations
+            .iter()
+            .map(|operation| (operation.operation.as_str(), all_the_time_output(operation))),
     );
-    segment
+    write_operation_outputs(target_root, "all_the_time", outputs);
+}
+
+/// Sanitizes operation file names and rejects collisions before touching disk.
+fn operation_outputs<'a>(
+    outputs: impl IntoIterator<Item = (&'a str, serde_json::Value)>,
+) -> Vec<(String, serde_json::Value)> {
+    let mut file_names: HashMap<String, String> = HashMap::new();
+
+    outputs
+        .into_iter()
+        .map(|(operation, output)| {
+            let file_name = format!("{}.json", sanitize_file_name(operation));
+            let collision_key = file_name.to_ascii_lowercase();
+            if let Some(previous) = file_names.insert(collision_key, operation.to_owned()) {
+                panic!(
+                    "operations {previous:?} and {operation:?} both map to the output file name \
+                     {file_name:?} after sanitization"
+                );
+            }
+            (file_name, output)
+        })
+        .collect()
+}
+
+/// Rejects output paths that collide on a case-insensitive filesystem.
+fn assert_unique_output_paths(outputs: impl IntoIterator<Item = (String, PathBuf)>) {
+    let mut paths: Vec<(Vec<String>, String)> = Vec::new();
+
+    for (identity, path) in outputs {
+        let collision_key: Vec<String> = path
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy().to_ascii_lowercase())
+            .collect();
+        if let Some((_, previous)) = paths.iter().find(|(existing, _)| {
+            existing.starts_with(&collision_key) || collision_key.starts_with(existing)
+        }) {
+            panic!(
+                "cases {previous:?} and {identity:?} map to conflicting output paths after \
+                 sanitization; one output file is equal to or nested under the other ({path:?})"
+            );
+        }
+        paths.push((collision_key, identity));
+    }
+}
+
+/// Writes prepared operation documents under one engine's target subdirectory.
+fn write_operation_outputs(
+    target_root: &Path,
+    engine: &str,
+    outputs: Vec<(String, serde_json::Value)>,
+) {
+    if outputs.is_empty() {
+        return;
+    }
+
+    let dir = target_root.join(engine);
+    std::fs::create_dir_all(&dir).expect("the operation output directory should be creatable");
+    for (file_name, output) in outputs {
+        std::fs::write(dir.join(file_name), output.to_string())
+            .expect("the operation output file should be writable");
+    }
 }
 
 #[cfg(test)]
@@ -579,5 +676,90 @@ mod tests {
         assert!((std_dev - 0.5).abs() < f64::EPSILON);
         assert!((low - 26.4).abs() < f64::EPSILON);
         assert!((high - 27.4).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn alloc_tracker_output_contains_only_requested_values() {
+        let operation = parse_alloc_arg("group/case=200/3@190:210/2:4");
+        assert_eq!(
+            alloc_tracker_output(&operation),
+            serde_json::json!({
+                "operation": "group/case",
+                "slope_bytes_per_iteration": 200,
+                "slope_allocations_per_iteration": 3,
+                "interval_low_bytes_per_iteration": 190.0,
+                "interval_high_bytes_per_iteration": 210.0,
+                "interval_low_allocations_per_iteration": 2.0,
+                "interval_high_allocations_per_iteration": 4.0,
+            })
+        );
+    }
+
+    #[test]
+    fn all_the_time_output_contains_only_requested_values() {
+        let operation = parse_time_arg("group/case=25@20:30");
+        assert_eq!(
+            all_the_time_output(&operation),
+            serde_json::json!({
+                "operation": "group/case",
+                "slope_processor_time_nanos": 25,
+                "interval_low_processor_time_nanos": 20.0,
+                "interval_high_processor_time_nanos": 30.0,
+            })
+        );
+    }
+
+    #[test]
+    fn operation_file_names_match_the_real_producer_sanitization() {
+        let outputs = operation_outputs([("group/case", serde_json::json!({}))]);
+        assert_eq!(outputs[0].0, "group_case.json");
+    }
+
+    #[test]
+    #[should_panic]
+    fn operation_file_name_collisions_are_rejected() {
+        drop(operation_outputs([
+            ("group/case", serde_json::json!({})),
+            ("group_case", serde_json::json!({})),
+        ]));
+    }
+
+    #[test]
+    #[should_panic]
+    fn operation_file_name_collisions_ignore_ascii_case() {
+        drop(operation_outputs([
+            ("Group", serde_json::json!({})),
+            ("group", serde_json::json!({})),
+        ]));
+    }
+
+    #[test]
+    #[should_panic]
+    fn callgrind_group_collisions_are_rejected_before_writing() {
+        let cases = [
+            parse_callgrind_arg("a:b|m|f=1/0/0"),
+            parse_callgrind_arg("a?b|m|f=2/0/0"),
+        ];
+        write_callgrind_cases(Path::new("unused"), &cases);
+    }
+
+    #[test]
+    #[should_panic]
+    fn callgrind_file_and_directory_collisions_are_rejected_before_writing() {
+        let cases = [
+            parse_callgrind_arg("a|m|f=1/0/0"),
+            parse_callgrind_arg("a/summary.json/b|m|f=2/0/0"),
+        ];
+        write_callgrind_cases(Path::new("unused"), &cases);
+    }
+
+    #[test]
+    #[should_panic]
+    fn criterion_case_collisions_are_rejected_before_writing() {
+        let cases = [
+            parse_criterion_arg("a:b|f=1"),
+            parse_criterion_arg("a?b|f=2"),
+        ];
+        write_criterion_cases(Path::new("unused"), &cases);
     }
 }

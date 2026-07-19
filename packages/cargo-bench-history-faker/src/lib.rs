@@ -28,7 +28,8 @@ mod writers;
 pub use writers::{
     AllocOperation, CallgrindCase, CriterionCase, TimeOperation, callgrind_summary,
     parse_alloc_arg, parse_callgrind_arg, parse_criterion_arg, parse_time_arg, write_all_the_time,
-    write_alloc_tracker, write_callgrind_case, write_callgrind_summary, write_criterion_case,
+    write_alloc_tracker, write_callgrind_case, write_callgrind_cases, write_callgrind_summary,
+    write_criterion_case, write_criterion_cases,
 };
 
 // `binary_path` shells out to `cargo build` to locate the compiled binary. Only

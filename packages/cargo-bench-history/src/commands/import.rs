@@ -222,8 +222,9 @@ where
 /// resolved through git — a ref naming no real commit is a hard error, since the
 /// import avoids a checkout but not the existence requirement — and the recorded
 /// branch is cleared, because the imported data did not come from the current
-/// checkout. `--dirty` routes through the shared git facts so the stored body and
-/// its dirty-snapshot key stay coherent by construction.
+/// checkout. Imports are clean by default regardless of the repository's current
+/// state; `--dirty` routes through the shared git facts so the stored body and its
+/// dirty-snapshot key stay coherent by construction.
 async fn apply_overrides<G>(
     mut shared: SharedContext,
     options: &ImportOptions,
@@ -259,11 +260,11 @@ where
         shared.git.branch = None;
     }
 
-    if options.dirty {
+    shared.git.dirty = options.dirty;
+    if shared.git.dirty {
         reporter.note_with(|| {
             "recording a dirty snapshot (--dirty): keyed by the import-time second".to_owned()
         });
-        shared.git.dirty = true;
     }
 
     Ok(shared)
@@ -711,6 +712,27 @@ mod tests {
         assert!(keys[0].ends_with("/dirty-1700000000.json"), "{}", keys[0]);
         let run = only_stored_run(&storage);
         assert!(run.context.git.dirty);
+    }
+
+    #[test]
+    fn import_is_clean_by_default_even_when_the_repository_is_dirty() {
+        let storage = MemoryStorage::new();
+        let mut probe = FakeProbe::new();
+        probe.git.dirty = true;
+
+        run_import(
+            &ImportOptions::default(),
+            &callgrind_output(),
+            &probe,
+            &FakeGitHistory::new(),
+            &storage,
+        )
+        .unwrap();
+
+        let keys = storage.keys();
+        assert_eq!(keys.len(), 1);
+        assert!(keys[0].ends_with("/clean.json"), "{}", keys[0]);
+        assert!(!only_stored_run(&storage).context.git.dirty);
     }
 
     #[test]

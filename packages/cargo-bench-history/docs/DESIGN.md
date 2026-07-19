@@ -664,8 +664,9 @@ no freshness cutoff, so every matching file in the tree is ingested rather than 
 modified at or after a run start. That is exactly why `--target-dir` is **required** and
 never defaults to `<repo>/target` — an ungated sweep of the default tree would re-ingest
 unrelated stale output. By default the run takes real host context just as `collect` does:
-it probes the real repository (keying by the current HEAD commit, dirty per the working
-tree) and the real toolchain and hardware.
+it probes the real repository (keying by the current HEAD commit), toolchain, and hardware,
+but records a clean point regardless of incidental working-tree changes. `--dirty` explicitly
+opts into dirty-snapshot keying.
 
 Four overrides let a caller attribute an imported run to a context other than the current
 host, and they touch **only key-affecting discriminants** — body provenance stays real.
