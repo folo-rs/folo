@@ -1040,7 +1040,6 @@ fn push_or_skip(
     }
 }
 
-/// Builds the human-readable run summary.
 /// Builds the human-readable outcome message summarizing what a run stored.
 pub(crate) fn build_message(
     no_store: bool,

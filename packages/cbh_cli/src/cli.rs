@@ -1074,12 +1074,15 @@ mod tests {
     #[test]
     fn import_is_hidden_from_help() {
         // `import` parses (it is registered below) but is deliberately kept out of
-        // the public help, so it must not surface in the top-level command list.
+        // the public help, so it must not appear as an entry in the command list.
+        // Match the subcommand name as the first token of a help line rather than a
+        // bare substring, so an unrelated word like "important" in a description
+        // cannot mask a regression that re-exposes the command.
         let help = Cli::help("cargo-bench-history");
-        assert!(
-            !help.contains("import"),
-            "import is hidden from help: {help}"
-        );
+        let listed = help
+            .lines()
+            .any(|line| line.split_whitespace().next() == Some("import"));
+        assert!(!listed, "import is hidden from help: {help}");
     }
 
     #[test]

@@ -160,6 +160,15 @@ where
     G: GitHistory,
     S: Storage,
 {
+    // `--overwrite` and `--skip-existing` are mutually exclusive; clap rejects the
+    // combination on the CLI, so enforce the same contract for programmatic callers
+    // rather than silently letting overwrite win.
+    if options.overwrite && options.skip_existing {
+        return Err(RunError::Import {
+            message: "--overwrite and --skip-existing are mutually exclusive".to_owned(),
+        });
+    }
+
     // One bucket per engine (parallel to `Engine::ALL`). Import has a single
     // "run" — the curated tree — so each bucket holds exactly one harvest, which
     // `finalize_and_store` reduces trivially (a one-run best-of is the identity).
@@ -574,6 +583,34 @@ mod tests {
         assert!(
             storage.keys().is_empty(),
             "an unresolved commit stores nothing"
+        );
+    }
+
+    #[test]
+    fn overwrite_and_skip_existing_together_is_a_hard_error() {
+        let storage = MemoryStorage::new();
+        let options = ImportOptions {
+            overwrite: true,
+            skip_existing: true,
+            ..ImportOptions::default()
+        };
+
+        let error = run_import(
+            &options,
+            &callgrind_output(),
+            &FakeProbe::new(),
+            &FakeGitHistory::new(),
+            &storage,
+        )
+        .unwrap_err();
+
+        let RunError::Import { message } = error else {
+            panic!("expected an import error, got {error:?}");
+        };
+        assert!(message.contains("mutually exclusive"), "{message}");
+        assert!(
+            storage.keys().is_empty(),
+            "a rejected import stores nothing"
         );
     }
 

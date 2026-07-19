@@ -86,12 +86,13 @@ function Get-WorkspacePackage {
     # Returns the current workspace's member package names as a string array, via `cargo metadata`.
     # Used to drop packages that cargo-delta reports as affected but that no longer exist on this
     # branch (see Select-ExistingPackage). `--no-deps` keeps it to workspace members and avoids
-    # resolving - or touching - the dependency graph and lockfile.
+    # resolving - or touching - the dependency graph and lockfile. `--locked` guarantees the call is
+    # read-only, failing loudly rather than regenerating `Cargo.lock` as a surprise side effect.
     [CmdletBinding()]
     [OutputType([string[]])]
     param()
 
-    $metadataJson = cargo metadata --no-deps --format-version 1 | Out-String
+    $metadataJson = cargo metadata --no-deps --format-version 1 --locked | Out-String
     $metadata = $metadataJson | ConvertFrom-Json
     return @($metadata.packages | ForEach-Object { $_.name })
 }
