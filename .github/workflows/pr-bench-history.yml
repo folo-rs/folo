@@ -192,7 +192,7 @@ jobs:
             Write-Host "No placeholder change needed (the PR already has a rolling comment with results, or the placeholder is current)."
           }
 
-  # Benchmark ONLY the impacted packages across the full platform matrix, keyed by the PR head
+  # Benchmark ONLY the impacted packages across the benchmark platform matrix, keyed by the PR head
   # commit, appending the results into the prod store. Skipped when the PR impacts nothing
   # benchmarkable (delta.skip_all). Mirrors bench-history.yml's collect job, differing only in the
   # checkout (real head SHA, full history) and the package-scoped recipe.
@@ -205,7 +205,10 @@ jobs:
       # platform stores into its own partition independently.
       fail-fast: false
       matrix:
-        platform: [ubuntu-latest, windows-latest, ubuntu-24.04-arm, windows-11-arm]
+        # x86_64 Linux and Windows only, matching bench-history.yml: ARM and macOS are only
+        # nominally supported (test-pass parity, see validation.yml) and are kept out of
+        # benchmarking so we do not spend runner minutes on platforms we do not track.
+        platform: [ubuntu-latest, windows-latest]
 
     runs-on: ${{ matrix.platform }}
     # Same ceiling as the main collect: `--best-of 3` roughly triples the ~60-75 min suite, and the
