@@ -59,9 +59,9 @@ function Test-TransientFailure {
     # Heuristic predicate for Invoke-WithRetry's -RetryOn: does $Message look like a transient
     # infrastructure fault worth retrying (server-side 5xx, rate-limiting, a network/TLS blip, or a
     # runner disk I/O error) rather than a deterministic failure (a 4xx, auth error, or bad request)
-    # that will fail
-    # identically on every attempt? Deliberately conservative - an unrecognized message is treated
-    # as NON-transient so a genuine error surfaces immediately instead of hiding behind slow retries.
+    # that will fail identically on every attempt? Deliberately conservative - an unrecognized
+    # message is treated as NON-transient so a genuine error surfaces immediately instead of hiding
+    # behind slow retries.
     [CmdletBinding()]
     [OutputType([bool])]
     param(
