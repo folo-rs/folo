@@ -99,9 +99,9 @@ impl RelativeSpeed {
 
     /// Constructs a value from a raw numeric value. A missing value (zero) has no real speed metric
     /// behind it, so it maps to the `UNDETERMINED` sentinel to keep the value non-zero.
-    // Raw speed values only originate on the real Linux and Windows platforms (via
-    // `from_os_metric`), in the fake platform, or in tests; other builds report fallback speeds, so
-    // gate this out there to avoid dead code (for example on macOS or under Miri).
+    // Only reachable through `from_os_metric` (real Linux/Windows), the fake platform
+    // (`test-util`), and tests; the fallback platform reports `UNDETERMINED` directly, so gate
+    // this out there to avoid dead code.
     #[cfg(any(
         test,
         feature = "test-util",
