@@ -6,14 +6,14 @@ everything else as metadata so the analysis can see its effect over time.**
 ## Discriminant sets
 
 Two results are comparable exactly when their **discriminant sets** match. A discriminant set
-is `{ project, engine, target_triple, machine_key? }`:
+is `{ project, engine, target_triple, machine_key }`:
 
 - **`project`** — workspace identity (configured, defaulting to the repository directory name).
 - **`engine`** — different units and semantics never mix.
 - **`target_triple`** — even hardware-independent counts are not comparable across
   architectures.
-- **`machine_key`** — present only for hardware-dependent engines; a literal `synthetic`
-  placeholder for the hardware-independent ones. See [machine-key](../commands/machine-key.md).
+- **`machine_key`** — always present: the machine fingerprint for hardware-dependent engines,
+  and the literal `synthetic` for hardware-independent ones. See [machine-key](../commands/machine-key.md).
 
 Deliberately **metadata, not partition** — so a change shows up as a timeline step, which is
 the whole point of the tool — are the toolchain versions, OS/libc, commit, branch, and

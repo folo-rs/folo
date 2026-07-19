@@ -109,14 +109,14 @@ concept pages link up into the commands that exercise them.
 - **Teach**: hardware-dependent vs. -independent (drives partitioning) and confidence-interval vs.
   single-value (drives dispersion gating); *why no engine is deterministic* (tenet 2); what
   Callgrind deliberately persists vs. discards; the shared identity→metrics shape and
-  lower-is-better (tenet 8).
+  lower-is-better.
 
 #### Comparability and partitioning
 
 - **Goal**: when two results are allowed to be compared.
 - **Teach**: the central tenet — partition only by what makes results incomparable, record the
   rest as metadata (tenet 3); the discriminant set members; metadata-not-partition (toolchain,
-  OS, commit, branch) so a rustc bump reads as a step; first-parent topology ordering (tenet 9);
+  OS, commit, branch) so a rustc bump reads as a step; first-parent topology ordering (tenet 8);
   benchmark identity and what renaming does.
 
 #### Analysis
