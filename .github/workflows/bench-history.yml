@@ -3,9 +3,9 @@ name: Benchmark history
 # Per-commit collection of the workspace's benchmark results into the long-lived Azure
 # history store (account folohistory, baked into .cargo/bench_history.toml; see also
 # infra/azure-bench-history-prod/). Each push to `main` benchmarks the whole workspace
-# EXCEPT the slow, special-purpose `benchmarks` package, on every supported OS/architecture,
-# and appends the results keyed by the pushed commit. Over time this builds the performance
-# history that `cargo-bench-history analyze` reads to spot regressions.
+# EXCEPT the slow, special-purpose `benchmarks` package, on the x86_64 Linux and Windows
+# runners, and appends the results keyed by the pushed commit. Over time this builds the
+# performance history that `cargo-bench-history analyze` reads to spot regressions.
 #
 # Runs per-push rather than on a nightly schedule: a nightly run re-benchmarks an unchanged
 # tip for no gain and misses intermediate same-day commits, whereas per-push collects one
@@ -68,7 +68,10 @@ jobs:
       # commit; each platform stores into its own partition independently.
       fail-fast: false
       matrix:
-        platform: [ubuntu-latest, windows-latest, ubuntu-24.04-arm, windows-11-arm]
+        # x86_64 Linux and Windows only. ARM and macOS are only nominally supported (they must
+        # pass tests, see validation.yml) but are deliberately left out of benchmarking so we do
+        # not spend runner minutes measuring platforms whose performance we do not track.
+        platform: [ubuntu-latest, windows-latest]
 
     runs-on: ${{ matrix.platform }}
     # 360 minutes is GitHub's hard per-job ceiling for hosted runners, so this is as
