@@ -39,9 +39,7 @@ The teaching points that every chapter should reinforce, not just the concept ch
    not what it found. Automation reads the machine-readable report.
 7. **Prefer auto-detection.** Analysis mode is derived from git topology. Collection derives the
    machine key from hardware by default but allows an explicit stable key for a machine pool.
-8. **Lower-is-better, always.** Every persisted metric is normalized so a rise is a regression and
-   a fall an improvement.
-9. **Git topology orders time.** Series are ordered by first-parent committer-date topology read
+8. **Git topology orders time.** Series are ordered by first-parent committer-date topology read
    at analyze time, never by wall-clock measurement timestamps.
 
 ## Chapter map

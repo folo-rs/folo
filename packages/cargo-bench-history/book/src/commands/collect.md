@@ -28,7 +28,7 @@ hard error.
 Two caveats: a runner that is slow for the *entire* job is not corrected by the minimum, and
 Callgrind's deterministic counts make min-of-N a costly no-op for that engine.
 
-## Storage behaviour
+## Storage behavior
 
 By default, `collect` persists immediately — there is no separate publish step.
 `--no-store` is the explicit dry-run exception. A clean point writes a deterministic key and

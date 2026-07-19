@@ -31,7 +31,7 @@ cargo bench-history unbless --local=./bench-history <benchmark-prefix>...
 A blessing is an append-only sidecar alongside the commit's clean run, so narrowing one means
 unbless-then-re-bless the subset to keep, and overwriting a commit's clean run drops its stale
 sidecars. `unbless` deletes only the blessings recorded at the context commit; blessings at
-later commits stay in effect. Blessings are honoured **only in history mode** — branch mode
+later commits stay in effect. Blessings are honored **only in history mode** — branch mode
 judges the latest state against the base, which is treated as fully blessed by construction.
 
 Use [`list blessings`](list.md) to audit which blessings are in effect.
