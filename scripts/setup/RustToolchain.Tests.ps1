@@ -59,6 +59,59 @@ Describe 'Set-CargoEnvDefault' {
     }
 }
 
+Describe 'Install-RustupToolchain' {
+    BeforeEach {
+        $script:savedPermitCopyRename = $env:RUSTUP_PERMIT_COPY_RENAME
+        Mock rustup -ModuleName RustToolchain { $global:LASTEXITCODE = 0 }
+        Mock Start-Sleep -ModuleName Retry { }
+    }
+    AfterEach {
+        if ($null -ne $script:savedPermitCopyRename) {
+            $env:RUSTUP_PERMIT_COPY_RENAME = $script:savedPermitCopyRename
+        } else {
+            Remove-Item env:RUSTUP_PERMIT_COPY_RENAME -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'lets rustup resolve the active manifest toolchain when the channel is omitted' {
+        Install-RustupToolchain
+        Should -Invoke rustup -ModuleName RustToolchain -Times 1 -Exactly -ParameterFilter {
+            ($args -join ' ') -eq 'toolchain install --no-self-update'
+        }
+    }
+
+    It 'passes an exact channel, profile, and requested components' {
+        Install-RustupToolchain -Channel 'nightly-2026-01-01' -InstallProfile minimal `
+            -Component @('miri', 'rust-src')
+        Should -Invoke rustup -ModuleName RustToolchain -Times 1 -Exactly -ParameterFilter {
+            ($args -join ' ') -eq (
+                'toolchain install nightly-2026-01-01 --profile minimal ' +
+                '--component miri --component rust-src --no-self-update'
+            )
+        }
+    }
+
+    It 'retries one toolchain install until it succeeds' {
+        $script:installAttempts = 0
+        Mock rustup -ModuleName RustToolchain {
+            $script:installAttempts++
+            $global:LASTEXITCODE = if ($script:installAttempts -lt 2) { 1 } else { 0 }
+        }
+
+        Install-RustupToolchain -Channel '1.2.3'
+
+        Should -Invoke rustup -ModuleName RustToolchain -Times 2 -Exactly
+    }
+
+    It 'throws after exhausting retries for one toolchain install' {
+        Mock rustup -ModuleName RustToolchain { $global:LASTEXITCODE = 1 }
+
+        { Install-RustupToolchain -Channel '1.2.3' } | Should -Throw
+
+        Should -Invoke rustup -ModuleName RustToolchain -Times 4 -Exactly
+    }
+}
+
 Describe 'Install-RustToolchain' {
     BeforeEach {
         $script:tempDir = Join-Path ([IO.Path]::GetTempPath()) ("folo-toolchain-" + [guid]::NewGuid())

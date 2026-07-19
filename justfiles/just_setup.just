@@ -14,17 +14,21 @@ install-tools:
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
+    Import-Module "{{ justfile_directory() }}/scripts/setup/RustToolchain.psm1" -Force
+
     # This is the single source of truth for which tools - and which versions - get installed. CI
     # runs this same recipe on nearly every job via the setup-environment composite action, so
     # there is no separate CI install path to keep in sync. The only per-job variation is the
     # skip_azcopy / skip_azurite flags above, which trim two tools no ordinary CI job needs.
 
-    # First, we install/upgrade the stable toolchain in `rust-toolchain.toml`.
-    rustup toolchain install
+    # First, we install/upgrade the stable toolchain in `rust-toolchain.toml`. Omitting Channel is
+    # intentional: rustup reads the manifest, including its requested components.
+    Install-RustupToolchain
 
     # Then we install the other toolchains used by specific commands.
-    rustup toolchain install $env:RUST_MSRV
-    rustup toolchain install $env:RUST_NIGHTLY --component miri --component rustfmt --component rust-src --component llvm-tools-preview
+    Install-RustupToolchain -Channel $env:RUST_MSRV
+    Install-RustupToolchain -Channel $env:RUST_NIGHTLY `
+        -Component @('miri', 'rustfmt', 'rust-src', 'llvm-tools-preview')
 
     # Every tool is pinned to an explicit version from constants.env (dotenv, configured in the
     # root justfile, exposes each `FOO_VERSION` as `$env:FOO_VERSION`). This is deliberate: a plain

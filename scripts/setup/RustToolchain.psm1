@@ -64,6 +64,46 @@ function Set-CargoEnvDefault {
     }
 }
 
+function Install-RustupToolchain {
+    # Installs one toolchain (or the active rust-toolchain.toml toolchain when Channel is omitted)
+    # with item-level retry. Components are passed through individually so a large nightly install
+    # is retried as one internally consistent rustup operation.
+    [CmdletBinding()]
+    param(
+        [string] $Channel,
+        [ValidateSet('minimal', 'default', 'complete')][string] $InstallProfile,
+        [string[]] $Component = @()
+    )
+
+    $PSNativeCommandUseErrorActionPreference = $false
+
+    $rustupArguments = @('toolchain', 'install')
+    if (-not [string]::IsNullOrWhiteSpace($Channel)) {
+        $rustupArguments += $Channel
+    }
+    if (-not [string]::IsNullOrWhiteSpace($InstallProfile)) {
+        $rustupArguments += @('--profile', $InstallProfile)
+    }
+    foreach ($name in $Component) {
+        $rustupArguments += @('--component', $name)
+    }
+    $rustupArguments += '--no-self-update'
+
+    $toolchainDescription = if ([string]::IsNullOrWhiteSpace($Channel)) {
+        'the active toolchain'
+    } else {
+        $Channel
+    }
+
+    $env:RUSTUP_PERMIT_COPY_RENAME = '1'
+    Invoke-WithRetry -Attempt 4 -DelaySeconds 5 -BackoffMultiplier 2 -MaxDelaySeconds 30 -Action {
+        rustup @rustupArguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "rustup toolchain install for $toolchainDescription exited with code $LASTEXITCODE"
+        }
+    }
+}
+
 function Install-RustToolchain {
     # Installs the pinned stable toolchain via rustup and sets the Cargo environment the composite
     # relies on. Parameters exist purely for testability; in CI both take their real defaults.
@@ -80,17 +120,7 @@ function Install-RustToolchain {
     $channel = Get-PinnedRustChannel -ManifestPath $ManifestPath
     Write-Host "Pinned Rust channel from ${ManifestPath}: $channel"
 
-    # The install writes a lot to disk and pulls from static.rust-lang.org; either can blip
-    # transiently (the os error 5 that motivated owning this step), so retry the install alone with
-    # a short exponential backoff. RUSTUP_PERMIT_COPY_RENAME mirrors the marketplace action's
-    # handling of cross-device installs.
-    $env:RUSTUP_PERMIT_COPY_RENAME = '1'
-    Invoke-WithRetry -Attempt 4 -DelaySeconds 5 -BackoffMultiplier 2 -MaxDelaySeconds 30 -Action {
-        rustup toolchain install $channel --profile minimal --no-self-update
-        if ($LASTEXITCODE -ne 0) {
-            throw "rustup toolchain install $channel exited with code $LASTEXITCODE"
-        }
-    }
+    Install-RustupToolchain -Channel $channel -InstallProfile minimal
 
     # Making the pinned channel the default is convenient but not essential (rust-toolchain.toml
     # already directs cargo to it), so a failure here must not fail environment setup.
@@ -112,4 +142,5 @@ function Install-RustToolchain {
 Export-ModuleMember -Function `
     Get-PinnedRustChannel, `
     Set-CargoEnvDefault, `
+    Install-RustupToolchain, `
     Install-RustToolchain
