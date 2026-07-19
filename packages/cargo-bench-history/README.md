@@ -1,62 +1,122 @@
 # cargo-bench-history
 
-A Cargo subcommand that maintains a long-lived history of benchmark results and
-analyzes it for trends that snapshot-only tooling cannot see — for example
-"benchmark X has been getting incrementally slower over the past 12 months" or
-"scenario Y regressed after commit Z, visible only in hindsight against noisy
-data".
+A Cargo subcommand that keeps a long-lived history of your benchmark results and
+analyzes it for regressions and drift that snapshot-only tooling cannot see — a
+scenario that got 12% slower over six months, or a regression at commit Z that is
+only obvious in hindsight against noisy data.
 
-Most benchmark tooling only reports the current run, or at best compares against
-the previous local run. `cargo-bench-history` instead stores **every** run as an
-immutable record — on the local filesystem or in an
-Azure Blob container — and reconstructs per-benchmark series in git first-parent
-commit order, so historical trends become analyzable.
+## What it does for you
 
-Where results are stored is chosen at run time: pass `--local=<path>` for local
-filesystem storage (or a bare `--local` to take the path from the
-`CARGO_BENCH_HISTORY_STORAGE` environment variable), or configure an Azure Blob
-backend in `.cargo/bench_history.toml` and omit `--local`. A local path is
-machine-dependent, so it is never stored in the shared config file.
+Most benchmark tooling reports only the current run, or at best diffs it against
+the previous one. `cargo-bench-history` stores **every** run as an immutable
+record and reconstructs each benchmark's series in git first-parent commit order,
+so it can tell a real trend apart from run-to-run noise and point at the commit
+that moved it.
 
-## Installation
+Analyzing that history is what turns it into a verdict. On a pull request it runs
+in **branch mode** — judging the branch tip against the base level — and produces a
+report like this: one regression and one improvement, each charted against the
+baseline it is compared to (the flat run on the left) so the tip's step is obvious:
+
+```text
+Analyzed project folo (branch mode)
+  commit: 4f2a1c9
+  runs: 218 (9c1d0ab → 4f2a1c9)  regressions: 1  improvements: 1
+
+callgrind/x86_64-unknown-linux-gnu/synthetic
+  runs: 218  regressions: 1  improvements: 1
+  filter: --engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key synthetic
+
+many_cpus/hardware_info/query
+  +13.00% instruction_count (99% confidence)
+    regression via change point · 100 → 113 · @ 4f2a1c9
+ 113 ┤                               ╭───────────────
+ 110 ┤                             ╭─╯
+ 106 ┤                           ╭─╯
+ 103 ┤                         ╭─╯
+ 100 ┼─────────────────────────╯
+
+events_once/emit/one_subscriber
+  -15.00% instruction_count (98% confidence)
+    improvement via change point · 50 → 42.5 · @ 4f2a1c9
+ 50.44 ┼─────────────────────────╮
+ 48.45 ┤                         ╰─╮
+ 46.47 ┤                           ╰─╮
+ 44.48 ┤                             ╰──────╮
+ 42.50 ┤                                    ╰──────────
+```
+
+What you get out of it:
+
+- **High signal-to-noise.** No benchmark engine is deterministic, so every metric
+  is treated as noisy and gated hard — the tool would rather stay quiet than cry
+  wolf. Each finding carries its confidence and the commit it is attributed to.
+- **Regressions *and* improvements**, each judged at the branch tip and charted
+  against its baseline so you can see the size and shape of the change at a glance.
+- **A machine-readable verdict.** The same analysis emits JSON for automation;
+  findings are advisory and never change the exit code, so a regression never
+  breaks a build on its own — your automation decides what to do with the signal.
+
+## Integrating it into your project
+
+`cargo-bench-history` needs somewhere to keep history that outlives a single run:
+
+- **Local disk** — pass `--local=<path>` (or a bare `--local` to read the path
+  from `CARGO_BENCH_HISTORY_STORAGE`). Ideal for trying it out and for one
+  developer's machine.
+- **Azure Blob storage** — configure a container in `.cargo/bench_history.toml`
+  and omit `--local`. This is the shared backend a team and CI read and append to.
+  A local path is machine-specific, so it is never written into the shared config.
+
+In CI today, integration is hand-crafted per project: a GitHub Actions workflow
+runs `collect` on the base branch to grow the history, and runs `analyze` on each
+pull request to judge the branch tip against the base, posting the result as a
+**Performance impact** comment. (Reusable actions to make this turnkey are on the
+roadmap; for now the workflow is written by hand.)
+
+## Trying it locally
 
 Install with [`cargo binstall cargo-bench-history`](https://github.com/cargo-bins/cargo-binstall)
-to fetch a prebuilt binary on supported targets (transparently building from source
-elsewhere), or `cargo install cargo-bench-history` to always build from source.
+to fetch a prebuilt binary on supported targets (building from source elsewhere),
+or `cargo install cargo-bench-history` to always build from source. It then runs as
+`cargo bench-history`.
+
+`cargo-bench-history` records whatever your existing benchmarks emit — it does not
+create them for you, so your project needs at least one benchmark a supported engine
+can harvest (most commonly Criterion benches under `benches/`).
+
+To see analysis you first need a history to analyze — a single run has nothing to
+compare against. Grow one by backfilling past commits, then analyze the branch
+you are working on:
 
 ```text
 # Write a starter .cargo/bench_history.toml (documents the optional cloud backend).
 cargo bench-history install
 
-# Run the workspace benchmarks for the current commit and store the results
-# locally. Drop --local to store in the cloud backend from the config file.
-cargo bench-history collect --local=./bench-history
-
-# On a noisy runner, run the suite a few times and keep the best (minimum) value
-# per metric, since benchmark interference only ever makes a case slower.
-cargo bench-history collect --local=./bench-history --best-of 3
-
-# Bootstrap history by benching a range of past commits, so analysis has a
-# trend to work with (a single run on its own has nothing to compare against).
+# Bench a range of past commits so analysis has a trend to work with. Runs in an
+# isolated worktree and is resumable, so you can stop and re-run it.
 cargo bench-history backfill --local=./bench-history <from-commit> <to-commit>
 
-# Analyze the recorded history for regressions and drift.
+# Bench the current commit and append it to the history. On a noisy machine, run
+# the suite a few times and keep the best (minimum) value per metric.
+cargo bench-history collect --local=./bench-history --best-of 3
+
+# Judge your branch's impact. On a feature branch this auto-selects branch mode,
+# which compares the tip against the base and reports both regressions and gains.
 cargo bench-history analyze --local=./bench-history
 
-# Inspect the raw per-commit data points behind a finding, to correlate a change
-# with the commit that caused it (both --benchmark and --metric are required).
+# Drill into the raw per-commit points behind a finding to correlate a change with
+# the commit that caused it (both --benchmark and --metric are required).
 cargo bench-history examine --local=./bench-history \
-    --benchmark my_pkg/my_group/my_case --metric instruction_count
-
-# Print this machine's hardware fingerprint (the key hardware-dependent history is
-# partitioned by). --verbose additionally reports the factors behind the key on
-# standard error, for tracing a key change to the hardware detail that moved.
-cargo bench-history machine-key
+    --benchmark many_cpus/hardware_info/query --metric instruction_count
 ```
 
-## See also
+## Further reading
 
-More details in the [package documentation](https://docs.rs/cargo-bench-history/).
+The [user guide](https://folo-rs.github.io/folo/cargo-bench-history/) walks through
+every command, the storage backends and the analysis model in depth.
 
-This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
-high-performance hardware-aware programming in Rust.
+API details are in the [package documentation](https://docs.rs/cargo-bench-history/).
+
+This is part of the [Folo project](https://github.com/folo-rs/folo) that provides
+mechanisms for high-performance hardware-aware programming in Rust.

@@ -84,6 +84,20 @@ Logic worth unit-testing goes one level deeper into a module under `scripts/` co
 Pester suite. Every `run:` step uses `pwsh`; the `setup-environment` composite is the sole
 Bash holdout because it bootstraps PowerShell itself.
 
+## Published user guides
+
+Markdown user guides live under `packages/<package>/book/` and are published together as one
+GitHub Pages site. The book workflow discovers that convention rather than keeping a second
+catalog, builds each book in an independent matrix leg, and merges the resulting artifacts under
+`/<package>/`. A generated landing page at the site root reads each book's title and description
+from `book.toml`, so adding a book requires no workflow edit.
+
+Pull requests build every discovered book but never deploy, providing a real rendering check
+without publishing unmerged content. Pushes to `main` and explicitly dispatched runs assemble the
+artifacts, generate the landing page, and deploy through the GitHub Pages artifact flow. mdBook and
+its preprocessors are version-pinned in `constants.env` so local and hosted builds use the same
+rendering toolchain.
+
 ## Coverage reporting
 
 Coverage is a side effect of the ordinary test run, not a separate re-execution. A single
@@ -322,4 +336,3 @@ allowance; sizing a cap to the warm-cache setup time alone would make a cache mi
 fail the job. Jobs whose work is comfortably bounded carry no explicit cap and rely on
 GitHub's default ceiling, which already clears a cold setup with room to spare. Explicit caps
 exist only to stop a genuinely stuck run, never to bound the expected duration.
-

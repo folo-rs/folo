@@ -1,0 +1,150 @@
+name: Book
+
+# Builds every Markdown user-guide book under `packages/<crate>/book/` and publishes them as one
+# GitHub Pages site: each book at `/<book-name>/`, with a generated landing index at the root.
+#
+# The job graph is: discover (enumerate books -> build matrix) -> build (one book per matrix leg,
+# uploaded as an artifact) -> deploy (merge the artifacts, add the landing page, push to Pages).
+# The deploy job is skipped on pull requests, so a PR still gets its books built (a real check) but
+# only a push to main - or a manual run - actually publishes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - packages/*/book/**
+      - scripts/book/**
+      - justfile
+      - justfiles/just_book.just
+      - constants.env
+      - .github/workflows/book.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - packages/*/book/**
+      - scripts/book/**
+      - justfile
+      - justfiles/just_book.just
+      - constants.env
+      - .github/workflows/book.yml
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Enumerates the books to build into a JSON array the `build` job fans out over. This needs only
+  # the checkout and PowerShell (no Rust toolchain), so it skips setup-environment and stays fast.
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      books: ${{ steps.books.outputs.books }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Discover books
+        id: books
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          Import-Module ./scripts/book/BookSite.psm1 -Force
+          $books = Get-BookMatrixJson -PackagesRoot 'packages'
+          Write-Host "Discovered books: $books"
+          "books=$books" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
+
+  # Builds one book per matrix leg and uploads it as an artifact whose contents are rooted at
+  # `<book-name>/`, so the deploy job can merge every book into the site without further shuffling.
+  build:
+    needs: [discover]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        book: ${{ fromJSON(needs.discover.outputs.books) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Install mdbook
+        # mdbook and mdbook-mermaid are not part of `just install-tools`, so install them here,
+        # pinned and --locked for reproducibility. They are not carried in the shared
+        # setup-environment cache, so this compiles mdbook from source (a couple of minutes).
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          just book-install
+
+      - name: Build book
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          just book-build-one ${{ matrix.book }} target/book-site
+
+      - name: Upload book artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: book-${{ matrix.book }}
+          path: target/book-site
+          if-no-files-found: error
+          retention-days: 1
+
+  # Merges the per-book artifacts into a single site, generates the landing index and publishes to
+  # GitHub Pages. Skipped on pull requests. Like `discover`, generating the landing page needs only
+  # PowerShell, so this job skips setup-environment too.
+  deploy:
+    needs: [build]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Download book artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: book-*
+          path: public
+          merge-multiple: true
+
+      - name: Generate landing page
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          Import-Module ./scripts/book/BookSite.psm1 -Force
+          $path = New-BookLandingPage -PackagesRoot 'packages' -OutputPath 'public'
+          Write-Host "Wrote landing page to $path"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
