@@ -38,7 +38,7 @@ const BRANCH_CHART_MAX_POINTS: usize = 30;
 /// Enough to convey the most significant movers while keeping the rendered report
 /// comfortably within a GitHub issue body's size limit even when an analysis flags
 /// many changes.
-pub const DEFAULT_SUMMARY_LIMIT: NonZero<usize> = NonZero::new(20).expect("20 is non-zero");
+pub const DEFAULT_SUMMARY_LIMIT: NonZero<usize> = NonZero::new(10).expect("10 is non-zero");
 
 /// The selectable output format of an analysis report.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
