@@ -615,6 +615,38 @@ mod tests {
     }
 
     #[test]
+    fn either_dedup_flag_alone_still_imports() {
+        // Only one of the mutually exclusive flags set is a valid import: the guard
+        // must inspect both operands, so overwrite-only and skip-existing-only each
+        // store the single harvested run against an empty backend rather than being
+        // mistaken for the both-set combination.
+        for options in [
+            ImportOptions {
+                overwrite: true,
+                ..ImportOptions::default()
+            },
+            ImportOptions {
+                skip_existing: true,
+                ..ImportOptions::default()
+            },
+        ] {
+            let storage = MemoryStorage::new();
+            let outcome = run_import(
+                &options,
+                &callgrind_output(),
+                &FakeProbe::new(),
+                &FakeGitHistory::new(),
+                &storage,
+            )
+            .unwrap();
+            let RunOutcome::Completed { message } = outcome else {
+                panic!("expected completion, got {outcome:?}");
+            };
+            assert!(message.contains("Stored 1"), "{message}");
+        }
+    }
+
+    #[test]
     fn resolve_target_root_rejects_an_empty_target_dir() {
         let error = resolve_target_root(&PathBuf::new(), &PathBuf::from("/work")).unwrap_err();
         let RunError::Import { message } = error else {
