@@ -84,4 +84,4 @@ bounded recent tail ending at the tip, so the commit being judged remains visibl
 compressing months of history into the same chart.
 
 There is **no severity classification**: a finding's magnitude is conveyed by its
-relative-change percent, and which findings warrant action is left to human or agent judgement.
+relative-change percent, and which findings warrant action is left to human or agent judgment.

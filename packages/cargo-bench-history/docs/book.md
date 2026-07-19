@@ -98,7 +98,7 @@ concept pages link up into the commands that exercise them.
 | `examine` | Drill-down from a finding to the raw per-commit points of one `(benchmark, metric)` series; no detection, no judgment. |
 | `list` | Preview the exact data set `analyze` would consume (`runs` / `discriminants` / `blessings`) without analyzing. |
 | `prune` | Delete a chosen scope of stored data; never touches base-branch history without an explicit confirm. |
-| `bless` / `unbless` | Manually accept an intentional change so history stops re-flagging it; per-benchmark; honoured only in history mode. |
+| `bless` / `unbless` | Manually accept an intentional change so history stops re-flagging it; per-benchmark; honored only in history mode. |
 | `machine-key` | Print the hardware fingerprint that hardware-dependent history is partitioned by; `--verbose` explains the factors. |
 
 ### Part 3 — Concepts
