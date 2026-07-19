@@ -329,6 +329,16 @@ mod tests {
     }
 
     #[test]
+    fn import_error_is_displayed_and_has_no_source() {
+        let error = RunError::Import {
+            message: "--commit resolves to no commit in the repository".to_owned(),
+        };
+        assert!(error.to_string().contains("import failed"), "{error}");
+        assert!(error.to_string().contains("no commit"), "{error}");
+        assert!(error.source().is_none());
+    }
+
+    #[test]
     fn command_error_is_displayed_and_has_no_source() {
         let error = RunError::Command {
             engine: "callgrind".to_owned(),
