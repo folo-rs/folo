@@ -12,7 +12,7 @@ book-install:
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
-    cargo install mdbook@$env:MDBOOK_VERSION mdbook-mermaid@$env:MDBOOK_MERMAID_VERSION --locked
+    cargo install mdbook@$env:BOOK_MDBOOK_VERSION mdbook-mermaid@$env:BOOK_MDBOOK_MERMAID_VERSION --locked
 
 # Builds a single book into OUT/<NAME>. NAME is the package directory name (the book lives at
 # `packages/<NAME>/book`). Used per-book by the build matrix in the book workflow.

@@ -10,12 +10,15 @@
 # book.toml, and must be HTML-escaped before they land in the page).
 
 Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
 
 function Get-BookInfo {
     # Returns one object per discovered book - properties Name (the package directory name), Title
     # and Description (parsed from book.toml, falling back to Name / empty) and BookRoot (the
-    # directory holding book.toml) - sorted by Name for deterministic ordering. A book.toml that is
-    # not directly inside a `book` directory is ignored, so unrelated manifests never leak in.
+    # directory holding book.toml) - sorted by Name for deterministic ordering. Only the documented
+    # `<PackagesRoot>/<name>/book/book.toml` layout is discovered, so nested or unrelated manifests
+    # never leak into the build matrix.
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(
@@ -27,15 +30,40 @@ function Get-BookInfo {
     }
 
     $books = [System.Collections.Generic.List[pscustomobject]]::new()
-    $manifests = Get-ChildItem -LiteralPath $PackagesRoot -Filter 'book.toml' -Recurse -File |
-        Where-Object { $_.Directory.Name -eq 'book' }
+    $manifests = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
+    foreach ($packageDirectory in Get-ChildItem -LiteralPath $PackagesRoot -Directory) {
+        $manifestPath = Join-Path $packageDirectory.FullName 'book' 'book.toml'
+        if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+            $manifests.Add((Get-Item -LiteralPath $manifestPath))
+        }
+    }
 
     foreach ($manifest in ($manifests | Sort-Object FullName)) {
         $name = $manifest.Directory.Parent.Name
         $text = Get-Content -LiteralPath $manifest.FullName -Raw
+        $bookSectionMatch = [regex]::Match(
+            $text,
+            '(?ms)^\s*\[book\]\s*(.*?)(?=^\s*\[|\z)'
+        )
+        $bookSection = if ($bookSectionMatch.Success) {
+            $bookSectionMatch.Groups[1].Value
+        }
+        else {
+            ''
+        }
 
-        $title = if ($text -match '(?m)^\s*title\s*=\s*"([^"]+)"') { $Matches[1] } else { $name }
-        $description = if ($text -match '(?m)^\s*description\s*=\s*"([^"]+)"') { $Matches[1] } else { '' }
+        $title = if ($bookSection -match '(?m)^\s*title\s*=\s*"([^"]+)"') {
+            $Matches[1]
+        }
+        else {
+            $name
+        }
+        $description = if ($bookSection -match '(?m)^\s*description\s*=\s*"([^"]+)"') {
+            $Matches[1]
+        }
+        else {
+            ''
+        }
 
         $books.Add([pscustomobject]@{
                 Name        = $name

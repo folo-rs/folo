@@ -1,10 +1,16 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
+#Requires -Version 7
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
 
 # Pester suite for BookSite.psm1.
 #
 # Get-BookInfo walks the filesystem, so tests build a `packages/<pkg>/book/book.toml` fixture under
 # TestDrive covering: a book with a title and description, a book missing both (fall back to name),
-# a package with no book (skipped), and a stray book.toml outside a `book` directory (ignored).
+# a package with no book (skipped), a stray book.toml outside a `book` directory (ignored), and a
+# nested `book/book.toml` below a package (ignored).
 # New-BookLandingPage renders those into an index.html, so its tests assert the links, the parsed
 # titles and HTML-escaping of special characters.
 
@@ -25,10 +31,16 @@ Describe 'Get-BookInfo' {
             'description = "All about alpha."'
         )
 
-        # beta: a book.toml with neither title nor description (falls back to the package name).
+        # beta: no book metadata; similarly named output metadata must not leak into the card.
         $beta = Join-Path $script:Root 'beta' 'book'
         New-Item -ItemType Directory -Path $beta -Force | Out-Null
-        Set-Content -Path (Join-Path $beta 'book.toml') -Value '[book]'
+        Set-Content -Path (Join-Path $beta 'book.toml') -Value @(
+            '[book]'
+            ''
+            '[output.html]'
+            'title = "Not the book title"'
+            'description = "Not the book description."'
+        )
 
         # gamma: a package with no book at all (must be skipped).
         New-Item -ItemType Directory -Path (Join-Path $script:Root 'gamma') -Force | Out-Null
@@ -38,9 +50,14 @@ Describe 'Get-BookInfo' {
         $stray = Join-Path $script:Root 'delta' 'docs'
         New-Item -ItemType Directory -Path $stray -Force | Out-Null
         Set-Content -Path (Join-Path $stray 'book.toml') -Value '[book]'
+
+        # A nested book directory is outside the packages/<name>/book convention.
+        $nested = Join-Path $script:Root 'epsilon' 'nested' 'book'
+        New-Item -ItemType Directory -Path $nested -Force | Out-Null
+        Set-Content -Path (Join-Path $nested 'book.toml') -Value '[book]'
     }
 
-    It 'discovers only books inside a book directory, sorted by name' {
+    It 'discovers only direct package books, sorted by name' {
         $books = @(Get-BookInfo -PackagesRoot $script:Root)
         $books.Count | Should -Be 2
         $books.Name | Should -Be @('alpha', 'beta')

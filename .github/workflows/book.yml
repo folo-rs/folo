@@ -13,6 +13,7 @@ on:
     paths:
       - packages/*/book/**
       - scripts/book/**
+      - justfile
       - justfiles/just_book.just
       - constants.env
       - .github/workflows/book.yml
@@ -21,6 +22,7 @@ on:
     paths:
       - packages/*/book/**
       - scripts/book/**
+      - justfile
       - justfiles/just_book.just
       - constants.env
       - .github/workflows/book.yml
