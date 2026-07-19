@@ -154,7 +154,11 @@ function Invoke-CargoDelta {
         # to stderr and emits no stdout, which the parser treats as "nothing affected".
         $deltaJson = cargo delta -c $ConfigPath run --baseline $baselineJson --current $currentJson | Out-String
 
-        $affected = Read-DeltaAffectedPackage -DeltaJson $deltaJson
+        # Re-wrap in @(): Read-DeltaAffectedPackage returns an empty array for a "nothing affected"
+        # report, but PowerShell collapses a bare empty-array return to $null on assignment, and
+        # Select-ExistingPackage's -Affected is Mandatory (rejects $null). Without this a PR that
+        # touches no crate - docs, workflows or scripts only - would fail the delta job outright.
+        $affected = @(Read-DeltaAffectedPackage -DeltaJson $deltaJson)
         return Select-ExistingPackage -Affected $affected -WorkspacePackage (Get-WorkspacePackage)
     } finally {
         Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
