@@ -831,7 +831,12 @@ Every history-mode finding therefore carries an active flag and an active-from b
 
 The history-mode chart greys the pre-active prefix and draws the active window in the
 finding's direction colour, so the live period a finding is about is visually separated
-from the inactive context kept only for continuity.
+from the inactive context kept only for continuity. Branch mode charts differently: it
+judges only the **tip commit**, so it plots the detector's comparison baseline followed by
+the recent tail of the series ending at the tip rather than the whole history. Charting
+the full, possibly months-long series would resample it down to the fixed chart width and
+shrink the one commit that matters to an indistinct edge column; the bounded comparison
+chart keeps both the base level and the tip legible and unaliased.
 
 ### 8.7 Report formats
 
@@ -841,8 +846,9 @@ of history the findings describe — annotated `+ uncommitted changes` when the 
 was dirty, so a reader (or the auto-filed regression issue) can tie the report to an exact
 commit. Text goes to stdout as one paragraph per finding — the benchmark id on its own
 line as a chapter title, then a direction-coloured headline pairing the relative-change
-percent with the metric and its confidence, a dimmed detail line, and (in history mode
-only) a small line chart of the series — with colour enabled only
+percent with the metric and its confidence, a dimmed detail line, and a small line chart
+of the series — the whole series in history mode, only the bounded baseline-and-tail
+comparison in branch mode — with colour enabled only
 when stdout is a terminal and not disabled by environment. The text and Markdown reports
 group findings under a per-set header, which also states the **facet-filter flags** that
 reproduce exactly that partition, so a reader who spots a change can drill into it without

@@ -17,10 +17,21 @@ use colored::{Color, Colorize};
 use rasciigraph::{Config, plot, plot_colored, plot_many_colored};
 use serde::Serialize;
 
-/// Height, in rows, of a history-mode finding chart.
+/// Height, in rows, of a finding chart.
 const CHART_HEIGHT: u32 = 4;
-/// Width, in columns, of a history-mode finding chart.
+/// Width, in columns, of a finding chart.
 const CHART_WIDTH: u32 = 48;
+
+/// Maximum number of values in a branch-mode chart.
+///
+/// Branch mode judges a feature branch by its **tip commit alone** against a recent base
+/// level, so the tip is the one point that matters. Plotting the whole (often
+/// months-long) series would resample it down to [`CHART_WIDTH`] columns, shrinking that
+/// tip to a single edge column where it reads as noise. The chart starts with the
+/// comparison baseline and fills the remaining slots with the recent observed tail,
+/// keeping both sides of the reported change visible. The cap stays below
+/// [`CHART_WIDTH`] so every value maps to its own column without resampling.
+const BRANCH_CHART_MAX_POINTS: usize = 30;
 
 /// The number of findings a Markdown summary retains by default.
 ///
@@ -381,9 +392,10 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
         return finish(&lines);
     }
 
-    // A per-commit chart is meaningful only for a history (`master`) timeline; the
-    // branch mode compares against a baseline rather than walking a series.
-    let chart_enabled = input.mode == "history";
+    // Both modes draw a per-finding chart; the scope differs. History walks the whole
+    // series; branch charts the comparison baseline and recent tail so the tip commit
+    // it judges stays legible (see `ChartScope`).
+    let scope = chart_scope(input.mode);
     for summary in input.sets {
         if summary.findings.is_empty() {
             continue;
@@ -393,7 +405,7 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
         lines.push(set_counts_line(summary, input.report_improvements));
         lines.push(format!("  filter: {}", set_filter_flags(summary.set)));
         for finding in &summary.findings {
-            push_finding_block(&mut lines, finding, chart_enabled);
+            push_finding_block(&mut lines, finding, scope);
         }
     }
     push_warning(&mut lines, input.warning);
@@ -402,9 +414,9 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
 
 /// Appends one finding as a paragraph: the benchmark id on its own line as a
 /// chapter title, then a direction-colored `percentage metric (confidence)`
-/// headline, a dimmed detail line, an optional blessing/recovery note, and (in
-/// history mode) a chart of the metric over commits.
-fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, chart_enabled: bool) {
+/// headline, a dimmed detail line, an optional blessing/recovery note, and a chart
+/// of the metric over commits, scoped per [`ChartScope`].
+fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, scope: ChartScope) {
     lines.push(String::new());
 
     // Lead with the benchmark id on its own line, like a chapter title: some ids are
@@ -435,9 +447,7 @@ fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, chart_enabled:
         lines.push(format!("    {blessing}").dimmed().to_string());
     }
 
-    if chart_enabled
-        && let Some(chart) = chart_of(&finding.series, finding.direction, finding.active_from)
-    {
+    if let Some(chart) = scoped_chart(finding, scope) {
         lines.push(chart);
     }
 }
@@ -587,6 +597,56 @@ impl From<Direction> for ChartColor {
     }
 }
 
+/// How a finding's metric chart is scoped for the analysis mode it was produced in.
+///
+/// The two modes ask different questions of the same stored history, so they chart
+/// different slices of a finding's series.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ChartScope {
+    /// History mode: plot the whole series, greying the pre-blessing prefix per the
+    /// finding's `active_from`, so the long-range trend and any re-baseline boundary
+    /// both show.
+    FullHistory,
+    /// Branch mode: plot the comparison baseline followed by the most recent points
+    /// ending at the tip commit. Branch mode judges the branch by that one commit, so
+    /// the bounded chart keeps it legible instead of aliasing it into a single edge
+    /// column (see [`BRANCH_CHART_MAX_POINTS`]). A branch series is never blessed, so
+    /// its active window always starts at `0`.
+    BranchComparison,
+}
+
+/// Chooses the [`ChartScope`] for an analysis `mode` string (`history`/`branch`).
+///
+/// Only `branch` uses the bounded comparison; every other value (history, and any
+/// future mode) charts the full series, the information-preserving default.
+fn chart_scope(mode: &str) -> ChartScope {
+    if mode == "branch" {
+        ChartScope::BranchComparison
+    } else {
+        ChartScope::FullHistory
+    }
+}
+
+/// Builds the bounded values for a branch finding's comparison chart.
+///
+/// The first value is the detector's actual comparison baseline. The remaining values
+/// are the recent observed suffix ending at the tip, guaranteeing that both sides of
+/// the reported change remain visible even when a long-lived branch contributes more
+/// points than the chart cap. The tip is the one data point branch mode acts on, and it
+/// must never be dropped or aliased away, however long the underlying history is.
+fn branch_chart_values(finding: &Finding) -> Vec<f64> {
+    let observed_limit = BRANCH_CHART_MAX_POINTS.saturating_sub(1);
+    let start = finding.series.len().saturating_sub(observed_limit);
+    let observed = finding
+        .series
+        .get(start..)
+        .expect("saturating subtraction keeps the start within the series");
+    let mut values = Vec::with_capacity(observed.len().saturating_add(1));
+    values.push(finding.baseline);
+    values.extend(observed.iter().map(|point| point.value));
+    values
+}
+
 /// Renders a compact line chart of a finding's series values over commits, colored
 /// by direction. Returns `None` when there are too few points to plot.
 ///
@@ -597,6 +657,29 @@ impl From<Direction> for ChartColor {
 fn chart_of(series: &[SeriesValue], direction: Direction, active_from: usize) -> Option<String> {
     let values: Vec<f64> = series.iter().map(|point| point.value).collect();
     chart(&values, direction.into(), active_from)
+}
+
+/// Renders a finding's metric chart for the given [`ChartScope`], or `None` when the
+/// scoped series has too few points to plot.
+///
+/// [`ChartScope::FullHistory`] charts the whole series honoring the finding's
+/// `active_from`; [`ChartScope::BranchComparison`] charts [`branch_chart_values`] with
+/// the active window pinned to `0` (a branch series is never blessed), so the
+/// comparison baseline and tip commit stay legible rather than becoming aliased edge
+/// columns.
+fn scoped_chart(finding: &Finding, scope: ChartScope) -> Option<String> {
+    match scope {
+        ChartScope::FullHistory => {
+            chart_of(&finding.series, finding.direction, finding.active_from)
+        }
+        // Chart the comparison baseline and recent tail ending at the tip. This is
+        // business-critical: the tip commit is the sole data point branch mode judges,
+        // so it must remain visible and unaliased regardless of how much history
+        // precedes it.
+        ChartScope::BranchComparison => {
+            chart(&branch_chart_values(finding), finding.direction.into(), 0)
+        }
+    }
 }
 
 /// The plotting strategy [`chart`] selects for a series, deciding how the line is
@@ -706,9 +789,9 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
         return finish(&lines);
     }
 
-    // A per-commit chart is meaningful only for a history timeline, matching the
-    // text report; branch mode compares against a baseline.
-    let chart_enabled = input.mode == "history";
+    // Both modes draw a per-finding chart, matching the text report; the scope differs
+    // (history walks the whole series, branch charts the baseline and recent tail).
+    let scope = chart_scope(input.mode);
     for summary in input.sets {
         if summary.findings.is_empty() {
             continue;
@@ -729,7 +812,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
         }
         lines.push(format!("- Filter: `{}`", set_filter_flags(summary.set)));
         for finding in &summary.findings {
-            push_finding_markdown(&mut lines, finding, "###", chart_enabled);
+            push_finding_markdown(&mut lines, finding, "###", scope);
         }
     }
     push_warning(&mut lines, input.warning);
@@ -797,11 +880,11 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
         ));
     }
 
-    // A per-commit chart is meaningful only for a history timeline, matching the full
-    // reports; branch mode compares against a baseline.
-    let chart_enabled = input.mode == "history";
+    // Both modes draw a per-finding chart, matching the full reports; the scope differs
+    // (history walks the whole series, branch charts the baseline and recent tail).
+    let scope = chart_scope(input.mode);
     for finding in input.findings.iter().take(limit.get()) {
-        push_finding_markdown(&mut lines, finding, "##", chart_enabled);
+        push_finding_markdown(&mut lines, finding, "##", scope);
         push_set_filter_footer(&mut lines, &finding.set);
     }
     push_warning(&mut lines, input.warning);
@@ -821,15 +904,15 @@ fn push_set_filter_footer(lines: &mut Vec<String>, set: &DiscriminantSet) {
 
 /// Appends one finding as a Markdown block mirroring the text report: the benchmark
 /// id as a `heading` (a chapter title), then a bold `percentage metric (confidence)`
-/// line, the shared detail line, an optional blessing note, and (in history mode) the
-/// metric chart in a fenced `text` block so it survives Markdown rendering. `heading`
-/// carries the ATX prefix (`##`/`###`) so the block nests correctly — top-level in the
-/// summary, one level under the set heading in the full report.
+/// line, the shared detail line, an optional blessing note, and the metric chart in a
+/// fenced `text` block so it survives Markdown rendering, scoped per [`ChartScope`].
+/// `heading` carries the ATX prefix (`##`/`###`) so the block nests correctly —
+/// top-level in the summary, one level under the set heading in the full report.
 fn push_finding_markdown(
     lines: &mut Vec<String>,
     finding: &Finding,
     heading: &str,
-    chart_enabled: bool,
+    scope: ChartScope,
 ) {
     lines.push(String::new());
 
@@ -857,9 +940,7 @@ fn push_finding_markdown(
         lines.push(blessing);
     }
 
-    if chart_enabled
-        && let Some(chart) = chart_of(&finding.series, finding.direction, finding.active_from)
-    {
+    if let Some(chart) = scoped_chart(finding, scope) {
         lines.push(String::new());
         lines.push("```text".to_owned());
         lines.push(chart);
@@ -1836,7 +1917,7 @@ mod tests {
     }
 
     /// Builds a regression finding whose series steps up over four commits, so a
-    /// history-mode chart has enough points to draw.
+    /// chart has enough points to draw.
     fn regression_with_series() -> Finding {
         let mut finding = regression();
         finding.series = vec![
@@ -1864,6 +1945,40 @@ mod tests {
         finding
     }
 
+    /// A y-axis value that only ever appears on a chart's scale, never in a finding's
+    /// prose (its baseline/latest are 100/130), so a report either charting or omitting
+    /// it can be told apart by a plain substring search.
+    const CHART_ONLY_MARKER: f64 = 1000.0;
+
+    /// Builds a regression finding with a long series: a distinctive early spike, a long
+    /// flat baseline, and an elevated tip.
+    ///
+    /// The early spike ([`CHART_ONLY_MARKER`]) sits far outside the branch chart's
+    /// bounded comparison and dwarfs the tip, so it dominates a whole-series chart's
+    /// y-axis but is absent from a branch chart's — the discriminator the scope tests
+    /// key off. The tip (index `len - 1`) is the one point branch mode judges; it must
+    /// always survive into the chart.
+    fn regression_with_long_series() -> Finding {
+        let len = 200;
+        let tip = 130.0;
+        let baseline = 100.0;
+        let mut series: Vec<SeriesValue> = (0..len)
+            .map(|index| SeriesValue {
+                commit: Some(format!("c{index}")),
+                value: baseline,
+                dirty: false,
+            })
+            .collect();
+        // A towering early point, older than the bounded branch chart would reach.
+        series[0].value = CHART_ONLY_MARKER;
+        // The tip: the last commit analyzed, the single point branch mode acts on.
+        series[len - 1].value = tip;
+        Finding {
+            series,
+            ..regression()
+        }
+    }
+
     #[test]
     fn history_mode_text_draws_a_chart() {
         let set = discriminant_set();
@@ -1877,14 +1992,151 @@ mod tests {
     }
 
     #[test]
-    fn branch_mode_text_has_no_chart() {
+    fn branch_mode_text_draws_a_chart() {
         let set = discriminant_set();
         let findings = vec![regression_with_series()];
         let mut summaries = Vec::new();
         let mut input = single_set_input("folo", &set, &findings, &mut summaries);
         input.mode = "branch";
         let text = render(&input, ReportFormat::Text, false);
-        assert!(!text.contains('┤') && !text.contains('┼'), "{text}");
+        // Branch mode now charts too (it previously did not); the axis marker proves it.
+        assert!(text.contains('┤') || text.contains('┼'), "{text}");
+    }
+
+    #[test]
+    fn branch_mode_text_charts_the_bounded_comparison_including_the_tip() {
+        // BUSINESS-CRITICAL INVARIANT. Branch mode judges a feature branch by its tip
+        // commit alone, so the tip is the one data point the report exists to convey. It
+        // must remain visible on the chart no matter how long the history is — never
+        // aliased away or shrunk to an indistinct edge column by resampling a
+        // months-long series down to the chart width. This test pins that: charting the
+        // baseline and recent tail keeps the tip as the chart's maximum while dropping
+        // ancient history. Do NOT weaken it to "a chart is drawn" — the point is *which*
+        // values the chart shows.
+        let set = discriminant_set();
+        let findings = vec![regression_with_long_series()];
+        let mut summaries = Vec::new();
+        let mut input = single_set_input("folo", &set, &findings, &mut summaries);
+        input.mode = "branch";
+        let text = render(&input, ReportFormat::Text, false);
+
+        // A chart is drawn.
+        assert!(text.contains('┤') || text.contains('┼'), "{text}");
+        // The tip is the tail's peak, so it labels the top of the y-axis: the last
+        // commit analyzed is unmistakably plotted, not aliased into the baseline.
+        assert!(
+            text.contains("130 ┤") || text.contains("130 ┼"),
+            "the tip value must head the chart's y-axis: {text}"
+        );
+        // The ancient spike lies outside the bounded comparison, so it must not appear
+        // on the chart scale — proof the whole series was not charted, and that ancient
+        // outliers cannot squash the tip out of view.
+        assert!(
+            !text.contains("1000"),
+            "branch mode must exclude ancient history from the chart: {text}"
+        );
+    }
+
+    #[test]
+    fn history_mode_text_charts_the_whole_series() {
+        // The companion to the branch comparison test: history mode charts the *entire*
+        // series, so the same ancient spike that a branch chart drops here heads the
+        // y-axis. This keeps the two scopes distinct and stops a refactor from silently
+        // collapsing branch's bounded view into history's whole-series view (or vice
+        // versa).
+        let set = discriminant_set();
+        let findings = vec![regression_with_long_series()];
+        let mut summaries = Vec::new();
+        let mut input = single_set_input("folo", &set, &findings, &mut summaries);
+        input.mode = "history";
+        let text = render(&input, ReportFormat::Text, false);
+
+        assert!(text.contains('┤') || text.contains('┼'), "{text}");
+        assert!(
+            text.contains("1000"),
+            "history mode charts the whole series, so the early spike heads the y-axis: {text}"
+        );
+    }
+
+    #[test]
+    fn branch_mode_markdown_draws_a_fenced_chart() {
+        let set = discriminant_set();
+        let findings = vec![regression_with_series()];
+        let mut summaries = Vec::new();
+        let mut input = single_set_input("folo", &set, &findings, &mut summaries);
+        input.mode = "branch";
+        let report = render(&input, ReportFormat::Markdown, false);
+        // The branch chart sits inside the same fenced `text` block as a history chart.
+        assert!(report.contains("```text"), "{report}");
+        assert!(report.contains('┤') || report.contains('┼'), "{report}");
+    }
+
+    #[test]
+    fn markdown_summary_charts_the_branch_comparison() {
+        // The summary is the third renderer that must chart branch findings; and, like the
+        // full reports, it must keep the tip (last commit) visible while windowing out
+        // ancient history. See
+        // `branch_mode_text_charts_the_bounded_comparison_including_the_tip`.
+        let findings = vec![regression_with_long_series()];
+        let mut input = flat_input(&findings);
+        input.mode = "branch";
+        let report = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+
+        assert!(report.contains("```text"), "{report}");
+        assert!(
+            report.contains("130 ┤") || report.contains("130 ┼"),
+            "the tip must head the summary chart's y-axis: {report}"
+        );
+        assert!(
+            !report.contains("1000"),
+            "the branch summary must exclude ancient history: {report}"
+        );
+    }
+
+    #[test]
+    fn branch_chart_values_keep_the_baseline_and_tip() {
+        // BUSINESS-CRITICAL INVARIANT. A long-lived branch can itself contribute more
+        // points than the chart cap. Even then, the bounded chart must retain both the
+        // comparison baseline and the last point — the tip commit branch mode judges —
+        // without resampling either one away.
+        let mut finding = regression_with_long_series();
+        for point in finding
+            .series
+            .iter_mut()
+            .rev()
+            .take(BRANCH_CHART_MAX_POINTS)
+        {
+            point.value = finding.latest;
+        }
+        let values = branch_chart_values(&finding);
+        assert_eq!(values.len(), BRANCH_CHART_MAX_POINTS, "the chart is capped");
+        assert_eq!(
+            values
+                .first()
+                .expect("the baseline is always present")
+                .to_bits(),
+            finding.baseline.to_bits(),
+            "the detector's comparison baseline must remain visible"
+        );
+        assert_eq!(
+            values
+                .last()
+                .expect("the observed tail is non-empty")
+                .to_bits(),
+            finding
+                .series
+                .last()
+                .expect("the test series is non-empty")
+                .value
+                .to_bits(),
+            "the tip must be the last charted point"
+        );
+        assert!(
+            values
+                .iter()
+                .all(|value| value.to_bits() != CHART_ONLY_MARKER.to_bits()),
+            "ancient observations must fall outside the bounded chart"
+        );
     }
 
     #[test]
