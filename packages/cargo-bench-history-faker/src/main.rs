@@ -111,15 +111,15 @@ fn main() -> ExitCode {
                 callgrind_cases.push(parse_callgrind_arg(&value));
             }
             "--criterion" => {
-                let value = args
-                    .next()
-                    .expect("--criterion requires GROUP|FUNCTION|VALUE=NANOS[@STDDEV/CILOW:CIHIGH]");
+                let value = args.next().expect(
+                    "--criterion requires GROUP|FUNCTION|VALUE=NANOS[@STDDEV/CILOW:CIHIGH]",
+                );
                 criterion_cases.push(parse_criterion_arg(&value));
             }
             "--alloc-tracker" => {
-                let value = args
-                    .next()
-                    .expect("--alloc-tracker requires OPERATION=BYTES/COUNT[@BLOW:BHIGH/CLOW:CHIGH]");
+                let value = args.next().expect(
+                    "--alloc-tracker requires OPERATION=BYTES/COUNT[@BLOW:BHIGH/CLOW:CHIGH]",
+                );
                 alloc_operations.push(parse_alloc_arg(&value));
             }
             "--all-the-time" => {
