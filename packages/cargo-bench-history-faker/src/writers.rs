@@ -208,7 +208,7 @@ pub fn write_callgrind_case(target_root: &Path, case: &CallgrindCase) {
     write_callgrind_summary(target_root, &case.group, &content);
 }
 
-/// Parses a `GROUP|FUNCTION|VALUE=NANOS[@STDDEV/CILOW:CIHIGH]` argument into a
+/// Parses a `GROUP|FUNCTION[|VALUE]=NANOS[@STDDEV/CILOW:CIHIGH]` argument into a
 /// [`CriterionCase`].
 ///
 /// `VALUE` is optional: both `GROUP|FUNCTION=NANOS` and the value-less
@@ -229,7 +229,7 @@ pub fn write_callgrind_case(target_root: &Path, case: &CallgrindCase) {
 pub fn parse_criterion_arg(value: &str) -> CriterionCase {
     let (identity, timing) = value
         .split_once('=')
-        .expect("--criterion value must be GROUP|FUNCTION|VALUE=NANOS[@STDDEV/CILOW:CIHIGH]");
+        .expect("--criterion value must be GROUP|FUNCTION[|VALUE]=NANOS[@STDDEV/CILOW:CIHIGH]");
     let parts: Vec<&str> = identity.split('|').collect();
     let (group, function, value) = match parts.as_slice() {
         [group, function] => (*group, *function, ""),

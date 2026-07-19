@@ -12,7 +12,7 @@
 //! ```text
 //! cargo-bench-history-faker [--exit-code N]
 //!                           [--callgrind GROUP|MODULE|FUNCTION[|ID[|PACKAGE_DIR]]=IR/BC/BI]...
-//!                           [--criterion GROUP|FUNCTION|VALUE=NANOS[@STDDEV/CILOW:CIHIGH]]...
+//!                           [--criterion GROUP|FUNCTION[|VALUE]=NANOS[@STDDEV/CILOW:CIHIGH]]...
 //!                           [--alloc-tracker OPERATION=BYTES/COUNT[@BLOW:BHIGH/CLOW:CHIGH]]...
 //!                           [--all-the-time OPERATION=NANOS[@LOW:HIGH]]...
 //!                           [--fail-if-exists PATH] [--chdir DIR]
@@ -30,10 +30,10 @@
 //! harnesses in different packages share a top-level directory but occupy distinct
 //! nested ones — the on-disk collision shape a recursive harvest must keep distinct.
 //!
-//! `--criterion GROUP|FUNCTION|VALUE=NANOS[@STDDEV/CILOW:CIHIGH]` writes a Criterion
+//! `--criterion GROUP|FUNCTION[|VALUE]=NANOS[@STDDEV/CILOW:CIHIGH]` writes a Criterion
 //! case as a `new/benchmark.json` and `new/estimates.json` pair whose identity is
-//! `GROUP`/`FUNCTION`/`VALUE` (an empty `VALUE` omits the parameter component) and
-//! whose wall-clock slope estimate is `NANOS` nanoseconds. The optional
+//! `GROUP`/`FUNCTION`/`VALUE` (an omitted or empty `VALUE` drops the parameter
+//! component) and whose wall-clock slope estimate is `NANOS` nanoseconds. The optional
 //! `@STDDEV/CILOW:CIHIGH` suffix records a standard deviation and confidence
 //! interval on the estimate; without it the estimate carries a degenerate
 //! `(NANOS, NANOS)` interval and no standard deviation, so no dispersion is
@@ -112,7 +112,7 @@ fn main() -> ExitCode {
             }
             "--criterion" => {
                 let value = args.next().expect(
-                    "--criterion requires GROUP|FUNCTION|VALUE=NANOS[@STDDEV/CILOW:CIHIGH]",
+                    "--criterion requires GROUP|FUNCTION[|VALUE]=NANOS[@STDDEV/CILOW:CIHIGH]",
                 );
                 criterion_cases.push(parse_criterion_arg(&value));
             }
