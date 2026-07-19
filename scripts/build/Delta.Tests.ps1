@@ -42,6 +42,36 @@ Describe 'Read-DeltaAffectedPackage' {
     }
 }
 
+Describe 'Select-ExistingPackage' {
+    It 'drops packages that no longer exist in the workspace' {
+        $result = Select-ExistingPackage `
+            -Affected @('mock_bench_engine', 'cargo-bench-history-faker', 'cbh_engines') `
+            -WorkspacePackage @('cargo-bench-history-faker', 'cbh_engines', 'cbh_cli')
+        $result | Should -Be @('cargo-bench-history-faker', 'cbh_engines')
+    }
+
+    It 'preserves the affected order' {
+        $result = Select-ExistingPackage `
+            -Affected @('c', 'a', 'b') `
+            -WorkspacePackage @('a', 'b', 'c')
+        $result | Should -Be @('c', 'a', 'b')
+    }
+
+    It 'returns an empty array when every affected package was removed' {
+        Select-ExistingPackage -Affected @('gone') -WorkspacePackage @('here') |
+            Should -BeNullOrEmpty
+    }
+
+    It 'returns an empty array for an empty affected list' {
+        Select-ExistingPackage -Affected @() -WorkspacePackage @('a') | Should -BeNullOrEmpty
+    }
+
+    It 'is case-sensitive (a differently cased name is treated as absent)' {
+        Select-ExistingPackage -Affected @('Events') -WorkspacePackage @('events') |
+            Should -BeNullOrEmpty
+    }
+}
+
 Describe 'Get-DeltaOutput' {
     Context 'when packages are affected' {
         BeforeAll {

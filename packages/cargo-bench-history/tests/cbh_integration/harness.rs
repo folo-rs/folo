@@ -13,6 +13,7 @@ pub(crate) use cargo_bench_history::{
     default_template, run, run_with_overrides,
 };
 use cbh_codec as codec;
+use cbh_model::{DiscriminantSet, Engine};
 pub(crate) use jiff::Timestamp;
 use nonempty::nonempty;
 pub(crate) use serial_test::serial;
@@ -36,6 +37,26 @@ pub(crate) const HARNESS_AUTO_TRIPLE: &str = "x86_64-unknown-linux-gnu";
 /// matches only the machine-key-exempt synthetic sets, never a hardware-keyed
 /// partition (which the tests always select with an explicit `--machine-key`).
 pub(crate) const HARNESS_AUTO_MACHINE_KEY: &str = "harness-auto-machine";
+
+/// Canonical faker `--callgrind` identity/metric fragments, kept in lockstep with
+/// what the `collect` identity assertions expect. A fragment is everything after
+/// the on-disk `GROUP` — `MODULE|FUNCTION[|ID[|PACKAGE_DIR]]=IR/BC/BI`; the
+/// [`callgrind_arg`] helper prepends the group.
+///
+/// `CALLGRIND_SINGLE` is an unparametrized bench in package `fast_time`
+/// (`Ir`/`Bc`/`Bi` = 36/4/2); `CALLGRIND_PARAMETRIZED` adds the `two_instants` id
+/// (87/2/1); `CALLGRIND_SINGLE_ALT_PKG` keeps `CALLGRIND_SINGLE`'s identity but
+/// reports a different `package_dir` (package `other_pkg`), to exercise
+/// cross-package bench-name collisions.
+pub(crate) const CALLGRIND_SINGLE: &str = "fast_time_timestamp_performance_cg::timestamp_capture::timestamp_capture_std_now|timestamp_capture_std_now||/mnt/c/Source/folo/packages/fast_time=36/4/2";
+pub(crate) const CALLGRIND_PARAMETRIZED: &str = "fast_time_timestamp_performance_cg::timestamp_capture::timestamp_capture_instant_saturating_duration_since|timestamp_capture_instant_saturating_duration_since|two_instants|/mnt/c/Source/folo/packages/fast_time=87/2/1";
+pub(crate) const CALLGRIND_SINGLE_ALT_PKG: &str = "fast_time_timestamp_performance_cg::timestamp_capture::timestamp_capture_std_now|timestamp_capture_std_now||/work/packages/other_pkg=36/4/2";
+
+/// Builds a faker `--callgrind` argument value for on-disk `group` from one of the
+/// `CALLGRIND_*` identity/metric fragments (prepends `GROUP|`).
+pub(crate) fn callgrind_arg(group: &str, fragment: &str) -> String {
+    format!("{group}|{fragment}")
+}
 
 /// A process-global base repository template: a `master`-branch repo carrying the
 /// volatile-directory excludes and one empty `root` commit, built once via the real
@@ -394,7 +415,7 @@ pub(crate) struct Workspace {
     committer_times: RefCell<HashMap<String, Timestamp>>,
     /// Arguments passed to the mock benchmark engine that `collect`/`backfill` invoke
     /// in place of `cargo bench`. They tell the mock which fixtures to emit (which
-    /// `--summary` / `--criterion` cases, or an `--exit-code`), so each engine's
+    /// `--callgrind` / `--criterion` cases, or an `--exit-code`), so each engine's
     /// output tree is produced by the single benchmark command `collect` invokes.
     bench: Vec<String>,
     /// Streams commit creation through one long-lived `git fast-import` rather than
@@ -795,7 +816,7 @@ impl Workspace {
     /// Commits a tracked file with `contents` at `relative` on the current branch
     /// and returns the new commit's full ID. Unlike [`commit`](Self::commit), the
     /// commit changes the tree, so the file appears in any worktree checked out to
-    /// it — used to stand in for a "broken" commit the mock engine reacts to. It
+    /// it — used to stand in for a "broken" commit the faker reacts to. It
     /// takes the next synthetic committer date, keeping the timeline monotonic and
     /// in-window like the surrounding empty commits.
     pub(crate) fn commit_with_file(&self, message: &str, relative: &str, contents: &str) -> String {
@@ -858,10 +879,10 @@ impl Workspace {
         // keeps the test hermetic without mutating the process environment.
         let target_root = self.root().join("target");
 
-        // Drive `collect`/`backfill` against the mock engine instead of `cargo bench`:
+        // Drive `collect`/`backfill` against the faker instead of `cargo bench`:
         // the program plus its fixture-describing arguments form the benchmark
         // command, which the single bench invocation runs to produce engine output.
-        let mut bench_command = vec![mock_bench_engine::binary_path().to_owned()];
+        let mut bench_command = vec![cargo_bench_history_faker::binary_path().to_owned()];
         bench_command.extend(self.bench.iter().cloned());
 
         let effective = self.effective_args(args);
@@ -899,7 +920,7 @@ impl Workspace {
         args: &[&str],
     ) -> Result<RunOutcome, RunError> {
         self.flush_git();
-        let mut bench_command = vec![mock_bench_engine::binary_path().to_owned()];
+        let mut bench_command = vec![cargo_bench_history_faker::binary_path().to_owned()];
         bench_command.extend(self.bench.iter().cloned());
 
         let effective = self.effective_args(args);
@@ -1041,8 +1062,11 @@ impl Workspace {
 
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
-        let key = format!(
-            "v1/testproj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit_id}/clean.json"
+        let key = seed_clean_key(
+            Engine::Callgrind,
+            "x86_64-unknown-linux-gnu",
+            None,
+            &commit_id,
         );
         let mut object: serde_json::Value = serde_json::from_str(
             &ir_result_set(observed.as_second(), &commit_id, ir_value)
@@ -1074,8 +1098,7 @@ impl Workspace {
     pub(crate) fn seed_callgrind_in(&self, triple: &str, machine: &str, label: &str, value: f64) {
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
-        let key =
-            format!("v1/testproj/objects/callgrind/{triple}/{machine}/{commit_id}/clean.json");
+        let key = seed_clean_key(Engine::Callgrind, triple, Some(machine), &commit_id);
         self.seed(
             &key,
             &ir_result_set(observed.as_second(), &commit_id, value),
@@ -1090,9 +1113,12 @@ impl Workspace {
     pub(crate) fn seed_dirty_callgrind(&self, observed: &str, label: &str, value: f64) {
         let commit_id = self.commit_id(label);
         let effective: Timestamp = format!("{observed}T00:00:00Z").parse().unwrap();
-        let key = format!(
-            "v1/testproj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit_id}/dirty-{}.json",
-            effective.as_second()
+        let key = seed_dirty_key(
+            Engine::Callgrind,
+            "x86_64-unknown-linux-gnu",
+            None,
+            &commit_id,
+            effective.as_second(),
         );
         self.seed(
             &key,
@@ -1105,8 +1131,11 @@ impl Workspace {
     pub(crate) fn seed_metrics(&self, label: &str, metrics: Vec<Metric>) {
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
-        let key = format!(
-            "v1/testproj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit_id}/clean.json"
+        let key = seed_clean_key(
+            Engine::Callgrind,
+            "x86_64-unknown-linux-gnu",
+            None,
+            &commit_id,
         );
         self.seed(
             &key,
@@ -1172,8 +1201,11 @@ impl Workspace {
     pub(crate) fn seed_many_callgrind(&self, label: &str, values: &[f64]) {
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
-        let key = format!(
-            "v1/testproj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit_id}/clean.json"
+        let key = seed_clean_key(
+            Engine::Callgrind,
+            "x86_64-unknown-linux-gnu",
+            None,
+            &commit_id,
         );
         self.seed(
             &key,
@@ -1186,8 +1218,11 @@ impl Workspace {
     pub(crate) fn seed_criterion(&self, label: &str, machine: &str, value: f64) {
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
-        let key = format!(
-            "v1/testproj/objects/criterion/x86_64-pc-windows-msvc/{machine}/{commit_id}/clean.json"
+        let key = seed_clean_key(
+            Engine::Criterion,
+            "x86_64-pc-windows-msvc",
+            Some(machine),
+            &commit_id,
         );
         self.seed(
             &key,
@@ -1208,9 +1243,12 @@ impl Workspace {
     ) {
         let commit_id = self.commit_id(label);
         let effective: Timestamp = format!("{observed}T00:00:00Z").parse().unwrap();
-        let key = format!(
-            "v1/testproj/objects/criterion/x86_64-pc-windows-msvc/{machine}/{commit_id}/dirty-{}.json",
-            effective.as_second()
+        let key = seed_dirty_key(
+            Engine::Criterion,
+            "x86_64-pc-windows-msvc",
+            Some(machine),
+            &commit_id,
+            effective.as_second(),
         );
         self.seed(
             &key,
@@ -1246,8 +1284,11 @@ impl Workspace {
     pub(crate) fn seed_two_benchmarks(&self, label: &str, alpha: f64, beta: f64) {
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
-        let key = format!(
-            "v1/testproj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit_id}/clean.json"
+        let key = seed_clean_key(
+            Engine::Callgrind,
+            "x86_64-unknown-linux-gnu",
+            None,
+            &commit_id,
         );
         self.seed(
             &key,
@@ -1262,8 +1303,11 @@ impl Workspace {
     pub(crate) fn seed_alloc_tracker(&self, label: &str, operation: &str, bytes: f64, allocs: f64) {
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
-        let key = format!(
-            "v1/testproj/objects/alloc_tracker/x86_64-unknown-linux-gnu/synthetic/{commit_id}/clean.json"
+        let key = seed_clean_key(
+            Engine::AllocTracker,
+            "x86_64-unknown-linux-gnu",
+            None,
+            &commit_id,
         );
         self.seed(
             &key,
@@ -1284,8 +1328,11 @@ impl Workspace {
     ) {
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
-        let key = format!(
-            "v1/testproj/objects/all_the_time/x86_64-unknown-linux-gnu/{machine}/{commit_id}/clean.json"
+        let key = seed_clean_key(
+            Engine::AllTheTime,
+            "x86_64-unknown-linux-gnu",
+            Some(machine),
+            &commit_id,
         );
         self.seed(
             &key,
@@ -1307,8 +1354,11 @@ impl Workspace {
     ) {
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
-        let key = format!(
-            "v1/testproj/objects/all_the_time/x86_64-unknown-linux-gnu/{machine}/{commit_id}/clean.json"
+        let key = seed_clean_key(
+            Engine::AllTheTime,
+            "x86_64-unknown-linux-gnu",
+            Some(machine),
+            &commit_id,
         );
         self.seed(
             &key,
@@ -1321,6 +1371,29 @@ impl Workspace {
             ),
         );
     }
+}
+
+/// The project every seeded object is recorded under, matching the identity the
+/// faker-backed `collect`/`import` runs resolve for the test repository.
+const SEED_PROJECT: &str = "testproj";
+
+/// Builds a clean-object storage key through the model's key builder — the exact
+/// code path `run` writes under — so a seed helper cannot drift from the
+/// production storage layout by hand-formatting a key string.
+fn seed_clean_key(engine: Engine, triple: &str, machine: Option<&str>, commit: &str) -> String {
+    DiscriminantSet::new(engine, triple, machine).clean_key(SEED_PROJECT, commit)
+}
+
+/// Builds a dirty-snapshot storage key through the model's key builder, keyed by
+/// `observation_unix` exactly as a real dirty run is.
+fn seed_dirty_key(
+    engine: Engine,
+    triple: &str,
+    machine: Option<&str>,
+    commit: &str,
+    observation_unix: i64,
+) -> String {
+    DiscriminantSet::new(engine, triple, machine).dirty_key(SEED_PROJECT, commit, observation_unix)
 }
 
 /// Clears `CARGO_TARGET_DIR` from the process environment for its lifetime,

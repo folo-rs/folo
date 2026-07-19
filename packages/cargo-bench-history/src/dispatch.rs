@@ -104,6 +104,9 @@ pub async fn run_with_overrides(
             .await
         }
         Command::Install(options) => commands::install(options, workspace_dir).await,
+        Command::Import(options) => {
+            commands::import(options, workspace_dir, storage_override).await
+        }
         Command::Analyze(options) => {
             commands::analyze(options, workspace_dir, clock, storage_override, auto_facets).await
         }

@@ -178,7 +178,7 @@ pub(crate) async fn execute(
 /// resolved to (if any), so the note can state both the chosen backend and why —
 /// an explicit `--local` path, the environment-variable path behind a bare
 /// `--local`, or the cloud backend configured when no `--local` was given.
-fn describe_storage(
+pub(crate) fn describe_storage(
     selection: Option<&LocalStorageSelection>,
     resolved_local: Option<&Path>,
     config: &Config,
@@ -212,18 +212,84 @@ pub(crate) fn default_bench_command() -> Vec<String> {
 }
 
 /// Probe facts shared across every engine in a single run.
-struct SharedContext {
+///
+/// `collect` builds this straight from the host probe; `import` builds it the same
+/// way and then applies its metadata overrides (target triple, commit, dirty)
+/// before handing it to [`finalize_and_store`], which treats it as ground truth.
+pub(crate) struct SharedContext {
     /// Git facts of the working directory.
-    git: GitInfo,
+    pub(crate) git: GitInfo,
     /// Active toolchain facts.
-    rustc: RustcInfo,
+    pub(crate) rustc: RustcInfo,
     /// Detected execution environment.
-    env: EnvironmentInfo,
-    /// Target triple the benchmarks ran on (the host triple `rustc` reports; the
-    /// tool always runs on the same OS it benchmarks).
-    target_triple: String,
+    pub(crate) env: EnvironmentInfo,
+    /// Effective target triple the run is keyed under and recorded against — the
+    /// host triple `rustc` reports for `collect`, or an `import --target-triple`
+    /// override. It feeds both the partition key and `ToolchainInfo.target_triple`.
+    pub(crate) target_triple: String,
     /// Host hardware profile, fingerprinted for hardware-dependent engines.
-    hardware: HardwareProfile,
+    pub(crate) hardware: HardwareProfile,
+}
+
+/// Probes the host once for the facts every engine shares.
+///
+/// Both commands start here: `collect` stores the result as-is, `import` mutates
+/// the key-affecting discriminants afterwards. It is the single place the raw host
+/// context is assembled.
+pub(crate) async fn probe_context<P>(
+    probe: &P,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<SharedContext, RunError>
+where
+    P: EnvironmentProbe,
+{
+    let rustc = probe.toolchain().await?;
+    Ok(SharedContext {
+        git: probe.git().await?,
+        target_triple: rustc.host.clone().unwrap_or_default(),
+        rustc,
+        env: detect_environment(env),
+        hardware: probe.hardware().await,
+    })
+}
+
+/// The injected collaborators the store back half operates against, shared by
+/// `collect` and `import`.
+///
+/// A lean subset of [`CollectDeps`] with only what persisting a finalized run
+/// needs — no runner, output source, or bench command — so `import` (which has no
+/// benchmark command to run) can call [`finalize_and_store`] without inventing
+/// stand-ins for collect-only ports.
+pub(crate) struct FinalizeDeps<'a, S> {
+    /// Persists result sets. `None` under `--no-store`, where the store path is
+    /// never reached.
+    pub(crate) storage: Option<&'a S>,
+    /// Resolved project identity for the storage partition.
+    pub(crate) project_id: &'a str,
+    /// Version of this tool, recorded with each run.
+    pub(crate) tool_version: &'a str,
+    /// Sink for `--verbose` diagnostic notes.
+    pub(crate) reporter: &'a dyn Reporter,
+}
+
+/// How a finalized run is placed in storage, independent of which command
+/// produced it.
+///
+/// Decouples the store logic from `CollectOptions` so `collect` and `import` feed
+/// it from their own option structs. The dirty/clean choice is *not* here: it
+/// rides on [`SharedContext::git`]'s `dirty` flag (probed by `collect`, set from
+/// `--dirty` by `import`), keeping the stored body and its key coherent by
+/// construction.
+pub(crate) struct StoreParams<'a> {
+    /// Explicit machine-key override for hardware-dependent engines; `None` uses
+    /// the auto-detected fingerprint.
+    pub(crate) machine_key: Option<&'a str>,
+    /// Replace an existing object in place instead of failing on a collision.
+    pub(crate) overwrite: bool,
+    /// Treat an existing object as a success that writes nothing (append-only).
+    pub(crate) skip_existing: bool,
+    /// Skip storage entirely (`collect --no-store`). `import` never sets this.
+    pub(crate) no_store: bool,
 }
 
 /// The result of harvesting one engine's output.
@@ -368,7 +434,8 @@ where
         });
 
         for (bucket, engine) in per_engine.iter_mut().zip(Engine::ALL) {
-            let records = harvest_records(deps, engine, run_start).await?;
+            let records =
+                harvest_records(deps.output, deps.reporter, engine, Some(run_start)).await?;
             bucket.push(records);
         }
     }
@@ -378,33 +445,72 @@ where
     // second; later runs share the same commit, so their starts do not matter.
     let run_start = first_run_start.expect("best-of runs the suite at least once");
 
-    let rustc = deps.probe.toolchain().await?;
-    let shared = SharedContext {
-        git: deps.probe.git().await?,
-        target_triple: rustc.host.clone().unwrap_or_default(),
-        rustc,
-        env: detect_environment(deps.env),
-        hardware: deps.probe.hardware().await,
-    };
+    let shared = probe_context(deps.probe, deps.env).await?;
 
+    let store = FinalizeDeps {
+        storage: deps.storage,
+        project_id: deps.project_id,
+        tool_version: deps.tool_version,
+        reporter: deps.reporter,
+    };
+    let params = StoreParams {
+        machine_key: options.machine_key.as_deref(),
+        overwrite: options.overwrite,
+        skip_existing: options.skip_existing,
+        no_store: options.no_store,
+    };
+    finalize_and_store(
+        &store,
+        &shared,
+        &params,
+        "collecting",
+        "toolchain host",
+        &per_engine,
+        run_start,
+    )
+    .await
+}
+
+/// Reduces and stores every engine's harvested records against a resolved context.
+///
+/// The shared back half of the import pipeline (announce partition → per-metric
+/// reduce → per-engine store). Given `per_engine` (one inner vector per run), the
+/// resolved [`SharedContext`], and the [`StoreParams`] governing placement, it is
+/// used verbatim by both `collect` and `import`; they differ only in how they
+/// produce `per_engine` and `shared` (and in the `operation` verb naming the
+/// partition announcement). `run_start` stamps each stored run's observation time
+/// and any dirty-snapshot second.
+pub(crate) async fn finalize_and_store<S>(
+    store: &FinalizeDeps<'_, S>,
+    shared: &SharedContext,
+    params: &StoreParams<'_>,
+    operation: &str,
+    triple_note: &str,
+    per_engine: &[Vec<Vec<BenchmarkResult>>],
+    run_start: SystemTime,
+) -> Result<CollectSummary, RunError>
+where
+    S: Storage,
+{
     // The always-on effective-partition announcement: one line, printed regardless
     // of `--verbose`, naming the storage partition this run's results land in (the
     // target triple, always the toolchain host, and the machine key hardware-
     // dependent engines use — an explicit `--machine-key` or the auto-detected
     // fingerprint). It mirrors the query commands' effective-selection summary so
-    // the partition a `collect` writes and an `analyze` reads is stated the same way.
-    let effective_machine_key =
-        resolve_machine_key(options.machine_key.as_deref(), &shared.hardware);
-    deps.reporter.announce(&collect_selection_summary(
+    // the partition a run writes and an `analyze` reads is stated the same way.
+    let effective_machine_key = resolve_machine_key(params.machine_key, &shared.hardware);
+    store.reporter.announce(&partition_selection_summary(
+        operation,
         &shared.target_triple,
+        triple_note,
         &effective_machine_key,
-        options.machine_key.is_some(),
+        params.machine_key.is_some(),
     ));
     // Under --verbose, spell out the individual hardware factors behind the
     // auto-detected fingerprint so that if the machine key changes between runs
     // the responsible factor can be identified from the log (even when an
     // explicit --machine-key override is currently masking the fingerprint).
-    deps.reporter.note_with(|| {
+    store.reporter.note_with(|| {
         format!(
             "hardware fingerprint components: {}",
             describe_fingerprint_components(&shared.hardware)
@@ -416,14 +522,15 @@ where
     let mut labels = Vec::new();
 
     for (bucket, engine) in per_engine.iter().zip(Engine::ALL) {
+        let runs = bucket.len();
         let combined = min_per_metric(bucket).map_err(|error| RunError::Inconsistent {
             engine: engine.to_string(),
             message: error.to_string(),
         })?;
-        note_best_of_selections(deps.reporter, engine, runs, &combined.selections);
+        note_best_of_selections(store.reporter, engine, runs, &combined.selections);
 
         let summary =
-            store_engine(options, deps, &shared, engine, combined.results, run_start).await?;
+            store_engine(store, shared, params, engine, combined.results, run_start).await?;
         if summary.stored {
             stored = stored.saturating_add(1);
         }
@@ -440,16 +547,22 @@ where
     })
 }
 
-/// Builds the always-on, one-line summary of a collect run's effective storage
-/// partition: the target triple its results are keyed under (always the toolchain
-/// host, since the tool benchmarks the OS it runs on) and the machine key
+/// Builds the always-on, one-line summary of a run's effective storage partition:
+/// the target triple its results are keyed under and the machine key
 /// hardware-dependent engines use — an explicit `--machine-key` override or the
 /// auto-detected hardware fingerprint.
 ///
+/// `operation` is the gerund naming the action ("collecting"/"importing").
+/// `triple_note` qualifies the triple in parentheses ("toolchain host" for a
+/// probed run, "from --target-triple" for an import override); an empty note omits
+/// the parenthetical.
+///
 /// A pure formatter so the wording is unit-tested without a probe; the effective
 /// values are resolved by the caller.
-fn collect_selection_summary(
+fn partition_selection_summary(
+    operation: &str,
     target_triple: &str,
+    triple_note: &str,
     machine_key: &str,
     machine_key_explicit: bool,
 ) -> String {
@@ -458,13 +571,18 @@ fn collect_selection_summary(
     } else {
         target_triple
     };
+    let triple_suffix = if triple_note.is_empty() {
+        String::new()
+    } else {
+        format!(" ({triple_note})")
+    };
     let machine_source = if machine_key_explicit {
         "from --machine-key"
     } else {
         "auto-detected"
     };
     format!(
-        "collecting: target-triple={triple} (toolchain host); \
+        "{operation}: target-triple={triple}{triple_suffix}; \
          machine-key={machine_key} ({machine_source}), used by hardware-dependent engines"
     )
 }
@@ -591,22 +709,22 @@ fn build_bench_argv(
 /// Harvests and parses one engine's output for a single run.
 ///
 /// The front half of storing an engine's results, split out so the `--best-of`
-/// loop can gather each run's records before they are reduced together. Producing
-/// no fresh output yields an empty vector (the steady state for an engine that
-/// does not apply here).
-async fn harvest_records<R, P, O, S>(
-    deps: &CollectDeps<'_, R, P, O, S>,
+/// loop can gather each run's records before they are reduced together, and so
+/// `import` can harvest a curated tree the same way. Producing no fresh output
+/// yields an empty vector (the steady state for an engine that does not apply
+/// here). `since` gates by modification time (`Some`) or admits everything
+/// (`None`, which `import` passes to take a curated tree wholesale).
+pub(crate) async fn harvest_records<O>(
+    output: &O,
+    reporter: &dyn Reporter,
     engine: Engine,
-    run_start: SystemTime,
+    since: Option<SystemTime>,
 ) -> Result<Vec<BenchmarkResult>, RunError>
 where
     O: BenchOutputSource,
 {
-    let harvest = deps
-        .output
-        .collect(engine, run_start, deps.reporter)
-        .await?;
-    parse_harvest(&harvest, deps.reporter)
+    let harvest = output.collect(engine, since, reporter).await?;
+    parse_harvest(&harvest, reporter)
 }
 
 /// Stores one engine's reduced result set (unless suppressed).
@@ -615,10 +733,10 @@ where
 /// reduced across the `--best-of` runs), it builds the run context and storage
 /// key and writes the object. `run_start` is the first run's start, which stamps
 /// the observation time and any dirty-snapshot second.
-async fn store_engine<R, P, O, S>(
-    options: &CollectOptions,
-    deps: &CollectDeps<'_, R, P, O, S>,
+async fn store_engine<S>(
+    store: &FinalizeDeps<'_, S>,
     shared: &SharedContext,
+    params: &StoreParams<'_>,
     engine: Engine,
     records: Vec<BenchmarkResult>,
     run_start: SystemTime,
@@ -635,7 +753,7 @@ where
     // is no misconfiguration to report, since absence is the expected steady state
     // for an engine that does not apply here.
     if count == 0 {
-        deps.reporter.note_with(|| {
+        store.reporter.note_with(|| {
             format!("{engine}: no fresh benchmark cases harvested; nothing to store")
         });
         return Ok(EngineSummary {
@@ -645,8 +763,8 @@ where
         });
     }
 
-    if options.no_store {
-        deps.reporter.note_with(|| {
+    if params.no_store {
+        store.reporter.note_with(|| {
             format!(
                 "{engine}: harvested {}; not storing (--no-store)",
                 count_noun(count, "case")
@@ -671,7 +789,7 @@ where
             target_triple: target_triple.clone(),
             rustc_version: shared.rustc.version.clone(),
         },
-        deps.tool_version.to_owned(),
+        store.tool_version.to_owned(),
     );
     // Record the host hardware provenance on every stored run (write-only): the
     // fingerprint factors and the key they hash to, so a later change in a
@@ -686,7 +804,7 @@ where
     // engines (such as Callgrind) use no machine key.
     let machine_key = engine
         .is_hardware_dependent()
-        .then(|| resolve_machine_key(options.machine_key.as_deref(), &shared.hardware));
+        .then(|| resolve_machine_key(params.machine_key, &shared.hardware));
     let key = DiscriminantSet::new(engine, target_triple, machine_key.as_deref());
     // History is organized by commit, so the full commit ID names the directory
     // (`analyze` resolves which commits to read from git topology). A clean run is
@@ -694,12 +812,12 @@ where
     // observation time so concurrent snapshots of the same commit coexist.
     let commit = shared.git.commit.as_deref().unwrap_or("unknown");
     let object_key = if dirty {
-        key.dirty_key(deps.project_id, commit, observation.as_second())
+        key.dirty_key(store.project_id, commit, observation.as_second())
     } else {
-        key.clean_key(deps.project_id, commit)
+        key.clean_key(store.project_id, commit)
     };
 
-    deps.reporter.note_with(|| {
+    store.reporter.note_with(|| {
         format!(
             "{engine}: {} at commit {commit} ({}){} -> {object_key}",
             count_noun(count, "case"),
@@ -717,21 +835,21 @@ where
         .expect("a freshly built run always serializes to JSON");
     // The early `--no-store` return above is the only path that leaves storage
     // unset, so reaching here guarantees a backend was built.
-    let storage = deps
+    let storage = store
         .storage
         .expect("storage is built whenever a run may store results");
     let outcome = store_result(
         storage,
         &object_key,
         json.as_bytes(),
-        options.overwrite,
-        options.skip_existing,
+        params.overwrite,
+        params.skip_existing,
     )
     .await?;
 
     match outcome {
         StoreOutcome::Skipped => {
-            deps.reporter.note_with(|| {
+            store.reporter.note_with(|| {
                 format!(
                     "{engine}: {object_key} already exists; left unchanged (--skip-existing), \
                  so nothing was written and the cache-invalidation marker was not armed"
@@ -746,15 +864,17 @@ where
             })
         }
         StoreOutcome::Stored => {
-            deps.reporter
+            store
+                .reporter
                 .note_with(|| format!("{engine}: stored {object_key}"));
 
             // Replacing a clean run discards the data point its blessings accepted, so
             // any blessing sidecars on this commit no longer describe a stored level.
             // Remove them on overwrite so a stale blessing cannot silently re-baseline
             // the new run.
-            if options.overwrite && !dirty {
-                invalidate_blessings(storage, &key, deps.project_id, commit, deps.reporter).await?;
+            if params.overwrite && !dirty {
+                invalidate_blessings(storage, &key, store.project_id, commit, store.reporter)
+                    .await?;
             }
 
             Ok(EngineSummary {
@@ -920,8 +1040,13 @@ fn push_or_skip(
     }
 }
 
-/// Builds the human-readable run summary.
-fn build_message(no_store: bool, stored: usize, harvested: usize, labels: &[String]) -> String {
+/// Builds the human-readable outcome message summarizing what a run stored.
+pub(crate) fn build_message(
+    no_store: bool,
+    stored: usize,
+    harvested: usize,
+    labels: &[String],
+) -> String {
     let mut message = if no_store {
         format!(
             "Harvested {}; nothing stored (--no-store).",
@@ -1184,10 +1309,17 @@ mod tests {
     }
 
     #[test]
-    fn collect_selection_summary_names_the_effective_partition() {
+    fn partition_selection_summary_names_the_effective_partition() {
         // Auto-detected fingerprint: the machine key is marked auto-detected and the
         // triple is named as the toolchain host.
-        let auto = collect_selection_summary("x86_64-pc-windows-msvc", "abcd1234", false);
+        let auto = partition_selection_summary(
+            "collecting",
+            "x86_64-pc-windows-msvc",
+            "toolchain host",
+            "abcd1234",
+            false,
+        );
+        assert!(auto.starts_with("collecting: "), "{auto}");
         assert!(
             auto.contains("target-triple=x86_64-pc-windows-msvc (toolchain host)"),
             "{auto}"
@@ -1198,7 +1330,13 @@ mod tests {
         );
 
         // An explicit `--machine-key` is attributed to the option, not auto-detection.
-        let explicit = collect_selection_summary("aarch64-apple-darwin", "ci-pool", true);
+        let explicit = partition_selection_summary(
+            "collecting",
+            "aarch64-apple-darwin",
+            "toolchain host",
+            "ci-pool",
+            true,
+        );
         assert!(
             explicit.contains("machine-key=ci-pool (from --machine-key)"),
             "{explicit}"
@@ -1206,8 +1344,30 @@ mod tests {
         assert!(!explicit.contains("auto-detected"), "{explicit}");
 
         // A missing host triple degrades to a readable placeholder rather than blank.
-        let unknown = collect_selection_summary("", "abcd1234", false);
+        let unknown =
+            partition_selection_summary("collecting", "", "toolchain host", "abcd1234", false);
         assert!(unknown.contains("target-triple=unknown"), "{unknown}");
+
+        // `import` reuses the formatter with its own verb and triple note, and an
+        // empty note drops the parenthetical entirely.
+        let imported = partition_selection_summary(
+            "importing",
+            "wasm32-unknown-unknown",
+            "from --target-triple",
+            "abcd1234",
+            false,
+        );
+        assert!(imported.starts_with("importing: "), "{imported}");
+        assert!(
+            imported.contains("target-triple=wasm32-unknown-unknown (from --target-triple)"),
+            "{imported}"
+        );
+        let no_note =
+            partition_selection_summary("importing", "wasm32-unknown-unknown", "", "k", false);
+        assert!(
+            no_note.contains("target-triple=wasm32-unknown-unknown;"),
+            "{no_note}"
+        );
     }
 
     #[test]
@@ -1475,7 +1635,7 @@ mod tests {
         async fn collect(
             &self,
             engine: Engine,
-            _since: SystemTime,
+            _since: Option<SystemTime>,
             _reporter: &dyn Reporter,
         ) -> io::Result<Harvest> {
             Ok(match engine {
@@ -2701,7 +2861,7 @@ mod tests {
         async fn collect(
             &self,
             engine: Engine,
-            since: SystemTime,
+            since: Option<SystemTime>,
             reporter: &dyn Reporter,
         ) -> io::Result<Harvest> {
             let index = {

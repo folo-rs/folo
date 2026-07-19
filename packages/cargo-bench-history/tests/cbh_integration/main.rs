@@ -18,6 +18,7 @@ mod cli;
 mod collect;
 mod examine;
 mod harness;
+mod import;
 mod install;
 mod list;
 mod machine_key;

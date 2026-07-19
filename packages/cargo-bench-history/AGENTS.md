@@ -66,6 +66,19 @@ Semantics and per-command behaviour: DESIGN §7–§8.
 one query view that does **not** (a pure index over storage keys). `examine` is the one
 command that names a `--metric` (its input is an `analyze` finding, which prints the metric).
 
+## Hidden `import` command
+
+`import` is a hidden, unsupported sibling of `collect` — the store path with the `cargo bench`
+run removed — reusing `collect`'s finalize-and-store helper. **Keep the two on one code path**:
+a store rule added to `collect` (keying, overwrite/skip-existing, dirty coexistence) must hold
+for `import` for free. Its invariants are easy to break: the harvest is **ungated** (freshness
+`None`), so `--target-dir` is **required** and must never fall back to `<repo>/target`; the
+four overrides (`--target-triple` / `--machine-key` / `--commit` / `--dirty`) touch **only
+key-affecting discriminants** — real-host `MachineInfo` provenance stays untouched — and
+`import` assumes nothing about the data being synthetic (real output must import identically).
+`--commit` is git-resolved (unknown = hard error) and never checks the commit out. Semantics:
+DESIGN §7.9.
+
 ## CLI (clap derive)
 
 The CLI uses **clap** derive (chosen over `argh` for `help_heading` grouping — the surface is
@@ -112,14 +125,17 @@ always-on channel).
 test touching the real filesystem/process/runtime/wall-clock or the network emulator must be
 `#[tokio::test]` (or `#[test]`) **and** `#[cfg_attr(miri, ignore = "…")]` with a reason.
 
-**Mock engine.** End-to-end tests launch the standalone `publish = false` **`mock_bench_engine`
-package** (kept out of the shipped crate so `cargo install` places only the one real binary).
-Tests resolve it via `mock_bench_engine::binary_path()`; every `just` recipe that runs the
-suite under nextest pre-builds it once and passes `MOCK_BENCH_ENGINE` (avoids per-process
-`cargo build` races). Its crate root needs
-`#![cfg_attr(coverage_nightly, feature(coverage_attribute))]`. It writes per-engine fixture
-output on demand via repeatable flags (`--summary`/`--criterion`/`--alloc-tracker`/
-`--all-the-time`) and `--fail-if-exists` to simulate a failing commit.
+**Faker (test-support engine).** End-to-end tests launch the standalone
+**`cargo-bench-history-faker` lib+bin package** — a stand-in benchmark engine. It is a
+published-but-unsupported crate (`#![doc(hidden)]`, no stable API/CLI); the workspace consumes
+its `binary_path()` locator behind the `private-test-util` feature, so `cargo install
+cargo-bench-history` still places only the one real binary on PATH. Tests resolve the binary via
+`cargo_bench_history_faker::binary_path()`; every `just` recipe that runs the suite under nextest
+pre-builds it once and passes `CBH_FAKER` (avoids per-process `cargo build` races). It writes
+per-engine fixture output on demand via repeatable flags (`--callgrind`/`--criterion`/
+`--alloc-tracker`/`--all-the-time`) and `--fail-if-exists` to simulate a failing commit. The
+value cores behind those writers live in the faker's public `writers` module, so unit and
+fidelity tests can build the exact same documents without spawning a process.
 
 **CWD & target root.** Almost every test — including the real-adapter e2e — pins its own
 tempdir workspace and target root through the `run_with_overrides` entry (`workspace_dir` +

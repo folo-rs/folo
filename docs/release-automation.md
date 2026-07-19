@@ -62,16 +62,17 @@ fail *before* any version or changelog is touched:
 The set of published binary crates is **derived**, so new tools are covered
 automatically and hardcoding can never let one slip through. A package is a
 publishable binary crate iff it is publishable **and** has a `bin` target. Today
-that set is three Cargo subcommands:
+that set is four Cargo subcommands:
 
-| Crate                  | Binary                 | Notes                                              |
-| ---------------------- | ---------------------- | -------------------------------------------------- |
-| `cargo-bench-history`  | `cargo-bench-history`  | Slow to build from source (Azure SDK), so the one that benefits most from a prebuilt binary. |
-| `cargo-detect-package` | `cargo-detect-package` | Small, fast to build.                              |
-| `cargo-freeze-deps`    | `cargo-freeze-deps`    | Small, fast to build.                              |
+| Crate                       | Binary                      | Notes                                              |
+| --------------------------- | --------------------------- | -------------------------------------------------- |
+| `cargo-bench-history`       | `cargo-bench-history`       | Slow to build from source (Azure SDK), so the one that benefits most from a prebuilt binary. |
+| `cargo-bench-history-faker` | `cargo-bench-history-faker` | Unsupported test-support engine; published only so sibling repos can validate `cargo-bench-history` end to end (and fetch it via `cargo binstall`). No stable API or CLI. |
+| `cargo-detect-package`      | `cargo-detect-package`      | Small, fast to build.                              |
+| `cargo-freeze-deps`         | `cargo-freeze-deps`         | Small, fast to build.                              |
 
-`cargo-bench-history-stress` and `mock_bench_engine` have binaries but are
-`publish = false`, so the derivation correctly excludes them.
+`cargo-bench-history-stress` has a binary but is `publish = false`, so the
+derivation correctly excludes it.
 
 The `mimalloc` global allocator is orthogonal to distribution and is applied to
 every binary regardless of whether it is published (tracked separately in
@@ -432,9 +433,6 @@ not yet exist, prints a warning like:
 > Warning: `<crate>` has never been published. Its first release must be done
 > manually (`cargo publish`); afterwards configure Trusted Publishing for it on
 > crates.io and re-publish via the GitHub workflow.
-
-The three crates published today already exist on crates.io, so this affects only
-future new crates.
 
 ## Prerequisites (one-time)
 

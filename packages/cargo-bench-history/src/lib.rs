@@ -316,7 +316,7 @@ pub use cbh_analyze::AutoFacets;
 pub use cbh_cli::{Cli, EarlyExit};
 pub use cbh_command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
-    ExamineOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection,
+    ExamineOptions, ImportOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection,
     MachineKeyOptions, PruneOptions, UnblessOptions,
 };
 pub use cbh_config::{ConfigError, default_template};

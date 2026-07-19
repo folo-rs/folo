@@ -2,12 +2,12 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-/// Returns the absolute path to the freshly built `mock_bench_engine` binary.
+/// Returns the absolute path to the freshly built `cargo-bench-history-faker` binary.
 ///
 /// The binary is built on demand (a fast no-op once it is up to date) and rebuilt
 /// automatically after edits, so the path is always present and current; it is
 /// resolved once per process. A test runner that has already built the binary may
-/// point the `MOCK_BENCH_ENGINE` environment variable at it to skip the per-process
+/// point the `CBH_FAKER` environment variable at it to skip the per-process
 /// build — the value is trusted only when it names an existing file.
 #[must_use]
 pub fn binary_path() -> &'static str {
@@ -15,13 +15,13 @@ pub fn binary_path() -> &'static str {
     PATH.as_str()
 }
 
-/// Resolves the path [`binary_path`] caches: trust `MOCK_BENCH_ENGINE` when it names an
+/// Resolves the path [`binary_path`] caches: trust `CBH_FAKER` when it names an
 /// existing file, otherwise build this crate and read the path Cargo reports. Split out
 /// from the `LazyLock` initializer so it can be exercised directly, and passing
 /// [`run_cargo_build`] by name (rather than wrapping it in a closure) keeps the build seam
 /// a single named function the tests can call on its own.
 fn locate_or_build() -> String {
-    resolve(std::env::var_os("MOCK_BENCH_ENGINE"), run_cargo_build)
+    resolve(std::env::var_os("CBH_FAKER"), run_cargo_build)
 }
 
 /// The outcome of spawning `cargo build`, reduced to the fields the resolver inspects.
@@ -41,7 +41,7 @@ struct BuildOutput {
     stderr: Vec<u8>,
 }
 
-/// Resolves the mock-engine binary path: trust an existing file named by
+/// Resolves the faker binary path: trust an existing file named by
 /// `env_override`, otherwise build the crate via `build` and read the path Cargo
 /// reports for the binary artifact.
 fn resolve(env_override: Option<OsString>, build: impl FnOnce() -> BuildOutput) -> String {
@@ -51,7 +51,7 @@ fn resolve(env_override: Option<OsString>, build: impl FnOnce() -> BuildOutput) 
             // `binary_path` promises an absolute path, but the override may be relative.
             // Resolve it to absolute now — while the working directory is still the one
             // the override was written against — so the cached value keeps naming the
-            // same file after a later directory change (the mock honors `--chdir` and the
+            // same file after a later directory change (the faker honors `--chdir` and the
             // integration harness drives commands from various directories). The build
             // path Cargo reports is already absolute, so this keeps both resolution paths
             // consistent. `std::path::absolute` is preferred over `canonicalize` to avoid
@@ -61,7 +61,7 @@ fn resolve(env_override: Option<OsString>, build: impl FnOnce() -> BuildOutput) 
             return std::path::absolute(&path)
                 .unwrap_or_else(|error| {
                     panic!(
-                        "MOCK_BENCH_ENGINE={} could not be resolved to an absolute path: {error}",
+                        "CBH_FAKER={} could not be resolved to an absolute path: {error}",
                         path.display()
                     )
                 })
@@ -78,7 +78,7 @@ fn run_cargo_build() -> BuildOutput {
     // `--manifest-path` (absolute, derived from this crate's own manifest directory)
     // makes the build independent of the current working directory, which some tests
     // change before first touching the engine. `--locked` matches the
-    // `just _mock-engine-path` recipe and refuses to silently rewrite the lockfile.
+    // `just _faker-path` recipe and refuses to silently rewrite the lockfile.
     let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
     // Build into a dedicated target directory (see `engine_target_dir`) instead of the
     // shared workspace `target/` tree. Cargo swaps a binary into place by unlinking the old
@@ -102,7 +102,7 @@ fn run_cargo_build() -> BuildOutput {
         .arg("--target-dir")
         .arg(&target_dir)
         .output()
-        .expect("spawning `cargo build` for mock_bench_engine should succeed");
+        .expect("spawning `cargo build` for cargo-bench-history-faker should succeed");
     BuildOutput {
         success: output.status.success(),
         code: output.status.code(),
@@ -117,8 +117,8 @@ fn run_cargo_build() -> BuildOutput {
 /// It nests under the active target directory — the ambient `CARGO_TARGET_DIR` when one is
 /// set (as coverage runs do), otherwise the workspace `target/` — so it stays git-ignored,
 /// is cached in CI alongside everything else, and is removed by `cargo clean`. The
-/// `just _mock-engine-path` recipe passes the same `--target-dir`, so a pre-built
-/// `MOCK_BENCH_ENGINE` and an on-demand build resolve to the very same isolated binary. The
+/// `just _faker-path` recipe passes the same `--target-dir`, so a pre-built
+/// `CBH_FAKER` and an on-demand build resolve to the very same isolated binary. The
 /// ambient value is taken as a parameter (rather than read here) so the mapping stays
 /// unit-testable without mutating process-wide environment.
 ///
@@ -130,7 +130,7 @@ fn run_cargo_build() -> BuildOutput {
 /// `cargo-bench-history`'s `commands::collect::target_root_from`).
 fn engine_target_dir(ambient_target_dir: Option<OsString>) -> PathBuf {
     // The workspace root, two levels above this crate's own manifest
-    // (`<root>/packages/mock_bench_engine`).
+    // (`<root>/packages/cargo-bench-history-faker`).
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
     let base = ambient_target_dir.map_or_else(
         || workspace_root.join("target"),
@@ -143,7 +143,7 @@ fn engine_target_dir(ambient_target_dir: Option<OsString>) -> PathBuf {
             }
         },
     );
-    base.join("mock-engine")
+    base.join("faker")
 }
 
 /// Reads the built binary's path from Cargo's JSON build output, panicking with the
@@ -152,7 +152,7 @@ fn engine_target_dir(ambient_target_dir: Option<OsString>) -> PathBuf {
 fn interpret_build(output: &BuildOutput) -> String {
     assert!(
         output.success,
-        "building mock_bench_engine failed (exit code: {}):\nstdout:\n{}\nstderr:\n{}",
+        "building cargo-bench-history-faker failed (exit code: {}):\nstdout:\n{}\nstderr:\n{}",
         output
             .code
             .map_or_else(|| "unknown".to_owned(), |code| code.to_string()),
@@ -168,13 +168,13 @@ fn interpret_build(output: &BuildOutput) -> String {
         };
         let is_artifact =
             message.get("reason").and_then(serde_json::Value::as_str) == Some("compiler-artifact");
-        let is_mock = message
+        let is_faker = message
             .get("target")
             .and_then(|target| target.get("name"))
             .and_then(serde_json::Value::as_str)
-            == Some("mock_bench_engine");
+            == Some("cargo-bench-history-faker");
         if is_artifact
-            && is_mock
+            && is_faker
             && let Some(executable) = message
                 .get("executable")
                 .and_then(serde_json::Value::as_str)
@@ -182,11 +182,10 @@ fn interpret_build(output: &BuildOutput) -> String {
             return executable.to_owned();
         }
     }
-    panic!("cargo build did not report an executable path for mock_bench_engine");
+    panic!("cargo build did not report an executable path for cargo-bench-history-faker");
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 
@@ -225,29 +224,35 @@ mod tests {
     #[test]
     fn picks_the_executable_of_the_bin_artifact() {
         let resolved = interpret_build(&ok_build(artifact_line(
-            "mock_bench_engine",
-            "/tmp/mock_bench_engine",
+            "cargo-bench-history-faker",
+            "/tmp/cargo-bench-history-faker",
         )));
-        assert_eq!(resolved, "/tmp/mock_bench_engine");
+        assert_eq!(resolved, "/tmp/cargo-bench-history-faker");
     }
 
     #[test]
     fn ignores_non_json_lines_other_packages_and_the_lib_artifact() {
         // The lib artifact has no executable; an unrelated package and a stray
-        // non-JSON line must both be skipped before the mock bin is found.
+        // non-JSON line must both be skipped before the faker bin is found.
         let lib_artifact = serde_json::json!({
             "reason": "compiler-artifact",
-            "target": { "name": "mock_bench_engine" },
+            "target": { "name": "cargo-bench-history-faker" },
             "executable": serde_json::Value::Null,
         })
         .to_string();
         let stdout = format!(
             "{}\n{lib_artifact}\nthis is not json\n{}\n",
             artifact_line("serde_json", "/tmp/serde_json"),
-            artifact_line("mock_bench_engine", "/tmp/mock_bench_engine"),
+            artifact_line(
+                "cargo-bench-history-faker",
+                "/tmp/cargo-bench-history-faker"
+            ),
         );
 
-        assert_eq!(interpret_build(&ok_build(stdout)), "/tmp/mock_bench_engine");
+        assert_eq!(
+            interpret_build(&ok_build(stdout)),
+            "/tmp/cargo-bench-history-faker"
+        );
     }
 
     #[test]
@@ -255,7 +260,7 @@ mod tests {
     fn panics_when_no_executable_is_reported() {
         let lib_only = serde_json::json!({
             "reason": "compiler-artifact",
-            "target": { "name": "mock_bench_engine" },
+            "target": { "name": "cargo-bench-history-faker" },
             "executable": serde_json::Value::Null,
         })
         .to_string();
@@ -303,9 +308,12 @@ mod tests {
         // `None` skips the file check entirely, so this exercises `resolve`'s build
         // path without touching the filesystem (and stays Miri-safe).
         let resolved = resolve(None, || {
-            ok_build(artifact_line("mock_bench_engine", "/tmp/mock_bench_engine"))
+            ok_build(artifact_line(
+                "cargo-bench-history-faker",
+                "/tmp/cargo-bench-history-faker",
+            ))
         });
-        assert_eq!(resolved, "/tmp/mock_bench_engine");
+        assert_eq!(resolved, "/tmp/cargo-bench-history-faker");
     }
 
     #[test]
@@ -315,7 +323,7 @@ mod tests {
         let ambient = Path::new(env!("CARGO_MANIFEST_DIR")).join("custom-target");
         assert!(ambient.is_absolute());
         let dir = engine_target_dir(Some(ambient.clone().into_os_string()));
-        assert_eq!(dir, ambient.join("mock-engine"));
+        assert_eq!(dir, ambient.join("faker"));
     }
 
     #[test]
@@ -327,7 +335,7 @@ mod tests {
             .join("..")
             .join("..")
             .join("rel-target")
-            .join("mock-engine");
+            .join("faker");
         assert_eq!(dir, expected);
     }
 
@@ -340,7 +348,7 @@ mod tests {
             .join("..")
             .join("..")
             .join("target")
-            .join("mock-engine");
+            .join("faker");
         assert_eq!(dir, expected);
         assert!(
             dir.is_absolute(),
@@ -395,9 +403,12 @@ mod tests {
     fn env_override_naming_a_missing_file_falls_through_to_building() {
         let missing = Path::new(env!("CARGO_MANIFEST_DIR")).join("does-not-exist.invalid");
         let resolved = resolve(Some(missing.into_os_string()), || {
-            ok_build(artifact_line("mock_bench_engine", "/tmp/mock_bench_engine"))
+            ok_build(artifact_line(
+                "cargo-bench-history-faker",
+                "/tmp/cargo-bench-history-faker",
+            ))
         });
-        assert_eq!(resolved, "/tmp/mock_bench_engine");
+        assert_eq!(resolved, "/tmp/cargo-bench-history-faker");
     }
 
     // The two cases below drive the real build seam (not the injected fakes): they spawn
@@ -413,7 +424,7 @@ mod tests {
         let output = run_cargo_build();
         assert!(
             output.success,
-            "building mock_bench_engine should succeed; stderr:\n{}",
+            "building cargo-bench-history-faker should succeed; stderr:\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
         let resolved = interpret_build(&output);
@@ -423,8 +434,10 @@ mod tests {
             "the reported executable should exist: {resolved:?}"
         );
         assert!(
-            resolved.to_string_lossy().contains("mock_bench_engine"),
-            "the reported executable should be the mock engine: {resolved:?}"
+            resolved
+                .to_string_lossy()
+                .contains("cargo-bench-history-faker"),
+            "the reported executable should be the faker: {resolved:?}"
         );
     }
 
@@ -432,7 +445,7 @@ mod tests {
     #[test]
     fn binary_path_returns_an_existing_absolute_file() {
         // Drives `binary_path` (and thus `locate_or_build`) through whichever branch the
-        // ambient environment selects — `MOCK_BENCH_ENGINE` when a test runner pre-built
+        // ambient environment selects — `CBH_FAKER` when a test runner pre-built
         // the engine, an on-demand build otherwise — and confirms the contract either way.
         let resolved = Path::new(binary_path());
         assert!(

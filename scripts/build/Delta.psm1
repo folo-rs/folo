@@ -6,9 +6,10 @@
 # origin/main", so the whole validation matrix can be scoped to just those packages. The same
 # analyze-current / analyze-baseline-via-worktree / run / parse pipeline was previously copied both
 # into the justfile and into .github/workflows/validation.yml, which is exactly how the two drift
-# apart. It lives here once now: the fragile parsing (Read-DeltaAffectedPackage) and the CI output
-# shaping (Get-DeltaOutput) are pure and Pester-tested, and the orchestration (Invoke-CargoDelta)
-# is the single seam both callers use. The only intentional difference between callers is baseline
+# apart. It lives here once now: the fragile parsing (Read-DeltaAffectedPackage), the removed-package
+# filtering (Select-ExistingPackage) and the CI output shaping (Get-DeltaOutput) are pure and
+# Pester-tested, and the orchestration (Invoke-CargoDelta) is the single seam both callers use. The
+# only intentional difference between callers is baseline
 # freshness: the local recipe fetches origin/main first, whereas CI checks out with full history
 # (fetch-depth: 0) and passes -SkipFetch.
 
@@ -34,6 +35,28 @@ function Read-DeltaAffectedPackage {
     return @($delta.Affected)
 }
 
+function Select-ExistingPackage {
+    # Filters affected package names down to those that still exist in the current workspace,
+    # preserving order. cargo-delta compares the branch against origin/main, so a package deleted or
+    # renamed away on this branch is reported as affected (its files changed - they were removed) yet
+    # cannot be validated here: a scoped `cargo <cmd> -p <name>` would fail with "package ID
+    # specification `<name>` did not match any packages". Dropping such a package is correct - there
+    # is nothing left on this branch to validate - while every package that still exists (including
+    # the rename's replacement and anything depending on it) is retained. Pure, so the membership
+    # logic is test-covered independently of the cargo/git orchestration.
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Affected,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $WorkspacePackage
+    )
+
+    $existing = [System.Collections.Generic.HashSet[string]]::new(
+        [string[]] $WorkspacePackage,
+        [System.StringComparer]::Ordinal)
+    return @($Affected | Where-Object { $existing.Contains($_) })
+}
+
 function Get-DeltaOutput {
     # Shapes an affected-package list into the three step outputs the CI `delta` job publishes:
     # `packages` (space-separated, the form `just package="..."` expects), `packages_json` (a JSON
@@ -57,6 +80,21 @@ function Get-DeltaOutput {
         PackagesJson = $packagesJson
         SkipAll      = if ($Affected.Count -eq 0) { 'true' } else { 'false' }
     }
+}
+
+function Get-WorkspacePackage {
+    # Returns the current workspace's member package names as a string array, via `cargo metadata`.
+    # Used to drop packages that cargo-delta reports as affected but that no longer exist on this
+    # branch (see Select-ExistingPackage). `--no-deps` keeps it to workspace members and avoids
+    # resolving - or touching - the dependency graph and lockfile. `--locked` guarantees the call is
+    # read-only, failing loudly rather than regenerating `Cargo.lock` as a surprise side effect.
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param()
+
+    $metadataJson = cargo metadata --no-deps --format-version 1 --locked | Out-String
+    $metadata = $metadataJson | ConvertFrom-Json
+    return @($metadata.packages | ForEach-Object { $_.name })
 }
 
 function Invoke-CargoDelta {
@@ -116,10 +154,11 @@ function Invoke-CargoDelta {
         # to stderr and emits no stdout, which the parser treats as "nothing affected".
         $deltaJson = cargo delta -c $ConfigPath run --baseline $baselineJson --current $currentJson | Out-String
 
-        return Read-DeltaAffectedPackage -DeltaJson $deltaJson
+        $affected = Read-DeltaAffectedPackage -DeltaJson $deltaJson
+        return Select-ExistingPackage -Affected $affected -WorkspacePackage (Get-WorkspacePackage)
     } finally {
         Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
-Export-ModuleMember -Function Read-DeltaAffectedPackage, Get-DeltaOutput, Invoke-CargoDelta
+Export-ModuleMember -Function Read-DeltaAffectedPackage, Select-ExistingPackage, Get-WorkspacePackage, Get-DeltaOutput, Invoke-CargoDelta

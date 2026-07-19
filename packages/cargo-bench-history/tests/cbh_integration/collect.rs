@@ -5,7 +5,8 @@ use crate::harness::{serial, *};
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_callgrind_end_to_end_stores_results() {
-    let workspace = Workspace::new(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
+    let workspace = Workspace::new(&storage_only_config()).with_bench(&["--callgrind", &bench]);
 
     let outcome = workspace.drive(&["collect"]).await.unwrap();
     let RunOutcome::Completed { message } = outcome else {
@@ -76,11 +77,12 @@ async fn collect_callgrind_end_to_end_stores_results() {
 #[serial]
 #[cfg_attr(miri, ignore)]
 async fn collect_harvests_output_when_the_engine_runs_in_a_package_directory() {
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
     let workspace = Workspace::new(&storage_only_config()).with_bench(&[
         "--chdir",
         "subpkg",
-        "--summary",
-        "grp=single",
+        "--callgrind",
+        &bench,
     ]);
     std::fs::create_dir_all(workspace.root().join("subpkg")).unwrap();
 
@@ -104,11 +106,13 @@ async fn collect_harvests_output_when_the_engine_runs_in_a_package_directory() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_stores_a_record_per_summary() {
+    let single = callgrind_arg("a", CALLGRIND_SINGLE);
+    let parametrized = callgrind_arg("b", CALLGRIND_PARAMETRIZED);
     let workspace = Workspace::new(&storage_only_config()).with_bench(&[
-        "--summary",
-        "a=single",
-        "--summary",
-        "b=parametrized",
+        "--callgrind",
+        &single,
+        "--callgrind",
+        &parametrized,
     ]);
 
     let outcome = workspace.drive(&["collect"]).await.unwrap();
@@ -141,11 +145,13 @@ async fn collect_stores_a_record_per_summary() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_distinguishes_same_module_path_across_packages() {
+    let single = callgrind_arg("a", CALLGRIND_SINGLE);
+    let alt_pkg = callgrind_arg("b", CALLGRIND_SINGLE_ALT_PKG);
     let workspace = Workspace::new(&storage_only_config()).with_bench(&[
-        "--summary",
-        "a=single",
-        "--summary",
-        "b=single-alt-pkg",
+        "--callgrind",
+        &single,
+        "--callgrind",
+        &alt_pkg,
     ]);
 
     let outcome = workspace.drive(&["collect"]).await.unwrap();
@@ -185,11 +191,13 @@ async fn collect_distinguishes_same_module_path_across_packages() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_harvests_colliding_bench_binary_names_in_distinct_packages() {
+    let foo = callgrind_arg("shared/foo", CALLGRIND_SINGLE);
+    let bar = callgrind_arg("shared/bar", CALLGRIND_SINGLE_ALT_PKG);
     let workspace = Workspace::new(&storage_only_config()).with_bench(&[
-        "--summary",
-        "shared/foo=single",
-        "--summary",
-        "shared/bar=single-alt-pkg",
+        "--callgrind",
+        &foo,
+        "--callgrind",
+        &bar,
     ]);
 
     let outcome = workspace.drive(&["collect"]).await.unwrap();
@@ -221,7 +229,8 @@ async fn collect_harvests_colliding_bench_binary_names_in_distinct_packages() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_no_store_harvests_without_storing() {
-    let workspace = Workspace::new(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
+    let workspace = Workspace::new(&storage_only_config()).with_bench(&["--callgrind", &bench]);
 
     let outcome = workspace.drive(&["collect", "--no-store"]).await.unwrap();
     let RunOutcome::Completed { message } = outcome else {
@@ -262,8 +271,8 @@ async fn collect_propagates_nonzero_engine_exit() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_criterion_stores_results() {
-    let workspace =
-        Workspace::new(&storage_only_config()).with_bench(&["--criterion", "grp|capture|now=26.9"]);
+    let workspace = Workspace::new(&storage_only_config())
+        .with_bench(&["--criterion", "grp|capture|now=26.9@0.5/26.4:27.4"]);
 
     let outcome = workspace.drive(&["collect"]).await.unwrap();
     assert!(matches!(outcome, RunOutcome::Completed { .. }));
@@ -288,9 +297,10 @@ async fn collect_criterion_stores_results() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_harvests_every_engine_that_produced_output() {
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
     let workspace = Workspace::new(&storage_only_config()).with_bench(&[
-        "--summary",
-        "grp=single",
+        "--callgrind",
+        &bench,
         "--criterion",
         "grp|capture|now=12.5",
         "--alloc-tracker",
@@ -516,8 +526,9 @@ async fn collect_criterion_collects_distinct_cases_as_records() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_then_analyze_round_trips_a_sanitizing_project_id() {
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
     let workspace = Workspace::clean_repo(&storage_only_config_with_id("my proj/sub"))
-        .with_bench(&["--summary", "grp=single"])
+        .with_bench(&["--callgrind", &bench])
         .with_real_auto_facets();
 
     workspace.drive(&["collect"]).await.unwrap();
@@ -597,8 +608,9 @@ async fn collect_then_analyze_preserves_unusual_identity_characters() {
 async fn collect_uses_explicit_config_path() {
     // Only the custom path holds a configuration; the default discovery path is
     // absent, so a successful run proves `--config` was honored.
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
     let workspace = Workspace::with_config_at("config/bench.toml", &storage_only_config())
-        .with_bench(&["--summary", "grp=single"]);
+        .with_bench(&["--callgrind", &bench]);
 
     let outcome = workspace
         .drive(&["collect", "--config", "config/bench.toml"])
@@ -613,7 +625,8 @@ async fn collect_uses_explicit_config_path() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn re_running_the_same_commit_is_refused_as_a_duplicate() {
-    let workspace = Workspace::new(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
+    let workspace = Workspace::new(&storage_only_config()).with_bench(&["--callgrind", &bench]);
 
     workspace.drive(&["collect"]).await.unwrap();
 
@@ -631,7 +644,8 @@ async fn re_running_the_same_commit_is_refused_as_a_duplicate() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn overwrite_replaces_the_stored_result() {
-    let workspace = Workspace::new(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
+    let workspace = Workspace::new(&storage_only_config()).with_bench(&["--callgrind", &bench]);
 
     workspace.drive(&["collect"]).await.unwrap();
 

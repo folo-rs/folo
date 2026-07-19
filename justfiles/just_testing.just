@@ -102,7 +102,7 @@ test FILTER="":
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
-    $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
+    $env:CBH_FAKER = just _faker-path | Select-Object -Last 1
     cargo +$env:RUST_MSRV nextest run {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast
 
 # Run the PowerShell test suites for the standalone scripts under scripts/ (currently the
@@ -124,34 +124,34 @@ test-scripts:
     $config.Output.Verbosity = 'Detailed'
     Invoke-Pester -Configuration $config
 
-# Build the test-support `mock_bench_engine` binary and print its path. The mock is a
-# fake benchmark engine the cargo-bench-history integration tests drive; it lives in
-# its own never-published package (see packages/mock_bench_engine and issue #289), so
-# Cargo does not expose it via CARGO_BIN_EXE_* to the tests. The tests build and locate
-# it on demand, but a test runner can call this once up front and pass the path via
-# MOCK_BENCH_ENGINE so each per-test process skips a redundant Cargo freshness check.
+# Build the test-support `cargo-bench-history-faker` binary and print its path. The faker
+# is a stand-in benchmark engine the cargo-bench-history integration tests drive; it lives
+# in its own lib+bin package (see packages/cargo-bench-history-faker), so Cargo does not
+# expose it via CARGO_BIN_EXE_* to the tests. The tests build and locate it on demand, but
+# a test runner can call this once up front and pass the path via CBH_FAKER so each per-test
+# process skips a redundant Cargo freshness check.
 #
-# The build targets a dedicated `<target>/mock-engine` directory rather than the shared
+# The build targets a dedicated `<target>/faker` directory rather than the shared
 # workspace `target/` tree (matching the Rust-side `engine_target_dir`). Cargo relinks a
 # binary by unlinking it and hard-linking the replacement, so on the shared tree a
-# concurrent build could momentarily leave the engine absent under a test that is spawning
+# concurrent build could momentarily leave the binary absent under a test that is spawning
 # it; its own tree means only builds aimed here touch the file, closing that race (#332).
 [group('testing')]
 [script]
-_mock-engine-path:
+_faker-path:
     Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
-    Import-Module "{{ justfile_directory() }}/scripts/build/MockBenchEngine.psm1" -Force
+    Import-Module "{{ justfile_directory() }}/scripts/build/Faker.psm1" -Force
 
     # Nest under the ambient CARGO_TARGET_DIR (e.g. a coverage run's tree) when set, else the
     # workspace `target/`, so the isolated tree stays git-ignored and cached like everything
-    # else. The Rust resolver derives the same path, so a pre-built MOCK_BENCH_ENGINE and an
+    # else. The Rust resolver derives the same path, so a pre-built CBH_FAKER and an
     # on-demand build resolve to the very same isolated binary.
-    $engineTargetDir = Join-Path ($env:CARGO_TARGET_DIR ?? "target") "mock-engine"
-    $messages = cargo +$env:RUST_MSRV build -p mock_bench_engine --target-dir $engineTargetDir --message-format=json-render-diagnostics --locked
-    Write-Output (Resolve-MockBenchEngineExecutable -CargoMessage $messages)
+    $fakerTargetDir = Join-Path ($env:CARGO_TARGET_DIR ?? "target") "faker"
+    $messages = cargo +$env:RUST_MSRV build -p cargo-bench-history-faker --target-dir $fakerTargetDir --message-format=json-render-diagnostics --locked
+    Write-Output (Resolve-FakerExecutable -CargoMessage $messages)
 
 # Run the cargo-bench-history "stress analyze" harness against LOCAL filesystem
 # storage: it seeds a giant synthetic benchmark history (default 1000 benchmarks ×
@@ -304,7 +304,7 @@ test-azurite:
         # AZURITE_BLOB_ENDPOINT cannot redirect the tests to a different target (the recipe would
         # then start/reuse one emulator while the tests hit another - non-hermetic).
         $env:AZURITE_BLOB_ENDPOINT = "https://${blobHost}:${blobPort}/devstoreaccount1"
-        $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
+        $env:CBH_FAKER = just _faker-path | Select-Object -Last 1
         Write-Host "Running Azurite-backed tests against ${blobHost}:${blobPort}."
         cargo +$env:RUST_MSRV nextest run -p cargo-bench-history --locked --no-fail-fast azure azurite
     } finally {
@@ -347,7 +347,7 @@ test-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_TEST_AZURE_ACCOUNT', ''):
 
     $env:BENCH_HISTORY_TEST_AZURE_ACCOUNT = $account
     $env:ENABLE_AZURE = "1"
-    $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
+    $env:CBH_FAKER = just _faker-path | Select-Object -Last 1
 
     Write-Host "Running real-Azure tests against account '$account' (Microsoft Entra ID; requires az login)."
     cargo +$env:RUST_MSRV nextest run -p cargo-bench-history real_azure --locked --no-fail-fast

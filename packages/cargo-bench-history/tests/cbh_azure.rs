@@ -48,6 +48,12 @@ use cargo_bench_history::{
 use futures::FutureExt as _;
 use serial_test::serial;
 
+/// A valid faker `--callgrind` argument for the Azure scenarios. They assert only on
+/// store / list / analyze outcomes, never on the benchmark identity, so one fixed
+/// case suffices. This is the `cbh_integration` harness's `CALLGRIND_SINGLE` inlined:
+/// that harness belongs to a different test binary and is not importable here.
+const FAKER_CALLGRIND: &str = "grp|fast_time_timestamp_performance_cg::timestamp_capture::timestamp_capture_std_now|timestamp_capture_std_now||/mnt/c/Source/folo/packages/fast_time=36/4/2";
+
 fn command_from(args: &[&str]) -> Command {
     Cli::from_args(&["cargo-bench-history"], args)
         .unwrap()
@@ -508,10 +514,10 @@ impl AzureWorkspace {
     /// harvest at the workspace's own `target/` so it is hermetic.
     async fn drive(&self, args: &[&str]) -> Result<RunOutcome, RunError> {
         let target_root = self.dir.path().join("target");
-        // Drive `collect`/`backfill` against the mock engine instead of `cargo bench`:
+        // Drive `collect`/`backfill` against the faker instead of `cargo bench`:
         // the program plus its fixture-describing arguments form the benchmark
         // command, which the single bench invocation runs to produce engine output.
-        let mut bench_command = vec![mock_bench_engine::binary_path().to_owned()];
+        let mut bench_command = vec![cargo_bench_history_faker::binary_path().to_owned()];
         bench_command.extend(self.bench.iter().cloned());
 
         // Enable verbose reporting so the reporter's `note_with` closures run against
@@ -559,7 +565,7 @@ impl AzureWorkspace {
 
 /// Scenario: a single `collect` stores one harvested result set.
 async fn scenario_collect_stores(workspace: AzureWorkspace) {
-    let workspace = workspace.with_bench(&["--summary", "grp=single"]);
+    let workspace = workspace.with_bench(&["--callgrind", FAKER_CALLGRIND]);
 
     let outcome = workspace.drive(&["collect"]).await.unwrap();
     let RunOutcome::Completed { message } = outcome else {
@@ -581,7 +587,7 @@ async fn scenario_collect_stores(workspace: AzureWorkspace) {
 /// Scenario: a full public round-trip — two `collect` runs store result sets, and
 /// `analyze` reads them back (list + get) and reports over the history.
 async fn scenario_collect_then_analyze(workspace: AzureWorkspace) {
-    let workspace = workspace.with_bench(&["--summary", "grp=single"]);
+    let workspace = workspace.with_bench(&["--callgrind", FAKER_CALLGRIND]);
 
     workspace.drive(&["collect"]).await.unwrap();
     // A clean run is keyed by its commit, so the second point needs its own
@@ -604,7 +610,7 @@ async fn scenario_collect_then_analyze(workspace: AzureWorkspace) {
 /// feature/official dirty-admission split works end to end against the backend (not
 /// just a flat two-object listing).
 async fn scenario_feature_and_dirty(workspace: AzureWorkspace) {
-    let workspace = workspace.with_bench(&["--summary", "grp=single"]);
+    let workspace = workspace.with_bench(&["--callgrind", FAKER_CALLGRIND]);
 
     // master: root - c2   (two clean points on the official line).
     workspace.drive(&["collect"]).await.unwrap();
@@ -669,7 +675,7 @@ fn count_files(dir: &std::path::Path) -> usize {
 /// facade's cache-aware dispatch, the mirror synchronize (reuse and wipe), and the
 /// post-delete marker flush — through exactly the command surface the binary uses.
 async fn scenario_cache_round_trip(workspace: AzureWorkspace) {
-    let workspace = workspace.with_bench(&["--summary", "grp=single"]);
+    let workspace = workspace.with_bench(&["--callgrind", FAKER_CALLGRIND]);
     let cache = tempfile::tempdir().unwrap();
     // `--cache` uses `require_equals`, so the path must be attached with `=`; a
     // space-separated `--cache <path>` would leave the flag bare (falling back to
@@ -742,7 +748,7 @@ async fn scenario_cache_round_trip(workspace: AzureWorkspace) {
 /// cached. Prune loads (list + get) to decide what to remove, then deletes; the
 /// deletion arms the flag the subsequent flush consults.
 async fn scenario_prune_without_cache(workspace: AzureWorkspace) {
-    let workspace = workspace.with_bench(&["--summary", "grp=single"]);
+    let workspace = workspace.with_bench(&["--callgrind", FAKER_CALLGRIND]);
 
     // One clean run on the base line, then a feature commit with its own clean run.
     // A feature commit's own run is deletable without the base-branch guard, so the
@@ -880,7 +886,7 @@ async fn stored_blob_declares_gzip_content_encoding_in_azurite() {
 
     let container = unique_container();
     let workspace =
-        AzureWorkspace::new_azurite(&container).with_bench(&["--summary", "grp=single"]);
+        AzureWorkspace::new_azurite(&container).with_bench(&["--callgrind", FAKER_CALLGRIND]);
     workspace.drive(&["collect"]).await.unwrap();
 
     let client = azurite_container_client(&container);

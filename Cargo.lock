@@ -431,6 +431,7 @@ dependencies = [
  "azure_identity",
  "azure_storage_blob",
  "base64",
+ "cargo-bench-history-faker",
  "cbh_analyze",
  "cbh_cli",
  "cbh_codec",
@@ -445,7 +446,6 @@ dependencies = [
  "futures",
  "jiff",
  "mimalloc",
- "mock_bench_engine",
  "mutants",
  "nonempty",
  "reqwest",
@@ -455,6 +455,15 @@ dependencies = [
  "testing",
  "tick",
  "tokio",
+]
+
+[[package]]
+name = "cargo-bench-history-faker"
+version = "0.0.7"
+dependencies = [
+ "folo_utils",
+ "mimalloc",
+ "serde_json",
 ]
 
 [[package]]
@@ -2131,14 +2140,6 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "mock_bench_engine"
-version = "0.0.0"
-dependencies = [
- "mimalloc",
- "serde_json",
 ]
 
 [[package]]

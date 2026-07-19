@@ -123,6 +123,12 @@ pub enum RunError {
         /// Human-readable description of the precondition failure.
         message: String,
     },
+    /// An `import` precondition failed (for example a `--commit` override that
+    /// resolves to no commit in the repository).
+    Import {
+        /// Human-readable description of the precondition failure.
+        message: String,
+    },
     /// An underlying I/O operation (process, probe, or harvest) failed.
     Io(io::Error),
 }
@@ -151,6 +157,7 @@ impl fmt::Display for RunError {
             Self::Analyze { message } => write!(f, "failed to analyze history: {message}"),
             Self::Backfill { message } => write!(f, "backfill failed: {message}"),
             Self::Bless { message } => write!(f, "blessing failed: {message}"),
+            Self::Import { message } => write!(f, "import failed: {message}"),
             Self::Io(error) => write!(f, "I/O error: {error}"),
         }
     }
@@ -169,7 +176,8 @@ impl Error for RunError {
             | Self::Duplicate { .. }
             | Self::Analyze { .. }
             | Self::Backfill { .. }
-            | Self::Bless { .. } => None,
+            | Self::Bless { .. }
+            | Self::Import { .. } => None,
         }
     }
 }
@@ -317,6 +325,16 @@ mod tests {
         };
         assert!(error.to_string().contains("backfill failed"), "{error}");
         assert!(error.to_string().contains("dirty"), "{error}");
+        assert!(error.source().is_none());
+    }
+
+    #[test]
+    fn import_error_is_displayed_and_has_no_source() {
+        let error = RunError::Import {
+            message: "--commit resolves to no commit in the repository".to_owned(),
+        };
+        assert!(error.to_string().contains("import failed"), "{error}");
+        assert!(error.to_string().contains("no commit"), "{error}");
         assert!(error.source().is_none());
     }
 
