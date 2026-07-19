@@ -15,15 +15,20 @@
 #
 # A benchmark run takes many hours, and a new push cancels the in-flight one, so on the FIRST run of a
 # PR there is nothing on display yet and on later runs the comment a reader sees can lag the PR tip by
-# a long way. Three seams keep that honest, all driven by the lightweight mark-stale job that fires at
-# the START of a new run. First, before any comment exists, Publish-InProgressComment seeds a
-# "benchmarking in progress" placeholder (carrying the in-progress marker above) so the author knows
-# results are coming; it refreshes that placeholder's disclosed scope on re-runs and steps aside once
-# real findings land. Second, the analyze job embeds a hidden "analyzed commit" marker in the body
-# (which commit the numbers describe). Third, once results exist, Set-RollingCommentStaleness prepends
-# a warning banner stating how far behind HEAD those numbers now are (via Get-CommitsBehind), so nobody
-# mistakes hours-old results for the current state; it skips the still-empty placeholder, which has no
-# results to stale. The banner clears itself when the next analyze rewrites the body with fresh results.
+# a long way. Four seams keep that honest. The first three fire from the lightweight mark-stale job at
+# the START of a new run: before any comment exists, Publish-InProgressComment seeds a "benchmarking in
+# progress" placeholder (carrying the in-progress marker above) so the author knows results are coming,
+# refreshing its disclosed scope on re-runs and stepping aside once real findings land; the analyze job
+# embeds a hidden "analyzed commit" marker in the body recording which commit the numbers describe; and
+# once results exist, Set-RollingCommentStaleness prepends a warning banner stating how far behind HEAD
+# those numbers now are (via Get-CommitsBehind), skipping the still-empty placeholder, which has no
+# results to stale. The fourth fires at the END of a run, from the analyze job itself, right before it
+# posts: Add-StalenessBannerIfBehind re-reads the LIVE PR head and, when the results it is about to
+# publish already describe a superseded commit (a push that raced this run's post despite the concurrency
+# cancellation and the analyze job's `!cancelled()` gate), injects that SAME banner into the composed
+# body first - so a superseded result is never published looking fresh. Both staleness paths share one
+# wording helper (Format-StalenessWarning) so their banners cannot drift, and every banner clears itself
+# when the next analyze rewrites the body with fresh results.
 #
 # Every GitHub-touching call goes through `gh api` behind the single Invoke-GhCapture seam the
 # Pester suite (BenchHistoryComment.Tests.ps1) mocks, so the find/update/create/delete logic is
@@ -418,6 +423,26 @@ function Add-StalenessBanner {
     return ($assembled -join "`n")
 }
 
+function Format-StalenessWarning {
+    # Pure wording shared by the two staleness paths - Set-RollingCommentStaleness (start-of-run marking)
+    # and Add-StalenessBannerIfBehind (post-time self-check) - so the banner text cannot drift between
+    # them. Given a Get-CommitsBehind result (or $null when the distance could not be computed), returns
+    # the warning sentence: a concrete, related distance yields "N commit(s) behind HEAD"; anything else
+    # (unrelated histories, a null/failed lookup, or a non-positive distance) yields the numberless
+    # "out of date" wording. Kept unexported, mirroring Add-StalenessBanner and Format-InProgressBody.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [hashtable] $Distance
+    )
+
+    if ($Distance -and $Distance.Related -and $Distance.Behind -gt 0) {
+        $noun = if ($Distance.Behind -eq 1) { 'commit' } else { 'commits' }
+        return "Benchmark results are $($Distance.Behind) $noun behind HEAD. This comment will be updated when newer results are available."
+    }
+    return 'Benchmark results are out of date. This comment will be updated when newer results are available.'
+}
+
 function Set-RollingCommentStaleness {
     # Called at the START of a new PR benchmark run (the mark-stale job) to flag that the rolling
     # comment's currently-displayed findings now lag the PR tip and a fresh run is underway, so a reader
@@ -495,13 +520,13 @@ function Set-RollingCommentStaleness {
                 "unmarked.")
             return $false
         }
-        if ($distance -and $distance.Related) {
-            $noun = if ($distance.Behind -eq 1) { 'commit' } else { 'commits' }
-            $warning = "Benchmark results are $($distance.Behind) $noun behind HEAD. This comment will be updated when newer results are available."
-        }
+        # Shared wording (Format-StalenessWarning) so this banner cannot drift from the one the post-time
+        # self-check (Add-StalenessBannerIfBehind) injects: a related distance yields "N commit(s) behind
+        # HEAD", anything else (unrelated histories or a failed lookup) the numberless fallback.
+        $warning = Format-StalenessWarning -Distance $distance
     }
     if (-not $warning) {
-        $warning = 'Benchmark results are out of date. This comment will be updated when newer results are available.'
+        $warning = Format-StalenessWarning -Distance $null
     }
 
     $newBody = Add-StalenessBanner -Body $body -Warning $warning -Marker $Marker
@@ -529,6 +554,92 @@ function Set-RollingCommentStaleness {
     finally {
         Remove-Item -LiteralPath $tempBodyFile.FullName -Force -ErrorAction SilentlyContinue
     }
+    return $true
+}
+
+function Add-StalenessBannerIfBehind {
+    # Defense-in-depth for the analyze POST path. The rolling-comment body the analyze job composes
+    # describes $AnalyzedSha - the PR head SHA frozen when the run was triggered. A benchmark run takes
+    # hours; if a new push lands during it, concurrency normally cancels this run before it posts (and the
+    # analyze job's `!cancelled()` gate keeps a superseded run from analyzing at all), but a push that
+    # races this job's final post could still publish the composed body, showing fresh-looking numbers for
+    # a commit that is no longer the tip with no way for a reader to tell. This reads the LIVE PR head and,
+    # when it differs from $AnalyzedSha, injects the SAME staleness banner the mark-stale job uses (the
+    # shared Add-StalenessBanner + Format-StalenessWarning helpers) into $BodyFile BEFORE it is posted, so a
+    # superseded result is never published unwarned. The banner is inserted after the dedup $Marker line and
+    # leaves the hidden analyzed-commit marker intact, so the next run can still parse it. Best-effort: any
+    # failure to determine the live head leaves the body untouched (the run still posts; it just cannot
+    # self-flag) rather than failing the advisory comment. Rewrites $BodyFile in place; returns $true when a
+    # banner was injected. Isolates the real `gh` calls behind Invoke-GhCapture so the Pester suite drives
+    # it with a mocked head.
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)][string] $Repo,
+        [Parameter(Mandatory)][string] $PrNumber,
+        [Parameter(Mandatory)][string] $Marker,
+        [Parameter(Mandatory)][string] $AnalyzedSha,
+        [Parameter(Mandatory)][string] $BodyFile
+    )
+
+    Assert-RepoAndPr -Repo $Repo -PrNumber $PrNumber
+    Assert-CommitSha -Sha $AnalyzedSha -Label 'Analyzed'
+
+    if (-not (Test-Path -LiteralPath $BodyFile)) {
+        throw "Comment body file '$BodyFile' does not exist."
+    }
+
+    # Read the LIVE PR head SHA (`.head.sha` off the pull request). Best-effort: a transient `gh` failure
+    # must not fail the advisory comment, so degrade to "post as composed" rather than throwing.
+    $currentSha = $null
+    try {
+        $output = Invoke-GhCapture -Arguments @(
+            'api', "repos/$Repo/pulls/$PrNumber", '--jq', '.head.sha'
+        )
+        $currentSha = $output.Trim()
+    }
+    catch {
+        Write-Verbose ("Could not read the live head of PR #$PrNumber to check whether the composed " +
+            "benchmark results are already stale; posting them as composed. Error: $($_.Exception.Message)")
+        return $false
+    }
+
+    # A head that is not a 40-hex SHA (an empty or garbled response) is unusable for a compare; degrade to
+    # posting as composed rather than guessing at staleness.
+    if ($currentSha -notmatch '^[0-9a-fA-F]{40}$') {
+        Write-Verbose ("Live head of PR #$PrNumber came back as '$currentSha', not a 40-char SHA; posting " +
+            "the composed benchmark results without a self-staleness check.")
+        return $false
+    }
+
+    # The overwhelmingly common case: the PR has not moved since the run was triggered, so the composed
+    # results describe the current tip and need no banner. A plain string compare avoids a needless
+    # compare-API round-trip on every post.
+    if ($currentSha -eq $AnalyzedSha) {
+        Write-Verbose ("Composed benchmark results describe the live head of PR #$PrNumber ($AnalyzedSha); " +
+            "no staleness banner needed.")
+        return $false
+    }
+
+    # The PR advanced (or was force-pushed) while this run benchmarked $AnalyzedSha. Word the banner with
+    # the concrete distance when the two commits are related, else the numberless fallback - via the shared
+    # Format-StalenessWarning so it matches the mark-stale job's wording exactly. Any compare failure is
+    # best-effort: a null distance simply yields the numberless wording rather than failing the post.
+    $distance = $null
+    try {
+        $distance = Get-CommitsBehind -Repo $Repo -BaseSha $AnalyzedSha -HeadSha $currentSha
+    }
+    catch {
+        Write-Verbose ("Compare lookup failed for analyzed commit $AnalyzedSha (live head $currentSha) on " +
+            "PR #$PrNumber; using generic out-of-date wording. Error: $($_.Exception.Message)")
+    }
+    $warning = Format-StalenessWarning -Distance $distance
+
+    $body = Get-Content -LiteralPath $BodyFile -Raw
+    $newBody = Add-StalenessBanner -Body $body -Warning $warning -Marker $Marker
+    Set-Content -LiteralPath $BodyFile -Value $newBody -Encoding utf8 -NoNewline
+    Write-Verbose ("PR #$PrNumber advanced from analyzed commit $AnalyzedSha to live head $currentSha " +
+        "during the run; injected a staleness banner into the composed benchmark comment before posting.")
     return $true
 }
 
@@ -653,4 +764,4 @@ function Publish-InProgressComment {
     return $true
 }
 
-Export-ModuleMember -Function Find-RollingComment, Publish-RollingComment, Remove-RollingComment, Get-CommitsBehind, Set-RollingCommentStaleness, Publish-InProgressComment
+Export-ModuleMember -Function Find-RollingComment, Publish-RollingComment, Remove-RollingComment, Get-CommitsBehind, Set-RollingCommentStaleness, Add-StalenessBannerIfBehind, Publish-InProgressComment

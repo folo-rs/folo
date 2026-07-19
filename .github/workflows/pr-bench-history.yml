@@ -285,12 +285,16 @@ jobs:
 
   # Compare the PR head against `main` in branch mode and post/update the rolling PR comment. Runs
   # after every platform finishes (even partially: fail-fast is off) so the comparison reflects
-  # whatever landed. Uses always() so a partially-failed collect still analyzes, but the explicit
-  # same-repo + skip_all gates keep it from running on forks or empty deltas.
+  # whatever landed. Uses `!cancelled()` (NOT always()) so a partially-failed collect still analyzes -
+  # a failed leg is not a cancellation - while a run SUPERSEDED by a newer push (concurrency
+  # cancel-in-progress) does NOT: always() would run even when cancelled and publish results for the now
+  # stale head SHA, exactly the "stale results, no warning" case this workflow guards against (the
+  # analyze post path's own live-head self-check backstops the narrow window where cancellation races the
+  # final post). The explicit same-repo + skip_all gates keep it from running on forks or empty deltas.
   analyze:
     needs: [delta, collect]
     if: >-
-      always()
+      !cancelled()
       && github.repository == 'folo-rs/folo'
       && github.event.pull_request.head.repo.full_name == github.repository
       && needs.delta.outputs.skip_all != 'true'
@@ -501,6 +505,26 @@ jobs:
           $commitMarker = "$env:COMMIT_MARKER_PREFIX$env:HEAD_SHA -->"
           $body = @($env:MARKER, $commitMarker, '') + $parts
           Set-Content -Path (Join-Path $env:SCRATCH_DIR 'comment-body.md') -Value ($body -join "`n") -Encoding utf8
+
+      # Defense-in-depth against publishing already-stale results. The comment composed above describes
+      # the head SHA frozen when this run was triggered, but a benchmark run takes hours. A newer push
+      # normally supersedes this run before it posts (concurrency cancel-in-progress, and the analyze
+      # gate above is `!cancelled()` so a superseded run never reaches here), yet a push that RACES this
+      # final post could still publish numbers for a commit that is no longer the PR tip. This reads the
+      # LIVE PR head and, when it no longer matches the analyzed SHA, injects the same staleness banner
+      # the mark-stale job uses into the composed body BEFORE it is posted, so a superseded result never
+      # appears fresh. Best-effort - a `gh` hiccup leaves the body as composed and never fails the
+      # advisory comment. Lands right before the post so it sees the final body.
+      - name: Flag composed comment stale if the PR advanced
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MARKER: ${{ env.PR_COMMENT_MARKER }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
+        run: just gh-flag-pr-comment-if-stale "$env:REPO" "$env:PR_NUMBER" "$env:MARKER" "$env:HEAD_SHA" (Join-Path $env:SCRATCH_DIR 'comment-body.md')
 
       # One rolling comment per PR, updated in place (deduped by the hidden marker) so repeated pushes
       # never spam the thread. Posted via `gh` through the shared gh-file-pr-comment recipe (the

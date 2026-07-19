@@ -258,6 +258,20 @@ skips a still-empty placeholder (it has no results to age), leaving the placehol
 the seeding pass. `mark-stale` is gated on the same non-empty delta as collect, so it never races the
 cleanup path that *deletes* the comment when the PR no longer touches anything benchmarkable.
 
+That start-of-run banner only helps a *later* run flag an *earlier* run's results; a run must also not
+publish results that are *already* stale by the time it finishes. Two mechanisms cover the finish side.
+First, the `analyze` job is gated on `!cancelled()`, **not** `always()`: a partially-failed collect
+(one platform red) is not a cancellation, so analysis still runs and reports whatever landed, but a run
+*superseded* by a newer push — which concurrency `cancel-in-progress` cancels — does **not** analyze or
+post, because `always()` would run even when cancelled and publish results for a head SHA the PR has
+already moved past. Second, as defense-in-depth for the narrow window where a push races a run's *final
+post* faster than the cancellation can stop it, the `analyze` job re-reads the **live PR head** just
+before posting and, when it no longer matches the analyzed (frozen) head SHA, injects that same
+staleness banner into the composed body first — so a superseded result is never published looking fresh.
+Both this self-check and `mark-stale` word the banner through one shared helper so they cannot drift,
+and both degrade to posting/leaving the body untouched rather than failing the advisory comment if the
+live head or compare distance cannot be read.
+
 Collection is **delta-scoped**: a preflight job runs cargo-delta against `main` and benchmarks only
 the impacted packages — those the PR changed, plus their dependents — since re-measuring the whole
 workspace on every PR push would be wasteful. Analysis, by contrast, is deliberately **not**
