@@ -101,6 +101,10 @@ Describe 'Test-TransientFailure' {
         Test-TransientFailure -Message 'error: connection reset by peer' | Should -BeTrue
     }
 
+    It 'treats a runner disk I/O error as transient' {
+        Test-TransientFailure -Message 'unable to sync download to disk: Input/output error (os error 5)' | Should -BeTrue
+    }
+
     It 'treats a 404 as non-transient' {
         Test-TransientFailure -Message 'gh: Not Found (HTTP 404)' | Should -BeFalse
     }

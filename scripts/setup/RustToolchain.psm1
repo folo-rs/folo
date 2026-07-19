@@ -68,6 +68,15 @@ function Install-RustupToolchain {
     # Installs one toolchain (or the active rust-toolchain.toml toolchain when Channel is omitted)
     # with item-level retry. Components are passed through individually so a large nightly install
     # is retried as one internally consistent rustup operation.
+    #
+    # The retry is deliberately unconditional (no Test-TransientFailure predicate). The faults it
+    # exists to absorb - a runner disk I/O error (the `os error 5` that motivated owning this step)
+    # or a mid-download network blip - are not reliably classifiable from rustup's message, and the
+    # install is idempotent, so every failure is re-attempted within the bounded backoff; only a
+    # genuinely deterministic failure (e.g. a bad channel pin) burns the full window before it
+    # surfaces. rustup streams its own diagnostics to the log on each attempt, so throwing just the
+    # exit code keeps the failure legible without buffering that live stream - matching how the
+    # release-plz wrapper reports.
     [CmdletBinding()]
     param(
         [string] $Channel,

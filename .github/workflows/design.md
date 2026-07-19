@@ -355,14 +355,19 @@ one bad sector), the actionlint/shellcheck/azcopy tool downloads (which re-fetch
 the checksum, so a truncated payload re-downloads rather than being trusted), and the idempotent
 `gh` read calls behind the bench-history modules' `Invoke-GhCapture` seam.
 
-Two lines bound where retry is applied. It never wraps a non-idempotent mutation — creating,
-editing, closing, or deleting an issue or comment — because a retry after a fault that already
-took effect would duplicate it; only reads opt in, via `Invoke-GhCapture -RetryOnFailure`. And it
-retries only *transient* failures: a deterministic error (a 4xx, an auth refusal, a malformed
-request) will fail identically every attempt, so `Test-TransientFailure` lets it surface
-immediately instead of hiding behind slow retries. Reads that already degrade gracefully — those
-returning a neutral result on failure rather than aborting the job — are left as-is, since a
-soft-failing read needs no retry to keep the job alive.
+Two rules bound where and how retry is applied. First, it never wraps a non-idempotent mutation —
+creating, editing, closing, or deleting an issue or comment — because a retry after a fault that
+already took effect would duplicate it; only reads opt in, via `Invoke-GhCapture -RetryOnFailure`.
+Second, how a retryable failure is recognised depends on whether the failure is legible. A `gh` read
+runs against a live API where a deterministic error (a 4xx, an auth refusal, a malformed request) is
+unambiguous and should surface at once, so those reads pass `Test-TransientFailure` as the retry
+predicate and re-attempt only transient-looking failures. The idempotent installs and downloads are
+different: their motivating faults — a runner disk I/O error, a truncated fetch — are not reliably
+classifiable from the error text, and the operations are cheap to repeat, so they retry *every*
+failure within a small, bounded budget, and a genuinely deterministic failure (a bad version pin, a
+checksum that never matches) costs only the capped backoff window before it surfaces. Reads that
+already degrade gracefully — returning a neutral result on failure rather than aborting the job — are
+left un-retried, since a soft-failing read needs no retry to keep the job alive.
 
 First-party marketplace actions (checkout, cache, artifact up/download, and the like) are trusted
 to retry their own network operations internally, so they are not wrapped in a third-party retry

@@ -57,8 +57,9 @@ function Invoke-WithRetry {
 
 function Test-TransientFailure {
     # Heuristic predicate for Invoke-WithRetry's -RetryOn: does $Message look like a transient
-    # infrastructure fault worth retrying (server-side 5xx, rate-limiting, a network/TLS blip)
-    # rather than a deterministic failure (a 4xx, auth error, or bad request) that will fail
+    # infrastructure fault worth retrying (server-side 5xx, rate-limiting, a network/TLS blip, or a
+    # runner disk I/O error) rather than a deterministic failure (a 4xx, auth error, or bad request)
+    # that will fail
     # identically on every attempt? Deliberately conservative - an unrecognized message is treated
     # as NON-transient so a genuine error surfaces immediately instead of hiding behind slow retries.
     [CmdletBinding()]
@@ -84,7 +85,12 @@ function Test-TransientFailure {
         'temporary failure in name resolution',
         'network is unreachable',
         'TLS handshake',
-        'unexpected eof'
+        'unexpected eof',
+        # Runner disk I/O faults - the `os error 5` blip that motivated owning the toolchain step.
+        # Match the descriptive EIO text (rustc renders io errors as "<description> (os error N)")
+        # rather than the raw errno, which on Windows means access-denied and is often deterministic.
+        'input/output error',
+        'i/o error'
     ) -join '|'
 
     return [bool] ($Message -match "(?i)($transient)")
