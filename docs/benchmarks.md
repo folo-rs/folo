@@ -37,7 +37,7 @@ Do not forget to register benchmarks in `Cargo.toml`.
 
 Unless the benchmark's *purpose* is to measure I/O or some other
 operating-system service, keep syscalls out of the measured path. Syscalls
-(opening files, network access, reading the real-time clock, and so on) have
+(opening files, accessing the network, spawning processes, and so on) have
 unpredictable latency that depends on kernel scheduling, filesystem and device
 state, caches, and unrelated processes on the machine. That is noise which has
 nothing to do with the code under test and which varies from run to run and from
