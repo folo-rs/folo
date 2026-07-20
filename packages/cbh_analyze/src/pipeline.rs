@@ -293,7 +293,7 @@ where
     )
     .await;
     reporter.timing(
-        "comparison-base lag classification (branch mode)",
+        "comparison-base lag classification (classify_comparison_base_lags)",
         lag_started.elapsed(),
     );
 
