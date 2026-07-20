@@ -930,6 +930,42 @@ Because it exists to
 fit a downstream cap rather than to present the analysis, it is offered only by `analyze`,
 never by the enumerating commands, and the retained-count is a fixed policy of the renderer.
 
+### 8.8 Comparison-base lag (branch mode)
+
+Branch mode compares the tip against the recent base-side points of the *same* discriminant set.
+On rotating CI machine pools (§4) the newest base commits may carry data only under a different
+machine key, so the branch runner's key has usable base data only several commits behind the
+merge-base — the comparison silently reaches back in history. Counts are never compared across
+machine keys, so the tool cannot bridge that gap; it only **discloses** it.
+
+Each surviving branch finding records the first-parent index of the newest base-side point it was
+actually compared against — its **comparison base**. A finding whose comparison base sits behind
+the merge-base *lags*, by the first-parent distance between the two. History mode has no single
+comparison base and never lags. The lag is measured from the detector's real comparison point, not
+from raw run occupancy: a partial run can be newer than the point a particular series was compared
+against, so occupancy would overstate coverage.
+
+A lag is classified by *why* the newer base commits were unusable:
+
+* **discriminant set mismatch** — a newer base-side clean run for the same benchmark and metric
+  exists, but under a different machine key: pool rotation, not missing measurements.
+* **no base data at more recent commits** — no newer base-side run for that series exists at all.
+
+Mismatch evidence is satisfied from the already-loaded series first (the whole story under
+`--machine-key all`, where every key is resident) and otherwise from the base-side clean runs under
+other machine keys found in the same partition listing, fetched lazily and only when a lagging
+finding could use them. Raw storage occupancy is only a discovery index — a partial run may omit the
+affected benchmark or metric — so a mismatch is asserted only from a parsed payload that actually
+carries the finding's benchmark and metric.
+
+Because partial runs can leave different findings in one set with different comparison bases or
+reasons, the lag is reported **per discriminant set** as a deduplicated, deterministically ordered
+list rather than a single value; the normal whole-suite case yields exactly one warning line per
+affected set. It is per-set metadata, distinct from the top-level dirty-base-tip warning, surfaced
+in every format (§8.7) — after each affected set's header in text and Markdown, once per affected
+set in the condensed summary, and as an optional `comparison_base_lags` array on each JSON set — and
+never changes finding selection or the exit code.
+
 ## 9. Architecture
 
 The tool is a **shell** (the CLI binary and its library) plus a family of small, private-use

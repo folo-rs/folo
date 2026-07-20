@@ -28,6 +28,7 @@ use cbh_storage::{Storage, StorageFacade, resolve_storage};
 use jiff::Timestamp;
 use tick::Clock;
 
+use super::comparison_base::classify_comparison_base_lags;
 use super::dataset::{empty_history_hint, select_dataset};
 use super::facets::AutoFacets;
 use super::history::dirty_base_exception_warning;
@@ -277,6 +278,25 @@ where
         .count();
     let notable = !findings.is_empty();
 
+    // Disclose when a branch finding's comparison base lags the merge-base — the
+    // recent base commits carry data only under a rotated machine key, or none at
+    // all. Classified per set from the detector's actual comparison point, drawing on
+    // the already loaded series first and only then a lazy sibling fetch.
+    let lag_started = Instant::now();
+    let comparison_base_lags = classify_comparison_base_lags(
+        storage,
+        &findings,
+        &series,
+        dataset.merge_base_index,
+        &dataset.sibling_observations,
+        reporter,
+    )
+    .await?;
+    reporter.timing(
+        "comparison-base lag classification (branch mode)",
+        lag_started.elapsed(),
+    );
+
     // Break the report down by comparable set so each partition reads on its own.
     let mut sets: Vec<DiscriminantSet> = series.iter().map(|one| one.set.clone()).collect();
     sets.sort();
@@ -291,6 +311,7 @@ where
                 .iter()
                 .filter(|finding| &finding.set == set)
                 .collect(),
+            comparison_base_lags: comparison_base_lags.get(set).cloned().unwrap_or_default(),
         })
         .collect();
 
@@ -528,7 +549,46 @@ mod tests {
         git
     }
 
-    /// A linear master history `c0 - c1 - c2 - c3 - c4 - c5`, HEAD at the tip.
+    /// A five-commit master history `c0..c4` with a feature branch off the tip `c4`:
+    ///
+    /// ```text
+    /// master:  c0 - c1 - c2 - c3 - c4
+    ///                               \
+    /// feature:                       f1 - f2   (HEAD)
+    /// ```
+    ///
+    /// Lets the PR runner's machine key carry base data only up to `c3` (one commit
+    /// behind the `c4` merge-base) while a sibling machine key holds `c4`, so a
+    /// surviving branch finding's comparison base lags by one commit.
+    fn feature_off_c4_git() -> FakeGitHistory {
+        let mut git = FakeGitHistory::new();
+        git.commit("c0", None)
+            .commit("c1", Some("c0"))
+            .commit("c2", Some("c1"))
+            .commit("c3", Some("c2"))
+            .commit("c4", Some("c3"))
+            .commit("f1", Some("c4"))
+            .commit("f2", Some("f1"))
+            .branch("master", "c4")
+            .branch("feature", "f2")
+            .head("feature")
+            .mark_default("master");
+        git
+    }
+
+    /// Seeds the PR runner's (`m1`) base and feature runs for [`feature_off_c4_git`]:
+    /// a flat base line at `c0..c3` (the `c4` tip is missing for `m1`) and a raised
+    /// feature regime `f1`, `f2`, and a dirty `f2` snapshot, large enough to flag.
+    fn seed_lagging_branch(storage: &MemoryStorage) {
+        store(storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
+        store(storage, &clean_key("c1"), &ir_set(1, "c1", 100.0));
+        store(storage, &clean_key("c2"), &ir_set(2, "c2", 100.0));
+        store(storage, &clean_key("c3"), &ir_set(3, "c3", 100.0));
+        store(storage, &clean_key("f1"), &ir_set(4, "f1", 130.0));
+        store(storage, &clean_key("f2"), &ir_set(5, "f2", 130.0));
+        store(storage, &dirty_key("f2", 6), &ir_set(6, "f2", 130.0));
+    }
+
     ///
     /// Long enough to host a sustained level shift with at least two points on
     /// each side, which the change-point detector requires before it flags.
@@ -1200,6 +1260,93 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["runs"], 7, "the dirty f2 snapshot is admitted");
         assert_eq!(regressions, 1, "the admitted dirty f2 completes the step");
+    }
+
+    #[test]
+    fn a_lagging_comparison_base_with_a_sibling_run_warns_of_a_mismatch() {
+        // The PR runner's key (m1) carries base data only through c3, one commit
+        // behind the c4 merge-base, while a sibling key (m2) holds the same benchmark
+        // and metric at c4. The finding's comparison base therefore lags by one commit
+        // because of machine-key rotation, and every surface must disclose it.
+        let storage = MemoryStorage::new();
+        seed_lagging_branch(&storage);
+        store(
+            &storage,
+            &clean_key_in("callgrind", "x86_64-unknown-linux-gnu", "m2", "c4"),
+            &ir_set(7, "c4", 100.0),
+        );
+        let git = feature_off_c4_git();
+
+        let (text, regressions) = analyze(&git, &storage, "folo", &options());
+        assert_eq!(regressions, 1);
+        assert!(
+            text.contains(
+                "Warning: comparison base is 1 commit behind base (discriminant set mismatch)"
+            ),
+            "{text}"
+        );
+
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &options());
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let lags = &parsed["sets"][0]["comparison_base_lags"];
+        assert_eq!(lags[0]["commits_behind"], 1, "{report}");
+        assert_eq!(lags[0]["reason"], "discriminant_set_mismatch", "{report}");
+    }
+
+    #[test]
+    fn a_lagging_comparison_base_without_a_sibling_warns_of_missing_data() {
+        // Same one-commit lag, but no sibling key holds newer base data at all, so the
+        // reason is ordinary missing base data rather than machine-key rotation.
+        let storage = MemoryStorage::new();
+        seed_lagging_branch(&storage);
+        let git = feature_off_c4_git();
+
+        let (text, regressions) = analyze(&git, &storage, "folo", &options());
+        assert_eq!(regressions, 1);
+        assert!(
+            text.contains(
+                "Warning: comparison base is 1 commit behind base \
+                 (no base data at more recent commits)"
+            ),
+            "{text}"
+        );
+
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &options());
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let lags = &parsed["sets"][0]["comparison_base_lags"];
+        assert_eq!(lags[0]["reason"], "no_recent_base_data", "{report}");
+    }
+
+    #[test]
+    fn a_comparison_base_reaching_the_merge_base_warns_of_nothing() {
+        // When m1 also carries the c4 merge-base tip, the comparison base reaches it
+        // and no comparison-base warning is emitted on any surface.
+        let storage = MemoryStorage::new();
+        seed_lagging_branch(&storage);
+        store(&storage, &clean_key("c4"), &ir_set(7, "c4", 100.0));
+        let git = feature_off_c4_git();
+
+        let (text, _) = analyze(&git, &storage, "folo", &options());
+        assert!(!text.contains("comparison base is"), "{text}");
+
+        let (report, _, _) = analyze_json(&git, &storage, "folo", &options());
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert!(
+            parsed["sets"][0]["comparison_base_lags"].is_null(),
+            "an unaffected set omits the field entirely: {report}"
+        );
+    }
+
+    #[test]
+    fn history_mode_never_warns_of_a_lagging_comparison_base() {
+        // History mode has no single comparison base, so the warning never applies
+        // even when older commits carry data under a different machine key.
+        let storage = MemoryStorage::new();
+        seed_linear_step(&storage);
+        let git = linear6_git();
+
+        let (text, _) = analyze(&git, &storage, "folo", &options());
+        assert!(!text.contains("comparison base is"), "{text}");
     }
 
     #[test]

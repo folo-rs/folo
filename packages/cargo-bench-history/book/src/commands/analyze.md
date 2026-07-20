@@ -57,6 +57,20 @@ Text goes to stdout by default. File toggles compose, so a single pass can emit 
 Markdown, and JSON at once; requesting no output at all is an error. A derived, condensed
 Markdown **summary** is also available for a size-limited downstream consumer.
 
+> **Comparison-base warnings (branch mode)**
+> On rotating CI machine pools the newest base commits may carry data only under a different
+> machine key, so the PR runner's key compares its tip against base data a few commits behind
+> the merge-base. When that happens, the affected discriminant set carries a warning naming how
+> far behind and why:
+>
+> - *discriminant set mismatch* — newer base data exists, but under a different machine key
+>   (pool rotation); counts are never compared across machine keys.
+> - *no base data at more recent commits* — no newer base run exists for that series at all.
+>
+> The warning appears in every format (per set in text, Markdown, and the summary; a
+> `comparison_base_lags` array on each JSON set). It is advisory only and never changes which
+> findings are reported or the exit code.
+
 **Findings never affect the exit code**: the process exits non-zero only when the analysis
 fails to *run*. A finding is advisory; the machine-readable signal lives in the JSON report,
 which downstream automation should read rather than the exit status.

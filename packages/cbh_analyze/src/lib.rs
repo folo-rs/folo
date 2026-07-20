@@ -35,6 +35,7 @@
 
 mod announce;
 mod bless;
+mod comparison_base;
 mod dataset;
 mod error;
 mod examine;
