@@ -140,7 +140,8 @@ struct JsonSet<'a> {
     engine: &'a str,
     /// Resolved target triple.
     target_triple: &'a str,
-    /// Machine key: the fingerprint of the machine that produced the runs.
+    /// Machine key: the partition value the runs were stored under (a hardware
+    /// fingerprint, or an explicit `--machine-key` override such as a pool label).
     machine_key: &'a str,
     /// Stored runs loaded for this set.
     runs: usize,
