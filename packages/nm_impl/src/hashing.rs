@@ -11,6 +11,7 @@ use foldhash::fast::FixedState;
 /// maps: byte-identical source produces a different count on every build. A
 /// fixed seed removes that variance.
 ///
-/// Event names are internal identifiers rather than attacker-controlled input,
-/// so forgoing the default `HashDoS` resistance carries no risk here.
+/// Event names are expected to be a bounded set of trusted, internally-chosen
+/// identifiers rather than attacker-controlled input, so trading the default
+/// `HashDoS` resistance for determinism is appropriate here.
 pub(crate) type HashMap<K, V> = std::collections::HashMap<K, V, FixedState>;

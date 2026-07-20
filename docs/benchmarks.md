@@ -76,16 +76,17 @@ A Callgrind instruction count is only meaningful if byte-identical source
 produces the same count across builds. One subtle way to break that is a
 `HashMap`/`HashSet` built with a **default, randomly-seeded hasher**.
 
-The default hashers in `std` (`RandomState`) and `foldhash`
-(`foldhash::fast::RandomState`) derive their seed from process memory addresses
-(stack pointers and code/static segment locations), not from a runtime RNG.
-Within a single binary Valgrind disables ASLR, so a benchmark is deterministic
-run-to-run. But a **different build** — a different commit, or even the same
-commit linked at a different address — gets a different seed, which changes hash
-iteration order and probe counts, which changes the instruction count on
-byte-identical benchmark logic. The result is phantom regressions and
-improvements in benchmark history that track nothing but the linker's address
-assignments.
+These default seeds are not fixed at compile time. `std`'s `RandomState` draws
+its seed from the operating system RNG, so it varies from run to run.
+`foldhash::fast::RandomState` instead derives its seed from process memory
+addresses (stack pointers and code/static segment locations). The address-based
+scheme is stable within a single binary under Valgrind — which disables ASLR, so
+the benchmark reproduces run-to-run — but a **different build** (a different
+commit, or even the same commit linked at a different address) gets a different
+seed. Either way the seed is unrelated to the benchmark's logic, so hash
+iteration order and probe counts shift, changing the instruction count on
+byte-identical source. The result is phantom regressions and improvements in
+benchmark history that track nothing but the seed.
 
 The symptom is distinctive: only the benchmarks that **build or iterate a hash
 container** jitter across builds, while every other benchmark is bit-stable. A
@@ -105,8 +106,9 @@ type HashMap<K, V> = std::collections::HashMap<K, V, FixedState>;
 let map = HashMap::default(); // FixedState: Default, so this is deterministic
 ```
 
-Only drop the randomized seed where the keys are not attacker-controlled, since
-a fixed seed forfeits HashDoS resistance. For internal registries keyed by
-compile-time-known names (the `nm_impl` case) that trade-off is safe; for maps
-keyed by untrusted external input, keep the randomized seed and instead avoid
-measuring hash-container iteration in an instruction-count benchmark.
+Only drop the randomized seed where the keys are trusted rather than
+attacker-controlled, since a fixed seed forfeits HashDoS resistance. For
+internal registries keyed by a bounded set of trusted names (the `nm_impl`
+case) that trade-off is appropriate; for maps keyed by untrusted external
+input, keep the randomized seed and instead avoid measuring hash-container
+iteration in an instruction-count benchmark.
