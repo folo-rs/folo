@@ -46,8 +46,8 @@ fn entrypoint(c: &mut Criterion) {
 
     let mut g = c.benchmark_group("vicinal/spawn");
 
-    let spawn_single_alloc = allocs.operation("spawn_single");
-    let spawn_single_time = times.operation("spawn_single");
+    let spawn_single_alloc = allocs.operation("vicinal/spawn/spawn_single");
+    let spawn_single_time = times.operation("vicinal/spawn/spawn_single");
 
     g.bench_function("spawn_single", |b| {
         let pool = Pool::new();
@@ -67,8 +67,8 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let spawn_100_alloc = allocs.operation("spawn_100");
-    let spawn_100_time = times.operation("spawn_100");
+    let spawn_100_alloc = allocs.operation("vicinal/spawn/spawn_100");
+    let spawn_100_time = times.operation("vicinal/spawn/spawn_100");
 
     g.bench_function("spawn_100", |b| {
         let pool = Pool::new();
@@ -99,8 +99,8 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let spawn_urgent_single_alloc = allocs.operation("spawn_urgent_single");
-    let spawn_urgent_single_time = times.operation("spawn_urgent_single");
+    let spawn_urgent_single_alloc = allocs.operation("vicinal/spawn/spawn_urgent_single");
+    let spawn_urgent_single_time = times.operation("vicinal/spawn/spawn_urgent_single");
 
     g.bench_function("spawn_urgent_single", |b| {
         let pool = Pool::new();
@@ -124,8 +124,8 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let spawn_urgent_100_alloc = allocs.operation("spawn_urgent_100");
-    let spawn_urgent_100_time = times.operation("spawn_urgent_100");
+    let spawn_urgent_100_alloc = allocs.operation("vicinal/spawn/spawn_urgent_100");
+    let spawn_urgent_100_time = times.operation("vicinal/spawn/spawn_urgent_100");
 
     g.bench_function("spawn_urgent_100", |b| {
         let pool = Pool::new();
@@ -160,8 +160,8 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let thread_single_alloc = allocs.operation("thread_single");
-    let thread_single_time = times.operation("thread_single");
+    let thread_single_alloc = allocs.operation("vicinal/spawn/thread_single");
+    let thread_single_time = times.operation("vicinal/spawn/thread_single");
 
     g.bench_function("thread_single", |b| {
         b.iter_custom(|iterations| {
@@ -178,8 +178,8 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let thread_100_alloc = allocs.operation("thread_100");
-    let thread_100_time = times.operation("thread_100");
+    let thread_100_alloc = allocs.operation("vicinal/spawn/thread_100");
+    let thread_100_time = times.operation("vicinal/spawn/thread_100");
 
     g.bench_function("thread_100", |b| {
         b.iter_custom(|iterations| {
@@ -207,8 +207,8 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let threadpool_single_alloc = allocs.operation("threadpool_single");
-    let threadpool_single_time = times.operation("threadpool_single");
+    let threadpool_single_alloc = allocs.operation("vicinal/spawn/threadpool_single");
+    let threadpool_single_time = times.operation("vicinal/spawn/threadpool_single");
 
     g.bench_function("threadpool_single", |b| {
         // Vicinal pool defaults to 2 threads per processor, so we match.
@@ -250,8 +250,8 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let threadpool_100_alloc = allocs.operation("threadpool_100");
-    let threadpool_100_time = times.operation("threadpool_100");
+    let threadpool_100_alloc = allocs.operation("vicinal/spawn/threadpool_100");
+    let threadpool_100_time = times.operation("vicinal/spawn/threadpool_100");
 
     g.bench_function("threadpool_100", |b| {
         // Vicinal pool defaults to 2 threads per processor, so we match.
@@ -309,8 +309,10 @@ fn entrypoint(c: &mut Criterion) {
     // This group includes both regular spawn (with event) and spawn_and_forget for fair comparison.
     let mut g = c.benchmark_group("vicinal/fire_and_forget");
 
-    let spawn_with_event_single_alloc = allocs.operation("spawn_with_event_single");
-    let spawn_with_event_single_time = times.operation("spawn_with_event_single");
+    let spawn_with_event_single_alloc =
+        allocs.operation("vicinal/fire_and_forget/spawn_with_event_single");
+    let spawn_with_event_single_time =
+        times.operation("vicinal/fire_and_forget/spawn_with_event_single");
 
     g.bench_function("spawn_with_event_single", |b| {
         let pool = Pool::new();
@@ -340,8 +342,9 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let spawn_with_event_100_alloc = allocs.operation("spawn_with_event_100");
-    let spawn_with_event_100_time = times.operation("spawn_with_event_100");
+    let spawn_with_event_100_alloc =
+        allocs.operation("vicinal/fire_and_forget/spawn_with_event_100");
+    let spawn_with_event_100_time = times.operation("vicinal/fire_and_forget/spawn_with_event_100");
 
     g.bench_function("spawn_with_event_100", |b| {
         let pool = Pool::new();
@@ -383,8 +386,10 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let spawn_and_forget_single_alloc = allocs.operation("spawn_and_forget_single");
-    let spawn_and_forget_single_time = times.operation("spawn_and_forget_single");
+    let spawn_and_forget_single_alloc =
+        allocs.operation("vicinal/fire_and_forget/spawn_and_forget_single");
+    let spawn_and_forget_single_time =
+        times.operation("vicinal/fire_and_forget/spawn_and_forget_single");
 
     g.bench_function("spawn_and_forget_single", |b| {
         let pool = Pool::new();
@@ -413,8 +418,9 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let spawn_and_forget_100_alloc = allocs.operation("spawn_and_forget_100");
-    let spawn_and_forget_100_time = times.operation("spawn_and_forget_100");
+    let spawn_and_forget_100_alloc =
+        allocs.operation("vicinal/fire_and_forget/spawn_and_forget_100");
+    let spawn_and_forget_100_time = times.operation("vicinal/fire_and_forget/spawn_and_forget_100");
 
     g.bench_function("spawn_and_forget_100", |b| {
         let pool = Pool::new();

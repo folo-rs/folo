@@ -37,7 +37,8 @@ fn entrypoint(c: &mut Criterion) {
         // its own stdout and file output on drop.
         let alloc_session = Session::new().no_stdout().no_file();
 
-        let process_op = alloc_session.operation("empty_process_span");
+        let process_op =
+            alloc_session.operation("alloc_tracker_tracking_overhead/overhead/process_span_empty");
         group.bench_function("process_span_empty", |b| {
             b.iter(|| {
                 let _span = process_op.measure_process().iterations(1);
@@ -46,7 +47,8 @@ fn entrypoint(c: &mut Criterion) {
             });
         });
 
-        let thread_op = alloc_session.operation("empty_thread_span");
+        let thread_op =
+            alloc_session.operation("alloc_tracker_tracking_overhead/overhead/thread_span_empty");
         group.bench_function("thread_span_empty", |b| {
             b.iter(|| {
                 let _span = thread_op.measure_thread().iterations(1);

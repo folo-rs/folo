@@ -51,7 +51,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
     group.sample_size(2000);
 
     // Box::pin() baseline with churn (insertion + removal pattern)
-    let allocs_op = allocs.operation("Box::pin()");
+    let allocs_op = allocs.operation("infinity_pool_vs_std/churn_insertion/Box::pin()");
     group.bench_function("Box::pin()", |b| {
         b.iter_custom(|iters| {
             let mut all_boxes = Vec::with_capacity(iters as usize);
@@ -95,7 +95,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
     });
 
     // Rc::pin() baseline with churn (insertion + removal pattern)
-    let allocs_op = allocs.operation("Rc::pin()");
+    let allocs_op = allocs.operation("infinity_pool_vs_std/churn_insertion/Rc::pin()");
     group.bench_function("Rc::pin()", |b| {
         b.iter_custom(|iters| {
             let mut all_rcs = Vec::with_capacity(iters as usize);
@@ -139,7 +139,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
     });
 
     // Arc::pin() baseline with churn (insertion + removal pattern)
-    let allocs_op = allocs.operation("Arc::pin()");
+    let allocs_op = allocs.operation("infinity_pool_vs_std/churn_insertion/Arc::pin()");
     group.bench_function("Arc::pin()", |b| {
         b.iter_custom(|iters| {
             let mut all_arcs = Vec::with_capacity(iters as usize);
@@ -183,7 +183,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
     });
 
     // PinnedPool<T> (thread-safe, reference counted) with churn
-    let allocs_op = allocs.operation("PinnedPool");
+    let allocs_op = allocs.operation("infinity_pool_vs_std/churn_insertion/PinnedPool");
     group.bench_function("PinnedPool", |b| {
         b.iter_custom(|iters| {
             let mut all_pools = Vec::with_capacity(iters as usize);
@@ -228,7 +228,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
     });
 
     // LocalPinnedPool<T> (single-threaded, reference counted) with churn
-    let allocs_op = allocs.operation("LocalPinnedPool");
+    let allocs_op = allocs.operation("infinity_pool_vs_std/churn_insertion/LocalPinnedPool");
     group.bench_function("LocalPinnedPool", |b| {
         b.iter_custom(|iters| {
             let mut all_pools = Vec::with_capacity(iters as usize);
@@ -273,7 +273,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
     });
 
     // RawPinnedPool<T> (raw, manual lifetime management) with churn
-    let allocs_op = allocs.operation("RawPinnedPool");
+    let allocs_op = allocs.operation("infinity_pool_vs_std/churn_insertion/RawPinnedPool");
     group.bench_function("RawPinnedPool", |b| {
         b.iter_custom(|iters| {
             let mut all_pools = Vec::with_capacity(iters as usize);
@@ -321,7 +321,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
     });
 
     // OpaquePool (thread-safe, reference counted, type-erased) with churn
-    let allocs_op = allocs.operation("OpaquePool");
+    let allocs_op = allocs.operation("infinity_pool_vs_std/churn_insertion/OpaquePool");
     group.bench_function("OpaquePool", |b| {
         b.iter_custom(|iters| {
             let mut all_pools = Vec::with_capacity(iters as usize);
@@ -366,7 +366,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
     });
 
     // LocalOpaquePool (single-threaded, reference counted, type-erased) with churn
-    let allocs_op = allocs.operation("LocalOpaquePool");
+    let allocs_op = allocs.operation("infinity_pool_vs_std/churn_insertion/LocalOpaquePool");
     group.bench_function("LocalOpaquePool", |b| {
         b.iter_custom(|iters| {
             let mut all_pools = Vec::with_capacity(iters as usize);
@@ -411,7 +411,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
     });
 
     // RawOpaquePool (raw, manual lifetime management, type-erased) with churn
-    let allocs_op = allocs.operation("RawOpaquePool");
+    let allocs_op = allocs.operation("infinity_pool_vs_std/churn_insertion/RawOpaquePool");
     group.bench_function("RawOpaquePool", |b| {
         b.iter_custom(|iters| {
             let mut all_pools = Vec::with_capacity(iters as usize);
@@ -459,7 +459,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
     });
 
     // BlindPool (thread-safe, reference counted, multiple types) with churn
-    let allocs_op = allocs.operation("BlindPool");
+    let allocs_op = allocs.operation("infinity_pool_vs_std/churn_insertion/BlindPool");
     group.bench_function("BlindPool", |b| {
         b.iter_custom(|iters| {
             let mut all_pools = Vec::with_capacity(iters as usize);
@@ -504,7 +504,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
     });
 
     // LocalBlindPool (single-threaded, reference counted, multiple types) with churn
-    let allocs_op = allocs.operation("LocalBlindPool");
+    let allocs_op = allocs.operation("infinity_pool_vs_std/churn_insertion/LocalBlindPool");
     group.bench_function("LocalBlindPool", |b| {
         b.iter_custom(|iters| {
             let mut all_pools = Vec::with_capacity(iters as usize);
@@ -549,7 +549,7 @@ fn churn_insertion_benchmark(c: &mut Criterion) {
     });
 
     // RawBlindPool (raw, manual lifetime management, multiple types) with churn
-    let allocs_op = allocs.operation("RawBlindPool");
+    let allocs_op = allocs.operation("infinity_pool_vs_std/churn_insertion/RawBlindPool");
     group.bench_function("RawBlindPool", |b| {
         b.iter_custom(|iters| {
             let mut all_pools = Vec::with_capacity(iters as usize);
