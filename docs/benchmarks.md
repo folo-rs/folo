@@ -33,6 +33,26 @@ benchmark function and in the same benchmark group.
 
 Do not forget to register benchmarks in `Cargo.toml`.
 
+## Avoid syscalls unless I/O is the thing being measured
+
+Unless the benchmark's *purpose* is to measure I/O or some other
+operating-system service, keep syscalls out of the measured path. Syscalls
+(opening files, accessing the network, spawning processes, and so on) have
+unpredictable latency that depends on kernel scheduling, filesystem and device
+state, caches, and unrelated processes on the machine. That is noise which has
+nothing to do with the code under test and which varies from run to run and from
+machine to machine.
+
+When a benchmark needs a stand-in "workload" to represent the body of a task,
+use a small, deterministic, CPU-only computation seeded with `black_box` (so the
+optimizer cannot fold it away) rather than a syscall standing in as busywork.
+
+Some syscalls are genuinely unavoidable — spawning a thread, for example, is
+inherently a kernel operation and is the very thing a worker-pool benchmark
+exists to measure. Even then, minimize them: perform the unavoidable syscalls
+once during setup where possible, and keep them out of the per-iteration
+workload.
+
 Benchmark file names, Criterion group names, and Callgrind group/function names
 follow strict conventions documented in [`docs/naming.md`](naming.md): the file
 basename prefixes Criterion group names, Callgrind files require a paired
