@@ -57,3 +57,7 @@ pub(crate) const RESIDUAL_NOISE_MULTIPLE: f64 = 3.0;
 /// Default `min_regime_separation`: the Mann–Whitney probability-of-superiority a
 /// level shift's two regimes must reach to be trusted.
 pub(crate) const MIN_REGIME_SEPARATION: f64 = 0.85;
+
+/// Largest interior window size resolved-spike search will scan; longer histories
+/// skip the quadratic search rather than stall.
+pub(crate) const RESOLVED_SPIKE_MAX_POINTS: usize = 200;

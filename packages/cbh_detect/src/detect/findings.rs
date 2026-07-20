@@ -958,10 +958,6 @@ pub fn short_commit(commit: &str) -> String {
     commit.get(..12).unwrap_or(commit).to_owned()
 }
 
-/// Largest interior window size resolved-spike search will scan; longer histories
-/// skip the (quadratic) search rather than stall.
-const RESOLVED_SPIKE_MAX_POINTS: usize = 200;
-
 /// Locates a *recovered* spike in a (re-baselined) history series: a sustained
 /// interior regime that deviated from baseline and has since returned to it.
 ///
@@ -980,7 +976,7 @@ fn evaluate_resolved_spike(
 ) -> Option<Candidate> {
     let points = &series.points;
     let n = points.len();
-    if n > RESOLVED_SPIKE_MAX_POINTS {
+    if n > noise_gates::RESOLVED_SPIKE_MAX_POINTS {
         return None;
     }
     let min = config.min_regime.max(1);
@@ -2667,9 +2663,9 @@ mod tests {
     )]
     fn resolved_spike_at_the_search_size_limit_is_flagged() {
         // A 200-point history (the inclusive search ceiling) with a recovered plateau
-        // still analyses: the `n > RESOLVED_SPIKE_MAX_POINTS` guard must be a strict
-        // `>`.
-        let mut values = vec![10.0_f64; RESOLVED_SPIKE_MAX_POINTS];
+        // still analyses: the `n > noise_gates::RESOLVED_SPIKE_MAX_POINTS` guard
+        // must be a strict `>`.
+        let mut values = vec![10.0_f64; noise_gates::RESOLVED_SPIKE_MAX_POINTS];
         for value in values.get_mut(90..110).unwrap() {
             *value = 20.0;
         }
@@ -2687,8 +2683,9 @@ mod tests {
     )]
     fn resolved_spike_beyond_the_search_size_limit_is_skipped() {
         // One point past the inclusive search ceiling is rejected outright: the
-        // `n > RESOLVED_SPIKE_MAX_POINTS` guard caps the quadratic plateau search.
-        let mut values = vec![10.0_f64; RESOLVED_SPIKE_MAX_POINTS + 1];
+        // `n > noise_gates::RESOLVED_SPIKE_MAX_POINTS` guard caps the quadratic
+        // plateau search.
+        let mut values = vec![10.0_f64; noise_gates::RESOLVED_SPIKE_MAX_POINTS + 1];
         for value in values.get_mut(90..110).unwrap() {
             *value = 20.0;
         }
