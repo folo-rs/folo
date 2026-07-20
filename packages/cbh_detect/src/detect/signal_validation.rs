@@ -28,10 +28,11 @@
 //!   Branch mode also needs a base side to compare against at all — a case with an empty
 //!   base side leaves it quiet.
 //! * **Absolute scale (dimension 2).** Every case is analysed both as-is and scaled up
-//!   by a large constant. All of the analysis is relative, so the absolute scale must
-//!   not change the verdict: the as-is verdict is checked against the case's
-//!   expectation, and every scaled verdict is checked against that as-is reference, so
-//!   a scale-sensitivity regression fails here.
+//!   by a large constant. The analysis is scale-invariant except for an
+//!   absolute-magnitude floor on quantized metrics, and that floor only ever
+//!   *suppresses* tiny moves — so scaling *up* can never change a verdict: the as-is
+//!   verdict is checked against the case's expectation, and every scaled verdict is
+//!   checked against that as-is reference, so a scale-sensitivity regression fails here.
 //!
 //! Both directions are still exercised without a polarity dimension: every metric is
 //! lower-is-better, so a curated rise is a regression (reported by every mode) and a

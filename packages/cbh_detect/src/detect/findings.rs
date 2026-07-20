@@ -26,6 +26,10 @@
 //! * A Mann–Whitney rank test must then confirm the two regimes differ, the move
 //!   must clear a practical-magnitude floor, and it must exceed the series' own
 //!   between-commit residual scatter (the primary, series-intrinsic noise gate).
+//!   The practical-magnitude floor is relative (a minimum percentage), with an
+//!   absolute floor additionally applied to quantized metrics (the Callgrind integer
+//!   counts, see [`MetricKind::is_quantized`]) so a single-quantum run-to-run wobble
+//!   on a tiny count cannot read as a large-percentage regression.
 //! * Where the engine reports a per-point confidence interval (Criterion,
 //!   `all_the_time`, `alloc_tracker`) the two regimes' intervals must also be
 //!   disjoint; if they overlap this veto *withholds* the finding, treating the
@@ -53,7 +57,7 @@ use cbh_stats as stats;
 use serde::Serialize;
 
 use crate::detect::parallel::{balanced_chunk_sizes, worker_count};
-use crate::detect::{Series, SeriesPoint};
+use crate::detect::{Series, SeriesPoint, noise_gates};
 
 /// Tunable parameters of the engine-aware analysis.
 #[derive(Clone, Copy, Debug)]
@@ -75,6 +79,15 @@ pub struct AnalysisConfig {
     /// Minimum relative magnitude (3%) a noisy move must reach to matter in
     /// practice, regardless of statistical significance.
     pub practical_relative: f64,
+    /// Minimum absolute magnitude, in the metric's own units, a move on a *quantized*
+    /// metric must reach to matter in practice. Composed by conjunction with
+    /// [`practical_relative`](Self::practical_relative): a quantized metric such as a
+    /// Callgrind count moves in whole integer units, so at a small baseline a
+    /// single-unit run-to-run wobble is a large *percentage* move that the relative
+    /// floor alone would let through; requiring an absolute span as well suppresses
+    /// that jitter. Continuous metrics (see [`MetricKind::is_quantized`]) are exempt —
+    /// only the relative floor applies to them.
+    pub practical_absolute: f64,
     /// How many recent base-side points form the level a branch's latest state is
     /// compared against (branch mode).
     pub compare_window: usize,
@@ -110,17 +123,18 @@ pub struct AnalysisConfig {
 impl Default for AnalysisConfig {
     fn default() -> Self {
         Self {
-            min_regime: 2,
-            change_alpha: 0.05,
-            fdr_q: 0.10,
-            drift_min_points: 6,
-            drift_alpha: 0.05,
-            practical_relative: 0.03,
-            compare_window: 8,
-            branch_practical_relative: 0.05,
-            branch_noise_multiple: 2.0,
-            residual_noise_multiple: 3.0,
-            min_regime_separation: 0.85,
+            min_regime: noise_gates::MIN_REGIME,
+            change_alpha: noise_gates::CHANGE_ALPHA,
+            fdr_q: noise_gates::FDR_Q,
+            drift_min_points: noise_gates::DRIFT_MIN_POINTS,
+            drift_alpha: noise_gates::DRIFT_ALPHA,
+            practical_relative: noise_gates::PRACTICAL_RELATIVE,
+            practical_absolute: noise_gates::PRACTICAL_ABSOLUTE,
+            compare_window: noise_gates::COMPARE_WINDOW,
+            branch_practical_relative: noise_gates::BRANCH_PRACTICAL_RELATIVE,
+            branch_noise_multiple: noise_gates::BRANCH_NOISE_MULTIPLE,
+            residual_noise_multiple: noise_gates::RESIDUAL_NOISE_MULTIPLE,
+            min_regime_separation: noise_gates::MIN_REGIME_SEPARATION,
         }
     }
 }
@@ -367,6 +381,20 @@ fn relative_delta_of(delta: f64, baseline: f64) -> f64 {
     }
 }
 
+/// Whether a move clears the absolute-magnitude floor for `series`.
+///
+/// Continuous metrics carry no quantization, so their percentage move is trustworthy
+/// at any magnitude and this gate exempts them (returns `true`). A quantized metric
+/// (see [`MetricKind::is_quantized`]) moves in whole integer units with no confidence
+/// interval, so `delta` must span at least
+/// [`practical_absolute`](AnalysisConfig::practical_absolute) of those units;
+/// otherwise a single-quantum wobble on a tiny baseline would clear the relative
+/// floor and read as a regression. The gate composes with the relative floor by
+/// conjunction and can only *suppress*, never promote, a move.
+fn clears_absolute_floor(series: &Series, delta: f64, config: &AnalysisConfig) -> bool {
+    !series.kind.is_quantized() || delta.abs() >= config.practical_absolute
+}
+
 /// The representative confidence interval of a regime: the median of its points'
 /// lower and upper bounds, available only when the engine reports dispersion.
 fn regime_interval(points: &[&SeriesPoint]) -> Option<(f64, f64)> {
@@ -529,7 +557,8 @@ fn arbitrate(
 /// short series, so it is not used as a significance gate); both regimes must hold
 /// at least `min_regime` points (persistence). The move must then be confirmed by a
 /// significant Mann–Whitney rank-sum difference between the regimes, clear the
-/// practical-magnitude floor, stand above the series' own between-commit residual
+/// practical-magnitude floor (relative, plus an absolute floor on quantized
+/// metrics), stand above the series' own between-commit residual
 /// scatter, separate the two regimes as populations (the Mann–Whitney effect-size
 /// gate that rejects a noisy-but-stable series whose levels interleave), and — when
 /// the engine reports per-point confidence intervals — separate the two regimes'
@@ -566,6 +595,9 @@ fn evaluate_change_point(
         return None;
     }
     if relative_delta.abs() < config.practical_relative {
+        return None;
+    }
+    if !clears_absolute_floor(series, delta, config) {
         return None;
     }
     if !exceeds_residual_noise(delta, step_model_residual(values, tau), config) {
@@ -618,7 +650,8 @@ fn evaluate_change_point(
 ///
 /// The trend is established by the Mann–Kendall test and quantified by the
 /// Theil–Sen line, so a single outlier cannot manufacture a drift. The total
-/// movement must clear the practical-magnitude floor and stand above the series'
+/// movement must clear the practical-magnitude floor (relative, plus an absolute
+/// floor on quantized metrics) and stand above the series'
 /// own residual scatter about the fitted line; where the engine reports confidence
 /// intervals it must additionally exceed the per-measurement noise floor (twice the
 /// median half-width), so jitter does not read as a trend.
@@ -643,6 +676,9 @@ fn evaluate_drift(series: &Series, values: &[f64], config: &AnalysisConfig) -> O
     }
     let relative_delta = relative_delta_of(delta, baseline);
     if relative_delta.abs() < config.practical_relative {
+        return None;
+    }
+    if !clears_absolute_floor(series, delta, config) {
         return None;
     }
     if !exceeds_residual_noise(delta, line_model_residual(values, slope, intercept), config) {
@@ -745,7 +781,8 @@ fn latest_commit_points<'a>(branch: &[&'a SeriesPoint]) -> Vec<&'a SeriesPoint> 
 /// Compares a `before` sample against an `after` sample on the same series and, if
 /// the noise-aware gates pass, returns a change-point [`Candidate`].
 ///
-/// The relative move must clear `practical_floor` and stand above the two samples'
+/// The relative move must clear `practical_floor` and, on a quantized metric, also
+/// span the absolute floor; the move must then stand above the two samples'
 /// own between-commit residual scatter (the primary, series-intrinsic noise gate,
 /// which for a single-run engine like Callgrind is the only dispersion available).
 /// It must then either — when both samples have at least two points — pass a
@@ -775,6 +812,9 @@ fn compare_samples(
     let relative_delta = relative_delta_of(delta, baseline);
 
     if relative_delta.abs() < practical_floor {
+        return None;
+    }
+    if !clears_absolute_floor(series, delta, config) {
         return None;
     }
     if !exceeds_residual_noise(
@@ -930,7 +970,8 @@ const RESOLVED_SPIKE_MAX_POINTS: usize = 200;
 /// the level rose, `flipped_at` where it recovered, `baseline` the pre-spike level,
 /// and `latest` the spike's own level (its magnitude is what is notable). Both the
 /// rise and the recovery must be Mann–Whitney significant, the plateau must clear
-/// the practical-magnitude floor, and the deviation must stand above the rise's own
+/// the practical-magnitude floor (relative, plus an absolute floor on quantized
+/// metrics), and the deviation must stand above the rise's own
 /// residual scatter.
 fn evaluate_resolved_spike(
     series: &Series,
@@ -980,6 +1021,7 @@ fn evaluate_resolved_spike(
     let (rise, recovery, level, deviation) = best?;
     if deviation.abs() <= 0.0
         || relative_delta_of(deviation, baseline).abs() < config.practical_relative
+        || !clears_absolute_floor(series, deviation, config)
     {
         return None;
     }
@@ -1747,6 +1789,38 @@ mod tests {
     }
 
     #[test]
+    fn change_point_below_the_absolute_floor_is_suppressed() {
+        // On a quantized metric a 4-count move clears the relative floor (4/60 ≈ 6.7%
+        // ≥ 3%) and every other gate — significant 3-vs-3 separation, zero residual —
+        // yet is suppressed because it falls short of the absolute floor of 5, where a
+        // single-quantum wobble on a tiny count would otherwise read as a regression.
+        let series = series_of(&[60.0, 60.0, 60.0, 64.0, 64.0, 64.0]);
+        assert!(changes(&[series]).is_empty());
+    }
+
+    #[test]
+    fn change_point_at_the_absolute_floor_is_flagged() {
+        // The absolute floor is a `>=` gate, so a 5-count move exactly at the floor is
+        // still reported (a `>`/`==` mutant would suppress or misgate it).
+        let series = series_of(&[60.0, 60.0, 60.0, 65.0, 65.0, 65.0]);
+        let finding = only(changes(&[series]));
+        assert_eq!(finding.method, FindingMethod::ChangePoint);
+        assert_eq!(finding.delta, 5.0);
+    }
+
+    #[test]
+    fn change_point_absolute_floor_exempts_continuous_metrics() {
+        // The absolute floor only applies to quantized metrics. The same 4-count move
+        // on a continuous wall-time series (which carries dispersion, not quantization)
+        // clears its relative floor and is reported, proving the exemption: were the
+        // gate applied unconditionally, this move would be suppressed too.
+        let series = wall_series(&[60.0, 60.0, 60.0, 64.0, 64.0, 64.0], 0.5);
+        let finding = only(changes(&[series]));
+        assert_eq!(finding.method, FindingMethod::ChangePoint);
+        assert_eq!(finding.delta, 4.0);
+    }
+
+    #[test]
     fn branch_count_rise_is_a_regression() {
         // Branch-execution counts are lower-is-better, so a sustained rise is a
         // regression.
@@ -2132,6 +2206,40 @@ mod tests {
     }
 
     #[test]
+    fn branch_mode_below_the_absolute_floor_is_suppressed() {
+        // A quantized branch tip 4 counts above a small base (60 -> 64) clears the 5%
+        // branch relative floor (6.7%) and the residual gate, but not the absolute
+        // floor of 5, so it is suppressed. Without the gate this single-quantum-scale
+        // move would flag on the pull request.
+        let series = placed_series(&[
+            (0, 60.0, false),
+            (1, 60.0, false),
+            (2, 60.0, false),
+            (3, 64.0, false),
+            (4, 64.0, false),
+            (5, 64.0, false),
+        ]);
+        assert!(branch_changes(&[series], Some(2)).is_empty());
+    }
+
+    #[test]
+    fn branch_mode_at_the_absolute_floor_is_flagged() {
+        // The same shape with a 5-count move (60 -> 65) clears the absolute floor and
+        // is reported, pinning the gate's `>=` boundary in branch mode.
+        let series = placed_series(&[
+            (0, 60.0, false),
+            (1, 60.0, false),
+            (2, 60.0, false),
+            (3, 65.0, false),
+            (4, 65.0, false),
+            (5, 65.0, false),
+        ]);
+        let finding = only(branch_changes(&[series], Some(2)));
+        assert_eq!(finding.direction, Direction::Regression);
+        assert_eq!(finding.latest, 65.0);
+    }
+
+    #[test]
     fn branch_mode_is_silent_for_a_benchmark_new_on_the_branch() {
         // Every point is past the merge-base: no base-side baseline to compare to.
         let series = placed_series(&[(3, 130.0, false), (4, 130.0, false), (5, 130.0, false)]);
@@ -2437,6 +2545,27 @@ mod tests {
     }
 
     #[test]
+    fn drift_below_the_absolute_floor_is_suppressed() {
+        // A clean upward drift on a quantized metric totalling only 4 counts (100 ->
+        // 104). Its relative move (4%) clears the relative floor and the trend is
+        // significant with zero residual, so only the absolute floor of 5 suppresses
+        // it. Removing that gate would let a sub-quantum-scale drift flag.
+        let series = series_of(&[100.0, 100.8, 101.6, 102.4, 103.2, 104.0]);
+        assert!(evaluate_drift(&series, &values_of(&series), &AnalysisConfig::default()).is_none());
+    }
+
+    #[test]
+    fn drift_at_the_absolute_floor_is_flagged() {
+        // The same clean drift totalling exactly 5 counts (100 -> 105) clears the
+        // absolute floor and is flagged, pinning the gate's `>=` boundary.
+        let series = series_of(&[100.0, 101.0, 102.0, 103.0, 104.0, 105.0]);
+        let candidate =
+            evaluate_drift(&series, &values_of(&series), &AnalysisConfig::default()).unwrap();
+        assert_eq!(candidate.finding.method, FindingMethod::Drift);
+        assert_eq!(candidate.finding.delta, 5.0);
+    }
+
+    #[test]
     fn noisy_drift_within_the_measurement_noise_floor_is_suppressed() {
         // The same climb on a noisy engine, but the endpoints (delta 20) do not
         // separate by more than twice the confidence half-width (12): jitter, not a
@@ -2579,15 +2708,40 @@ mod tests {
 
     #[test]
     fn resolved_spike_exactly_at_the_practical_floor_is_a_spike() {
-        // A plateau (103) exactly 3% above baseline (100) meets the floor; the
+        // A plateau (1030) exactly 3% above baseline (1000) meets the floor; the
         // `relative < floor` gate must be a strict `<` (a `<=`/`==` mutant suppresses
-        // it).
-        let series = recovered_spike(100.0, 103.0, 8);
+        // it). The magnitudes are scaled well past the absolute floor so only the
+        // relative gate's strictness is under test here.
+        let series = recovered_spike(1000.0, 1030.0, 8);
         let config = AnalysisConfig {
             practical_relative: 3.0 / 100.0,
             ..AnalysisConfig::default()
         };
         assert!(evaluate_resolved_spike(&series, &values_of(&series), &config).is_some());
+    }
+
+    #[test]
+    fn resolved_spike_below_the_absolute_floor_is_not_a_spike() {
+        // A recovered spike whose plateau rose only 4 counts above a small baseline
+        // (60 -> 64 -> 60) clears the relative floor (6.7%) and the rise/recovery rank
+        // tests, but not the absolute floor of 5, so it is not reported. Without the
+        // gate a single-quantum blip on a tiny count would surface as an inactive spike.
+        let series = recovered_spike(60.0, 64.0, 8);
+        assert!(
+            evaluate_resolved_spike(&series, &values_of(&series), &AnalysisConfig::default())
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn resolved_spike_at_the_absolute_floor_is_a_spike() {
+        // The same spike raised to a 5-count plateau (60 -> 65 -> 60) clears the
+        // absolute floor and is reported, pinning the gate's `>=` boundary.
+        let series = recovered_spike(60.0, 65.0, 8);
+        assert!(
+            evaluate_resolved_spike(&series, &values_of(&series), &AnalysisConfig::default())
+                .is_some()
+        );
     }
 
     #[test]
