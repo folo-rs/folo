@@ -48,7 +48,7 @@ concurrency:
 
 # Title of the rolling failure-alert issue, defined once and shared by the two jobs that
 # reference it: the `alert` job files it under this exact title (via the shared
-# gh-file-rolling-issue recipe), and the `resolve` job matches on it to close that issue.
+# gh-file-rolling-issue recipe), and the `resolve-alert` job matches on it to close that issue.
 # The rolling-issue filing dedups solely by exact title, so this string is the alert's
 # identity; a single definition keeps the open and close paths from drifting apart.
 env:
@@ -390,11 +390,11 @@ jobs:
       # Compose the failure-alert body (interpolating the failed run's URL) into the runner temp
       # dir, then file it with the same Publish-RollingIssue seam the regression path uses - one
       # rolling issue keyed on $FAILURE_ISSUE_TITLE, updated rather than duplicated on each failing
-      # run, and auto-closed by the `resolve` job once the workflow is green again. The ci-failure
-      # label is what `resolve` narrows its close search to. The module is imported directly (not
+      # run, and auto-closed by the `resolve-alert` job once the workflow is green again. The ci-failure
+      # label is what `resolve-alert` narrows its close search to. The module is imported directly (not
       # via `just`) because this lightweight notifier deliberately skips the build-environment
       # setup - the same shape (checkout + preinstalled gh CLI + module import, no build-env setup)
-      # as the sibling `resolve` job's own close step.
+      # as the sibling `resolve-alert` job's own close step.
       - name: Open or update failure issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -428,7 +428,7 @@ jobs:
             -Verbose
           Write-Host "Failure alert issue: $url"
 
-  resolve:
+  resolve-alert:
     # Mirror of `alert`: when collection AND analysis are green again, auto-close the
     # rolling failure issue (if one is open) so a fixed run does not leave a stale
     # alert rotting open. Gated on the needs' results explicitly (rather than the implicit

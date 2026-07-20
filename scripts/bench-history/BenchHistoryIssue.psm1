@@ -74,7 +74,7 @@ function Invoke-GhCapture {
 function Get-OpenIssueByTitle {
     # Returns the first OPEN issue whose title equals $Title exactly, or $null when none matches.
     # The list is narrowed to $Label so only a handful of issues come back, then the exact-title
-    # match is done client-side - the same list-then-match approach the workflow's `resolve` job
+    # match is done client-side - the same list-then-match approach the workflow's `resolve-alert` job
     # uses to find the failure-alert issue, which avoids the eventual-consistency lag of the GitHub
     # search index that a `gh issue list --search`/`gh search issues` query would hit. Isolates the
     # real `gh issue list` call so the tests can mock it.
@@ -141,7 +141,7 @@ function Publish-RollingIssue {
 
 function Close-RollingIssue {
     # Closes EVERY open issue whose title equals $Title exactly among those carrying $Label, each
-    # with an audit $Comment. The mirror image of Publish-RollingIssue: the workflow's `resolve` job
+    # with an audit $Comment. The mirror image of Publish-RollingIssue: the workflow's `resolve-alert` job
     # calls this once the pipeline is green again so a fixed run does not leave the rolling
     # failure-alert issue rotting open. Closing ALL matches (not just the first) sweeps any backlog
     # of historical duplicates in one pass - the same list-then-exact-title approach
