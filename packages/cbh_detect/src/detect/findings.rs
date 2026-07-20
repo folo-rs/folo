@@ -2546,11 +2546,16 @@ mod tests {
 
     #[test]
     fn drift_below_the_absolute_floor_is_suppressed() {
-        // A clean upward drift on a quantized metric totalling only 4 counts (100 ->
-        // 104). Its relative move (4%) clears the relative floor and the trend is
-        // significant with zero residual, so only the absolute floor of 5 suppresses
-        // it. Removing that gate would let a sub-quantum-scale drift flag.
-        let series = series_of(&[100.0, 100.8, 101.6, 102.4, 103.2, 104.0]);
+        // An upward drift on a quantized metric totalling only 4 counts (100 -> 104).
+        // Its relative move (4%) clears the relative floor and the trend is
+        // significant, so disabling the absolute floor admits it; the default floor
+        // of 5 is the gate that suppresses it.
+        let series = series_of(&[100.0, 101.0, 101.0, 102.0, 103.0, 104.0]);
+        let without_absolute_floor = AnalysisConfig {
+            practical_absolute: 0.0,
+            ..AnalysisConfig::default()
+        };
+        assert!(evaluate_drift(&series, &values_of(&series), &without_absolute_floor).is_some());
         assert!(evaluate_drift(&series, &values_of(&series), &AnalysisConfig::default()).is_none());
     }
 
