@@ -195,11 +195,9 @@ where
     // of `--verbose`, naming the resolved (possibly auto-detected) partition, base
     // branch, and context commit, so a plain run never hides a value it defaulted.
     // Emitted before the base-branch guard so even that refusal states what was
-    // selected. When the machine key was auto-detected, a follow-up notice states
-    // that the machine-independent `synthetic` sets are included regardless.
+    // selected.
     announce_selection(
         reporter,
-        &facets,
         &selection_announcement(
             &facets,
             Some(AnnouncedBase {
@@ -316,12 +314,9 @@ where
     // The always-on effective-selection announcement: one line, printed regardless
     // of `--verbose`, naming the resolved (possibly auto-detected) partition and the
     // context commit whose blessings are being removed. `unbless` acts purely at a
-    // commit and never resolves a base branch, so no base segment appears. When the
-    // machine key was auto-detected, a follow-up notice states that the
-    // machine-independent `synthetic` sets are unblessed regardless.
+    // commit and never resolves a base branch, so no base segment appears.
     announce_selection(
         reporter,
-        &facets,
         &selection_announcement(
             &facets,
             None,
@@ -398,11 +393,11 @@ mod tests {
         Config::default()
     }
 
-    /// The auto-detected facets for the default synthetic partition the tests seed.
+    /// The auto-detected facets the tests seed their default partition under.
     fn auto() -> AutoFacets {
         AutoFacets {
             triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "synthetic".to_owned(),
+            machine_key: "m1".to_owned(),
         }
     }
 
@@ -432,7 +427,7 @@ mod tests {
     }
 
     fn clean_key(commit: &str) -> String {
-        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
+        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/clean.json")
     }
 
     /// A linear master history `c0 - c1 - c2`, HEAD at the tip `c2`.
@@ -776,7 +771,7 @@ mod tests {
             reporter.announcements()
         );
         assert!(
-            reporter.announced("machine-key=synthetic (auto-detected)"),
+            reporter.announced("machine-key=m1 (auto-detected)"),
             "{:?}",
             reporter.announcements()
         );
@@ -810,7 +805,7 @@ mod tests {
         ))
         .unwrap();
         assert!(
-            reporter.announced("machine-key=synthetic (auto-detected)"),
+            reporter.announced("machine-key=m1 (auto-detected)"),
             "{:?}",
             reporter.announcements()
         );

@@ -7,13 +7,14 @@
 
 # Collects the whole workspace's benchmark history (excluding the slow, special-purpose
 # `benchmarks` package) into the prod Azure store, keyed by the current commit. The machine
-# partition for noisy wall-clock engines is the runner's OWN auto-detected hardware fingerprint,
+# partition for every engine is the runner's OWN auto-detected hardware fingerprint,
 # NOT a fixed key: the GitHub-hosted runner pool is heterogeneous, and pinning every SKU onto one
-# synthetic series just mixes incomparable machines and jitters daily. Letting each runner stamp
+# shared series just mixes incomparable machines and jitters daily. Letting each runner stamp
 # its real fingerprint splits the data into one clean series per hardware type; the analyze job is
 # fed the exact fingerprints collected this run (see gh-analyze-bench-history) so it surveys only
-# those series. Deterministic engines (Callgrind, allocation/time counters) are hardware-independent
-# and ignore the key. `--best-of 3` counteracts the same runner noise from the other direction: the
+# those series. Every engine is partitioned this way — even Callgrind and the allocation/time
+# counters, whose simulated figures still vary across microarchitectures as libraries dispatch to
+# different code paths. `--best-of 3` counteracts the same runner noise from the other direction: the
 # suite runs three times and each metric keeps its minimum sample, since benchmark interference
 # on a shared runner is one-sided (it only ever makes a case slower) and the runs are spaced far
 # enough apart in time that a transient slowdown is unlikely to hit every one. This roughly
@@ -146,9 +147,10 @@ gh-write-bench-history-machine-key file:
 # repeated `--machine-key <fingerprint>` args via the Pester-tested Get-MachineKeyArgument (see
 # scripts/bench-history/BenchHistoryMachineKey.psm1). Threading the exact keys (rather than
 # `--machine-key all`) keeps the survey scoped to the machines that actually measured this commit and
-# never mixes in a stray key some other machine inserted into the shared store. Only hardware-
-# DEPENDENT engines partition by machine key; deterministic engines (Callgrind, alloc/time counters)
-# are exempt from the machine-key filter inside the tool, so they are analyzed regardless.
+# never mixes in a stray key some other machine inserted into the shared store. Every engine
+# partitions by machine key now — Callgrind and the alloc/time counters included, since their
+# simulated figures still vary across microarchitectures — so the threaded fingerprints scope the
+# whole survey uniformly to the machines that measured this commit.
 #
 # {{keydir}} may be EMPTY when every collect leg failed (a total collect failure uploads nothing):
 # there is then no new data at this commit to survey, so the recipe writes a non-notable placeholder

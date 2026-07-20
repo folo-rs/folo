@@ -5,14 +5,12 @@
 //! recording the per-iteration processor time a benchmark spends together with a
 //! per-iteration slope and its confidence interval estimated over the operation's
 //! measured spans. Processor time depends on the host hardware, so this engine
-//! partitions its history by a machine key (see [`Engine::is_hardware_dependent`]).
-//! The committed fixtures under `tests/fixtures/all_the_time/` are representative
+//! partitions its history by a machine key. The committed fixtures under
+//! `tests/fixtures/all_the_time/` are representative
 //! samples of the current schema; the authoritative schema-drift guard is the
 //! `super::schema_roundtrip` test, which feeds real producer output through this
 //! parser so a field renamed or dropped on either side of the boundary fails the
 //! build.
-//!
-//! [`Engine::is_hardware_dependent`]: cbh_model::Engine::is_hardware_dependent
 
 use std::error::Error;
 use std::fmt;

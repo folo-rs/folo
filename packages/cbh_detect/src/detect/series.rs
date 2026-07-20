@@ -628,7 +628,7 @@ mod tests {
     /// A clean object at `commit` carrying the given instruction-count value.
     fn clean_object(commit: &str, observation: i64, value: f64) -> LoadedObject {
         let object_key = format!(
-            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json"
+            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/clean.json"
         );
         LoadedObject {
             key: parse_key(&object_key).unwrap(),
@@ -640,7 +640,7 @@ mod tests {
     /// A dirty snapshot at `commit` taken at `unix`, carrying the given value.
     fn dirty_object(commit: &str, unix: i64, value: f64) -> LoadedObject {
         let object_key = format!(
-            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/dirty-{unix}.json"
+            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/dirty-{unix}.json"
         );
         LoadedObject {
             key: parse_key(&object_key).unwrap(),
@@ -677,7 +677,7 @@ mod tests {
             .map(|(package, commit, topo_index, dirty, ordinal, value)| {
                 let run = run_for_package(ts(1), commit, value, Some(package));
                 let object_key = format!(
-                    "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json"
+                    "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/clean.json"
                 );
                 let key = parse_key(&object_key).unwrap();
                 (
@@ -826,7 +826,7 @@ mod tests {
     fn build_series_separates_sets() {
         // A second run in a different triple is a different (incomparable) series.
         let other_key =
-            "v1/proj/objects/callgrind/aarch64-unknown-linux-gnu/synthetic/c0/clean.json"
+            "v1/proj/objects/callgrind/aarch64-unknown-linux-gnu/m1/c0/clean.json"
                 .to_owned();
         let other = LoadedObject {
             key: parse_key(&other_key).unwrap(),
@@ -843,9 +843,9 @@ mod tests {
         // Two results share group/case/kind and set but belong to different
         // packages, so they must form two series rather than silently merging.
         let foo_key =
-            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json".to_owned();
+            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/c0/clean.json".to_owned();
         let bar_key =
-            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c1/clean.json".to_owned();
+            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/c1/clean.json".to_owned();
         let objects = vec![
             LoadedObject {
                 key: parse_key(&foo_key).unwrap(),
@@ -866,9 +866,9 @@ mod tests {
     fn build_series_applies_prefix_filter() {
         // Two benchmarks in different packages; a prefix selects only one family.
         let foo_key =
-            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json".to_owned();
+            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/c0/clean.json".to_owned();
         let bar_key =
-            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c1/clean.json".to_owned();
+            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/c1/clean.json".to_owned();
         let objects = vec![
             LoadedObject {
                 key: parse_key(&foo_key).unwrap(),
@@ -983,7 +983,7 @@ mod tests {
         // A blessing recorded only for a *different* set (a different target triple),
         // so the lookup for this series' set misses.
         let other_set = parse_key(
-            "v1/proj/objects/callgrind/aarch64-unknown-linux-gnu/synthetic/c0/clean.json",
+            "v1/proj/objects/callgrind/aarch64-unknown-linux-gnu/m1/c0/clean.json",
         )
         .unwrap()
         .set;
@@ -1013,7 +1013,7 @@ mod tests {
         benches: &[(&str, f64)],
     ) -> LoadedObject {
         let object_key =
-            format!("v1/proj/objects/callgrind/{triple}/synthetic/{commit}/{filename}");
+            format!("v1/proj/objects/callgrind/{triple}/m1/{commit}/{filename}");
         let context = RunContext::new(
             ts(observation),
             GitInfo {
@@ -1121,7 +1121,7 @@ mod tests {
         metrics: &[(MetricKind, f64)],
     ) -> LoadedObject {
         let object_key = format!(
-            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json"
+            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/clean.json"
         );
         let context = RunContext::new(
             ts(observation),
@@ -1262,7 +1262,7 @@ mod tests {
         // distinct id survives as its own series across both resize paths.
         let prefixes: Arc<[BenchmarkIdPrefix]> = Arc::from(Vec::new());
         let key =
-            parse_key("v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json")
+            parse_key("v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/c0/clean.json")
                 .unwrap();
 
         let mut first = SeriesBuilder::with_prefixes(Arc::clone(&prefixes));
@@ -1330,7 +1330,7 @@ mod tests {
         );
         let run = Run::new(context, vec![record]);
         let key =
-            parse_key("v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json")
+            parse_key("v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/c0/clean.json")
                 .unwrap();
 
         let mut builder = SeriesBuilder::new(SeriesFilter::default());

@@ -203,11 +203,9 @@ where
     // of `--verbose`, naming the resolved (possibly auto-detected) partition, base
     // branch, and `--since` cutoff a plain run would otherwise resolve silently.
     // Emitted before the `--prune-base` guard so even that refusal states what was
-    // selected. When the machine key was auto-detected, a follow-up notice states
-    // that the machine-independent `synthetic` sets are pruned along with it.
+    // selected.
     announce_selection(
         reporter,
-        &facets,
         &selection_announcement(
             &facets,
             Some(AnnouncedBase {
@@ -733,11 +731,11 @@ mod tests {
         Config::default()
     }
 
-    /// The auto-detected facets for the default synthetic partition the tests seed.
+    /// The auto-detected facets the tests seed their default partition under.
     fn auto() -> AutoFacets {
         AutoFacets {
             triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "synthetic".to_owned(),
+            machine_key: "m1".to_owned(),
         }
     }
 
@@ -778,18 +776,18 @@ mod tests {
     }
 
     fn clean_key(commit: &str) -> String {
-        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
+        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/clean.json")
     }
 
     fn dirty_key(commit: &str, unix: i64) -> String {
         format!(
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/dirty-{unix}.json"
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/dirty-{unix}.json"
         )
     }
 
     fn bless_key(commit: &str, unix: i64) -> String {
         format!(
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/bless-{unix}.json"
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/bless-{unix}.json"
         )
     }
 
@@ -972,7 +970,7 @@ mod tests {
             reporter.announcements()
         );
         assert!(
-            reporter.announced("machine-key=synthetic (auto-detected)"),
+            reporter.announced("machine-key=m1 (auto-detected)"),
             "{:?}",
             reporter.announcements()
         );
@@ -1428,7 +1426,7 @@ mod tests {
         // A criterion dirty run on the same commit must survive an engine-scoped
         // callgrind prune.
         let criterion_dirty =
-            "v1/folo/objects/criterion/x86_64-unknown-linux-gnu/synthetic/f1/dirty-200.json";
+            "v1/folo/objects/criterion/x86_64-unknown-linux-gnu/m1/f1/dirty-200.json";
         store(&storage, criterion_dirty, &set("f1"));
         let git = feature_git();
 
@@ -1590,7 +1588,7 @@ mod tests {
         let set = DiscriminantSet {
             engine: "callgrind".to_owned(),
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "synthetic".to_owned(),
+            machine_key: "m1".to_owned(),
         };
         // Two clean runs (c0, c1) plus one blessing on c0: an asymmetric mix so a
         // run/blessing miscount diverges from the truth.

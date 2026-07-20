@@ -16,28 +16,32 @@ async fn collect_callgrind_end_to_end_stores_results() {
 
     let (key, set) = workspace.single_object();
 
-    // Synthetic partition (Callgrind is hardware-independent) under the resolved
-    // triple. `collect` auto-detects the host triple, so derive it from the stored
-    // context to keep the assertion host-portable. The temp workspace is outside
-    // any git repository, so the commit resolves to the `unknown` fallback and the
-    // clean tree yields `clean.json`.
+    // Every engine is machine-keyed under the resolved triple and the auto-detected
+    // host fingerprint. `collect` auto-detects both, so derive them from the stored
+    // context to keep the assertion host-portable. The temp workspace is outside any
+    // git repository, so the commit resolves to the `unknown` fallback and the clean
+    // tree yields `clean.json`.
+    //
+    // The host-hardware provenance is recorded on every stored run (write-only); its
+    // fingerprint is the machine key the run partitions under, a 16-char lowercase
+    // hex digest of the probed factors.
     let triple = &set.context.toolchain.target_triple;
-    assert_eq!(
-        key,
-        format!("v1/testproj/objects/callgrind/{triple}/synthetic/unknown/clean.json")
-    );
-
-    assert_eq!(set.schema_version, SCHEMA_VERSION);
-    assert_eq!(set.context.tool_version, TOOL_VERSION);
-
-    // The host-hardware provenance is recorded on every stored run (write-only),
-    // even for a hardware-independent engine: its fingerprint is the auto-detected
-    // machine key, a 16-char lowercase hex digest of the probed factors.
     let machine = set
         .context
         .machine
         .as_ref()
         .expect("collect records host-hardware provenance");
+    assert_eq!(
+        key,
+        format!(
+            "v1/testproj/objects/callgrind/{triple}/{fingerprint}/unknown/clean.json",
+            fingerprint = machine.fingerprint
+        )
+    );
+
+    assert_eq!(set.schema_version, SCHEMA_VERSION);
+    assert_eq!(set.context.tool_version, TOOL_VERSION);
+
     assert!(machine.processors >= 1, "{machine:?}");
     assert!(machine.memory_regions >= 1, "{machine:?}");
     assert_eq!(machine.fingerprint.len(), 16, "{machine:?}");
@@ -278,10 +282,16 @@ async fn collect_criterion_stores_results() {
     assert!(matches!(outcome, RunOutcome::Completed { .. }));
 
     let (key, set) = workspace.single_object();
-    // Criterion partitions by the host triple and a machine fingerprint (never the
-    // `synthetic` segment Callgrind uses).
+    // Criterion is machine-keyed: it partitions by the host triple and the
+    // auto-detected machine fingerprint.
+    let fingerprint = &set
+        .context
+        .machine
+        .as_ref()
+        .expect("collect records host-hardware provenance")
+        .fingerprint;
     assert!(key.contains("/criterion/"), "{key}");
-    assert!(!key.contains("/synthetic/"), "{key}");
+    assert!(key.contains(&format!("/{fingerprint}/")), "{key}");
     assert_eq!(set.results.len(), 1);
     let metric = &set.results[0].metrics[0];
     assert_eq!(metric.kind, MetricKind::WallTime);
@@ -317,39 +327,26 @@ async fn collect_harvests_every_engine_that_produced_output() {
 
     let objects = workspace.stored_objects();
     assert_eq!(objects.len(), 4, "{objects:?}");
-    // Hardware-independent engines (Callgrind instruction counts, allocation
-    // statistics) land in the `synthetic` partition; hardware-dependent engines
-    // (Criterion wall time, `all_the_time` processor time) carry a machine
-    // fingerprint.
-    assert!(
-        objects
-            .iter()
-            .any(|(key, _)| key.contains("/callgrind/") && key.contains("/synthetic/")),
-        "{objects:?}"
-    );
-    assert!(
-        objects
-            .iter()
-            .any(|(key, _)| key.contains("/criterion/") && !key.contains("/synthetic/")),
-        "{objects:?}"
-    );
-    assert!(
-        objects
-            .iter()
-            .any(|(key, _)| key.contains("/alloc_tracker/") && key.contains("/synthetic/")),
-        "{objects:?}"
-    );
-    assert!(
-        objects
-            .iter()
-            .any(|(key, _)| key.contains("/all_the_time/") && !key.contains("/synthetic/")),
-        "{objects:?}"
-    );
+    // Every engine is machine-keyed, so all four sets land under the same
+    // auto-detected host fingerprint, each in its own engine partition.
+    let fingerprint = objects
+        .first()
+        .and_then(|(_, set)| set.context.machine.as_ref())
+        .expect("collect records host-hardware provenance")
+        .fingerprint
+        .clone();
+    for engine in ["callgrind", "criterion", "alloc_tracker", "all_the_time"] {
+        assert!(
+            objects.iter().any(|(key, _)| {
+                key.contains(&format!("/{engine}/")) && key.contains(&format!("/{fingerprint}/"))
+            }),
+            "{engine}: {objects:?}"
+        );
+    }
 }
 
-/// An `alloc_tracker` run stores allocation statistics in the `synthetic`
-/// partition (allocation behavior depends on the code, not the hardware),
-/// carrying both the byte and the count metric.
+/// An `alloc_tracker` run stores allocation statistics in a machine-fingerprinted
+/// partition, carrying both the byte and the count metric.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_alloc_tracker_stores_results() {
@@ -361,7 +358,13 @@ async fn collect_alloc_tracker_stores_results() {
 
     let (key, set) = workspace.single_object();
     assert!(key.contains("/alloc_tracker/"), "{key}");
-    assert!(key.contains("/synthetic/"), "{key}");
+    let fingerprint = &set
+        .context
+        .machine
+        .as_ref()
+        .expect("collect records host-hardware provenance")
+        .fingerprint;
+    assert!(key.contains(&format!("/{fingerprint}/")), "{key}");
     assert_eq!(set.results.len(), 1);
     let record = &set.results[0];
     assert_eq!(record.id.qualified(), "allocate_vec");
@@ -377,8 +380,7 @@ async fn collect_alloc_tracker_stores_results() {
 }
 
 /// An `all_the_time` run stores processor time in a machine-fingerprinted
-/// partition (processor time is hardware-dependent), and `--machine-key` overrides
-/// the fingerprint.
+/// partition, and `--machine-key` overrides the fingerprint.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_all_the_time_is_partitioned_by_machine_key() {
@@ -396,7 +398,6 @@ async fn collect_all_the_time_is_partitioned_by_machine_key() {
         key.contains(&format!("/all_the_time/{triple}/ci-pool-b/")),
         "{key}"
     );
-    assert!(!key.contains("/synthetic/"), "{key}");
     assert_eq!(set.results.len(), 1);
     let record = &set.results[0];
     assert_eq!(record.id.qualified(), "read_cell");

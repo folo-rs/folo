@@ -899,11 +899,11 @@ mod tests {
         Config::default()
     }
 
-    /// The auto-detected facets for the default synthetic partition the tests seed.
+    /// The auto-detected facets the tests seed their default partition under.
     fn auto() -> AutoFacets {
         AutoFacets {
             triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "synthetic".to_owned(),
+            machine_key: "m1".to_owned(),
         }
     }
 
@@ -1001,7 +1001,7 @@ mod tests {
     }
 
     fn clean_key(commit: &str) -> String {
-        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
+        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/clean.json")
     }
 
     fn store(storage: &MemoryStorage, key: &str, set: &Run) {
@@ -1013,7 +1013,7 @@ mod tests {
         DiscriminantSet {
             engine: "callgrind".to_owned(),
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "synthetic".to_owned(),
+            machine_key: "m1".to_owned(),
         }
     }
 
@@ -1026,7 +1026,7 @@ mod tests {
         DiscriminantSet {
             engine: "criterion".to_owned(),
             target_triple: "aarch64-apple-darwin".to_owned(),
-            machine_key: "synthetic".to_owned(),
+            machine_key: "m1".to_owned(),
         }
     }
 
@@ -1091,7 +1091,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("callgrind/x86_64-unknown-linux-gnu/synthetic"),
+            text.contains("callgrind/x86_64-unknown-linux-gnu/m1"),
             "{text}"
         );
         assert!(
@@ -1287,7 +1287,7 @@ mod tests {
         let report = list(&storage, &git, &options());
         assert!(report.contains("Data set for project folo"), "{report}");
         assert!(
-            report.contains("callgrind/x86_64-unknown-linux-gnu/synthetic"),
+            report.contains("callgrind/x86_64-unknown-linux-gnu/m1"),
             "{report}"
         );
         // "series" must not be pluralized into "seriess".
@@ -1394,7 +1394,7 @@ mod tests {
         store(&storage, &clean_key("c0"), &two_metric_set(0, "c0"));
         store(
             &storage,
-            "v1/folo/objects/criterion/x86_64-unknown-linux-gnu/synthetic/c0/clean.json",
+            "v1/folo/objects/criterion/x86_64-unknown-linux-gnu/m1/c0/clean.json",
             &two_metric_set(0, "c0"),
         );
         let git = linear_git();
@@ -1485,9 +1485,9 @@ mod tests {
         assert!(engines.contains(&"callgrind"), "{report}");
         assert!(engines.contains(&"criterion"), "{report}");
 
-        // An explicit facet still narrows the catalog. (`--engine` is the facet
-        // that always discriminates: synthetic partitions are exempt from the
-        // triple and machine-key filters, but never from the engine filter.)
+        // An explicit facet still narrows the catalog. The discriminants catalog
+        // lists every stored partition regardless of the auto-detected triple or
+        // machine key, but an explicit `--engine` still filters it.
         let opts = ListOptions {
             subject: ListSubject::Discriminants,
             engine: vec!["criterion".to_owned()],
@@ -1546,7 +1546,7 @@ mod tests {
         let report = list(&storage, &git, &opts);
         assert!(report.contains("Discriminant sets:"), "{report}");
         assert!(
-            report.contains("callgrind/x86_64-unknown-linux-gnu/synthetic"),
+            report.contains("callgrind/x86_64-unknown-linux-gnu/m1"),
             "{report}"
         );
     }
@@ -1567,7 +1567,7 @@ mod tests {
             "{report}"
         );
         assert!(
-            report.contains("| callgrind | x86_64-unknown-linux-gnu | synthetic |"),
+            report.contains("| callgrind | x86_64-unknown-linux-gnu | m1 |"),
             "{report}"
         );
     }
@@ -1614,7 +1614,7 @@ mod tests {
     /// The blessing-sidecar key in the same partition as [`clean_key`].
     fn bless_key(commit: &str, issued_unix: i64) -> String {
         format!(
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/bless-{issued_unix}.json"
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/bless-{issued_unix}.json"
         )
     }
 

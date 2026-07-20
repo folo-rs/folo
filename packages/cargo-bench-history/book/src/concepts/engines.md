@@ -1,18 +1,19 @@
 # Benchmark engines
 
 `cargo-bench-history` supports four benchmark engines. It does not run them by name — it
-enables the combined environment they all need and harvests whichever produced output. The
-engines split along two axes that drive the whole data model: **hardware-dependent vs.
-hardware-independent** (which decides partitioning), and **whether each measurement carries a
-confidence interval** (which decides how dispersion is gated). No engine is exempt from
-run-to-run noise.
+enables the combined environment they all need and harvests whichever produced output. What
+drives the data model is **whether each measurement carries a confidence interval** (which
+decides how dispersion is gated). No engine is exempt from run-to-run noise, and every
+engine's numbers are machine-dependent in practice — even simulated instruction counts and
+allocation figures vary with the host, because libraries dispatch to different code paths on
+different microarchitectures — so every engine is partitioned by machine key.
 
-| Engine | Measures | Hardware | Confidence interval |
-|---|---|---|---|
-| **Criterion** | Wall-clock time | Dependent | Yes |
-| **Callgrind** (via Gungraun) | Simulated instruction / branch counts | Independent | No (single value) |
-| **`alloc_tracker`** | Heap allocations (bytes and counts) | Independent | Yes |
-| **`all_the_time`** | Processor (CPU) time | Dependent | Yes |
+| Engine | Measures | Confidence interval |
+|---|---|---|
+| **Criterion** | Wall-clock time | Yes |
+| **Callgrind** (via Gungraun) | Simulated instruction / branch counts | No (single value) |
+| **`alloc_tracker`** | Heap allocations (bytes and counts) | Yes |
+| **`all_the_time`** | Processor (CPU) time | Yes |
 
 ## Why no engine is deterministic
 
@@ -35,6 +36,6 @@ never parsed or persisted.
 
 ## Shared shape
 
-Despite differing in units, noise, and hardware-dependence, all four engines reduce to the
+Despite differing in units and noise, all four engines reduce to the
 same shape: *a stable benchmark identity → a set of named numeric metrics*. Every persisted
 metric is **lower-is-better**, so a rise is always a regression and a fall an improvement.

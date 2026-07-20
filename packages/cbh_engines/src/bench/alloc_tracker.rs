@@ -4,9 +4,10 @@
 //! `alloc_tracker` writes one file per operation under `target/alloc_tracker/`,
 //! recording how many bytes and how many allocations a benchmark performs per
 //! iteration, together with a per-iteration slope and its confidence interval
-//! estimated over the operation's measured spans. Allocation behavior does not
-//! depend on the host hardware, so this engine stores its history without a
-//! machine key (see [`Engine::is_hardware_dependent`]). It is *not* deterministic,
+//! estimated over the operation's measured spans. Allocation behavior can vary
+//! across microarchitectures — for example when a dependency dispatches to a
+//! different code path per CPU — so this engine partitions its history by a
+//! machine key. It is *not* deterministic,
 //! however: warmup and buffer-resize allocations are amortized over a
 //! Criterion-chosen iteration count, so the per-iteration figures jitter run to
 //! run. The adapter therefore reads the warmup-robust per-iteration slope. Every
@@ -17,8 +18,6 @@
 //! guard is the `super::schema_roundtrip` test, which feeds real producer output
 //! through this parser so a field renamed or dropped on either side of the
 //! boundary fails the build.
-//!
-//! [`Engine::is_hardware_dependent`]: cbh_model::Engine::is_hardware_dependent
 
 use std::error::Error;
 use std::fmt;

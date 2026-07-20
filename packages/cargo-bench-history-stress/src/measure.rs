@@ -3,8 +3,8 @@
 //! Each mode is run through the real public [`run_with_overrides`] entry point, so
 //! the measured path is exactly production data-loading and detection — only the
 //! data underneath is synthetic. The facet filters are forced to `all` because the
-//! seeded triples and the `synthetic` machine key never match the host the harness
-//! runs on; without that every object would be filtered out.
+//! seeded triples and the seeded machine key never match the host the harness runs
+//! on; without that every object would be filtered out.
 
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
@@ -106,7 +106,7 @@ pub(crate) async fn measure(
     let options = build_options(workspace, repo, mode, storage, logger.verbose());
     logger.step(&format!("analyzing in {} mode", mode.keyword()));
     logger.detail_with(|| format!(
-        "context={}, base={}, facets forced to all (seeded triples and the synthetic machine key \
+        "context={}, base={}, facets forced to all (seeded triples and the seeded machine key \
          never match the host), repeats={repeat}",
         options.context.as_deref().unwrap_or(""),
         options.base.as_deref().unwrap_or(""),

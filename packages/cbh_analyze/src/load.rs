@@ -423,7 +423,7 @@ mod tests {
         let set = DiscriminantSet {
             engine: "criterion".to_owned(),
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "synthetic".to_owned(),
+            machine_key: "m1".to_owned(),
         };
         let mut index = RunIndex::new();
         assert!(index.is_empty(), "a fresh index admits no runs");
@@ -454,12 +454,12 @@ mod tests {
         let set = DiscriminantSet {
             engine: "criterion".to_owned(),
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "synthetic".to_owned(),
+            machine_key: "m1".to_owned(),
         };
         let other_set = DiscriminantSet {
             engine: "callgrind".to_owned(),
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "synthetic".to_owned(),
+            machine_key: "m1".to_owned(),
         };
 
         // The reference index folds every run in one pass.
@@ -509,12 +509,12 @@ mod tests {
         let set = DiscriminantSet {
             engine: "criterion".to_owned(),
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "synthetic".to_owned(),
+            machine_key: "m1".to_owned(),
         };
         let other_set = DiscriminantSet {
             engine: "callgrind".to_owned(),
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "synthetic".to_owned(),
+            machine_key: "m1".to_owned(),
         };
 
         let mut index = RunIndex::new();
@@ -539,7 +539,7 @@ mod tests {
         let set = DiscriminantSet {
             engine: "criterion".to_owned(),
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "synthetic".to_owned(),
+            machine_key: "m1".to_owned(),
         };
         let mut index = RunIndex::new();
         index.record(&set, 0, "solo", false);

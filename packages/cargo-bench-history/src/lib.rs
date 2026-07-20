@@ -52,12 +52,12 @@
 //! * **engine** — the benchmark system (`callgrind`, `criterion`, `alloc_tracker`,
 //!   `all_the_time`), since their numbers are not comparable to each other.
 //! * **target triple** — for example `x86_64-unknown-linux-gnu`.
-//! * **machine key** — a hardware fingerprint, but *only* for engines whose
-//!   results depend on hardware. Deterministic engines (Callgrind instruction
-//!   counts, `alloc_tracker` allocations) are hardware-independent and share a
-//!   single `synthetic` partition; noisy engines (Criterion wall-clock,
-//!   `all_the_time` processor time) are partitioned by machine key so results from
-//!   different machines are never mixed.
+//! * **machine key** — a hardware fingerprint of the host the benchmark ran on.
+//!   Every engine is partitioned by it (Callgrind instruction counts and
+//!   `alloc_tracker` allocations included), because even those figures vary with
+//!   the hardware in practice — libraries dispatch to different code paths on
+//!   different microarchitectures — so results from different machines are never
+//!   mixed.
 //!
 //! Everything else — toolchain version, OS, commit, CI provider — is recorded as
 //! metadata rather than forking history, so its effect stays *visible* as a step

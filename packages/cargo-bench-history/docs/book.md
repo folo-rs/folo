@@ -99,14 +99,14 @@ concept pages link up into the commands that exercise them.
 | `list` | Preview the exact data set `analyze` would consume (`runs` / `discriminants` / `blessings`) without analyzing. |
 | `prune` | Delete a chosen scope of stored data; never touches base-branch history without an explicit confirm. |
 | `bless` / `unbless` | Manually accept an intentional change so history stops re-flagging it; per-benchmark; honored only in history mode. |
-| `machine-key` | Print the hardware fingerprint that hardware-dependent history is partitioned by; `--verbose` explains the factors. |
+| `machine-key` | Print the hardware fingerprint that all history is partitioned by; `--verbose` explains the factors. |
 
 ### Part 3 — Concepts
 
 #### Benchmark engines
 
-- **Goal**: the four engines and the two axes that drive the data model.
-- **Teach**: hardware-dependent vs. -independent (drives partitioning) and confidence-interval vs.
+- **Goal**: the four engines and the axis that drives the data model.
+- **Teach**: every engine is machine-keyed (so partitioning is uniform) and confidence-interval vs.
   single-value (drives dispersion gating); *why no engine is deterministic* (tenet 2); what
   Callgrind deliberately persists vs. discards; the shared identity→metrics shape and
   lower-is-better.

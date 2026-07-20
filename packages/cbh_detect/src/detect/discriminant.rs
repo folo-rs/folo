@@ -19,8 +19,7 @@ use nonempty::NonEmpty;
 /// filtering — [`DiscriminantSetQuery::matches`] treats [`Auto`](Self::Auto)
 /// and [`Explicit`](Self::Explicit) alike, matching by value equality — but it
 /// drives user-facing diagnostics: marking an auto-detected value in the
-/// verbose selection trail and phrasing the machine-independent inclusion
-/// notice.
+/// verbose selection trail.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum FacetFilter {
     /// Unconstrained: every set passes. Produced by the `all` keyword, and by
@@ -38,15 +37,7 @@ pub enum FacetFilter {
 
 impl FacetFilter {
     /// Whether `actual` passes this filter.
-    ///
-    /// `exempt` marks a set that ignores this facet entirely (used for the
-    /// machine-key facet on a `synthetic` set — `synthetic` means "no machine",
-    /// so its results belong to every machine's universe regardless of whether
-    /// the facet was auto-detected or explicit).
-    fn passes(&self, actual: &str, exempt: bool) -> bool {
-        if exempt {
-            return true;
-        }
+    fn passes(&self, actual: &str) -> bool {
         match self {
             Self::All => true,
             Self::Auto(value) => value.eq_ignore_ascii_case(actual),
@@ -78,18 +69,15 @@ pub struct DiscriminantSetQuery {
 impl DiscriminantSetQuery {
     /// Whether `set` passes every facet filter.
     ///
-    /// Hardware-independent (`synthetic`) sets — Callgrind and `alloc_tracker` —
-    /// are exempt from the machine-key facet entirely: their results are not tied
-    /// to any one machine, so they belong to every machine's universe. They still
-    /// obey the target-triple facet, because even hardware-independent counts are
-    /// not comparable across architectures (a per-architecture instruction count
-    /// or allocation profile is a different measurement).
+    /// Every set is machine-keyed, so the machine-key facet applies uniformly.
+    /// Sets still obey the target-triple facet, because counts are not comparable
+    /// across architectures (a per-architecture instruction count or allocation
+    /// profile is a different measurement).
     #[must_use]
     pub fn matches(&self, set: &DiscriminantSet) -> bool {
-        let synthetic = set.is_synthetic();
-        self.engine.passes(&set.engine, false)
-            && self.target_triple.passes(&set.target_triple, false)
-            && self.machine_key.passes(&set.machine_key, synthetic)
+        self.engine.passes(&set.engine)
+            && self.target_triple.passes(&set.target_triple)
+            && self.machine_key.passes(&set.machine_key)
     }
 }
 
@@ -104,7 +92,7 @@ mod tests {
         DiscriminantSet {
             engine: "callgrind".to_owned(),
             target_triple: triple.to_owned(),
-            machine_key: "synthetic".to_owned(),
+            machine_key: "m1".to_owned(),
         }
     }
 
@@ -117,7 +105,7 @@ mod tests {
                 target_triple: FacetFilter::Explicit(nonempty![
                     "x86_64-pc-windows-msvc".to_owned()
                 ]),
-                machine_key: FacetFilter::Explicit(nonempty!["synthetic".to_owned()]),
+                machine_key: FacetFilter::Explicit(nonempty!["m1".to_owned()]),
                 ..DiscriminantSetQuery::default()
             }
             .matches(&windows)
@@ -153,45 +141,54 @@ mod tests {
     }
 
     #[test]
-    fn synthetic_set_is_exempt_from_the_machine_key_facet() {
-        let synthetic = set("x86_64-unknown-linux-gnu"); // machine = synthetic
-        // Even an explicit, non-matching machine key includes a synthetic set.
+    fn set_obeys_the_machine_key_facet() {
+        let machine = set("x86_64-unknown-linux-gnu"); // machine = m1
+        // A non-matching explicit machine key excludes the set.
         assert!(
-            DiscriminantSetQuery {
+            !DiscriminantSetQuery {
                 machine_key: FacetFilter::Explicit(nonempty!["some-other-machine".to_owned()]),
                 ..DiscriminantSetQuery::default()
             }
-            .matches(&synthetic)
+            .matches(&machine)
         );
-        // And an auto-detected host fingerprint includes it too.
+        // A non-matching auto-detected host fingerprint excludes it too.
         assert!(
-            DiscriminantSetQuery {
+            !DiscriminantSetQuery {
                 machine_key: FacetFilter::Auto("host-fingerprint".to_owned()),
                 ..DiscriminantSetQuery::default()
             }
-            .matches(&synthetic)
+            .matches(&machine)
+        );
+        // Its own machine key includes it.
+        assert!(
+            DiscriminantSetQuery {
+                machine_key: FacetFilter::Explicit(nonempty!["m1".to_owned()]),
+                ..DiscriminantSetQuery::default()
+            }
+            .matches(&machine)
         );
     }
 
     #[test]
-    fn synthetic_set_obeys_the_target_triple_facet() {
-        let synthetic = set("x86_64-unknown-linux-gnu"); // machine = synthetic
+    fn set_obeys_the_target_triple_facet() {
+        let machine = set("x86_64-unknown-linux-gnu");
         // A matching auto-detected triple includes it.
         assert!(
             DiscriminantSetQuery {
                 target_triple: FacetFilter::Auto("x86_64-unknown-linux-gnu".to_owned()),
+                machine_key: FacetFilter::Auto("m1".to_owned()),
                 ..DiscriminantSetQuery::default()
             }
-            .matches(&synthetic)
+            .matches(&machine)
         );
-        // A different auto-detected triple excludes it: even hardware-independent
-        // counts are not comparable across architectures.
+        // A different auto-detected triple excludes it: counts are not comparable
+        // across architectures.
         assert!(
             !DiscriminantSetQuery {
                 target_triple: FacetFilter::Auto("x86_64-pc-windows-msvc".to_owned()),
                 ..DiscriminantSetQuery::default()
             }
-            .matches(&synthetic)
+            .matches(&machine)
         );
         // An explicit non-matching triple also excludes it.
         assert!(
@@ -201,12 +198,12 @@ mod tests {
                 ]),
                 ..DiscriminantSetQuery::default()
             }
-            .matches(&synthetic)
+            .matches(&machine)
         );
     }
 
     #[test]
-    fn hardware_dependent_set_obeys_the_auto_detected_machine_key() {
+    fn set_obeys_the_auto_detected_machine_key() {
         let machine = DiscriminantSet {
             engine: "criterion".to_owned(),
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),

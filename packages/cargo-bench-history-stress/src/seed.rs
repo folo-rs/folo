@@ -399,7 +399,7 @@ mod tests {
         let sets = vec![DiscriminantSet::new(
             Engine::Callgrind,
             "x86_64-unknown-linux-gnu",
-            None,
+            "stress-rig",
         )];
         let repo = main_only_repo(4);
         let scenario = Scenario {

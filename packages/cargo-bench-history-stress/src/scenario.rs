@@ -128,8 +128,8 @@ const TRIPLES: [&str; 6] = [
     "aarch64-apple-darwin",
 ];
 
-/// Machine key for the hardware-dependent engines, whose series are partitioned
-/// per machine. The synthetic dataset attributes them all to one fixed rig.
+/// Machine key every engine partitions under, since every series is per-machine.
+/// The stress dataset attributes them all to one fixed rig.
 const MACHINE_KEY: &str = "stress-rig";
 
 /// Whether `triple` targets Linux — the only platform Callgrind can run on (it
@@ -142,20 +142,18 @@ fn targets_linux(triple: &str) -> bool {
 /// triples it can run on.
 ///
 /// Callgrind is gated to Linux because Valgrind runs there only; the other engines
-/// span all six triples. Hardware-dependent engines (Criterion, `all_the_time`)
-/// carry a [`MACHINE_KEY`]; the hardware-independent ones (Callgrind,
-/// `alloc_tracker`) use the literal `synthetic` machine key. The data is not meant
-/// to be realistic across engines — the point is that every engine's partition is
-/// populated so `analyze` exercises each one.
+/// span all six triples. Every engine is machine-keyed, so every set carries the
+/// [`MACHINE_KEY`]. The data is not meant to be realistic across engines — the
+/// point is that every engine's partition is populated so `analyze` exercises each
+/// one.
 pub(crate) fn discriminant_sets() -> Vec<DiscriminantSet> {
     let mut sets = Vec::new();
     for engine in Engine::ALL {
-        let machine = engine.is_hardware_dependent().then_some(MACHINE_KEY);
         for triple in TRIPLES {
             if engine == Engine::Callgrind && !targets_linux(triple) {
                 continue;
             }
-            sets.push(DiscriminantSet::new(engine, triple, machine));
+            sets.push(DiscriminantSet::new(engine, triple, MACHINE_KEY));
         }
     }
     sets
@@ -165,10 +163,12 @@ pub(crate) fn discriminant_sets() -> Vec<DiscriminantSet> {
 ///
 /// Deterministic engines record an exact integer count with no dispersion; noisy
 /// engines record the estimate plus a tight confidence band, mirroring a real run
-/// so the noise-aware gates have the dispersion they need.
+/// so the noise-aware gates have the dispersion they need. This split is a
+/// property of the stress dataset only, not a claim about which engines are
+/// machine-dependent (every engine is).
 pub(crate) fn metric_for(engine: Engine, value: f64) -> Metric {
     let kind = primary_metric(engine);
-    if engine.is_hardware_dependent() {
+    if matches!(engine, Engine::Criterion | Engine::AllTheTime) {
         let std_dev = value * NOISE_FRACTION;
         let half = std_dev * NOISE_CI_Z;
         Metric::new(kind, value).with_dispersion(
@@ -429,14 +429,9 @@ mod tests {
             }
         }
 
-        // Hardware-dependent engines carry the machine key; the others are synthetic.
+        // Every engine is machine-keyed, so every set carries the machine key.
         for set in &sets {
-            let engine = Engine::from_name(&set.engine).expect("known engine");
-            if engine.is_hardware_dependent() {
-                assert_eq!(set.machine_key, MACHINE_KEY, "{}", set.engine);
-            } else {
-                assert!(set.is_synthetic(), "{}", set.engine);
-            }
+            assert_eq!(set.machine_key, MACHINE_KEY, "{}", set.engine);
         }
 
         // No two sets collide on their storage key.

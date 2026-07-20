@@ -45,7 +45,7 @@ fn storage_key(c: &mut Criterion) {
         b.iter(|| black_box(sanitize_segment(black_box("x86_64-unknown-linux-gnu"))));
     });
 
-    let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", None);
+    let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", "m1");
     group.bench_function("clean_key", |b| {
         b.iter(|| {
             black_box(black_box(&set).clean_key(
@@ -55,7 +55,7 @@ fn storage_key(c: &mut Criterion) {
         });
     });
 
-    let key = "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/\
+    let key = "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/\
                deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/clean.json";
     group.bench_function("parse_key", |b| {
         b.iter(|| black_box(parse_key(black_box(key))));

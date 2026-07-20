@@ -17,10 +17,12 @@ not otherwise comparable. Its commands are `collect`, `install`, `analyze`, `exa
 ## 1. Benchmark engines and what they emit
 
 Understanding the producers is mandatory: comparability and parsing both depend on it.
-Four engines are supported, and they split along two axes that drive the whole data
-model — **hardware-dependent vs. hardware-independent** (which decides partitioning), and
-**whether each measurement carries a confidence interval** (which decides how dispersion is
-gated). No engine is exempt from run-to-run noise.
+Four engines are supported. The axis that drives the data model is **whether each
+measurement carries a confidence interval** (which decides how dispersion is gated). No
+engine is exempt from run-to-run noise, and every engine's numbers are machine-dependent
+in practice — even simulated instruction counts and allocation figures vary with the host,
+because libraries dispatch to different code paths on different microarchitectures — so
+every engine is partitioned by machine key (see §3).
 
 * **Criterion** — wall-clock time. Hardware-dependent and noisy. Each measured case
   yields a stable identity (group / function / value) and a point estimate (the
@@ -28,19 +30,21 @@ gated). No engine is exempt from run-to-run noise.
   deviation and bootstrap confidence interval. It records no timestamp, commit, machine,
   or package, so the tool supplies all run context.
 * **Callgrind (via Gungraun)** — simulated instruction and branch-execution counts.
-  Hardware-independent but not exact: a CPU simulator is low-noise, yet its counts still
-  drift by a few percent run to run. Only the build-stable events are tracked — the
-  instruction count (`Ir`) and the two branch-execution counts (`Bc`, `Bi`). Gungraun also
-  emits cache-simulation counts (`L1hits`/`LLhits`/`RamHits`), the derived `EstimatedCycles`,
+  Low-noise but not exact: a CPU simulator is low-noise, yet its counts still drift by a
+  few percent run to run, and they vary across microarchitectures as libraries dispatch to
+  different code paths. Only the build-stable events are tracked — the instruction count
+  (`Ir`) and the two branch-execution counts (`Bc`, `Bi`). Gungraun also emits
+  cache-simulation counts (`L1hits`/`LLhits`/`RamHits`), the derived `EstimatedCycles`,
   and the branch-misprediction counts (`Bcm`/`Bim`), but those are **not** parsed or
   persisted: at microbenchmark magnitudes they track binary layout rather than the code under
   test, so they cannot be compared across builds (see §8). Its machine-readable summary is the
   one output that must be opted into with an environment variable — the narrow "special need"
   that justifies `collect` existing at all.
-* **`alloc_tracker`** — heap allocations (bytes and counts). Hardware-independent but not
-  deterministic: warmup and buffer-resize allocations are amortized over a Criterion-chosen
-  iteration count, so the per-iteration figures jitter. It prefers a warmup-robust slope and
-  records a bootstrap confidence interval over its measured spans when its output carries one.
+* **`alloc_tracker`** — heap allocations (bytes and counts). Not deterministic: warmup and
+  buffer-resize allocations are amortized over a Criterion-chosen iteration count, so the
+  per-iteration figures jitter, and they too vary with the host's library code paths. It
+  prefers a warmup-robust slope and records a bootstrap confidence interval over its
+  measured spans when its output carries one.
 * **`all_the_time`** — processor (CPU) time. Hardware-dependent and noisy, carrying a
   bootstrap confidence interval like Criterion.
 
@@ -48,7 +52,7 @@ The two workspace-local crates (`alloc_tracker`, `all_the_time`) each auto-emit 
 JSON file per operation on drop, so they need no opt-in and the operation name alone
 identifies the series.
 
-Despite differing in units, noise, and hardware-dependence, all four reduce to the same
+Despite differing in units and noise, all four reduce to the same
 shape: *a stable benchmark identity → a set of named numeric metrics*. That shared shape
 is the foundation of the model.
 
@@ -93,23 +97,23 @@ flowchart LR
   timestamp override.
 * **Discriminant set** — the partition under which a series accumulates. Two results are
   comparable exactly when their discriminant sets match.
-* **Machine key** — a stable hardware fingerprint used only by hardware-dependent
-  engines.
+* **Machine key** — a stable hardware fingerprint that partitions every engine's data by
+  the host it ran on.
 
 ## 3. Comparability and storage partitioning
 
 The central tenet: **partition only by what makes results fundamentally incomparable;
 record everything else as metadata so the analysis can see its effect over time.**
 
-A discriminant set is `{ project, engine, target_triple, machine_key? }`:
+A discriminant set is `{ project, engine, target_triple, machine_key }`:
 
 * `project` — workspace identity (configured, defaulting to the repository directory
   name).
 * `engine` — different units and semantics never mix.
-* `target_triple` — even hardware-independent counts are not comparable across
+* `target_triple` — even simulated counts are not comparable across
   architectures (`…-windows-msvc` and `…-windows-gnu` are genuinely different binaries).
-* `machine_key` — present only for hardware-dependent engines; a literal `synthetic`
-  placeholder for the hardware-independent ones.
+* `machine_key` — a stable fingerprint of the host the benchmark ran on; every engine is
+  partitioned by it, because every engine's numbers vary with the hardware in practice.
 
 Deliberately **metadata, not partition** — so a change shows up as a timeline step, which
 is the whole point of the tool — are the toolchain versions, OS/libc, commit, branch, and
@@ -135,7 +139,7 @@ filesystem and a blob container (no read-modify-write races in concurrent CI). T
 shape is:
 
 ```
-<root>/v1/<project>/objects/<engine>/<target_triple>/<machine|synthetic>/<commit>/
+<root>/v1/<project>/objects/<engine>/<target_triple>/<machine>/<commit>/
     clean.json                    # ≤1 per commit — the canonical point for a clean tree
     dirty-<observation_unix>.json # 0..N snapshots taken on top of this base commit
 ```
@@ -177,15 +181,11 @@ dimension confused users — filter on the triple directly.)
 Each facet is repeatable, unions its values, and accepts the literal `all` to widen past a
 dimension. Omitting a facet **auto-detects the current machine**: the triple defaults to
 the host triple and the machine key to the host fingerprint, so a bare query reports *this*
-machine's data; engine has no machine-derived value, so it defaults to all engines. A
-`synthetic` set always passes the **machine-key** facet regardless of its value (it carries
-no machine), so auto-detecting the host fingerprint still includes the hardware-independent
-sets. It still obeys the **target-triple** facet, though — a per-architecture instruction
-count or allocation profile is a distinct measurement — so a bare query mixes in only the
-synthetic sets built for *this* triple, never foreign-triple ones. Because that inclusion is
-easy to overlook, a query whose machine-key facet was auto-detected prints a one-line notice
-that machine-independent `synthetic` benchmarks ride along. A facet that matches several
-sets yields one report per set — parallel data sets analyzed individually.
+machine's data; engine has no machine-derived value, so it defaults to all engines. Every
+engine is partitioned by machine key, so a bare query scopes every engine uniformly to
+*this* host's fingerprint — nothing rides along across machines, and no set is exempt from
+the machine-key facet. A facet that matches several sets yields one report per set —
+parallel data sets analyzed individually.
 
 The commands divide into **create** and **query** roles. `collect` and `backfill` record
 new data into exactly one machine's reality, so they auto-detect every facet and accept
@@ -211,7 +211,16 @@ Because the key is persisted and compared across machines and tool versions, it 
 truncated to a compact path segment, and a golden test pins a fixed profile to its digest
 so an accidental change to the canonical form is caught. A command-line override wins over
 the computed fingerprint (it is CLI-only — a committed config would carry a machine key
-wrong for some checkouts). The key is computed only for hardware-dependent engines.
+wrong for some checkouts). The key is computed for every run, because every engine is
+partitioned by it.
+
+There is no machine-independent partition: every engine — Callgrind instruction counts and
+`alloc_tracker` allocations included — is keyed by the host fingerprint, because those
+figures vary with the microarchitecture in practice. The string `synthetic` carries no
+special meaning; it is an ordinary machine-key value like any other. Historical data that
+earlier tool versions stored under a literal `synthetic` placeholder is not migrated: those
+series restart under the runner's real fingerprint at the changeover, and the old objects
+stay reachable only via an explicit `--machine-key synthetic` (or `--machine-key all`).
 
 The individual factors behind the fingerprint (the version tag, processor and memory-region
 counts, processor models, and the per-processor speed histogram) are surfaced for debugging:
@@ -413,7 +422,7 @@ commit.
 
 Regardless of `--verbose`, `collect` prints a one-line **effective-partition** summary to
 stderr naming the storage partition its results land in: the target triple (always the
-toolchain host) and the machine key hardware-dependent engines use — marked as
+toolchain host) and the machine key every engine is partitioned by — marked as
 auto-detected or as coming from `--machine-key`. This makes the otherwise-invisible
 auto-detected partition self-describing on every run. `backfill` reuses the same `collect`
 path and so emits the line per commit, each reflecting that commit's own probed toolchain.
@@ -671,14 +680,14 @@ opts into dirty-snapshot keying.
 Four overrides let a caller attribute an imported run to a context other than the current
 host, and they touch **only key-affecting discriminants** — body provenance stays real.
 `--target-triple` sets both the storage-partition triple and the recorded toolchain target
-triple. `--machine-key` sets the machine partition of the hardware-dependent engines only
-(Callgrind and `alloc_tracker` remain `synthetic`); the recorded `MachineInfo` stays the
-real host's. `--commit` is **resolved through git** (an unknown commit is a hard error) and
-keys the run to any existing commit — typically an ancestor — **without checking it out**,
-clearing the branch to `None`; this lets a test attribute a whole synthetic series across
-history from a single HEAD position. `--dirty` records the run as a dirty snapshot rather
-than a clean point. The commit must still exist: `import` never invents git topology, so
-real integration testing still requires a real history.
+triple. `--machine-key` sets the machine partition of every engine (every engine is
+machine-keyed); the recorded `MachineInfo` stays the real host's. `--commit` is **resolved
+through git** (an unknown commit is a hard error) and keys the run to any existing commit —
+typically an ancestor — **without checking it out**, clearing the branch to `None`; this
+lets a test attribute a whole synthetic series across history from a single HEAD position.
+`--dirty` records the run as a dirty snapshot rather than a clean point. The commit must
+still exist: `import` never invents git topology, so real integration testing still requires
+a real history.
 
 ## 8. Analysis
 

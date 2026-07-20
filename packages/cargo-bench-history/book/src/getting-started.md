@@ -34,7 +34,7 @@ cargo bench-history analyze --local=./bench-history
 cargo bench-history examine --local=./bench-history \
     --benchmark my_pkg/my_group/my_case --metric instruction_count
 
-# Print this machine's hardware fingerprint (the key that hardware-dependent history is
+# Print this machine's hardware fingerprint (the key every engine's history is
 # partitioned by).
 cargo bench-history machine-key
 ```

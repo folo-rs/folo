@@ -227,7 +227,7 @@ pub(crate) struct SharedContext {
     /// host triple `rustc` reports for `collect`, or an `import --target-triple`
     /// override. It feeds both the partition key and `ToolchainInfo.target_triple`.
     pub(crate) target_triple: String,
-    /// Host hardware profile, fingerprinted for hardware-dependent engines.
+    /// Host hardware profile, fingerprinted into the machine key.
     pub(crate) hardware: HardwareProfile,
 }
 
@@ -281,8 +281,8 @@ pub(crate) struct FinalizeDeps<'a, S> {
 /// `--dirty` by `import`), keeping the stored body and its key coherent by
 /// construction.
 pub(crate) struct StoreParams<'a> {
-    /// Explicit machine-key override for hardware-dependent engines; `None` uses
-    /// the auto-detected fingerprint.
+    /// Explicit machine-key override applied to every engine; `None` uses the
+    /// auto-detected fingerprint.
     pub(crate) machine_key: Option<&'a str>,
     /// Replace an existing object in place instead of failing on a collision.
     pub(crate) overwrite: bool,
@@ -494,10 +494,10 @@ where
 {
     // The always-on effective-partition announcement: one line, printed regardless
     // of `--verbose`, naming the storage partition this run's results land in (the
-    // target triple, always the toolchain host, and the machine key hardware-
-    // dependent engines use — an explicit `--machine-key` or the auto-detected
-    // fingerprint). It mirrors the query commands' effective-selection summary so
-    // the partition a run writes and an `analyze` reads is stated the same way.
+    // target triple, always the toolchain host, and the machine key every engine
+    // uses — an explicit `--machine-key` or the auto-detected fingerprint). It
+    // mirrors the query commands' effective-selection summary so the partition a
+    // run writes and an `analyze` reads is stated the same way.
     let effective_machine_key = resolve_machine_key(params.machine_key, &shared.hardware);
     store.reporter.announce(&partition_selection_summary(
         operation,
@@ -548,9 +548,9 @@ where
 }
 
 /// Builds the always-on, one-line summary of a run's effective storage partition:
-/// the target triple its results are keyed under and the machine key
-/// hardware-dependent engines use — an explicit `--machine-key` override or the
-/// auto-detected hardware fingerprint.
+/// the target triple its results are keyed under and the machine key every engine
+/// uses — an explicit `--machine-key` override or the auto-detected hardware
+/// fingerprint.
 ///
 /// `operation` is the gerund naming the action ("collecting"/"importing").
 /// `triple_note` qualifies the triple in parentheses ("toolchain host" for a
@@ -583,7 +583,7 @@ fn partition_selection_summary(
     };
     format!(
         "{operation}: target-triple={triple}{triple_suffix}; \
-         machine-key={machine_key} ({machine_source}), used by hardware-dependent engines"
+         machine-key={machine_key} ({machine_source})"
     )
 }
 
@@ -798,14 +798,11 @@ where
     context.machine = Some(machine_info(&shared.hardware));
     let run = Run::new(context, records);
 
-    // Hardware-dependent engines (such as Criterion) partition their history by a
-    // machine fingerprint so only equivalent machines share a series. An explicit
-    // `--machine-key` overrides the computed fingerprint. Hardware-independent
-    // engines (such as Callgrind) use no machine key.
-    let machine_key = engine
-        .is_hardware_dependent()
-        .then(|| resolve_machine_key(params.machine_key, &shared.hardware));
-    let key = DiscriminantSet::new(engine, target_triple, machine_key.as_deref());
+    // Every engine partitions its history by a machine key so only equivalent
+    // machines share a series. An explicit `--machine-key` overrides the computed
+    // hardware fingerprint.
+    let machine_key = resolve_machine_key(params.machine_key, &shared.hardware);
+    let key = DiscriminantSet::new(engine, target_triple, &machine_key);
     // History is organized by commit, so the full commit ID names the directory
     // (`analyze` resolves which commits to read from git topology). A clean run is
     // keyed solely by its commit and so is deterministic; a dirty snapshot adds its
@@ -819,12 +816,9 @@ where
 
     store.reporter.note_with(|| {
         format!(
-            "{engine}: {} at commit {commit} ({}){} -> {object_key}",
+            "{engine}: {} at commit {commit} ({}), machine {machine_key} -> {object_key}",
             count_noun(count, "case"),
             if dirty { "dirty" } else { "clean" },
-            machine_key
-                .as_deref()
-                .map_or_else(String::new, |key| format!(", machine {key}")),
         )
     });
 
@@ -1509,6 +1503,13 @@ mod tests {
         }
     }
 
+    /// The auto-detected machine key every engine partitions under for the
+    /// [`FakeProbe`] hardware profile. Every engine is machine-keyed, so a probed
+    /// run with no `--machine-key` override lands under this fingerprint.
+    fn probe_machine_key() -> String {
+        resolve_machine_key(None, &FakeProbe::new().hardware)
+    }
+
     #[derive(Clone, Default)]
     struct FakeOutput {
         callgrind: Vec<RawSummary>,
@@ -1855,13 +1856,13 @@ mod tests {
         assert!(message.contains("Stored 1"), "{message}");
 
         let keys = storage.keys();
+        let machine = probe_machine_key();
         assert_eq!(
             keys,
-            vec![
-                "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/\
+            vec![format!(
+                "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/{machine}/\
                  deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/clean.json"
-                    .to_owned()
-            ]
+            )]
         );
 
         let bytes = block_on(storage.get(&keys[0])).unwrap();
@@ -1915,10 +1916,11 @@ mod tests {
             &storage,
         )
         .unwrap();
-        let original = block_on(storage.get(
-            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/\
+        let machine = probe_machine_key();
+        let original = block_on(storage.get(&format!(
+            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/{machine}/\
              deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/clean.json",
-        ))
+        )))
         .unwrap();
 
         // A re-run of the same commit under --skip-existing succeeds without a
@@ -2007,8 +2009,11 @@ mod tests {
             &storage,
         )
         .unwrap();
-        let commit_dir = "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/\
-                          deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+        let machine = probe_machine_key();
+        let commit_dir = format!(
+            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/{machine}/\
+             deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        );
         let bless_key = format!("{commit_dir}/bless-100.json");
         let record = BlessingRecord::new(
             "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_owned(),
@@ -2073,8 +2078,11 @@ mod tests {
         // Blessings accept the clean run's data point, so a blessing sidecar on the
         // commit must survive when only a dirty snapshot of that commit is rewritten;
         // invalidation is reserved for a clean overwrite that discards the point.
-        let commit_dir = "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/\
-                          deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+        let machine = probe_machine_key();
+        let commit_dir = format!(
+            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/{machine}/\
+             deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        );
         let bless_key = format!("{commit_dir}/bless-100.json");
         let record = BlessingRecord::new(
             "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_owned(),
@@ -2296,18 +2304,19 @@ mod tests {
         };
         assert!(message.contains("Stored 2"), "{message}");
 
-        // Callgrind partitions under `synthetic`; Criterion partitions under the
-        // machine fingerprint of the probed hardware. Both sets are stored.
+        // Every engine partitions under the machine fingerprint of the probed
+        // hardware. Both sets are stored under the same machine key.
+        let machine = probe_machine_key();
         let keys = storage.keys();
         assert_eq!(keys.len(), 2, "{keys:?}");
         assert!(
             keys.iter()
-                .any(|key| key.contains("/callgrind/") && key.contains("/synthetic/")),
+                .any(|key| key.contains("/callgrind/") && key.contains(&format!("/{machine}/"))),
             "{keys:?}"
         );
         assert!(
             keys.iter()
-                .any(|key| key.contains("/criterion/") && !key.contains("/synthetic/")),
+                .any(|key| key.contains("/criterion/") && key.contains(&format!("/{machine}/"))),
             "{keys:?}"
         );
     }
@@ -2431,7 +2440,7 @@ mod tests {
     }
 
     #[test]
-    fn alloc_tracker_output_is_stored_in_a_synthetic_partition() {
+    fn alloc_tracker_output_is_stored_under_the_machine_key() {
         let storage = MemoryStorage::new();
         let outcome = drive(
             &CollectOptions::default(),
@@ -2447,12 +2456,13 @@ mod tests {
         };
         assert!(message.contains("Stored 1"), "{message}");
 
-        // Allocation counts are hardware-independent, so the partition is
-        // `synthetic` rather than a machine key.
+        // Allocation counts are machine-dependent (allocator behaviour varies by
+        // build and platform), so the partition is the machine fingerprint.
+        let machine = probe_machine_key();
         let keys = storage.keys();
         assert_eq!(keys.len(), 1, "{keys:?}");
         assert!(keys[0].contains("/alloc_tracker/"), "{keys:?}");
-        assert!(keys[0].contains("/synthetic/"), "{keys:?}");
+        assert!(keys[0].contains(&format!("/{machine}/")), "{keys:?}");
 
         let bytes = block_on(storage.get(&keys[0])).unwrap();
         let set = Run::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
