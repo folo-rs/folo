@@ -544,7 +544,7 @@ jobs:
   # comment left by an EARLIER iteration of the same PR - e.g. a benchmarked change that was later
   # reverted - so a stale, misleading comment does not linger. A no-op when there is no such comment.
   # Deliberately lightweight (checkout + preinstalled gh + direct module import, no build-env setup,
-  # no Azure, no history), mirroring bench-history.yml's alert/resolve jobs.
+  # no Azure, no history), mirroring bench-history.yml's alert/resolve-alert jobs.
   cleanup:
     needs: delta
     if: needs.delta.outputs.skip_all == 'true'
