@@ -69,3 +69,44 @@ Callgrind-based instruction-count benchmarks. See
 [`docs/callgrind-benchmarks.md`](callgrind-benchmarks.md) for the strategy,
 scenario selection, bench file template, the Criterion-pairing convention, and
 how to interpret results.
+
+## Hash containers and instruction-count determinism
+
+A Callgrind instruction count is only meaningful if byte-identical source
+produces the same count across builds. One subtle way to break that is a
+`HashMap`/`HashSet` built with a **default, randomly-seeded hasher**.
+
+The default hashers in `std` (`RandomState`) and `foldhash`
+(`foldhash::fast::RandomState`) derive their seed from process memory addresses
+(stack pointers and code/static segment locations), not from a runtime RNG.
+Within a single binary Valgrind disables ASLR, so a benchmark is deterministic
+run-to-run. But a **different build** — a different commit, or even the same
+commit linked at a different address — gets a different seed, which changes hash
+iteration order and probe counts, which changes the instruction count on
+byte-identical benchmark logic. The result is phantom regressions and
+improvements in benchmark history that track nothing but the linker's address
+assignments.
+
+The symptom is distinctive: only the benchmarks that **build or iterate a hash
+container** jitter across builds, while every other benchmark is bit-stable. A
+demonstration on `nm_impl` showed the same binary swing by ~7% (18260 vs 19607
+instructions) from a stack-address change alone; after switching to a fixed seed
+the count became immovable under the same perturbation.
+
+If a benchmarked code path uses a hash container, give it a **fixed-seed
+hasher** so the measurement depends only on the code, not on load addresses. In
+this workspace, use `foldhash::fast::FixedState`:
+
+```rust
+use foldhash::fast::FixedState;
+
+type HashMap<K, V> = std::collections::HashMap<K, V, FixedState>;
+
+let map = HashMap::default(); // FixedState: Default, so this is deterministic
+```
+
+Only drop the randomized seed where the keys are not attacker-controlled, since
+a fixed seed forfeits HashDoS resistance. For internal registries keyed by
+compile-time-known names (the `nm_impl` case) that trade-off is safe; for maps
+keyed by untrusted external input, keep the randomized seed and instead avoid
+measuring hash-container iteration in an instruction-count benchmark.
