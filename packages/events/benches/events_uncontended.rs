@@ -122,7 +122,8 @@ fn creation_boxed(c: &mut Criterion, allocs: &AllocSession) {
 fn creation_embedded(c: &mut Criterion, allocs: &AllocSession) {
     let mut group = c.benchmark_group("events_uncontended/creation_embedded");
 
-    let op = allocs.operation("events_uncontended/creation_embedded/events/embedded/ManualResetEvent");
+    let op =
+        allocs.operation("events_uncontended/creation_embedded/events/embedded/ManualResetEvent");
     group.bench_function("events/embedded/ManualResetEvent", |b| {
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
@@ -136,7 +137,8 @@ fn creation_embedded(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    let op = allocs.operation("events_uncontended/creation_embedded/events/embedded/AutoResetEvent");
+    let op =
+        allocs.operation("events_uncontended/creation_embedded/events/embedded/AutoResetEvent");
     group.bench_function("events/embedded/AutoResetEvent", |b| {
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
@@ -150,7 +152,8 @@ fn creation_embedded(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    let op = allocs.operation("events_uncontended/creation_embedded/events/embedded/LocalManualResetEvent");
+    let op = allocs
+        .operation("events_uncontended/creation_embedded/events/embedded/LocalManualResetEvent");
     group.bench_function("events/embedded/LocalManualResetEvent", |b| {
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
@@ -164,7 +167,8 @@ fn creation_embedded(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    let op = allocs.operation("events_uncontended/creation_embedded/events/embedded/LocalAutoResetEvent");
+    let op = allocs
+        .operation("events_uncontended/creation_embedded/events/embedded/LocalAutoResetEvent");
     group.bench_function("events/embedded/LocalAutoResetEvent", |b| {
         b.iter_custom(|iters| {
             let _span = op.measure_thread().iterations(iters);
@@ -283,7 +287,8 @@ fn signal_round_trip(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    let op = allocs.operation("events_uncontended/signal_round_trip/events/embedded/ManualResetEvent");
+    let op =
+        allocs.operation("events_uncontended/signal_round_trip/events/embedded/ManualResetEvent");
     group.bench_function("events/embedded/ManualResetEvent", |b| {
         let container = pin!(EmbeddedManualResetEvent::new());
         let manual = unsafe { ManualResetEvent::embedded(container.as_ref()) };
@@ -298,7 +303,8 @@ fn signal_round_trip(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    let op = allocs.operation("events_uncontended/signal_round_trip/events/embedded/AutoResetEvent");
+    let op =
+        allocs.operation("events_uncontended/signal_round_trip/events/embedded/AutoResetEvent");
     group.bench_function("events/embedded/AutoResetEvent", |b| {
         let container = pin!(EmbeddedAutoResetEvent::new());
         let auto = unsafe { AutoResetEvent::embedded(container.as_ref()) };
@@ -330,7 +336,8 @@ fn signal_round_trip(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    let op = allocs.operation("events_uncontended/signal_round_trip/event_listener/Event (listener!)");
+    let op =
+        allocs.operation("events_uncontended/signal_round_trip/event_listener/Event (listener!)");
     group.bench_function("event_listener/Event (listener!)", |b| {
         let el_event = ElEvent::<()>::new();
         let waker = Waker::noop();
@@ -451,7 +458,8 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    let op = allocs.operation("events_uncontended/async_poll_ready/events/embedded/ManualResetEvent");
+    let op =
+        allocs.operation("events_uncontended/async_poll_ready/events/embedded/ManualResetEvent");
     group.bench_function("events/embedded/ManualResetEvent", |b| {
         let container = pin!(EmbeddedManualResetEvent::new());
         let manual = unsafe { ManualResetEvent::embedded(container.as_ref()) };
@@ -501,7 +509,8 @@ fn async_poll_ready(c: &mut Criterion, allocs: &AllocSession) {
         });
     });
 
-    let op = allocs.operation("events_uncontended/async_poll_ready/event_listener/Event (listener!)");
+    let op =
+        allocs.operation("events_uncontended/async_poll_ready/event_listener/Event (listener!)");
     group.bench_function("event_listener/Event (listener!)", |b| {
         let el_event = ElEvent::<()>::new();
         let mut cx = Context::from_waker(waker);

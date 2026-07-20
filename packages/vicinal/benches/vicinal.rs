@@ -309,8 +309,10 @@ fn entrypoint(c: &mut Criterion) {
     // This group includes both regular spawn (with event) and spawn_and_forget for fair comparison.
     let mut g = c.benchmark_group("vicinal/fire_and_forget");
 
-    let spawn_with_event_single_alloc = allocs.operation("vicinal/fire_and_forget/spawn_with_event_single");
-    let spawn_with_event_single_time = times.operation("vicinal/fire_and_forget/spawn_with_event_single");
+    let spawn_with_event_single_alloc =
+        allocs.operation("vicinal/fire_and_forget/spawn_with_event_single");
+    let spawn_with_event_single_time =
+        times.operation("vicinal/fire_and_forget/spawn_with_event_single");
 
     g.bench_function("spawn_with_event_single", |b| {
         let pool = Pool::new();
@@ -340,7 +342,8 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let spawn_with_event_100_alloc = allocs.operation("vicinal/fire_and_forget/spawn_with_event_100");
+    let spawn_with_event_100_alloc =
+        allocs.operation("vicinal/fire_and_forget/spawn_with_event_100");
     let spawn_with_event_100_time = times.operation("vicinal/fire_and_forget/spawn_with_event_100");
 
     g.bench_function("spawn_with_event_100", |b| {
@@ -383,8 +386,10 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let spawn_and_forget_single_alloc = allocs.operation("vicinal/fire_and_forget/spawn_and_forget_single");
-    let spawn_and_forget_single_time = times.operation("vicinal/fire_and_forget/spawn_and_forget_single");
+    let spawn_and_forget_single_alloc =
+        allocs.operation("vicinal/fire_and_forget/spawn_and_forget_single");
+    let spawn_and_forget_single_time =
+        times.operation("vicinal/fire_and_forget/spawn_and_forget_single");
 
     g.bench_function("spawn_and_forget_single", |b| {
         let pool = Pool::new();
@@ -413,7 +418,8 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let spawn_and_forget_100_alloc = allocs.operation("vicinal/fire_and_forget/spawn_and_forget_100");
+    let spawn_and_forget_100_alloc =
+        allocs.operation("vicinal/fire_and_forget/spawn_and_forget_100");
     let spawn_and_forget_100_time = times.operation("vicinal/fire_and_forget/spawn_and_forget_100");
 
     g.bench_function("spawn_and_forget_100", |b| {

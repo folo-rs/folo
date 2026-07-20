@@ -93,17 +93,21 @@ benchmark identifier** it measures — that is:
 ```
 
 which, given the group-naming rule above, always expands to
-`<file-basename>/<subgroup>/<bench>`. The tracking name is not free-form: it is
-the join key that lets the emitted allocation/time report line up one-to-one
-with the Criterion report for the same benchmark. A mismatched name silently
-produces two reports that cannot be correlated, which is worse than useless.
+`<file-basename>/<subgroup>/<bench_function name>`. Note that
+`<bench_function name>` is the exact string passed to `bench_function(...)` and
+may itself contain `/` separators (for example `events/embedded/AutoResetEvent`);
+reproduce it in full rather than appending only its final segment. The tracking
+name is not free-form: it is the join key that lets the emitted allocation/time
+report line up one-to-one with the Criterion report for the same benchmark. A
+mismatched name silently produces two reports that cannot be correlated, which
+is worse than useless.
 
 Example for `foo/benches/foo_something.rs`:
 
 ```rust
 let mut group = c.benchmark_group("foo_something/reads"); // <group>
-let op = allocs.operation("foo_something/reads/warm_cache"); // <group>/<bench>
-group.bench_function("warm_cache", |b| { /* ... */ });      // <bench>
+let op = allocs.operation("foo_something/reads/warm_cache"); // <group>/<bench_function name>
+group.bench_function("warm_cache", |b| { /* ... */ });      // <bench_function name>
 ```
 
 Watch out for these traps:
