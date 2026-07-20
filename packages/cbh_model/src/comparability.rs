@@ -3,9 +3,8 @@
 //!
 //! The guiding rule (see the *Comparability & storage partitioning* section of
 //! `DESIGN.md`) is to partition only by what makes results *fundamentally*
-//! incomparable — project, engine, target triple, and (for hardware-dependent
-//! engines) a machine key — and to record everything else as metadata so its
-//! effect stays visible in the timeline.
+//! incomparable — project, engine, target triple, and a machine key — and to
+//! record everything else as metadata so its effect stays visible in the timeline.
 
 use std::fmt;
 
@@ -13,18 +12,20 @@ use serde::Serialize;
 
 use super::constants::{OBJECTS_SEGMENT, STORAGE_VERSION};
 
-/// A benchmark engine, distinguished by whether its results depend on hardware.
+/// A benchmark engine: the measurement tool whose output a series accumulates.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Engine {
-    /// Criterion wall-clock benchmarks: hardware-dependent and noisy.
+    /// Criterion wall-clock benchmarks: noisy, with a confidence interval.
     Criterion,
-    /// Callgrind (via Gungraun) instruction counts: simulated, hardware-independent.
+    /// Callgrind (via Gungraun) instruction counts: simulated and low-noise, yet
+    /// still machine-dependent (microarchitecture-specific library dispatch moves
+    /// the counts), so its history is partitioned by machine key like every engine.
     Callgrind,
-    /// `alloc_tracker` allocation counts and bytes: hardware-independent but not
-    /// deterministic — warmup and buffer-resize allocations jitter the per-iteration
-    /// figure, which is amortized over a Criterion-chosen iteration count.
+    /// `alloc_tracker` allocation counts and bytes: not deterministic — warmup and
+    /// buffer-resize allocations jitter the per-iteration figure, which is amortized
+    /// over a Criterion-chosen iteration count.
     AllocTracker,
-    /// `all_the_time` processor-time measurements: hardware-dependent and noisy.
+    /// `all_the_time` processor-time measurements: noisy, with a confidence interval.
     AllTheTime,
 }
 
@@ -61,20 +62,6 @@ impl Engine {
             _ => None,
         }
     }
-
-    /// Whether results from this engine depend on the host hardware.
-    ///
-    /// Hardware-dependent engines require a machine key in their partition;
-    /// hardware-independent ones use the literal `synthetic` instead. Allocation
-    /// counts and bytes are a property of the code, not the machine, so
-    /// `alloc_tracker` is hardware-independent; processor time obviously is not.
-    #[must_use]
-    pub fn is_hardware_dependent(self) -> bool {
-        match self {
-            Self::Criterion | Self::AllTheTime => true,
-            Self::Callgrind | Self::AllocTracker => false,
-        }
-    }
 }
 
 impl fmt::Display for Engine {
@@ -96,7 +83,8 @@ pub struct DiscriminantSet {
     pub engine: String,
     /// Resolved target triple the run was recorded under.
     pub target_triple: String,
-    /// Machine key (`synthetic` for hardware-independent engines).
+    /// Machine key: a stable hardware fingerprint (or an explicit override). Every
+    /// engine is machine-keyed.
     pub machine_key: String,
 }
 
@@ -108,27 +96,20 @@ impl DiscriminantSet {
     /// alphanumeric, `-`, `_`, or `.` is replaced with `_`, and a segment that
     /// would otherwise be empty or consist only of dots becomes `_`. This keeps a
     /// stray `/` (or other surprising input) from silently splitting a storage key
-    /// into the wrong number of segments. A `None` machine key becomes the literal
-    /// `synthetic`, used for hardware-independent engines.
+    /// into the wrong number of segments.
     #[must_use]
-    pub fn new(engine: Engine, target_triple: &str, machine_key: Option<&str>) -> Self {
+    pub fn new(engine: Engine, target_triple: &str, machine_key: &str) -> Self {
         Self {
             engine: engine.as_str().to_owned(),
             target_triple: sanitize_segment(target_triple),
-            machine_key: machine_key.map_or_else(|| "synthetic".to_owned(), sanitize_segment),
+            machine_key: sanitize_segment(machine_key),
         }
-    }
-
-    /// Whether this is a hardware-independent (`synthetic`) set.
-    #[must_use]
-    pub fn is_synthetic(&self) -> bool {
-        self.machine_key == "synthetic"
     }
 
     /// The storage prefix that all runs in this series share, within `project`.
     ///
     /// Layout:
-    /// `{STORAGE_VERSION}/{project}/{OBJECTS_SEGMENT}/{engine}/{target_triple}/{machine|synthetic}`.
+    /// `{STORAGE_VERSION}/{project}/{OBJECTS_SEGMENT}/{engine}/{target_triple}/{machine}`.
     /// The fixed `objects` segment separates the data subtree from a project's
     /// metadata siblings (e.g. the cache-invalidation marker); below this prefix the
     /// history is organized by commit (see [`clean_key`] and [`dirty_key`]) so
@@ -333,22 +314,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hardware_dependence_matches_engine() {
-        assert!(Engine::Criterion.is_hardware_dependent());
-        assert!(Engine::AllTheTime.is_hardware_dependent());
-        assert!(!Engine::Callgrind.is_hardware_dependent());
-        assert!(!Engine::AllocTracker.is_hardware_dependent());
-    }
-
-    #[test]
-    fn alloc_tracker_uses_a_synthetic_partition() {
-        // Allocation counts are a property of the code, not the machine, so
-        // `alloc_tracker` carries no machine key.
-        let set = DiscriminantSet::new(Engine::AllocTracker, "x86_64-pc-windows-msvc", None);
-        assert!(set.is_synthetic());
+    fn every_engine_partitions_by_machine_key() {
+        // Every engine is machine-keyed: even the low-noise simulated counts differ
+        // by microarchitecture, so a machine key always appears in the partition.
+        let set = DiscriminantSet::new(Engine::AllocTracker, "x86_64-pc-windows-msvc", "abc123");
         assert_eq!(
             set.partition_prefix("folo"),
-            "v1/folo/objects/alloc_tracker/x86_64-pc-windows-msvc/synthetic"
+            "v1/folo/objects/alloc_tracker/x86_64-pc-windows-msvc/abc123"
         );
     }
 
@@ -356,8 +328,7 @@ mod tests {
     fn all_the_time_partitions_by_machine_key() {
         // Processor time depends on the machine, so `all_the_time` carries a
         // machine fingerprint.
-        let set =
-            DiscriminantSet::new(Engine::AllTheTime, "x86_64-pc-windows-msvc", Some("abc123"));
+        let set = DiscriminantSet::new(Engine::AllTheTime, "x86_64-pc-windows-msvc", "abc123");
         assert_eq!(
             set.partition_prefix("folo"),
             "v1/folo/objects/all_the_time/x86_64-pc-windows-msvc/abc123"
@@ -366,7 +337,7 @@ mod tests {
 
     #[test]
     fn machine_key_appears_in_partition() {
-        let set = DiscriminantSet::new(Engine::Criterion, "x86_64-pc-windows-msvc", Some("abc123"));
+        let set = DiscriminantSet::new(Engine::Criterion, "x86_64-pc-windows-msvc", "abc123");
         assert_eq!(
             set.partition_prefix("folo"),
             "v1/folo/objects/criterion/x86_64-pc-windows-msvc/abc123"
@@ -374,66 +345,50 @@ mod tests {
     }
 
     #[test]
-    fn is_synthetic_is_false_for_a_machine_keyed_set() {
-        // A machine-dependent engine carries a real fingerprint, so the set is not
-        // synthetic even though synthetic sets share the same type.
-        let set =
-            DiscriminantSet::new(Engine::AllTheTime, "x86_64-pc-windows-msvc", Some("abc123"));
-        assert!(!set.is_synthetic());
-    }
-
-    #[test]
     fn display_formats_engine_triple_and_machine_key() {
-        let set = DiscriminantSet::new(Engine::Criterion, "x86_64-pc-windows-msvc", Some("abc123"));
+        let set = DiscriminantSet::new(Engine::Criterion, "x86_64-pc-windows-msvc", "abc123");
         assert_eq!(set.to_string(), "criterion/x86_64-pc-windows-msvc/abc123");
-
-        // A synthetic set renders the literal `synthetic` machine segment.
-        let synthetic = DiscriminantSet::new(Engine::AllocTracker, "x86_64-pc-windows-msvc", None);
-        assert_eq!(
-            synthetic.to_string(),
-            "alloc_tracker/x86_64-pc-windows-msvc/synthetic"
-        );
     }
 
     #[test]
     fn clean_key_is_named_by_commit() {
-        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", None);
+        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", "abc123");
         assert_eq!(
             set.clean_key("folo", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/\
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/abc123/\
              deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/clean.json"
         );
     }
 
     #[test]
     fn dirty_key_is_named_by_commit_and_observation_time() {
-        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", None);
+        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", "abc123");
         assert_eq!(
             set.dirty_key(
                 "folo",
                 "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
                 1_700_000_000
             ),
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/\
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/abc123/\
              deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/dirty-1700000000.json"
         );
     }
 
     #[test]
     fn bless_key_targets_the_commit_directory() {
-        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", None);
+        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", "m1");
         assert_eq!(
             set.bless_key("folo", "abc123", 1_700_000_000),
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/bless-1700000000.json"
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/abc123/bless-1700000000.json"
         );
     }
 
     #[test]
     fn commit_prefix_enumerates_one_commit_directory() {
-        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", None);
+        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", "m1");
         assert_eq!(
             set.commit_prefix("folo", "dead/beef"),
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/dead_beef/"
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/dead_beef/"
         );
     }
 
@@ -480,7 +435,7 @@ mod tests {
 
     #[test]
     fn new_sanitizes_partition_components() {
-        let set = DiscriminantSet::new(Engine::Criterion, "weird/triple", Some("machine/one"));
+        let set = DiscriminantSet::new(Engine::Criterion, "weird/triple", "machine/one");
         assert_eq!(
             set.partition_prefix("team/app"),
             "v1/team_app/objects/criterion/weird_triple/machine_one"
@@ -491,11 +446,11 @@ mod tests {
 
     #[test]
     fn clean_key_sanitizes_the_commit() {
-        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", None);
+        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", "m1");
         let object = set.clean_key("folo", "dead/beef");
         assert_eq!(
             object,
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/dead_beef/clean.json"
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/dead_beef/clean.json"
         );
         // Exactly the eight canonical key segments survive sanitization.
         assert_eq!(object.split('/').count(), 8);
@@ -503,11 +458,11 @@ mod tests {
 
     #[test]
     fn dirty_key_sanitizes_the_commit() {
-        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", None);
+        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", "m1");
         let object = set.dirty_key("folo", "dead/beef", 1_700_000_000);
         assert_eq!(
             object,
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/dead_beef/dirty-1700000000.json"
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/dead_beef/dirty-1700000000.json"
         );
         // Exactly the eight canonical key segments survive sanitization.
         assert_eq!(object.split('/').count(), 8);
@@ -515,14 +470,13 @@ mod tests {
 
     #[test]
     fn parse_key_decomposes_a_clean_key() {
-        let parsed = parse_key(
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/clean.json",
-        )
-        .unwrap();
+        let parsed =
+            parse_key("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/abc123/clean.json")
+                .unwrap();
         assert_eq!(parsed.project, "folo");
         assert_eq!(parsed.set.engine, "callgrind");
         assert_eq!(parsed.set.target_triple, "x86_64-unknown-linux-gnu");
-        assert_eq!(parsed.set.machine_key, "synthetic");
+        assert_eq!(parsed.set.machine_key, "m1");
         assert_eq!(parsed.commit, "abc123");
         assert_eq!(parsed.file, "clean.json");
         assert!(!parsed.is_dirty());
@@ -543,7 +497,7 @@ mod tests {
     #[test]
     fn parse_key_recognizes_a_blessing_sidecar() {
         let parsed = parse_key(
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/bless-1700000000.json",
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/abc123/bless-1700000000.json",
         )
         .unwrap();
         assert!(parsed.is_bless());
@@ -553,13 +507,12 @@ mod tests {
 
     #[test]
     fn bless_key_targets_the_sets_commit_directory() {
-        let parsed = parse_key(
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/clean.json",
-        )
-        .unwrap();
+        let parsed =
+            parse_key("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/abc123/clean.json")
+                .unwrap();
         assert_eq!(
             parsed.bless_key(1_700_000_000),
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/abc123/bless-1700000000.json"
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/abc123/bless-1700000000.json"
         );
     }
 

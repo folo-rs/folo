@@ -71,8 +71,9 @@ pub enum Command {
     Bless(BlessOptions),
     /// Remove blessings recorded at the current commit.
     Unbless(UnblessOptions),
-    /// Print this machine's hardware fingerprint (the machine key
-    /// hardware-dependent engines partition by).
+    /// Print this machine's hardware fingerprint.
+    ///
+    /// Every benchmark engine partitions its history by this key.
     MachineKey(MachineKeyOptions),
 }
 
@@ -103,7 +104,7 @@ pub struct CollectOptions {
     pub all_features: bool,
     /// Disable the default cargo feature set (`--no-default-features`).
     pub no_default_features: bool,
-    /// Override for the machine fingerprint (hardware-dependent engines), if set.
+    /// Override for the machine key used to partition every engine, if set.
     pub machine_key: Option<String>,
     /// Harvest and build results without storing them.
     pub no_store: bool,
@@ -174,7 +175,7 @@ pub struct ImportOptions {
     /// leftovers from unrelated runs into one import, so the caller must name the
     /// tree it curated.
     pub target_dir: PathBuf,
-    /// Override for the machine fingerprint (hardware-dependent engines), if set.
+    /// Override for the machine key used to partition every engine, if set.
     pub machine_key: Option<String>,
     /// Override for the partition target triple, if set. Applied to both the
     /// partition key and the recorded `ToolchainInfo.target_triple` so the stored
@@ -539,7 +540,7 @@ pub struct BackfillOptions {
     pub all_features: bool,
     /// Disable the default cargo feature set (`--no-default-features`).
     pub no_default_features: bool,
-    /// Override for the machine fingerprint (hardware-dependent engines), if set.
+    /// Override for the machine key used to partition every engine, if set.
     pub machine_key: Option<String>,
     /// Replace already-stored results for the backfilled commits instead of
     /// skipping them as duplicates.

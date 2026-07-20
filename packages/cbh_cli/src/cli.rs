@@ -325,8 +325,8 @@ struct CollectCommand {
     #[command(flatten)]
     env: EnvArgs,
 
-    /// Override the machine fingerprint used to partition hardware-dependent
-    /// results (for example, a CI machine-pool name).
+    /// Override the machine key used to partition every engine's results (for
+    /// example, a CI machine-pool name).
     #[arg(long, value_name = "KEY", help_heading = HEADING_DISCRIMINANT)]
     machine_key: Option<String>,
 
@@ -432,8 +432,8 @@ struct ImportCommand {
     #[arg(long, value_name = "PATH", help_heading = HEADING_ENV)]
     target_dir: PathBuf,
 
-    /// Override the machine fingerprint used to partition hardware-dependent
-    /// results (for example, a CI machine-pool name).
+    /// Override the machine key used to partition every engine's results (for
+    /// example, a CI machine-pool name).
     #[arg(long, value_name = "KEY", help_heading = HEADING_DISCRIMINANT)]
     machine_key: Option<String>,
 
@@ -866,8 +866,8 @@ struct BackfillCommand {
     #[command(flatten)]
     env: EnvArgs,
 
-    /// Override the machine fingerprint used to partition hardware-dependent
-    /// results (for example, a CI machine-pool name).
+    /// Override the machine key used to partition every engine's results (for
+    /// example, a CI machine-pool name).
     #[arg(long, value_name = "KEY", help_heading = HEADING_DISCRIMINANT)]
     machine_key: Option<String>,
 

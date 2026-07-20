@@ -51,5 +51,5 @@ verbatim.
 
 Regardless of `--verbose`, `collect` prints a one-line effective-partition summary to
 stderr naming the storage partition its results land in: the target triple and the machine
-key that hardware-dependent engines use, marked as auto-detected or as coming from
+key every engine is partitioned by, marked as auto-detected or as coming from
 `--machine-key`.

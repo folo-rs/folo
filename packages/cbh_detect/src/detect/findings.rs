@@ -1283,7 +1283,7 @@ mod tests {
             set: DiscriminantSet {
                 engine: "callgrind".to_owned(),
                 target_triple: "t".to_owned(),
-                machine_key: "synthetic".to_owned(),
+                machine_key: "m1".to_owned(),
             },
             id: BenchmarkId::new(nonempty!["group".to_owned(), "case".to_owned()]),
             kind,
@@ -1338,7 +1338,7 @@ mod tests {
                 set: DiscriminantSet {
                     engine: "callgrind".to_owned(),
                     target_triple: "t".to_owned(),
-                    machine_key: "synthetic".to_owned(),
+                    machine_key: "m1".to_owned(),
                 },
                 id: BenchmarkId::new(nonempty!["group".to_owned(), "case".to_owned()]),
                 kind: MetricKind::InstructionCount,
@@ -2034,7 +2034,7 @@ mod tests {
             set: DiscriminantSet {
                 engine: "callgrind".to_owned(),
                 target_triple: "t".to_owned(),
-                machine_key: "synthetic".to_owned(),
+                machine_key: "m1".to_owned(),
             },
             id: BenchmarkId::new(nonempty!["group".to_owned(), "case".to_owned()]),
             kind: MetricKind::InstructionCount,

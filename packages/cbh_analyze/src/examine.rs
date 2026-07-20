@@ -537,11 +537,11 @@ mod tests {
         Config::default()
     }
 
-    /// The auto-detected facets for the default synthetic partition the tests seed.
+    /// The auto-detected facets the tests seed their default partition under.
     fn auto() -> AutoFacets {
         AutoFacets {
             triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "synthetic".to_owned(),
+            machine_key: "m1".to_owned(),
         }
     }
 
@@ -615,13 +615,11 @@ mod tests {
     }
 
     fn clean_key(commit: &str) -> String {
-        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
+        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/clean.json")
     }
 
     fn dirty_key(commit: &str, unix: i64) -> String {
-        format!(
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/dirty-{unix}.json"
-        )
+        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/dirty-{unix}.json")
     }
 
     fn store(storage: &MemoryStorage, key: &str, run: &Run) {
@@ -1079,7 +1077,7 @@ mod tests {
         );
         store(
             &storage,
-            "v1/folo/objects/criterion/x86_64-unknown-linux-gnu/synthetic/c0/clean.json",
+            "v1/folo/objects/criterion/x86_64-unknown-linux-gnu/m1/c0/clean.json",
             &single_metric_run(0, "c0", 200.0),
         );
         let git = linear_git();

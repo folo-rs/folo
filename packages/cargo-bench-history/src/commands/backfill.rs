@@ -909,7 +909,7 @@ mod tests {
     #[test]
     fn commit_of_clean_key_extracts_the_commit_only_for_clean_objects() {
         assert_eq!(
-            commit_of_clean_key("v1/proj/objects/callgrind/triple/synthetic/abc123/clean.json"),
+            commit_of_clean_key("v1/proj/objects/callgrind/triple/m1/abc123/clean.json"),
             Some("abc123")
         );
         // A dirty snapshot is not a backfilled commit.
@@ -991,7 +991,7 @@ mod tests {
         // Two engines record c0 (under different partitions); c1 has only a dirty
         // snapshot; a different project's clean run must not leak in.
         block_on(storage.put(
-            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json",
+            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/c0/clean.json",
             b"{}",
         ))
         .unwrap();
@@ -1006,7 +1006,7 @@ mod tests {
         ))
         .unwrap();
         block_on(storage.put(
-            "v1/other/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c9/clean.json",
+            "v1/other/objects/callgrind/x86_64-unknown-linux-gnu/m1/c9/clean.json",
             b"{}",
         ))
         .unwrap();
@@ -1175,7 +1175,7 @@ mod tests {
         assert_eq!(empty, CommitOutcome::SkippedEmpty);
 
         let duplicate = map_collect_result(Err(RunError::Duplicate {
-            key: "v1/p/objects/callgrind/t/synthetic/abc/clean.json".to_owned(),
+            key: "v1/p/objects/callgrind/t/m1/abc/clean.json".to_owned(),
         }))
         .unwrap();
         assert_eq!(duplicate, CommitOutcome::SkippedExisting);

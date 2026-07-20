@@ -140,7 +140,8 @@ struct JsonSet<'a> {
     engine: &'a str,
     /// Resolved target triple.
     target_triple: &'a str,
-    /// Machine key (`synthetic` for hardware-independent engines).
+    /// Machine key: the partition value the runs were stored under (a hardware
+    /// fingerprint, or an explicit `--machine-key` override such as a pool label).
     machine_key: &'a str,
     /// Stored runs loaded for this set.
     runs: usize,
@@ -1090,7 +1091,7 @@ mod tests {
         DiscriminantSet {
             engine: "callgrind".to_owned(),
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "synthetic".to_owned(),
+            machine_key: "m1".to_owned(),
         }
     }
 
@@ -1300,7 +1301,7 @@ mod tests {
 
         let report = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
 
-        let footer = "_Filter:_ `--engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key synthetic`";
+        let footer = "_Filter:_ `--engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key m1`";
         assert!(report.contains(footer), "{report}");
         // The footer trails the finding headline rather than leading it.
         let headline_at = report.find("mover_a").expect("headline present");
@@ -1332,7 +1333,7 @@ mod tests {
 
         assert!(
             report.contains(
-                "--engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key synthetic"
+                "--engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key m1"
             ),
             "{report}"
         );
@@ -1440,14 +1441,14 @@ mod tests {
         let report = render(&input, ReportFormat::Text, false);
         assert!(report.contains("regressions: 1"), "{report}");
         assert!(
-            report.contains("callgrind/x86_64-unknown-linux-gnu/synthetic"),
+            report.contains("callgrind/x86_64-unknown-linux-gnu/m1"),
             "the set heading drops the redundant `Set ` prefix: {report}"
         );
         // The set header names the facet flags that reproduce exactly this partition,
         // so a reader who spots a finding knows how to query it directly.
         assert!(
             report.contains(
-                "  filter: --engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key synthetic"
+                "  filter: --engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key m1"
             ),
             "{report}"
         );
@@ -1606,7 +1607,7 @@ mod tests {
             "{report}"
         );
         assert!(
-            report.contains("## callgrind/x86_64-unknown-linux-gnu/synthetic"),
+            report.contains("## callgrind/x86_64-unknown-linux-gnu/m1"),
             "the set heading drops the redundant `Set ` prefix: {report}"
         );
         // The per-set tally mirrors the JSON metadata and the text header.
@@ -1614,7 +1615,7 @@ mod tests {
         // The set header names the facet flags that reproduce exactly this partition.
         assert!(
             report.contains(
-                "- Filter: `--engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key synthetic`"
+                "- Filter: `--engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key m1`"
             ),
             "{report}"
         );
@@ -2361,7 +2362,7 @@ mod tests {
         DiscriminantSet {
             engine: "callgrind".to_owned(),
             target_triple: "aarch64-apple-darwin".to_owned(),
-            machine_key: "synthetic".to_owned(),
+            machine_key: "m2".to_owned(),
         }
     }
 

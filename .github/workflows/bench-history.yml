@@ -130,8 +130,8 @@ jobs:
           Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
           Set-AzureFederationEnv -ConstantsPath constants.env -EnvFilePath $env:GITHUB_ENV | Out-Null
 
-      # The deterministic engines (Callgrind, allocation/time counters) are hardware-independent; the
-      # wall-clock engines are partitioned by each runner's OWN real hardware fingerprint (see the
+      # Every engine — Callgrind and the allocation/time counters included — is partitioned by each
+      # runner's OWN real hardware fingerprint (see the
       # gh-collect-bench-history recipe) so a heterogeneous runner pool splits into one clean series
       # per SKU rather than one jittery mixed series. RECOLLECT_COMMIT_ID (empty on a push/plain
       # dispatch) switches the recipe from appending the pushed commit to re-measuring and OVERWRITING

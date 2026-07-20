@@ -22,14 +22,22 @@ async fn backfill_stores_one_clean_object_per_commit_and_restores_checkout() {
     assert!(message.contains("2 stored"), "{message}");
 
     // One clean object per commit, keyed by that commit's full ID. `backfill`
-    // auto-detects the target triple, so derive it from a stored object to keep
-    // the key assertions correct on every platform CI runs on.
+    // auto-detects the target triple and machine key, so derive both from a stored
+    // object to keep the key assertions correct on every platform CI runs on.
     let objects = workspace.stored_objects();
     assert_eq!(objects.len(), 2, "{objects:?}");
     let triple = objects[0].1.context.toolchain.target_triple.clone();
+    let machine = objects[0]
+        .1
+        .context
+        .machine
+        .as_ref()
+        .expect("backfill records host-hardware provenance")
+        .fingerprint
+        .clone();
     for commit_id in [&c1, &c2] {
         let expected =
-            format!("v1/testproj/objects/callgrind/{triple}/synthetic/{commit_id}/clean.json");
+            format!("v1/testproj/objects/callgrind/{triple}/{machine}/{commit_id}/clean.json");
         assert!(
             objects.iter().any(|(key, _)| key == &expected),
             "missing {expected} in {objects:?}"
@@ -80,9 +88,17 @@ async fn backfill_spans_a_merge_commit_along_first_parent() {
     let objects = workspace.stored_objects();
     assert_eq!(objects.len(), 3, "{objects:?}");
     let triple = objects[0].1.context.toolchain.target_triple.clone();
+    let machine = objects[0]
+        .1
+        .context
+        .machine
+        .as_ref()
+        .expect("backfill records host-hardware provenance")
+        .fingerprint
+        .clone();
     for commit_id in [&c1, &m, &c3] {
         let expected =
-            format!("v1/testproj/objects/callgrind/{triple}/synthetic/{commit_id}/clean.json");
+            format!("v1/testproj/objects/callgrind/{triple}/{machine}/{commit_id}/clean.json");
         assert!(
             objects.iter().any(|(key, _)| key == &expected),
             "missing {expected} in {objects:?}"

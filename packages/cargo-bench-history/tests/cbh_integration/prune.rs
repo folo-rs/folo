@@ -218,8 +218,9 @@ async fn prune_dirty_removes_runs_across_multiple_discriminant_sets() {
     workspace.seed_dirty_criterion("2024-01-02", "f1", "m1", 20.0);
 
     // Text format exercises the plural "discriminant sets" summary branch. The
-    // facets widen to every triple/machine so the synthetic callgrind set and the
-    // windows-keyed criterion set are both in scope regardless of host.
+    // facets widen to every triple/machine so the callgrind set (under the harness
+    // machine key) and the `m1`-keyed criterion set are both in scope regardless of
+    // host.
     let RunOutcome::Completed { message } = workspace
         .drive(&[
             "prune",

@@ -42,7 +42,7 @@ pub struct Overrides {
     /// The auto-detected discriminant facets (host target triple + machine key) the
     /// query commands default to when a facet is omitted. `None` probes the host;
     /// integration tests inject fixed values so the suite is independent of the host
-    /// it runs on (a `synthetic` set's inclusion now depends on the auto triple).
+    /// it runs on.
     pub auto_facets: Option<AutoFacets>,
 }
 

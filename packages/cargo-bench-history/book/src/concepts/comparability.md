@@ -10,10 +10,11 @@ is `{ project, engine, target_triple, machine_key }`:
 
 - **`project`** — workspace identity (configured, defaulting to the repository directory name).
 - **`engine`** — different units and semantics never mix.
-- **`target_triple`** — even hardware-independent counts are not comparable across
+- **`target_triple`** — even simulated counts are not comparable across
   architectures.
-- **`machine_key`** — always present: the machine fingerprint for hardware-dependent engines,
-  and the literal `synthetic` for hardware-independent ones. See [machine-key](../commands/machine-key.md).
+- **`machine_key`** — always present: a fingerprint of the host the benchmark ran on. Every
+  engine is partitioned by it, because every engine's numbers vary with the hardware in
+  practice. See [machine-key](../commands/machine-key.md).
 
 Deliberately **metadata, not partition** — so a change shows up as a timeline step, which is
 the whole point of the tool — are the toolchain versions, OS/libc, commit, branch, and

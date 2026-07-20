@@ -25,17 +25,18 @@ use tick::Clock;
 pub(crate) const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The target triple the harness pins the auto-detected facet to, matching the
-/// triple the seed helpers write their synthetic partitions under. Pinning it
-/// keeps the suite host-independent: synthetic sets now obey the target-triple
-/// facet (a `list`/`analyze` with an auto triple no longer sees foreign-triple
-/// data), so a bare query must auto-detect the seeded triple regardless of the
-/// host the test runs on.
+/// triple the seed helpers write their partitions under. Pinning it keeps the
+/// suite host-independent: sets obey the target-triple facet (a `list`/`analyze`
+/// with an auto triple never sees foreign-triple data), so a bare query must
+/// auto-detect the seeded triple regardless of the host the test runs on.
 pub(crate) const HARNESS_AUTO_TRIPLE: &str = "x86_64-unknown-linux-gnu";
 
-/// The machine key the harness pins the auto-detected facet to. Chosen not to
-/// collide with any seeded machine key, so an auto machine-key query still
-/// matches only the machine-key-exempt synthetic sets, never a hardware-keyed
-/// partition (which the tests always select with an explicit `--machine-key`).
+/// The machine key the harness pins the auto-detected facet to. Every engine is
+/// machine-keyed, so a bare query must auto-detect a machine key the seeded sets
+/// share; the callgrind/alloc seed helpers plant their objects under this key so a
+/// default query matches them regardless of the host the test runs on. Tests that
+/// exercise per-machine isolation seed additional, explicit machine keys and
+/// select them with an explicit `--machine-key`.
 pub(crate) const HARNESS_AUTO_MACHINE_KEY: &str = "harness-auto-machine";
 
 /// Canonical faker `--callgrind` identity/metric fragments, kept in lockstep with
@@ -1065,7 +1066,7 @@ impl Workspace {
         let key = seed_clean_key(
             Engine::Callgrind,
             "x86_64-unknown-linux-gnu",
-            None,
+            HARNESS_AUTO_MACHINE_KEY,
             &commit_id,
         );
         let mut object: serde_json::Value = serde_json::from_str(
@@ -1089,7 +1090,12 @@ impl Workspace {
     /// own git committer date, so the test owns the topology the window is decided
     /// from.
     pub(crate) fn seed_callgrind(&self, label: &str, value: f64) {
-        self.seed_callgrind_in("x86_64-unknown-linux-gnu", "synthetic", label, value);
+        self.seed_callgrind_in(
+            "x86_64-unknown-linux-gnu",
+            HARNESS_AUTO_MACHINE_KEY,
+            label,
+            value,
+        );
     }
 
     /// Seeds one clean Callgrind result set into the `triple`/`machine` partition
@@ -1098,7 +1104,7 @@ impl Workspace {
     pub(crate) fn seed_callgrind_in(&self, triple: &str, machine: &str, label: &str, value: f64) {
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
-        let key = seed_clean_key(Engine::Callgrind, triple, Some(machine), &commit_id);
+        let key = seed_clean_key(Engine::Callgrind, triple, machine, &commit_id);
         self.seed(
             &key,
             &ir_result_set(observed.as_second(), &commit_id, value),
@@ -1116,7 +1122,7 @@ impl Workspace {
         let key = seed_dirty_key(
             Engine::Callgrind,
             "x86_64-unknown-linux-gnu",
-            None,
+            HARNESS_AUTO_MACHINE_KEY,
             &commit_id,
             effective.as_second(),
         );
@@ -1134,7 +1140,7 @@ impl Workspace {
         let key = seed_clean_key(
             Engine::Callgrind,
             "x86_64-unknown-linux-gnu",
-            None,
+            HARNESS_AUTO_MACHINE_KEY,
             &commit_id,
         );
         self.seed(
@@ -1197,14 +1203,14 @@ impl Workspace {
 
     /// Seeds one Callgrind result set carrying one `Ir` benchmark per entry in
     /// `values` for the previously created commit `label`, all in the shared
-    /// `x86_64`/`synthetic` partition.
+    /// `x86_64`/[`HARNESS_AUTO_MACHINE_KEY`] partition.
     pub(crate) fn seed_many_callgrind(&self, label: &str, values: &[f64]) {
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
         let key = seed_clean_key(
             Engine::Callgrind,
             "x86_64-unknown-linux-gnu",
-            None,
+            HARNESS_AUTO_MACHINE_KEY,
             &commit_id,
         );
         self.seed(
@@ -1221,7 +1227,7 @@ impl Workspace {
         let key = seed_clean_key(
             Engine::Criterion,
             "x86_64-pc-windows-msvc",
-            Some(machine),
+            machine,
             &commit_id,
         );
         self.seed(
@@ -1246,7 +1252,7 @@ impl Workspace {
         let key = seed_dirty_key(
             Engine::Criterion,
             "x86_64-pc-windows-msvc",
-            Some(machine),
+            machine,
             &commit_id,
             effective.as_second(),
         );
@@ -1287,7 +1293,7 @@ impl Workspace {
         let key = seed_clean_key(
             Engine::Callgrind,
             "x86_64-unknown-linux-gnu",
-            None,
+            HARNESS_AUTO_MACHINE_KEY,
             &commit_id,
         );
         self.seed(
@@ -1298,15 +1304,14 @@ impl Workspace {
 
     /// Seeds one clean `alloc_tracker` result set for `operation` on the previously
     /// created commit `label`, recording `bytes` mean bytes and `allocs` mean
-    /// allocations per iteration. Allocation counts are hardware-independent, so the
-    /// partition is `synthetic` (no machine key).
+    /// allocations per iteration in the [`HARNESS_AUTO_MACHINE_KEY`] partition.
     pub(crate) fn seed_alloc_tracker(&self, label: &str, operation: &str, bytes: f64, allocs: f64) {
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
         let key = seed_clean_key(
             Engine::AllocTracker,
             "x86_64-unknown-linux-gnu",
-            None,
+            HARNESS_AUTO_MACHINE_KEY,
             &commit_id,
         );
         self.seed(
@@ -1317,8 +1322,7 @@ impl Workspace {
 
     /// Seeds one clean `all_the_time` result set for `operation` on the previously
     /// created commit `label`, recording `nanos` mean processor-time nanoseconds
-    /// per iteration in the `machine`-keyed partition (processor time is
-    /// hardware-dependent).
+    /// per iteration in the `machine`-keyed partition.
     pub(crate) fn seed_all_the_time(
         &self,
         label: &str,
@@ -1331,7 +1335,7 @@ impl Workspace {
         let key = seed_clean_key(
             Engine::AllTheTime,
             "x86_64-unknown-linux-gnu",
-            Some(machine),
+            machine,
             &commit_id,
         );
         self.seed(
@@ -1357,7 +1361,7 @@ impl Workspace {
         let key = seed_clean_key(
             Engine::AllTheTime,
             "x86_64-unknown-linux-gnu",
-            Some(machine),
+            machine,
             &commit_id,
         );
         self.seed(
@@ -1380,7 +1384,7 @@ const SEED_PROJECT: &str = "testproj";
 /// Builds a clean-object storage key through the model's key builder — the exact
 /// code path `run` writes under — so a seed helper cannot drift from the
 /// production storage layout by hand-formatting a key string.
-fn seed_clean_key(engine: Engine, triple: &str, machine: Option<&str>, commit: &str) -> String {
+fn seed_clean_key(engine: Engine, triple: &str, machine: &str, commit: &str) -> String {
     DiscriminantSet::new(engine, triple, machine).clean_key(SEED_PROJECT, commit)
 }
 
@@ -1389,7 +1393,7 @@ fn seed_clean_key(engine: Engine, triple: &str, machine: Option<&str>, commit: &
 fn seed_dirty_key(
     engine: Engine,
     triple: &str,
-    machine: Option<&str>,
+    machine: &str,
     commit: &str,
     observation_unix: i64,
 ) -> String {

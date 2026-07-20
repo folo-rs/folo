@@ -14,7 +14,7 @@
 //! The environment and hardware probe. The environment probe port discovers the git and
 //! toolchain facts of a run (shelling out to `git` and `rustc`), and the machine
 //! fingerprint derives a stable, reproducible key from the host's hardware so that
-//! hardware-dependent results are only ever compared across equivalent machines. Split
+//! benchmark results are only ever compared across equivalent machines. It is split
 //! out of the `cargo-bench-history` shell so this environment-sensing code is isolated
 //! for mutation testing.
 //!

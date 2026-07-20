@@ -23,9 +23,9 @@ Analyzed project folo (branch mode)
   commit: 4f2a1c9
   runs: 218 (9c1d0ab → 4f2a1c9)  regressions: 1  improvements: 1
 
-callgrind/x86_64-unknown-linux-gnu/synthetic
+callgrind/x86_64-unknown-linux-gnu/a1b2c3d4e5f60718
   runs: 218  regressions: 1  improvements: 1
-  filter: --engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key synthetic
+  filter: --engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key a1b2c3d4e5f60718
 
 many_cpus/hardware_info/query
   +13.00% instruction_count (99% confidence)

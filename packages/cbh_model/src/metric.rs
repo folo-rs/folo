@@ -92,12 +92,10 @@ pub enum MetricKind {
     ConditionalBranches,
     /// Executed indirect branches (Callgrind); low-noise but not exact.
     IndirectBranches,
-    /// Bytes allocated per iteration (`alloc_tracker`); hardware-independent but
-    /// not deterministic (warmup and buffer-resize allocations jitter the
-    /// per-iteration figure).
+    /// Bytes allocated per iteration (`alloc_tracker`); not deterministic (warmup
+    /// and buffer-resize allocations jitter the per-iteration figure).
     AllocatedBytes,
-    /// Allocation count per iteration (`alloc_tracker`); hardware-independent but
-    /// not deterministic.
+    /// Allocation count per iteration (`alloc_tracker`); not deterministic.
     AllocationCount,
 }
 

@@ -285,7 +285,7 @@ mod tests {
 
     use cbh_engines::{Harvest, RawOperationFile, RawSummary};
     use cbh_git::{FakeGitHistory, parse_git_info};
-    use cbh_probe::{HardwareProfile, RustcInfo};
+    use cbh_probe::{HardwareProfile, RustcInfo, resolve_machine_key};
     use cbh_storage::MemoryStorage;
     use futures::executor::block_on;
 
@@ -340,6 +340,12 @@ mod tests {
         }
     }
 
+    /// The auto-detected machine key every engine partitions under for the
+    /// [`FakeProbe`] hardware profile, when no `--machine-key` override applies.
+    fn probe_machine_key() -> String {
+        resolve_machine_key(None, &FakeProbe::new().hardware)
+    }
+
     /// A curated-tree stand-in that hands back canned per-engine output, so a test
     /// drives the harvest without a real `target/` directory. `import` gates
     /// nothing, so the modification-time cutoff is ignored.
@@ -385,9 +391,8 @@ mod tests {
         }
     }
 
-    /// A curated tree carrying both a hardware-independent (Callgrind) and a
-    /// hardware-dependent (`all_the_time`) engine's output, to prove `--machine-key`
-    /// repartitions only the latter.
+    /// A curated tree carrying both a Callgrind and an `all_the_time` engine's
+    /// output, to prove `--machine-key` repartitions every engine.
     fn callgrind_and_time_output() -> FakeOutput {
         FakeOutput {
             time: vec![RawOperationFile {
@@ -467,17 +472,17 @@ mod tests {
         assert!(message.contains("Stored 1"), "{message}");
 
         // Format canary: the exact storage key and decompressed body an importer
-        // must produce for the single-case Callgrind harvest. Callgrind is
-        // hardware-independent, so the machine segment is `synthetic`; the commit
-        // and triple come from the probed host.
+        // must produce for the single-case Callgrind harvest. Every engine is
+        // machine-keyed, so the machine segment is the probed host fingerprint; the
+        // commit and triple come from the probed host.
+        let machine = probe_machine_key();
         let keys = storage.keys();
         assert_eq!(
             keys,
-            vec![
-                "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/\
+            vec![format!(
+                "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/{machine}/\
                  deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/clean.json"
-                    .to_owned()
-            ]
+            )]
         );
 
         let run = only_stored_run(&storage);
@@ -736,7 +741,7 @@ mod tests {
     }
 
     #[test]
-    fn machine_key_override_only_repartitions_hardware_dependent_engines() {
+    fn machine_key_override_repartitions_every_engine() {
         let storage = MemoryStorage::new();
         let options = ImportOptions {
             machine_key: Some("lab-runner-7".to_owned()),
@@ -754,14 +759,13 @@ mod tests {
 
         let keys = storage.keys();
         assert_eq!(keys.len(), 2, "{keys:?}");
-        // Callgrind is hardware-independent: it stays under `synthetic`, ignoring
-        // the override.
+        // Callgrind is machine-keyed: the override names its partition.
         assert!(
             keys.iter()
-                .any(|key| key.contains("/callgrind/") && key.contains("/synthetic/")),
+                .any(|key| key.contains("/callgrind/") && key.contains("/lab-runner-7/")),
             "{keys:?}"
         );
-        // `all_the_time` is hardware-dependent: the override names its partition.
+        // `all_the_time` is machine-keyed too: the override names its partition.
         assert!(
             keys.iter()
                 .any(|key| key.contains("/all_the_time/") && key.contains("/lab-runner-7/")),

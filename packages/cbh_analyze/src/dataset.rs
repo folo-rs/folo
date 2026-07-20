@@ -195,11 +195,8 @@ where
     // The always-on effective-selection announcement: one line, printed regardless
     // of `--verbose`, naming the resolved (possibly auto-detected) partition, base
     // branch, and look-back window a plain run would otherwise resolve silently.
-    // When the machine key was auto-detected, a follow-up notice states that the
-    // machine-independent `synthetic` sets ride along regardless of that key.
     announce_selection(
         reporter,
-        &facets,
         &effective_selection_summary(
             &facets,
             &base_name,

@@ -416,7 +416,7 @@ mod tests {
 
     /// The clean object key for `commit` in the callgrind/linux partition.
     fn clean_key(commit: &str) -> String {
-        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
+        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/clean.json")
     }
 
     /// The clean object key for `commit` in an arbitrary engine/triple/machine-key partition.
@@ -455,9 +455,7 @@ mod tests {
 
     /// A dirty snapshot key for `commit` taken at `unix`.
     fn dirty_key(commit: &str, unix: i64) -> String {
-        format!(
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/dirty-{unix}.json"
-        )
+        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/dirty-{unix}.json")
     }
 
     /// Stores a value at `key` in `storage`, panicking on failure (test helper).
@@ -598,12 +596,12 @@ mod tests {
         Timestamp::from_second(0).unwrap()
     }
 
-    /// The auto-detected facets for the default synthetic partition the unit-test
-    /// data is seeded under (`x86_64-unknown-linux-gnu`, `synthetic` machine).
+    /// The auto-detected facets the unit-test data is seeded under
+    /// (`x86_64-unknown-linux-gnu`, `m1` machine).
     fn auto() -> AutoFacets {
         AutoFacets {
             triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "synthetic".to_owned(),
+            machine_key: "m1".to_owned(),
         }
     }
 
@@ -781,8 +779,7 @@ mod tests {
             "0.0.1".to_owned(),
         );
         let bless_key =
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c3/bless-3.json"
-                .to_owned();
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json".to_owned();
         block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
 
         let reporter = RecordingReporter::new();
@@ -843,8 +840,7 @@ mod tests {
             "0.0.1".to_owned(),
         );
         let bless_key =
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c3/bless-3.json"
-                .to_owned();
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json".to_owned();
         block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
 
         let reporter = RecordingReporter::new();
@@ -910,8 +906,7 @@ mod tests {
         seed_linear_step(&storage);
         // c3 is on the linear6 history, so history mode loads its sidecar.
         let bless_key =
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c3/bless-3.json"
-                .to_owned();
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json".to_owned();
         block_on(storage.put(&bless_key, &[0xff, 0xfe, 0x00])).unwrap();
         let error = analyze_blessing_error(&storage);
         match error {
@@ -927,8 +922,7 @@ mod tests {
         let storage = MemoryStorage::new();
         seed_linear_step(&storage);
         let bless_key =
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c3/bless-3.json"
-                .to_owned();
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json".to_owned();
         block_on(storage.put(&bless_key, b"{ not a blessing record")).unwrap();
         let error = analyze_blessing_error(&storage);
         match error {
@@ -955,8 +949,7 @@ mod tests {
             "0.0.1".to_owned(),
         );
         let bless_key =
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/z9/bless-3.json"
-                .to_owned();
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/z9/bless-3.json".to_owned();
         block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
 
         let reporter = RecordingReporter::new();
@@ -986,7 +979,7 @@ mod tests {
         // Both sets run through the `linear_git` tip (`c3`) so neither benchmark is a
         // ghost there and the always-on tip filter keeps every series.
         //
-        // Set A — callgrind/linux/synthetic: three runs (c1..c3), each carrying two
+        // Set A — callgrind/linux/m1: three runs (c1..c3), each carrying two
         // metrics so the set reconstructs two distinct series.
         for index in 1..4 {
             let commit = format!("c{index}");
@@ -997,7 +990,7 @@ mod tests {
                 &two_metric_set(second, &commit, 100.0, 200.0),
             );
         }
-        // Set B — callgrind/darwin/synthetic: two runs (c2..c3), each carrying one
+        // Set B — callgrind/darwin/m1: two runs (c2..c3), each carrying one
         // metric so the set reconstructs a single series. Distinct run AND series
         // counts from set A make an `==`/`!=` swap in either per-set tally observable.
         for index in 2..4 {
@@ -1005,13 +998,13 @@ mod tests {
             let second = i64::from(index);
             store(
                 &storage,
-                &clean_key_in("callgrind", "aarch64-apple-darwin", "synthetic", &commit),
+                &clean_key_in("callgrind", "aarch64-apple-darwin", "m1", &commit),
                 &ir_set(second, &commit, 100.0),
             );
         }
 
         let git = linear_git();
-        // The two sets live under different triples, and synthetic sets obey the
+        // The two sets live under different triples, and every set obeys the
         // target-triple facet, so an auto-detected triple would report only its own.
         // Widen to `all` to exercise the per-set tallies across both partitions.
         let opts = AnalyzeOptions {
@@ -1551,7 +1544,7 @@ mod tests {
         store(&storage, &clean_key("c3"), &ir_set(3, "c3", 100.0));
         store(
             &storage,
-            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/c3/clean.json",
+            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/m1/c3/clean.json",
             &ir_set(3, "c3", 100.0),
         );
         let git = linear_git();
@@ -1578,7 +1571,7 @@ mod tests {
         store(&storage, &clean_key("c3"), &ir_set(3, "c3", 100.0));
         store(
             &storage,
-            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/c3/clean.json",
+            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/m1/c3/clean.json",
             &ir_set(3, "c3", 100.0),
         );
         let git = linear_git();
@@ -1601,13 +1594,13 @@ mod tests {
     fn two_sets_produce_two_report_sections() {
         // Both sets are seeded at the `linear_git` tip (`c3`) so the tip filter keeps
         // each and every partition is reported. They differ only by triple, and
-        // synthetic sets obey the target-triple facet, so the query widens to
+        // every set obeys the target-triple facet, so the query widens to
         // `--target-triple all` to search both partitions rather than just the host's.
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c3"), &ir_set(3, "c3", 100.0));
         store(
             &storage,
-            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/c3/clean.json",
+            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/m1/c3/clean.json",
             &ir_set(3, "c3", 100.0),
         );
         let git = linear_git();
@@ -1629,7 +1622,7 @@ mod tests {
         store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
         store(
             &storage,
-            "v1/folo/objects/criterion/x86_64-unknown-linux-gnu/synthetic/c0/clean.json",
+            "v1/folo/objects/criterion/x86_64-unknown-linux-gnu/m1/c0/clean.json",
             &ir_set(0, "c0", 100.0),
         );
         let git = linear_git();
@@ -1813,7 +1806,7 @@ mod tests {
             let commit = format!("c{index}");
             let second = i64::try_from(index).unwrap();
             let key = format!(
-                "v1/{sanitized}/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json"
+                "v1/{sanitized}/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/clean.json"
             );
             store(&storage, &key, &ir_set(second, &commit, value));
         }
