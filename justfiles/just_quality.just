@@ -111,7 +111,12 @@ validate-scripts:
 
     if ($results.Count -gt 0) {
         foreach ($finding in $results) {
-            $relative = $finding.ScriptName.Substring($root.Length).TrimStart('\', '/')
+            $scriptName = [string]$finding.ScriptName
+            if ($scriptName.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $relative = $scriptName.Substring($root.Length).TrimStart('\', '/')
+            } else {
+                $relative = $scriptName
+            }
             Write-Host ("{0}:{1} [{2}] {3}: {4}" -f $relative, $finding.Line, $finding.Severity, $finding.RuleName, $finding.Message)
         }
         $issueNoun = if ($results.Count -eq 1) { 'issue' } else { 'issues' }

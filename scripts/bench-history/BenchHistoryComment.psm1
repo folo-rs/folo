@@ -37,6 +37,10 @@
 
 Set-StrictMode -Version Latest
 
+# A transient GitHub blip (5xx, rate-limit, dropped connection) on a read should not fail the
+# whole job, so the read-side gh calls below retry via the shared helper.
+Import-Module (Join-Path $PSScriptRoot '..' 'utility' 'Retry.psm1') -Force
+
 # Sentinel pair bounding the staleness warning banner Set-RollingCommentStaleness prepends. Keeping the
 # banner between two hidden markers makes a re-run REPLACE it (strip the old block, insert the new)
 # rather than stack a second copy, and lets the block be located without depending on its wording.
@@ -64,10 +68,21 @@ function Invoke-GhCapture {
     # (stderr first, then any stdout) so the failure is never swallowed. Inspecting the exit code
     # ourselves - rather than letting a non-zero `gh` abort - is why the native-error toggle is off.
     # This is the single seam the Pester suite mocks (via `Mock gh`).
+    #
+    # Pass -RetryOnFailure ONLY for idempotent READS: it retries a transient-looking failure (HTTP
+    # 5xx, rate limit, a dropped connection) a few times before giving up, while a deterministic
+    # error still fails fast. Mutations must NOT set it - a retried create/edit/delete could double
+    # its effect.
     [CmdletBinding()]
-    param([Parameter(Mandatory)][object[]] $Arguments)
+    param(
+        [Parameter(Mandatory)][object[]] $Arguments,
+        [switch] $RetryOnFailure
+    )
 
     $PSNativeCommandUseErrorActionPreference = $false
+    # Name the invocation once for the failure message; also keeps the $Arguments read at the
+    # function's own scope rather than only inside the retry closure below.
+    $commandLine = "gh $($Arguments -join ' ')"
     # `-WhatIf:$false` on the temp-file bookkeeping: New-TemporaryFile and Remove-Item both support
     # ShouldProcess, so an ambient $WhatIfPreference from a SupportsShouldProcess CALLER (e.g.
     # Set-RollingCommentStaleness -WhatIf, which still needs the read GETs that back its preview) would
@@ -77,16 +92,24 @@ function Invoke-GhCapture {
     $stderrFile = New-TemporaryFile -WhatIf:$false
     try {
         $stderrPath = $stderrFile.FullName
-        $stdout = (gh @Arguments 2>$stderrPath | Out-String)
-        $exitCode = $LASTEXITCODE
-        if ($exitCode -ne 0) {
-            $stderr = Get-Content -LiteralPath $stderrPath -Raw
-            $parts = @()
-            if ($stderr -and $stderr.Trim()) { $parts += $stderr.Trim() }
-            if ($stdout -and $stdout.Trim()) { $parts += $stdout.Trim() }
-            throw "gh $($Arguments -join ' ') failed (exit $exitCode): $($parts -join ' ')"
+        $invoke = {
+            $stdout = (gh @Arguments 2>$stderrPath | Out-String)
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -ne 0) {
+                $stderr = Get-Content -LiteralPath $stderrPath -Raw
+                $parts = @()
+                if ($stderr -and $stderr.Trim()) { $parts += $stderr.Trim() }
+                if ($stdout -and $stdout.Trim()) { $parts += $stdout.Trim() }
+                throw "$commandLine failed (exit $exitCode): $($parts -join ' ')"
+            }
+            return $stdout
         }
-        return $stdout
+
+        if ($RetryOnFailure) {
+            return (Invoke-WithRetry -Attempt 4 -DelaySeconds 3 -BackoffMultiplier 2 -MaxDelaySeconds 30 `
+                    -RetryOn { param($e) Test-TransientFailure -Message $e.Exception.Message } -Action $invoke)
+        }
+        return (& $invoke)
     }
     finally {
         Remove-Item -LiteralPath $stderrFile.FullName -Force -ErrorAction SilentlyContinue -WhatIf:$false
@@ -161,7 +184,7 @@ function Find-RollingComment {
 
     # Invoke-GhCapture keeps stderr off stdout so ConvertFrom-Json always sees clean JSON even if
     # `gh` emitted a warning; `--paginate` follows the next-page links and merges the array pages.
-    $output = Invoke-GhCapture -Arguments @(
+    $output = Invoke-GhCapture -RetryOnFailure -Arguments @(
         'api', '--paginate', "repos/$Repo/issues/$PrNumber/comments"
     )
 

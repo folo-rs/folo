@@ -69,6 +69,7 @@ Describe 'Get-OpenIssueByTitle (mocked gh issue list)' {
     Context 'when gh fails' {
         BeforeEach {
             Mock gh -ModuleName BenchHistoryIssue { $global:LASTEXITCODE = 1; 'HTTP 503: Service Unavailable' }
+            Mock Start-Sleep -ModuleName Retry { }
         }
 
         It 'throws, surfacing the gh output' {
@@ -104,6 +105,7 @@ Describe 'Get-OpenIssueByTitle (mocked gh issue list)' {
                 Write-Error 'GraphQL: rate limit exceeded' -ErrorAction Continue
                 $global:LASTEXITCODE = 1
             }
+            Mock Start-Sleep -ModuleName Retry { }
         }
 
         It 'surfaces the stderr text in the thrown error' {
@@ -309,6 +311,7 @@ Describe 'Close-RollingIssue (mocked gh)' {
     Context 'when gh list fails' {
         BeforeEach {
             Mock gh -ModuleName BenchHistoryIssue { $global:LASTEXITCODE = 1; 'HTTP 503: Service Unavailable' }
+            Mock Start-Sleep -ModuleName Retry { }
         }
 
         It 'throws, surfacing the gh output' {
