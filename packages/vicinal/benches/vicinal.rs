@@ -1,6 +1,5 @@
 #![expect(missing_docs, reason = "benchmarks")]
 
-use std::fs::File;
 use std::hint::black_box;
 use std::thread;
 use std::time::Instant;
@@ -18,9 +17,19 @@ use vicinal::Pool;
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
+/// A small, deterministic, CPU-only stand-in for a real task body.
+///
+/// These benchmarks measure the overhead of *dispatching* work onto a worker,
+/// so the task body must be cheap and predictable. It performs no syscalls (see
+/// `docs/benchmarks.md`), which would otherwise inject kernel and filesystem
+/// noise unrelated to the scheduling under test. A handful of LCG steps seeded
+/// with `black_box` gives a fixed cost the optimizer cannot fold away.
 fn simulate_work() -> u32 {
-    drop(File::open("Q:\\non_existent_file.txt"));
-    42
+    let mut value = black_box(42_u32);
+    for _ in 0..32 {
+        value = value.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+    }
+    value
 }
 
 fn entrypoint(c: &mut Criterion) {
