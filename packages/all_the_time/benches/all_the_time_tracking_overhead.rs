@@ -34,7 +34,7 @@ fn entrypoint(c: &mut Criterion) {
         // its own stdout and file output on drop.
         let time_session = Session::new().no_stdout().no_file();
 
-        let thread_op = time_session.operation("empty_thread_span");
+        let thread_op = time_session.operation("all_the_time_tracking_overhead/overhead/thread_span_empty");
         group.bench_function("thread_span_empty", |b| {
             b.iter(|| {
                 let _span = thread_op.measure_thread().iterations(1);
@@ -43,7 +43,7 @@ fn entrypoint(c: &mut Criterion) {
             });
         });
 
-        let process_op = time_session.operation("empty_process_span");
+        let process_op = time_session.operation("all_the_time_tracking_overhead/overhead/process_span_empty");
         group.bench_function("process_span_empty", |b| {
             b.iter(|| {
                 let _span = process_op.measure_process().iterations(1);
@@ -53,7 +53,7 @@ fn entrypoint(c: &mut Criterion) {
         });
 
         // Test batch overhead with different iteration counts
-        let batch_op_10 = time_session.operation("empty_batch_span_10");
+        let batch_op_10 = time_session.operation("all_the_time_tracking_overhead/overhead/batch_span_empty_10_iterations");
         group.bench_function("batch_span_empty_10_iterations", |b| {
             b.iter(|| {
                 let _span = batch_op_10.measure_thread().iterations(10);
@@ -62,7 +62,7 @@ fn entrypoint(c: &mut Criterion) {
             });
         });
 
-        let batch_op_100 = time_session.operation("empty_batch_span_100");
+        let batch_op_100 = time_session.operation("all_the_time_tracking_overhead/overhead/batch_span_empty_100_iterations");
         group.bench_function("batch_span_empty_100_iterations", |b| {
             b.iter(|| {
                 let _span = batch_op_100.measure_thread().iterations(100);
@@ -71,7 +71,7 @@ fn entrypoint(c: &mut Criterion) {
             });
         });
 
-        let batch_op_1000 = time_session.operation("empty_batch_span_1000");
+        let batch_op_1000 = time_session.operation("all_the_time_tracking_overhead/overhead/batch_span_empty_1000_iterations");
         group.bench_function("batch_span_empty_1000_iterations", |b| {
             b.iter(|| {
                 let _span = batch_op_1000.measure_thread().iterations(1000);

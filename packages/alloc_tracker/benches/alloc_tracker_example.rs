@@ -22,7 +22,7 @@ fn entrypoint(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("alloc_tracker_example/example");
 
-    let string_op = allocs.operation("string_formatting");
+    let string_op = allocs.operation("alloc_tracker_example/example/string_formatting");
     group.bench_function("string_formatting", |b| {
         b.iter_custom(|iters| {
             let start = Instant::now();
@@ -42,7 +42,7 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let vector_op = allocs.operation("vector_creation");
+    let vector_op = allocs.operation("alloc_tracker_example/example/vector_creation");
     group.bench_function("vector_creation", |b| {
         b.iter_custom(|iters| {
             let start = Instant::now();

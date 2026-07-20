@@ -57,7 +57,11 @@ Benchmark file names, Criterion group names, and Callgrind group/function names
 follow strict conventions documented in [`docs/naming.md`](naming.md): the file
 basename prefixes Criterion group names, Callgrind files require a paired
 Criterion file, and Callgrind identifiers mirror Criterion ones with `/`
-substituted by `_`.
+substituted by `_`. In particular, when a benchmark tracks allocations or
+processor time, the `alloc_tracker`/`all_the_time` operation name **must equal
+the full Criterion benchmark identifier** (`<group>/<bench>`) so the two reports
+correlate — see the tracking-session operation-name rule in
+[`docs/naming.md`](naming.md).
 
 ## Stack pin vs. `Box::pin` on the measured path
 

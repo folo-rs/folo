@@ -23,7 +23,7 @@ fn entrypoint(c: &mut Criterion) {
     let mut group = c.benchmark_group("all_the_time_example/example");
 
     let cell = Cell::new(1234);
-    let read_cell_op = cpu_time.operation("read_cell");
+    let read_cell_op = cpu_time.operation("all_the_time_example/example/read_cell");
 
     group.bench_function("read_cell", |b| {
         b.iter_custom(|iters| {
@@ -41,7 +41,7 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let string_op = cpu_time.operation("string_formatting");
+    let string_op = cpu_time.operation("all_the_time_example/example/string_formatting");
 
     group.bench_function("string_formatting", |b| {
         b.iter_custom(|iters| {
@@ -62,7 +62,7 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let computation_op = cpu_time.operation("computation");
+    let computation_op = cpu_time.operation("all_the_time_example/example/computation");
 
     group.bench_function("computation", |b| {
         b.iter_custom(|iters| {

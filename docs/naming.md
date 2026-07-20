@@ -71,6 +71,63 @@ Avoid `::` or other custom separators between segments — Criterion already
 uses `/` as the hierarchical separator and that is the only separator that
 should appear in group names.
 
+### Tracking-session operation names must equal the Criterion identifier
+
+> **This is the naming rule most easily overlooked. Read it before touching any
+> benchmark that tracks allocations or processor time.**
+
+Many Criterion benchmarks pair their timing with an
+[`alloc_tracker`](../packages/alloc_tracker) or
+[`all_the_time`](../packages/all_the_time) tracking session. Each tracked
+operation is registered with a call such as:
+
+```rust
+let op = allocs.operation("<name>");
+```
+
+The `<name>` string **must be identical to the fully qualified Criterion
+benchmark identifier** it measures — that is:
+
+```
+<criterion group name>/<bench_function name>
+```
+
+which, given the group-naming rule above, always expands to
+`<file-basename>/<subgroup>/<bench>`. The tracking name is not free-form: it is
+the join key that lets the emitted allocation/time report line up one-to-one
+with the Criterion report for the same benchmark. A mismatched name silently
+produces two reports that cannot be correlated, which is worse than useless.
+
+Example for `foo/benches/foo_something.rs`:
+
+```rust
+let mut group = c.benchmark_group("foo_something/reads"); // <group>
+let op = allocs.operation("foo_something/reads/warm_cache"); // <group>/<bench>
+group.bench_function("warm_cache", |b| { /* ... */ });      // <bench>
+```
+
+Watch out for these traps:
+
+* **Use the `bench_function` name, not a paraphrase.** The operation leaf must
+  be the exact string passed to `bench_function(...)`. When the two were
+  written to differ (e.g. an operation called `empty_thread_span` measuring a
+  bench named `thread_span_empty`), the operation name must be corrected to
+  match the bench — the join key is the Criterion identifier, never the old
+  operation label.
+* **Include every segment.** Missing the `<file-basename>/` prefix (or any
+  intermediate segment the `bench_function` name carries) breaks the match.
+  The name must reproduce the Criterion identifier in full, even where that
+  makes a segment look redundant.
+
+**Exception — operations that name the workload under test.** When a benchmark
+exercises a tracking session *as the thing being measured* (for example a
+report-lifecycle bench that populates a session with synthetic operations), the
+`operation(...)` calls on that inner session name the workload, not the
+enclosing Criterion benchmark, and are deliberately independent of the Criterion
+identifier (e.g. `session.operation(format!("op_{op_idx}"))`). Only the
+*outer* tracking session that correlates with the Criterion report follows the
+rule above.
+
 ### Callgrind benchmark files
 
 Callgrind benchmark files (suffix `_cg.rs`) live alongside the Criterion
