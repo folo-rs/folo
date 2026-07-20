@@ -455,9 +455,7 @@ mod tests {
 
     /// A dirty snapshot key for `commit` taken at `unix`.
     fn dirty_key(commit: &str, unix: i64) -> String {
-        format!(
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/dirty-{unix}.json"
-        )
+        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/dirty-{unix}.json")
     }
 
     /// Stores a value at `key` in `storage`, panicking on failure (test helper).
@@ -781,8 +779,7 @@ mod tests {
             "0.0.1".to_owned(),
         );
         let bless_key =
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json"
-                .to_owned();
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json".to_owned();
         block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
 
         let reporter = RecordingReporter::new();
@@ -843,8 +840,7 @@ mod tests {
             "0.0.1".to_owned(),
         );
         let bless_key =
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json"
-                .to_owned();
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json".to_owned();
         block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
 
         let reporter = RecordingReporter::new();
@@ -910,8 +906,7 @@ mod tests {
         seed_linear_step(&storage);
         // c3 is on the linear6 history, so history mode loads its sidecar.
         let bless_key =
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json"
-                .to_owned();
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json".to_owned();
         block_on(storage.put(&bless_key, &[0xff, 0xfe, 0x00])).unwrap();
         let error = analyze_blessing_error(&storage);
         match error {
@@ -927,8 +922,7 @@ mod tests {
         let storage = MemoryStorage::new();
         seed_linear_step(&storage);
         let bless_key =
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json"
-                .to_owned();
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json".to_owned();
         block_on(storage.put(&bless_key, b"{ not a blessing record")).unwrap();
         let error = analyze_blessing_error(&storage);
         match error {
@@ -955,8 +949,7 @@ mod tests {
             "0.0.1".to_owned(),
         );
         let bless_key =
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/z9/bless-3.json"
-                .to_owned();
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/z9/bless-3.json".to_owned();
         block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
 
         let reporter = RecordingReporter::new();

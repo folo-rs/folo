@@ -196,8 +196,18 @@ async fn examine_selects_only_the_named_metric() {
 async fn examine_facet_selection_mirrors_analyze() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_callgrind_in("x86_64-unknown-linux-gnu", HARNESS_AUTO_MACHINE_KEY, "c1", 100.0);
-    workspace.seed_callgrind_in("x86_64-pc-windows-msvc", HARNESS_AUTO_MACHINE_KEY, "c1", 50.0);
+    workspace.seed_callgrind_in(
+        "x86_64-unknown-linux-gnu",
+        HARNESS_AUTO_MACHINE_KEY,
+        "c1",
+        100.0,
+    );
+    workspace.seed_callgrind_in(
+        "x86_64-pc-windows-msvc",
+        HARNESS_AUTO_MACHINE_KEY,
+        "c1",
+        50.0,
+    );
 
     // Across triples (`--target-triple all`), both comparable sets pivot. An
     // auto-detected triple would scope to the host's set alone — every set obeys the

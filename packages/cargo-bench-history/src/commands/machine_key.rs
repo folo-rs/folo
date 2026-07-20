@@ -1,7 +1,7 @@
 //! The `machine-key` command: print this machine's hardware fingerprint.
 //!
-//! The key is what hardware-dependent engines partition their history by, so it
-//! is printed to standard output (clean, one line) for CI to capture and thread
+//! Every engine partitions its history by this key, so it is printed to standard
+//! output (clean, one line) for CI to capture and thread
 //! into an `analyze` selection. Under `--verbose`, the individual factors that
 //! make up the fingerprint are emitted to standard error so a change in the key
 //! can be traced to the specific factor that changed.

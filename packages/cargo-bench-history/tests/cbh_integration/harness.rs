@@ -1090,7 +1090,12 @@ impl Workspace {
     /// own git committer date, so the test owns the topology the window is decided
     /// from.
     pub(crate) fn seed_callgrind(&self, label: &str, value: f64) {
-        self.seed_callgrind_in("x86_64-unknown-linux-gnu", HARNESS_AUTO_MACHINE_KEY, label, value);
+        self.seed_callgrind_in(
+            "x86_64-unknown-linux-gnu",
+            HARNESS_AUTO_MACHINE_KEY,
+            label,
+            value,
+        );
     }
 
     /// Seeds one clean Callgrind result set into the `triple`/`machine` partition

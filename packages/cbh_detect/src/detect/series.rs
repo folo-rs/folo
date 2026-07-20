@@ -627,9 +627,8 @@ mod tests {
 
     /// A clean object at `commit` carrying the given instruction-count value.
     fn clean_object(commit: &str, observation: i64, value: f64) -> LoadedObject {
-        let object_key = format!(
-            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/clean.json"
-        );
+        let object_key =
+            format!("v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/clean.json");
         LoadedObject {
             key: parse_key(&object_key).unwrap(),
             object_key,
@@ -826,8 +825,7 @@ mod tests {
     fn build_series_separates_sets() {
         // A second run in a different triple is a different (incomparable) series.
         let other_key =
-            "v1/proj/objects/callgrind/aarch64-unknown-linux-gnu/m1/c0/clean.json"
-                .to_owned();
+            "v1/proj/objects/callgrind/aarch64-unknown-linux-gnu/m1/c0/clean.json".to_owned();
         let other = LoadedObject {
             key: parse_key(&other_key).unwrap(),
             object_key: other_key,
@@ -982,11 +980,10 @@ mod tests {
         let mut series = four_commit_series();
         // A blessing recorded only for a *different* set (a different target triple),
         // so the lookup for this series' set misses.
-        let other_set = parse_key(
-            "v1/proj/objects/callgrind/aarch64-unknown-linux-gnu/m1/c0/clean.json",
-        )
-        .unwrap()
-        .set;
+        let other_set =
+            parse_key("v1/proj/objects/callgrind/aarch64-unknown-linux-gnu/m1/c0/clean.json")
+                .unwrap()
+                .set;
         let mut map = HashMap::new();
         map.insert(
             other_set,
@@ -1012,8 +1009,7 @@ mod tests {
         observation: i64,
         benches: &[(&str, f64)],
     ) -> LoadedObject {
-        let object_key =
-            format!("v1/proj/objects/callgrind/{triple}/m1/{commit}/{filename}");
+        let object_key = format!("v1/proj/objects/callgrind/{triple}/m1/{commit}/{filename}");
         let context = RunContext::new(
             ts(observation),
             GitInfo {
@@ -1120,9 +1116,8 @@ mod tests {
         package: &str,
         metrics: &[(MetricKind, f64)],
     ) -> LoadedObject {
-        let object_key = format!(
-            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/clean.json"
-        );
+        let object_key =
+            format!("v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/clean.json");
         let context = RunContext::new(
             ts(observation),
             GitInfo {
@@ -1261,9 +1256,8 @@ mod tests {
         // rehash closure would silently drop or conflate series, so check that every
         // distinct id survives as its own series across both resize paths.
         let prefixes: Arc<[BenchmarkIdPrefix]> = Arc::from(Vec::new());
-        let key =
-            parse_key("v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/c0/clean.json")
-                .unwrap();
+        let key = parse_key("v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/c0/clean.json")
+            .unwrap();
 
         let mut first = SeriesBuilder::with_prefixes(Arc::clone(&prefixes));
         for index in 0_u32..64 {
@@ -1329,9 +1323,8 @@ mod tests {
             ],
         );
         let run = Run::new(context, vec![record]);
-        let key =
-            parse_key("v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/c0/clean.json")
-                .unwrap();
+        let key = parse_key("v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/c0/clean.json")
+            .unwrap();
 
         let mut builder = SeriesBuilder::new(SeriesFilter::default());
         builder.push(&key.set, 0, false, 0, &key.commit, &RunPoints::from(&run));

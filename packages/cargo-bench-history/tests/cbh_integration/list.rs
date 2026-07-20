@@ -8,8 +8,18 @@ async fn list_discriminants_lists_present_sets() {
     let workspace = Workspace::repo(&storage_only_config());
     // One commit, but two comparable sets: a Linux and a Windows callgrind pool.
     workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_callgrind_in("x86_64-unknown-linux-gnu", HARNESS_AUTO_MACHINE_KEY, "c1", 100.0);
-    workspace.seed_callgrind_in("x86_64-pc-windows-msvc", HARNESS_AUTO_MACHINE_KEY, "c1", 100.0);
+    workspace.seed_callgrind_in(
+        "x86_64-unknown-linux-gnu",
+        HARNESS_AUTO_MACHINE_KEY,
+        "c1",
+        100.0,
+    );
+    workspace.seed_callgrind_in(
+        "x86_64-pc-windows-msvc",
+        HARNESS_AUTO_MACHINE_KEY,
+        "c1",
+        100.0,
+    );
 
     let message = workspace.drive_json(&["list", "discriminants"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
@@ -66,8 +76,18 @@ async fn list_previews_the_analyzed_data_set() {
 async fn list_facet_selection_mirrors_analyze() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_callgrind_in("x86_64-unknown-linux-gnu", HARNESS_AUTO_MACHINE_KEY, "c1", 100.0);
-    workspace.seed_callgrind_in("x86_64-pc-windows-msvc", HARNESS_AUTO_MACHINE_KEY, "c1", 50.0);
+    workspace.seed_callgrind_in(
+        "x86_64-unknown-linux-gnu",
+        HARNESS_AUTO_MACHINE_KEY,
+        "c1",
+        100.0,
+    );
+    workspace.seed_callgrind_in(
+        "x86_64-pc-windows-msvc",
+        HARNESS_AUTO_MACHINE_KEY,
+        "c1",
+        50.0,
+    );
 
     let message = workspace
         .drive_json(&[

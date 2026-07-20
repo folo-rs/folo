@@ -780,15 +780,11 @@ mod tests {
     }
 
     fn dirty_key(commit: &str, unix: i64) -> String {
-        format!(
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/dirty-{unix}.json"
-        )
+        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/dirty-{unix}.json")
     }
 
     fn bless_key(commit: &str, unix: i64) -> String {
-        format!(
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/bless-{unix}.json"
-        )
+        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/bless-{unix}.json")
     }
 
     fn store(storage: &MemoryStorage, key: &str, value: &Run) {

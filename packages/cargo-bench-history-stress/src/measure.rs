@@ -105,12 +105,14 @@ pub(crate) async fn measure(
 ) -> Result<MeasureResult, Error> {
     let options = build_options(workspace, repo, mode, storage, logger.verbose());
     logger.step(&format!("analyzing in {} mode", mode.keyword()));
-    logger.detail_with(|| format!(
-        "context={}, base={}, facets forced to all (seeded triples and the seeded machine key \
+    logger.detail_with(|| {
+        format!(
+            "context={}, base={}, facets forced to all (seeded triples and the seeded machine key \
          never match the host), repeats={repeat}",
-        options.context.as_deref().unwrap_or(""),
-        options.base.as_deref().unwrap_or(""),
-    ));
+            options.context.as_deref().unwrap_or(""),
+            options.base.as_deref().unwrap_or(""),
+        )
+    });
 
     let command = Command::Analyze(options);
 

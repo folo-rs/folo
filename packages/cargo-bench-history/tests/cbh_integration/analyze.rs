@@ -1352,8 +1352,18 @@ async fn analyze_target_triple_facet_isolates_linux_from_windows() {
         ("2024-01-06", "c6", 130.0, 50.0),
     ] {
         workspace.commit_dated(date, label);
-        workspace.seed_callgrind_in("x86_64-unknown-linux-gnu", HARNESS_AUTO_MACHINE_KEY, label, linux);
-        workspace.seed_callgrind_in("x86_64-pc-windows-msvc", HARNESS_AUTO_MACHINE_KEY, label, windows);
+        workspace.seed_callgrind_in(
+            "x86_64-unknown-linux-gnu",
+            HARNESS_AUTO_MACHINE_KEY,
+            label,
+            linux,
+        );
+        workspace.seed_callgrind_in(
+            "x86_64-pc-windows-msvc",
+            HARNESS_AUTO_MACHINE_KEY,
+            label,
+            windows,
+        );
     }
 
     // The Linux triple sees the regression.
@@ -1570,8 +1580,18 @@ async fn analyze_target_triple_facet_selects_one_set() {
         ("2024-01-06", "c6", 130.0, 50.0),
     ] {
         workspace.commit_dated(date, label);
-        workspace.seed_callgrind_in("x86_64-unknown-linux-gnu", HARNESS_AUTO_MACHINE_KEY, label, x64);
-        workspace.seed_callgrind_in("aarch64-unknown-linux-gnu", HARNESS_AUTO_MACHINE_KEY, label, arm);
+        workspace.seed_callgrind_in(
+            "x86_64-unknown-linux-gnu",
+            HARNESS_AUTO_MACHINE_KEY,
+            label,
+            x64,
+        );
+        workspace.seed_callgrind_in(
+            "aarch64-unknown-linux-gnu",
+            HARNESS_AUTO_MACHINE_KEY,
+            label,
+            arm,
+        );
     }
 
     let RunOutcome::Analyzed { regressions, .. } = workspace

@@ -317,8 +317,7 @@ mod tests {
     fn every_engine_partitions_by_machine_key() {
         // Every engine is machine-keyed: even the low-noise simulated counts differ
         // by microarchitecture, so a machine key always appears in the partition.
-        let set =
-            DiscriminantSet::new(Engine::AllocTracker, "x86_64-pc-windows-msvc", "abc123");
+        let set = DiscriminantSet::new(Engine::AllocTracker, "x86_64-pc-windows-msvc", "abc123");
         assert_eq!(
             set.partition_prefix("folo"),
             "v1/folo/objects/alloc_tracker/x86_64-pc-windows-msvc/abc123"
@@ -329,8 +328,7 @@ mod tests {
     fn all_the_time_partitions_by_machine_key() {
         // Processor time depends on the machine, so `all_the_time` carries a
         // machine fingerprint.
-        let set =
-            DiscriminantSet::new(Engine::AllTheTime, "x86_64-pc-windows-msvc", "abc123");
+        let set = DiscriminantSet::new(Engine::AllTheTime, "x86_64-pc-windows-msvc", "abc123");
         assert_eq!(
             set.partition_prefix("folo"),
             "v1/folo/objects/all_the_time/x86_64-pc-windows-msvc/abc123"
@@ -472,10 +470,9 @@ mod tests {
 
     #[test]
     fn parse_key_decomposes_a_clean_key() {
-        let parsed = parse_key(
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/abc123/clean.json",
-        )
-        .unwrap();
+        let parsed =
+            parse_key("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/abc123/clean.json")
+                .unwrap();
         assert_eq!(parsed.project, "folo");
         assert_eq!(parsed.set.engine, "callgrind");
         assert_eq!(parsed.set.target_triple, "x86_64-unknown-linux-gnu");
@@ -510,10 +507,9 @@ mod tests {
 
     #[test]
     fn bless_key_targets_the_sets_commit_directory() {
-        let parsed = parse_key(
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/abc123/clean.json",
-        )
-        .unwrap();
+        let parsed =
+            parse_key("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/abc123/clean.json")
+                .unwrap();
         assert_eq!(
             parsed.bless_key(1_700_000_000),
             "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/abc123/bless-1700000000.json"

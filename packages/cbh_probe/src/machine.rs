@@ -1,6 +1,4 @@
-//! Machine fingerprint: a stable hash of the host's hardware characteristics,
-//! used to partition hardware-dependent (Criterion) results so that only runs
-//! from equivalent machines share a series.
+//! Stable machine fingerprint for partitioning benchmark results.
 //!
 //! The fingerprint must be reproducible across tool versions and across the
 //! equivalent machines of a single pool, so it is a fixed SHA-256 over a
@@ -11,7 +9,7 @@
 //! but equivalent hardware.
 //!
 //! The key is surfaced two ways for operators. [`resolve_machine_key`] yields the
-//! key itself (what `collect` stamps hardware-dependent results with and the
+//! key itself (what `collect` stamps every result with and the
 //! `machine-key` command prints), while [`describe_fingerprint_components`] renders
 //! the individual factors that fed the hash, so a change in the key can be traced —
 //! in verbose logs — to the specific hardware detail that moved.
@@ -33,8 +31,7 @@ const FINGERPRINT_VERSION: &str = "mk2";
 /// collisions between distinct hardware profiles are not a practical concern.
 const FINGERPRINT_HEX_LEN: usize = 16;
 
-/// Hardware facts that identify a machine for partitioning hardware-dependent
-/// benchmark results.
+/// Hardware facts that identify a machine for partitioning benchmark results.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HardwareProfile {
     /// Maximum number of logical processors the system reports.
