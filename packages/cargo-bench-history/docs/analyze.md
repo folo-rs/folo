@@ -157,7 +157,9 @@ second listing:
   unresolved are the sibling objects that could fall in its gap fetched — deduplicated, through
   the same bounded-concurrency loader the main load uses — then parsed with the same lean
   projection to confirm the benchmark and metric are actually present rather than trusting raw key
-  occupancy. A run with no surviving lag, an all-ghost set, or history mode fetches nothing.
+  occupancy. A run with no surviving lag, an all-ghost set, or history mode fetches nothing. The
+  warning is advisory, so a failure to fetch or parse that optional evidence is noted and degrades
+  the affected findings to the generic reason instead of failing the run.
 
 ## The full parallelism / serial map
 

@@ -291,7 +291,7 @@ where
         &dataset.sibling_observations,
         reporter,
     )
-    .await?;
+    .await;
     reporter.timing(
         "comparison-base lag classification (branch mode)",
         lag_started.elapsed(),

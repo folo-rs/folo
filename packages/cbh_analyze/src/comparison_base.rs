@@ -19,6 +19,10 @@
 //! `--machine-key all`, where every machine key is already loaded), and only then
 //! from a lazy, deduplicated fetch of the sibling clean-run objects that could fall in
 //! a lagging finding's gap. Sets with no lagging finding never trigger a fetch.
+//!
+//! Comparison-base warnings are advisory: if the optional sibling evidence cannot be
+//! fetched or parsed, the failure is noted and the affected findings degrade to the
+//! generic reason rather than failing the analysis run.
 
 use std::collections::HashMap;
 use std::num::NonZero;
@@ -65,10 +69,10 @@ struct SiblingEvidence {
 /// comparison base lags. Only fetches foreign sibling payloads that could classify a
 /// still-unresolved lagging finding, reusing the shared bounded-concurrency loader.
 ///
-/// # Errors
-///
-/// Returns an error if a needed sibling object cannot be fetched, decoded as UTF-8, or
-/// parsed as a result set — surfaced rather than silently guessing a reason.
+/// Comparison-base warnings are advisory and never fail the analysis run. If the
+/// optional sibling evidence cannot be fetched or parsed, the failure is noted and the
+/// affected findings fall through to the generic reason rather than aborting — a
+/// mismatch is only ever asserted from positive evidence we could actually read.
 pub(crate) async fn classify_comparison_base_lags<S>(
     storage: &S,
     findings: &[Finding],
@@ -76,12 +80,12 @@ pub(crate) async fn classify_comparison_base_lags<S>(
     merge_base_index: Option<usize>,
     siblings: &[SiblingObservation],
     reporter: &dyn Reporter,
-) -> Result<HashMap<DiscriminantSet, Vec<ComparisonBaseLag>>, AnalyzeError>
+) -> HashMap<DiscriminantSet, Vec<ComparisonBaseLag>>
 where
     S: Storage,
 {
     let Some(merge_base) = merge_base_index else {
-        return Ok(HashMap::new());
+        return HashMap::new();
     };
 
     let lagging: Vec<LaggingFinding<'_>> = findings
@@ -101,7 +105,7 @@ where
         })
         .collect();
     if lagging.is_empty() {
-        return Ok(HashMap::new());
+        return HashMap::new();
     }
     reporter.note_with(|| {
         format!(
@@ -127,10 +131,20 @@ where
     // Only fetch the sibling objects that could still change a verdict: exact
     // clean-run keys sharing a still-unresolved finding's comparable axes and falling
     // inside its gap. Deduplicate so an object shared by several findings loads once.
+    // A fetch or parse failure is advisory-only: note it and leave the affected
+    // findings to fall through to the generic reason, never aborting the analysis.
     let evidence = if unresolved.is_empty() {
         Vec::new()
     } else {
-        load_sibling_evidence(storage, &unresolved, siblings, merge_base, reporter).await?
+        match load_sibling_evidence(storage, &unresolved, siblings, merge_base, reporter).await {
+            Ok(evidence) => evidence,
+            Err(error) => {
+                reporter.note_with(move || {
+                    format!("skipping comparison-base mismatch evidence: {error}")
+                });
+                Vec::new()
+            }
+        }
     };
 
     let mut lags: HashMap<&DiscriminantSet, Vec<ComparisonBaseLag>> = HashMap::new();
@@ -164,7 +178,7 @@ where
         set_lags.dedup();
         classified.insert(set.clone(), set_lags);
     }
-    Ok(classified)
+    classified
 }
 
 /// Whether an already loaded sibling series proves a machine-key mismatch for
@@ -433,7 +447,7 @@ mod tests {
         }
     }
 
-    /// Classifies with a recording reporter, unwrapping the result.
+    /// Classifies with a recording reporter.
     fn classify(
         storage: &MemoryStorage,
         findings: &[Finding],
@@ -441,15 +455,31 @@ mod tests {
         merge_base_index: Option<usize>,
         siblings: &[SiblingObservation],
     ) -> HashMap<DiscriminantSet, Vec<ComparisonBaseLag>> {
-        block_on(classify_comparison_base_lags(
+        classify_reported(storage, findings, series, merge_base_index, siblings).0
+    }
+
+    /// Classifies and returns the recording reporter so a test can inspect whether a
+    /// sibling fetch was attempted or an evidence failure was noted.
+    fn classify_reported(
+        storage: &MemoryStorage,
+        findings: &[Finding],
+        series: &[Series],
+        merge_base_index: Option<usize>,
+        siblings: &[SiblingObservation],
+    ) -> (
+        HashMap<DiscriminantSet, Vec<ComparisonBaseLag>>,
+        RecordingReporter,
+    ) {
+        let reporter = RecordingReporter::new();
+        let lags = block_on(classify_comparison_base_lags(
             storage,
             findings,
             series,
             merge_base_index,
             siblings,
-            &RecordingReporter::new(),
-        ))
-        .unwrap()
+            &reporter,
+        ));
+        (lags, reporter)
     }
 
     #[test]
@@ -581,6 +611,26 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_sibling_fetch_degrades_to_the_generic_reason() {
+        // The only mismatch evidence for this lagging finding would come from a
+        // relevant sibling object that is missing from storage, so fetching it fails.
+        // Advisory classification must not abort: it notes the failure and degrades to
+        // the generic reason.
+        let storage = MemoryStorage::new();
+        let sibling = absent_sibling("m2", "c3", 3);
+        let findings = [finding("m1", Some(2))];
+        let (lags, reporter) = classify_reported(&storage, &findings, &[], Some(3), &[sibling]);
+        let set_lags = &lags[&set("m1")];
+        assert_eq!(set_lags.len(), 1);
+        assert_eq!(set_lags[0].commits_behind.get(), 1);
+        assert_eq!(
+            set_lags[0].reason,
+            ComparisonBaseLagReason::NoRecentBaseData
+        );
+        assert!(reporter.contains("skipping comparison-base mismatch evidence"));
+    }
+
+    #[test]
     fn a_fetched_sibling_missing_the_metric_is_generic() {
         // The newer sibling run carries the benchmark but only a different metric.
         let storage = MemoryStorage::new();
@@ -607,12 +657,45 @@ mod tests {
         let storage = MemoryStorage::new();
         let sibling = absent_sibling("m2", "c2", 2);
         let findings = [finding("m1", Some(2))];
-        let lags = classify(&storage, &findings, &[], Some(3), &[sibling]);
+        let (lags, reporter) = classify_reported(&storage, &findings, &[], Some(3), &[sibling]);
         let set_lags = &lags[&set("m1")];
         assert_eq!(
             set_lags[0].reason,
             ComparisonBaseLagReason::NoRecentBaseData
         );
+        assert!(!reporter.contains("fetching"), "no fetch was attempted");
+    }
+
+    #[test]
+    fn a_sibling_newer_than_the_merge_base_is_not_fetched() {
+        // Evidence must be no newer than the merge-base. A sibling past the merge-base
+        // (index 5, merge-base 3) is outside the finding's gap and never fetched.
+        let storage = MemoryStorage::new();
+        let sibling = absent_sibling("m2", "c5", 5);
+        let findings = [finding("m1", Some(2))];
+        let (lags, reporter) = classify_reported(&storage, &findings, &[], Some(3), &[sibling]);
+        let set_lags = &lags[&set("m1")];
+        assert_eq!(
+            set_lags[0].reason,
+            ComparisonBaseLagReason::NoRecentBaseData
+        );
+        assert!(!reporter.contains("fetching"), "no fetch was attempted");
+    }
+
+    #[test]
+    fn a_same_machine_key_observation_is_not_fetched() {
+        // An observation under the finding's own machine key is the finding's own set,
+        // not a rotation sibling, so even a newer clean point never triggers a fetch.
+        let storage = MemoryStorage::new();
+        let sibling = absent_sibling("m1", "c3", 3);
+        let findings = [finding("m1", Some(2))];
+        let (lags, reporter) = classify_reported(&storage, &findings, &[], Some(3), &[sibling]);
+        let set_lags = &lags[&set("m1")];
+        assert_eq!(
+            set_lags[0].reason,
+            ComparisonBaseLagReason::NoRecentBaseData
+        );
+        assert!(!reporter.contains("fetching"), "no fetch was attempted");
     }
 
     #[test]

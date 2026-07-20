@@ -956,7 +956,9 @@ Mismatch evidence is satisfied from the already-loaded series first (the whole s
 other machine keys found in the same partition listing, fetched lazily and only when a lagging
 finding could use them. Raw storage occupancy is only a discovery index — a partial run may omit the
 affected benchmark or metric — so a mismatch is asserted only from a parsed payload that actually
-carries the finding's benchmark and metric.
+carries the finding's benchmark and metric. Because the warning is advisory, a failure to fetch or
+parse that optional evidence is noted and degrades the affected findings to the generic reason
+rather than failing the analysis run.
 
 Because partial runs can leave different findings in one set with different comparison bases or
 reasons, the lag is reported **per discriminant set** as a deduplicated, deterministically ordered
