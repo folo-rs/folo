@@ -11,49 +11,49 @@
 
 /// Default `min_regime`: each side of a change must hold at least this many points
 /// for the step to be trusted, so a one-off blip on the latest point cannot flag.
-pub(super) const MIN_REGIME: usize = 2;
+pub(crate) const MIN_REGIME: usize = 2;
 
 /// Default `change_alpha`: the significance level a change-point's Mann–Whitney
 /// rank test must clear.
-pub(super) const CHANGE_ALPHA: f64 = 0.05;
+pub(crate) const CHANGE_ALPHA: f64 = 0.05;
 
 /// Default `fdr_q`: the Benjamini–Hochberg target false-discovery rate over a batch
 /// of candidates.
-pub(super) const FDR_Q: f64 = 0.10;
+pub(crate) const FDR_Q: f64 = 0.10;
 
 /// Default `drift_min_points`: a series needs at least this many points before a
 /// slow-drift finding is considered.
-pub(super) const DRIFT_MIN_POINTS: usize = 6;
+pub(crate) const DRIFT_MIN_POINTS: usize = 6;
 
 /// Default `drift_alpha`: the significance level a drift's Mann–Kendall trend must
 /// clear.
-pub(super) const DRIFT_ALPHA: f64 = 0.05;
+pub(crate) const DRIFT_ALPHA: f64 = 0.05;
 
 /// Default `practical_relative`: a history move must shift the level by at least
 /// this fraction (3%) to matter in practice, regardless of significance.
-pub(super) const PRACTICAL_RELATIVE: f64 = 0.03;
+pub(crate) const PRACTICAL_RELATIVE: f64 = 0.03;
 
 /// Default `practical_absolute`: a move on a quantized metric must span at least
 /// this many of its integer units, so a single-quantum run-to-run wobble on a tiny
 /// baseline never flags as a large percentage regression.
-pub(super) const PRACTICAL_ABSOLUTE: f64 = 5.0;
+pub(crate) const PRACTICAL_ABSOLUTE: f64 = 5.0;
 
 /// Default `compare_window`: how many recent base-side points form the level a
 /// branch tip is compared against.
-pub(super) const COMPARE_WINDOW: usize = 8;
+pub(crate) const COMPARE_WINDOW: usize = 8;
 
 /// Default `branch_practical_relative`: a branch move must reach this fraction
 /// (5%), raised above the history floor, to keep pull-request false positives down.
-pub(super) const BRANCH_PRACTICAL_RELATIVE: f64 = 0.05;
+pub(crate) const BRANCH_PRACTICAL_RELATIVE: f64 = 0.05;
 
 /// Default `branch_noise_multiple`: multiple of the per-measurement noise floor a
 /// branch move with too few points to rank-test must exceed.
-pub(super) const BRANCH_NOISE_MULTIPLE: f64 = 2.0;
+pub(crate) const BRANCH_NOISE_MULTIPLE: f64 = 2.0;
 
 /// Default `residual_noise_multiple`: multiple of a series' own between-commit
 /// residual scatter a move must exceed to clear the primary noise gate.
-pub(super) const RESIDUAL_NOISE_MULTIPLE: f64 = 3.0;
+pub(crate) const RESIDUAL_NOISE_MULTIPLE: f64 = 3.0;
 
 /// Default `min_regime_separation`: the Mann–Whitney probability-of-superiority a
 /// level shift's two regimes must reach to be trusted.
-pub(super) const MIN_REGIME_SEPARATION: f64 = 0.85;
+pub(crate) const MIN_REGIME_SEPARATION: f64 = 0.85;
