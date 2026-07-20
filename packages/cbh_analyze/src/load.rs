@@ -254,15 +254,21 @@ pub(crate) async fn list_candidates<S: Storage>(
         // comparable axes — the only base-side evidence that could explain a lagging
         // comparison base by machine-key rotation. `--machine-key all` selects every
         // key, so this stays empty and classification falls back to loaded series.
-        if let Some(query) = &sibling_query
-            && !matches_selection
-            && parsed.file == "clean.json"
-            && query.matches(&parsed.set)
-        {
+        let retained_as_sibling = sibling_query.as_ref().is_some_and(|query| {
+            !matches_selection && parsed.file == "clean.json" && query.matches(&parsed.set)
+        });
+        if retained_as_sibling {
             siblings.push((key.clone(), parsed.clone()));
         }
         if matches_selection {
             selected.push((key, parsed));
+        } else if retained_as_sibling {
+            reporter.note_with(|| {
+                format!(
+                    "retaining {key} as a machine-relaxed sibling: discriminant {}",
+                    parsed.set
+                )
+            });
         } else {
             reporter.note_with(|| {
                 format!(
@@ -650,14 +656,20 @@ mod tests {
         storage: &cbh_storage::MemoryStorage,
         facets: &DiscriminantSetQuery,
     ) -> CandidateListing {
-        futures::executor::block_on(list_candidates(
-            storage,
-            "folo",
-            facets,
-            true,
-            &cbh_diag::RecordingReporter::new(),
-        ))
-        .unwrap()
+        list_reported(storage, facets).0
+    }
+
+    /// Lists candidates and siblings, returning the recording reporter so a test can
+    /// inspect the per-key diagnostics.
+    fn list_reported(
+        storage: &cbh_storage::MemoryStorage,
+        facets: &DiscriminantSetQuery,
+    ) -> (CandidateListing, cbh_diag::RecordingReporter) {
+        let reporter = cbh_diag::RecordingReporter::new();
+        let listing =
+            futures::executor::block_on(list_candidates(storage, "folo", facets, true, &reporter))
+                .unwrap();
+        (listing, reporter)
     }
 
     #[test]
@@ -680,6 +692,51 @@ mod tests {
         assert_eq!(listing.selected.first().unwrap().1.set.machine_key, "m1");
         assert_eq!(listing.siblings.len(), 1, "m2 is a sibling");
         assert_eq!(listing.siblings.first().unwrap().1.set.machine_key, "m2");
+    }
+
+    #[test]
+    fn a_retained_sibling_is_not_diagnosed_as_skipped() {
+        // A machine-relaxed sibling is kept for lag classification, so its verbose note
+        // must say it was retained, never that it was skipped for not matching the
+        // facets. A genuinely non-matching key (a dirty run) still reads as skipped.
+        let storage = cbh_storage::MemoryStorage::new();
+        let put = |key: &str| {
+            futures::executor::block_on(storage.put(key, b"{}")).unwrap();
+        };
+        let selected = "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c0/clean.json";
+        let sibling = "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m2/c0/clean.json";
+        let skipped = "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m3/c0/dirty-5.json";
+        put(selected);
+        put(sibling);
+        put(skipped);
+
+        let (listing, reporter) = list_reported(
+            &storage,
+            &query("callgrind", "x86_64-unknown-linux-gnu", "m1"),
+        );
+        assert_eq!(listing.selected.len(), 1);
+        assert_eq!(listing.siblings.len(), 1);
+
+        assert!(
+            reporter.contains(&format!("retaining {sibling} as a machine-relaxed sibling")),
+            "the sibling is reported as retained: {:?}",
+            reporter.notes()
+        );
+        assert!(
+            !reporter.contains(&format!("skipping {sibling}")),
+            "the retained sibling is never reported as skipped: {:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains(&format!("skipping {skipped}")),
+            "a genuinely non-matching key is still reported as skipped: {:?}",
+            reporter.notes()
+        );
+        assert!(
+            !reporter.contains(&format!("retaining {skipped}")),
+            "a non-sibling is never reported as retained: {:?}",
+            reporter.notes()
+        );
     }
 
     #[test]
