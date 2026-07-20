@@ -10,6 +10,7 @@
 
 pub(crate) mod discriminant;
 pub(crate) mod findings;
+mod noise_gates;
 pub(crate) mod parallel;
 pub(crate) mod run_points;
 pub(crate) mod selection;

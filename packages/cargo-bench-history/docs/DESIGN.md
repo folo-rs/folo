@@ -785,10 +785,21 @@ movement must clear the practical floor and exceed the residual scatter about th
 line; the confidence-interval-width gate is applied additionally when intervals are present,
 again only able to suppress a candidate and never to create one.
 
-The **practical-magnitude floor** is a single hard threshold below which no finding surfaces,
+The **practical-magnitude floor** is a hard threshold below which no finding surfaces,
 regardless of engine, direction, or how confidently it was measured. A change too small to
 warrant a human's attention is dropped even when the statistics are certain — this is what
-keeps a low-noise engine like Callgrind from surfacing sub-threshold trivia.
+keeps a low-noise engine like Callgrind from surfacing sub-threshold trivia. It has two
+parts, composed by conjunction so a move must clear both: a **relative floor** (a minimum
+percentage) applied to every metric, and an **absolute floor** applied only to *quantized*
+metrics — the Callgrind integer counts, which move in whole units with no confidence
+interval. Because such a count changes in discrete steps, a single-unit run-to-run wobble on
+a small baseline is a large *percentage* move that the relative floor alone would admit;
+requiring the move to also span a minimum number of those units suppresses that quantization
+jitter. Continuous, dispersion-bearing metrics (wall and processor time, `alloc_tracker`
+figures) are exempt from the absolute floor.
+
+The gate thresholds are centralized as a single policy rather than embedded throughout the
+detectors, so maintainers can review and tune the complete policy together.
 
 ### 8.3 Multiple-comparison discipline
 

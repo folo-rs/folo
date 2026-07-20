@@ -27,11 +27,11 @@
 //!   past the split) but not a sustained historical trend to history.
 //!   Branch mode also needs a base side to compare against at all — a case with an empty
 //!   base side leaves it quiet.
-//! * **Absolute scale (dimension 2).** Every case is analysed both as-is and scaled up
-//!   by a large constant. All of the analysis is relative, so the absolute scale must
-//!   not change the verdict: the as-is verdict is checked against the case's
-//!   expectation, and every scaled verdict is checked against that as-is reference, so
-//!   a scale-sensitivity regression fails here.
+//! * **Absolute scale (dimension 2).** Every case is analysed as a continuous metric,
+//!   both as-is and scaled up by a large constant. The absolute-magnitude floor does
+//!   not apply to continuous metrics, so every scaled verdict must match its as-is
+//!   reference. A separate quantized-metric case pins the intentional exception:
+//!   scaling can promote a move when it carries the absolute delta across that floor.
 //!
 //! Both directions are still exercised without a polarity dimension: every metric is
 //! lower-is-better, so a curated rise is a regression (reported by every mode) and a
@@ -323,8 +323,8 @@ fn scaled(values: &[f64], scale: f64) -> Vec<f64> {
 #[test]
 fn curated_signals_match_expected_verdicts() {
     // Scale multiples applied on top of each as-is series; the as-is verdict is the
-    // reference every scaled verdict must match. The analysis is relative, so no
-    // multiple may change the outcome.
+    // reference every scaled verdict must match. The matrix uses a continuous metric,
+    // so the absolute floor is inapplicable and no multiple may change the outcome.
     let scale_multiples = [1000.0_f64];
 
     for case in cases() {
@@ -333,8 +333,9 @@ fn curated_signals_match_expected_verdicts() {
             let context = mode.context(case.merge_base_index());
             let expected = case.expected_outcome(mode).is_finding(mode);
             // Every metric is lower-is-better; a curated fall only surfaces where the
-            // mode reports improvements. Instruction count is a representative kind.
-            let kind = MetricKind::InstructionCount;
+            // mode reports improvements. Wall time represents the continuous metrics
+            // for which scale invariance remains part of the contract.
+            let kind = MetricKind::WallTime;
 
             // Dimension 1: the as-is verdict under this mode matches the hand-picked
             // expectation.
@@ -345,17 +346,40 @@ fn curated_signals_match_expected_verdicts() {
                 case.name,
             );
 
-            // Dimension 2: scaling the whole series by any constant leaves the verdict
-            // unchanged, because every comparison the analysis makes is relative.
+            // Dimension 2: scaling a continuous series leaves the verdict unchanged.
             for scale in scale_multiples {
                 let scaled_verdict = raises_finding(&scaled(&values, scale), kind, &context);
                 assert_eq!(
                     scaled_verdict, reference,
                     "case '{}' mode={mode:?}: scaling by {scale} changed the verdict \
-                     (absolute scale must not matter)",
+                     for a continuous metric",
                     case.name,
                 );
             }
         }
+    }
+}
+
+#[test]
+fn scaling_a_quantized_move_can_clear_the_absolute_floor() {
+    // A 60 -> 64 instruction-count step clears both relative floors but not the
+    // five-count absolute floor. Scaling preserves its shape and relative magnitude
+    // while lifting the absolute delta above the floor, so both analysis modes may
+    // legitimately change from quiet to finding.
+    let values = [run_of(60.0, 50), run_of(64.0, 50)].concat();
+    let scaled_values = scaled(&values, 1000.0);
+
+    for mode in Mode::ALL {
+        let context = mode.context(Some(49));
+        assert!(!raises_finding(
+            &values,
+            MetricKind::InstructionCount,
+            &context
+        ));
+        assert!(raises_finding(
+            &scaled_values,
+            MetricKind::InstructionCount,
+            &context
+        ));
     }
 }
