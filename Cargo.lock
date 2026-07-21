@@ -2769,9 +2769,6 @@ name = "rasciigraph"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b7d4b4f6be8decb01c72dc816cd58d0a9896a3c78f0ca9ba53aafea55cc9844b"
-dependencies = [
- "colored",
-]
 
 [[package]]
 name = "redox_syscall"

@@ -20,7 +20,7 @@ doc = false
 cbh_detect = { workspace = true }
 cbh_model = { workspace = true }
 colored = { workspace = true }
-rasciigraph = { workspace = true, features = ["color"] }
+rasciigraph = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 

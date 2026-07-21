@@ -24,5 +24,5 @@ benchmark identity and the metric, so pasting them back in is natural.
 `analyze`'s exact data-set selection that never analyze. It runs **no detection and no
 re-baselining** — it has no findings, modes, or blessings — and repeats the pivot once per
 matching discriminant set. The text and Markdown renderings lead each set with a small
-neutral line chart of the selected series (`examine` makes no judgment); the JSON form
+line chart of the selected series; the JSON form
 carries the ordered points at full precision with each commit's full title.
