@@ -306,7 +306,8 @@ struct JsonReport<'a> {
 
 /// Renders `input` in the requested `format`.
 ///
-/// `color` enables ANSI styling of the headline percentage in the text format. The
+/// `color` enables ANSI styling of the text format — the direction-colored headline
+/// percentage, the bold benchmark id, and the dimmed detail and blessing lines. The
 /// caller decides it from the output terminal so tests and pipes stay plain; charts
 /// are always uncolored, and `markdown` and `json` ignore it.
 #[must_use]

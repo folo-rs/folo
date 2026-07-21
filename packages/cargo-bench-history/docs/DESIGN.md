@@ -649,7 +649,7 @@ per discriminant set, the ordered points with full-precision values and each com
 title — the 50-character title truncation is a readability convenience of the text and
 Markdown tables, not of the data. The text and Markdown renderings **lead each set with the
 same small line chart `analyze` draws**, reusing its renderer, so a maintainer sees the shape
-of the series before reading the points it pivots; the line is drawn **uncoloured**, and it is
+of the series before reading the points it pivots; the line is drawn **uncolored**, and it is
 drawn only when a set has at least two points. The JSON form
 carries no chart (a charting concern the human reports draw from internally, not data a
 consumer reconstructs).
@@ -898,10 +898,10 @@ layout is canonical. Each report names the **analyzed tip commit** — the commi
 of history the findings describe — annotated `+ uncommitted changes` when the working tree
 was dirty, so a reader (or the auto-filed regression issue) can tie the report to an exact
 commit. Text goes to stdout as one paragraph per finding — the benchmark id on its own
-line as a chapter title, then a direction-coloured headline pairing the relative-change
+line as a chapter title, then a direction-colored headline pairing the relative-change
 percent with the metric and its confidence, a dimmed detail line, and a small line chart
 of the series — the whole series in history mode, only the bounded baseline-and-tail
-comparison in branch mode — the chart itself always uncoloured, with headline colour
+comparison in branch mode — the chart itself always uncolored, with headline color
 enabled only when stdout is a terminal and not disabled by environment. The text and Markdown reports
 group findings under a per-set header, which also states the **facet-filter flags** that
 reproduce exactly that partition, so a reader who spots a change can drill into it without
