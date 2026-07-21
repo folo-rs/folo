@@ -58,6 +58,24 @@ modes, auto-detected from git topology (there is no flag to force a mode):
   base, reporting both directions. Only the tip commit lands in the base on merge, so the
   branch's own intermediate history is ignored.
 
+## Comparison-base lag
+
+Branch mode compares the tip against the recent base-side points of the **same** discriminant
+set — same project, engine, target triple, and [machine key](../commands/machine-key.md).
+Measurements are never compared across machine keys, so on rotating CI pools, where the newest
+base commits may have run on a different machine, the branch runner's key can have usable base
+data only a few commits behind the merge-base. The comparison quietly reaches back in history.
+
+`analyze` discloses this per affected discriminant set, naming how far behind the comparison
+base is and why:
+
+- **discriminant set mismatch** — a newer base run for the benchmark and metric exists, but
+  under a different machine key. This is pool rotation, not a gap in coverage.
+- **no base data at more recent commits** — no newer base run exists for that series at all.
+
+The warning is advisory metadata: it explains *what the tip was actually compared against* and
+never changes which findings are reported or the exit code.
+
 ## Re-baselining
 
 History mode distinguishes a change **still in effect** from one **already addressed**, so a

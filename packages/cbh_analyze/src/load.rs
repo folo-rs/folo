@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use anyspawn::Spawner;
 use cbh_detect::{
-    DiscriminantSetQuery, RunPoints, SeriesBuilder, balanced_chunk_sizes, worker_count,
+    DiscriminantSetQuery, FacetFilter, RunPoints, SeriesBuilder, balanced_chunk_sizes, worker_count,
 };
 use cbh_diag::{Reporter, ReporterExt, count_noun};
 use cbh_model::{
@@ -157,6 +157,23 @@ impl RunIndex {
     }
 }
 
+/// The recognized objects a single project listing produced.
+///
+/// A large history is listed once (a single [`Storage::list`] round-trip); this
+/// splits its keys into the facet-selected candidates and, when requested, the
+/// machine-relaxed clean-run siblings used to explain a lagging branch comparison
+/// base.
+pub(crate) struct CandidateListing {
+    /// Objects whose discriminant set matches every facet filter — the selection the
+    /// analysis (or listing) operates on.
+    pub(crate) selected: Vec<(String, StorageKey)>,
+    /// Potential sibling observations for branch-mode comparison-base lag
+    /// classification: exact `clean.json` objects that match the engine and
+    /// target-triple facets but whose machine key the selection does not cover. Empty
+    /// unless siblings were requested (`collect_siblings`).
+    pub(crate) siblings: Vec<(String, StorageKey)>,
+}
+
 /// Lists the stored objects under the project's partition and keeps the ones whose
 /// discriminant set matches the facet filters. Shared by the topology-aware
 /// selection and the discriminant listing (which needs no repository).
@@ -166,6 +183,30 @@ pub(crate) async fn facet_filtered_candidates<S: Storage>(
     facets: &DiscriminantSetQuery,
     reporter: &dyn Reporter,
 ) -> Result<Vec<(String, StorageKey)>, AnalyzeError> {
+    Ok(
+        list_candidates(storage, project_id, facets, false, reporter)
+            .await?
+            .selected,
+    )
+}
+
+/// Lists the project's stored objects once and partitions the recognized keys into
+/// the facet-selected candidates and, when `collect_siblings` is set, the
+/// machine-relaxed clean-run siblings (same engine and target triple, under a machine
+/// key the selection does not cover).
+///
+/// Sibling discovery relaxes only the machine-key facet, so it never widens the
+/// selection: the selected set is exactly what [`facet_filtered_candidates`] returns.
+/// It exists solely to let branch-mode analysis discover whether a newer base-side run
+/// for a lagging finding exists under a different machine key, without a second list
+/// round-trip.
+pub(crate) async fn list_candidates<S: Storage>(
+    storage: &S,
+    project_id: &str,
+    facets: &DiscriminantSetQuery,
+    collect_siblings: bool,
+    reporter: &dyn Reporter,
+) -> Result<CandidateListing, AnalyzeError> {
     // The listing prefix must use the same sanitized project segment that
     // `DiscriminantSet` writes its storage keys under. A project id containing a
     // character that sanitizes (a space, `/`, a non-ASCII letter, ...) is stored
@@ -186,7 +227,17 @@ pub(crate) async fn facet_filtered_candidates<S: Storage>(
     reporter.timing("storage.list(prefix) round-trip", list_started.elapsed());
     reporter.note_with(|| format!("storage returned {}", count_noun(keys.len(), "object key")));
 
-    let mut candidates: Vec<(String, StorageKey)> = Vec::new();
+    // Sibling discovery keeps the engine and target-triple facets but relaxes the
+    // machine key, so a run under any machine key that shares the comparable axes can
+    // surface as a potential newer base-side observation.
+    let sibling_query = collect_siblings.then(|| DiscriminantSetQuery {
+        engine: facets.engine.clone(),
+        target_triple: facets.target_triple.clone(),
+        machine_key: FacetFilter::All,
+    });
+
+    let mut selected: Vec<(String, StorageKey)> = Vec::new();
+    let mut siblings: Vec<(String, StorageKey)> = Vec::new();
     for key in keys {
         if !key.ends_with(".json") {
             reporter.note_with(|| format!("skipping {key}: not a .json object"));
@@ -198,24 +249,50 @@ pub(crate) async fn facet_filtered_candidates<S: Storage>(
             });
             continue;
         };
-        if !facets.matches(&parsed.set) {
+        let matches_selection = facets.matches(&parsed.set);
+        // A sibling is a clean run the selection does not cover but that shares the
+        // comparable axes — the only base-side evidence that could explain a lagging
+        // comparison base by machine-key rotation. `--machine-key all` selects every
+        // key, so this stays empty and classification falls back to loaded series.
+        let retained_as_sibling = sibling_query.as_ref().is_some_and(|query| {
+            !matches_selection && parsed.file == "clean.json" && query.matches(&parsed.set)
+        });
+        if retained_as_sibling {
+            siblings.push((key.clone(), parsed.clone()));
+        }
+        if matches_selection {
+            selected.push((key, parsed));
+        } else if retained_as_sibling {
+            reporter.note_with(|| {
+                format!(
+                    "retaining {key} as a machine-relaxed sibling: discriminant {}",
+                    parsed.set
+                )
+            });
+        } else {
             reporter.note_with(|| {
                 format!(
                     "skipping {key}: discriminant {} does not match the facet filters",
                     parsed.set
                 )
             });
-            continue;
         }
-        candidates.push((key, parsed));
     }
     reporter.note_with(|| {
         format!(
             "{} match the facet filters",
-            count_noun(candidates.len(), "object")
+            count_noun(selected.len(), "object")
         )
     });
-    Ok(candidates)
+    if sibling_query.is_some() {
+        reporter.note_with(|| {
+            format!(
+                "{} retained as machine-relaxed sibling candidates",
+                count_noun(siblings.len(), "clean-run object")
+            )
+        });
+    }
+    Ok(CandidateListing { selected, siblings })
 }
 
 /// How many stored objects to fetch concurrently while loading a data set.
@@ -563,5 +640,155 @@ mod tests {
             ordinal_of(usize::try_from(u32::MAX).expect("u32 fits in usize")),
             u32::MAX
         );
+    }
+
+    /// A discriminant-set query pinned to one engine/triple and machine key.
+    fn query(engine: &str, triple: &str, machine: &str) -> DiscriminantSetQuery {
+        DiscriminantSetQuery {
+            engine: FacetFilter::Auto(engine.to_owned()),
+            target_triple: FacetFilter::Auto(triple.to_owned()),
+            machine_key: FacetFilter::Auto(machine.to_owned()),
+        }
+    }
+
+    /// Lists candidates and siblings from `storage`, unwrapping the result.
+    fn list(
+        storage: &cbh_storage::MemoryStorage,
+        facets: &DiscriminantSetQuery,
+    ) -> CandidateListing {
+        list_reported(storage, facets).0
+    }
+
+    /// Lists candidates and siblings, returning the recording reporter so a test can
+    /// inspect the per-key diagnostics.
+    fn list_reported(
+        storage: &cbh_storage::MemoryStorage,
+        facets: &DiscriminantSetQuery,
+    ) -> (CandidateListing, cbh_diag::RecordingReporter) {
+        let reporter = cbh_diag::RecordingReporter::new();
+        let listing =
+            futures::executor::block_on(list_candidates(storage, "folo", facets, true, &reporter))
+                .unwrap();
+        (listing, reporter)
+    }
+
+    #[test]
+    fn sibling_listing_relaxes_only_the_machine_key() {
+        // The selection covers only m1, but a clean run under m2 that shares the
+        // engine and triple is retained as a machine-relaxed sibling — never as a
+        // selected candidate.
+        let storage = cbh_storage::MemoryStorage::new();
+        let put = |key: &str| {
+            futures::executor::block_on(storage.put(key, b"{}")).unwrap();
+        };
+        put("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c0/clean.json");
+        put("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m2/c0/clean.json");
+
+        let listing = list(
+            &storage,
+            &query("callgrind", "x86_64-unknown-linux-gnu", "m1"),
+        );
+        assert_eq!(listing.selected.len(), 1, "only m1 is selected");
+        assert_eq!(listing.selected.first().unwrap().1.set.machine_key, "m1");
+        assert_eq!(listing.siblings.len(), 1, "m2 is a sibling");
+        assert_eq!(listing.siblings.first().unwrap().1.set.machine_key, "m2");
+    }
+
+    #[test]
+    fn a_retained_sibling_is_not_diagnosed_as_skipped() {
+        // A machine-relaxed sibling is kept for lag classification, so its verbose note
+        // must say it was retained, never that it was skipped for not matching the
+        // facets. A genuinely non-matching key (a dirty run) still reads as skipped.
+        let storage = cbh_storage::MemoryStorage::new();
+        let put = |key: &str| {
+            futures::executor::block_on(storage.put(key, b"{}")).unwrap();
+        };
+        let selected = "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c0/clean.json";
+        let sibling = "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m2/c0/clean.json";
+        let skipped = "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m3/c0/dirty-5.json";
+        put(selected);
+        put(sibling);
+        put(skipped);
+
+        let (listing, reporter) = list_reported(
+            &storage,
+            &query("callgrind", "x86_64-unknown-linux-gnu", "m1"),
+        );
+        assert_eq!(listing.selected.len(), 1);
+        assert_eq!(listing.siblings.len(), 1);
+
+        assert!(
+            reporter.contains(&format!("retaining {sibling} as a machine-relaxed sibling")),
+            "the sibling is reported as retained: {:?}",
+            reporter.notes()
+        );
+        assert!(
+            !reporter.contains(&format!("skipping {sibling}")),
+            "the retained sibling is never reported as skipped: {:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains(&format!("skipping {skipped}")),
+            "a genuinely non-matching key is still reported as skipped: {:?}",
+            reporter.notes()
+        );
+        assert!(
+            !reporter.contains(&format!("retaining {skipped}")),
+            "a non-sibling is never reported as retained: {:?}",
+            reporter.notes()
+        );
+    }
+
+    #[test]
+    fn sibling_listing_keeps_only_exact_clean_runs_under_other_engines_or_triples() {
+        // A sibling must be an exact clean.json under the same engine and triple. A
+        // dirty snapshot, a blessing sidecar, and a run under a different engine or
+        // triple are all rejected even though their machine key differs from m1.
+        let storage = cbh_storage::MemoryStorage::new();
+        let put = |key: &str| {
+            futures::executor::block_on(storage.put(key, b"{}")).unwrap();
+        };
+        put("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m2/c0/clean.json");
+        put("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m2/c0/dirty-5.json");
+        put("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m2/c0/bless-5.json");
+        put("v1/folo/objects/criterion/x86_64-unknown-linux-gnu/m2/c0/clean.json");
+        put("v1/folo/objects/callgrind/aarch64-apple-darwin/m2/c0/clean.json");
+
+        let listing = list(
+            &storage,
+            &query("callgrind", "x86_64-unknown-linux-gnu", "m1"),
+        );
+        assert!(listing.selected.is_empty(), "nothing matches m1");
+        assert_eq!(
+            listing.siblings.len(),
+            1,
+            "only the exact clean run under the same engine and triple is a sibling"
+        );
+        let sibling = &listing.siblings.first().unwrap().1;
+        assert_eq!(sibling.file, "clean.json");
+        assert_eq!(sibling.set.engine, "callgrind");
+        assert_eq!(sibling.set.target_triple, "x86_64-unknown-linux-gnu");
+    }
+
+    #[test]
+    fn sibling_listing_is_empty_without_collection() {
+        // The sibling query commands do not need siblings, so `collect_siblings =
+        // false` keeps the extra list empty regardless of what the partition holds.
+        let storage = cbh_storage::MemoryStorage::new();
+        futures::executor::block_on(storage.put(
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m2/c0/clean.json",
+            b"{}",
+        ))
+        .unwrap();
+
+        let listing = futures::executor::block_on(list_candidates(
+            &storage,
+            "folo",
+            &query("callgrind", "x86_64-unknown-linux-gnu", "m1"),
+            false,
+            &cbh_diag::RecordingReporter::new(),
+        ))
+        .unwrap();
+        assert!(listing.siblings.is_empty());
     }
 }

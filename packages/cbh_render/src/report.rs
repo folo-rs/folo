@@ -9,6 +9,7 @@
 //! ranked findings, and a per-set breakdown follows so each comparable partition
 //! reads as its own section.
 
+use std::collections::HashSet;
 use std::num::NonZero;
 
 use cbh_detect::{Direction, Finding, FindingMethod, SeriesValue, short_commit};
@@ -75,6 +76,44 @@ pub struct SetSummary<'a> {
     pub series: usize,
     /// The set's findings, in the same global ranking as the top level.
     pub findings: Vec<&'a Finding>,
+    /// How far this set's comparison base(s) sit behind the merge-base, with the
+    /// reason for each distinct lag. Branch mode only; empty when every finding's
+    /// comparison base reaches the merge-base (the usual whole-suite case) and in
+    /// history mode. Partial runs can leave different findings comparing against
+    /// different points, so this is a deduplicated, deterministically ordered list
+    /// rather than a single value.
+    pub comparison_base_lags: Vec<ComparisonBaseLag>,
+}
+
+/// How far a discriminant set's comparison base sits behind the merge-base, and why.
+///
+/// In branch mode each finding is compared against the recent base-side points of its
+/// own discriminant set. On rotating CI machine pools the newest base commits may carry
+/// data only under a different machine key, so the branch runner's machine key has usable
+/// base data only several commits earlier — the comparison silently reaches back in
+/// history. This records that lag for one set so the report can disclose it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct ComparisonBaseLag {
+    /// First-parent distance from the comparison base to the merge-base. Always at
+    /// least one: a comparison base that reaches the merge-base is not a lag and is
+    /// never recorded.
+    pub commits_behind: NonZero<usize>,
+    /// Why the comparison base lags.
+    pub reason: ComparisonBaseLagReason,
+}
+
+/// Why a discriminant set's comparison base lags the merge-base.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ComparisonBaseLagReason {
+    /// A newer base-side run for the same benchmark and metric exists, but under a
+    /// different machine key — machine-pool rotation, not missing measurements. The
+    /// comparison base could not use it because counts are not comparable across
+    /// machine keys.
+    DiscriminantSetMismatch,
+    /// No base-side run for the affected series exists at any more recent commit; the
+    /// comparison base is simply the newest data available for this partition.
+    NoRecentBaseData,
 }
 
 /// The inputs a report is rendered from.
@@ -151,6 +190,11 @@ struct JsonSet<'a> {
     regressions: usize,
     /// Flagged improvements in this set.
     improvements: usize,
+    /// How far this set's comparison base(s) lag the merge-base, with the reason for
+    /// each distinct lag (branch mode only). Omitted when the comparison base reaches
+    /// the merge-base — the usual case — and in history mode.
+    #[serde(skip_serializing_if = "<[ComparisonBaseLag]>::is_empty")]
+    comparison_base_lags: &'a [ComparisonBaseLag],
 }
 
 /// The JSON shape of one finding: the machine-readable form of a text-report
@@ -304,6 +348,18 @@ fn push_warning(lines: &mut Vec<String>, warning: Option<&str>) {
     }
 }
 
+/// Formats one comparison-base lag as its exact report warning line, with the
+/// singular/plural agreement the text and Markdown reports share.
+fn comparison_base_lag_warning(lag: &ComparisonBaseLag) -> String {
+    let count = lag.commits_behind.get();
+    let commits = if count == 1 { "commit" } else { "commits" };
+    let reason = match lag.reason {
+        ComparisonBaseLagReason::DiscriminantSetMismatch => "discriminant set mismatch",
+        ComparisonBaseLagReason::NoRecentBaseData => "no base data at more recent commits",
+    };
+    format!("Warning: comparison base is {count} {commits} behind base ({reason})")
+}
+
 /// A one-line label for a set, naming its `engine / triple / machine` partition.
 fn set_label(set: &DiscriminantSet) -> String {
     set.to_string()
@@ -405,6 +461,9 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
         lines.push(set_label(summary.set));
         lines.push(set_counts_line(summary, input.report_improvements));
         lines.push(format!("  filter: {}", set_filter_flags(summary.set)));
+        for lag in &summary.comparison_base_lags {
+            lines.push(format!("  {}", comparison_base_lag_warning(lag)));
+        }
         for finding in &summary.findings {
             push_finding_block(&mut lines, finding, scope);
         }
@@ -812,6 +871,10 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
             ));
         }
         lines.push(format!("- Filter: `{}`", set_filter_flags(summary.set)));
+        for lag in &summary.comparison_base_lags {
+            lines.push(String::new());
+            lines.push(format!("> {}", comparison_base_lag_warning(lag)));
+        }
         for finding in &summary.findings {
             push_finding_markdown(&mut lines, finding, "###", scope);
         }
@@ -883,8 +946,24 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
 
     // Both modes draw a per-finding chart, matching the full reports; the scope differs
     // (history walks the whole series, branch charts the baseline and recent tail).
+    //
+    // Comparison-base warnings are per-set metadata, but the summary flattens the set
+    // grouping, so surface each affected set's warnings once — immediately before that
+    // set's first retained finding.
     let scope = chart_scope(input.mode);
+    let mut warned_sets: HashSet<&DiscriminantSet> = HashSet::new();
     for finding in input.findings.iter().take(limit.get()) {
+        if warned_sets.insert(&finding.set)
+            && let Some(summary) = input
+                .sets
+                .iter()
+                .find(|summary| *summary.set == finding.set)
+        {
+            for lag in &summary.comparison_base_lags {
+                lines.push(String::new());
+                lines.push(format!("> {}", comparison_base_lag_warning(lag)));
+            }
+        }
         push_finding_markdown(&mut lines, finding, "##", scope);
         push_set_filter_footer(&mut lines, &finding.set);
     }
@@ -966,6 +1045,7 @@ fn render_json(input: &ReportInput<'_>) -> String {
             series: summary.series,
             regressions: count_direction(&summary.findings, Direction::Regression),
             improvements: count_direction(&summary.findings, Direction::Improvement),
+            comparison_base_lags: &summary.comparison_base_lags,
         })
         .collect();
 
@@ -1118,6 +1198,7 @@ mod tests {
             blessed_at: None,
             blessed_commit_time: None,
             series: Vec::new(),
+            comparison_base_index: None,
         }
     }
 
@@ -1133,6 +1214,7 @@ mod tests {
             runs: findings.len().saturating_add(3),
             series: findings.len().max(1),
             findings: findings.iter().collect(),
+            comparison_base_lags: Vec::new(),
         });
         ReportInput {
             project,
@@ -1481,6 +1563,7 @@ mod tests {
             runs: 7,
             series: 5,
             findings: findings.iter().collect(),
+            comparison_base_lags: Vec::new(),
         }];
         let input = ReportInput {
             project: "folo",
@@ -2377,12 +2460,14 @@ mod tests {
                 runs: 6,
                 series: 1,
                 findings: vec![&findings[0]],
+                comparison_base_lags: Vec::new(),
             },
             SetSummary {
                 set: &set_b,
                 runs: 4,
                 series: 1,
                 findings: Vec::new(),
+                comparison_base_lags: Vec::new(),
             },
         ];
         let input = ReportInput {
@@ -2421,12 +2506,14 @@ mod tests {
                 runs: 6,
                 series: 1,
                 findings: vec![&findings[0]],
+                comparison_base_lags: Vec::new(),
             },
             SetSummary {
                 set: &set_b,
                 runs: 4,
                 series: 1,
                 findings: Vec::new(),
+                comparison_base_lags: Vec::new(),
             },
         ];
         let input = ReportInput {
@@ -2452,6 +2539,148 @@ mod tests {
             !report.contains("aarch64-apple-darwin"),
             "the empty set is skipped: {report}"
         );
+    }
+
+    /// Builds a comparison-base lag from a plain count and reason.
+    fn lag(commits_behind: usize, reason: ComparisonBaseLagReason) -> ComparisonBaseLag {
+        ComparisonBaseLag {
+            commits_behind: NonZero::new(commits_behind).expect("test count is non-zero"),
+            reason,
+        }
+    }
+
+    /// A single-set branch-mode report whose set carries `lags`, for the
+    /// comparison-base warning-surface tests.
+    fn input_with_lags<'a>(
+        set: &'a DiscriminantSet,
+        findings: &'a [Finding],
+        lags: Vec<ComparisonBaseLag>,
+        summaries: &'a mut Vec<SetSummary<'a>>,
+    ) -> ReportInput<'a> {
+        summaries.push(SetSummary {
+            set,
+            runs: findings.len().saturating_add(3),
+            series: findings.len().max(1),
+            findings: findings.iter().collect(),
+            comparison_base_lags: lags,
+        });
+        ReportInput {
+            project: "folo",
+            tip_commit: "1234567890abcdef1234",
+            tip_dirty: false,
+            mode: "branch",
+            notable: !findings.is_empty(),
+            runs: findings.len().saturating_add(3),
+            series: findings.len().max(1),
+            commit_span: None,
+            report_improvements: false,
+            findings,
+            sets: summaries,
+            hint: None,
+            warning: None,
+            ghosts_excluded: 0,
+        }
+    }
+
+    #[test]
+    fn every_format_reports_a_discriminant_set_mismatch_warning() {
+        let set = discriminant_set();
+        let findings = vec![regression()];
+        let mut summaries = Vec::new();
+        let input = input_with_lags(
+            &set,
+            &findings,
+            vec![lag(5, ComparisonBaseLagReason::DiscriminantSetMismatch)],
+            &mut summaries,
+        );
+        let expected =
+            "Warning: comparison base is 5 commits behind base (discriminant set mismatch)";
+        for report in [
+            render(&input, ReportFormat::Text, false),
+            render(&input, ReportFormat::Markdown, false),
+            render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT),
+        ] {
+            assert!(report.contains(expected), "{report}");
+        }
+    }
+
+    #[test]
+    fn missing_base_data_warning_uses_a_singular_count() {
+        let set = discriminant_set();
+        let findings = vec![regression()];
+        let mut summaries = Vec::new();
+        let input = input_with_lags(
+            &set,
+            &findings,
+            vec![lag(1, ComparisonBaseLagReason::NoRecentBaseData)],
+            &mut summaries,
+        );
+        assert!(
+            render(&input, ReportFormat::Text, false).contains(
+                "Warning: comparison base is 1 commit behind base \
+                 (no base data at more recent commits)"
+            ),
+            "singular count and generic reason"
+        );
+    }
+
+    #[test]
+    fn json_report_carries_comparison_base_lags_in_order() {
+        let set = discriminant_set();
+        let findings = vec![regression()];
+        let mut summaries = Vec::new();
+        let input = input_with_lags(
+            &set,
+            &findings,
+            vec![
+                lag(5, ComparisonBaseLagReason::DiscriminantSetMismatch),
+                lag(2, ComparisonBaseLagReason::NoRecentBaseData),
+            ],
+            &mut summaries,
+        );
+        let json = render(&input, ReportFormat::Json, false);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let lags = &parsed["sets"][0]["comparison_base_lags"];
+        assert_eq!(lags[0]["commits_behind"], 5);
+        assert_eq!(lags[0]["reason"], "discriminant_set_mismatch");
+        assert_eq!(lags[1]["commits_behind"], 2);
+        assert_eq!(lags[1]["reason"], "no_recent_base_data");
+    }
+
+    #[test]
+    fn json_report_omits_comparison_base_lags_when_absent() {
+        let set = discriminant_set();
+        let findings = vec![regression()];
+        let mut summaries = Vec::new();
+        let input = single_set_input("folo", &set, &findings, &mut summaries);
+        let json = render(&input, ReportFormat::Json, false);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(
+            parsed["sets"][0].get("comparison_base_lags").is_none(),
+            "unaffected sets carry no comparison_base_lags: {json}"
+        );
+    }
+
+    #[test]
+    fn summary_emits_a_set_warning_once_before_its_findings() {
+        // Two findings from the same set: the set's warning must surface exactly once,
+        // even though the summary flattens the per-set grouping.
+        let set = discriminant_set();
+        let findings = vec![
+            named_regression("alpha", 0.50),
+            named_regression("beta", 0.40),
+        ];
+        let mut summaries = Vec::new();
+        let input = input_with_lags(
+            &set,
+            &findings,
+            vec![lag(3, ComparisonBaseLagReason::DiscriminantSetMismatch)],
+            &mut summaries,
+        );
+        let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+        let warning =
+            "Warning: comparison base is 3 commits behind base (discriminant set mismatch)";
+        assert_eq!(summary.matches(warning).count(), 1, "{summary}");
     }
 
     #[test]

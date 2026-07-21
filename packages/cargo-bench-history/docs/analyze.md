@@ -137,6 +137,30 @@ an in-place unstable sort for the median (no scratch buffer, and ties are bit-id
 reordering cannot change the result), pre-sized buffers for the pairwise Theil–Sen slope,
 and a single sort for the false-discovery filter across all noisy candidates.
 
+## Comparison-base lag (branch mode)
+
+After detection, branch mode discloses when a finding's comparison base lags the merge-base
+(DESIGN.md §8.8). The classification reuses the pipeline's existing seams rather than adding a
+second listing:
+
+* **Phase 1 already retained the candidates.** The single project listing splits its keys into
+  the facet-selected candidates *and* the machine-relaxed clean-run siblings — exact `clean.json`
+  objects sharing the engine and triple under a machine key the selection does not cover. The
+  sibling keys pass the same on-history, base-side, and `--since` admission as the selection, so
+  classification starts from a compact, already-vetted key list without a second `list`
+  round-trip.
+* **Evidence comes from loaded data first.** A lagging finding is a machine-key mismatch if a
+  newer base-side clean point for its benchmark and metric exists under a sibling key. Under
+  `--machine-key all` every key is already resident, so this is answered from the loaded series
+  with no fetch at all.
+* **Foreign payloads are fetched lazily and once.** Only when the loaded series leave a lag
+  unresolved are the sibling objects that could fall in its gap fetched — deduplicated, through
+  the same bounded-concurrency loader the main load uses — then parsed with the same lean
+  projection to confirm the benchmark and metric are actually present rather than trusting raw key
+  occupancy. A run with no surviving lag, an all-ghost set, or history mode fetches nothing. The
+  warning is advisory, so a failure to fetch or parse that optional evidence is noted and degrades
+  the affected findings to the generic reason instead of failing the run.
+
 ## The full parallelism / serial map
 
 | Stage | Concurrency type | Unit of work |

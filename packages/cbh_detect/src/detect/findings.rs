@@ -294,6 +294,13 @@ pub struct Finding {
     /// Markdown reports can draw a chart; it is not part of the machine-readable JSON
     /// contract.
     pub series: Vec<SeriesValue>,
+    /// First-parent topological index of the newest base-side point this finding was
+    /// actually compared against — the series' *comparison base*. Set only in branch
+    /// mode (`None` in history mode, where there is no single comparison base). Internal
+    /// cross-crate analysis metadata that lets the analysis measure how far the
+    /// comparison base sits behind the merge-base; it is not part of the JSON finding
+    /// contract.
+    pub comparison_base_index: Option<usize>,
 }
 
 impl Finding {
@@ -637,6 +644,7 @@ fn evaluate_change_point(
             blessed_at: None,
             blessed_commit_time: None,
             series: Vec::new(),
+            comparison_base_index: None,
         },
         source_index: 0,
         bh_p: effective_p,
@@ -713,6 +721,7 @@ fn evaluate_drift(series: &Series, values: &[f64], config: &AnalysisConfig) -> O
             blessed_at: None,
             blessed_commit_time: None,
             series: Vec::new(),
+            comparison_base_index: None,
         },
         source_index: 0,
         bh_p: trend.p_value,
@@ -877,6 +886,7 @@ fn compare_samples(
             blessed_at: None,
             blessed_commit_time: None,
             series: Vec::new(),
+            comparison_base_index: None,
         },
         source_index: 0,
         bh_p: effective_p,
@@ -903,14 +913,20 @@ fn evaluate_branch(
     let base_window = recent(&base, config.compare_window);
     let latest_points = latest_commit_points(&branch);
     let commit = branch.last().and_then(|&point| owned_commit(point));
-    compare_samples(
+    // The newest base-side point actually fed to the comparison is this series' comparison
+    // base. Record its first-parent position so the analysis can measure how far it sits
+    // behind the merge-base.
+    let comparison_base_index = base_window.last().map(|point| point.topo_index);
+    let mut candidate = compare_samples(
         series,
         &base_window,
         &latest_points,
         config,
         config.branch_practical_relative,
         commit,
-    )
+    )?;
+    candidate.finding.comparison_base_index = comparison_base_index;
+    Some(candidate)
 }
 
 /// The post-blessing window of `series` as a standalone series for detection.
@@ -1055,6 +1071,7 @@ fn evaluate_resolved_spike(
             blessed_at: None,
             blessed_commit_time: None,
             series: Vec::new(),
+            comparison_base_index: None,
         },
         source_index: 0,
         bh_p: effective_p,
@@ -1394,6 +1411,7 @@ mod tests {
                 blessed_at: None,
                 blessed_commit_time: None,
                 series: Vec::new(),
+                comparison_base_index: None,
             },
             source_index: 0,
             bh_p: 0.0,
@@ -2258,6 +2276,46 @@ mod tests {
         let finding = only(branch_changes(&[series], Some(2)));
         assert_eq!(finding.direction, Direction::Regression);
         assert_eq!(finding.latest, 130.0);
+    }
+
+    #[test]
+    fn branch_finding_stamps_the_newest_base_window_index() {
+        // Base-side runs at topo 0..2, branch-side at 3..5, merge-base at 2. The
+        // comparison base is the newest base-side point actually compared against.
+        let series = placed_series(&[
+            (0, 100.0, false),
+            (1, 100.0, false),
+            (2, 100.0, false),
+            (3, 130.0, false),
+            (4, 130.0, false),
+            (5, 130.0, false),
+        ]);
+        let finding = only(branch_changes(&[series], Some(2)));
+        assert_eq!(finding.comparison_base_index, Some(2));
+    }
+
+    #[test]
+    fn branch_comparison_base_index_lags_when_recent_base_data_is_missing() {
+        // The merge-base is topo 5, but this series has no base-side runs at topo 3..5;
+        // its newest base point is topo 2, so its comparison base lags the merge-base.
+        let series = placed_series(&[
+            (0, 100.0, false),
+            (1, 100.0, false),
+            (2, 100.0, false),
+            (6, 130.0, false),
+            (7, 130.0, false),
+            (8, 130.0, false),
+        ]);
+        let finding = only(branch_changes(&[series], Some(5)));
+        assert_eq!(finding.comparison_base_index, Some(2));
+    }
+
+    #[test]
+    fn history_finding_has_no_comparison_base_index() {
+        // History mode has no single comparison base, so the field stays `None`.
+        let series = series_of(&[100.0, 100.0, 100.0, 130.0, 130.0, 130.0]);
+        let finding = only(changes(std::slice::from_ref(&series)));
+        assert_eq!(finding.comparison_base_index, None);
     }
 
     // -- Blessing (re-baselining) and recovered spikes ------------------------

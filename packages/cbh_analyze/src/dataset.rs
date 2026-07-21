@@ -20,7 +20,8 @@ use super::facets::{
 };
 use super::history::{DirtyTipPolicy, ResolvedHistory, resolve_history};
 use super::load::{
-    RunIndex, WorkerFold, facet_filtered_candidates, fold_runs_chunked, load_objects_concurrently,
+    CandidateListing, RunIndex, WorkerFold, fold_runs_chunked, list_candidates,
+    load_objects_concurrently,
 };
 use super::selection::Selection;
 use super::window::{auto_mode, before_since_cutoff, resolve_since, since_cutoff_reason};
@@ -70,6 +71,28 @@ pub(crate) struct SelectedDataSet {
     /// history-mode re-baselining picks, per series, the latest matching blessing.
     /// Empty in branch mode (it ignores blessings).
     pub(crate) blessings: HashMap<DiscriminantSet, Vec<BlessingPlacement>>,
+    /// Base-side clean-run observations under machine keys the selection does not
+    /// cover, retained (branch mode only) so the analysis can classify why a finding's
+    /// comparison base lags the merge-base. Empty in history mode and when the
+    /// selection already spans every machine key (`--machine-key all`). Each entry
+    /// carries the storage key, discriminant set, and first-parent topological index;
+    /// the payload is fetched lazily by the pipeline only when a lagging finding needs
+    /// it.
+    pub(crate) sibling_observations: Vec<SiblingObservation>,
+}
+
+/// A base-side clean run under a machine key the selection does not cover, retained
+/// for branch-mode comparison-base lag classification.
+#[derive(Clone, Debug)]
+pub(crate) struct SiblingObservation {
+    /// The object's storage key, for the lazy payload fetch.
+    pub(crate) key: String,
+    /// The parsed storage key, carrying the sibling's discriminant set (a machine key
+    /// the selection did not cover). Retained so the lazy fetch reuses it without a
+    /// re-parse.
+    pub(crate) parsed: StorageKey,
+    /// First-parent topological index of the sibling's commit.
+    pub(crate) topo_index: usize,
 }
 
 /// Resolves the git topology, selects the comparable commits, and loads the
@@ -97,7 +120,10 @@ where
 {
     let facets = resolve_facets(selection, Some(auto))?;
     let listing_started = Instant::now();
-    let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
+    let CandidateListing {
+        selected: candidates,
+        siblings: sibling_candidates,
+    } = list_candidates(storage, project_id, &facets, true, reporter).await?;
     reporter.timing(
         "candidate listing + facet filter (includes storage.list)",
         listing_started.elapsed(),
@@ -191,6 +217,21 @@ where
             since_cutoff_reason(selection.since.is_some(), mode)
         )
     });
+
+    // Retain the base-side sibling observations branch mode uses to explain a lagging
+    // comparison base. Only clean runs up to the merge-base can serve as a comparison
+    // base, and the same on-history and `--since` admission the selection uses applies.
+    // History mode has no single comparison base, so it keeps none. This is key-only
+    // work (no fetches); the payloads are read lazily only if a finding actually lags.
+    let sibling_observations = admit_sibling_observations(
+        sibling_candidates,
+        mode,
+        merge_base_index,
+        &order,
+        &commit_times,
+        since,
+        reporter,
+    );
 
     // The always-on effective-selection announcement: one line, printed regardless
     // of `--verbose`, naming the resolved (possibly auto-detected) partition, base
@@ -421,7 +462,68 @@ where
         mode,
         merge_base_index,
         blessings,
+        sibling_observations,
     })
+}
+
+/// Admits the base-side sibling observations branch mode uses to explain a lagging
+/// comparison base, applying the same on-history and `--since` admission the
+/// selection uses. Key-only work — no payloads are fetched. History mode, or an
+/// unknown merge-base, yields none: neither has a single comparison base to lag.
+fn admit_sibling_observations(
+    candidates: Vec<(String, StorageKey)>,
+    mode: AnalysisMode,
+    merge_base_index: Option<usize>,
+    order: &HashMap<String, usize>,
+    commit_times: &HashMap<String, Timestamp>,
+    since: Option<Timestamp>,
+    reporter: &dyn Reporter,
+) -> Vec<SiblingObservation> {
+    let (AnalysisMode::Branch, Some(merge_base)) = (mode, merge_base_index) else {
+        return Vec::new();
+    };
+    let mut observations = Vec::new();
+    for (key, parsed) in candidates {
+        let Some(&topo_index) = order.get(&parsed.commit) else {
+            reporter.note_with(|| {
+                format!(
+                    "skipping sibling {key}: commit {} is not on the analyzed history",
+                    parsed.commit
+                )
+            });
+            continue;
+        };
+        if topo_index > merge_base {
+            reporter.note_with(|| {
+                format!(
+                    "skipping sibling {key}: commit {} is on the branch side of the merge-base",
+                    parsed.commit
+                )
+            });
+            continue;
+        }
+        if before_since_cutoff(commit_times.get(&parsed.commit).copied(), since) {
+            reporter.note_with(|| {
+                format!(
+                    "skipping sibling {key}: commit {} is before the --since cutoff",
+                    parsed.commit
+                )
+            });
+            continue;
+        }
+        observations.push(SiblingObservation {
+            key,
+            parsed,
+            topo_index,
+        });
+    }
+    reporter.note_with(|| {
+        format!(
+            "retained {} for comparison-base classification",
+            count_noun(observations.len(), "base-side sibling observation")
+        )
+    });
+    observations
 }
 
 /// Builds the always-on, one-line summary of a run's effective selection: the
@@ -715,6 +817,127 @@ mod tests {
         assert!(
             summary.contains("no default look-back window outside history mode"),
             "{summary}"
+        );
+    }
+
+    /// A clean sibling storage key parsed for `commit` under machine `m2`.
+    fn sibling_key(commit: &str) -> (String, StorageKey) {
+        let key =
+            format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m2/{commit}/clean.json");
+        let parsed = cbh_model::parse_key(&key).unwrap();
+        (key, parsed)
+    }
+
+    /// The first-parent order and committer times for a `c0..c3` line.
+    fn topology() -> (HashMap<String, usize>, HashMap<String, Timestamp>) {
+        let mut order = HashMap::new();
+        let mut times = HashMap::new();
+        for index in 0..=3 {
+            let commit = format!("c{index}");
+            order.insert(commit.clone(), index);
+            times.insert(
+                commit,
+                Timestamp::from_second(i64::try_from(index).unwrap()).unwrap(),
+            );
+        }
+        (order, times)
+    }
+
+    #[test]
+    fn sibling_admission_keeps_on_history_base_side_commits() {
+        // c2 is on-history and at/before the c3 merge-base, so it is admitted with its
+        // topological index; c3 (the merge-base itself) is also base-side and kept.
+        let (order, times) = topology();
+        let candidates = vec![sibling_key("c2"), sibling_key("c3")];
+        let observations = admit_sibling_observations(
+            candidates,
+            AnalysisMode::Branch,
+            Some(3),
+            &order,
+            &times,
+            None,
+            &cbh_diag::RecordingReporter::new(),
+        );
+        let indices: Vec<usize> = observations.iter().map(|obs| obs.topo_index).collect();
+        assert_eq!(indices, vec![2, 3]);
+    }
+
+    #[test]
+    fn sibling_admission_drops_off_history_and_branch_side_commits() {
+        // An unknown commit is off the analyzed history; a commit past the merge-base
+        // is branch-side. Neither can serve as a base-side comparison point.
+        let (mut order, times) = topology();
+        order.insert("f1".to_owned(), 4);
+        let candidates = vec![
+            sibling_key("unknown-commit"),
+            sibling_key("c2"),
+            sibling_key("f1"),
+        ];
+        let observations = admit_sibling_observations(
+            candidates,
+            AnalysisMode::Branch,
+            Some(3),
+            &order,
+            &times,
+            None,
+            &cbh_diag::RecordingReporter::new(),
+        );
+        let indices: Vec<usize> = observations.iter().map(|obs| obs.topo_index).collect();
+        assert_eq!(
+            indices,
+            vec![2],
+            "only the on-history base-side c2 survives"
+        );
+    }
+
+    #[test]
+    fn sibling_admission_drops_commits_before_the_since_cutoff() {
+        // A `--since` cutoff excludes commits committed before it, exactly as the
+        // selection's own admission does.
+        let (order, times) = topology();
+        let candidates = vec![sibling_key("c0"), sibling_key("c2")];
+        let observations = admit_sibling_observations(
+            candidates,
+            AnalysisMode::Branch,
+            Some(3),
+            &order,
+            &times,
+            Some(Timestamp::from_second(2).unwrap()),
+            &cbh_diag::RecordingReporter::new(),
+        );
+        let indices: Vec<usize> = observations.iter().map(|obs| obs.topo_index).collect();
+        assert_eq!(indices, vec![2], "c0 is before the since cutoff");
+    }
+
+    #[test]
+    fn sibling_admission_is_empty_outside_branch_mode_or_without_a_merge_base() {
+        let (order, times) = topology();
+        let reporter = cbh_diag::RecordingReporter::new();
+        assert!(
+            admit_sibling_observations(
+                vec![sibling_key("c2")],
+                AnalysisMode::History,
+                Some(3),
+                &order,
+                &times,
+                None,
+                &reporter,
+            )
+            .is_empty(),
+            "history mode has no single comparison base"
+        );
+        assert!(
+            admit_sibling_observations(
+                vec![sibling_key("c2")],
+                AnalysisMode::Branch,
+                None,
+                &order,
+                &times,
+                None,
+                &reporter,
+            )
+            .is_empty(),
+            "an unknown merge-base cannot anchor a lag"
         );
     }
 }
