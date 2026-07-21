@@ -65,7 +65,7 @@ pub struct SeriesPoint {
 /// In history analysis a series with a matching blessing is *re-baselined* to the
 /// blessed commit — the detector treats the blessed level as the new baseline and
 /// only sees points from that commit onward, while the pre-blessing points are
-/// retained for charting (drawn greyed). See the *Re-baselining* analysis
+/// retained for charting. See the *Re-baselining* analysis
 /// section of `DESIGN.md`.
 #[derive(Clone, Debug)]
 pub struct Blessing {
@@ -98,7 +98,7 @@ pub struct Series {
     /// Index into `points` where the active (post-blessing) window begins; `0`
     /// when the series is unblessed (every point is active). History-mode
     /// detection considers only `points[active_start..]`, while charts draw the
-    /// whole series with the pre-`active_start` prefix greyed.
+    /// whole series.
     pub active_start: usize,
     /// The blessing that re-baselined this series, if any (the report anchor).
     pub blessing: Option<Blessing>,

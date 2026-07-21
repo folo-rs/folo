@@ -867,7 +867,7 @@ via the base-tip dirty exception.
 
 History mode distinguishes a change that is **still in effect** from one that has **already
 been addressed**, so a long history does not keep re-flagging events a reviewer has handled.
-Every history-mode finding therefore carries an active flag and an active-from boundary.
+Every history-mode finding therefore carries an active flag distinguishing the two.
 
 * **Resolved spikes** — when a level rose and later returned to its prior baseline, the
   current state matches the baseline and there is nothing to act on. Such a finding is

@@ -1034,7 +1034,6 @@ mod tests {
             commit: Some("deadbee".to_owned()),
             flipped_at: None,
             active: true,
-            active_from: 0,
             blessed_at: None,
             blessed_commit_time: None,
             series: Vec::new(),
