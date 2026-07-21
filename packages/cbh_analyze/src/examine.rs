@@ -37,9 +37,8 @@ use serde::Serialize;
 use tick::Clock;
 
 use super::{
-    AutoFacets, ReportFormat, Selection, Series, SeriesFilter, chart,
-    dirty_base_exception_warning, empty_history_hint, format_value, resolve_auto_facets,
-    resolve_now, select_dataset,
+    AutoFacets, ReportFormat, Selection, Series, SeriesFilter, chart, dirty_base_exception_warning,
+    empty_history_hint, format_value, resolve_auto_facets, resolve_now, select_dataset,
 };
 use crate::{AnalyzeError, RenderedReports, ReportRequest};
 

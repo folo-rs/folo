@@ -658,7 +658,11 @@ pub fn chart(values: &[f64]) -> Option<String> {
     let config = Config::default()
         .with_height(CHART_HEIGHT)
         .with_width(CHART_WIDTH);
-    Some(plot(values.to_vec(), config).trim_end_matches('\n').to_owned())
+    Some(
+        plot(values.to_vec(), config)
+            .trim_end_matches('\n')
+            .to_owned(),
+    )
 }
 
 fn render_markdown(input: &ReportInput<'_>) -> String {
