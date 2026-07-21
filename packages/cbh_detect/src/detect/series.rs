@@ -97,8 +97,8 @@ pub struct Series {
     pub points: Vec<SeriesPoint>,
     /// Index into `points` where the active (post-blessing) window begins; `0`
     /// when the series is unblessed (every point is active). History-mode
-    /// detection considers only `points[active_start..]`, while charts draw the
-    /// whole series.
+    /// detection considers only `points[active_start..]`; the full `points` are
+    /// retained for reporting.
     pub active_start: usize,
     /// The blessing that re-baselined this series, if any (the report anchor).
     pub blessing: Option<Blessing>,
