@@ -620,6 +620,7 @@ mod tests {
         )
         .unwrap();
         assert!(parsed.is_dirty());
+        assert!(!parsed.is_clean());
         assert_eq!(
             parsed.kind,
             ObjectKind::Dirty {
@@ -638,6 +639,7 @@ mod tests {
         .unwrap();
         assert!(parsed.is_bless());
         assert!(!parsed.is_dirty());
+        assert!(!parsed.is_clean());
         assert_eq!(
             parsed.kind,
             ObjectKind::Bless {
@@ -675,6 +677,34 @@ mod tests {
         assert!(parse_key("v1/folo/objects/dhat/t/m/c/clean.json").is_none());
         // A structurally valid key whose file segment is not a known object.
         assert!(parse_key("v1/folo/objects/callgrind/t/m/c/notes.json").is_none());
+        // Keys that are valid in every respect except one guarded segment, so the
+        // version and `objects` guards are each exercised in isolation (a real
+        // engine and object file would otherwise let a mutated guard slip through).
+        assert!(
+            parse_key("v2/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/abc123/clean.json")
+                .is_none()
+        );
+        assert!(
+            parse_key("v1/folo/data/callgrind/x86_64-unknown-linux-gnu/m1/abc123/clean.json")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn engine_orders_by_identifier() {
+        // Ordering follows `as_str`, so a `DiscriminantSet` sorts identically
+        // whether its engine is compared as an `Engine` or as its serialized name.
+        let mut by_engine = Engine::ALL.to_vec();
+        by_engine.sort();
+        let ordered_names: Vec<&str> = by_engine.iter().map(|engine| engine.as_str()).collect();
+        let mut by_name = Engine::ALL.map(Engine::as_str).to_vec();
+        by_name.sort_unstable();
+        assert_eq!(ordered_names, by_name);
+        assert!(Engine::Callgrind < Engine::Criterion);
+        assert_eq!(
+            Engine::Callgrind.partial_cmp(&Engine::Criterion),
+            Some(Ordering::Less)
+        );
     }
 
     #[test]
