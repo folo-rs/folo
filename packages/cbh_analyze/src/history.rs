@@ -237,11 +237,11 @@ where
         .collect();
     let admit_dirty: HashMap<String, bool> = selected
         .iter()
-        .map(|one| (one.commit.clone(), one.admit_dirty))
+        .map(|one| (one.commit.clone(), one.dirty.admits_dirty()))
         .collect();
     let dirty_base_exception: HashMap<String, bool> = selected
         .iter()
-        .map(|one| (one.commit.clone(), one.dirty_base_exception))
+        .map(|one| (one.commit.clone(), one.dirty.is_base_exception()))
         .collect();
 
     // The merge-base's topological position (when it is on the analyzed chain)
