@@ -305,7 +305,7 @@ mod tests {
     use cbh_detect::{Direction, FindingMethod, SeriesPoint};
     use cbh_diag::RecordingReporter;
     use cbh_model::{
-        BenchmarkId, BenchmarkResult, EnvironmentInfo, GitInfo, Metric, Run, RunContext,
+        BenchmarkId, BenchmarkResult, Engine, EnvironmentInfo, GitInfo, Metric, Run, RunContext,
         ToolchainInfo, parse_key,
     };
     use cbh_storage::MemoryStorage;
@@ -318,7 +318,7 @@ mod tests {
     /// The discriminant set for `machine`, sharing every other comparable axis.
     fn set(machine: &str) -> DiscriminantSet {
         DiscriminantSet {
-            engine: "callgrind".to_owned(),
+            engine: Engine::Callgrind,
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
             machine_key: machine.to_owned(),
         }
@@ -782,13 +782,13 @@ mod tests {
         assert!(is_sibling_set(&set("m2"), &target), "different machine key");
         assert!(!is_sibling_set(&set("m1"), &target), "same machine key");
         let other_engine = DiscriminantSet {
-            engine: "criterion".to_owned(),
+            engine: Engine::Criterion,
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
             machine_key: "m2".to_owned(),
         };
         assert!(!is_sibling_set(&other_engine, &target), "different engine");
         let other_triple = DiscriminantSet {
-            engine: "callgrind".to_owned(),
+            engine: Engine::Callgrind,
             target_triple: "aarch64-apple-darwin".to_owned(),
             machine_key: "m2".to_owned(),
         };

@@ -6,14 +6,21 @@
 //! incomparable — project, engine, target triple, and a machine key — and to
 //! record everything else as metadata so its effect stays visible in the timeline.
 
+use std::cmp::Ordering;
 use std::fmt;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::constants::{OBJECTS_SEGMENT, STORAGE_VERSION};
 
 /// A benchmark engine: the measurement tool whose output a series accumulates.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+///
+/// Serializes to (and deserializes from) its stable lowercase
+/// [identifier](Self::as_str) — `criterion`, `callgrind`, `alloc_tracker`,
+/// `all_the_time` — so a [`DiscriminantSet`] flattened into a JSON report keeps
+/// that exact wire name.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Engine {
     /// Criterion wall-clock benchmarks: noisy, with a confidence interval.
     Criterion,
@@ -64,6 +71,21 @@ impl Engine {
     }
 }
 
+/// Orders engines by their stable [identifier](Self::as_str), so a
+/// [`DiscriminantSet`] sorts identically whether its engine is compared as an
+/// `Engine` or as the serialized string that used to stand in for it.
+impl Ord for Engine {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+
+impl PartialOrd for Engine {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl fmt::Display for Engine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
@@ -79,8 +101,8 @@ impl fmt::Display for Engine {
 /// back (parsed from a storage key), so the same type drives both sides.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct DiscriminantSet {
-    /// Engine identifier (for example, `callgrind`).
-    pub engine: String,
+    /// The benchmark engine whose output the series accumulates.
+    pub engine: Engine,
     /// Resolved target triple the run was recorded under.
     pub target_triple: String,
     /// Machine key: a stable hardware fingerprint (or an explicit override). Every
@@ -100,7 +122,7 @@ impl DiscriminantSet {
     #[must_use]
     pub fn new(engine: Engine, target_triple: &str, machine_key: &str) -> Self {
         Self {
-            engine: engine.as_str().to_owned(),
+            engine,
             target_triple: sanitize_segment(target_triple),
             machine_key: sanitize_segment(machine_key),
         }
@@ -120,7 +142,7 @@ impl DiscriminantSet {
     #[must_use]
     pub fn partition_prefix(&self, project: &str) -> String {
         let project = sanitize_segment(project);
-        let engine = &self.engine;
+        let engine = self.engine.as_str();
         let triple = &self.target_triple;
         let machine_key = &self.machine_key;
         format!("{STORAGE_VERSION}/{project}/{OBJECTS_SEGMENT}/{engine}/{triple}/{machine_key}")
@@ -192,13 +214,66 @@ impl fmt::Display for DiscriminantSet {
     }
 }
 
+/// Which kind of object a storage key names, decoded from its file segment.
+///
+/// A commit directory holds three kinds of object, distinguished by file name:
+/// the canonical clean run (`clean.json`), zero or more dirty snapshots
+/// (`dirty-<observation_unix>.json`), and zero or more blessing sidecars
+/// (`bless-<issued_unix>.json`). Recovering this typed classification once
+/// (rather than re-testing string prefixes at each use site) keeps the three
+/// cases exhaustive and parses each embedded timestamp a single time.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ObjectKind {
+    /// The canonical clean-working-tree run (`clean.json`).
+    Clean,
+    /// A dirty (uncommitted-tree) snapshot, distinguished by its observation second.
+    Dirty {
+        /// The Unix second at which the snapshot was observed, from the file name.
+        observation_unix: i64,
+    },
+    /// A blessing sidecar, distinguished by the second it was issued.
+    Bless {
+        /// The Unix second at which the blessing was issued, from the file name.
+        issued_unix: i64,
+    },
+}
+
+impl ObjectKind {
+    /// Decodes the file segment of a storage key into its object kind, returning
+    /// `None` when the segment is not one of the three recognized object files.
+    fn from_file_segment(file: &str) -> Option<Self> {
+        if file == "clean.json" {
+            return Some(Self::Clean);
+        }
+        if let Some(seconds) = file
+            .strip_prefix("dirty-")
+            .and_then(|rest| rest.strip_suffix(".json"))
+        {
+            return seconds
+                .parse()
+                .ok()
+                .map(|observation_unix| Self::Dirty { observation_unix });
+        }
+        if let Some(seconds) = file
+            .strip_prefix("bless-")
+            .and_then(|rest| rest.strip_suffix(".json"))
+        {
+            return seconds
+                .parse()
+                .ok()
+                .map(|issued_unix| Self::Bless { issued_unix });
+        }
+        None
+    }
+}
+
 /// The components a storage key decomposes into.
 ///
 /// A storage key references one of three kinds of object in a commit directory:
 /// a clean run (`clean.json`), a dirty snapshot (`dirty-<unix>.json`), or a
-/// blessing sidecar (`bless-<unix>.json`). The [`file`](Self::file) segment
-/// distinguishes them; [`is_dirty`](Self::is_dirty) and
-/// [`is_bless`](Self::is_bless) classify it.
+/// blessing sidecar (`bless-<unix>.json`). The [`kind`](Self::kind) field, an
+/// [`ObjectKind`], captures which; [`is_clean`](Self::is_clean),
+/// [`is_dirty`](Self::is_dirty), and [`is_bless`](Self::is_bless) classify it.
 ///
 /// This is the inverse of the key-construction methods above ([`clean_key`],
 /// [`dirty_key`], [`bless_key`]): [`parse_key`] recovers this decomposition from a
@@ -215,21 +290,27 @@ pub struct StorageKey {
     pub set: DiscriminantSet,
     /// The commit directory segment (full commit ID, or `unknown`).
     pub commit: String,
-    /// The file segment (`clean.json`, `dirty-<unix>.json`, or `bless-<unix>.json`).
-    pub file: String,
+    /// Which kind of object the key names, decoded from its file segment.
+    pub kind: ObjectKind,
 }
 
 impl StorageKey {
+    /// Whether the key names a clean (committed-tree) run.
+    #[must_use]
+    pub fn is_clean(&self) -> bool {
+        matches!(self.kind, ObjectKind::Clean)
+    }
+
     /// Whether the key names a dirty (uncommitted-tree) snapshot.
     #[must_use]
     pub fn is_dirty(&self) -> bool {
-        self.file.starts_with("dirty-")
+        matches!(self.kind, ObjectKind::Dirty { .. })
     }
 
     /// Whether the key names a blessing sidecar rather than a stored run.
     #[must_use]
     pub fn is_bless(&self) -> bool {
-        self.file.starts_with("bless-")
+        matches!(self.kind, ObjectKind::Bless { .. })
     }
 
     /// The blessing sidecar key for this set's commit directory, issued at
@@ -247,8 +328,10 @@ impl StorageKey {
 /// — exactly eight non-empty segments, with the fixed `objects` segment directly
 /// under the project. Any key that does not match that shape exactly (wrong
 /// version, missing `objects` segment, too few or too many segments, or an empty
-/// segment) is ignored (returns `None`) rather than misattributed — so a
-/// per-project metadata sibling such as the cache-invalidation marker is skipped.
+/// segment), names an engine the tool has no adapter for, or whose file segment is
+/// not one of the three recognized object files, is ignored (returns `None`)
+/// rather than misattributed — so a per-project metadata sibling such as the
+/// cache-invalidation marker is skipped.
 #[must_use]
 pub fn parse_key(key: &str) -> Option<StorageKey> {
     let parts: Vec<&str> = key.split('/').collect();
@@ -271,15 +354,17 @@ pub fn parse_key(key: &str) -> Option<StorageKey> {
     if parts.iter().any(|segment| segment.is_empty()) {
         return None;
     }
+    let engine = Engine::from_name(engine)?;
+    let kind = ObjectKind::from_file_segment(file)?;
     Some(StorageKey {
         project: (*project).to_owned(),
         set: DiscriminantSet {
-            engine: (*engine).to_owned(),
+            engine,
             target_triple: (*target_triple).to_owned(),
             machine_key: (*machine_key).to_owned(),
         },
         commit: (*commit).to_owned(),
-        file: (*file).to_owned(),
+        kind,
     })
 }
 
@@ -474,11 +559,11 @@ mod tests {
             parse_key("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/abc123/clean.json")
                 .unwrap();
         assert_eq!(parsed.project, "folo");
-        assert_eq!(parsed.set.engine, "callgrind");
+        assert_eq!(parsed.set.engine, Engine::Callgrind);
         assert_eq!(parsed.set.target_triple, "x86_64-unknown-linux-gnu");
         assert_eq!(parsed.set.machine_key, "m1");
         assert_eq!(parsed.commit, "abc123");
-        assert_eq!(parsed.file, "clean.json");
+        assert!(parsed.is_clean());
         assert!(!parsed.is_dirty());
         assert!(!parsed.is_bless());
     }
@@ -490,6 +575,12 @@ mod tests {
         )
         .unwrap();
         assert!(parsed.is_dirty());
+        assert_eq!(
+            parsed.kind,
+            ObjectKind::Dirty {
+                observation_unix: 1_700_000_000
+            }
+        );
         assert_eq!(parsed.set.target_triple, "x86_64-pc-windows-msvc");
         assert_eq!(parsed.set.machine_key, "m1");
     }
@@ -502,6 +593,12 @@ mod tests {
         .unwrap();
         assert!(parsed.is_bless());
         assert!(!parsed.is_dirty());
+        assert_eq!(
+            parsed.kind,
+            ObjectKind::Bless {
+                issued_unix: 1_700_000_000
+            }
+        );
         assert_eq!(parsed.commit, "abc123");
     }
 
@@ -529,5 +626,24 @@ mod tests {
         assert!(parse_key("v1/folo/objects/callgrind/t/m/c/sub/f.json").is_none());
         assert!(parse_key("v1/folo/objects/callgrind/t//c/f.json").is_none());
         assert!(parse_key("v1/folo/objects/callgrind/t/m/c/").is_none());
+        // A structurally valid key naming an engine the tool has no adapter for.
+        assert!(parse_key("v1/folo/objects/dhat/t/m/c/clean.json").is_none());
+        // A structurally valid key whose file segment is not a known object.
+        assert!(parse_key("v1/folo/objects/callgrind/t/m/c/notes.json").is_none());
+    }
+
+    #[test]
+    fn engine_serde_matches_as_str() {
+        // The serialized wire form must equal `as_str`, so a flattened
+        // `DiscriminantSet` keeps the exact engine name in JSON reports.
+        for engine in Engine::ALL {
+            let json = serde_json::to_string(&engine).unwrap();
+            assert_eq!(json, format!("\"{}\"", engine.as_str()));
+            assert_eq!(
+                serde_json::from_str::<Engine>(&json).unwrap(),
+                engine,
+                "engine {engine} must round-trip through its wire form"
+            );
+        }
     }
 }

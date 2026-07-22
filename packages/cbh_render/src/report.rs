@@ -891,7 +891,7 @@ fn render_json(input: &ReportInput<'_>) -> String {
         .sets
         .iter()
         .map(|summary| JsonSet {
-            engine: &summary.set.engine,
+            engine: summary.set.engine.as_str(),
             target_triple: &summary.set.target_triple,
             machine_key: &summary.set.machine_key,
             runs: summary.runs,
@@ -1019,14 +1019,14 @@ mod tests {
     use std::thread;
 
     use cbh_detect::SeriesValue;
-    use cbh_model::MetricKind;
+    use cbh_model::{Engine, MetricKind};
     use nonempty::nonempty;
 
     use super::*;
 
     fn discriminant_set() -> DiscriminantSet {
         DiscriminantSet {
-            engine: "callgrind".to_owned(),
+            engine: Engine::Callgrind,
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
             machine_key: "m1".to_owned(),
         }
@@ -1258,7 +1258,7 @@ mod tests {
         let linux = named_regression("shared", 0.50);
         let windows = Finding {
             set: DiscriminantSet {
-                engine: "criterion".to_owned(),
+                engine: Engine::Criterion,
                 target_triple: "x86_64-pc-windows-msvc".to_owned(),
                 machine_key: "m1".to_owned(),
             },
@@ -2145,7 +2145,7 @@ mod tests {
 
     fn darwin_set() -> DiscriminantSet {
         DiscriminantSet {
-            engine: "callgrind".to_owned(),
+            engine: Engine::Callgrind,
             target_triple: "aarch64-apple-darwin".to_owned(),
             machine_key: "m2".to_owned(),
         }

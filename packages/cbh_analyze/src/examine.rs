@@ -462,7 +462,7 @@ fn render_pivot_json(pivot: &Pivot, hint: Option<&str>, warning: Option<&str>) -
         .sets
         .iter()
         .map(|set| JsonSet {
-            engine: &set.set.engine,
+            engine: set.set.engine.as_str(),
             target_triple: &set.set.target_triple,
             machine_key: &set.set.machine_key,
             points: set

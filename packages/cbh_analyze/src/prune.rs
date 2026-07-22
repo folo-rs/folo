@@ -674,7 +674,7 @@ fn render_plan_json(plan: &Plan, dry_run: bool) -> String {
         .sets
         .iter()
         .map(|set| JsonSet {
-            engine: &set.set.engine,
+            engine: set.set.engine.as_str(),
             target_triple: &set.set.target_triple,
             machine_key: &set.set.machine_key,
             runs: set.runs,
@@ -717,7 +717,7 @@ mod tests {
     use cbh_diag::RecordingReporter;
     use cbh_git::FakeGitHistory;
     use cbh_model::{
-        BenchmarkId, BenchmarkResult, EnvironmentInfo, GitInfo, Metric, MetricKind, Run,
+        BenchmarkId, BenchmarkResult, Engine, EnvironmentInfo, GitInfo, Metric, MetricKind, Run,
         RunContext, ToolchainInfo,
     };
     use cbh_storage::{MemoryStorage, Storage};
@@ -1582,7 +1582,7 @@ mod tests {
     #[test]
     fn build_plan_counts_runs_and_blessings_separately() {
         let set = DiscriminantSet {
-            engine: "callgrind".to_owned(),
+            engine: Engine::Callgrind,
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
             machine_key: "m1".to_owned(),
         };

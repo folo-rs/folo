@@ -413,14 +413,14 @@ mod tests {
         // Every engine is represented at least once.
         for engine in Engine::ALL {
             assert!(
-                sets.iter().any(|set| set.engine == engine.as_str()),
+                sets.iter().any(|set| set.engine == engine),
                 "missing engine {engine}"
             );
         }
 
         // Callgrind sets are Linux-only.
         for set in &sets {
-            if set.engine == Engine::Callgrind.as_str() {
+            if set.engine == Engine::Callgrind {
                 assert!(
                     targets_linux(&set.target_triple),
                     "callgrind set on non-Linux triple {}",

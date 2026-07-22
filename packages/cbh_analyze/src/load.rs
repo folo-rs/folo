@@ -255,7 +255,7 @@ pub(crate) async fn list_candidates<S: Storage>(
         // comparison base by machine-key rotation. `--machine-key all` selects every
         // key, so this stays empty and classification falls back to loaded series.
         let retained_as_sibling = sibling_query.as_ref().is_some_and(|query| {
-            !matches_selection && parsed.file == "clean.json" && query.matches(&parsed.set)
+            !matches_selection && parsed.is_clean() && query.matches(&parsed.set)
         });
         if retained_as_sibling {
             siblings.push((key.clone(), parsed.clone()));
@@ -491,14 +491,14 @@ fn ordinal_of(rank: usize) -> u32 {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use cbh_model::DiscriminantSet;
+    use cbh_model::{DiscriminantSet, Engine};
 
     use super::*;
 
     #[test]
     fn run_index_counts_runs_and_reports_emptiness() {
         let set = DiscriminantSet {
-            engine: "criterion".to_owned(),
+            engine: Engine::Criterion,
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
             machine_key: "m1".to_owned(),
         };
@@ -529,12 +529,12 @@ mod tests {
         // the per-worker indices must reproduce the single-threaded tally exactly,
         // summing the totals and the per-(set, commit) clean/dirty counts.
         let set = DiscriminantSet {
-            engine: "criterion".to_owned(),
+            engine: Engine::Criterion,
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
             machine_key: "m1".to_owned(),
         };
         let other_set = DiscriminantSet {
-            engine: "callgrind".to_owned(),
+            engine: Engine::Callgrind,
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
             machine_key: "m1".to_owned(),
         };
@@ -584,12 +584,12 @@ mod tests {
     #[test]
     fn commit_span_spans_the_oldest_and_newest_analyzed_commit() {
         let set = DiscriminantSet {
-            engine: "criterion".to_owned(),
+            engine: Engine::Criterion,
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
             machine_key: "m1".to_owned(),
         };
         let other_set = DiscriminantSet {
-            engine: "callgrind".to_owned(),
+            engine: Engine::Callgrind,
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
             machine_key: "m1".to_owned(),
         };
@@ -614,7 +614,7 @@ mod tests {
     #[test]
     fn commit_span_collapses_to_a_single_commit() {
         let set = DiscriminantSet {
-            engine: "criterion".to_owned(),
+            engine: Engine::Criterion,
             target_triple: "x86_64-unknown-linux-gnu".to_owned(),
             machine_key: "m1".to_owned(),
         };
@@ -765,8 +765,8 @@ mod tests {
             "only the exact clean run under the same engine and triple is a sibling"
         );
         let sibling = &listing.siblings.first().unwrap().1;
-        assert_eq!(sibling.file, "clean.json");
-        assert_eq!(sibling.set.engine, "callgrind");
+        assert!(sibling.is_clean());
+        assert_eq!(sibling.set.engine, Engine::Callgrind);
         assert_eq!(sibling.set.target_triple, "x86_64-unknown-linux-gnu");
     }
 

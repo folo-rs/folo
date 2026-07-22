@@ -12,8 +12,8 @@ use std::thread;
 
 use cbh_codec as codec;
 use cbh_model::{
-    BenchmarkIdPrefix, BenchmarkResult, BlessingRecord, DiscriminantSet, Engine, EnvironmentInfo,
-    GitInfo, Run, RunContext, ToolchainInfo,
+    BenchmarkIdPrefix, BenchmarkResult, BlessingRecord, DiscriminantSet, EnvironmentInfo, GitInfo,
+    Run, RunContext, ToolchainInfo,
 };
 use jiff::Timestamp;
 
@@ -312,8 +312,7 @@ fn clean_run(
     dirty: bool,
     value: impl Fn(usize) -> f64,
 ) -> Run {
-    let engine = Engine::from_name(&set.engine)
-        .expect("discriminant sets are built from Engine::ALL, so the engine name always resolves");
+    let engine = set.engine;
     let results: Vec<BenchmarkResult> = (0..scenario.benchmarks)
         .map(|b| {
             BenchmarkResult::new(

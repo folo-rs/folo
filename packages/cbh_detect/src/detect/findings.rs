@@ -1284,7 +1284,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use cbh_model::{DiscriminantSet, MetricKind};
+    use cbh_model::{DiscriminantSet, Engine, MetricKind};
     use jiff::Timestamp;
     use nonempty::nonempty;
 
@@ -1327,7 +1327,7 @@ mod tests {
             .collect();
         Series {
             set: DiscriminantSet {
-                engine: "callgrind".to_owned(),
+                engine: Engine::Callgrind,
                 target_triple: "t".to_owned(),
                 machine_key: "m1".to_owned(),
             },
@@ -1382,7 +1382,7 @@ mod tests {
         Candidate {
             finding: Finding {
                 set: DiscriminantSet {
-                    engine: "callgrind".to_owned(),
+                    engine: Engine::Callgrind,
                     target_triple: "t".to_owned(),
                     machine_key: "m1".to_owned(),
                 },
@@ -2110,7 +2110,7 @@ mod tests {
             .collect();
         Series {
             set: DiscriminantSet {
-                engine: "callgrind".to_owned(),
+                engine: Engine::Callgrind,
                 target_triple: "t".to_owned(),
                 machine_key: "m1".to_owned(),
             },

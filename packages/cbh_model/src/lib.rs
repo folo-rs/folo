@@ -35,7 +35,9 @@ mod run;
 pub use aggregate::{AggregateError, Combined, Selection, min_per_metric};
 pub use benchmark_id::{BenchmarkId, BenchmarkIdPrefix, EmptyBenchmarkIdPrefix};
 pub use bless::{BLESS_SCHEMA_VERSION, BlessingRecord};
-pub use comparability::{DiscriminantSet, Engine, StorageKey, parse_key, sanitize_segment};
+pub use comparability::{
+    DiscriminantSet, Engine, ObjectKind, StorageKey, parse_key, sanitize_segment,
+};
 pub use constants::{OBJECTS_SEGMENT, STORAGE_VERSION};
 pub use context::{
     EnvironmentInfo, EnvironmentProvider, GitInfo, MachineInfo, RunContext, ToolchainInfo,

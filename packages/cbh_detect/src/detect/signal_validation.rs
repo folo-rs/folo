@@ -57,7 +57,7 @@
 
 use std::sync::Arc;
 
-use cbh_model::{BenchmarkId, DiscriminantSet, MetricKind};
+use cbh_model::{BenchmarkId, DiscriminantSet, Engine, MetricKind};
 use nonempty::nonempty;
 
 use crate::detect::findings::find_changes;
@@ -295,7 +295,7 @@ fn curated_series(values: &[f64], kind: MetricKind) -> Series {
         .collect();
     Series {
         set: DiscriminantSet {
-            engine: "callgrind".to_owned(),
+            engine: Engine::Callgrind,
             target_triple: "t".to_owned(),
             machine_key: "m1".to_owned(),
         },
