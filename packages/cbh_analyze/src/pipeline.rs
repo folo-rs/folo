@@ -345,7 +345,7 @@ where
         project: project_id,
         tip_commit: &dataset.tip_commit,
         tip_dirty: dataset.tip_dirty,
-        mode: dataset.mode.as_str(),
+        mode: dataset.mode,
         notable,
         runs: dataset.run_index.total(),
         series: series.len(),
