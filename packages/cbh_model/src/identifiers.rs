@@ -49,12 +49,6 @@ macro_rules! string_newtype {
             }
         }
 
-        impl PartialEq<str> for $name {
-            fn eq(&self, other: &str) -> bool {
-                self.0 == other
-            }
-        }
-
         impl PartialEq<&str> for $name {
             fn eq(&self, other: &&str) -> bool {
                 self.0 == *other
