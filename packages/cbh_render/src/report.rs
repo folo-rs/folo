@@ -11,6 +11,7 @@
 
 use std::collections::HashSet;
 use std::num::NonZero;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use cbh_detect::{Direction, Finding, FindingMethod, short_commit};
 use cbh_model::{BenchmarkId, DiscriminantSet};
@@ -389,26 +390,34 @@ fn tip_label(commit: &str, dirty: bool) -> String {
     }
 }
 
-/// Forces `colored`'s process-global override to `value` until dropped, then
-/// restores ambient auto-detection. Bundling the set with the matching restore keeps
-/// the override scoped to a single render call so it can never leak into later output,
-/// even on an early return or panic.
-struct ColorOverride;
+/// Serializes access to `colored`'s process-global override.
+static COLOR_OVERRIDE_LOCK: Mutex<()> = Mutex::new(());
+
+/// Forces `colored`'s process-global override to `value` until dropped, then restores
+/// ambient auto-detection.
+///
+/// Holding [`COLOR_OVERRIDE_LOCK`] for the override's lifetime prevents concurrent
+/// renders from changing the process-global state while output is being assembled.
+struct ColorOverride {
+    _lock: MutexGuard<'static, ()>,
+}
 
 impl ColorOverride {
     #[must_use]
     fn force(value: bool) -> Self {
+        let lock = COLOR_OVERRIDE_LOCK
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         colored::control::set_override(value);
-        Self
+        Self { _lock: lock }
     }
 }
 
 impl Drop for ColorOverride {
     // Restoring `colored`'s process-global override is exercised by every render test
-    // (each builds and drops a guard), but asserting it requires observing that global
-    // state, which races with the rest of the parallel test suite and which `colored`
-    // exposes no override-state getter to read deterministically. Skipped for mutation
-    // only; the restore itself is covered behaviourally.
+    // (each builds and drops a guard), but `colored` exposes no override-state getter
+    // to assert the restoration directly. Skipped for mutation only; the restore itself
+    // is covered behaviourally.
     #[cfg_attr(test, mutants::skip)]
     fn drop(&mut self) {
         colored::control::unset_override();
@@ -1005,6 +1014,9 @@ fn format_percent(relative_delta: f64) -> String {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
+
+    use std::sync::TryLockError;
+    use std::thread;
 
     use cbh_detect::SeriesValue;
     use cbh_model::MetricKind;
@@ -2086,6 +2098,22 @@ mod tests {
         // slip would reject the two-point case).
         assert!(chart(&[1.0]).is_none());
         assert!(chart(&[1.0, 2.0]).is_some());
+    }
+
+    #[test]
+    fn color_override_holds_the_global_lock_across_threads() {
+        let _color = ColorOverride::force(false);
+
+        let lock_was_held = thread::spawn(|| {
+            matches!(
+                COLOR_OVERRIDE_LOCK.try_lock(),
+                Err(TryLockError::WouldBlock)
+            )
+        })
+        .join()
+        .unwrap();
+
+        assert!(lock_was_held);
     }
 
     #[test]

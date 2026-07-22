@@ -168,6 +168,9 @@ pub(crate) async fn unbless(
 
 /// Writes the rendered reports to the requested paths, resolving relative paths
 /// against `workspace_dir` and announcing each write on the verbose trail.
+// Trivial production-adapter forwarder; `write_reports` is unit-tested and report-file
+// wiring is covered end-to-end.
+#[cfg_attr(test, mutants::skip)]
 async fn write_rendered(
     workspace_dir: &Path,
     verbose: bool,
