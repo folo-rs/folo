@@ -15,8 +15,7 @@
 //! exactly as the chart would plot it (a commit's clean run and its dirty snapshots
 //! each contribute a flagged row, clean before dirty). The text and Markdown
 //! renderings lead each set with the same small line chart `analyze` draws (reusing
-//! its renderer), neutral/uncolored since `examine` makes no regression/improvement
-//! judgment. Like `analyze` it needs a resolvable repository — first-parent topology
+//! its renderer). Like `analyze` it needs a resolvable repository — first-parent topology
 //! to order the points and each commit's title to label them — and repeats the pivot
 //! once per matching discriminant set.
 
@@ -38,9 +37,8 @@ use serde::Serialize;
 use tick::Clock;
 
 use super::{
-    AutoFacets, ChartColor, ReportFormat, Selection, Series, SeriesFilter, chart,
-    dirty_base_exception_warning, empty_history_hint, format_value, resolve_auto_facets,
-    resolve_now, select_dataset,
+    AutoFacets, ReportFormat, Selection, Series, SeriesFilter, chart, dirty_base_exception_warning,
+    empty_history_hint, format_value, resolve_auto_facets, resolve_now, select_dataset,
 };
 use crate::{AnalyzeError, RenderedReports, ReportRequest};
 
@@ -323,12 +321,11 @@ fn short_commit_id(commit_id: &str) -> &str {
     commit_id.get(..12).unwrap_or(commit_id)
 }
 
-/// The neutral line chart of a set's ordered values, drawn before its data points
-/// (the same chart `analyze` renders for a finding, but uncolored because `examine`
-/// makes no judgment). `None` when there are too few points to plot.
+/// The line chart of a set's ordered values, drawn before its data points (the same
+/// chart `analyze` renders for a finding). `None` when there are too few points to plot.
 fn chart_of_points(points: &[DataPoint]) -> Option<String> {
     let values: Vec<f64> = points.iter().map(|point| point.value).collect();
-    chart(&values, ChartColor::Neutral, 0)
+    chart(&values)
 }
 
 /// Renders the pivot in the requested format, appending the diagnostic hint and
@@ -360,8 +357,7 @@ fn render_pivot_text(pivot: &Pivot, hint: Option<&str>, warning: Option<&str>) -
             lines.push(set.set.to_string());
             // Lead the set with the same small line chart `analyze` draws, so a
             // maintainer sees the shape of the series before reading the points it
-            // pivots. Neutral (uncolored) because `examine` makes no regression /
-            // improvement judgment.
+            // pivots.
             if let Some(chart) = chart_of_points(&set.points) {
                 lines.push(chart);
                 lines.push(String::new());
@@ -407,7 +403,7 @@ fn render_pivot_markdown(pivot: &Pivot, hint: Option<&str>, warning: Option<&str
         for set in &pivot.sets {
             lines.push(String::new());
             lines.push(format!("## {}", set.set));
-            // The same neutral series chart the text pivot draws, fenced as a `text`
+            // The same series chart the text pivot draws, fenced as a `text`
             // block so it survives Markdown rendering (mirrors `analyze`).
             if let Some(chart) = chart_of_points(&set.points) {
                 lines.push(String::new());
@@ -900,7 +896,7 @@ mod tests {
     }
 
     #[test]
-    fn text_draws_a_neutral_chart_before_the_points() {
+    fn text_draws_a_chart_before_the_points() {
         let storage = MemoryStorage::new();
         store(
             &storage,
@@ -920,7 +916,7 @@ mod tests {
         let git = linear_git();
 
         let report = examine(&storage, &git, &options());
-        // The rasciigraph axis marker proves the neutral chart was drawn.
+        // The rasciigraph axis marker proves the chart was drawn.
         let axis = report
             .find('┤')
             .or_else(|| report.find('┼'))
@@ -933,7 +929,7 @@ mod tests {
             axis < first_point,
             "the chart precedes the points: {report}"
         );
-        // A neutral chart carries no color (no ANSI escapes).
+        // The chart carries no color (no ANSI escapes).
         assert!(!report.contains('\u{1b}'), "no ANSI escape: {report:?}");
     }
 
