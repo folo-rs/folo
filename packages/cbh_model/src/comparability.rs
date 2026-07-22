@@ -12,6 +12,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use super::constants::{OBJECTS_SEGMENT, STORAGE_VERSION};
+use super::identifiers::{MachineKey, TargetTriple};
 
 /// A benchmark engine: the measurement tool whose output a series accumulates.
 ///
@@ -104,10 +105,10 @@ pub struct DiscriminantSet {
     /// The benchmark engine whose output the series accumulates.
     pub engine: Engine,
     /// Resolved target triple the run was recorded under.
-    pub target_triple: String,
+    pub target_triple: TargetTriple,
     /// Machine key: a stable hardware fingerprint (or an explicit override). Every
     /// engine is machine-keyed.
-    pub machine_key: String,
+    pub machine_key: MachineKey,
 }
 
 impl DiscriminantSet {
@@ -120,11 +121,11 @@ impl DiscriminantSet {
     /// stray `/` (or other surprising input) from silently splitting a storage key
     /// into the wrong number of segments.
     #[must_use]
-    pub fn new(engine: Engine, target_triple: &str, machine_key: &str) -> Self {
+    pub fn new(engine: Engine, target_triple: &TargetTriple, machine_key: &MachineKey) -> Self {
         Self {
             engine,
-            target_triple: sanitize_segment(target_triple),
-            machine_key: sanitize_segment(machine_key),
+            target_triple: TargetTriple::from(sanitize_segment(target_triple.as_str())),
+            machine_key: MachineKey::from(sanitize_segment(machine_key.as_str())),
         }
     }
 
@@ -360,8 +361,8 @@ pub fn parse_key(key: &str) -> Option<StorageKey> {
         project: (*project).to_owned(),
         set: DiscriminantSet {
             engine,
-            target_triple: (*target_triple).to_owned(),
-            machine_key: (*machine_key).to_owned(),
+            target_triple: TargetTriple::from(*target_triple),
+            machine_key: MachineKey::from(*machine_key),
         },
         commit: (*commit).to_owned(),
         kind,
@@ -402,7 +403,11 @@ mod tests {
     fn every_engine_partitions_by_machine_key() {
         // Every engine is machine-keyed: even the low-noise simulated counts differ
         // by microarchitecture, so a machine key always appears in the partition.
-        let set = DiscriminantSet::new(Engine::AllocTracker, "x86_64-pc-windows-msvc", "abc123");
+        let set = DiscriminantSet::new(
+            Engine::AllocTracker,
+            &TargetTriple::from("x86_64-pc-windows-msvc"),
+            &MachineKey::from("abc123"),
+        );
         assert_eq!(
             set.partition_prefix("folo"),
             "v1/folo/objects/alloc_tracker/x86_64-pc-windows-msvc/abc123"
@@ -413,7 +418,11 @@ mod tests {
     fn all_the_time_partitions_by_machine_key() {
         // Processor time depends on the machine, so `all_the_time` carries a
         // machine fingerprint.
-        let set = DiscriminantSet::new(Engine::AllTheTime, "x86_64-pc-windows-msvc", "abc123");
+        let set = DiscriminantSet::new(
+            Engine::AllTheTime,
+            &TargetTriple::from("x86_64-pc-windows-msvc"),
+            &MachineKey::from("abc123"),
+        );
         assert_eq!(
             set.partition_prefix("folo"),
             "v1/folo/objects/all_the_time/x86_64-pc-windows-msvc/abc123"
@@ -422,7 +431,11 @@ mod tests {
 
     #[test]
     fn machine_key_appears_in_partition() {
-        let set = DiscriminantSet::new(Engine::Criterion, "x86_64-pc-windows-msvc", "abc123");
+        let set = DiscriminantSet::new(
+            Engine::Criterion,
+            &TargetTriple::from("x86_64-pc-windows-msvc"),
+            &MachineKey::from("abc123"),
+        );
         assert_eq!(
             set.partition_prefix("folo"),
             "v1/folo/objects/criterion/x86_64-pc-windows-msvc/abc123"
@@ -431,13 +444,21 @@ mod tests {
 
     #[test]
     fn display_formats_engine_triple_and_machine_key() {
-        let set = DiscriminantSet::new(Engine::Criterion, "x86_64-pc-windows-msvc", "abc123");
+        let set = DiscriminantSet::new(
+            Engine::Criterion,
+            &TargetTriple::from("x86_64-pc-windows-msvc"),
+            &MachineKey::from("abc123"),
+        );
         assert_eq!(set.to_string(), "criterion/x86_64-pc-windows-msvc/abc123");
     }
 
     #[test]
     fn clean_key_is_named_by_commit() {
-        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", "abc123");
+        let set = DiscriminantSet::new(
+            Engine::Callgrind,
+            &TargetTriple::from("x86_64-unknown-linux-gnu"),
+            &MachineKey::from("abc123"),
+        );
         assert_eq!(
             set.clean_key("folo", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
             "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/abc123/\
@@ -447,7 +468,11 @@ mod tests {
 
     #[test]
     fn dirty_key_is_named_by_commit_and_observation_time() {
-        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", "abc123");
+        let set = DiscriminantSet::new(
+            Engine::Callgrind,
+            &TargetTriple::from("x86_64-unknown-linux-gnu"),
+            &MachineKey::from("abc123"),
+        );
         assert_eq!(
             set.dirty_key(
                 "folo",
@@ -461,7 +486,11 @@ mod tests {
 
     #[test]
     fn bless_key_targets_the_commit_directory() {
-        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", "m1");
+        let set = DiscriminantSet::new(
+            Engine::Callgrind,
+            &TargetTriple::from("x86_64-unknown-linux-gnu"),
+            &MachineKey::from("m1"),
+        );
         assert_eq!(
             set.bless_key("folo", "abc123", 1_700_000_000),
             "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/abc123/bless-1700000000.json"
@@ -470,7 +499,11 @@ mod tests {
 
     #[test]
     fn commit_prefix_enumerates_one_commit_directory() {
-        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", "m1");
+        let set = DiscriminantSet::new(
+            Engine::Callgrind,
+            &TargetTriple::from("x86_64-unknown-linux-gnu"),
+            &MachineKey::from("m1"),
+        );
         assert_eq!(
             set.commit_prefix("folo", "dead/beef"),
             "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/dead_beef/"
@@ -520,7 +553,11 @@ mod tests {
 
     #[test]
     fn new_sanitizes_partition_components() {
-        let set = DiscriminantSet::new(Engine::Criterion, "weird/triple", "machine/one");
+        let set = DiscriminantSet::new(
+            Engine::Criterion,
+            &TargetTriple::from("weird/triple"),
+            &MachineKey::from("machine/one"),
+        );
         assert_eq!(
             set.partition_prefix("team/app"),
             "v1/team_app/objects/criterion/weird_triple/machine_one"
@@ -531,7 +568,11 @@ mod tests {
 
     #[test]
     fn clean_key_sanitizes_the_commit() {
-        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", "m1");
+        let set = DiscriminantSet::new(
+            Engine::Callgrind,
+            &TargetTriple::from("x86_64-unknown-linux-gnu"),
+            &MachineKey::from("m1"),
+        );
         let object = set.clean_key("folo", "dead/beef");
         assert_eq!(
             object,
@@ -543,7 +584,11 @@ mod tests {
 
     #[test]
     fn dirty_key_sanitizes_the_commit() {
-        let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", "m1");
+        let set = DiscriminantSet::new(
+            Engine::Callgrind,
+            &TargetTriple::from("x86_64-unknown-linux-gnu"),
+            &MachineKey::from("m1"),
+        );
         let object = set.dirty_key("folo", "dead/beef", 1_700_000_000);
         assert_eq!(
             object,

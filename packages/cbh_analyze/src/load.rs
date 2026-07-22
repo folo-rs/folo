@@ -499,8 +499,8 @@ mod tests {
     fn run_index_counts_runs_and_reports_emptiness() {
         let set = DiscriminantSet {
             engine: Engine::Criterion,
-            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m1".to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            machine_key: "m1".into(),
         };
         let mut index = RunIndex::new();
         assert!(index.is_empty(), "a fresh index admits no runs");
@@ -530,13 +530,13 @@ mod tests {
         // summing the totals and the per-(set, commit) clean/dirty counts.
         let set = DiscriminantSet {
             engine: Engine::Criterion,
-            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m1".to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            machine_key: "m1".into(),
         };
         let other_set = DiscriminantSet {
             engine: Engine::Callgrind,
-            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m1".to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            machine_key: "m1".into(),
         };
 
         // The reference index folds every run in one pass.
@@ -585,13 +585,13 @@ mod tests {
     fn commit_span_spans_the_oldest_and_newest_analyzed_commit() {
         let set = DiscriminantSet {
             engine: Engine::Criterion,
-            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m1".to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            machine_key: "m1".into(),
         };
         let other_set = DiscriminantSet {
             engine: Engine::Callgrind,
-            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m1".to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            machine_key: "m1".into(),
         };
 
         let mut index = RunIndex::new();
@@ -615,8 +615,8 @@ mod tests {
     fn commit_span_collapses_to_a_single_commit() {
         let set = DiscriminantSet {
             engine: Engine::Criterion,
-            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m1".to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            machine_key: "m1".into(),
         };
         let mut index = RunIndex::new();
         index.record(&set, 0, "solo", false);

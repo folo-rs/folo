@@ -661,7 +661,7 @@ mod tests {
     fn auto() -> AutoFacets {
         AutoFacets {
             triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m1".to_owned(),
+            machine_key: "m1".into(),
         }
     }
 

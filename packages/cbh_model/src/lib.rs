@@ -29,6 +29,7 @@ mod bless;
 mod comparability;
 mod constants;
 mod context;
+mod identifiers;
 mod metric;
 mod run;
 
@@ -43,5 +44,6 @@ pub use context::{
     EnvironmentInfo, EnvironmentProvider, GitInfo, MachineInfo, RunContext, ToolchainInfo,
     detect_environment,
 };
+pub use identifiers::{MachineKey, TargetTriple};
 pub use metric::{Metric, MetricKind};
 pub use run::{BenchmarkResult, MetricList, Run, SCHEMA_VERSION};

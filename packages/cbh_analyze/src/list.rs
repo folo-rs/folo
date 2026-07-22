@@ -418,8 +418,8 @@ fn render_listing_json(listing: &Listing, hint: Option<&str>, warning: Option<&s
         .iter()
         .map(|set| JsonSet {
             engine: set.set.engine.as_str(),
-            target_triple: &set.set.target_triple,
-            machine_key: &set.set.machine_key,
+            target_triple: set.set.target_triple.as_str(),
+            machine_key: set.set.machine_key.as_str(),
             runs: set.runs,
             series: set.series,
             commits: set
@@ -477,8 +477,8 @@ fn render_discriminants(sets: &[DiscriminantSet], format: ReportFormat) -> Strin
                 .iter()
                 .map(|set| JsonDiscriminant {
                     engine: set.engine.as_str(),
-                    target_triple: &set.target_triple,
-                    machine_key: &set.machine_key,
+                    target_triple: set.target_triple.as_str(),
+                    machine_key: set.machine_key.as_str(),
                 })
                 .collect();
             serde_json::to_string_pretty(&list).expect("discriminant list serializes to JSON")
@@ -856,8 +856,8 @@ fn render_blessings_json(
         .iter()
         .map(|entry| JsonBlessing {
             engine: entry.set.engine.as_str(),
-            target_triple: &entry.set.target_triple,
-            machine_key: &entry.set.machine_key,
+            target_triple: entry.set.target_triple.as_str(),
+            machine_key: entry.set.machine_key.as_str(),
             benchmark: entry.benchmark.as_deref(),
             commit: &entry.commit,
             commit_time: entry.commit_time,
@@ -903,7 +903,7 @@ mod tests {
     fn auto() -> AutoFacets {
         AutoFacets {
             triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m1".to_owned(),
+            machine_key: "m1".into(),
         }
     }
 
@@ -1012,8 +1012,8 @@ mod tests {
     fn linux_set() -> DiscriminantSet {
         DiscriminantSet {
             engine: Engine::Callgrind,
-            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m1".to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            machine_key: "m1".into(),
         }
     }
 
@@ -1025,8 +1025,8 @@ mod tests {
     fn mac_set() -> DiscriminantSet {
         DiscriminantSet {
             engine: Engine::Criterion,
-            target_triple: "aarch64-apple-darwin".to_owned(),
-            machine_key: "m1".to_owned(),
+            target_triple: "aarch64-apple-darwin".into(),
+            machine_key: "m1".into(),
         }
     }
 

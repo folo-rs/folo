@@ -675,8 +675,8 @@ fn render_plan_json(plan: &Plan, dry_run: bool) -> String {
         .iter()
         .map(|set| JsonSet {
             engine: set.set.engine.as_str(),
-            target_triple: &set.set.target_triple,
-            machine_key: &set.set.machine_key,
+            target_triple: set.set.target_triple.as_str(),
+            machine_key: set.set.machine_key.as_str(),
             runs: set.runs,
             blessings: set.blessings,
             commits: set
@@ -735,7 +735,7 @@ mod tests {
     fn auto() -> AutoFacets {
         AutoFacets {
             triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m1".to_owned(),
+            machine_key: "m1".into(),
         }
     }
 
@@ -1583,8 +1583,8 @@ mod tests {
     fn build_plan_counts_runs_and_blessings_separately() {
         let set = DiscriminantSet {
             engine: Engine::Callgrind,
-            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m1".to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            machine_key: "m1".into(),
         };
         // Two clean runs (c0, c1) plus one blessing on c0: an asymmetric mix so a
         // run/blessing miscount diverges from the truth.

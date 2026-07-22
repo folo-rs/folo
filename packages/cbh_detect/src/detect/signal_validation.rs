@@ -296,8 +296,8 @@ fn curated_series(values: &[f64], kind: MetricKind) -> Series {
     Series {
         set: DiscriminantSet {
             engine: Engine::Callgrind,
-            target_triple: "t".to_owned(),
-            machine_key: "m1".to_owned(),
+            target_triple: "t".into(),
+            machine_key: "m1".into(),
         },
         id: BenchmarkId::new(nonempty!["signal".to_owned(), "case".to_owned()]),
         kind,

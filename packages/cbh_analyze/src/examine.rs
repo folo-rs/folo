@@ -463,8 +463,8 @@ fn render_pivot_json(pivot: &Pivot, hint: Option<&str>, warning: Option<&str>) -
         .iter()
         .map(|set| JsonSet {
             engine: set.set.engine.as_str(),
-            target_triple: &set.set.target_triple,
-            machine_key: &set.set.machine_key,
+            target_triple: set.set.target_triple.as_str(),
+            machine_key: set.set.machine_key.as_str(),
             points: set
                 .points
                 .iter()
@@ -537,7 +537,7 @@ mod tests {
     fn auto() -> AutoFacets {
         AutoFacets {
             triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m1".to_owned(),
+            machine_key: "m1".into(),
         }
     }
 

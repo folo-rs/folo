@@ -28,8 +28,8 @@ use jiff::Timestamp;
 use tick::Clock;
 
 use crate::model::{
-    BenchmarkResult, DiscriminantSet, Engine, EnvironmentInfo, GitInfo, MachineInfo, Run,
-    RunContext, ToolchainInfo, detect_environment, min_per_metric,
+    BenchmarkResult, DiscriminantSet, Engine, EnvironmentInfo, GitInfo, MachineInfo, MachineKey,
+    Run, RunContext, TargetTriple, ToolchainInfo, detect_environment, min_per_metric,
 };
 use crate::{CollectOptions, LocalStorageSelection, RunError, RunOutcome, finish_with_flush};
 
@@ -226,7 +226,7 @@ pub(crate) struct SharedContext {
     /// Effective target triple the run is keyed under and recorded against — the
     /// host triple `rustc` reports for `collect`, or an `import --target-triple`
     /// override. It feeds both the partition key and `ToolchainInfo.target_triple`.
-    pub(crate) target_triple: String,
+    pub(crate) target_triple: TargetTriple,
     /// Host hardware profile, fingerprinted into the machine key.
     pub(crate) hardware: HardwareProfile,
 }
@@ -246,7 +246,7 @@ where
     let rustc = probe.toolchain().await?;
     Ok(SharedContext {
         git: probe.git().await?,
-        target_triple: rustc.host.clone().unwrap_or_default(),
+        target_triple: TargetTriple::from(rustc.host.clone().unwrap_or_default()),
         rustc,
         env: detect_environment(env),
         hardware: probe.hardware().await,
@@ -501,7 +501,7 @@ where
     let effective_machine_key = resolve_machine_key(params.machine_key, &shared.hardware);
     store.reporter.announce(&partition_selection_summary(
         operation,
-        &shared.target_triple,
+        shared.target_triple.as_str(),
         triple_note,
         &effective_machine_key,
         params.machine_key.is_some(),
@@ -801,7 +801,7 @@ where
     // Every engine partitions its history by a machine key so only equivalent
     // machines share a series. An explicit `--machine-key` overrides the computed
     // hardware fingerprint.
-    let machine_key = resolve_machine_key(params.machine_key, &shared.hardware);
+    let machine_key = MachineKey::from(resolve_machine_key(params.machine_key, &shared.hardware));
     let key = DiscriminantSet::new(engine, target_triple, &machine_key);
     // History is organized by commit, so the full commit ID names the directory
     // (`analyze` resolves which commits to read from git topology). A clean run is

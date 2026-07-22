@@ -319,8 +319,8 @@ mod tests {
     fn set(machine: &str) -> DiscriminantSet {
         DiscriminantSet {
             engine: Engine::Callgrind,
-            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: machine.to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            machine_key: machine.into(),
         }
     }
 
@@ -783,14 +783,14 @@ mod tests {
         assert!(!is_sibling_set(&set("m1"), &target), "same machine key");
         let other_engine = DiscriminantSet {
             engine: Engine::Criterion,
-            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m2".to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            machine_key: "m2".into(),
         };
         assert!(!is_sibling_set(&other_engine, &target), "different engine");
         let other_triple = DiscriminantSet {
             engine: Engine::Callgrind,
-            target_triple: "aarch64-apple-darwin".to_owned(),
-            machine_key: "m2".to_owned(),
+            target_triple: "aarch64-apple-darwin".into(),
+            machine_key: "m2".into(),
         };
         assert!(!is_sibling_set(&other_triple, &target), "different triple");
     }

@@ -44,7 +44,9 @@
               behavior is intentional and cannot misbehave for the sizes used here"
 )]
 
-use cbh_model::{BenchmarkId, DiscriminantSet, Engine, Metric, MetricKind};
+use cbh_model::{
+    BenchmarkId, DiscriminantSet, Engine, MachineKey, Metric, MetricKind, TargetTriple,
+};
 use jiff::Timestamp;
 use nonempty::nonempty;
 
@@ -153,7 +155,11 @@ pub(crate) fn discriminant_sets() -> Vec<DiscriminantSet> {
             if engine == Engine::Callgrind && !targets_linux(triple) {
                 continue;
             }
-            sets.push(DiscriminantSet::new(engine, triple, MACHINE_KEY));
+            sets.push(DiscriminantSet::new(
+                engine,
+                &TargetTriple::from(triple),
+                &MachineKey::from(MACHINE_KEY),
+            ));
         }
     }
     sets
@@ -422,7 +428,7 @@ mod tests {
         for set in &sets {
             if set.engine == Engine::Callgrind {
                 assert!(
-                    targets_linux(&set.target_triple),
+                    targets_linux(set.target_triple.as_str()),
                     "callgrind set on non-Linux triple {}",
                     set.target_triple
                 );

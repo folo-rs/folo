@@ -892,8 +892,8 @@ fn render_json(input: &ReportInput<'_>) -> String {
         .iter()
         .map(|summary| JsonSet {
             engine: summary.set.engine.as_str(),
-            target_triple: &summary.set.target_triple,
-            machine_key: &summary.set.machine_key,
+            target_triple: summary.set.target_triple.as_str(),
+            machine_key: summary.set.machine_key.as_str(),
             runs: summary.runs,
             series: summary.series,
             regressions: count_direction(&summary.findings, Direction::Regression),
@@ -1027,8 +1027,8 @@ mod tests {
     fn discriminant_set() -> DiscriminantSet {
         DiscriminantSet {
             engine: Engine::Callgrind,
-            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m1".to_owned(),
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            machine_key: "m1".into(),
         }
     }
 
@@ -1259,8 +1259,8 @@ mod tests {
         let windows = Finding {
             set: DiscriminantSet {
                 engine: Engine::Criterion,
-                target_triple: "x86_64-pc-windows-msvc".to_owned(),
-                machine_key: "m1".to_owned(),
+                target_triple: "x86_64-pc-windows-msvc".into(),
+                machine_key: "m1".into(),
             },
             ..named_regression("shared", 0.40)
         };
@@ -2146,8 +2146,8 @@ mod tests {
     fn darwin_set() -> DiscriminantSet {
         DiscriminantSet {
             engine: Engine::Callgrind,
-            target_triple: "aarch64-apple-darwin".to_owned(),
-            machine_key: "m2".to_owned(),
+            target_triple: "aarch64-apple-darwin".into(),
+            machine_key: "m2".into(),
         }
     }
 
