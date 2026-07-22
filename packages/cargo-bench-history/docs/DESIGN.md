@@ -649,9 +649,8 @@ per discriminant set, the ordered points with full-precision values and each com
 title — the 50-character title truncation is a readability convenience of the text and
 Markdown tables, not of the data. The text and Markdown renderings **lead each set with the
 same small line chart `analyze` draws**, reusing its renderer, so a maintainer sees the shape
-of the series before reading the points it pivots; because `examine` makes no
-regression/improvement judgment the line is **neutral (uncolored)** rather than
-direction-colored, and it is drawn only when a set has at least two points. The JSON form
+of the series before reading the points it pivots; the line is drawn **uncolored**, and it is
+drawn only when a set has at least two points. The JSON form
 carries no chart (a charting concern the human reports draw from internally, not data a
 consumer reconstructs).
 
@@ -868,7 +867,7 @@ via the base-tip dirty exception.
 
 History mode distinguishes a change that is **still in effect** from one that has **already
 been addressed**, so a long history does not keep re-flagging events a reviewer has handled.
-Every history-mode finding therefore carries an active flag and an active-from boundary.
+Every history-mode finding therefore carries an active flag distinguishing the two.
 
 * **Resolved spikes** — when a level rose and later returned to its prior baseline, the
   current state matches the baseline and there is nothing to act on. Such a finding is
@@ -883,9 +882,9 @@ Every history-mode finding therefore carries an active flag and an active-from b
   construction. A re-baselined finding records the blessing's commit and time for
   provenance.
 
-The history-mode chart greys the pre-active prefix and draws the active window in the
-finding's direction colour, so the live period a finding is about is visually separated
-from the inactive context kept only for continuity. Branch mode charts differently: it
+The history-mode chart plots the whole series, so the long-range trend the finding is about
+stays visible alongside the earlier context kept for continuity. Branch mode charts
+differently: it
 judges only the **tip commit**, so it plots the detector's comparison baseline followed by
 the recent tail of the series ending at the tip rather than the whole history. Charting
 the full, possibly months-long series would resample it down to the fixed chart width and
@@ -899,11 +898,11 @@ layout is canonical. Each report names the **analyzed tip commit** — the commi
 of history the findings describe — annotated `+ uncommitted changes` when the working tree
 was dirty, so a reader (or the auto-filed regression issue) can tie the report to an exact
 commit. Text goes to stdout as one paragraph per finding — the benchmark id on its own
-line as a chapter title, then a direction-coloured headline pairing the relative-change
+line as a chapter title, then a direction-colored headline pairing the relative-change
 percent with the metric and its confidence, a dimmed detail line, and a small line chart
 of the series — the whole series in history mode, only the bounded baseline-and-tail
-comparison in branch mode — with colour enabled only
-when stdout is a terminal and not disabled by environment. The text and Markdown reports
+comparison in branch mode — the chart itself always uncolored, with headline color
+enabled only when stdout is a terminal and not disabled by environment. The text and Markdown reports
 group findings under a per-set header, which also states the **facet-filter flags** that
 reproduce exactly that partition, so a reader who spots a change can drill into it without
 reconstructing the query by hand. Markdown is that data with

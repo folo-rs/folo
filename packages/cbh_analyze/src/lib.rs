@@ -51,7 +51,7 @@ mod window;
 
 pub use bless::{bless, unbless};
 pub(crate) use cbh_detect::{Series, SeriesFilter, apply_blessings};
-pub(crate) use cbh_render::{ChartColor, ReportFormat, chart, format_value};
+pub(crate) use cbh_render::{ReportFormat, chart, format_value};
 pub(crate) use dataset::{empty_history_hint, select_dataset};
 pub use error::AnalyzeError;
 pub use examine::execute as examine;

@@ -282,10 +282,6 @@ pub struct Finding {
     /// since recovered (history mode only — branch always looks at the latest
     /// state, so its findings are always active).
     pub active: bool,
-    /// Index into `series` at which the active (post-blessing) window begins; points
-    /// before it are pre-blessing history, retained for charting but excluded from
-    /// detection. `0` when the series is unblessed.
-    pub active_from: usize,
     /// Abbreviated commit of the blessing that re-baselined this series, if any.
     pub blessed_at: Option<String>,
     /// Effective (committer) time of the blessed commit, RFC 3339, if blessed.
@@ -640,7 +636,6 @@ fn evaluate_change_point(
             commit,
             flipped_at: None,
             active: true,
-            active_from: 0,
             blessed_at: None,
             blessed_commit_time: None,
             series: Vec::new(),
@@ -717,7 +712,6 @@ fn evaluate_drift(series: &Series, values: &[f64], config: &AnalysisConfig) -> O
             commit,
             flipped_at: None,
             active: true,
-            active_from: 0,
             blessed_at: None,
             blessed_commit_time: None,
             series: Vec::new(),
@@ -882,7 +876,6 @@ fn compare_samples(
             commit,
             flipped_at: None,
             active: true,
-            active_from: 0,
             blessed_at: None,
             blessed_commit_time: None,
             series: Vec::new(),
@@ -954,14 +947,13 @@ fn active_view(series: &Series) -> Series {
     }
 }
 
-/// Records a history-mode finding's re-baseline provenance, so the chart can grey
-/// the pre-blessing prefix and the report can name the blessing.
+/// Records a history-mode finding's re-baseline provenance, so the report can name
+/// the blessing.
 ///
 /// The finding's charting points ([`Finding::series`]) are filled in later, when
 /// the candidate survives filtering (see [`find_changes_spawned`]); a dropped candidate
 /// never builds them.
 fn stamp_history(finding: &mut Finding, series: &Series) {
-    finding.active_from = series.active_start;
     if let Some(blessing) = &series.blessing {
         finding.blessed_at = Some(short_commit(&blessing.commit));
         finding.blessed_commit_time = blessing.commit_time.map(|time| time.to_string());
@@ -1067,7 +1059,6 @@ fn evaluate_resolved_spike(
             commit: points.get(rise).and_then(owned_commit),
             flipped_at: points.get(recovery).and_then(owned_commit),
             active: false,
-            active_from: 0,
             blessed_at: None,
             blessed_commit_time: None,
             series: Vec::new(),
@@ -1407,7 +1398,6 @@ mod tests {
                 commit: None,
                 flipped_at: None,
                 active: true,
-                active_from: 0,
                 blessed_at: None,
                 blessed_commit_time: None,
                 series: Vec::new(),
@@ -2374,18 +2364,12 @@ mod tests {
         assert_eq!(finding.latest, 160.0);
         // The full nine-point series is restored for charting...
         assert_eq!(finding.series.len(), 9);
-        // ...and the active window plus blessing provenance are recorded.
-        assert_eq!(finding.active_from, 3);
+        // ...and the blessing provenance is recorded.
         assert_eq!(finding.blessed_at.as_deref(), Some("abcdef012345"));
         assert_eq!(
             finding.blessed_commit_time.as_deref(),
             Some("1970-01-01T00:00:03Z")
         );
-        // An unblessed finding has a zero active window.
-        let unblessed = only(changes(&[series_of(&[
-            10.0, 10.0, 10.0, 10.0, 20.0, 20.0, 20.0, 20.0,
-        ])]));
-        assert_eq!(unblessed.active_from, 0);
     }
 
     #[test]
