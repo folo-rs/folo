@@ -1,14 +1,16 @@
-//! String-newtype identifiers for the two opaque, sanitized storage-key segments
-//! that would otherwise be indistinguishable `String`s: the [`TargetTriple`] a run
-//! was measured on and the [`MachineKey`] its history is partitioned by.
+//! String-newtype identifiers for two opaque text values that would otherwise be
+//! indistinguishable `String`s: the [`TargetTriple`] a run was measured on and the
+//! [`MachineKey`] its history is partitioned by. Each is sanitized when it becomes
+//! a path segment in a storage key, but also appears in raw form elsewhere — most
+//! notably [`TargetTriple`], which holds the value `rustc` reported in a
+//! [`ToolchainInfo`](crate::ToolchainInfo).
 //!
-//! Both are arbitrary text sitting side by side as path segments in a storage key,
-//! so as bare strings they are trivially transposed where they are constructed or
-//! passed together — most visibly in
-//! [`DiscriminantSet::new`](crate::DiscriminantSet::new) and the flattened JSON
-//! reports. Distinct types make that transposition a compile error while
-//! preserving the stored wire format (`#[serde(transparent)]`) and the string
-//! ordering a [`DiscriminantSet`](crate::DiscriminantSet) sorts by.
+//! As storage-key segments the two sit side by side, so as bare strings they are
+//! trivially transposed where they are constructed or passed together — most
+//! visibly in [`DiscriminantSet::new`](crate::DiscriminantSet::new) and the
+//! flattened JSON reports. Distinct types make that transposition a compile error
+//! while preserving the stored wire format (`#[serde(transparent)]`) and the
+//! string ordering a [`DiscriminantSet`](crate::DiscriminantSet) sorts by.
 
 use std::fmt;
 
