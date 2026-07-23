@@ -15,7 +15,9 @@
 
 use std::hint::black_box;
 
-use cbh_model::{BenchmarkId, DiscriminantSet, Engine, parse_key, sanitize_segment};
+use cbh_model::{
+    BenchmarkId, DiscriminantSet, Engine, MachineKey, TargetTriple, parse_key, sanitize_segment,
+};
 use criterion::{Criterion, criterion_group, criterion_main};
 use nonempty::nonempty;
 
@@ -45,7 +47,11 @@ fn storage_key(c: &mut Criterion) {
         b.iter(|| black_box(sanitize_segment(black_box("x86_64-unknown-linux-gnu"))));
     });
 
-    let set = DiscriminantSet::new(Engine::Callgrind, "x86_64-unknown-linux-gnu", "m1");
+    let set = DiscriminantSet::new(
+        Engine::Callgrind,
+        &TargetTriple::from("x86_64-unknown-linux-gnu"),
+        &MachineKey::from("m1"),
+    );
     group.bench_function("clean_key", |b| {
         b.iter(|| {
             black_box(black_box(&set).clean_key(

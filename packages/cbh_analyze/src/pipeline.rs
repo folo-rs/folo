@@ -345,7 +345,7 @@ where
         project: project_id,
         tip_commit: &dataset.tip_commit,
         tip_dirty: dataset.tip_dirty,
-        mode: dataset.mode.as_str(),
+        mode: dataset.mode,
         notable,
         runs: dataset.run_index.total(),
         series: series.len(),
@@ -661,7 +661,7 @@ mod tests {
     fn auto() -> AutoFacets {
         AutoFacets {
             triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m1".to_owned(),
+            machine_key: "m1".into(),
         }
     }
 

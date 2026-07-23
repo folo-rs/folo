@@ -674,9 +674,9 @@ fn render_plan_json(plan: &Plan, dry_run: bool) -> String {
         .sets
         .iter()
         .map(|set| JsonSet {
-            engine: &set.set.engine,
-            target_triple: &set.set.target_triple,
-            machine_key: &set.set.machine_key,
+            engine: set.set.engine.as_str(),
+            target_triple: set.set.target_triple.as_str(),
+            machine_key: set.set.machine_key.as_str(),
             runs: set.runs,
             blessings: set.blessings,
             commits: set
@@ -717,7 +717,7 @@ mod tests {
     use cbh_diag::RecordingReporter;
     use cbh_git::FakeGitHistory;
     use cbh_model::{
-        BenchmarkId, BenchmarkResult, EnvironmentInfo, GitInfo, Metric, MetricKind, Run,
+        BenchmarkId, BenchmarkResult, Engine, EnvironmentInfo, GitInfo, Metric, MetricKind, Run,
         RunContext, ToolchainInfo,
     };
     use cbh_storage::{MemoryStorage, Storage};
@@ -735,7 +735,7 @@ mod tests {
     fn auto() -> AutoFacets {
         AutoFacets {
             triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m1".to_owned(),
+            machine_key: "m1".into(),
         }
     }
 
@@ -1582,9 +1582,9 @@ mod tests {
     #[test]
     fn build_plan_counts_runs_and_blessings_separately() {
         let set = DiscriminantSet {
-            engine: "callgrind".to_owned(),
-            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m1".to_owned(),
+            engine: Engine::Callgrind,
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            machine_key: "m1".into(),
         };
         // Two clean runs (c0, c1) plus one blessing on c0: an asymmetric mix so a
         // run/blessing miscount diverges from the truth.

@@ -29,17 +29,21 @@ mod bless;
 mod comparability;
 mod constants;
 mod context;
+mod identifiers;
 mod metric;
 mod run;
 
 pub use aggregate::{AggregateError, Combined, Selection, min_per_metric};
 pub use benchmark_id::{BenchmarkId, BenchmarkIdPrefix, EmptyBenchmarkIdPrefix};
 pub use bless::{BLESS_SCHEMA_VERSION, BlessingRecord};
-pub use comparability::{DiscriminantSet, Engine, StorageKey, parse_key, sanitize_segment};
+pub use comparability::{
+    DiscriminantSet, Engine, ObjectKind, StorageKey, parse_key, sanitize_segment,
+};
 pub use constants::{OBJECTS_SEGMENT, STORAGE_VERSION};
 pub use context::{
     EnvironmentInfo, EnvironmentProvider, GitInfo, MachineInfo, RunContext, ToolchainInfo,
     detect_environment,
 };
+pub use identifiers::{MachineKey, TargetTriple};
 pub use metric::{Metric, MetricKind};
 pub use run::{BenchmarkResult, MetricList, Run, SCHEMA_VERSION};

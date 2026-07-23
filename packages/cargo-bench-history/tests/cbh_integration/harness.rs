@@ -13,7 +13,7 @@ pub(crate) use cargo_bench_history::{
     default_template, run, run_with_overrides,
 };
 use cbh_codec as codec;
-use cbh_model::{DiscriminantSet, Engine};
+use cbh_model::{DiscriminantSet, Engine, MachineKey, TargetTriple};
 pub(crate) use jiff::Timestamp;
 use nonempty::nonempty;
 pub(crate) use serial_test::serial;
@@ -1385,7 +1385,12 @@ const SEED_PROJECT: &str = "testproj";
 /// code path `run` writes under — so a seed helper cannot drift from the
 /// production storage layout by hand-formatting a key string.
 fn seed_clean_key(engine: Engine, triple: &str, machine: &str, commit: &str) -> String {
-    DiscriminantSet::new(engine, triple, machine).clean_key(SEED_PROJECT, commit)
+    DiscriminantSet::new(
+        engine,
+        &TargetTriple::from(triple),
+        &MachineKey::from(machine),
+    )
+    .clean_key(SEED_PROJECT, commit)
 }
 
 /// Builds a dirty-snapshot storage key through the model's key builder, keyed by
@@ -1397,7 +1402,12 @@ fn seed_dirty_key(
     commit: &str,
     observation_unix: i64,
 ) -> String {
-    DiscriminantSet::new(engine, triple, machine).dirty_key(SEED_PROJECT, commit, observation_unix)
+    DiscriminantSet::new(
+        engine,
+        &TargetTriple::from(triple),
+        &MachineKey::from(machine),
+    )
+    .dirty_key(SEED_PROJECT, commit, observation_unix)
 }
 
 /// Clears `CARGO_TARGET_DIR` from the process environment for its lifetime,

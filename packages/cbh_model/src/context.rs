@@ -11,6 +11,8 @@
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use super::identifiers::TargetTriple;
+
 /// Metadata attached to every stored run.
 ///
 /// A run's timeline position comes from git topology (keyed by the commit ID in
@@ -136,7 +138,7 @@ pub struct ToolchainInfo {
     /// Target triple the benchmark binary ran on. The tool always runs on the
     /// same OS it benchmarks (under WSL, the Linux side), so this is the host
     /// triple `rustc` reports.
-    pub target_triple: String,
+    pub target_triple: TargetTriple,
     /// `rustc` version string, if detected.
     pub rustc_version: Option<String>,
 }

@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::num::NonZero;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use cbh_detect::{Direction, Finding, FindingMethod, short_commit};
+use cbh_detect::{AnalysisMode, Direction, Finding, FindingMethod, short_commit};
 use cbh_model::{BenchmarkId, DiscriminantSet};
 use colored::Colorize;
 use rasciigraph::{Config, plot};
@@ -131,8 +131,8 @@ pub struct ReportInput<'a> {
     /// checkout differs from the committed tip. False for a clean tree (the CI
     /// collection case).
     pub tip_dirty: bool,
-    /// The analysis mode the report was produced in (`history`/`branch`).
-    pub mode: &'a str,
+    /// The analysis mode the report was produced in.
+    pub mode: AnalysisMode,
     /// Whether any finding survived — the at-a-glance signal a downstream
     /// automation reads to decide whether the report is worth surfacing.
     pub notable: bool,
@@ -278,8 +278,9 @@ struct JsonReport<'a> {
     tip_commit: &'a str,
     /// Whether the working tree carried uncommitted changes when the analysis ran.
     tip_dirty: bool,
-    /// The analysis mode (`history`/`branch`).
-    mode: &'a str,
+    /// The analysis mode. Serializes to its stable lowercase wire name
+    /// (`history`/`branch`).
+    mode: AnalysisMode,
     /// Whether any finding survived — the downstream automation signal.
     notable: bool,
     /// Total stored runs loaded.
@@ -444,7 +445,11 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
     }
 
     let mut lines = vec![
-        format!("Analyzed project {} ({} mode)", input.project, input.mode),
+        format!(
+            "Analyzed project {} ({} mode)",
+            input.project,
+            input.mode.as_str()
+        ),
         format!("  commit: {}", tip_label(input.tip_commit, input.tip_dirty)),
         format!("  {}", header.join("  ")),
     ];
@@ -604,12 +609,12 @@ enum ChartScope {
     BranchComparison,
 }
 
-/// Chooses the [`ChartScope`] for an analysis `mode` string (`history`/`branch`).
+/// Chooses the [`ChartScope`] for an analysis `mode`.
 ///
-/// Only `branch` uses the bounded comparison; every other value (history, and any
-/// future mode) charts the full series, the information-preserving default.
-fn chart_scope(mode: &str) -> ChartScope {
-    if mode == "branch" {
+/// Only [`AnalysisMode::Branch`] uses the bounded comparison; history charts the
+/// full series, the information-preserving default.
+fn chart_scope(mode: AnalysisMode) -> ChartScope {
+    if mode == AnalysisMode::Branch {
         ChartScope::BranchComparison
     } else {
         ChartScope::FullHistory
@@ -682,7 +687,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
         format!("# Benchmark history analysis: {}", input.project),
         String::new(),
         format!("- Commit: {}", tip_label(input.tip_commit, input.tip_dirty)),
-        format!("- Mode: {}", input.mode),
+        format!("- Mode: {}", input.mode.as_str()),
         format!(
             "- Runs analyzed: {}",
             runs_with_span(input.runs, input.commit_span)
@@ -760,7 +765,7 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
         format!("# Benchmark history analysis: {}", input.project),
         String::new(),
         format!("- Commit: {}", tip_label(input.tip_commit, input.tip_dirty)),
-        format!("- Mode: {}", input.mode),
+        format!("- Mode: {}", input.mode.as_str()),
         format!(
             "- Runs analyzed: {}",
             runs_with_span(input.runs, input.commit_span)
@@ -891,9 +896,9 @@ fn render_json(input: &ReportInput<'_>) -> String {
         .sets
         .iter()
         .map(|summary| JsonSet {
-            engine: &summary.set.engine,
-            target_triple: &summary.set.target_triple,
-            machine_key: &summary.set.machine_key,
+            engine: summary.set.engine.as_str(),
+            target_triple: summary.set.target_triple.as_str(),
+            machine_key: summary.set.machine_key.as_str(),
             runs: summary.runs,
             series: summary.series,
             regressions: count_direction(&summary.findings, Direction::Regression),
@@ -1019,16 +1024,16 @@ mod tests {
     use std::thread;
 
     use cbh_detect::SeriesValue;
-    use cbh_model::MetricKind;
+    use cbh_model::{Engine, MetricKind};
     use nonempty::nonempty;
 
     use super::*;
 
     fn discriminant_set() -> DiscriminantSet {
         DiscriminantSet {
-            engine: "callgrind".to_owned(),
-            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m1".to_owned(),
+            engine: Engine::Callgrind,
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            machine_key: "m1".into(),
         }
     }
 
@@ -1076,7 +1081,7 @@ mod tests {
             project,
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
-            mode: "history",
+            mode: AnalysisMode::History,
             notable: !findings.is_empty(),
             runs: findings.len().saturating_add(3),
             series: findings.len().max(1),
@@ -1098,7 +1103,7 @@ mod tests {
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
-            mode: "history",
+            mode: AnalysisMode::History,
             notable: !findings.is_empty(),
             runs: findings.len().saturating_add(3),
             series: findings.len().max(1),
@@ -1258,9 +1263,9 @@ mod tests {
         let linux = named_regression("shared", 0.50);
         let windows = Finding {
             set: DiscriminantSet {
-                engine: "criterion".to_owned(),
-                target_triple: "x86_64-pc-windows-msvc".to_owned(),
-                machine_key: "m1".to_owned(),
+                engine: Engine::Criterion,
+                target_triple: "x86_64-pc-windows-msvc".into(),
+                machine_key: "m1".into(),
             },
             ..named_regression("shared", 0.40)
         };
@@ -1329,7 +1334,7 @@ mod tests {
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
-            mode: "history",
+            mode: AnalysisMode::History,
             notable: false,
             runs: 3,
             series: 1,
@@ -1353,7 +1358,7 @@ mod tests {
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
-            mode: "history",
+            mode: AnalysisMode::History,
             notable: false,
             runs: 0,
             series: 0,
@@ -1425,7 +1430,7 @@ mod tests {
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
-            mode: "history",
+            mode: AnalysisMode::History,
             notable: true,
             runs: 99,
             series: 88,
@@ -1620,7 +1625,7 @@ mod tests {
         let findings = vec![regression_with_series()];
         let mut summaries = Vec::new();
         let mut input = single_set_input("folo", &set, &findings, &mut summaries);
-        input.mode = "history";
+        input.mode = AnalysisMode::History;
         let report = render(&input, ReportFormat::Markdown, false);
         // The chart sits inside a fenced `text` block and carries no ANSI escapes.
         assert!(report.contains("```text"), "{report}");
@@ -1634,7 +1639,7 @@ mod tests {
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
-            mode: "history",
+            mode: AnalysisMode::History,
             notable: false,
             runs: 0,
             series: 0,
@@ -1657,7 +1662,7 @@ mod tests {
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
-            mode: "history",
+            mode: AnalysisMode::History,
             notable: false,
             runs: 0,
             series: 0,
@@ -1705,7 +1710,7 @@ mod tests {
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
-            mode: "history",
+            mode: AnalysisMode::History,
             notable: false,
             runs: 1,
             series: 1,
@@ -1731,7 +1736,7 @@ mod tests {
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
-            mode: "history",
+            mode: AnalysisMode::History,
             notable: false,
             runs: 0,
             series: 0,
@@ -1807,7 +1812,7 @@ mod tests {
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: true,
-            mode: "history",
+            mode: AnalysisMode::History,
             notable: false,
             runs: 1,
             series: 1,
@@ -1925,7 +1930,7 @@ mod tests {
         let findings = vec![regression_with_series()];
         let mut summaries = Vec::new();
         let mut input = single_set_input("folo", &set, &findings, &mut summaries);
-        input.mode = "history";
+        input.mode = AnalysisMode::History;
         let text = render(&input, ReportFormat::Text, false);
         // The rasciigraph axis marker proves a chart was drawn under the finding.
         assert!(text.contains('┤') || text.contains('┼'), "{text}");
@@ -1937,7 +1942,7 @@ mod tests {
         let findings = vec![regression_with_series()];
         let mut summaries = Vec::new();
         let mut input = single_set_input("folo", &set, &findings, &mut summaries);
-        input.mode = "branch";
+        input.mode = AnalysisMode::Branch;
         let text = render(&input, ReportFormat::Text, false);
         // Branch mode now charts too (it previously did not); the axis marker proves it.
         assert!(text.contains('┤') || text.contains('┼'), "{text}");
@@ -1957,7 +1962,7 @@ mod tests {
         let findings = vec![regression_with_long_series()];
         let mut summaries = Vec::new();
         let mut input = single_set_input("folo", &set, &findings, &mut summaries);
-        input.mode = "branch";
+        input.mode = AnalysisMode::Branch;
         let text = render(&input, ReportFormat::Text, false);
 
         // A chart is drawn.
@@ -1988,7 +1993,7 @@ mod tests {
         let findings = vec![regression_with_long_series()];
         let mut summaries = Vec::new();
         let mut input = single_set_input("folo", &set, &findings, &mut summaries);
-        input.mode = "history";
+        input.mode = AnalysisMode::History;
         let text = render(&input, ReportFormat::Text, false);
 
         assert!(text.contains('┤') || text.contains('┼'), "{text}");
@@ -2004,7 +2009,7 @@ mod tests {
         let findings = vec![regression_with_series()];
         let mut summaries = Vec::new();
         let mut input = single_set_input("folo", &set, &findings, &mut summaries);
-        input.mode = "branch";
+        input.mode = AnalysisMode::Branch;
         let report = render(&input, ReportFormat::Markdown, false);
         // The branch chart sits inside the same fenced `text` block as a history chart.
         assert!(report.contains("```text"), "{report}");
@@ -2019,7 +2024,7 @@ mod tests {
         // `branch_mode_text_charts_the_bounded_comparison_including_the_tip`.
         let findings = vec![regression_with_long_series()];
         let mut input = flat_input(&findings);
-        input.mode = "branch";
+        input.mode = AnalysisMode::Branch;
         let report = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
 
         assert!(report.contains("```text"), "{report}");
@@ -2145,9 +2150,9 @@ mod tests {
 
     fn darwin_set() -> DiscriminantSet {
         DiscriminantSet {
-            engine: "callgrind".to_owned(),
-            target_triple: "aarch64-apple-darwin".to_owned(),
-            machine_key: "m2".to_owned(),
+            engine: Engine::Callgrind,
+            target_triple: "aarch64-apple-darwin".into(),
+            machine_key: "m2".into(),
         }
     }
 
@@ -2176,7 +2181,7 @@ mod tests {
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
-            mode: "history",
+            mode: AnalysisMode::History,
             notable: true,
             runs: 10,
             series: 2,
@@ -2222,7 +2227,7 @@ mod tests {
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
-            mode: "history",
+            mode: AnalysisMode::History,
             notable: true,
             runs: 10,
             series: 2,
@@ -2270,7 +2275,7 @@ mod tests {
             project: "folo",
             tip_commit: "1234567890abcdef1234",
             tip_dirty: false,
-            mode: "branch",
+            mode: AnalysisMode::Branch,
             notable: !findings.is_empty(),
             runs: findings.len().saturating_add(3),
             series: findings.len().max(1),

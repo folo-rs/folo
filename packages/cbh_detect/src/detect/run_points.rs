@@ -192,7 +192,7 @@ mod tests {
             },
             EnvironmentInfo::default(),
             ToolchainInfo {
-                target_triple: "x86_64-unknown-linux-gnu".to_owned(),
+                target_triple: "x86_64-unknown-linux-gnu".into(),
                 rustc_version: Some("1.80.0".to_owned()),
             },
             "9.9.9".to_owned(),

@@ -1284,7 +1284,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use cbh_model::{DiscriminantSet, MetricKind};
+    use cbh_model::{DiscriminantSet, Engine, MetricKind};
     use jiff::Timestamp;
     use nonempty::nonempty;
 
@@ -1327,9 +1327,9 @@ mod tests {
             .collect();
         Series {
             set: DiscriminantSet {
-                engine: "callgrind".to_owned(),
-                target_triple: "t".to_owned(),
-                machine_key: "m1".to_owned(),
+                engine: Engine::Callgrind,
+                target_triple: "t".into(),
+                machine_key: "m1".into(),
             },
             id: BenchmarkId::new(nonempty!["group".to_owned(), "case".to_owned()]),
             kind,
@@ -1382,9 +1382,9 @@ mod tests {
         Candidate {
             finding: Finding {
                 set: DiscriminantSet {
-                    engine: "callgrind".to_owned(),
-                    target_triple: "t".to_owned(),
-                    machine_key: "m1".to_owned(),
+                    engine: Engine::Callgrind,
+                    target_triple: "t".into(),
+                    machine_key: "m1".into(),
                 },
                 id: BenchmarkId::new(nonempty!["group".to_owned(), "case".to_owned()]),
                 kind: MetricKind::InstructionCount,
@@ -2110,9 +2110,9 @@ mod tests {
             .collect();
         Series {
             set: DiscriminantSet {
-                engine: "callgrind".to_owned(),
-                target_triple: "t".to_owned(),
-                machine_key: "m1".to_owned(),
+                engine: Engine::Callgrind,
+                target_triple: "t".into(),
+                machine_key: "m1".into(),
             },
             id: BenchmarkId::new(nonempty!["group".to_owned(), "case".to_owned()]),
             kind: MetricKind::InstructionCount,

@@ -417,9 +417,9 @@ fn render_listing_json(listing: &Listing, hint: Option<&str>, warning: Option<&s
         .sets
         .iter()
         .map(|set| JsonSet {
-            engine: &set.set.engine,
-            target_triple: &set.set.target_triple,
-            machine_key: &set.set.machine_key,
+            engine: set.set.engine.as_str(),
+            target_triple: set.set.target_triple.as_str(),
+            machine_key: set.set.machine_key.as_str(),
             runs: set.runs,
             series: set.series,
             commits: set
@@ -476,9 +476,9 @@ fn render_discriminants(sets: &[DiscriminantSet], format: ReportFormat) -> Strin
             let list: Vec<JsonDiscriminant<'_>> = sets
                 .iter()
                 .map(|set| JsonDiscriminant {
-                    engine: &set.engine,
-                    target_triple: &set.target_triple,
-                    machine_key: &set.machine_key,
+                    engine: set.engine.as_str(),
+                    target_triple: set.target_triple.as_str(),
+                    machine_key: set.machine_key.as_str(),
                 })
                 .collect();
             serde_json::to_string_pretty(&list).expect("discriminant list serializes to JSON")
@@ -855,9 +855,9 @@ fn render_blessings_json(
     let blessings: Vec<JsonBlessing<'_>> = entries
         .iter()
         .map(|entry| JsonBlessing {
-            engine: &entry.set.engine,
-            target_triple: &entry.set.target_triple,
-            machine_key: &entry.set.machine_key,
+            engine: entry.set.engine.as_str(),
+            target_triple: entry.set.target_triple.as_str(),
+            machine_key: entry.set.machine_key.as_str(),
             benchmark: entry.benchmark.as_deref(),
             commit: &entry.commit,
             commit_time: entry.commit_time,
@@ -885,7 +885,7 @@ mod tests {
     use cbh_diag::RecordingReporter;
     use cbh_git::FakeGitHistory;
     use cbh_model::{
-        BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, GitInfo, Metric,
+        BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, Engine, EnvironmentInfo, GitInfo, Metric,
         MetricKind, Run, RunContext, ToolchainInfo,
     };
     use cbh_storage::{MemoryStorage, Storage};
@@ -903,7 +903,7 @@ mod tests {
     fn auto() -> AutoFacets {
         AutoFacets {
             triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m1".to_owned(),
+            machine_key: "m1".into(),
         }
     }
 
@@ -1011,9 +1011,9 @@ mod tests {
 
     fn linux_set() -> DiscriminantSet {
         DiscriminantSet {
-            engine: "callgrind".to_owned(),
-            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m1".to_owned(),
+            engine: Engine::Callgrind,
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            machine_key: "m1".into(),
         }
     }
 
@@ -1024,9 +1024,9 @@ mod tests {
     /// A discriminant set distinct from [`linux_set`], for grouping tests.
     fn mac_set() -> DiscriminantSet {
         DiscriminantSet {
-            engine: "criterion".to_owned(),
-            target_triple: "aarch64-apple-darwin".to_owned(),
-            machine_key: "m1".to_owned(),
+            engine: Engine::Criterion,
+            target_triple: "aarch64-apple-darwin".into(),
+            machine_key: "m1".into(),
         }
     }
 

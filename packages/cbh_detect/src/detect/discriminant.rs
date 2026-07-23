@@ -75,24 +75,25 @@ impl DiscriminantSetQuery {
     /// profile is a different measurement).
     #[must_use]
     pub fn matches(&self, set: &DiscriminantSet) -> bool {
-        self.engine.passes(&set.engine)
-            && self.target_triple.passes(&set.target_triple)
-            && self.machine_key.passes(&set.machine_key)
+        self.engine.passes(set.engine.as_str())
+            && self.target_triple.passes(set.target_triple.as_str())
+            && self.machine_key.passes(set.machine_key.as_str())
     }
 }
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use cbh_model::Engine;
     use nonempty::nonempty;
 
     use super::*;
 
     fn set(triple: &str) -> DiscriminantSet {
         DiscriminantSet {
-            engine: "callgrind".to_owned(),
-            target_triple: triple.to_owned(),
-            machine_key: "m1".to_owned(),
+            engine: Engine::Callgrind,
+            target_triple: triple.into(),
+            machine_key: "m1".into(),
         }
     }
 
@@ -205,9 +206,9 @@ mod tests {
     #[test]
     fn set_obeys_the_auto_detected_machine_key() {
         let machine = DiscriminantSet {
-            engine: "criterion".to_owned(),
-            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m1".to_owned(),
+            engine: Engine::Criterion,
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            machine_key: "m1".into(),
         };
         // This machine matches its own auto-detected fingerprint.
         assert!(

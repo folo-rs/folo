@@ -240,7 +240,7 @@ where
     let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
     let clean_at_head: Vec<StorageKey> = candidates
         .into_iter()
-        .filter(|(_, parsed)| parsed.commit == head && parsed.file == "clean.json")
+        .filter(|(_, parsed)| parsed.commit == head && parsed.is_clean())
         .map(|(_, parsed)| parsed)
         .collect();
     if clean_at_head.is_empty() {
@@ -397,7 +397,7 @@ mod tests {
     fn auto() -> AutoFacets {
         AutoFacets {
             triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "m1".to_owned(),
+            machine_key: "m1".into(),
         }
     }
 

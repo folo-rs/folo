@@ -33,7 +33,7 @@ use super::collect::{
     FinalizeDeps, SharedContext, StoreParams, build_message, describe_storage, finalize_and_store,
     harvest_records, probe_context,
 };
-use crate::model::{BenchmarkResult, Engine};
+use crate::model::{BenchmarkResult, Engine, TargetTriple};
 use crate::{ImportOptions, RunError, RunOutcome, finish_with_flush};
 
 /// The real `import`: wire the production adapters and orchestrate.
@@ -238,7 +238,7 @@ where
         reporter.note_with(|| {
             format!("overriding target triple to {triple} (partition key and recorded toolchain)")
         });
-        shared.target_triple = triple.to_owned();
+        shared.target_triple = TargetTriple::from(triple);
     }
 
     if let Some(reference) = options.commit.as_deref() {
