@@ -48,10 +48,13 @@ See [Analysis](../concepts/analysis.md) for what each mode detects.
 ## Output
 
 Each finding names the benchmark and metric, quantifies the move and confidence, attributes
-it to a commit, and draws a compact chart. History mode charts the full selected series.
-Branch mode charts the comparison baseline followed by the recent observations ending at
-the tip, keeping the one commit being judged visible; intermediate branch points provide
-visual context but do not change the tip-only judgment.
+it to a commit, and draws a compact, topology-accurate chart — one column per first-parent
+commit, so a commit with no measurement is a gap rather than being collapsed away. History
+mode charts the full selected series, keeping a trailing gap up to the analyzed tip when a
+benchmark has not been measured on the most recent commits. Branch mode charts the comparison
+baseline followed by the recent per-commit tail ending at the tip, keeping the one commit
+being judged visible and drawing any comparison-base lag as the empty columns before the tip;
+intermediate branch points do not change the tip-only judgment.
 
 Text goes to stdout by default. File toggles compose, so a single pass can emit text,
 Markdown, and JSON at once; requesting no output at all is an error. A derived, condensed

@@ -260,6 +260,7 @@ where
         mode: dataset.mode,
         config: AnalysisConfig::default(),
         merge_base_index: dataset.merge_base_index,
+        tip_index: dataset.tip_index,
         include_improvements: options.include_improvements,
         include_inactive: options.include_inactive,
     };

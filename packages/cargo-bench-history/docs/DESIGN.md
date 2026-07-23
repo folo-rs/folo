@@ -639,18 +639,20 @@ gives; when runs enter but none carry the named `(benchmark, metric)` pair, a di
 pointing at the unmatched benchmark id or metric name.
 
 `examine` runs **no detection and no re-baselining** — it has no findings, modes, or
-blessings. It shows every selected point exactly as the chart would plot it (a commit
-carrying both a clean run and dirty snapshots contributes a row each, ordered
-clean-before-dirty and flagged, so a value's provenance is unambiguous), which is why the
-analysis-only flags (improvements, inactive findings) are not part of its surface. The
-three output renderings compose from one pass as everywhere else: the per-commit table on
-stdout by default, the same table in Markdown, and a machine-readable JSON form that carries,
-per discriminant set, the ordered points with full-precision values and each commit's full
-title — the 50-character title truncation is a readability convenience of the text and
-Markdown tables, not of the data. The text and Markdown renderings **lead each set with the
-same small line chart `analyze` draws**, reusing its renderer, so a maintainer sees the shape
-of the series before reading the points it pivots; the line is drawn **uncolored**, and it is
-drawn only when a set has at least two points. The JSON form
+blessings. It lists every selected **observation** (a commit carrying both a clean run and
+dirty snapshots contributes a row each, ordered clean-before-dirty and flagged, so a value's
+provenance is unambiguous), which is why the analysis-only flags (improvements, inactive
+findings) are not part of its surface. The three output renderings compose from one pass as
+everywhere else: the per-commit table on stdout by default, the same table in Markdown, and a
+machine-readable JSON form that carries, per discriminant set, the ordered points with
+full-precision values and each commit's full title — the 50-character title truncation is a
+readability convenience of the text and Markdown tables, not of the data. The text and
+Markdown renderings **lead each set with the same small line chart `analyze` draws**, reusing
+its renderer, so a maintainer sees the shape of the series before reading the points it
+pivots; the chart is **topology-accurate** — one column per first-parent commit, so a
+data-less commit between observations (or a trailing run of them up to the analyzed tip)
+renders as a gap that the tabular points, which list only real observations, do not carry.
+The line is drawn **uncolored**, and only when a set has at least two points. The JSON form
 carries no chart (a charting concern the human reports draw from internally, not data a
 consumer reconstructs).
 
@@ -882,14 +884,35 @@ Every history-mode finding therefore carries an active flag distinguishing the t
   construction. A re-baselined finding records the blessing's commit and time for
   provenance.
 
-The history-mode chart plots the whole series, so the long-range trend the finding is about
-stays visible alongside the earlier context kept for continuity. Branch mode charts
-differently: it
-judges only the **tip commit**, so it plots the detector's comparison baseline followed by
-the recent tail of the series ending at the tip rather than the whole history. Charting
-the full, possibly months-long series would resample it down to the fixed chart width and
-shrink the one commit that matters to an indistinct edge column; the bounded comparison
-chart keeps both the base level and the tip legible and unaliased.
+Charts are **topology-accurate**: a commit's column position reflects its place in
+first-parent history, not its ordinal among the observations. A finding stores only its
+real observations (each tagged with its commit's first-parent index); the renderer
+materializes one column per commit from the first observation onward and draws a
+data-less commit as a **gap** (a broken line), so five missing commits read as five empty
+columns rather than collapsing into one. Leading gaps are trimmed — the line always opens
+on the first observation — while interior gaps are kept. A **trailing gap** from the last
+observation up to the analyzed tip is kept too: it is the visual form of the "no newer
+data" disclosure, showing at a glance that the benchmark has not been measured on the most
+recent commits.
+
+The history-mode chart plots the whole series this way, so the long-range trend the finding
+is about stays visible alongside the earlier context kept for continuity. Branch mode charts
+differently: it judges only the **tip commit**, so it plots the detector's comparison
+baseline followed by the recent per-commit tail ending at the tip rather than the whole
+history, dropping the interior branch commits and representing the tip by a single column at
+its judged latest value. The gap between the newest base observation and that tip column is
+exactly the comparison-base lag (§8.8), drawn as empty interior columns. Charting the full,
+possibly months-long series would shrink the one commit that matters to an indistinct edge
+column; the bounded comparison chart keeps both the base level and the tip legible and
+unaliased.
+
+Both charts bin their columns to at most the fixed chart width **before** plotting: the
+underlying plotter resamples a series to its width with linear interpolation *before*
+computing the axis extrema, and that interpolation is NaN-poisoning, so handing it a long
+gapped series would blend an isolated observation trapped between gaps into a gap and drop
+it — and its axis extreme — entirely. Binning first places every observation in a column by
+integer position (never interpolated away) and leaves empty columns as gaps, so no
+observation and neither axis extreme is ever lost.
 
 ### 8.7 Report formats
 

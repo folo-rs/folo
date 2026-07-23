@@ -1768,3 +1768,169 @@ async fn analyze_excludes_ghost_benchmarks() {
         "the ghost benchmark must not appear: {report}"
     );
 }
+
+/// The rendered chart's rows: every axis row carries a `┤` or `┼` tick and the
+/// chart is always drawn uncolored, so filtering on those glyphs isolates the plot
+/// from the surrounding (possibly colored) report prose.
+fn chart_lines(report: &str) -> Vec<&str> {
+    report
+        .lines()
+        .filter(|line| line.contains('┤') || line.contains('┼'))
+        .collect()
+}
+
+/// The chart's rendered width in characters — the widest of its rows. Two charts
+/// spanning the same number of topology columns share this width even when one
+/// carries a trailing gap, so a width match proves the fill reached the tip column.
+fn chart_width(report: &str) -> usize {
+    chart_lines(report)
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0)
+}
+
+/// A feature branch whose comparison base lags the merge-base — the newest base
+/// data sits one commit behind the branch point — both warns in prose and still
+/// draws the branch chart. That trailing lag is the visual form of the warning: the
+/// chart spans the base history and the tip with the gap columns in between.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn analyze_branch_comparison_base_lag_warns_and_charts_the_gap() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // Base data reaches only c3; the c4 merge-base carries none, so the branch's
+    // comparison base ends one commit behind the branch point.
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
+    workspace.commit_dated("2024-01-02", "c2");
+    workspace.seed_callgrind("c2", 100.0);
+    workspace.commit_dated("2024-01-03", "c3");
+    workspace.seed_callgrind("c3", 100.0);
+    // c4 is the merge-base and is intentionally left unseeded.
+    workspace.commit_dated("2024-01-04", "c4");
+    workspace.checkout_new_branch("feature");
+    workspace.commit_dated("2024-01-05", "f1");
+    workspace.seed_callgrind("f1", 130.0);
+    workspace.commit_dated("2024-01-06", "f2");
+    workspace.seed_callgrind("f2", 130.0);
+    workspace.commit_dated("2024-01-07", "f3");
+    workspace.seed_callgrind("f3", 130.0);
+
+    let RunOutcome::Analyzed {
+        regressions,
+        report,
+        ..
+    } = workspace.drive(&["analyze"]).await.unwrap()
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    assert_eq!(
+        regressions, 1,
+        "the branch tip regresses against the base: {report}"
+    );
+    assert!(
+        report.contains(
+            "Warning: comparison base is 1 commit behind base \
+             (no base data at more recent commits)"
+        ),
+        "the one-commit comparison-base lag is disclosed: {report}"
+    );
+    assert!(
+        !chart_lines(&report).is_empty(),
+        "the branch finding draws a chart: {report}"
+    );
+}
+
+/// In history mode a benchmark whose latest observation for one metric lags the
+/// analyzed tip renders a trailing gap: the chart still spans every commit through
+/// the tip, with a blank column where the tip carries no datum for that metric. A
+/// sibling metric keeps the benchmark present at the tip, so the lagging metric's
+/// series is retained rather than dropped as a ghost.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn analyze_history_no_newer_data_renders_a_trailing_gap() {
+    // Two identical seven-commit histories. `conditional_branches` steps up at c4
+    // (a sustained regression); `instruction_count` stays flat and never flags. Only
+    // the tip commit c7 differs: the full run records both metrics there while the
+    // lagging run records instruction_count alone, so the benchmark stays present at
+    // the tip (not a ghost) yet its conditional_branches series ends at c6.
+    let steps = [
+        ("2024-01-01", "c1", 100.0),
+        ("2024-01-02", "c2", 100.0),
+        ("2024-01-03", "c3", 100.0),
+        ("2024-01-04", "c4", 130.0),
+        ("2024-01-05", "c5", 130.0),
+        ("2024-01-06", "c6", 130.0),
+    ];
+
+    let full = Workspace::repo(&storage_only_config());
+    let lag = Workspace::repo(&storage_only_config());
+    for workspace in [&full, &lag] {
+        for (date, label, cb) in steps {
+            workspace.commit_dated(date, label);
+            workspace.seed_metrics(
+                label,
+                vec![
+                    Metric::new(MetricKind::InstructionCount, 500.0),
+                    Metric::new(MetricKind::ConditionalBranches, cb),
+                ],
+            );
+        }
+    }
+    // The shared tip commit c7: the full run records both metrics; the lagging run
+    // records only the sibling, leaving conditional_branches one commit behind.
+    full.commit_dated("2024-01-07", "c7");
+    full.seed_metrics(
+        "c7",
+        vec![
+            Metric::new(MetricKind::InstructionCount, 500.0),
+            Metric::new(MetricKind::ConditionalBranches, 130.0),
+        ],
+    );
+    lag.commit_dated("2024-01-07", "c7");
+    lag.seed_metrics("c7", vec![Metric::new(MetricKind::InstructionCount, 500.0)]);
+
+    let RunOutcome::Analyzed {
+        regressions: full_regressions,
+        report: full_report,
+        ..
+    } = full.drive(&["analyze"]).await.unwrap()
+    else {
+        panic!("expected an analyzed outcome");
+    };
+    let RunOutcome::Analyzed {
+        regressions: lag_regressions,
+        report: lag_report,
+        ..
+    } = lag.drive(&["analyze"]).await.unwrap()
+    else {
+        panic!("expected an analyzed outcome");
+    };
+
+    assert_eq!(
+        full_regressions, 1,
+        "the full history flags the conditional_branches step: {full_report}"
+    );
+    assert_eq!(
+        lag_regressions, 1,
+        "the lagging history flags the same step even though the tip lacks the metric: {lag_report}"
+    );
+
+    // The lagging series ends at c6 but its chart is filled with a trailing gap column
+    // up to the analyzed tip c7, so it spans exactly as many columns — and renders
+    // exactly as wide — as the full history's chart. Without that trailing fill the
+    // lagging chart would stop one column short of the tip and be one character
+    // narrower. (`rasciigraph` draws a trailing gap and a continued flat plateau
+    // identically — both a blank final column — so the rendered width, not the glyph
+    // content, is what proves the fill reached the tip.)
+    assert!(
+        chart_width(&full_report) > 0,
+        "the full history draws a chart: {full_report}"
+    );
+    assert_eq!(
+        chart_width(&lag_report),
+        chart_width(&full_report),
+        "the trailing 'no newer data' gap extends the lagging chart to the tip\n\
+         FULL:\n{full_report}\nLAG:\n{lag_report}"
+    );
+}

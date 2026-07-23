@@ -353,6 +353,7 @@ mod tests {
             blessed_commit_time: None,
             series: Vec::new(),
             comparison_base_index,
+            chart_base_ref: None,
         }
     }
 

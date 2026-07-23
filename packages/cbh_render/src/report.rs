@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::num::NonZero;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use cbh_detect::{AnalysisMode, Direction, Finding, FindingMethod, short_commit};
+use cbh_detect::{AnalysisMode, Direction, Finding, FindingMethod, SeriesValue, short_commit};
 use cbh_model::{BenchmarkId, DiscriminantSet};
 use colored::Colorize;
 use rasciigraph::{Config, plot};
@@ -621,58 +621,192 @@ fn chart_scope(mode: AnalysisMode) -> ChartScope {
     }
 }
 
-/// Builds the bounded values for a branch finding's comparison chart.
+/// Builds the bounded, topology-accurate columns for a branch finding's comparison
+/// chart.
 ///
-/// The first value is the detector's actual comparison baseline. The remaining values
-/// are the recent observed suffix ending at the tip, guaranteeing that both sides of
-/// the reported change remain visible even when a long-lived branch contributes more
-/// points than the chart cap. The tip is the one data point branch mode acts on, and it
-/// must never be dropped or aliased away, however long the underlying history is.
+/// The first column is the detector's actual comparison baseline. The rest are the
+/// recent per-commit tail ending at the tip: one column for each first-parent commit
+/// from `start_topo` up to the tip's `topo_index`, carrying the mean of the
+/// observations at that commit or a gap ([`f64::NAN`]) where the commit has none. The
+/// tip commit's column carries the finding's judged latest value and is never a gap, so
+/// both sides of the reported change stay visible — and the gap between the newest base
+/// point and the tip (the comparison-base lag) is drawn as those empty interior
+/// columns — however long the underlying history is. The window spans at most
+/// [`BRANCH_CHART_MAX_POINTS`] columns.
 fn branch_chart_values(finding: &Finding) -> Vec<f64> {
-    let observed_limit = BRANCH_CHART_MAX_POINTS.saturating_sub(1);
-    let start = finding.series.len().saturating_sub(observed_limit);
-    let observed = finding
-        .series
-        .get(start..)
-        .expect("saturating subtraction keeps the start within the series");
-    let mut values = Vec::with_capacity(observed.len().saturating_add(1));
-    values.push(finding.baseline);
-    values.extend(observed.iter().map(|point| point.value));
+    let mut values = vec![finding.baseline];
+    let Some(tip_topo) = finding.series.last().map(|point| point.topo_index) else {
+        return values;
+    };
+    // One column per first-parent commit in the recent window ending at the tip, so a
+    // data-less commit between the newest base point and the tip is a visible gap.
+    let window = BRANCH_CHART_MAX_POINTS.saturating_sub(1);
+    let start_topo = tip_topo.saturating_sub(window.saturating_sub(1));
+    values.extend((start_topo..=tip_topo).map(|topo| mean_at_topo(&finding.series, topo)));
     values
+}
+
+/// The mean of the finding-series values recorded at first-parent index `topo`.
+///
+/// Returns [`f64::NAN`] when the commit carries no observation (a gap column).
+fn mean_at_topo(series: &[SeriesValue], topo: usize) -> f64 {
+    let mut sum = 0.0;
+    let mut count = 0_usize;
+    for point in series {
+        if point.topo_index == topo {
+            sum += point.value;
+            count = count.saturating_add(1);
+        }
+    }
+    if count == 0 {
+        f64::NAN
+    } else {
+        sum / count_as_f64(count)
+    }
+}
+
+/// Bins real `(topo_index, value)` observations into at most `max_width` chart columns.
+///
+/// A gap ([`f64::NAN`]) is materialized for every commit — or, once the span exceeds
+/// `max_width`, every bin — that carries no observation.
+///
+/// `points` are ascending by `topo_index` (equal indices allowed, e.g. a commit's clean
+/// and dirty snapshots) and hold only real observations. `base_ref` is the trailing-fill
+/// target: when it sits past the last point the columns extend to it, so the data-less
+/// commits after the last observation render as a gap (the "no newer data" tail); `None`,
+/// or a value at or before the last point, adds no trailing gap. The leftmost column
+/// always holds the first observation, so there is never a leading gap. `max_width` must
+/// be at least 1; wide-chart callers pass [`CHART_WIDTH`].
+///
+/// While the span fits (`span + 1 <= max_width`) each commit maps to its own column, so
+/// the topology is exact and a data-less commit is a single `NaN` column. Beyond that
+/// the span is downsampled: every real point still lands in some column (placed by
+/// integer index, never interpolated away, so neither an observation nor an axis extreme
+/// is lost), empty columns stay `NaN`, and a column that catches several observations
+/// averages them (a slight, documented blur of a dense region). Binning to `max_width`
+/// before the series reaches [`chart`] is essential: `rasciigraph` interpolates to its
+/// width *before* computing the axis min/max and its linear interpolation is
+/// NaN-poisoning, so a longer series would blend an isolated observation surrounded by
+/// `NaN` into `NaN` and drop it (and its value) entirely.
+#[must_use]
+pub fn topology_columns(
+    points: &[(usize, f64)],
+    base_ref: Option<usize>,
+    max_width: usize,
+) -> Vec<f64> {
+    assert!(max_width >= 1, "a chart needs at least one column");
+    let Some(&(first, _)) = points.first() else {
+        return Vec::new();
+    };
+    let last = points.last().map_or(first, |&(topo, _)| topo);
+    let end = base_ref.map_or(last, |target| target.max(last));
+    let span = end.saturating_sub(first);
+    let width = span.saturating_add(1).min(max_width);
+    let mut bins = vec![(0.0_f64, 0_usize); width];
+    for &(topo, value) in points {
+        // `topo` lies in `[first, last] ⊆ [first, end]`, so `topo - first ∈ [0, span]` and
+        // the column index stays within `0..width`; when `span == 0` every point maps to
+        // the single column 0. The saturating operations only guard against overflow that
+        // real histories never reach; the true product is at most `span * (width - 1)`.
+        let offset = topo
+            .saturating_sub(first)
+            .saturating_mul(width.saturating_sub(1));
+        let col = offset.checked_div(span).unwrap_or(0);
+        if let Some((sum, count)) = bins.get_mut(col) {
+            *sum += value;
+            *count = count.saturating_add(1);
+        }
+    }
+    bins.into_iter()
+        .map(|(sum, count)| {
+            if count == 0 {
+                f64::NAN
+            } else {
+                sum / count_as_f64(count)
+            }
+        })
+        .collect()
+}
+
+/// Renders a compact line chart of real `(topo_index, value)` observations.
+///
+/// The observations are binned into topology-accurate columns (see [`topology_columns`])
+/// before plotting. `None` when fewer than two columns carry a real value.
+///
+/// Both wide-chart callers — a history finding's whole-series chart and `examine`'s
+/// per-commit chart — go through here, so a sparse or lagging series always renders its
+/// interior and trailing gaps.
+#[must_use]
+pub fn chart_series(points: &[(usize, f64)], base_ref: Option<usize>) -> Option<String> {
+    chart(&topology_columns(points, base_ref, CHART_WIDTH as usize))
+}
+
+/// Casts a small bin count to `f64` for averaging. Bin counts are bounded by the
+/// observation count, far below 2^53, so the conversion is exact.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "bin counts are far below 2^53, so the cast is exact"
+)]
+fn count_as_f64(count: usize) -> f64 {
+    count as f64
 }
 
 /// Renders a finding's metric chart for the given [`ChartScope`], or `None` when the
 /// scoped series has too few points to plot.
 ///
-/// [`ChartScope::FullHistory`] charts the whole series; [`ChartScope::BranchComparison`]
+/// [`ChartScope::FullHistory`] charts the whole series topology (one column per
+/// first-parent commit from the first observation onward, with gaps for data-less
+/// commits and a trailing gap up to the analysis tip); [`ChartScope::BranchComparison`]
 /// charts [`branch_chart_values`], so the comparison baseline and tip commit stay legible
 /// rather than becoming aliased edge columns.
 fn scoped_chart(finding: &Finding, scope: ChartScope) -> Option<String> {
-    let values: Vec<f64> = match scope {
-        ChartScope::FullHistory => finding.series.iter().map(|point| point.value).collect(),
+    match scope {
+        ChartScope::FullHistory => {
+            let points: Vec<(usize, f64)> = finding
+                .series
+                .iter()
+                .map(|point| (point.topo_index, point.value))
+                .collect();
+            chart_series(&points, finding.chart_base_ref)
+        }
         // Chart the comparison baseline and recent tail ending at the tip. This is
         // business-critical: the tip commit is the sole data point branch mode judges,
         // so it must remain visible and unaliased regardless of how much history
         // precedes it.
-        ChartScope::BranchComparison => branch_chart_values(finding),
-    };
-    chart(&values)
+        ChartScope::BranchComparison => chart(&branch_chart_values(finding)),
+    }
 }
 
-/// Renders a compact line chart of `values` over commits at the report's fixed chart
-/// dimensions. Returns `None` when there are fewer than two points (nothing to plot).
+/// Renders a compact line chart of `values` over commits at the report's chart height.
+///
+/// A non-finite (`NaN`) value renders as a gap in the line. Returns `None` when fewer
+/// than two values are finite (nothing to plot a line between).
+///
+/// The chart is drawn one column per supplied value, up to [`CHART_WIDTH`]; callers bin
+/// to at most that many columns first (see [`topology_columns`]), so the chart spans at
+/// most 48 columns. The width deliberately tracks the value count rather than always
+/// stretching to 48: `rasciigraph` resamples every series to `config.width` with linear
+/// interpolation *before* computing the axis extrema, and that interpolation is
+/// NaN-poisoning — stretching a gapped series blends an isolated observation trapped
+/// between two gaps into `NaN` and drops it (and its value) from both the line and the
+/// axis. Matching the width to the value count makes that resample an identity, so every
+/// real observation and both axis extrema survive and each gap stays exactly as wide as
+/// the run of data-less commits it represents.
 ///
 /// The line is always drawn uncolored: the report is most often read as Markdown, where
 /// ANSI styling would only add noise, so the chart carries plain characters that render
 /// anywhere.
 #[must_use]
 pub fn chart(values: &[f64]) -> Option<String> {
-    if values.len() < 2 {
+    if values.iter().filter(|value| value.is_finite()).count() < 2 {
         return None;
     }
+    let width = u32::try_from(values.len())
+        .unwrap_or(CHART_WIDTH)
+        .min(CHART_WIDTH);
     let config = Config::default()
         .with_height(CHART_HEIGHT)
-        .with_width(CHART_WIDTH);
+        .with_width(width);
     Some(
         plot(values.to_vec(), config)
             .trim_end_matches('\n')
@@ -1060,6 +1194,7 @@ mod tests {
             blessed_commit_time: None,
             series: Vec::new(),
             comparison_base_index: None,
+            chart_base_ref: None,
         }
     }
 
@@ -1870,21 +2005,25 @@ mod tests {
                 commit: Some("c0".to_owned()),
                 value: 100.0,
                 dirty: false,
+                topo_index: 0,
             },
             SeriesValue {
                 commit: Some("c1".to_owned()),
                 value: 100.0,
                 dirty: false,
+                topo_index: 1,
             },
             SeriesValue {
                 commit: Some("c2".to_owned()),
                 value: 130.0,
                 dirty: false,
+                topo_index: 2,
             },
             SeriesValue {
                 commit: Some("c3".to_owned()),
                 value: 130.0,
                 dirty: false,
+                topo_index: 3,
             },
         ];
         finding
@@ -1895,29 +2034,33 @@ mod tests {
     /// it can be told apart by a plain substring search.
     const CHART_ONLY_MARKER: f64 = 1000.0;
 
-    /// Builds a regression finding with a long series: a distinctive early spike, a long
-    /// flat baseline, and an elevated tip.
+    /// Builds a regression finding with a long, sparse topology: a lone ancient spike at
+    /// `topo_index` 0, then a wide data-less gap, then a recent 30-commit cluster ending
+    /// at the tip (`topo_index` 199).
     ///
-    /// The early spike ([`CHART_ONLY_MARKER`]) sits far outside the branch chart's
-    /// bounded comparison and dwarfs the tip, so it dominates a whole-series chart's
-    /// y-axis but is absent from a branch chart's — the discriminator the scope tests
-    /// key off. The tip (index `len - 1`) is the one point branch mode judges; it must
-    /// always survive into the chart.
+    /// The ancient spike ([`CHART_ONLY_MARKER`]) sits far outside the branch chart's
+    /// bounded recent window and dwarfs the tip, so it dominates a whole-series chart's
+    /// y-axis but is absent from a branch chart's — the discriminator the scope tests key
+    /// off. Because it is isolated at `topo_index` 0 it keeps its own leftmost column
+    /// (never averaged away), so the whole-series chart still shows it. The tip is the one
+    /// point branch mode judges; it must always survive into the chart.
     fn regression_with_long_series() -> Finding {
-        let len = 200;
-        let tip = 130.0;
+        let tip_topo = 199;
+        let cluster_start = 170;
         let baseline = 100.0;
-        let mut series: Vec<SeriesValue> = (0..len)
-            .map(|index| SeriesValue {
-                commit: Some(format!("c{index}")),
-                value: baseline,
-                dirty: false,
-            })
-            .collect();
-        // A towering early point, older than the bounded branch chart would reach.
-        series[0].value = CHART_ONLY_MARKER;
-        // The tip: the last commit analyzed, the single point branch mode acts on.
-        series[len - 1].value = tip;
+        let tip = 130.0;
+        let mut series = vec![SeriesValue {
+            commit: Some("c0".to_owned()),
+            value: CHART_ONLY_MARKER,
+            dirty: false,
+            topo_index: 0,
+        }];
+        series.extend((cluster_start..=tip_topo).map(|topo| SeriesValue {
+            commit: Some(format!("c{topo}")),
+            value: if topo == tip_topo { tip } else { baseline },
+            dirty: false,
+            topo_index: topo,
+        }));
         Finding {
             series,
             ..regression()
@@ -2082,6 +2225,281 @@ mod tests {
                 .all(|value| value.to_bits() != CHART_ONLY_MARKER.to_bits()),
             "ancient observations must fall outside the bounded chart"
         );
+    }
+
+    /// A regression finding carrying an explicit compact chart series, for exercising the
+    /// column-building helpers directly.
+    fn finding_with_series(baseline: f64, latest: f64, points: &[(usize, f64)]) -> Finding {
+        let mut finding = regression();
+        finding.baseline = baseline;
+        finding.latest = latest;
+        finding.series = points
+            .iter()
+            .map(|&(topo, value)| SeriesValue {
+                commit: Some(format!("c{topo}")),
+                value,
+                dirty: false,
+                topo_index: topo,
+            })
+            .collect();
+        finding
+    }
+
+    /// The count of gap (`NaN`) columns in a column slice.
+    fn gap_count(columns: &[f64]) -> usize {
+        columns.iter().filter(|value| value.is_nan()).count()
+    }
+
+    #[test]
+    fn topology_columns_empty_series_yields_no_columns() {
+        assert!(topology_columns(&[], None, CHART_WIDTH as usize).is_empty());
+        assert!(topology_columns(&[], Some(9), CHART_WIDTH as usize).is_empty());
+    }
+
+    #[test]
+    fn topology_columns_single_point_is_one_solid_column() {
+        // One observation, no base ref: a single finite column, no leading or trailing
+        // gap. (A lone column can't be charted, but the binning is still exact.)
+        let columns = topology_columns(&[(5, 42.0)], None, CHART_WIDTH as usize);
+        assert_eq!(columns.len(), 1);
+        assert_eq!(columns[0].to_bits(), 42.0_f64.to_bits());
+    }
+
+    #[test]
+    fn topology_columns_trims_the_leading_gap() {
+        // The first observation is at topo 5, not 0: the leftmost column still holds it,
+        // so the older empty commits never become leading gap columns.
+        let columns = topology_columns(&[(5, 10.0), (7, 20.0)], None, CHART_WIDTH as usize);
+        assert_eq!(columns.len(), 3, "topos 5..=7 span three columns");
+        assert_eq!(columns[0].to_bits(), 10.0_f64.to_bits(), "no leading gap");
+        assert!(
+            columns[1].is_nan(),
+            "the data-less topo 6 is the one interior gap"
+        );
+        assert_eq!(columns[2].to_bits(), 20.0_f64.to_bits());
+        assert_eq!(gap_count(&columns), 1);
+    }
+
+    #[test]
+    fn topology_columns_keeps_every_interior_gap() {
+        // Five data-less commits between two observations become exactly five gap
+        // columns — the topology is reproduced commit for commit.
+        let columns = topology_columns(&[(0, 10.0), (6, 20.0)], None, CHART_WIDTH as usize);
+        assert_eq!(columns.len(), 7);
+        assert_eq!(columns[0].to_bits(), 10.0_f64.to_bits());
+        assert_eq!(columns[6].to_bits(), 20.0_f64.to_bits());
+        assert_eq!(gap_count(&columns), 5, "five data-less commits, five gaps");
+        assert!(columns[1..6].iter().all(|value| value.is_nan()));
+    }
+
+    #[test]
+    fn topology_columns_keeps_the_trailing_gap_up_to_the_base_ref() {
+        // The base ref (the analyzed tip) sits three commits past the last observation,
+        // so those three data-less commits render as a trailing gap — the visual form of
+        // the "no newer data" lag.
+        let columns = topology_columns(&[(0, 10.0), (2, 20.0)], Some(5), CHART_WIDTH as usize);
+        assert_eq!(columns.len(), 6, "topos 0..=5 span six columns");
+        assert_eq!(columns[0].to_bits(), 10.0_f64.to_bits());
+        assert_eq!(columns[2].to_bits(), 20.0_f64.to_bits());
+        assert!(
+            columns[3..6].iter().all(|value| value.is_nan()),
+            "trailing lag gap"
+        );
+        assert!(
+            columns[1].is_nan(),
+            "the data-less topo 1 is an interior gap"
+        );
+        assert_eq!(
+            gap_count(&columns),
+            4,
+            "one interior (topo 1) plus three trailing (topos 3..=5)"
+        );
+    }
+
+    #[test]
+    fn topology_columns_base_ref_at_or_before_last_adds_no_trailing_gap() {
+        // A base ref that does not exceed the last observation leaves no trailing gap:
+        // there is no newer commit to wait for.
+        let at_last = topology_columns(&[(0, 10.0), (4, 20.0)], Some(4), CHART_WIDTH as usize);
+        assert_eq!(at_last.len(), 5);
+        assert_eq!(
+            at_last[4].to_bits(),
+            20.0_f64.to_bits(),
+            "last column is the observation"
+        );
+        let before_last = topology_columns(&[(0, 10.0), (4, 20.0)], Some(2), CHART_WIDTH as usize);
+        assert!(
+            before_last
+                .iter()
+                .zip(&at_last)
+                .all(|(left, right)| left.to_bits() == right.to_bits()),
+            "a base ref before the last point is inert: {before_last:?} vs {at_last:?}"
+        );
+    }
+
+    #[test]
+    fn topology_columns_averages_observations_that_share_a_commit() {
+        // A commit's clean and dirty snapshots share a topo index, so they land in one
+        // column and average — the column is the commit's mean, not two columns.
+        let columns = topology_columns(
+            &[(0, 10.0), (0, 20.0), (2, 30.0)],
+            None,
+            CHART_WIDTH as usize,
+        );
+        assert_eq!(columns.len(), 3);
+        assert_eq!(
+            columns[0].to_bits(),
+            15.0_f64.to_bits(),
+            "the shared commit's mean"
+        );
+        assert!(columns[1].is_nan());
+        assert_eq!(columns[2].to_bits(), 30.0_f64.to_bits());
+    }
+
+    #[test]
+    fn topology_columns_downsamples_without_losing_isolated_observations_or_extrema() {
+        // REGRESSION GUARD. `rasciigraph::plot` interpolates to its width *before*
+        // computing the axis min/max, and that interpolation is NaN-poisoning: handed a
+        // topology span wider than the chart, an isolated observation trapped between
+        // gaps blends into NaN and vanishes — taking its value out of the axis extrema.
+        // Binning to CHART_WIDTH first (here a 100-commit span into 48 columns) must place
+        // every real observation in its own column so neither the observations nor the
+        // axis extrema can be lost.
+        let points = [(0, 1000.0), (49, 1.0), (99, 500.0)];
+        let columns = topology_columns(&points, None, CHART_WIDTH as usize);
+        assert_eq!(
+            columns.len(),
+            CHART_WIDTH as usize,
+            "the span is capped at the width"
+        );
+        assert_eq!(
+            columns[0].to_bits(),
+            1000.0_f64.to_bits(),
+            "the max survives, in column 0"
+        );
+        assert_eq!(
+            columns[23].to_bits(),
+            1.0_f64.to_bits(),
+            "the isolated min survives"
+        );
+        assert_eq!(
+            columns[47].to_bits(),
+            500.0_f64.to_bits(),
+            "the last observation survives"
+        );
+        assert_eq!(
+            columns.iter().filter(|value| value.is_finite()).count(),
+            3,
+            "each of the three observations keeps its own column — none dropped or merged"
+        );
+        // And the extrema survive all the way into the rendered axis.
+        let chart = chart_series(&points, None).expect("three finite columns plot");
+        assert!(chart.contains("1000"), "the max heads the y-axis: {chart}");
+        assert!(chart.contains("┼") || chart.contains("┤"), "{chart}");
+    }
+
+    #[test]
+    fn chart_series_of_a_lone_observation_with_a_lag_draws_nothing() {
+        // One real observation plus a trailing lag is a single finite value among NaNs —
+        // too few to plot a line, so no chart.
+        assert!(chart_series(&[(0, 5.0)], Some(10)).is_none());
+    }
+
+    #[test]
+    fn chart_gates_on_the_finite_count_not_the_length() {
+        // The gate counts *finite* values: a lone real value padded with gap columns must
+        // not plot (pins the `< 2` finite test against a length-based slip).
+        assert!(
+            chart(&[1.0, f64::NAN]).is_none(),
+            "one finite value is too few"
+        );
+        assert!(chart(&[f64::NAN, f64::NAN]).is_none(), "no finite values");
+        assert!(
+            chart(&[1.0, f64::NAN, 2.0]).is_some(),
+            "two finite values plot"
+        );
+    }
+
+    #[test]
+    fn chart_renders_a_gap_without_disturbing_the_axis() {
+        // A NaN column is a gap, not a data point: it must not poison the axis extrema,
+        // and an isolated interior extreme surrounded by gaps must still head the axis.
+        let gapped = chart(&[10.0, f64::NAN, 30.0]).expect("two finite values plot");
+        assert!(
+            gapped.contains("30"),
+            "the max still labels the axis top: {gapped}"
+        );
+        assert!(
+            gapped.contains("10"),
+            "the min still labels the axis bottom: {gapped}"
+        );
+        let spike =
+            chart(&[10.0, f64::NAN, 1000.0, f64::NAN, 20.0]).expect("three finite values plot");
+        assert!(
+            spike.contains("1000"),
+            "an isolated interior spike survives, un-poisoned: {spike}"
+        );
+    }
+
+    #[test]
+    fn branch_chart_values_open_with_baseline_close_with_latest_and_gap_the_lag() {
+        // The compact branch series is a single base observation at topo 0 and the tip at
+        // topo 3; topos 1 and 2 are the commits the branch's base is behind by. The chart
+        // must open with the comparison baseline, close with the tip's judged latest, and
+        // render those two lagging commits as exactly two gap columns.
+        let finding = finding_with_series(100.0, 130.0, &[(0, 100.0), (3, 130.0)]);
+        let values = branch_chart_values(&finding);
+        assert_eq!(values.len(), 5, "baseline column + topos 0..=3");
+        assert_eq!(
+            values[0].to_bits(),
+            100.0_f64.to_bits(),
+            "opens with the baseline"
+        );
+        assert_eq!(
+            values[1].to_bits(),
+            100.0_f64.to_bits(),
+            "the base observation at topo 0"
+        );
+        assert!(values[2].is_nan(), "the first lagging commit is a gap");
+        assert!(values[3].is_nan(), "the second lagging commit is a gap");
+        assert_eq!(
+            values[4].to_bits(),
+            130.0_f64.to_bits(),
+            "closes with the tip's latest"
+        );
+        assert_eq!(gap_count(&values), 2, "exactly commits_behind gap columns");
+    }
+
+    #[test]
+    fn branch_chart_values_average_a_commits_shared_observations() {
+        // A base commit contributes both a clean and a dirty snapshot at the same topo
+        // index, so the branch chart's column for that commit is their mean, not their sum
+        // or product. topo 0 holds 100 and 120 (mean 110); the tip at topo 2 is the judged
+        // latest, with topo 1 the single lagging commit.
+        let finding = finding_with_series(100.0, 130.0, &[(0, 100.0), (0, 120.0), (2, 130.0)]);
+        let values = branch_chart_values(&finding);
+        assert_eq!(values.len(), 4, "baseline column + topos 0..=2");
+        assert_eq!(
+            values[1].to_bits(),
+            110.0_f64.to_bits(),
+            "the shared commit's column is the mean of its two observations"
+        );
+        assert!(values[2].is_nan(), "the lagging commit is a gap");
+        assert_eq!(
+            values[3].to_bits(),
+            130.0_f64.to_bits(),
+            "closes with the tip's latest"
+        );
+    }
+
+    #[test]
+    fn branch_chart_values_of_an_empty_series_is_just_the_baseline() {
+        // A finding with no charted observations still yields its baseline column (and so
+        // never plots, having one finite value).
+        let finding = finding_with_series(100.0, 130.0, &[]);
+        let values = branch_chart_values(&finding);
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0].to_bits(), 100.0_f64.to_bits());
     }
 
     #[test]
