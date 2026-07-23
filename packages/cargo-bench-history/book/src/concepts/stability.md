@@ -26,10 +26,17 @@ a cache-line boundary. Then a hot loop's position relative to the cache lines de
 own offset within its function — which your source fixes — and never on what the linker placed
 before it.
 
-With the LLVM backend (stable Rust), set this through `RUSTFLAGS` when building benchmarks:
+With the LLVM backend (stable Rust), set the flag through the `RUSTFLAGS` environment variable
+when building benchmarks — for example:
 
-```text
-RUSTFLAGS = -Cllvm-args=-align-all-functions=6
+```sh
+# bash / zsh
+RUSTFLAGS="-Cllvm-args=-align-all-functions=6" cargo bench
+```
+
+```powershell
+# PowerShell
+$env:RUSTFLAGS = "-Cllvm-args=-align-all-functions=6"; cargo bench
 ```
 
 The value is a **log2 exponent**, so `=6` aligns every function to `2^6 = 64` bytes — one full

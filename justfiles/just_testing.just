@@ -12,17 +12,16 @@ bench TARGET="":
         $target_selector += "{{ TARGET }}"
     }
 
-    # Build the benchmarks with 64-byte function alignment so hot loops keep a fixed position
-    # relative to the L1 instruction-cache lines across relinks; without it an unrelated
-    # dependency bump can reorder functions and shift a byte-identical loop across a cache-line
-    # boundary, showing up as a phantom wall-clock regression (see constants.env and the
-    # cargo-bench-history "Measurement stability" guide). $env:BENCH_STABILITY_RUSTFLAGS comes
-    # from constants.env via dotenv. Preserve any RUSTFLAGS the caller already set - chain, don't
-    # clobber - and add the flag only once.
-    $existing_rustflags = if ($env:RUSTFLAGS) { $env:RUSTFLAGS } else { "" }
-    if ($existing_rustflags -notlike "*align-all-functions*") {
-        $env:RUSTFLAGS = ($existing_rustflags, $env:BENCH_STABILITY_RUSTFLAGS | Where-Object { $_ }) -join " "
-    }
+    # Force 64-byte function alignment so hot loops keep a fixed position relative to the L1
+    # instruction-cache lines across relinks; without it an unrelated dependency bump can reorder
+    # functions and shift a byte-identical loop across a cache-line boundary, showing up as a
+    # phantom wall-clock regression (see constants.env and the cargo-bench-history "Measurement
+    # stability" guide). $env:BENCH_STABILITY_RUSTFLAGS comes from constants.env via dotenv. Keep
+    # any other RUSTFLAGS the caller set, but drop a pre-existing -align-all-functions token first
+    # so the stability value always wins - and is never duplicated or silently skipped in favour of
+    # a stray caller value.
+    $kept_rustflags = @(("$env:RUSTFLAGS" -split '\s+') | Where-Object { $_ -and ($_ -notlike '-Cllvm-args=-align-all-functions=*') })
+    $env:RUSTFLAGS = (@($kept_rustflags) + $env:BENCH_STABILITY_RUSTFLAGS) -join " "
 
     cargo bench {{ target_package }} --all-features $target_selector --locked
 
@@ -44,6 +43,11 @@ bench-best TARGET="":
         $target_selector += "--bench"
         $target_selector += "{{ TARGET }}"
     }
+
+    # Best-case means NO forced alignment, so strip any -align-all-functions token that may have
+    # been inherited from the environment (e.g. an exported BENCH_STABILITY_RUSTFLAGS); otherwise
+    # this would silently run aligned and stop being a true best case.
+    $env:RUSTFLAGS = (@(("$env:RUSTFLAGS" -split '\s+') | Where-Object { $_ -and ($_ -notlike '-Cllvm-args=-align-all-functions=*') }) -join " ")
 
     # Override the `bench` profile (which inherits `release`: no LTO, 16 codegen units) for this
     # invocation only, via cargo's per-profile environment overrides. Fat LTO plus a single
