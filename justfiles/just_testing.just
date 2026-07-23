@@ -18,9 +18,10 @@ bench TARGET="":
     # phantom wall-clock regression (see constants.env and the cargo-bench-history "Measurement
     # stability" guide). $env:BENCH_STABILITY_RUSTFLAGS comes from constants.env via dotenv. Treat
     # any RUSTFLAGS the caller set as an opaque string: remove only a pre-existing
-    # -align-all-functions token, then append the stability value so the 64-byte setting always
-    # wins - never duplicated, never silently skipped in favour of a stray caller value.
-    $kept_rustflags = ("$env:RUSTFLAGS" -replace '(^|\s)-Cllvm-args=-align-all-functions=\d+', '').Trim()
+    # -align-all-functions token (in any -C/--codegen spelling), then append the stability value so
+    # the 64-byte setting always wins - never duplicated, never silently skipped in favour of a
+    # stray caller value.
+    $kept_rustflags = ("$env:RUSTFLAGS" -replace '(^|\s)(-C\s?|--codegen[ =])llvm-args=-align-all-functions=\d+', '').Trim()
     $env:RUSTFLAGS = (@($kept_rustflags, $env:BENCH_STABILITY_RUSTFLAGS) | Where-Object { $_ }) -join " "
 
     cargo bench {{ target_package }} --all-features $target_selector --locked
@@ -49,8 +50,8 @@ bench-best TARGET="":
     # Best-case means NO forced alignment, so remove any -align-all-functions token that may have
     # been inherited from the environment (e.g. an exported BENCH_STABILITY_RUSTFLAGS); otherwise
     # this would silently run aligned and stop being a true best case. Treat RUSTFLAGS as opaque
-    # and strip only that token.
-    $env:RUSTFLAGS = ("$env:RUSTFLAGS" -replace '(^|\s)-Cllvm-args=-align-all-functions=\d+', '').Trim()
+    # and strip only that token (in any -C/--codegen spelling).
+    $env:RUSTFLAGS = ("$env:RUSTFLAGS" -replace '(^|\s)(-C\s?|--codegen[ =])llvm-args=-align-all-functions=\d+', '').Trim()
 
     # Build under the `bench-best` profile (root Cargo.toml): the `release` base plus fat LTO and a
     # single codegen unit - the most aggressively optimized build the standard pipeline produces.
@@ -59,7 +60,7 @@ bench-best TARGET="":
     # compiler can still emit suboptimal code (closing that gap would need PGO), but it does remove
     # the explicit pessimizations we accept elsewhere in the name of measurement stability.
 
-    cargo bench {{ target_package }} --all-features $target_selector --locked
+    cargo bench {{ target_package }} --profile bench-best --all-features $target_selector --locked
 
 # Run Callgrind-based instruction-count benchmarks. Requires Linux (Valgrind)
 # and the `gungraun-runner` binary on PATH; both are installed by

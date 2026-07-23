@@ -60,9 +60,10 @@ gh-collect-bench-history:
     # child process that inherits this RUSTFLAGS. Function-alignment padding sits between functions
     # and is never executed, so any Callgrind instruction counts or allocation counts gathered in
     # the same collection are unaffected. Treat any RUSTFLAGS the runner set as opaque: remove only
-    # a pre-existing -align-all-functions token, then append the stability value so the 64-byte
-    # setting always wins - never duplicated, never silently skipped in favour of a stray value.
-    $kept_rustflags = ("$env:RUSTFLAGS" -replace '(^|\s)-Cllvm-args=-align-all-functions=\d+', '').Trim()
+    # a pre-existing -align-all-functions token (in any -C/--codegen spelling), then append the
+    # stability value so the 64-byte setting always wins - never duplicated, never silently skipped
+    # in favour of a stray value.
+    $kept_rustflags = ("$env:RUSTFLAGS" -replace '(^|\s)(-C\s?|--codegen[ =])llvm-args=-align-all-functions=\d+', '').Trim()
     $env:RUSTFLAGS = (@($kept_rustflags, $env:BENCH_STABILITY_RUSTFLAGS) | Where-Object { $_ }) -join " "
 
     # RECOLLECT_COMMIT_ID is empty on a push / plain dispatch (normal append) and a commit SHA when
@@ -103,9 +104,10 @@ gh-collect-pr-bench-history packages:
     # stable against link-layout shifts (see constants.env); the tool spawns `cargo bench` as a
     # child that inherits this RUSTFLAGS, and the padding is never executed so instruction and
     # allocation counts are unaffected. Treat any RUSTFLAGS the runner set as opaque: remove only a
-    # pre-existing -align-all-functions token, then append the stability value so the 64-byte
-    # setting always wins - never duplicated, never silently skipped in favour of a stray value.
-    $kept_rustflags = ("$env:RUSTFLAGS" -replace '(^|\s)-Cllvm-args=-align-all-functions=\d+', '').Trim()
+    # pre-existing -align-all-functions token (in any -C/--codegen spelling), then append the
+    # stability value so the 64-byte setting always wins - never duplicated, never silently skipped
+    # in favour of a stray value.
+    $kept_rustflags = ("$env:RUSTFLAGS" -replace '(^|\s)(-C\s?|--codegen[ =])llvm-args=-align-all-functions=\d+', '').Trim()
     $env:RUSTFLAGS = (@($kept_rustflags, $env:BENCH_STABILITY_RUSTFLAGS) | Where-Object { $_ }) -join " "
 
     # The delta job passes the impacted packages space-separated (the same shape validation.yml's
