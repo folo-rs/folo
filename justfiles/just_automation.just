@@ -55,6 +55,16 @@ gh-collect-bench-history:
 
     Import-Module ./scripts/bench-history/BenchHistoryCollect.psm1 -Force
 
+    # Build the benchmarks with 64-byte function alignment so the collected wall-clock series are
+    # stable against link-layout shifts (see constants.env). The tool spawns `cargo bench` as a
+    # child process that inherits this RUSTFLAGS. Function-alignment padding sits between functions
+    # and is never executed, so any Callgrind instruction counts or allocation counts gathered in
+    # the same collection are unaffected. Preserve any existing RUSTFLAGS and add the flag once.
+    $existing_rustflags = if ($env:RUSTFLAGS) { $env:RUSTFLAGS } else { "" }
+    if ($existing_rustflags -notlike "*align-all-functions*") {
+        $env:RUSTFLAGS = ($existing_rustflags, $env:BENCH_STABILITY_RUSTFLAGS | Where-Object { $_ }) -join " "
+    }
+
     # RECOLLECT_COMMIT_ID is empty on a push / plain dispatch (normal append) and a commit SHA when
     # repairing one historical point (overwrite). The mode-selection logic - and the untrusted-input
     # validation - lives in the module so it is Pester-tested (BenchHistoryCollect.Tests.ps1); this
@@ -88,6 +98,15 @@ gh-collect-pr-bench-history packages:
     $PSNativeCommandUseErrorActionPreference = $true
 
     Import-Module ./scripts/bench-history/BenchHistoryCollect.psm1 -Force
+
+    # Build the benchmarks with 64-byte function alignment so the collected wall-clock series are
+    # stable against link-layout shifts (see constants.env); the tool spawns `cargo bench` as a
+    # child that inherits this RUSTFLAGS, and the padding is never executed so instruction and
+    # allocation counts are unaffected. Preserve any existing RUSTFLAGS and add the flag once.
+    $existing_rustflags = if ($env:RUSTFLAGS) { $env:RUSTFLAGS } else { "" }
+    if ($existing_rustflags -notlike "*align-all-functions*") {
+        $env:RUSTFLAGS = ($existing_rustflags, $env:BENCH_STABILITY_RUSTFLAGS | Where-Object { $_ }) -join " "
+    }
 
     # The delta job passes the impacted packages space-separated (the same shape validation.yml's
     # `just package="..."` gating uses); split them into the array the module scopes on.

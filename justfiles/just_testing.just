@@ -12,6 +12,47 @@ bench TARGET="":
         $target_selector += "{{ TARGET }}"
     }
 
+    # Build the benchmarks with 64-byte function alignment so hot loops keep a fixed position
+    # relative to the L1 instruction-cache lines across relinks; without it an unrelated
+    # dependency bump can reorder functions and shift a byte-identical loop across a cache-line
+    # boundary, showing up as a phantom wall-clock regression (see constants.env and the
+    # cargo-bench-history "Measurement stability" guide). $env:BENCH_STABILITY_RUSTFLAGS comes
+    # from constants.env via dotenv. Preserve any RUSTFLAGS the caller already set - chain, don't
+    # clobber - and add the flag only once.
+    $existing_rustflags = if ($env:RUSTFLAGS) { $env:RUSTFLAGS } else { "" }
+    if ($existing_rustflags -notlike "*align-all-functions*") {
+        $env:RUSTFLAGS = ($existing_rustflags, $env:BENCH_STABILITY_RUSTFLAGS | Where-Object { $_ }) -join " "
+    }
+
+    cargo bench {{ target_package }} --all-features $target_selector --locked
+
+# Run the wall-clock benchmarks tuned for the best achievable numbers rather than for stability
+# across history: whole-program optimization (fat LTO, a single codegen unit) and NO alignment
+# padding. Use this to answer "how fast can this actually go" on the current machine. The results
+# are deliberately NOT comparable with the `just bench` timeline that cargo-bench-history collects
+# - the build profile differs - so never feed a `bench-best` run into the history store.
+[group('testing')]
+[script]
+bench-best TARGET="":
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    $target_selector = @()
+
+    if ("{{ TARGET }}" -ne "") {
+        $target_selector += "--bench"
+        $target_selector += "{{ TARGET }}"
+    }
+
+    # Override the `bench` profile (which inherits `release`: no LTO, 16 codegen units) for this
+    # invocation only, via cargo's per-profile environment overrides. Fat LTO plus a single
+    # codegen unit gives the most aggressively optimized build. No alignment flag is set, so this
+    # path is free to reach layouts `just bench` pins away from - that is the point: best case,
+    # not stable case.
+    $env:CARGO_PROFILE_BENCH_LTO = "fat"
+    $env:CARGO_PROFILE_BENCH_CODEGEN_UNITS = "1"
+
     cargo bench {{ target_package }} --all-features $target_selector --locked
 
 # Run Callgrind-based instruction-count benchmarks. Requires Linux (Valgrind)
@@ -19,6 +60,11 @@ bench TARGET="":
 # `just install-tools`. Discovers any bench file whose name ends with `_cg`
 # (short for Callgrind) under `packages/<pkg>/benches/`. Callers on Windows
 # must invoke this through WSL themselves.
+#
+# Unlike `just bench`, this recipe deliberately does NOT force function alignment
+# ($env:BENCH_STABILITY_RUSTFLAGS): Callgrind counts executed instructions, which are already
+# independent of where functions land in memory, so alignment buys no stability here and only
+# perturbs the build. The alignment flag exists purely to stabilize wall-clock timings.
 [group('testing')]
 [script]
 bench-cg TARGET="":
