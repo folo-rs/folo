@@ -81,9 +81,9 @@ Two consequences worth planning for:
 - **Introducing it is a one-time step.** Because the build flag is not part of a result's
   identity, aligned and unaligned runs share a series, so turning alignment on shifts wall-clock
   numbers once, at the commit that introduces it. Land that change on its own commit and
-  [`bless`](../commands/bless.md) the affected series at it — `bless --all --context <commit>`
-  accepts the whole workspace in one step — so history-mode analysis reads the step as an accepted
-  baseline change rather than a regression.
+  [`bless`](../commands/bless.md) the affected series at it — `cargo bench-history bless --all
+  --context <commit>` accepts the whole workspace in one step — so history-mode analysis reads the
+  step as an accepted baseline change rather than a regression.
 - **Pull-request comparisons re-baseline on their own.** Blessing re-baselines history-mode
   analysis only; a pull request is judged directly against the recent base-branch points, which
   blessing does not adjust. Until enough aligned points accumulate on the base branch, a pull
