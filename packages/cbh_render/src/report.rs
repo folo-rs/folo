@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::num::NonZero;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use cbh_detect::{AnalysisMode, Direction, Finding, FindingMethod, SeriesValue, short_commit};
+use cbh_detect::{AnalysisMode, Direction, Finding, FindingMethod, short_commit};
 use cbh_model::{BenchmarkId, DiscriminantSet};
 use colored::Colorize;
 use rasciigraph::{Config, plot};
@@ -642,27 +642,31 @@ fn branch_chart_values(finding: &Finding) -> Vec<f64> {
     // data-less commit between the newest base point and the tip is a visible gap.
     let window = BRANCH_CHART_MAX_POINTS.saturating_sub(1);
     let start_topo = tip_topo.saturating_sub(window.saturating_sub(1));
-    values.extend((start_topo..=tip_topo).map(|topo| mean_at_topo(&finding.series, topo)));
-    values
-}
-
-/// The mean of the finding-series values recorded at first-parent index `topo`.
-///
-/// Returns [`f64::NAN`] when the commit carries no observation (a gap column).
-fn mean_at_topo(series: &[SeriesValue], topo: usize) -> f64 {
-    let mut sum = 0.0;
-    let mut count = 0_usize;
-    for point in series {
-        if point.topo_index == topo {
-            sum += point.value;
-            count = count.saturating_add(1);
+    // The series is ordered by `topo_index`, so the window is a contiguous suffix. Fold
+    // each in-window commit's observations into its own column in a single pass, rather
+    // than re-scanning the whole (in branch mode still-full) base history once per column.
+    let column_count = tip_topo.saturating_sub(start_topo).saturating_add(1);
+    let mut bins = vec![(0.0_f64, 0_usize); column_count];
+    let first = finding
+        .series
+        .partition_point(|point| point.topo_index < start_topo);
+    for point in finding.series.get(first..).unwrap_or_default() {
+        // Every point from `first` onward has `start_topo <= topo_index <= tip_topo`, so
+        // the offset stays within `0..column_count`; `get_mut` guards it regardless.
+        let col = point.topo_index.saturating_sub(start_topo);
+        if let Some((sum, count)) = bins.get_mut(col) {
+            *sum += point.value;
+            *count = count.saturating_add(1);
         }
     }
-    if count == 0 {
-        f64::NAN
-    } else {
-        sum / count_as_f64(count)
-    }
+    values.extend(bins.into_iter().map(|(sum, count)| {
+        if count == 0 {
+            f64::NAN
+        } else {
+            sum / count_as_f64(count)
+        }
+    }));
+    values
 }
 
 /// Bins real `(topo_index, value)` observations into at most `max_width` chart columns.
