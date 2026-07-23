@@ -21,7 +21,7 @@ bench TARGET="":
     # -align-all-functions token (in any -C/--codegen spelling), then append the stability value so
     # the 64-byte setting always wins - never duplicated, never silently skipped in favour of a
     # stray caller value.
-    $kept_rustflags = ("$env:RUSTFLAGS" -replace '(^|\s)(-C\s?|--codegen[ =])llvm-args=-align-all-functions=\d+', '').Trim()
+    $kept_rustflags = ("$env:RUSTFLAGS" -replace '(^|\s)(-C\s*|--codegen(?:\s+|=))llvm-args=-align-all-functions=\d+', '').Trim()
     $env:RUSTFLAGS = (@($kept_rustflags, $env:BENCH_STABILITY_RUSTFLAGS) | Where-Object { $_ }) -join " "
 
     cargo bench {{ target_package }} --all-features $target_selector --locked
@@ -51,7 +51,7 @@ bench-best TARGET="":
     # been inherited from the environment (e.g. an exported BENCH_STABILITY_RUSTFLAGS); otherwise
     # this would silently run aligned and stop being a true best case. Treat RUSTFLAGS as opaque
     # and strip only that token (in any -C/--codegen spelling).
-    $env:RUSTFLAGS = ("$env:RUSTFLAGS" -replace '(^|\s)(-C\s?|--codegen[ =])llvm-args=-align-all-functions=\d+', '').Trim()
+    $env:RUSTFLAGS = ("$env:RUSTFLAGS" -replace '(^|\s)(-C\s*|--codegen(?:\s+|=))llvm-args=-align-all-functions=\d+', '').Trim()
 
     # Build under the `bench-best` profile (root Cargo.toml): the `release` base plus fat LTO and a
     # single codegen unit - the most aggressively optimized build the standard pipeline produces.
