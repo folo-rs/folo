@@ -16,12 +16,12 @@ bench TARGET="":
     # instruction-cache lines across relinks; without it an unrelated dependency bump can reorder
     # functions and shift a byte-identical loop across a cache-line boundary, showing up as a
     # phantom wall-clock regression (see constants.env and the cargo-bench-history "Measurement
-    # stability" guide). $env:BENCH_STABILITY_RUSTFLAGS comes from constants.env via dotenv. Keep
-    # any other RUSTFLAGS the caller set, but drop a pre-existing -align-all-functions token first
-    # so the stability value always wins - and is never duplicated or silently skipped in favour of
-    # a stray caller value.
-    $kept_rustflags = @(("$env:RUSTFLAGS" -split '\s+') | Where-Object { $_ -and ($_ -notlike '-Cllvm-args=-align-all-functions=*') })
-    $env:RUSTFLAGS = (@($kept_rustflags) + $env:BENCH_STABILITY_RUSTFLAGS) -join " "
+    # stability" guide). $env:BENCH_STABILITY_RUSTFLAGS comes from constants.env via dotenv. Treat
+    # any RUSTFLAGS the caller set as an opaque string: remove only a pre-existing
+    # -align-all-functions token, then append the stability value so the 64-byte setting always
+    # wins - never duplicated, never silently skipped in favour of a stray caller value.
+    $kept_rustflags = ("$env:RUSTFLAGS" -replace '(^|\s)-Cllvm-args=-align-all-functions=\d+', '').Trim()
+    $env:RUSTFLAGS = (@($kept_rustflags, $env:BENCH_STABILITY_RUSTFLAGS) | Where-Object { $_ }) -join " "
 
     cargo bench {{ target_package }} --all-features $target_selector --locked
 
@@ -44,10 +44,11 @@ bench-best TARGET="":
         $target_selector += "{{ TARGET }}"
     }
 
-    # Best-case means NO forced alignment, so strip any -align-all-functions token that may have
+    # Best-case means NO forced alignment, so remove any -align-all-functions token that may have
     # been inherited from the environment (e.g. an exported BENCH_STABILITY_RUSTFLAGS); otherwise
-    # this would silently run aligned and stop being a true best case.
-    $env:RUSTFLAGS = (@(("$env:RUSTFLAGS" -split '\s+') | Where-Object { $_ -and ($_ -notlike '-Cllvm-args=-align-all-functions=*') }) -join " ")
+    # this would silently run aligned and stop being a true best case. Treat RUSTFLAGS as opaque
+    # and strip only that token.
+    $env:RUSTFLAGS = ("$env:RUSTFLAGS" -replace '(^|\s)-Cllvm-args=-align-all-functions=\d+', '').Trim()
 
     # Override the `bench` profile (which inherits `release`: no LTO, 16 codegen units) for this
     # invocation only, via cargo's per-profile environment overrides. Fat LTO plus a single

@@ -59,11 +59,11 @@ gh-collect-bench-history:
     # stable against link-layout shifts (see constants.env). The tool spawns `cargo bench` as a
     # child process that inherits this RUSTFLAGS. Function-alignment padding sits between functions
     # and is never executed, so any Callgrind instruction counts or allocation counts gathered in
-    # the same collection are unaffected. Keep any other RUSTFLAGS the runner set, but drop a
-    # pre-existing -align-all-functions token first so the stability value always wins - never
-    # duplicated, never silently skipped in favour of a stray runner value.
-    $kept_rustflags = @(("$env:RUSTFLAGS" -split '\s+') | Where-Object { $_ -and ($_ -notlike '-Cllvm-args=-align-all-functions=*') })
-    $env:RUSTFLAGS = (@($kept_rustflags) + $env:BENCH_STABILITY_RUSTFLAGS) -join " "
+    # the same collection are unaffected. Treat any RUSTFLAGS the runner set as opaque: remove only
+    # a pre-existing -align-all-functions token, then append the stability value so the 64-byte
+    # setting always wins - never duplicated, never silently skipped in favour of a stray value.
+    $kept_rustflags = ("$env:RUSTFLAGS" -replace '(^|\s)-Cllvm-args=-align-all-functions=\d+', '').Trim()
+    $env:RUSTFLAGS = (@($kept_rustflags, $env:BENCH_STABILITY_RUSTFLAGS) | Where-Object { $_ }) -join " "
 
     # RECOLLECT_COMMIT_ID is empty on a push / plain dispatch (normal append) and a commit SHA when
     # repairing one historical point (overwrite). The mode-selection logic - and the untrusted-input
@@ -102,11 +102,11 @@ gh-collect-pr-bench-history packages:
     # Build the benchmarks with 64-byte function alignment so the collected wall-clock series are
     # stable against link-layout shifts (see constants.env); the tool spawns `cargo bench` as a
     # child that inherits this RUSTFLAGS, and the padding is never executed so instruction and
-    # allocation counts are unaffected. Keep any other RUSTFLAGS the runner set, but drop a
-    # pre-existing -align-all-functions token first so the stability value always wins - never
-    # duplicated, never silently skipped in favour of a stray runner value.
-    $kept_rustflags = @(("$env:RUSTFLAGS" -split '\s+') | Where-Object { $_ -and ($_ -notlike '-Cllvm-args=-align-all-functions=*') })
-    $env:RUSTFLAGS = (@($kept_rustflags) + $env:BENCH_STABILITY_RUSTFLAGS) -join " "
+    # allocation counts are unaffected. Treat any RUSTFLAGS the runner set as opaque: remove only a
+    # pre-existing -align-all-functions token, then append the stability value so the 64-byte
+    # setting always wins - never duplicated, never silently skipped in favour of a stray value.
+    $kept_rustflags = ("$env:RUSTFLAGS" -replace '(^|\s)-Cllvm-args=-align-all-functions=\d+', '').Trim()
+    $env:RUSTFLAGS = (@($kept_rustflags, $env:BENCH_STABILITY_RUSTFLAGS) | Where-Object { $_ }) -join " "
 
     # The delta job passes the impacted packages space-separated (the same shape validation.yml's
     # `just package="..."` gating uses); split them into the array the module scopes on.
