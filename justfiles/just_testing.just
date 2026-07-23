@@ -27,7 +27,9 @@ bench TARGET="":
 
 # Run the wall-clock benchmarks tuned for the best achievable numbers rather than for stability
 # across history: whole-program optimization (fat LTO, a single codegen unit) and NO alignment
-# padding. Use this to answer "how fast can this actually go" on the current machine. The results
+# padding. Use this to see how fast the standard pipeline gets this code on the current machine -
+# it drops the stability pessimizations `just bench` accepts, though it is not a guaranteed
+# optimum (the compiler can still be suboptimal; PGO would be needed to go further). The results
 # are deliberately NOT comparable with the `just bench` timeline that cargo-bench-history collects
 # - the build profile differs - so never feed a `bench-best` run into the history store.
 [group('testing')]
@@ -52,9 +54,11 @@ bench-best TARGET="":
 
     # Override the `bench` profile (which inherits `release`: no LTO, 16 codegen units) for this
     # invocation only, via cargo's per-profile environment overrides. Fat LTO plus a single
-    # codegen unit gives the most aggressively optimized build. No alignment flag is set, so this
-    # path is free to reach layouts `just bench` pins away from - that is the point: best case,
-    # not stable case.
+    # codegen unit gives the most aggressively optimized build the standard pipeline produces. No
+    # alignment flag is set, so this path is free to reach layouts `just bench` pins away from -
+    # that is the point: best case, not stable case. Note this is not a guaranteed optimum: the
+    # compiler can still emit suboptimal code (closing that gap would need PGO), but it does remove
+    # the explicit pessimizations we accept elsewhere in the name of measurement stability.
     $env:CARGO_PROFILE_BENCH_LTO = "fat"
     $env:CARGO_PROFILE_BENCH_CODEGEN_UNITS = "1"
 
