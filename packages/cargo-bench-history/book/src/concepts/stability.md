@@ -44,9 +44,19 @@ cache line. `=5` (32 bytes) is cheaper but only *partly* pins the layout: a func
 start at either the `0` or `32` offset within a line, so a loop long enough to cross the midpoint
 can still straddle. Only 64-byte alignment makes each loop's placement fully deterministic.
 
-Align **functions only**. Do not add `-align-all-nofallthru-blocks`: that pads *inside* loops,
-injecting NOPs into the measured path, which can make small hot loops dramatically slower rather
-than more stable.
+Align **functions only** — and this is a *complete* fix for relink-driven instability, not a
+partial one. Once every function starts on a cache-line boundary, a loop's offset from the nearest
+boundary equals its offset *within its own function*. Relinking only ever moves whole functions
+around; it never rewrites a function's internal byte layout. So that intra-function offset — and
+therefore the loop's position relative to the cache lines — is fixed for a given source and can no
+longer shift when an unrelated dependency reorders the binary.
+
+Do **not** additionally pass `-align-all-nofallthru-blocks`. It aligns basic blocks *inside*
+functions, which buys no extra relink stability — intra-function layout is already deterministic
+under fixed codegen — while injecting NOPs into the measured path that can make small hot loops
+dramatically slower. A loop that straddles a line purely because of its offset within its own
+function does so deterministically for a given source: that is a fixed performance cost, not a
+phantom regression, so it is a performance question rather than a stability one.
 
 The cost is a modest `.text` size increase (padding between functions) and, for a benchmark that
 was previously lucky enough to sit inside a line, a one-time shift to its aligned position. After
