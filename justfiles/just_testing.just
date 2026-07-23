@@ -52,15 +52,12 @@ bench-best TARGET="":
     # and strip only that token.
     $env:RUSTFLAGS = ("$env:RUSTFLAGS" -replace '(^|\s)-Cllvm-args=-align-all-functions=\d+', '').Trim()
 
-    # Override the `bench` profile (which inherits `release`: no LTO, 16 codegen units) for this
-    # invocation only, via cargo's per-profile environment overrides. Fat LTO plus a single
-    # codegen unit gives the most aggressively optimized build the standard pipeline produces. No
-    # alignment flag is set, so this path is free to reach layouts `just bench` pins away from -
+    # Build under the `bench-best` profile (root Cargo.toml): the `release` base plus fat LTO and a
+    # single codegen unit - the most aggressively optimized build the standard pipeline produces.
+    # No alignment flag is set, so this path is free to reach layouts `just bench` pins away from -
     # that is the point: best case, not stable case. Note this is not a guaranteed optimum: the
     # compiler can still emit suboptimal code (closing that gap would need PGO), but it does remove
     # the explicit pessimizations we accept elsewhere in the name of measurement stability.
-    $env:CARGO_PROFILE_BENCH_LTO = "fat"
-    $env:CARGO_PROFILE_BENCH_CODEGEN_UNITS = "1"
 
     cargo bench {{ target_package }} --all-features $target_selector --locked
 
