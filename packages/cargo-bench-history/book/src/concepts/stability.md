@@ -44,12 +44,16 @@ cache line. `=5` (32 bytes) is cheaper but only *partly* pins the layout: a func
 start at either the `0` or `32` offset within a line, so a loop long enough to cross the midpoint
 can still straddle. Only 64-byte alignment makes each loop's placement fully deterministic.
 
-Align **functions only** — and this is a *complete* fix for relink-driven instability, not a
-partial one. Once every function starts on a cache-line boundary, a loop's offset from the nearest
-boundary equals its offset *within its own function*. Relinking only ever moves whole functions
-around; it never rewrites a function's internal byte layout. So that intra-function offset — and
-therefore the loop's position relative to the cache lines — is fixed for a given source and can no
-longer shift when an unrelated dependency reorders the binary.
+Align **functions only** — for code the LLVM backend emits under deterministic codegen (which is
+what a Rust benchmark and its dependencies compile to), this is a *complete* fix for relink-driven
+instability, not a partial one. Once every function starts on a cache-line boundary, a loop's
+offset from the nearest boundary equals its offset *within its own function*. Relinking only ever
+moves whole functions around; it never rewrites a function's internal byte layout. So that
+intra-function offset — and therefore the loop's position relative to the cache lines — is fixed
+for a given source and can no longer shift when an unrelated dependency reorders the binary. (The
+flag aligns only LLVM-emitted functions; machine code from a C dependency, hand-written assembly
+or a prebuilt static library is unaffected, and would need its own alignment if it hosted the hot
+loop.)
 
 Do **not** additionally pass `-align-all-nofallthru-blocks`. It aligns basic blocks *inside*
 functions, which buys no extra relink stability — intra-function layout is already deterministic
@@ -75,7 +79,14 @@ Two consequences worth planning for:
   executed instructions, which do not depend on where functions land, so alignment neither helps
   nor should be applied there. Allocation-tracking metrics are likewise layout-invariant.
 - **Introducing it is a one-time step.** Because the build flag is not part of a result's
-  identity, aligned and unaligned runs share a series. Turning alignment on shifts wall-clock
-  numbers once, at the commit that introduces it. Land that change on its own and
-  [`bless`](../commands/bless.md) the affected series at that commit so the step is not reported
-  as a regression.
+  identity, aligned and unaligned runs share a series, so turning alignment on shifts wall-clock
+  numbers once, at the commit that introduces it. Land that change on its own commit and
+  [`bless`](../commands/bless.md) the affected series at it — `bless --all --context <commit>`
+  accepts the whole workspace in one step — so history-mode analysis reads the step as an accepted
+  baseline change rather than a regression.
+- **Pull-request comparisons re-baseline on their own.** Blessing re-baselines history-mode
+  analysis only; a pull request is judged directly against the recent base-branch points, which
+  blessing does not adjust. Until enough aligned points accumulate on the base branch, a pull
+  request that touches an affected wall-clock benchmark can show a one-time-shift-sized move in its
+  performance comment. Those findings are advisory rather than merge gates and clear themselves
+  once the aligned baseline fills in.
