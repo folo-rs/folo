@@ -368,3 +368,14 @@ inherits = "test"
 # Speed up the build.
 debug = "none"
 incremental = false
+
+# Best-case benchmarking profile used by `just bench-best`. `cargo bench` defaults to the built-in
+# `bench` profile (which mirrors `release`: opt-level 3, no LTO, 16 codegen units); this inherits
+# the same `release` base and turns on whole-program optimization - fat LTO across a single codegen
+# unit - to squeeze out the fastest code the standard pipeline produces. It is deliberately NOT
+# used for the tracked `just bench` history: those numbers must stay comparable over time, and the
+# stability recipes instead force function alignment. See justfiles/just_testing.just.
+[profile.bench-best]
+inherits = "release"
+lto = "fat"
+codegen-units = 1

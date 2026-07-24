@@ -23,4 +23,5 @@
 
 - [Benchmark engines](concepts/engines.md)
 - [Comparability and partitioning](concepts/comparability.md)
+- [Measurement stability](concepts/stability.md)
 - [Analysis](concepts/analysis.md)

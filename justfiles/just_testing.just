@@ -12,13 +12,66 @@ bench TARGET="":
         $target_selector += "{{ TARGET }}"
     }
 
+    # Force 64-byte function alignment so hot loops keep a fixed position relative to the L1
+    # instruction-cache lines across relinks; without it an unrelated dependency bump can reorder
+    # functions and shift a byte-identical loop across a cache-line boundary, showing up as a
+    # phantom wall-clock regression (see constants.env and the cargo-bench-history "Measurement
+    # stability" guide). $env:BENCH_STABILITY_RUSTFLAGS comes from constants.env via dotenv. Treat
+    # any RUSTFLAGS the caller set as an opaque string: remove only a pre-existing
+    # -align-all-functions token (in any -C/--codegen spelling), then append the stability value so
+    # the 64-byte setting always wins - never duplicated, never silently skipped in favour of a
+    # stray caller value.
+    $kept_rustflags = ("$env:RUSTFLAGS" -replace '(^|\s)(-C\s*|--codegen(?:\s+|=))llvm-args=-align-all-functions=\d+', '').Trim()
+    $env:RUSTFLAGS = (@($kept_rustflags, $env:BENCH_STABILITY_RUSTFLAGS) | Where-Object { $_ }) -join " "
+
     cargo bench {{ target_package }} --all-features $target_selector --locked
+
+# Run the wall-clock benchmarks tuned for the best achievable numbers rather than for stability
+# across history: whole-program optimization (fat LTO, a single codegen unit) and NO alignment
+# padding. Use this to see how fast the standard pipeline gets this code on the current machine -
+# it drops the stability pessimizations `just bench` accepts, though it is not a guaranteed
+# optimum (the compiler can still be suboptimal; PGO would be needed to go further). The results
+# are deliberately NOT comparable with the `just bench` timeline that cargo-bench-history collects
+# - the build profile differs - so never feed a `bench-best` run into the history store.
+[group('testing')]
+[script]
+bench-best TARGET="":
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    $target_selector = @()
+
+    if ("{{ TARGET }}" -ne "") {
+        $target_selector += "--bench"
+        $target_selector += "{{ TARGET }}"
+    }
+
+    # Best-case means NO forced alignment, so remove any -align-all-functions token that may have
+    # been inherited from the environment (e.g. an exported BENCH_STABILITY_RUSTFLAGS); otherwise
+    # this would silently run aligned and stop being a true best case. Treat RUSTFLAGS as opaque
+    # and strip only that token (in any -C/--codegen spelling).
+    $env:RUSTFLAGS = ("$env:RUSTFLAGS" -replace '(^|\s)(-C\s*|--codegen(?:\s+|=))llvm-args=-align-all-functions=\d+', '').Trim()
+
+    # Build under the `bench-best` profile (root Cargo.toml): the `release` base plus fat LTO and a
+    # single codegen unit - the most aggressively optimized build the standard pipeline produces.
+    # No alignment flag is set, so this path is free to reach layouts `just bench` pins away from -
+    # that is the point: best case, not stable case. Note this is not a guaranteed optimum: the
+    # compiler can still emit suboptimal code (closing that gap would need PGO), but it does remove
+    # the explicit pessimizations we accept elsewhere in the name of measurement stability.
+
+    cargo bench {{ target_package }} --profile bench-best --all-features $target_selector --locked
 
 # Run Callgrind-based instruction-count benchmarks. Requires Linux (Valgrind)
 # and the `gungraun-runner` binary on PATH; both are installed by
 # `just install-tools`. Discovers any bench file whose name ends with `_cg`
 # (short for Callgrind) under `packages/<pkg>/benches/`. Callers on Windows
 # must invoke this through WSL themselves.
+#
+# Unlike `just bench`, this recipe deliberately does NOT force function alignment
+# ($env:BENCH_STABILITY_RUSTFLAGS): Callgrind counts executed instructions, which are already
+# independent of where functions land in memory, so alignment buys no stability here and only
+# perturbs the build. The alignment flag exists purely to stabilize wall-clock timings.
 [group('testing')]
 [script]
 bench-cg TARGET="":
