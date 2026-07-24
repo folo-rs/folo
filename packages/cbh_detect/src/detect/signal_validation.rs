@@ -93,6 +93,9 @@ impl Mode {
     /// so the context matches the mode's intended reporting semantics: branch (which
     /// reports both directions) opts in, history opts out. Branch mode ignores the
     /// flag today, but pinning it consistently keeps the context correct if that changes.
+    ///
+    /// `tip_index` feeds only the chart's trailing gap, which these detection-outcome
+    /// cases never inspect, so it is pinned to zero.
     fn context(self, merge_base_index: Option<usize>) -> AnalysisContext {
         let mode = match self {
             Self::History => AnalysisMode::History,
@@ -102,6 +105,7 @@ impl Mode {
             mode,
             config: AnalysisConfig::default(),
             merge_base_index,
+            tip_index: 0,
             include_improvements: self.reports_improvements(),
             include_inactive: false,
         }

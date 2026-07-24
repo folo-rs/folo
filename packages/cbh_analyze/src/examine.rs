@@ -37,8 +37,9 @@ use serde::Serialize;
 use tick::Clock;
 
 use super::{
-    AutoFacets, ReportFormat, Selection, Series, SeriesFilter, chart, dirty_base_exception_warning,
-    empty_history_hint, format_value, resolve_auto_facets, resolve_now, select_dataset,
+    AutoFacets, ReportFormat, Selection, Series, SeriesFilter, chart_series,
+    dirty_base_exception_warning, empty_history_hint, format_value, resolve_auto_facets,
+    resolve_now, select_dataset,
 };
 use crate::{AnalyzeError, RenderedReports, ReportRequest};
 
@@ -164,6 +165,7 @@ where
         metric_kind,
         &dataset.series,
         &dataset.commit_subjects,
+        dataset.tip_index,
     );
 
     // When the pivot is empty, explain why: either no run entered the selection at
@@ -224,6 +226,10 @@ struct DataPoint {
     dirty: bool,
     /// The commit's full title (subject), empty when topology reported none.
     title: String,
+    /// First-parent topological index of the commit. Chart-only: it places each point
+    /// in its own per-commit column and materializes the data-less commits between
+    /// observations as gaps. The point table and JSON never read it.
+    topo_index: usize,
 }
 
 /// One discriminant set's slice of the pivot.
@@ -248,16 +254,25 @@ struct Pivot {
     unit: &'static str,
     /// The per-set slices, one entry per discriminant set carrying the series.
     sets: Vec<SetPivot>,
+    /// Trailing-fill target for each set's chart: the analyzed tip's first-parent
+    /// index, so a series that stops short of the tip renders the data-less commits
+    /// after its last observation as a gap. Chart-only.
+    base_ref: Option<usize>,
 }
 
 /// Narrows the reconstructed series to the one `(benchmark, metric)` pair, once per
 /// discriminant set, and turns each into its ordered data points.
+///
+/// `tip_index` is the analyzed tip's first-parent index, carried onto the pivot as the
+/// chart's trailing-fill target so a series that stops short of the tip renders a
+/// trailing gap (see [`chart_of_points`]).
 fn build_pivot(
     project_id: &str,
     benchmark: &str,
     metric_kind: MetricKind,
     series: &[Series],
     commit_subjects: &HashMap<String, String>,
+    tip_index: usize,
 ) -> Pivot {
     let mut sets: Vec<SetPivot> = series
         .iter()
@@ -275,6 +290,7 @@ fn build_pivot(
                         value: point.value,
                         dirty: point.dirty,
                         title,
+                        topo_index: point.topo_index,
                     }
                 })
                 .collect();
@@ -294,6 +310,7 @@ fn build_pivot(
         metric: metric_kind.as_str(),
         unit: metric_kind.as_unit(),
         sets,
+        base_ref: Some(tip_index),
     }
 }
 
@@ -321,11 +338,17 @@ fn short_commit_id(commit_id: &str) -> &str {
     commit_id.get(..12).unwrap_or(commit_id)
 }
 
-/// The line chart of a set's ordered values, drawn before its data points (the same
-/// chart `analyze` renders for a finding). `None` when there are too few points to plot.
-fn chart_of_points(points: &[DataPoint]) -> Option<String> {
-    let values: Vec<f64> = points.iter().map(|point| point.value).collect();
-    chart(&values)
+/// The line chart of a set's observations, drawn before its data points (the same
+/// chart `analyze` renders for a finding). Each observation sits in its own per-commit
+/// column, with the data-less commits between observations — and, when `base_ref`
+/// extends past the last observation, the trailing commits up to the analyzed tip —
+/// rendered as gaps. `None` when there are too few points to plot.
+fn chart_of_points(points: &[DataPoint], base_ref: Option<usize>) -> Option<String> {
+    let pairs: Vec<(usize, f64)> = points
+        .iter()
+        .map(|point| (point.topo_index, point.value))
+        .collect();
+    chart_series(&pairs, base_ref)
 }
 
 /// Renders the pivot in the requested format, appending the diagnostic hint and
@@ -358,7 +381,7 @@ fn render_pivot_text(pivot: &Pivot, hint: Option<&str>, warning: Option<&str>) -
             // Lead the set with the same small line chart `analyze` draws, so a
             // maintainer sees the shape of the series before reading the points it
             // pivots.
-            if let Some(chart) = chart_of_points(&set.points) {
+            if let Some(chart) = chart_of_points(&set.points, pivot.base_ref) {
                 lines.push(chart);
                 lines.push(String::new());
             }
@@ -405,7 +428,7 @@ fn render_pivot_markdown(pivot: &Pivot, hint: Option<&str>, warning: Option<&str
             lines.push(format!("## {}", set.set));
             // The same series chart the text pivot draws, fenced as a `text`
             // block so it survives Markdown rendering (mirrors `analyze`).
-            if let Some(chart) = chart_of_points(&set.points) {
+            if let Some(chart) = chart_of_points(&set.points, pivot.base_ref) {
                 lines.push(String::new());
                 lines.push("```text".to_owned());
                 lines.push(chart);
@@ -976,6 +999,182 @@ mod tests {
         assert!(
             !report.contains('┤') && !report.contains('┼'),
             "no chart for a single point: {report}"
+        );
+    }
+
+    /// A `DataPoint` at the given topology and value, with the other fields fixed —
+    /// enough to drive [`chart_of_points`] and [`cbh_render::topology_columns`].
+    fn data_point(topo: usize, value: f64) -> DataPoint {
+        DataPoint {
+            commit: format!("c{topo}"),
+            short_commit: format!("c{topo}"),
+            value,
+            dirty: false,
+            title: String::new(),
+            topo_index: topo,
+        }
+    }
+
+    #[test]
+    fn chart_of_points_materializes_a_data_less_interior_commit_as_one_gap() {
+        // c0, c1, then c3 have data; the interior c2 (topo 2) does not. The tip is
+        // c3 (topo 3), so there is no trailing gap — exactly one interior gap column.
+        let gapped = [
+            data_point(0, 100.0),
+            data_point(1, 130.0),
+            data_point(3, 128.0),
+        ];
+        let pairs: Vec<(usize, f64)> = gapped.iter().map(|p| (p.topo_index, p.value)).collect();
+        // The span (3) is below the chart width, so the column count is exact and
+        // independent of the 48-wide cap: one column per commit c0..=c3.
+        let columns = cbh_render::topology_columns(&pairs, Some(3), 48);
+        assert_eq!(columns.len(), 4, "one column per commit c0..=c3");
+        assert_eq!(
+            columns.iter().filter(|value| value.is_nan()).count(),
+            1,
+            "exactly the data-less c2 is a gap"
+        );
+        assert!(columns[2].is_nan(), "the gap sits at c2's column");
+        assert!(
+            columns[0].is_finite() && columns[1].is_finite() && columns[3].is_finite(),
+            "the three real observations survive"
+        );
+
+        // The rendered chart differs from the same three values placed contiguously,
+        // proving topology (not observation order) drives the column layout.
+        let contiguous = [
+            data_point(0, 100.0),
+            data_point(1, 130.0),
+            data_point(2, 128.0),
+        ];
+        let with_gap = chart_of_points(&gapped, Some(3)).expect("the gapped series draws");
+        let without_gap =
+            chart_of_points(&contiguous, Some(2)).expect("the contiguous series draws");
+        assert_ne!(
+            with_gap, without_gap,
+            "the interior gap changes the chart raster"
+        );
+    }
+
+    #[test]
+    fn chart_of_points_materializes_the_no_newer_data_tail_as_a_trailing_gap() {
+        // Data stops at c2 while the analyzed tip is c3 (topo 3): the last commit has
+        // no observation, so the chart shows a single trailing gap column.
+        let points = [
+            data_point(0, 100.0),
+            data_point(1, 130.0),
+            data_point(2, 128.0),
+        ];
+        let pairs: Vec<(usize, f64)> = points.iter().map(|p| (p.topo_index, p.value)).collect();
+        let columns = cbh_render::topology_columns(&pairs, Some(3), 48);
+        assert_eq!(columns.len(), 4, "the tip commit c3 gets its own column");
+        assert_eq!(
+            columns.iter().filter(|value| value.is_nan()).count(),
+            1,
+            "exactly the analyzed tip is a trailing gap"
+        );
+        assert!(
+            columns[3].is_nan(),
+            "the trailing gap sits at the tip column"
+        );
+        assert!(
+            chart_of_points(&points, Some(3)).is_some(),
+            "the tail draws"
+        );
+    }
+
+    #[test]
+    fn a_data_less_interior_commit_still_lists_only_real_observations() {
+        // Store c0, c1, c3 — skipping the interior c2 — on the linear history whose
+        // tip is c3. The chart materializes c2 as a gap, but the point table and JSON
+        // list only the three real observations.
+        let storage = MemoryStorage::new();
+        store(
+            &storage,
+            &clean_key("c0"),
+            &single_metric_run(0, "c0", 100.0),
+        );
+        store(
+            &storage,
+            &clean_key("c1"),
+            &single_metric_run(1, "c1", 130.0),
+        );
+        store(
+            &storage,
+            &clean_key("c3"),
+            &single_metric_run(3, "c3", 128.0),
+        );
+        let git = linear_git();
+
+        let report = examine_json(&storage, &git, &options());
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let points = parsed["sets"][0]["points"].as_array().unwrap();
+        assert_eq!(points.len(), 3, "only the real observations: {report}");
+        let commits: Vec<&str> = points
+            .iter()
+            .map(|point| point["commit"].as_str().unwrap())
+            .collect();
+        assert_eq!(commits, ["c0", "c1", "c3"], "no phantom c2 row: {report}");
+        assert!(
+            points[0].get("topo_index").is_none(),
+            "the JSON point carries no topology index: {report}"
+        );
+
+        let text = examine(&storage, &git, &options());
+        assert!(
+            text.contains('┤') || text.contains('┼'),
+            "the chart is drawn across the gap: {text}"
+        );
+        assert!(text.contains("c3"), "the c3 row is present: {text}");
+        assert!(
+            !text.contains("| c2 |") && !text.contains("  c2  "),
+            "the data-less c2 never becomes a row: {text}"
+        );
+    }
+
+    #[test]
+    fn a_contiguous_history_charts_without_a_gap() {
+        // Every commit c0..=c3 has data and c3 is the tip, so the densified chart
+        // holds one finite column per commit with no `NaN`.
+        let storage = MemoryStorage::new();
+        store(
+            &storage,
+            &clean_key("c0"),
+            &single_metric_run(0, "c0", 100.0),
+        );
+        store(
+            &storage,
+            &clean_key("c1"),
+            &single_metric_run(1, "c1", 130.0),
+        );
+        store(
+            &storage,
+            &clean_key("c2"),
+            &single_metric_run(2, "c2", 128.0),
+        );
+        store(
+            &storage,
+            &clean_key("c3"),
+            &single_metric_run(3, "c3", 126.0),
+        );
+        let git = linear_git();
+
+        let report = examine_json(&storage, &git, &options());
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let points = parsed["sets"][0]["points"].as_array().unwrap();
+        assert_eq!(
+            points.len(),
+            4,
+            "every commit is a real observation: {report}"
+        );
+
+        // The densified columns the chart draws hold no gap.
+        let pairs = [(0_usize, 100.0), (1, 130.0), (2, 128.0), (3, 126.0)];
+        let columns = cbh_render::topology_columns(&pairs, Some(3), 48);
+        assert_eq!(columns.len(), 4);
+        assert!(
+            columns.iter().all(|value| value.is_finite()),
+            "a contiguous history has no gap columns"
         );
     }
 
