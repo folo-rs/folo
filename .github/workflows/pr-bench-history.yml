@@ -303,12 +303,15 @@ jobs:
     # cold-cache setup-environment on top of the analysis.
     timeout-minutes: 150
 
-    # id-token to self-federate with Entra (reads the history), contents for checkout, and
-    # pull-requests to post/update the rolling comment.
+    # id-token to self-federate with Entra (reads the history), contents for checkout,
+    # pull-requests to post/update the rolling comment, and actions:read so the machine-key
+    # download below can enumerate this run's artifacts through the REST run-artifacts endpoint
+    # (see that step's note) rather than the attempt-scoped internal artifact service.
     permissions:
       id-token: write
       contents: read
       pull-requests: write
+      actions: read
 
     steps:
       - name: Checkout repository
@@ -367,11 +370,21 @@ jobs:
       # the recipe scans recursively. A leg whose collection failed uploaded nothing, so its key is
       # simply absent; if EVERY leg failed the pattern download matches nothing (it does not fail) and
       # the recipe treats the empty directory as "nothing to analyze".
+      #
+      # `github-token` (with `run-id`, defaulted to this run) is what routes the download through the
+      # public REST run-artifacts endpoint instead of the attempt-bound internal artifact service.
+      # That endpoint lists a run's artifacts across ALL of its attempts, so after a PARTIAL re-run
+      # (e.g. `gh run rerun --failed` on one flaky collect leg) the surviving leg's artifact - which
+      # stays under the earlier attempt - still resolves. Without the token the action pins each
+      # artifact to the current attempt and 404s ("workflow run not found") on any older-attempt
+      # artifact, leaving `analyze` impossible to green without re-running the whole matrix.
       - name: Download collected machine keys
         uses: actions/download-artifact@v4
         with:
           pattern: pr-bench-history-machine-key-*
           path: ${{ steps.scratch.outputs.dir }}/machine-keys
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
 
       # Renders report.md (full Markdown), report.json (full JSON), summary.md (the condensed
       # top-findings Markdown) and notable.txt into the scratch directory, in BRANCH mode (PR head
