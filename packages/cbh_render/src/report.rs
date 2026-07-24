@@ -685,13 +685,14 @@ fn branch_chart_values(finding: &Finding) -> Vec<f64> {
 /// While the span fits (`span + 1 <= max_width`) each commit maps to its own column, so
 /// the topology is exact and a data-less commit is a single `NaN` column. Beyond that
 /// the span is downsampled: every real point still lands in some column (placed by
-/// integer index, never interpolated away, so neither an observation nor an axis extreme
-/// is lost), empty columns stay `NaN`, and a column that catches several observations
-/// averages them (a slight, documented blur of a dense region). Binning to `max_width`
-/// before the series reaches [`chart`] is essential: `rasciigraph` interpolates to its
-/// width *before* computing the axis min/max and its linear interpolation is
-/// NaN-poisoning, so a longer series would blend an isolated observation surrounded by
-/// `NaN` into `NaN` and drop it (and its value) entirely.
+/// integer index, never interpolated away), so an isolated observation is never dropped
+/// and empty columns stay `NaN`. A column that catches several observations averages
+/// them, which blurs a dense region and can attenuate an extreme that shares a bin — the
+/// one detail binning gives up. Binning to `max_width` before the series reaches [`chart`]
+/// is essential: `rasciigraph` interpolates to its width *before* computing the axis
+/// min/max and its linear interpolation is NaN-poisoning, so a longer series would blend
+/// an isolated observation surrounded by `NaN` into `NaN` and drop it (and its value)
+/// entirely.
 #[must_use]
 pub fn topology_columns(
     points: &[(usize, f64)],
@@ -2367,8 +2368,8 @@ mod tests {
         // topology span wider than the chart, an isolated observation trapped between
         // gaps blends into NaN and vanishes — taking its value out of the axis extrema.
         // Binning to CHART_WIDTH first (here a 100-commit span into 48 columns) must place
-        // every real observation in its own column so neither the observations nor the
-        // axis extrema can be lost.
+        // each isolated observation in its own column so neither those observations nor the
+        // axis extrema they define can be lost.
         let points = [(0, 1000.0), (49, 1.0), (99, 500.0)];
         let columns = topology_columns(&points, None, CHART_WIDTH as usize);
         assert_eq!(

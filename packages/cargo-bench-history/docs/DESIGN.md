@@ -911,8 +911,10 @@ underlying plotter resamples a series to its width with linear interpolation *be
 computing the axis extrema, and that interpolation is NaN-poisoning, so handing it a long
 gapped series would blend an isolated observation trapped between gaps into a gap and drop
 it — and its axis extreme — entirely. Binning first places every observation in a column by
-integer position (never interpolated away) and leaves empty columns as gaps, so no
-observation and neither axis extreme is ever lost.
+integer position (never interpolated away) and leaves empty columns as gaps, so an isolated
+observation is never dropped and every gap survives. Once the span outgrows the chart width
+several observations can share a column and are averaged, which blurs that dense region and
+can attenuate an extreme falling inside it — the one detail binning gives up.
 
 ### 8.7 Report formats
 
