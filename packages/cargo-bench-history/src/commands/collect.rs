@@ -862,15 +862,6 @@ where
                 .reporter
                 .note_with(|| format!("{engine}: stored {object_key}"));
 
-            // Replacing a clean run discards the data point its blessings accepted, so
-            // any blessing sidecars on this commit no longer describe a stored level.
-            // Remove them on overwrite so a stale blessing cannot silently re-baseline
-            // the new run.
-            if params.overwrite && !dirty {
-                invalidate_blessings(storage, &key, store.project_id, commit, store.reporter)
-                    .await?;
-            }
-
             Ok(EngineSummary {
                 stored: true,
                 count,
@@ -923,33 +914,6 @@ async fn store_result<S: Storage>(
         }
         Err(error) => Err(error.into()),
     }
-}
-
-/// Deletes every blessing sidecar recorded at `commit` in the partition `key`.
-///
-/// Called when an overwrite replaces a clean run: the blessings accepted the level
-/// of the run being replaced, so they are removed rather than left to re-baseline
-/// the new (possibly different) level.
-async fn invalidate_blessings<S: Storage>(
-    storage: &S,
-    key: &DiscriminantSet,
-    project: &str,
-    commit: &str,
-    reporter: &dyn Reporter,
-) -> Result<(), RunError> {
-    let prefix = key.commit_prefix(project, commit);
-    let keys = storage.list(&prefix).await?;
-    for object_key in keys {
-        let is_bless = object_key
-            .rsplit('/')
-            .next()
-            .is_some_and(|name| name.starts_with("bless-"));
-        if is_bless {
-            storage.delete(&object_key).await?;
-            reporter.note_with(|| format!("removed stale blessing {object_key}"));
-        }
-    }
-    Ok(())
 }
 
 /// Parses harvested engine output into result records, naming the offending
@@ -1998,7 +1962,7 @@ mod tests {
     }
 
     #[test]
-    fn overwriting_a_clean_run_removes_stale_blessing_sidecars() {
+    fn overwriting_a_clean_run_keeps_blessing_sidecars() {
         let storage = MemoryStorage::new();
         // A first clean run establishes the commit directory.
         drive(
@@ -2024,8 +1988,10 @@ mod tests {
         block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
         assert!(storage.keys().iter().any(|key| key == &bless_key));
 
-        // Overwriting the clean run discards the accepted data point, so its
-        // blessing sidecar is removed.
+        // Capturing a run never removes a blessing — even an overwrite that replaces
+        // the clean run leaves the sidecar in place. A blessing is removed only by the
+        // `unbless` command, so a pre-emptive blessing (applied before the data lands)
+        // survives the capture that gives it something to baseline.
         let overwrite = CollectOptions {
             overwrite: true,
             ..CollectOptions::default()
@@ -2041,8 +2007,8 @@ mod tests {
 
         let keys = storage.keys();
         assert!(
-            !keys.iter().any(|key| key == &bless_key),
-            "the stale blessing should be gone: {keys:?}"
+            keys.iter().any(|key| key == &bless_key),
+            "the blessing survives the capture: {keys:?}"
         );
         assert!(
             keys.iter().any(|key| key.ends_with("/clean.json")),
@@ -2075,9 +2041,9 @@ mod tests {
     #[test]
     fn overwriting_a_dirty_snapshot_keeps_blessing_sidecars() {
         let storage = MemoryStorage::new();
-        // Blessings accept the clean run's data point, so a blessing sidecar on the
-        // commit must survive when only a dirty snapshot of that commit is rewritten;
-        // invalidation is reserved for a clean overwrite that discards the point.
+        // Capturing never removes a blessing, so a blessing sidecar on the commit
+        // survives when a dirty snapshot of that commit is rewritten, just as it does
+        // for a clean run. Blessings are removed only by the `unbless` command.
         let machine = probe_machine_key();
         let commit_dir = format!(
             "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/{machine}/\

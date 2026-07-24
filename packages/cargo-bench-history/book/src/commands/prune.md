@@ -9,15 +9,19 @@ rather than reporting on them.
 # Preview deletion of dirty snapshots without deleting anything.
 cargo bench-history prune --local=./bench-history --dry-run --dirty
 
-# Delete clean runs (and their blessings) from the selected feature-branch commits.
+# Delete clean runs from the selected feature-branch commits.
 cargo bench-history prune --local=./bench-history --clean
+
+# Also delete the blessing sidecars in the selected range.
+cargo bench-history prune --local=./bench-history --clean --include-blessings
 ```
 
-## Deletion scope is required
+## An action is required
 
-A deletion scope is required: `--clean` removes clean runs and their blessings, `--dirty`
-removes only dirty snapshots, and `--all` removes both. A bare `prune` is therefore an
-error that names the three choices.
+An action is required: `--clean` removes clean runs, `--dirty` removes only dirty snapshots,
+and `--all` removes both. `--include-blessings` additionally deletes blessing sidecars and may
+be given on its own to remove only blessings. A bare `prune` is therefore an error that names
+these choices.
 
 ## What prune preserves
 
@@ -26,6 +30,7 @@ branch's own commits, preserving shared base-branch history. If the context is i
 base branch, deletion is refused unless you explicitly confirm it with `--prune-base`; that
 guard protects the mainline data every feature analysis compares against.
 
-A blessing is removed only when the clean run it annotates is removed in the same pass, so
-blessings follow their clean run and are never time-filtered directly. A dry run builds the
-identical plan but skips the deletes.
+Pruning runs never removes a blessing; only `--include-blessings` (or [`unbless`](bless.md))
+does. With `--include-blessings`, every blessing in the selected range is deleted — including
+an orphan on a commit that has no recorded run. A dry run builds the identical plan but skips
+the deletes.

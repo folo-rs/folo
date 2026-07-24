@@ -117,8 +117,10 @@ pub enum RunError {
         /// Human-readable description, including any partial backfill summary.
         message: String,
     },
-    /// A blessing precondition failed (a dirty working tree, a commit not on the
-    /// base branch, no stored result at the current commit, or no prefixes given).
+    /// A blessing precondition failed: no benchmark prefixes given (and no `--all`),
+    /// an unresolvable context ref, an undeterminable base branch, or — when the
+    /// commit has no stored run — an unconstrained target triple or machine key that
+    /// leaves no discriminant set to synthesize a sidecar for.
     Bless {
         /// Human-readable description of the precondition failure.
         message: String,

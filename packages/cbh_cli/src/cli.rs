@@ -745,18 +745,27 @@ impl ExamineCommand {
     }
 }
 
-/// Delete stored runs (and their blessing sidecars) from the data set a matching
-/// `analyze`/`list` would resolve.
+/// Delete stored runs from the data set a matching `analyze`/`list` would resolve.
 ///
-/// You must say which kinds of run to delete with `--clean`, `--dirty`, or
-/// `--all`. Pruning walks the selected commits from `--context` back to `--base`;
-/// deleting the base branch's own data set requires the `--prune-base` guard.
+/// You must say what to delete with `--clean`, `--dirty`, `--all`, or
+/// `--include-blessings`. Pruning runs never removes a blessing on its own;
+/// `--include-blessings` additionally deletes blessing sidecars in the selected
+/// range (including on commits with no recorded run) and may be given alone.
+/// Pruning walks the selected commits from `--context` back to `--base`; deleting
+/// the base branch's own data set requires the `--prune-base` guard.
 #[derive(Args, Debug)]
-#[command(group(
-    ArgGroup::new("prune-kind")
-        .args(["clean", "dirty", "all"])
-        .required(true)
-))]
+#[command(
+    group(
+        ArgGroup::new("prune-action")
+            .args(["clean", "dirty", "all", "include_blessings"])
+            .required(true)
+            .multiple(true)
+    ),
+    group(
+        ArgGroup::new("prune-run-kind")
+            .args(["clean", "dirty", "all"])
+    )
+)]
 struct PruneCommand {
     /// Restrict removal to these commits (a full or short commit ID, prefix-matched);
     /// repeatable (default: every one of the selected commits).
@@ -787,7 +796,7 @@ struct PruneCommand {
     #[command(flatten)]
     commit_selection: PruneCommitArgs,
 
-    /// Remove only clean runs and their blessing sidecars.
+    /// Remove only clean runs.
     #[arg(long, help_heading = HEADING_FILTER)]
     clean: bool,
 
@@ -795,10 +804,14 @@ struct PruneCommand {
     #[arg(long, help_heading = HEADING_FILTER)]
     dirty: bool,
 
-    /// Remove both clean runs (with their blessing sidecars) and dirty snapshots
-    /// (the same as `--clean --dirty`).
+    /// Remove both clean and dirty runs (the same as `--clean --dirty`).
     #[arg(long, help_heading = HEADING_FILTER)]
     all: bool,
+
+    /// Also remove blessing sidecars in the selected range, including on commits
+    /// with no recorded run. May be given alone to remove only blessings.
+    #[arg(long, help_heading = HEADING_FILTER)]
+    include_blessings: bool,
 }
 
 /// Commit selection for `prune`: the range of commits whose data is removed.
@@ -840,6 +853,7 @@ impl PruneCommand {
             machine_key: self.facets.machine_key,
             clean,
             dirty,
+            include_blessings: self.include_blessings,
             prune_base: self.prune_base,
             dry_run: self.dry_run,
             no_text: self.output.no_text,
@@ -2034,6 +2048,43 @@ mod tests {
         assert!(options.clean, "--all enables clean removal");
         assert!(options.dirty, "--all enables dirty removal");
         assert!(!options.dry_run);
+    }
+
+    #[test]
+    fn prune_include_blessings_combines_with_a_run_scope() {
+        // `--include-blessings` is additive: it must be usable alongside a run scope
+        // to prune runs and their blessings in one pass.
+        let Command::Prune(options) = parse(&["prune", "--all", "--include-blessings"]) else {
+            panic!("expected prune command");
+        };
+        assert!(options.clean, "--all enables clean removal");
+        assert!(options.dirty, "--all enables dirty removal");
+        assert!(options.include_blessings, "--include-blessings is set");
+    }
+
+    #[test]
+    fn prune_include_blessings_alone_is_accepted() {
+        let Command::Prune(options) = parse(&["prune", "--include-blessings"]) else {
+            panic!("expected prune command");
+        };
+        assert!(!options.clean);
+        assert!(!options.dirty);
+        assert!(options.include_blessings);
+    }
+
+    #[test]
+    fn prune_rejects_combining_clean_and_dirty() {
+        // `--clean`, `--dirty`, and `--all` remain mutually exclusive alternatives;
+        // `--all` is the way to remove both run kinds.
+        let error =
+            Cli::from_args(&["cargo-bench-history"], &["prune", "--clean", "--dirty"]).unwrap_err();
+        assert!(
+            error.output.contains("cannot be used with")
+                || error.output.contains("conflict")
+                || error.output.contains("cannot be used"),
+            "combining --clean and --dirty should be rejected: {}",
+            error.output
+        );
     }
 
     #[test]

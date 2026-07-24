@@ -59,10 +59,10 @@ impl Engine {
         }
     }
 
-    /// Parses an [`Engine`] from its stable lowercase identifier.
+    /// Parses an [`Engine`] from its stable identifier, case-insensitively.
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
-        match name {
+        match name.to_ascii_lowercase().as_str() {
             "criterion" => Some(Self::Criterion),
             "callgrind" => Some(Self::Callgrind),
             "alloc_tracker" => Some(Self::AllocTracker),
@@ -369,20 +369,26 @@ pub fn parse_key(key: &str) -> Option<StorageKey> {
     })
 }
 
-/// Replaces every character that is not safe in a single path segment with `_`,
-/// mapping an otherwise-empty or all-dots result to `_`.
+/// Canonicalizes a single path segment: lowercases ASCII letters, replaces every
+/// character that is not safe with `_`, and maps an otherwise-empty or all-dots
+/// result to `_`.
 ///
 /// "Safe" is the conservative set `[A-Za-z0-9._-]`, which is valid both as a
 /// filesystem path component (for local storage) and as an Azure blob name part.
 /// Mangling rather than rejecting means the tool never refuses a run merely
 /// because its project, triple, or machine key contains an awkward character.
+///
+/// Letters are folded to lower case so a segment's identity is case-insensitive:
+/// a discriminant set, project, or commit differing only in letter case resolves
+/// to the same storage key, and so blessing, pruning, and analysis never split on
+/// case alone.
 #[must_use]
 pub fn sanitize_segment(raw: &str) -> String {
     let mangled: String = raw
         .chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
-                c
+                c.to_ascii_lowercase()
             } else {
                 '_'
             }
@@ -527,12 +533,27 @@ mod tests {
     }
 
     #[test]
+    fn engine_from_name_is_case_insensitive() {
+        assert_eq!(Engine::from_name("Callgrind"), Some(Engine::Callgrind));
+        assert_eq!(Engine::from_name("ALL_THE_TIME"), Some(Engine::AllTheTime));
+    }
+
+    #[test]
     fn sanitize_segment_keeps_safe_characters() {
         assert_eq!(
             sanitize_segment("x86_64-unknown-linux-gnu"),
             "x86_64-unknown-linux-gnu"
         );
         assert_eq!(sanitize_segment("my.project-1"), "my.project-1");
+    }
+
+    #[test]
+    fn sanitize_segment_folds_case() {
+        assert_eq!(sanitize_segment("Team-App"), "team-app");
+        assert_eq!(
+            sanitize_segment("X86_64-PC-Windows-MSVC"),
+            "x86_64-pc-windows-msvc"
+        );
     }
 
     #[test]

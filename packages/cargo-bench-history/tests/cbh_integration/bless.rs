@@ -135,11 +135,12 @@ async fn unbless_restores_a_previously_blessed_regression() {
     );
 }
 
-/// Blessing is base-branch-only: attempting it from a feature branch is a hard
-/// error with no escape hatch, and records nothing.
+/// Blessing off the base branch is allowed but warns: the sidecar is still written,
+/// with an explanatory note that it only takes effect once the commit joins the base
+/// branch's first-parent history (for example after a fast-forward).
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn bless_on_a_feature_branch_is_rejected() {
+async fn bless_on_a_feature_branch_warns_but_succeeds() {
     let workspace = Workspace::clean_repo(&storage_only_config());
     workspace.commit_dated("2024-01-01", "c1");
     workspace.seed_callgrind("c1", 100.0);
@@ -147,19 +148,111 @@ async fn bless_on_a_feature_branch_is_rejected() {
     workspace.commit_dated("2024-01-02", "f1");
     workspace.seed_callgrind("f1", 130.0);
 
-    let error = workspace
-        .drive(&["bless", "nm/nm::observe"])
-        .await
-        .unwrap_err();
-    let RunError::Bless { message } = error else {
-        panic!("expected a bless error, got {error:?}");
+    let RunOutcome::Completed { message } =
+        workspace.drive(&["bless", "nm/nm::observe"]).await.unwrap()
+    else {
+        panic!("expected a completed outcome");
     };
     assert!(message.contains("not on the base branch"), "{message}");
-    // Only the two seeded clean runs exist; no blessing sidecar was written.
-    let objects = workspace.stored_objects();
-    assert!(
-        objects.iter().all(|(key, _)| key.ends_with("clean.json")),
-        "no blessing sidecar should be written: {objects:?}"
+    assert!(message.contains("first-parent history"), "{message}");
+    assert!(message.contains("Blessed"), "{message}");
+
+    // The blessing sidecar is still recorded at the off-base commit (the clean run
+    // present at f1 anchors it), so `list blessings` at HEAD finds it.
+    let listing = workspace.drive_json(&["list", "blessings"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&listing).unwrap();
+    let blessings = parsed["blessings"].as_array().unwrap();
+    assert_eq!(
+        blessings.len(),
+        1,
+        "the off-base blessing is still recorded: {listing}"
+    );
+}
+
+/// The off-base check follows *first-parent* history, not mere ancestry. A commit
+/// merged in as a second parent is reachable from the base branch, yet it is not on
+/// the base branch's official (first-parent) line, so `analyze` would ignore a
+/// blessing there. Blessing such a commit must therefore warn, even though a plain
+/// ancestry check would consider it "on the base branch."
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn bless_on_a_merged_in_side_commit_warns_off_first_parent() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // master:  root - c1 - M - c3   (M merges the side branch in)
+    //                  \   /
+    //  side:            sf1
+    workspace.commit("c1");
+    workspace.checkout_new_branch("side");
+    workspace.commit("sf1");
+    workspace.checkout("master");
+    workspace.merge("side", "M");
+    workspace.commit("c3");
+
+    // A clean run anchors the blessing at the second-parent commit sf1.
+    workspace.seed_callgrind("sf1", 100.0);
+
+    // Bless with HEAD on sf1: reachable from master (via M's second parent) but off
+    // master's first-parent line.
+    workspace.checkout("side");
+    let RunOutcome::Completed { message } =
+        workspace.drive(&["bless", "nm/nm::observe"]).await.unwrap()
+    else {
+        panic!("expected a completed outcome");
+    };
+    assert!(message.contains("not on the base branch"), "{message}");
+    assert!(message.contains("first-parent history"), "{message}");
+    assert!(message.contains("Blessed"), "{message}");
+
+    // The sidecar is still written at sf1.
+    let listing = workspace.drive_json(&["list", "blessings"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&listing).unwrap();
+    assert_eq!(
+        parsed["blessings"].as_array().unwrap().len(),
+        1,
+        "the off-first-parent blessing is still recorded: {listing}"
+    );
+}
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn bless_before_capture_applies_once_the_data_lands() {
+    let workspace = Workspace::clean_repo(&storage_only_config());
+    // Build the full commit history first, capturing no data yet.
+    for (date, label) in [
+        ("2024-01-01", "c1"),
+        ("2024-01-02", "c2"),
+        ("2024-01-03", "c3"),
+        ("2024-01-04", "c4"),
+        ("2024-01-05", "c5"),
+        ("2024-01-06", "c6"),
+    ] {
+        workspace.commit_dated(date, label);
+    }
+
+    // Pre-emptively accept the tip before any run exists there. With no data to
+    // anchor to, the target sets are synthesized from the resolved facets (every
+    // engine on this host).
+    let RunOutcome::Completed { message } = workspace.drive(&["bless", "--all"]).await.unwrap()
+    else {
+        panic!("expected a completed outcome");
+    };
+    assert!(message.contains("no stored result"), "{message}");
+    assert!(message.contains("Blessed"), "{message}");
+
+    // Now capture the rising Callgrind history over those same commits.
+    workspace.seed_callgrind("c1", 100.0);
+    workspace.seed_callgrind("c2", 100.0);
+    workspace.seed_callgrind("c3", 100.0);
+    workspace.seed_callgrind("c4", 130.0);
+    workspace.seed_callgrind("c5", 130.0);
+    workspace.seed_callgrind("c6", 130.0);
+
+    // The pre-emptive blessing occupies the exact Callgrind set the run landed in,
+    // so the regression is suppressed with no re-bless.
+    let report = workspace.drive_json(&["analyze"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(
+        parsed["regressions"], 0,
+        "a pre-emptive blessing must apply once the data lands: {report}"
     );
 }
 

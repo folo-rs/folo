@@ -187,6 +187,10 @@ engine is partitioned by machine key, so a bare query scopes every engine unifor
 the machine-key facet. A facet that matches several sets yields one report per set —
 parallel data sets analyzed individually.
 
+Facet identity is **case-insensitive**: engine names and every key segment are normalized to
+lowercase, so `Callgrind`, `callgrind`, and `CALLGRIND` name the same engine, and a triple or
+machine key differing only in case resolves to one set rather than silently splitting into two.
+
 The commands divide into **create** and **query** roles. `collect` and `backfill` record
 new data into exactly one machine's reality, so they auto-detect every facet and accept
 only a machine-key override (for a stable CI-pool key); they reject engine or triple
@@ -569,18 +573,19 @@ bad run, or drop the ephemeral uncommitted-tree snapshots that evaluation runs l
 behind. It reuses `analyze`'s selection pipeline (keeping the three commands in lockstep)
 and then removes the selected objects rather than reporting on them.
 
-A deletion **scope is required** — clean runs (and the blessings riding on them), dirty
-snapshots only, or both — so a bare `prune` is an error that names the three. Pruning never
-touches base-branch history: it walks the selected commits from the context back to the
-merge-base with the base and deletes only the context branch's own commits, preserving the
-shared base. Deleting the base branch's own data set (context resolves onto the base) wipes
-the mainline every feature analysis compares against, so it is refused unless a confirming
-flag is passed. The one intentional divergence from `analyze` / `list` is that the base
-tip's dirty snapshots are admitted **unconditionally**, so a dirty prune can reclaim
-ephemeral base-branch snapshots regardless of the current tree state. A blessing is removed
-only when the clean run it annotates is removed in the same pass, so blessings follow their
-clean run and are never time-filtered directly. A dry-run builds the identical plan but
-skips the deletes.
+A deletion **action is required** — remove clean runs, dirty snapshots, or both, and/or
+delete blessing sidecars with `--include-blessings` — so a bare `prune` is an error that
+names them. Pruning never touches base-branch history: it walks the selected commits from
+the context back to the merge-base with the base and deletes only the context branch's own
+commits, preserving the shared base. Deleting the base branch's own data set (context
+resolves onto the base) wipes the mainline every feature analysis compares against, so it is
+refused unless a confirming flag is passed. The one intentional divergence from `analyze` /
+`list` is that the base tip's dirty snapshots are admitted **unconditionally**, so a dirty
+prune can reclaim ephemeral base-branch snapshots regardless of the current tree state.
+Pruning runs never removes a blessing; `--include-blessings` deletes every blessing sidecar
+in the selected range — including an orphan on a commit with no recorded run — and may be
+given on its own to remove only blessings. A blessing is otherwise removed only by `unbless`.
+A dry-run builds the identical plan but skips the deletes.
 
 ### 7.7 `bless` / `unbless`
 
@@ -593,17 +598,24 @@ accepted step forever. Blessing re-baselines the series from the blessed commit 
 it is deliberately per-benchmark — accepting the benchmark that caused trouble must not
 silently accept every other benchmark that may be trending badly unnoticed. An all-switch
 (mutually exclusive with prefixes) accepts every benchmark recorded at the commit. Both
-commands operate on a context ref (default `HEAD`), so any base-branch commit can be
-(un)blessed, not just the checked-out one. A blessing is recorded only when the context
-commit is **on the base branch** and a clean run already exists there; both are hard errors
-otherwise, with no force escape hatch, because a feature-branch blessing would vanish or
-duplicate once the branch is squash-merged and blessing a commit with no data point is
-meaningless. A dirty working tree is allowed (the blessing targets the committed run) but
-warns.
+commands operate on a context ref (default `HEAD`), so any commit that resolves can be
+(un)blessed, not just the checked-out one. Blessing prefers — but does not require — the
+base branch and an existing clean run at the commit. Blessing off the base branch **warns**:
+the blessing only takes effect once the commit joins the base branch's first-parent history
+(for example after a fast-forward), so a fast-forward merge workflow can legitimately bless a
+commit already on a feature branch. Blessing a commit with **no recorded run** also warns
+(the commit id is worth double-checking) and synthesizes the target discriminant sets from
+the resolved facets — all four engines when `--engine` is omitted, under the resolved target
+triple and machine key — so an intentional change can be accepted *before* its data is
+captured; whichever engine's data lands there later is then accepted. This synthesis needs a
+concrete target triple and machine key, so a no-data blessing whose triple or machine-key
+facet is unconstrained (`all`) is a hard error. The remaining hard errors are an unresolvable
+context ref, an undeterminable base branch, and no prefixes without `--all`. A dirty working
+tree is allowed (the blessing targets the committed run) but warns.
 
-A blessing is an **append-only sidecar** alongside the commit's clean run, so narrowing one
-means unbless-then-re-bless the subset to keep, and overwriting a commit's clean run drops
-its stale sidecars. `unbless` deletes only the blessings recorded at the context commit;
+A blessing is an **append-only sidecar** in each targeted set's commit directory (which need
+not yet hold a run), so narrowing one means unbless-then-re-bless the subset to keep.
+Capturing or overwriting a run never removes a blessing. `unbless` deletes only the blessings recorded at the context commit;
 blessings at later commits stay in effect, so the timeline may remain blessed past the
 unblessed commit. `list blessings` audits them — the sidecars at the current commit by
 default, or the most recent blessing of every benchmark across the analysis window.
