@@ -183,6 +183,11 @@ pub struct AnalysisContext {
     /// history from the branch. `None` means no split is known (every point is
     /// treated as branch-side). Consulted only in [`AnalysisMode::Branch`].
     pub merge_base_index: Option<usize>,
+    /// First-parent topological index of the analyzed tip commit (the resolved
+    /// `--context`/HEAD). History-mode chart building uses it as the trailing-fill
+    /// target so a series that stops short of the tip renders the data-less commits
+    /// after its last observation as a gap. Consulted only in [`AnalysisMode::History`].
+    pub tip_index: usize,
     /// Whether improvements are reported. History mode defaults to regressions only
     /// (scheduled drift watch); branch mode always reports both.
     pub include_improvements: bool,
@@ -244,6 +249,10 @@ pub struct SeriesValue {
     pub value: f64,
     /// Whether the point is a dirty (uncommitted-tree) snapshot.
     pub dirty: bool,
+    /// First-parent topological index of the commit the point was measured against.
+    /// Charting places each point in its own per-commit column and materializes gaps
+    /// for the data-less commits between points; it is not part of the JSON contract.
+    pub topo_index: usize,
 }
 
 /// One flagged change: where it is, what moved, by how much, and how sure we are.
@@ -297,6 +306,13 @@ pub struct Finding {
     /// comparison base sits behind the merge-base; it is not part of the JSON finding
     /// contract.
     pub comparison_base_index: Option<usize>,
+    /// Trailing-fill target for the chart: the first-parent index the charted series
+    /// extends to when its last observation stops short of it. `Some(tip_index)` in
+    /// history mode, so the data-less commits between the last observation and the
+    /// analyzed tip render as a gap; `None` in branch mode, where the tip is the
+    /// always-present last column. Chart-only — like [`Finding::series`] it is not part
+    /// of the JSON finding contract.
+    pub chart_base_ref: Option<usize>,
 }
 
 impl Finding {
@@ -335,18 +351,80 @@ fn count_to_f64(count: usize) -> f64 {
     count as f64
 }
 
-/// The full series, oldest-first, as compact [`SeriesValue`] points for the JSON
-/// output (charting and provenance).
-fn series_values(series: &Series) -> Vec<SeriesValue> {
-    series
-        .points
-        .iter()
-        .map(|point| SeriesValue {
-            commit: owned_commit(point),
-            value: point.value,
-            dirty: point.dirty,
-        })
-        .collect()
+/// One source point as a compact [`SeriesValue`] chart point, carrying its
+/// `topo_index` so the renderer can place it in its own per-commit column.
+fn series_value_of(point: &SeriesPoint) -> SeriesValue {
+    SeriesValue {
+        commit: owned_commit(point),
+        value: point.value,
+        dirty: point.dirty,
+        topo_index: point.topo_index,
+    }
+}
+
+/// Builds a surviving finding's compact chart series and its trailing-fill target,
+/// dispatching on the analysis mode.
+///
+/// The series stays compact — one [`SeriesValue`] per real observation, never a
+/// materialized gap — and every point carries its `topo_index`, so the renderer can
+/// place each in its own per-commit column and draw the data-less commits between (and
+/// after) observations as gaps. This is presentation-only: detection reads
+/// `Series.points`, never this series.
+///
+/// History mode maps every source point 1:1 and returns `Some(context.tip_index)` as
+/// the trailing-fill target, so a series that stops short of the analyzed tip renders
+/// the intervening commits as the "no newer data" gap. Branch mode collapses the series
+/// (see [`branch_chart_series`]).
+fn build_chart_series(
+    source: &Series,
+    finding: &Finding,
+    context: &AnalysisContext,
+) -> (Vec<SeriesValue>, Option<usize>) {
+    match context.mode {
+        AnalysisMode::History => (
+            source.points.iter().map(series_value_of).collect(),
+            Some(context.tip_index),
+        ),
+        AnalysisMode::Branch => branch_chart_series(source, finding, context),
+    }
+}
+
+/// The branch-collapsed chart series and its (absent) trailing-fill target.
+///
+/// Branch mode judges the branch's tip commit alone, so the chart keeps the base-side
+/// points at their real `topo_index`, drops every interior branch commit, and
+/// represents the tip by a single point carrying the finding's judged `latest` value at
+/// `merge_base_index + 1`. The trailing-fill target is `None` — the tip is the
+/// always-present last column. The gap between the last base point (at the comparison
+/// base) and the tip therefore spans exactly `merge_base - comparison_base` (==
+/// `commits_behind`) columns.
+///
+/// A real branch finding always carries a known merge-base and comparison base; the
+/// fallback to a plain whole-series chart is defensive (never a panic) for a finding
+/// that somehow lacks either.
+fn branch_chart_series(
+    source: &Series,
+    finding: &Finding,
+    context: &AnalysisContext,
+) -> (Vec<SeriesValue>, Option<usize>) {
+    debug_assert!(
+        context.merge_base_index.is_some() && finding.comparison_base_index.is_some(),
+        "a branch finding always carries a known merge-base and comparison base",
+    );
+    let (Some(merge_base_index), Some(_)) =
+        (context.merge_base_index, finding.comparison_base_index)
+    else {
+        return (source.points.iter().map(series_value_of).collect(), None);
+    };
+    let (base, branch) = split_at_merge_base(&source.points, Some(merge_base_index));
+    let mut series: Vec<SeriesValue> = base.iter().copied().map(series_value_of).collect();
+    series.push(SeriesValue {
+        commit: finding.commit.clone(),
+        value: finding.latest,
+        dirty: branch.last().is_some_and(|point| point.dirty),
+        topo_index: merge_base_index.saturating_add(1),
+    });
+    (series, None)
 }
 
 /// The commit of a point as an owned `String`, for the JSON output.
@@ -640,6 +718,7 @@ fn evaluate_change_point(
             blessed_commit_time: None,
             series: Vec::new(),
             comparison_base_index: None,
+            chart_base_ref: None,
         },
         source_index: 0,
         bh_p: effective_p,
@@ -716,6 +795,7 @@ fn evaluate_drift(series: &Series, values: &[f64], config: &AnalysisConfig) -> O
             blessed_commit_time: None,
             series: Vec::new(),
             comparison_base_index: None,
+            chart_base_ref: None,
         },
         source_index: 0,
         bh_p: trend.p_value,
@@ -880,6 +960,7 @@ fn compare_samples(
             blessed_commit_time: None,
             series: Vec::new(),
             comparison_base_index: None,
+            chart_base_ref: None,
         },
         source_index: 0,
         bh_p: effective_p,
@@ -1063,6 +1144,7 @@ fn evaluate_resolved_spike(
             blessed_commit_time: None,
             series: Vec::new(),
             comparison_base_index: None,
+            chart_base_ref: None,
         },
         source_index: 0,
         bh_p: effective_p,
@@ -1157,7 +1239,9 @@ fn finalize_findings(
             let source = series
                 .get(source_index)
                 .expect("the source index was assigned from this series slice");
-            finding.series = series_values(source);
+            let (chart_series, chart_base_ref) = build_chart_series(source, &finding, context);
+            finding.series = chart_series;
+            finding.chart_base_ref = chart_base_ref;
             Some(finding)
         })
         .collect();
@@ -1402,12 +1486,25 @@ mod tests {
                 blessed_commit_time: None,
                 series: Vec::new(),
                 comparison_base_index: None,
+                chart_base_ref: None,
             },
             source_index: 0,
             bh_p: 0.0,
             split,
             line,
         }
+    }
+
+    /// The largest `topo_index` across every point of `series`, the realistic tip
+    /// index for a history-mode [`AnalysisContext`] over this test fixture. Zero when
+    /// there are no points.
+    fn max_topo_index(series: &[Series]) -> usize {
+        series
+            .iter()
+            .flat_map(|one| one.points.iter())
+            .map(|point| point.topo_index)
+            .max()
+            .unwrap_or(0)
     }
 
     /// Runs the history-mode detector with default config, reporting both
@@ -1419,6 +1516,7 @@ mod tests {
                 mode: AnalysisMode::History,
                 config: AnalysisConfig::default(),
                 merge_base_index: None,
+                tip_index: max_topo_index(series),
                 include_improvements: true,
                 include_inactive: false,
             },
@@ -1459,6 +1557,7 @@ mod tests {
             mode: AnalysisMode::History,
             config: AnalysisConfig::default(),
             merge_base_index: None,
+            tip_index: max_topo_index(&series),
             include_improvements: true,
             include_inactive: false,
         };
@@ -2130,6 +2229,7 @@ mod tests {
                 mode: AnalysisMode::Branch,
                 config: AnalysisConfig::default(),
                 merge_base_index,
+                tip_index: max_topo_index(series),
                 include_improvements: false,
                 include_inactive: false,
             },
@@ -2308,6 +2408,152 @@ mod tests {
         assert_eq!(finding.comparison_base_index, None);
     }
 
+    // -- Compact chart series (topology-accurate rendering input) -------------
+
+    /// The `(topo_index, value)` pairs of a finding's compact chart series.
+    fn chart_pairs(finding: &Finding) -> Vec<(usize, f64)> {
+        finding
+            .series
+            .iter()
+            .map(|point| (point.topo_index, point.value))
+            .collect()
+    }
+
+    #[test]
+    fn history_chart_series_maps_every_observation_and_targets_the_tip() {
+        // History mode keeps the series compact and 1:1 — every observation becomes one
+        // chart point carrying its real topo index — and stamps the analyzed tip as the
+        // trailing-fill target so a lagging series can render its "no newer data" gap.
+        let series = series_of(&[100.0, 100.0, 100.0, 130.0, 130.0, 130.0]);
+        let finding = only(changes(std::slice::from_ref(&series)));
+        assert_eq!(
+            chart_pairs(&finding),
+            vec![
+                (0, 100.0),
+                (1, 100.0),
+                (2, 100.0),
+                (3, 130.0),
+                (4, 130.0),
+                (5, 130.0),
+            ],
+        );
+        // `changes` analyses up to the last observation, so the tip index is 5.
+        assert_eq!(finding.chart_base_ref, Some(5));
+        // Detection is unaffected by carrying the topology through.
+        assert_eq!(finding.direction, Direction::Regression);
+        assert_eq!(finding.latest, 130.0);
+    }
+
+    #[test]
+    fn history_chart_series_preserves_interior_topology_gaps() {
+        // Data-less commits between observations survive as a jump in topo index, which
+        // the renderer turns into gap columns. Observations sit at topo 0..=2 and 6..=8,
+        // with topos 3..=5 carrying no data.
+        let series = placed_series(&[
+            (0, 100.0, false),
+            (1, 100.0, false),
+            (2, 100.0, false),
+            (6, 130.0, false),
+            (7, 130.0, false),
+            (8, 130.0, false),
+        ]);
+        let finding = only(changes(std::slice::from_ref(&series)));
+        assert_eq!(finding.direction, Direction::Regression);
+        assert_eq!(
+            chart_pairs(&finding)
+                .iter()
+                .map(|&(topo, _)| topo)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 6, 7, 8],
+            "the topo gap at 3..=5 is preserved for the renderer to draw",
+        );
+    }
+
+    #[test]
+    fn history_chart_base_ref_is_the_analyzed_tip_beyond_the_last_observation() {
+        // When analysis reaches commits newer than the last observation, the
+        // trailing-fill target is that tip, so the chart shows the lag as a trailing gap
+        // — the visual form of the "lagged history" warning.
+        let series = series_of(&[100.0, 100.0, 100.0, 130.0, 130.0, 130.0]);
+        let context = AnalysisContext {
+            mode: AnalysisMode::History,
+            config: AnalysisConfig::default(),
+            merge_base_index: None,
+            tip_index: 20,
+            include_improvements: true,
+            include_inactive: false,
+        };
+        let finding = only(find_changes(std::slice::from_ref(&series), &context));
+        assert_eq!(finding.chart_base_ref, Some(20));
+    }
+
+    #[test]
+    fn branch_chart_series_collapses_interior_commits_onto_the_tip() {
+        // Branch mode drops every interior branch commit and represents the branch by a
+        // single tip column at merge_base + 1 carrying the judged latest. Here the base
+        // is topo 0..=2 and the merge-base is topo 2, so the tip lands at topo 3.
+        let series = placed_series(&[
+            (0, 100.0, false),
+            (1, 100.0, false),
+            (2, 100.0, false),
+            (3, 130.0, false),
+            (4, 130.0, false),
+            (5, 130.0, false),
+        ]);
+        let finding = only(branch_changes(&[series], Some(2)));
+        assert_eq!(
+            finding.chart_base_ref, None,
+            "the tip is the always-present last column, so no trailing fill"
+        );
+        assert_eq!(
+            chart_pairs(&finding),
+            vec![(0, 100.0), (1, 100.0), (2, 100.0), (3, 130.0)],
+        );
+        let tip = finding.series.last().expect("the tip column is present");
+        assert_eq!(tip.topo_index, 3, "the tip is remapped to merge_base + 1");
+        assert_eq!(
+            tip.value, finding.latest,
+            "the tip column carries the judged latest, not a raw observation"
+        );
+    }
+
+    #[test]
+    fn branch_chart_series_is_unchanged_by_extra_interior_branch_commits() {
+        // Interior branch commits contribute zero columns, so a branch that detoured
+        // (improved, then regressed) collapses to the same compact chart series as one
+        // that went straight to the tip value — the base and tip state being equal.
+        let straight = placed_series(&[
+            (0, 100.0, false),
+            (1, 100.0, false),
+            (2, 100.0, false),
+            (3, 130.0, false),
+            (4, 130.0, false),
+            (5, 130.0, false),
+        ]);
+        let detour = placed_series(&[
+            (0, 100.0, false),
+            (1, 100.0, false),
+            (2, 100.0, false),
+            (3, 80.0, false),
+            (4, 80.0, false),
+            (5, 80.0, false),
+            (6, 130.0, false),
+            (7, 130.0, false),
+            (8, 130.0, false),
+        ]);
+        let straight_finding = only(branch_changes(&[straight], Some(2)));
+        let detour_finding = only(branch_changes(&[detour], Some(2)));
+        assert_eq!(
+            chart_pairs(&straight_finding),
+            chart_pairs(&detour_finding),
+            "interior branch commits must not change the collapsed chart series"
+        );
+        assert_eq!(
+            chart_pairs(&straight_finding),
+            vec![(0, 100.0), (1, 100.0), (2, 100.0), (3, 130.0)],
+        );
+    }
+
     // -- Blessing (re-baselining) and recovered spikes ------------------------
 
     /// Runs the history-mode detector reporting both directions *and* inactive
@@ -2319,6 +2565,7 @@ mod tests {
                 mode: AnalysisMode::History,
                 config: AnalysisConfig::default(),
                 merge_base_index: None,
+                tip_index: max_topo_index(series),
                 include_improvements: true,
                 include_inactive: true,
             },
@@ -2661,6 +2908,7 @@ mod tests {
             mode: AnalysisMode::History,
             config: AnalysisConfig::default(),
             merge_base_index: None,
+            tip_index: 0,
             include_improvements,
             include_inactive: false,
         };
@@ -2676,6 +2924,7 @@ mod tests {
             mode,
             config: AnalysisConfig::default(),
             merge_base_index: None,
+            tip_index: 0,
             include_improvements,
             include_inactive: false,
         };

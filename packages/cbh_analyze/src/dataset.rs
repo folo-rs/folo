@@ -57,6 +57,10 @@ pub(crate) struct SelectedDataSet {
     /// The full commit ID of the analyzed tip commit (the resolved `--context`/HEAD),
     /// carried into the report so it names the exact commit the findings describe.
     pub(crate) tip_commit: String,
+    /// First-parent topological index of the analyzed tip commit. History-mode chart
+    /// building uses it as the trailing-fill target so a series that stops short of the
+    /// tip renders the data-less commits after its last observation as a gap.
+    pub(crate) tip_index: usize,
     /// Whether the working tree carried uncommitted changes when the analysis ran;
     /// the report annotates the tip `+ uncommitted changes` when set.
     pub(crate) tip_dirty: bool,
@@ -444,6 +448,14 @@ where
         );
     }
 
+    // The analyzed tip's first-parent index (in practice `order.len() - 1`). History
+    // mode charts use it as the trailing-fill target so a series that stops short of
+    // the tip renders the data-less commits after its last observation as a gap.
+    let tip_index = order
+        .get(&tip_commit)
+        .copied()
+        .unwrap_or_else(|| order.len().saturating_sub(1));
+
     Ok(SelectedDataSet {
         series,
         run_index,
@@ -458,6 +470,7 @@ where
         facets,
         commit_subjects,
         tip_commit,
+        tip_index,
         tip_dirty,
         mode,
         merge_base_index,

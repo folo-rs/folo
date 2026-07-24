@@ -96,10 +96,16 @@ keys off a top-level "notable" flag and reads each finding's direction, magnitud
 attribution. Separately, `analyze` can render a condensed Markdown **summary** — a lossy
 excerpt for a size-limited downstream consumer.
 
-Human-readable findings include a compact chart. History mode shows the full selected
-series, including pre-blessing context; branch mode shows the comparison baseline and a
-bounded recent tail ending at the tip, so the commit being judged remains visible without
-compressing months of history into the same chart.
+Human-readable findings include a compact, **topology-accurate** chart: one column per
+first-parent commit from the first observation onward, so a commit with no measurement
+renders as a gap (a broken line) rather than being collapsed away. Leading gaps are trimmed
+and interior gaps kept, and a trailing gap up to the analyzed tip is the visual form of the
+"no newer data" disclosure — a benchmark not measured on the most recent commits. History
+mode shows the full selected series, including pre-blessing context; branch mode shows the
+comparison baseline and a bounded recent tail ending at the tip, dropping the interior branch
+commits and drawing the [comparison-base lag](#comparison-base-lag) as the empty columns
+between the newest base observation and the tip, so the commit being judged remains visible
+without compressing months of history into the same chart.
 
 There is **no severity classification**: a finding's magnitude is conveyed by its
 relative-change percent, and which findings warrant action is left to human or agent judgment.
