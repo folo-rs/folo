@@ -918,6 +918,27 @@ mod tests {
     }
 
     #[test]
+    fn synthesize_expands_an_auto_engine_and_explicit_facets() {
+        // An auto-detected engine resolves to that single engine, while explicit
+        // multi-value facets expand across each concrete value.
+        let facets = DiscriminantSetQuery {
+            engine: FacetFilter::Auto("callgrind".to_owned()),
+            target_triple: FacetFilter::Explicit(nonempty![
+                "x86_64-unknown-linux-gnu".to_owned(),
+                "aarch64-apple-darwin".to_owned(),
+            ]),
+            machine_key: FacetFilter::Auto("m1".to_owned()),
+        };
+        let sets = synthesize_target_sets(&facets);
+        // One engine × two triples × one machine = two sets.
+        assert_eq!(sets.len(), 2, "{sets:?}");
+        assert!(
+            sets.iter().all(|set| set.engine == Engine::Callgrind),
+            "the auto engine is callgrind: {sets:?}"
+        );
+    }
+
+    #[test]
     fn unbless_removes_every_blessing_at_head() {
         let storage = MemoryStorage::new();
         block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes())).unwrap();

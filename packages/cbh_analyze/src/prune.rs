@@ -1636,6 +1636,33 @@ mod tests {
     }
 
     #[test]
+    fn include_blessings_respects_the_since_cutoff() {
+        let storage = MemoryStorage::new();
+        // Orphan blessings on dated feature commits: f1 (100s) predates the 180s
+        // cutoff and is kept; f3 (300s) is on or after it and removed.
+        store_bless(&storage, &bless_key("f1", 10));
+        store_bless(&storage, &bless_key("f3", 30));
+        let git = dated_feature_git();
+
+        let opts = PruneOptions {
+            include_blessings: true,
+            since: Some("1970-01-01T00:03:00Z".to_owned()), // 180s
+            ..PruneOptions::default()
+        };
+        prune(&storage, &git, &opts);
+
+        let remaining = keys(&storage);
+        assert!(
+            remaining.contains(&bless_key("f1", 10)),
+            "f1's blessing (committed at 100s) predates --since and is kept"
+        );
+        assert!(
+            !remaining.contains(&bless_key("f3", 30)),
+            "f3's blessing (committed at 300s) is on or after --since and removed"
+        );
+    }
+
+    #[test]
     fn commit_filter_restricts_removal_to_the_named_commit() {
         let storage = MemoryStorage::new();
         store(&storage, &dirty_key("f1", 200), &set("f1"));
