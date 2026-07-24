@@ -2,8 +2,9 @@
 //! the base branch, so history analysis stops re-flagging an intentional change.
 //!
 //! A blessing is an append-only sidecar (`bless-<issued_unix>.json`, described by
-//! the `bless` / `unbless` command in `DESIGN.md`) stored in the same commit
-//! directory as the run it accepts. It names one
+//! the `bless` / `unbless` command in `DESIGN.md`) stored in the commit directory of
+//! each targeted discriminant set, which need not yet hold a run — a change can be
+//! blessed before its data is captured. It names one
 //! or more benchmark-id prefixes; a series whose qualified id starts with any of
 //! them is re-baselined to the blessed commit, so the accepted step stops being
 //! reported as a regression while its pre-blessing history is still retained for

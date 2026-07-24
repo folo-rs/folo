@@ -135,9 +135,12 @@
 //! ## `prune`
 //!
 //! Deletes a chosen portion of the stored data, using the same selection pipeline
-//! as `analyze`/`list`. A scope is required: `--dirty` removes ephemeral
-//! uncommitted-tree snapshots, `--clean` removes clean runs and their blessing
-//! sidecars, and `--all` removes both. Pruning preserves base-branch history — only
+//! as `analyze`/`list`. An action is required: `--dirty` removes ephemeral
+//! uncommitted-tree snapshots, `--clean` removes clean runs, and `--all` removes
+//! both. `--include-blessings` additionally deletes blessing sidecars in the
+//! selected range — including orphans on commits with no recorded run — and may be
+//! given on its own; pruning runs otherwise never removes a blessing. Pruning
+//! preserves base-branch history — only
 //! the context branch's own commits (those after the merge-base with `--base`) are
 //! removed. When the context resolves onto the base branch itself, the whole
 //! selection *is* base-branch history, so the deletion is refused unless
@@ -168,8 +171,12 @@
 //! `bless all_the_time/read_cell`), or `--all` to accept every benchmark recorded
 //! at the commit. A blessing re-baselines the benchmark's history from the blessed
 //! commit forward, so the accepted step is no longer reported while earlier points
-//! stay on the chart for context. Blessing is base-branch-only and requires an
-//! existing recorded run at the blessed commit. By default `bless`/`unbless` act on
+//! stay on the chart for context. Blessing prefers the base branch and an existing
+//! recorded run at the blessed commit, but neither is required: blessing off the base
+//! branch warns (the blessing only takes effect once the commit joins the base's
+//! first-parent history), and blessing a commit with no recorded run warns and
+//! synthesizes the target discriminant sets from the resolved facets, so a change can
+//! be accepted *before* its data is captured. By default `bless`/`unbless` act on
 //! `HEAD`; `--context <ref>` blesses or unblesses another commit instead. `unbless`
 //! removes the blessings recorded at that commit — note that any blessings defined
 //! at *later* commits remain in force, so the timeline may stay blessed past the
