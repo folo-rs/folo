@@ -447,12 +447,13 @@ pub struct ExamineOptions {
 /// Options for the `prune` command.
 ///
 /// The data-set-selection options mirror [`AnalyzeOptions`]/[`ListOptions`] so a
-/// `analyze`/`list` invocation would resolve. The caller must say which kinds of
-/// run to delete: `clean` removes clean runs (plus the blessing sidecars on every
-/// commit whose clean run is removed), `dirty` removes dirty (uncommitted-tree)
-/// snapshots, and setting both removes everything. Pruning the base branch's own
-/// data set (when `context` resolves to the same commit as `base`) requires
-/// `prune_base` as a safety guard.
+/// `analyze`/`list` invocation would resolve. The caller must say what to delete:
+/// `clean` removes clean runs, `dirty` removes dirty (uncommitted-tree) snapshots,
+/// and setting both removes every run. Pruning runs never removes a blessing;
+/// `include_blessings` additionally removes blessing sidecars in the selected
+/// range (including on commits with no recorded run) and may be given on its own.
+/// Pruning the base branch's own data set (when `context` resolves to the same
+/// commit as `base`) requires `prune_base` as a safety guard.
 #[doc(hidden)]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PruneOptions {
@@ -488,10 +489,14 @@ pub struct PruneOptions {
     /// auto-detects the current machine's fingerprint; `all` matches every
     /// machine.
     pub machine_key: Vec<String>,
-    /// Remove clean runs (and their blessing sidecars).
+    /// Remove clean runs.
     pub clean: bool,
     /// Remove dirty (uncommitted-tree) snapshots.
     pub dirty: bool,
+    /// Also remove blessing sidecars in the selected range, including on commits
+    /// with no recorded run. Off by default, so pruning runs never removes a
+    /// blessing (only the `unbless` command does).
+    pub include_blessings: bool,
     /// Confirm pruning the base branch's own data set (when `context` resolves to
     /// the same commit as `base`).
     pub prune_base: bool,

@@ -1,5 +1,5 @@
-//! The `prune` command: delete stored runs (and their blessing sidecars) from the
-//! data set a matching `analyze`/`list` pass resolves.
+//! The `prune` command: delete stored runs — and, on request, blessing sidecars —
+//! from the data set a matching `analyze`/`list` pass resolves.
 //!
 //! `prune` accepts the same data-set-selection options as `analyze`/`list` and
 //! resolves the identical commit topology via [`resolve_history`](super::resolve_history),
@@ -7,9 +7,12 @@
 //! ([`DirtyTipPolicy::Always`](super::DirtyTipPolicy)) — a deletion tool sees every
 //! stored run as a candidate, regardless of the present working-tree state.
 //!
-//! The caller must say which kinds of run to delete: `--clean` removes clean runs
-//! (plus the blessing sidecars on every commit whose clean run it removes),
-//! `--dirty` removes dirty (uncommitted-tree) snapshots, and `--all` removes both.
+//! The caller must say what to delete: `--clean` removes clean runs, `--dirty`
+//! removes dirty (uncommitted-tree) snapshots, and `--all` removes both. Pruning
+//! runs never removes a blessing; `--include-blessings` additionally deletes every
+//! blessing sidecar in the selected range — including on a commit with no recorded
+//! run (an orphan left by a pre-emptive blessing) — and may be given on its own to
+//! remove only blessings. A blessing is otherwise removed only by `unbless`.
 //!
 //! `prune` cleans only the *context branch's own* commits — those after the
 //! merge-base with the base ref — so base-branch history is preserved by default.
@@ -18,7 +21,7 @@
 //! is required to confirm it. `--dry-run` previews what would be removed without
 //! deleting anything.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use cbh_command::PruneOptions;
@@ -42,32 +45,39 @@ use super::{
 };
 use crate::{AnalyzeError, RenderedReports, ReportRequest};
 
-/// Which objects a prune pass deletes.
+/// Which runs a prune pass deletes.
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Scope {
-    /// Delete clean and dirty runs (plus the blessings on removed clean commits).
+    /// Delete clean and dirty runs.
     All,
     /// Delete only dirty (uncommitted-tree) snapshots.
     Dirty,
-    /// Delete only clean runs (plus their blessing sidecars).
+    /// Delete only clean runs.
     Clean,
 }
 
 impl Scope {
-    /// Resolves the deletion scope from the `--clean`/`--dirty`/`--all` switches.
-    /// The CLI requires exactly one of them; setting both `clean` and `dirty`
-    /// (what `--all` expands to) deletes everything.
-    fn from_options(options: &PruneOptions) -> Result<Self, AnalyzeError> {
-        match (options.clean, options.dirty) {
-            (true, true) => Ok(Self::All),
-            (false, true) => Ok(Self::Dirty),
-            (true, false) => Ok(Self::Clean),
-            (false, false) => Err(AnalyzeError::Analyze {
-                message: "specify which runs to delete: --clean (clean runs and their \
-                          blessings), --dirty (dirty snapshots), or --all (both)"
+    /// Resolves the run-deletion scope from the `--clean`/`--dirty`/`--all`
+    /// switches, or `None` when none is set (only blessings are being removed).
+    ///
+    /// At least one action must be requested: a run scope, or `--include-blessings`
+    /// on its own. `--all` expands to both `clean` and `dirty`.
+    fn from_options(options: &PruneOptions) -> Result<Option<Self>, AnalyzeError> {
+        let scope = match (options.clean, options.dirty) {
+            (true, true) => Some(Self::All),
+            (false, true) => Some(Self::Dirty),
+            (true, false) => Some(Self::Clean),
+            (false, false) => None,
+        };
+        if scope.is_none() && !options.include_blessings {
+            return Err(AnalyzeError::Analyze {
+                message: "specify what to delete: --clean (clean runs), --dirty (dirty \
+                          snapshots), --all (both), and/or --include-blessings (blessing \
+                          sidecars)"
                     .to_owned(),
-            }),
+            });
         }
+        Ok(scope)
     }
 
     /// Whether this scope deletes clean runs (and thus durable history).
@@ -232,125 +242,117 @@ where
         });
     }
 
-    // Separate blessing sidecars from runs: a blessing is removed only when the
-    // commit's clean run is removed (it references that run), so it is selected in
-    // a second pass keyed off the clean removals.
+    // Runs and blessing sidecars are pruned independently: `--clean`/`--dirty`/`--all`
+    // select runs, while `--include-blessings` selects blessing sidecars. Partition
+    // the candidates so each pass considers only its own object kind.
     let (runs, blessings): (Vec<_>, Vec<_>) = candidates
         .into_iter()
         .partition(|(_, parsed)| !parsed.is_bless());
 
     let mut items: Vec<RemovalItem> = Vec::new();
-    // Commits whose clean run is removed, so their blessing sidecars go too.
-    let mut clean_removed: HashSet<(DiscriminantSet, String)> = HashSet::new();
 
-    for (key, parsed) in runs {
-        let Some(&index) = order.get(&parsed.commit) else {
-            reporter.note_with(|| {
-                format!(
-                    "skipping {key}: commit {} is not on {target_ref}'s history",
-                    parsed.commit
-                )
-            });
-            continue;
-        };
-        // Preserve base-branch history: unless this is a base-branch prune, only
-        // the commits after the merge-base (the context branch's own commits) are
-        // eligible for removal.
-        if !commit_is_eligible(index, merge_base_index, tip_is_merge_base) {
-            reporter.note_with(|| {
-                format!(
-                    "skipping {key}: commit {} is on the base branch (preserved; prune from \
-                     the base branch with --prune-base to remove it)",
-                    parsed.commit
-                )
-            });
-            continue;
-        }
-        if !commit_matches(&parsed.commit, &options.commit) {
-            reporter.note_with(|| {
-                format!(
-                    "skipping {key}: commit {} does not match the requested <commit> arguments",
-                    parsed.commit
-                )
-            });
-            continue;
-        }
-
-        let kind = if parsed.is_dirty() {
-            RunKind::Dirty
-        } else {
-            RunKind::Clean
-        };
-
-        match kind {
-            RunKind::Dirty => {
-                if !scope.touches_dirty() {
-                    reporter
-                        .note_with(|| format!("skipping {key}: --clean removes only clean runs"));
-                    continue;
-                }
-                // `--dirty` reproduces `clean`: a dirty snapshot is removed only on
-                // a commit whose dirty runs the matching analyze/list would admit.
-                // The broader scopes delete dirty runs wherever they sit.
-                if scope == Scope::Dirty
-                    && !admit_dirty
-                        .get(parsed.commit.as_str())
-                        .copied()
-                        .unwrap_or(false)
-                {
-                    reporter.note_with(|| {
-                        format!(
-                            "skipping {key}: dirty snapshot on a base-side commit ({} admits \
-                             only clean runs)",
-                            parsed.commit
-                        )
-                    });
-                    continue;
-                }
-            }
-            RunKind::Clean => {
-                if !scope.touches_clean() {
-                    reporter
-                        .note_with(|| format!("skipping {key}: --dirty removes only dirty runs"));
-                    continue;
-                }
-            }
-            RunKind::Bless => unreachable!("blessings were partitioned out"),
-        }
-
-        // The `--since` cutoff is a per-commit property — git's committer date —
-        // which topology already resolved with the rest of the history, so deciding
-        // it needs no object fetch.
-        if before_since_cutoff(commit_times.get(&parsed.commit).copied(), since) {
-            reporter
-                .note_with(|| format!("skipping {key}: its commit predates the --since cutoff"));
-            continue;
-        }
-
-        if kind == RunKind::Clean {
-            clean_removed.insert((parsed.set.clone(), parsed.commit.clone()));
-        }
-        reporter.note_with(|| format!("selected {key} for removal"));
-        items.push(RemovalItem {
-            index,
-            set: parsed.set,
-            commit: parsed.commit,
-            key,
-            kind,
-        });
-    }
-
-    // Second pass: a blessing sidecar is removed exactly when its commit's clean
-    // run is removed (the clean run's blessing has nothing left to baseline once
-    // the run is gone).
-    if scope.touches_clean() {
-        for (key, parsed) in blessings {
-            let Some(&index) = order.get(&parsed.commit) else {
+    if let Some(scope) = scope {
+        for (key, parsed) in runs {
+            let Some(index) = selected_index(
+                &key,
+                &parsed.commit,
+                &order,
+                merge_base_index,
+                tip_is_merge_base,
+                &options.commit,
+                &target_ref,
+                reporter,
+            ) else {
                 continue;
             };
-            if !clean_removed.contains(&(parsed.set.clone(), parsed.commit.clone())) {
-                reporter
-                    .note_with(|| format!("skipping {key}: its clean run is not being removed"));
+
+            let kind = if parsed.is_dirty() {
+                RunKind::Dirty
+            } else {
+                RunKind::Clean
+            };
+
+            match kind {
+                RunKind::Dirty => {
+                    if !scope.touches_dirty() {
+                        reporter.note_with(|| {
+                            format!("skipping {key}: --clean removes only clean runs")
+                        });
+                        continue;
+                    }
+                    // `--dirty` reproduces `clean`: a dirty snapshot is removed only on
+                    // a commit whose dirty runs the matching analyze/list would admit.
+                    // The broader scopes delete dirty runs wherever they sit.
+                    if scope == Scope::Dirty
+                        && !admit_dirty
+                            .get(parsed.commit.as_str())
+                            .copied()
+                            .unwrap_or(false)
+                    {
+                        reporter.note_with(|| {
+                            format!(
+                                "skipping {key}: dirty snapshot on a base-side commit ({} admits \
+                                 only clean runs)",
+                                parsed.commit
+                            )
+                        });
+                        continue;
+                    }
+                }
+                RunKind::Clean => {
+                    if !scope.touches_clean() {
+                        reporter.note_with(|| {
+                            format!("skipping {key}: --dirty removes only dirty runs")
+                        });
+                        continue;
+                    }
+                }
+                RunKind::Bless => unreachable!("blessings were partitioned out"),
+            }
+
+            // The `--since` cutoff is a per-commit property — git's committer date —
+            // which topology already resolved with the rest of the history, so deciding
+            // it needs no object fetch.
+            if before_since_cutoff(commit_times.get(&parsed.commit).copied(), since) {
+                reporter.note_with(|| {
+                    format!("skipping {key}: its commit predates the --since cutoff")
+                });
+                continue;
+            }
+
+            reporter.note_with(|| format!("selected {key} for removal"));
+            items.push(RemovalItem {
+                index,
+                set: parsed.set,
+                commit: parsed.commit,
+                key,
+                kind,
+            });
+        }
+    }
+
+    // Blessing sidecars are removed only with `--include-blessings`, and then every
+    // one in the selected range goes — including on a commit with no recorded run (an
+    // orphan left by a pre-emptive blessing) — because a blessing stands on its own
+    // rather than referencing a stored run.
+    if options.include_blessings {
+        for (key, parsed) in blessings {
+            let Some(index) = selected_index(
+                &key,
+                &parsed.commit,
+                &order,
+                merge_base_index,
+                tip_is_merge_base,
+                &options.commit,
+                &target_ref,
+                reporter,
+            ) else {
+                continue;
+            };
+            if before_since_cutoff(commit_times.get(&parsed.commit).copied(), since) {
+                reporter.note_with(|| {
+                    format!("skipping {key}: its commit predates the --since cutoff")
+                });
                 continue;
             }
             reporter.note_with(|| format!("selected {key} for removal (blessing sidecar)"));
@@ -412,6 +414,55 @@ fn commit_matches(commit: &str, filters: &[String]) -> bool {
     filters
         .iter()
         .any(|filter| commit.starts_with(&filter.to_ascii_lowercase()))
+}
+
+/// The first-parent index of `commit` when it is in the selected range: on the
+/// target's history, eligible for removal (not preserved base-branch history), and
+/// matching the `<commit>` selection. Returns `None`, after noting why, when the
+/// commit is out of range. `key` names the object being considered, for the note.
+///
+/// Both prune passes (runs and blessing sidecars) share these commit-level gates;
+/// each pass then applies its own remaining checks (run-kind and `--since`).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "shared gate over resolved topology"
+)]
+fn selected_index(
+    key: &str,
+    commit: &str,
+    order: &HashMap<String, usize>,
+    merge_base_index: Option<usize>,
+    tip_is_merge_base: bool,
+    commit_filters: &[String],
+    target_ref: &str,
+    reporter: &dyn Reporter,
+) -> Option<usize> {
+    let Some(&index) = order.get(commit) else {
+        reporter.note_with(|| {
+            format!("skipping {key}: commit {commit} is not on {target_ref}'s history")
+        });
+        return None;
+    };
+    // Preserve base-branch history: unless this is a base-branch prune, only the
+    // commits after the merge-base (the context branch's own commits) are eligible.
+    if !commit_is_eligible(index, merge_base_index, tip_is_merge_base) {
+        reporter.note_with(|| {
+            format!(
+                "skipping {key}: commit {commit} is on the base branch (preserved; prune from \
+                 the base branch with --prune-base to remove it)"
+            )
+        });
+        return None;
+    }
+    if !commit_matches(commit, commit_filters) {
+        reporter.note_with(|| {
+            format!(
+                "skipping {key}: commit {commit} does not match the requested <commit> arguments"
+            )
+        });
+        return None;
+    }
+    Some(index)
 }
 
 /// Which kind of object a removal item names.
@@ -1100,7 +1151,7 @@ mod tests {
     }
 
     #[test]
-    fn all_scope_removes_clean_dirty_and_blessings_for_a_commit() {
+    fn all_scope_with_include_blessings_removes_clean_dirty_and_blessings_for_a_commit() {
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("f1"), &set("f1"));
         store(&storage, &dirty_key("f1", 200), &set("f1"));
@@ -1113,6 +1164,7 @@ mod tests {
         let opts = PruneOptions {
             clean: true,
             dirty: true,
+            include_blessings: true,
             commit: vec!["f1".to_owned()],
             ..PruneOptions::default()
         };
@@ -1139,7 +1191,40 @@ mod tests {
     }
 
     #[test]
-    fn clean_scope_removes_clean_and_blessings_but_keeps_dirty() {
+    fn pruning_runs_keeps_blessings_without_include_blessings() {
+        let storage = MemoryStorage::new();
+        store(&storage, &clean_key("f1"), &set("f1"));
+        store(&storage, &dirty_key("f1", 200), &set("f1"));
+        store_bless(&storage, &bless_key("f1", 50));
+        let git = feature_git();
+
+        // `--all` removes both runs but leaves the blessing: capturing or pruning a
+        // run never removes a blessing, only `unbless` (or `--include-blessings`) does.
+        let opts = PruneOptions {
+            clean: true,
+            dirty: true,
+            commit: vec!["f1".to_owned()],
+            ..PruneOptions::default()
+        };
+        let report = prune_json(&storage, &git, &opts);
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(parsed["totals"]["runs"], 2, "clean + dirty: {report}");
+        assert_eq!(parsed["totals"]["blessings"], 0, "{report}");
+
+        let remaining = keys(&storage);
+        assert!(!remaining.contains(&clean_key("f1")), "f1 clean removed");
+        assert!(
+            !remaining.contains(&dirty_key("f1", 200)),
+            "f1 dirty removed"
+        );
+        assert!(
+            remaining.contains(&bless_key("f1", 50)),
+            "the blessing survives a run prune"
+        );
+    }
+
+    #[test]
+    fn include_blessings_with_clean_scope_removes_clean_and_blessings_but_keeps_dirty() {
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("f1"), &set("f1"));
         store(&storage, &dirty_key("f1", 200), &set("f1"));
@@ -1148,6 +1233,7 @@ mod tests {
 
         let opts = PruneOptions {
             clean: true,
+            include_blessings: true,
             commit: vec!["f1".to_owned()],
             ..PruneOptions::default()
         };
@@ -1157,7 +1243,7 @@ mod tests {
         assert!(!remaining.contains(&clean_key("f1")), "clean removed");
         assert!(
             !remaining.contains(&bless_key("f1", 50)),
-            "blessing removed with its clean run"
+            "blessing removed by --include-blessings"
         );
         assert!(
             remaining.contains(&dirty_key("f1", 200)),
@@ -1166,17 +1252,91 @@ mod tests {
     }
 
     #[test]
-    fn prune_leaves_a_blessing_whose_commit_is_off_history() {
+    fn include_blessings_removes_an_orphan_blessing_with_no_run() {
+        let storage = MemoryStorage::new();
+        // A pre-emptive blessing on an in-range commit that has no recorded run.
+        store_bless(&storage, &bless_key("f1", 50));
+        let git = feature_git();
+
+        // `--include-blessings` alone (no run scope) removes the orphan blessing.
+        let opts = PruneOptions {
+            include_blessings: true,
+            commit: vec!["f1".to_owned()],
+            ..PruneOptions::default()
+        };
+        let report = prune_json(&storage, &git, &opts);
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(parsed["totals"]["runs"], 0, "no runs removed: {report}");
+        assert_eq!(parsed["totals"]["blessings"], 1, "{report}");
+        assert!(
+            !keys(&storage).contains(&bless_key("f1", 50)),
+            "orphan blessing removed"
+        );
+    }
+
+    #[test]
+    fn include_blessings_alone_leaves_runs_untouched() {
+        let storage = MemoryStorage::new();
+        store(&storage, &clean_key("f1"), &set("f1"));
+        store_bless(&storage, &bless_key("f1", 50));
+        let git = feature_git();
+
+        let opts = PruneOptions {
+            include_blessings: true,
+            commit: vec!["f1".to_owned()],
+            ..PruneOptions::default()
+        };
+        prune(&storage, &git, &opts);
+
+        let remaining = keys(&storage);
+        assert!(
+            remaining.contains(&clean_key("f1")),
+            "the clean run is untouched"
+        );
+        assert!(
+            !remaining.contains(&bless_key("f1", 50)),
+            "the blessing is removed"
+        );
+    }
+
+    #[test]
+    fn prune_without_any_action_is_an_error() {
+        let storage = MemoryStorage::new();
+        store(&storage, &clean_key("f1"), &set("f1"));
+        let git = feature_git();
+
+        let error = block_on(prune_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &PruneOptions::default(),
+            &auto(),
+            now(),
+            &RecordingReporter::new(),
+        ))
+        .unwrap_err();
+        match error {
+            AnalyzeError::Analyze { message } => {
+                assert!(message.contains("--include-blessings"), "{message}");
+            }
+            other => panic!("expected an Analyze error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn include_blessings_leaves_a_blessing_whose_commit_is_off_history() {
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("f1"), &set("f1"));
         // A blessing sidecar on a commit that is not on the analyzed history; the
-        // clean-touching second pass skips it instead of removing it.
+        // blessing pass skips it because the range only covers commits on history.
         store_bless(&storage, &bless_key("z9", 70));
         let git = feature_git();
 
         let opts = PruneOptions {
             clean: true,
             dirty: true,
+            include_blessings: true,
             commit: vec!["f1".to_owned()],
             ..PruneOptions::default()
         };
@@ -1472,6 +1632,33 @@ mod tests {
         assert!(
             !remaining.contains(&dirty_key("f3", 30)),
             "f3 (committed at 300s) is after --since and removed"
+        );
+    }
+
+    #[test]
+    fn include_blessings_respects_the_since_cutoff() {
+        let storage = MemoryStorage::new();
+        // Orphan blessings on dated feature commits: f1 (100s) predates the 180s
+        // cutoff and is kept; f3 (300s) is on or after it and removed.
+        store_bless(&storage, &bless_key("f1", 10));
+        store_bless(&storage, &bless_key("f3", 30));
+        let git = dated_feature_git();
+
+        let opts = PruneOptions {
+            include_blessings: true,
+            since: Some("1970-01-01T00:03:00Z".to_owned()), // 180s
+            ..PruneOptions::default()
+        };
+        prune(&storage, &git, &opts);
+
+        let remaining = keys(&storage);
+        assert!(
+            remaining.contains(&bless_key("f1", 10)),
+            "f1's blessing (committed at 100s) predates --since and is kept"
+        );
+        assert!(
+            !remaining.contains(&bless_key("f3", 30)),
+            "f3's blessing (committed at 300s) is on or after --since and removed"
         );
     }
 

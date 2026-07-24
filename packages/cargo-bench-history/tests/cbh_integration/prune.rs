@@ -298,8 +298,8 @@ async fn prune_dirty_since_only_removes_runs_on_or_after_the_cutoff() {
     );
 }
 
-/// The `--all` scope deletes clean *and* dirty runs (and their blessing sidecars)
-/// for the narrowed selection. A `<commit>` argument selecting one feature commit removes its
+/// The `--all` scope deletes clean *and* dirty runs for the narrowed selection. A
+/// `<commit>` argument selecting one feature commit removes its
 /// clean and dirty runs while leaving the base-branch run intact.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
@@ -326,8 +326,9 @@ async fn prune_all_removes_clean_and_dirty_for_a_commit() {
     assert_eq!(parsed["totals"]["runs"], 1, "{message}");
 }
 
-/// `prune` requires a scope: invoking it without `--clean`, `--dirty`, or `--all`
-/// is rejected at parse time, protecting against an accidental wipe with no intent.
+/// `prune` requires an action: invoking it without `--clean`, `--dirty`, `--all`,
+/// or `--include-blessings` is rejected at parse time, protecting against an
+/// accidental wipe with no intent.
 #[test]
 fn prune_requires_a_scope() {
     let error = Cli::from_args(&["cargo-bench-history"], &["prune"]).unwrap_err();
@@ -374,7 +375,7 @@ async fn prune_all_removes_only_the_feature_side() {
     );
 }
 
-/// `--clean` deletes clean runs (and their blessings) while leaving dirty snapshots
+/// `--clean` deletes clean runs while leaving dirty snapshots
 /// in place — the inverse of `--dirty`.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
@@ -404,11 +405,12 @@ async fn prune_clean_scope_removes_clean_and_keeps_dirty() {
     assert_eq!(parsed["totals"]["runs"], 1, "dirty f1 survived: {message}");
 }
 
-/// A blessing sidecar follows its clean run: deleting a commit's clean run with the
-/// default scope also removes the blessing recorded there.
+/// Pruning a run never removes a blessing; only `--include-blessings` (or `unbless`)
+/// does. The default `--all` prune deletes the clean run but leaves the blessing,
+/// which `--include-blessings` then removes.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn prune_removes_a_blessing_with_its_clean_run() {
+async fn include_blessings_is_required_to_prune_a_blessing() {
     let workspace = Workspace::clean_repo(&storage_only_config());
     workspace.seed_rising_callgrind_history();
     let head = workspace.head();
@@ -424,13 +426,30 @@ async fn prune_removes_a_blessing_with_its_clean_run() {
         "{message}"
     );
 
-    // Pruning HEAD's clean run also deletes the blessing that rode on it. The
-    // checkout is the base branch tip, so the base-branch guard must be confirmed.
+    // The default `--all` prune removes HEAD's clean run but leaves the blessing.
+    // The checkout is the base branch tip, so the base-branch guard must be confirmed.
     let message = workspace
         .drive_json(&["prune", &head, "--all", "--prune-base"])
         .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["totals"]["runs"], 1, "the clean HEAD run: {message}");
+    assert_eq!(parsed["totals"]["blessings"], 0, "{message}");
+
+    // The blessing survives the run prune.
+    let message = workspace.drive_json(&["list", "blessings"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
+    assert_eq!(
+        parsed["blessings"].as_array().unwrap().len(),
+        1,
+        "the blessing outlived its clean run: {message}"
+    );
+
+    // `--include-blessings` removes the now-orphan blessing.
+    let message = workspace
+        .drive_json(&["prune", &head, "--include-blessings", "--prune-base"])
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
+    assert_eq!(parsed["totals"]["runs"], 0, "no runs left: {message}");
     assert_eq!(parsed["totals"]["blessings"], 1, "{message}");
 
     // The blessing is gone.
@@ -438,7 +457,41 @@ async fn prune_removes_a_blessing_with_its_clean_run() {
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert!(
         parsed["blessings"].as_array().unwrap().is_empty(),
-        "the blessing was removed with its clean run: {message}"
+        "the blessing was removed by --include-blessings: {message}"
+    );
+}
+
+/// `--all` and `--include-blessings` are additive and combine in a single
+/// invocation: the run and its blessing are both removed in one pass.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn all_and_include_blessings_combine_in_one_invocation() {
+    let workspace = Workspace::clean_repo(&storage_only_config());
+    workspace.seed_rising_callgrind_history();
+    let head = workspace.head();
+
+    workspace.drive(&["bless", "nm/nm::observe"]).await.unwrap();
+
+    // A single pass with both flags removes the clean HEAD run and its blessing.
+    let message = workspace
+        .drive_json(&[
+            "prune",
+            &head,
+            "--all",
+            "--include-blessings",
+            "--prune-base",
+        ])
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
+    assert_eq!(parsed["totals"]["runs"], 1, "the clean HEAD run: {message}");
+    assert_eq!(parsed["totals"]["blessings"], 1, "the blessing: {message}");
+
+    // Both are gone.
+    let message = workspace.drive_json(&["list", "blessings"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
+    assert!(
+        parsed["blessings"].as_array().unwrap().is_empty(),
+        "the blessing was removed alongside its run: {message}"
     );
 }
 
