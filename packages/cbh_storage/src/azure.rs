@@ -185,7 +185,7 @@ impl AzureBlobStorage {
     fn blob_client(&self, key: &str) -> Result<BlobClient, StorageError> {
         let mut url = self.container_endpoint.clone();
         url.path_segments_mut()
-            .map_err(|()| io_error("Azure endpoint cannot be a base URL"))?
+            .map_err(|()| config_error("Azure endpoint cannot be a base URL"))?
             .extend(key.split('/'));
         let options = BlobClientOptions {
             client_options: self.shared_client_options(),
@@ -640,11 +640,6 @@ fn azure_io(error: &azure_core::Error) -> StorageError {
     StorageError::io(io::Error::other(format!("Azure Blob error: {error:?}")))
 }
 
-/// Builds a generic storage I/O error from a static message.
-fn io_error(message: &'static str) -> StorageError {
-    StorageError::io(io::Error::other(message))
-}
-
 /// Builds a storage configuration error.
 fn config_error(message: impl Into<String>) -> StorageError {
     StorageError::config(message)
@@ -768,6 +763,27 @@ mod tests {
         ) -> azure_core::Result<azure_core::http::AsyncRawResponse> {
             Ok(azure_core::http::AsyncRawResponse::from_bytes(
                 StatusCode::Forbidden,
+                Headers::new(),
+                azure_core::Bytes::new(),
+            ))
+        }
+    }
+
+    /// An HTTP client that answers every request with `404 Not Found`, standing
+    /// in for a blob (or container) that does not exist. The status is outside
+    /// the SDK's retry set, so the request is issued exactly once and the test
+    /// incurs no backoff delay.
+    #[derive(Debug)]
+    struct NotFoundHttpClient;
+
+    #[async_trait::async_trait]
+    impl HttpClient for NotFoundHttpClient {
+        async fn execute_request(
+            &self,
+            _request: &azure_core::http::Request,
+        ) -> azure_core::Result<azure_core::http::AsyncRawResponse> {
+            Ok(azure_core::http::AsyncRawResponse::from_bytes(
+                StatusCode::NotFound,
                 Headers::new(),
                 azure_core::Bytes::new(),
             ))
@@ -1572,6 +1588,30 @@ mod tests {
             !storage.invalidation.take(),
             "a failed write-once probe must not arm invalidation"
         );
+    }
+
+    #[tokio::test]
+    #[cfg_attr(
+        miri,
+        ignore = "drives the Azure SDK request pipeline, which Miri cannot run"
+    )]
+    async fn delete_maps_a_not_found_response_to_not_found() {
+        // A 404 on the delete request means the object is simply not there, which
+        // the storage port reports as `NotFound` rather than as an I/O failure so
+        // callers can treat it as an already-absent object.
+        let storage = AzureBlobStorage::from_parts(
+            "acct",
+            "history",
+            None,
+            fake_credential(),
+            Arc::new(NotFoundHttpClient),
+        )
+        .unwrap();
+
+        let error = storage.delete("v1/proj/object.json").await.unwrap_err();
+
+        assert!(matches!(error.kind(), StorageErrorKind::NotFound { .. }));
+        assert!(!storage.invalidation.take());
     }
 
     #[tokio::test]

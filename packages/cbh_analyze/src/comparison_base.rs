@@ -316,6 +316,7 @@ mod tests {
     use futures::executor::block_on;
     use jiff::Timestamp;
     use nonempty::nonempty;
+    use ohno::ErrorExt as _;
 
     use super::*;
 
@@ -416,6 +417,23 @@ mod tests {
         Run::new(context, vec![record])
     }
 
+    /// A sibling observation for `machine` at `commit`, positioned at `topo_index`.
+    ///
+    /// Nothing is stored under the key. A test either leaves it that way — so a fetch
+    /// of it fails, which doubles as a probe that classification never fetched — or
+    /// seeds it through [`store_sibling`] / [`store_sibling_bytes`].
+    fn sibling_at(machine: &str, commit: &str, topo_index: usize) -> SiblingObservation {
+        let key = format!(
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/{machine}/{commit}/clean.json"
+        );
+        let parsed = parse_key(&key).unwrap();
+        SiblingObservation {
+            key,
+            parsed,
+            topo_index,
+        }
+    }
+
     /// Stores `run` under `machine`'s clean key for `commit` and returns the matching
     /// sibling observation positioned at `topo_index`.
     fn store_sibling(
@@ -425,30 +443,27 @@ mod tests {
         topo_index: usize,
         run: &Run,
     ) -> SiblingObservation {
-        let key = format!(
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/{machine}/{commit}/clean.json"
-        );
-        block_on(storage.put(&key, run.to_json().unwrap().as_bytes())).unwrap();
-        let parsed = parse_key(&key).unwrap();
-        SiblingObservation {
-            key,
-            parsed,
+        store_sibling_bytes(
+            storage,
+            machine,
+            commit,
             topo_index,
-        }
+            run.to_json().unwrap().as_bytes(),
+        )
     }
 
-    /// A sibling observation whose object is *not* in storage — fetching it would
-    /// error, so it doubles as a probe that classification never fetched.
-    fn absent_sibling(machine: &str, commit: &str, topo_index: usize) -> SiblingObservation {
-        let key = format!(
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/{machine}/{commit}/clean.json"
-        );
-        let parsed = parse_key(&key).unwrap();
-        SiblingObservation {
-            key,
-            parsed,
-            topo_index,
-        }
+    /// Stores `bytes` verbatim under `machine`'s clean key for `commit`, so a test can
+    /// seed a payload the loader cannot decode.
+    fn store_sibling_bytes(
+        storage: &MemoryStorage,
+        machine: &str,
+        commit: &str,
+        topo_index: usize,
+        bytes: &[u8],
+    ) -> SiblingObservation {
+        let sibling = sibling_at(machine, commit, topo_index);
+        block_on(storage.put(&sibling.key, bytes)).unwrap();
+        sibling
     }
 
     /// Classifies with a recording reporter.
@@ -527,7 +542,7 @@ mod tests {
             3,
             false,
         )];
-        let siblings = [absent_sibling("m2", "c3", 3)];
+        let siblings = [sibling_at("m2", "c3", 3)];
         let lags = classify(&storage, &findings, &series, Some(3), &siblings);
         let set_lags = &lags[&set("m1")];
         assert_eq!(set_lags.len(), 1);
@@ -621,7 +636,7 @@ mod tests {
         // Advisory classification must not abort: it notes the failure and degrades to
         // the generic reason.
         let storage = MemoryStorage::new();
-        let sibling = absent_sibling("m2", "c3", 3);
+        let sibling = sibling_at("m2", "c3", 3);
         let findings = [finding("m1", Some(2))];
         let (lags, reporter) = classify_reported(&storage, &findings, &[], Some(3), &[sibling]);
         let set_lags = &lags[&set("m1")];
@@ -632,6 +647,67 @@ mod tests {
             ComparisonBaseLagReason::NoRecentBaseData
         );
         assert!(reporter.contains("skipping comparison-base mismatch evidence"));
+    }
+
+    /// Loads the sibling evidence one lagging finding at index 2 would need, expecting
+    /// the load to fail on `siblings`.
+    fn sibling_evidence_error(
+        storage: &MemoryStorage,
+        siblings: &[SiblingObservation],
+    ) -> AnalyzeError {
+        let set = set("m1");
+        let id = bench_id();
+        let lagging = LaggingFinding {
+            set: &set,
+            id: &id,
+            kind: MetricKind::InstructionCount,
+            comparison_base_index: 2,
+            commits_behind: NonZero::new(1).unwrap(),
+        };
+        // `SiblingEvidence` is not `Debug`, so `unwrap_err` is unavailable here.
+        block_on(load_sibling_evidence(
+            storage,
+            &[&lagging],
+            siblings,
+            3,
+            &RecordingReporter::new(),
+        ))
+        .err()
+        .unwrap()
+    }
+
+    #[test]
+    fn an_undecodable_sibling_object_names_the_key_it_could_not_decode() {
+        // Evidence is fetched as raw bytes, so a payload that is not text at all fails
+        // before any parsing is attempted.
+        let storage = MemoryStorage::new();
+        let sibling = store_sibling_bytes(&storage, "m2", "c3", 3, &[0xff, 0xfe, 0x00]);
+        let key = sibling.key.clone();
+        let error = sibling_evidence_error(&storage, &[sibling]);
+        let message = error
+            .find_source::<AnalysisFailedError>()
+            .unwrap()
+            .message();
+        // The fetch fans out over every relevant sibling, so the message is only
+        // actionable if it says which object failed.
+        assert!(message.contains(&key));
+        assert!(message.contains("is not valid UTF-8"));
+    }
+
+    #[test]
+    fn a_sibling_object_that_is_not_a_result_set_says_so() {
+        // Decodable text that does not describe a run is a distinct failure from
+        // undecodable bytes, so it must not borrow the other's wording.
+        let storage = MemoryStorage::new();
+        let sibling = store_sibling_bytes(&storage, "m2", "c3", 3, b"{}");
+        let key = sibling.key.clone();
+        let error = sibling_evidence_error(&storage, &[sibling]);
+        let message = error
+            .find_source::<AnalysisFailedError>()
+            .unwrap()
+            .message();
+        assert!(message.contains(&key));
+        assert!(message.contains("is not a valid result set"));
     }
 
     #[test]
@@ -659,7 +735,7 @@ mod tests {
         // A sibling at the comparison base (index 2, not strictly newer) is not
         // evidence of a *newer* base-side run and never triggers a fetch.
         let storage = MemoryStorage::new();
-        let sibling = absent_sibling("m2", "c2", 2);
+        let sibling = sibling_at("m2", "c2", 2);
         let findings = [finding("m1", Some(2))];
         let (lags, reporter) = classify_reported(&storage, &findings, &[], Some(3), &[sibling]);
         let set_lags = &lags[&set("m1")];
@@ -675,7 +751,7 @@ mod tests {
         // Evidence must be no newer than the merge-base. A sibling past the merge-base
         // (index 5, merge-base 3) is outside the finding's gap and never fetched.
         let storage = MemoryStorage::new();
-        let sibling = absent_sibling("m2", "c5", 5);
+        let sibling = sibling_at("m2", "c5", 5);
         let findings = [finding("m1", Some(2))];
         let (lags, reporter) = classify_reported(&storage, &findings, &[], Some(3), &[sibling]);
         let set_lags = &lags[&set("m1")];
@@ -691,7 +767,7 @@ mod tests {
         // An observation under the finding's own machine key is the finding's own set,
         // not a rotation sibling, so even a newer clean point never triggers a fetch.
         let storage = MemoryStorage::new();
-        let sibling = absent_sibling("m1", "c3", 3);
+        let sibling = sibling_at("m1", "c3", 3);
         let findings = [finding("m1", Some(2))];
         let (lags, reporter) = classify_reported(&storage, &findings, &[], Some(3), &[sibling]);
         let set_lags = &lags[&set("m1")];

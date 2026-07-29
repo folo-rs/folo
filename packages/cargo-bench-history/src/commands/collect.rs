@@ -1400,6 +1400,19 @@ mod tests {
             }
         }
 
+        /// A run that died without reporting an exit code, as a process killed by a
+        /// signal does.
+        fn terminated() -> Self {
+            Self {
+                status: EngineStatus {
+                    success: false,
+                    code: None,
+                },
+                calls: Arc::default(),
+                envs: Arc::default(),
+            }
+        }
+
         fn last_command(&self) -> Option<Vec<String>> {
             self.calls.lock().unwrap().last().cloned()
         }
@@ -2246,6 +2259,27 @@ mod tests {
         let failure = error.find_source::<EngineFailedError>().unwrap();
         assert_eq!(failure.engine(), "cargo bench");
         assert_eq!(failure.code(), 101);
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn engine_termination_without_an_exit_code_is_an_error() {
+        // A process killed by a signal reports failure with no exit code to name, so
+        // it is a distinct failure from a non-zero exit rather than a missing code.
+        let storage = MemoryStorage::new();
+        let error = drive(
+            &CollectOptions::default(),
+            &FakeRunner::terminated(),
+            &FakeProbe::new(),
+            &FakeOutput::with_two_callgrind_summaries(),
+            &storage,
+        )
+        .unwrap_err();
+
+        assert!(error.find_source::<EngineTerminatedError>().is_some());
+        assert!(error.find_source::<EngineFailedError>().is_none());
+        assert!(error.message().contains("cargo bench"));
+        assert!(error.message().contains("without an exit code"));
         assert!(storage.keys().is_empty());
     }
 
