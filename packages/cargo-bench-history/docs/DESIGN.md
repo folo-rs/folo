@@ -221,18 +221,15 @@ partitioned by it.
 There is no machine-independent partition: every engine — Callgrind instruction counts and
 `alloc_tracker` allocations included — is keyed by the host fingerprint, because those
 figures vary with the microarchitecture in practice. The string `synthetic` carries no
-special meaning; it is an ordinary machine-key value like any other. Historical data that
-earlier tool versions stored under a literal `synthetic` placeholder is not migrated: those
-series restart under the runner's real fingerprint at the changeover, and the old objects
-stay reachable only via an explicit `--machine-key synthetic` (or `--machine-key all`).
+special meaning; it is an ordinary machine-key value like any other, reachable only through
+an explicit `--machine-key synthetic` (or `--machine-key all`).
 
 The individual factors behind the fingerprint (the version tag, processor and memory-region
 counts, processor models, and the per-processor speed histogram) are surfaced for debugging:
 `collect` and the query commands emit them to standard error under `--verbose`, and the
 standalone `machine-key` command prints the key to standard output (with `--verbose` adding
-the factors to standard error). The
-latter exists so CI can capture the real per-runner key and thread it into a later `analyze`
-selection, now that runs are keyed by the auto-detected fingerprint rather than a fixed pin.
+the factors to standard error). The latter exists so CI can capture the real per-runner key
+and thread it into a later `analyze` selection.
 The same factors and resulting fingerprint are also recorded on every stored run as
 write-only provenance (see §5).
 
@@ -530,21 +527,60 @@ never mistaken for an empty project.
 ### 7.4 `backfill`
 
 `backfill` reconstructs history by checking out each commit in a range and running
-`collect` for it — bootstrapping an existing repository's timeline, and also the convenient
-path for ad-hoc evaluation over a span of commits. The range endpoints are inclusive
-positional subjects. Commits are enumerated oldest-first along the first-parent mainline;
-the tool first verifies both endpoints resolve and that the start is a first-parent
-ancestor of the end, then derives the range purely from the end's history — so backfilling
-does not depend on the current checkout or branch.
+`collect` for it — bootstrapping an existing repository's timeline, filling the gaps a
+heterogeneous machine pool leaves in a per-machine series, and also the convenient path for
+ad-hoc evaluation over a span of commits. The range endpoints are inclusive positional
+subjects naming the oldest and newest commit of a first-parent mainline span; the tool first
+verifies both endpoints resolve and that the start is a first-parent ancestor of the end,
+then derives the range purely from the end's history — so backfilling does not depend on the
+current checkout or branch.
+
+Within that range commits are processed **newest-first**. A long backfill is routinely cut
+short — by an operator losing patience or by a CI job ceiling — and the recent end of the
+history is what a comparison against the current tip actually reads, so an interrupted run
+has already spent its time on the points that matter most. The visible consequence is that
+stopping at the first failure stops at the *newest* failing commit.
 
 All work happens inside a dedicated **git worktree** under the temp directory rather than
 in the primary checkout, so a dirty primary tree neither blocks backfill nor affects what
 is measured (each point benchmarks a specific commit, never the working tree), and an
 interruption leaves the user exactly where they were. Between commits the worktree is reset
-clean while preserving the ignored build directory for incremental speed. By default,
-commits that already have a stored result are listed once up front and **skipped before
-their benches run**, making backfill resumable and cheap to re-issue; overwrite regenerates
-them. A build or bench failure stops by default (or, with a flag, is recorded and skipped
+clean while preserving the ignored build directory for incremental speed.
+
+Because that worktree is a **historical checkout, its own toolchain selection governs its
+build**: the toolchain selection the launcher exported into the tool's environment is
+dropped for the per-commit bench run, so the toolchain is resolved from the checkout itself —
+the pin at that commit when it has one, the local default otherwise — and the recorded `rustc`
+provenance (§5) names the compiler that actually ran. `collect` keeps the inherited selection
+instead — its checkout *is* the current workspace, where a deliberate toolchain choice by the
+caller must be honoured.
+
+The rest of the measurement configuration is **not** reconstructed and cannot be: the
+caller's `RUSTFLAGS` and the benchmark scope are caller intent, arriving from the
+invocation rather than from the commit, and passing them through is `collect`'s contract
+(§7.1) — a general-purpose tool has no way to read a specific project's build configuration
+out of a historical worktree. A commit older than the newest change to either is therefore
+measured slightly differently from a point collected when it was pushed, which can surface
+as a step in the series that no code change explains. This is a limitation to bound by
+keeping backfilled ranges recent, not a defect with a fix.
+
+By default, commits that already have a stored result are listed once up front and
+**skipped before their benches run**, making backfill resumable and cheap to re-issue;
+overwrite regenerates them. That pre-check reads only the **partition this run would write
+to** — the target triple and machine key this run stores under, honouring a `--machine-key`
+override (§3) — because a different triple or machine key is an independent data set and
+must never count as coverage of this one. The partition is resolved **once**, from the
+newest checkout in the range, so the pre-check matches every write as long as all the
+toolchains in the range resolve to the same host triple; that condition is the price of
+letting each worktree govern its own toolchain, the same decision that gives backfilled
+points their compiler fidelity. Across engines the pre-check unions rather than intersects:
+nothing requires a run to produce every engine (off Linux, Callgrind produces nothing at
+all), so a commit with a clean result for only some engines is still skipped, and overwrite
+is the way to revisit it. Engine results are stored one at a time, so a run killed inside
+that window leaves a partially stored commit that later runs consider complete —
+overwriting that one commit is the repair.
+
+A build or bench failure stops by default (or, with a flag, is recorded and skipped
 with an end-of-run summary), while infrastructure failures always abort since continuing
 cannot produce correct data. `--best-of N` carries through to each commit's `collect`, so a
 backfill can apply the same min-of-N noise reduction (§7.1) uniformly across the range.

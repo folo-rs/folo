@@ -4,7 +4,7 @@
 /// Version segment that prefixes every storage object key.
 ///
 /// It is the first segment of a partition prefix
-/// (`{STORAGE_VERSION}/{project}/{OBJECTS_SEGMENT}/{engine}/{triple}/{machine}`)
+/// (`{STORAGE_VERSION}/{project}/{OBJECTS_SEGMENT}/{engine}/{triple}/{machine}/`)
 /// and the value that `parse_key` requires before it
 /// accepts a key, so the writer and reader share a single source of truth for the
 /// layout version.
