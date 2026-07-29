@@ -3,13 +3,17 @@
 // This module contains logic for validating that paths are within a Cargo workspace
 // and finding the workspace root.
 
-use std::error;
 use std::path::{Path, PathBuf};
 
-use toml::Value;
+use ohno::AppError;
 
 use crate::detection::WorkspaceContext;
+use crate::manifest::read_manifest;
 use crate::pal::Filesystem;
+use crate::{
+    CurrentDirectoryError, CurrentDirectoryOutsideWorkspaceError, TargetPathNotFoundError,
+    TargetPathOutsideWorkspaceError, WorkspaceMismatchError,
+};
 
 /// Validates that the current working directory and target path are within the same Cargo
 /// workspace. This ensures the tool is only used when both locations are in the same workspace
@@ -20,14 +24,13 @@ use crate::pal::Filesystem;
 pub(crate) fn validate_workspace_context(
     target_path: &Path,
     fs: &impl Filesystem,
-) -> Result<WorkspaceContext, Box<dyn error::Error>> {
-    let current_dir = fs.current_dir()?;
+) -> Result<WorkspaceContext, AppError> {
+    let current_dir = fs.current_dir().map_err(CurrentDirectoryError::caused_by)?;
 
     // Find workspace root from the current directory.
-    let current_workspace_root =
-        find_workspace_root(&current_dir, fs).map_err(|original_error| {
-            format!("Current directory is not within a Cargo workspace: {original_error}")
-        })?;
+    let current_workspace_root = find_workspace_root(&current_dir, fs)
+        .map_err(CurrentDirectoryOutsideWorkspaceError::caused_by)?
+        .ok_or_else(CurrentDirectoryOutsideWorkspaceError::new)?;
 
     // Resolve the target path - try to make it absolute.
     let resolved_target_path = if target_path.is_absolute() {
@@ -45,18 +48,14 @@ pub(crate) fn validate_workspace_context(
     };
 
     // Canonicalize the resolved target path - it must exist.
-    let absolute_target_path = fs.canonicalize(&resolved_target_path).map_err(|error| {
-        format!(
-            "Target path '{}' does not exist or cannot be accessed: {error}",
-            target_path.display()
-        )
-    })?;
+    let absolute_target_path = fs
+        .canonicalize(&resolved_target_path)
+        .map_err(|error| TargetPathNotFoundError::caused_by(target_path, error))?;
 
     // Find workspace root for the target path.
-    let target_workspace_root =
-        find_workspace_root(&absolute_target_path, fs).map_err(|original_error| {
-            format!("Target path is not within a Cargo workspace: {original_error}")
-        })?;
+    let target_workspace_root = find_workspace_root(&absolute_target_path, fs)
+        .map_err(TargetPathOutsideWorkspaceError::caused_by)?
+        .ok_or_else(TargetPathOutsideWorkspaceError::new)?;
 
     // Verify both paths are in the same workspace.
     // Normalize paths to handle Windows path representation differences.
@@ -64,10 +63,9 @@ pub(crate) fn validate_workspace_context(
     let target_workspace_normalized = normalize_path(&target_workspace_root, fs);
 
     if current_workspace_normalized != target_workspace_normalized {
-        return Err(format!(
-            "Current directory workspace ('{}') differs from target path workspace ('{}')",
-            current_workspace_normalized.display(),
-            target_workspace_normalized.display()
+        return Err(WorkspaceMismatchError::new(
+            current_workspace_normalized,
+            target_workspace_normalized,
         )
         .into());
     }
@@ -83,25 +81,27 @@ pub(crate) fn validate_workspace_context(
     })
 }
 
-/// Finds the workspace root by looking for the workspace-level Cargo.toml.
+/// Finds the workspace root by looking for the workspace-level `Cargo.toml`.
+///
+/// Returns `Ok(None)` when no workspace-level manifest exists at or above `start_path`.
 // Mutations to this function cause infinite loops or hangs in integration tests.
 #[cfg_attr(test, mutants::skip)]
 fn find_workspace_root(
     start_path: &Path,
     fs: &impl Filesystem,
-) -> Result<PathBuf, Box<dyn error::Error>> {
+) -> Result<Option<PathBuf>, AppError> {
     let mut current_dir = start_path;
 
     loop {
         if fs.cargo_toml_exists(current_dir) {
             // Check if this is a workspace root.
-            let contents = fs.read_cargo_toml(current_dir)?;
-            let value: Value = toml::from_str(&contents)?;
-            if value.get("workspace").is_some() {
+            let manifest = read_manifest(current_dir, fs)?;
+            if manifest.get("workspace").is_some() {
                 // Return canonicalized path for consistent comparison.
-                return Ok(fs
-                    .canonicalize(current_dir)
-                    .unwrap_or_else(|_| current_dir.to_path_buf()));
+                return Ok(Some(
+                    fs.canonicalize(current_dir)
+                        .unwrap_or_else(|_| current_dir.to_path_buf()),
+                ));
             }
         }
 
@@ -111,7 +111,7 @@ fn find_workspace_root(
         }
     }
 
-    Err("Could not find workspace root".into())
+    Ok(None)
 }
 
 /// Normalizes a path by using OS canonicalization and stripping Windows UNC prefixes.
@@ -146,12 +146,8 @@ mod tests {
     fn validate_workspace_context_nonexistent_file() {
         // Nonexistent files are now rejected by validate_workspace_context, not detect_package.
         let fs = FilesystemFacade::target();
-        let result = validate_workspace_context(Path::new("nonexistent/file.rs"), &fs);
-        assert!(
-            result.is_err(),
-            "Should return error for non-existent files"
-        );
-        assert!(result.unwrap_err().to_string().contains("does not exist"));
+        let error = validate_workspace_context(Path::new("nonexistent/file.rs"), &fs).unwrap_err();
+        assert!(error.find_source::<TargetPathNotFoundError>().is_some());
     }
 
     /// Creates a minimal temporary Cargo workspace for tests.
@@ -218,13 +214,11 @@ edition = "2021"
         // Validation should fail when targeting a file that does not exist.
         let target_path = Path::new("nonexistent.rs");
         let fs = FilesystemFacade::target();
-        let result = validate_workspace_context(target_path, &fs);
-        assert!(result.is_err());
+        let error = validate_workspace_context(target_path, &fs).unwrap_err();
         assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Current directory is not within a Cargo workspace")
+            error
+                .find_source::<CurrentDirectoryOutsideWorkspaceError>()
+                .is_some()
         );
 
         // Restore original directory.
@@ -307,15 +301,9 @@ version = "0.1.0"
     #[serial] // This test uses a relative path that depends on the current working directory for resolution.
     fn validate_workspace_context_relative_path_outside() {
         let fs = FilesystemFacade::target();
-        let result =
-            validate_workspace_context(Path::new("../../../outside_workspace/file.rs"), &fs);
-        assert!(result.is_err(), "Expected error but validation succeeded!");
-        // The error could be about the file not existing or being outside workspace.
-        let error_msg = result.unwrap_err().to_string();
-        assert!(
-            error_msg.contains("does not exist")
-                || error_msg.contains("is not within the current workspace"),
-            "Expected appropriate error message, got: {error_msg}"
-        );
+        let error =
+            validate_workspace_context(Path::new("../../../outside_workspace/file.rs"), &fs)
+                .unwrap_err();
+        assert!(error.find_source::<TargetPathNotFoundError>().is_some());
     }
 }

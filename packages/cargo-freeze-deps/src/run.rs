@@ -1,7 +1,9 @@
 use std::fs;
 
+use ohno::AppError;
+
 use crate::freeze::freeze_document;
-use crate::{RunError, RunInput, RunOutcome};
+use crate::{ReadFileError, RunInput, RunOutcome, WriteFileError};
 
 /// Core entry point of the tool, extracted for direct testability.
 ///
@@ -11,15 +13,22 @@ use crate::{RunError, RunInput, RunOutcome};
 ///
 /// # Errors
 ///
-/// See [`RunError`] for the full taxonomy of failures.
+/// Returns an error whose source chain carries the condition that failed: a
+/// [`ReadFileError`] or [`WriteFileError`] when the filesystem access fails, a
+/// [`ParseError`](crate::ParseError) when the input is not valid TOML, and an
+/// [`UnexpectedVersionTypeError`](crate::UnexpectedVersionTypeError) or
+/// [`InvalidVersionError`](crate::InvalidVersionError) when a dependency's version field
+/// is malformed.
 #[doc(hidden)]
-pub fn run(input: &RunInput) -> Result<RunOutcome, RunError> {
-    let content = fs::read_to_string(&input.path).map_err(RunError::Io)?;
+pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
+    let content = fs::read_to_string(&input.path)
+        .map_err(|error| ReadFileError::caused_by(input.path.as_path(), error))?;
 
     let (rewritten, outcome) = freeze_document(&content)?;
 
     let output_path = input.output.as_ref().unwrap_or(&input.path);
-    fs::write(output_path, rewritten).map_err(RunError::Io)?;
+    fs::write(output_path, rewritten)
+        .map_err(|error| WriteFileError::caused_by(output_path.as_path(), error))?;
 
     Ok(outcome)
 }

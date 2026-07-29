@@ -33,7 +33,7 @@ use super::dataset::{empty_history_hint, select_dataset};
 use super::facets::AutoFacets;
 use super::history::dirty_base_exception_warning;
 use super::selection::Selection;
-use crate::{AnalyzeError, RenderedReports, ReportRequest};
+use crate::{AnalyzeError, RenderedReports, ReportRequest, ToolchainProbeFailedError};
 
 /// The real `analyze`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
@@ -143,7 +143,10 @@ fn should_colorize(is_terminal: bool, no_color: bool) -> bool {
 #[cfg_attr(test, mutants::skip)] // Probes the host environment; the facet resolution it feeds is tested.
 pub(crate) async fn detect_auto_facets() -> Result<AutoFacets, AnalyzeError> {
     let probe = SystemProbe::default();
-    let toolchain = probe.toolchain().await.map_err(AnalyzeError::Io)?;
+    let toolchain = probe
+        .toolchain()
+        .await
+        .map_err(ToolchainProbeFailedError::caused_by)?;
     let hardware = probe.hardware().await;
     Ok(AutoFacets {
         triple: toolchain.host.unwrap_or_default(),
@@ -399,8 +402,10 @@ mod tests {
     use futures::executor::block_on;
     use jiff::Timestamp;
     use nonempty::nonempty;
+    use ohno::ErrorExt as _;
 
     use super::*;
+    use crate::{AnalysisFailedError, FirstParentWalkFailedError};
 
     fn ts(seconds: i64) -> Timestamp {
         Timestamp::from_second(seconds).unwrap()
@@ -784,11 +789,35 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
-        assert!(
-            error.to_string().contains("requires a git repository"),
-            "{error}"
-        );
+        let message = error
+            .find_source::<AnalysisFailedError>()
+            .unwrap()
+            .message();
+        assert!(message.contains("requires a git repository"));
+    }
+
+    #[test]
+    fn analyze_propagates_a_typed_git_failure() {
+        // The typed git failures raised deep in history resolution must survive
+        // propagation out of the top-level entry point, not be flattened on the way.
+        let storage = MemoryStorage::new();
+        seed_linear_step(&storage);
+        let mut git = linear_git();
+        git.fail_first_parent();
+        let error = block_on(analyze_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &options(),
+            &auto(),
+            now_anchor(),
+            &RecordingReporter::new(),
+            false,
+            &spawner(),
+        ))
+        .unwrap_err();
+        assert!(error.find_source::<FirstParentWalkFailedError>().is_some());
     }
 
     #[test]
@@ -970,12 +999,11 @@ mod tests {
             "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json".to_owned();
         block_on(storage.put(&bless_key, &[0xff, 0xfe, 0x00])).unwrap();
         let error = analyze_blessing_error(&storage);
-        match error {
-            AnalyzeError::Analyze { message } => {
-                assert!(message.contains("is not valid UTF-8"), "{message}");
-            }
-            other => panic!("expected an analyze error, got {other:?}"),
-        }
+        let message = error
+            .find_source::<AnalysisFailedError>()
+            .unwrap()
+            .message();
+        assert!(message.contains("is not valid UTF-8"));
     }
 
     #[test]
@@ -986,15 +1014,11 @@ mod tests {
             "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json".to_owned();
         block_on(storage.put(&bless_key, b"{ not a blessing record")).unwrap();
         let error = analyze_blessing_error(&storage);
-        match error {
-            AnalyzeError::Analyze { message } => {
-                assert!(
-                    message.contains("is not a valid blessing record"),
-                    "{message}"
-                );
-            }
-            other => panic!("expected an analyze error, got {other:?}"),
-        }
+        let message = error
+            .find_source::<AnalysisFailedError>()
+            .unwrap()
+            .message();
+        assert!(message.contains("is not a valid blessing record"));
     }
 
     #[test]
@@ -1839,13 +1863,12 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
-        let message = error.to_string();
-        assert!(
-            message.contains("could not determine the base branch"),
-            "{message}"
-        );
-        assert!(message.contains("--base"), "{message}");
+        let message = error
+            .find_source::<AnalysisFailedError>()
+            .unwrap()
+            .message();
+        assert!(message.contains("could not determine the base branch"));
+        assert!(message.contains("--base"));
     }
 
     #[test]
@@ -1884,12 +1907,14 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
-        let message = error.to_string();
-        assert!(message.contains("no common ancestor"), "{message}");
-        assert!(message.contains("--unshallow"), "{message}");
+        let message = error
+            .find_source::<AnalysisFailedError>()
+            .unwrap()
+            .message();
+        assert!(message.contains("no common ancestor"));
+        assert!(message.contains("--unshallow"));
         // Auto-detected base: offer --base as the way to name the intended one.
-        assert!(message.contains("--base"), "{message}");
+        assert!(message.contains("--base"));
     }
 
     #[test]
@@ -1928,16 +1953,15 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
-        let message = error.to_string();
-        assert!(message.contains("--unshallow"), "{message}");
+        let message = error
+            .find_source::<AnalysisFailedError>()
+            .unwrap()
+            .message();
+        assert!(message.contains("--unshallow"));
         // The deliberately chosen base is named and reported as unrelated, without
         // suggesting the user pick a different --base value.
-        assert!(
-            message.contains("master is genuinely unrelated"),
-            "{message}"
-        );
-        assert!(!message.contains("name the intended base"), "{message}");
+        assert!(message.contains("master is genuinely unrelated"));
+        assert!(!message.contains("name the intended base"));
     }
 
     #[test]
@@ -2036,7 +2060,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
+        assert!(error.find_source::<AnalysisFailedError>().is_some());
     }
 
     #[test]
@@ -2058,7 +2082,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
+        assert!(error.find_source::<AnalysisFailedError>().is_some());
     }
 
     #[test]
@@ -2084,8 +2108,11 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
-        assert!(error.to_string().contains("no output selected"), "{error}");
+        let message = error
+            .find_source::<AnalysisFailedError>()
+            .unwrap()
+            .message();
+        assert!(message.contains("no output selected"));
     }
 
     #[test]
@@ -2109,7 +2136,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
+        assert!(error.find_source::<AnalysisFailedError>().is_some());
     }
 
     #[test]
@@ -2134,8 +2161,11 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
-        assert!(error.to_string().contains("--base"), "{error}");
+        let message = error
+            .find_source::<AnalysisFailedError>()
+            .unwrap()
+            .message();
+        assert!(message.contains("--base"));
     }
 
     #[test]

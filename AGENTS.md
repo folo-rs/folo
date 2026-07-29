@@ -179,12 +179,15 @@ Callgrind file with its Criterion counterpart.
 
 The `unwrap()` / `expect()` rules in both test and production code, checked
 arithmetic, `Drop`-time invariant checks with `thread::panicking()` guards,
-and the `NonZero<usize>` preference for non-zero numeric parameters.
+the `NonZero<usize>` preference for non-zero numeric parameters, and how error
+types are defined with `ohno` (one type per failure condition, transparent
+wrappers, when a `kind` field is warranted, constructor visibility, `#[display]`
+scoping, which derives survive).
 
 **Open this when**: choosing between `unwrap`, `expect`, `?`, or explicit
 error handling; auditing arithmetic that could overflow; writing a `Drop` impl
 that validates invariants; designing a numeric parameter that must be
-non-zero.
+non-zero; adding or reshaping any error type.
 
 ### [docs/unsafe-code.md](docs/unsafe-code.md)
 

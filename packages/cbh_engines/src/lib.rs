@@ -29,9 +29,10 @@ mod bench;
 mod bench_output;
 
 pub use bench::{
-    AllTheTimeParseError, AllocTrackerParseError, CallgrindParseError, CriterionParseError,
-    injected_bench_env, parse_all_the_time_operation, parse_alloc_tracker_operation,
-    parse_callgrind_summary, parse_criterion_case,
+    AllTheTimeParseError, AllocTrackerParseError, BenchmarkParseError, CallgrindJsonError,
+    CallgrindParseError, CriterionParseError, EstimatesParseError,
+    UnsupportedCallgrindVersionError, injected_bench_env, parse_all_the_time_operation,
+    parse_alloc_tracker_operation, parse_callgrind_summary, parse_criterion_case,
 };
 pub use bench_output::{
     BenchOutputSource, FsBenchOutputSource, Harvest, RawCriterionCase, RawOperationFile, RawSummary,

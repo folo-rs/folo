@@ -21,6 +21,7 @@ cbh_diag = { workspace = true }
 cbh_model = { workspace = true }
 jiff = { workspace = true }
 nonempty = { workspace = true }
+ohno = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
@@ -30,6 +31,7 @@ all_the_time = { path = "../all_the_time" }
 alloc_tracker = { path = "../alloc_tracker" }
 cbh_diag = { path = "../cbh_diag", features = ["private-test-util"] }
 mutants = { workspace = true }
+static_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 

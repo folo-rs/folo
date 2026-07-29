@@ -11,8 +11,9 @@ use cbh_probe::{
     EnvironmentProbe, HardwareProfile, SystemProbe, describe_fingerprint_components,
     resolve_machine_key,
 };
+use ohno::AppError;
 
-use crate::{MachineKeyOptions, RunError, RunOutcome};
+use crate::{MachineKeyOptions, RunOutcome};
 
 /// Executes the `machine-key` command against the real host.
 ///
@@ -20,7 +21,7 @@ use crate::{MachineKeyOptions, RunError, RunOutcome};
 ///
 /// Never fails: hardware probing is best-effort and always yields a profile.
 /// Returns a `Result` to match the shape every command handler shares.
-pub(crate) async fn execute(options: &MachineKeyOptions) -> Result<RunOutcome, RunError> {
+pub(crate) async fn execute(options: &MachineKeyOptions) -> Result<RunOutcome, AppError> {
     let profile = SystemProbe::default().hardware().await;
     let reporter = StderrReporter::new(options.verbose);
     Ok(machine_key_outcome(&profile, &reporter))

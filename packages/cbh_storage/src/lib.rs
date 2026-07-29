@@ -40,7 +40,7 @@ mod port;
 
 pub use azure::AzureBlobStorage;
 pub use caching::CachingStorage;
-pub use error::StorageError;
+pub use error::{StorageError, StorageErrorKind};
 pub use facade::{
     StorageFacade, StorageOverride, azure_backend_from_parts, build_storage, resolve_storage,
 };

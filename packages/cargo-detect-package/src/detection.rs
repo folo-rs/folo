@@ -2,11 +2,12 @@
 //
 // This module contains the core logic for detecting which Cargo package a file belongs to.
 
-use std::error;
 use std::path::{Path, PathBuf};
 
-use toml::Value;
+use ohno::AppError;
 
+use crate::PackageNameMissingError;
+use crate::manifest::read_manifest;
 use crate::pal::Filesystem;
 
 /// Represents the result of package detection.
@@ -39,7 +40,7 @@ pub(crate) struct WorkspaceContext {
 pub(crate) fn detect_package(
     context: &WorkspaceContext,
     fs: &impl Filesystem,
-) -> Result<DetectedPackage, Box<dyn error::Error>> {
+) -> Result<DetectedPackage, AppError> {
     let absolute_path = &context.absolute_target_path;
     let workspace_root = &context.workspace_root;
 
@@ -70,22 +71,17 @@ pub(crate) fn detect_package(
 pub(crate) fn extract_package_name(
     dir: &Path,
     fs: &impl Filesystem,
-) -> Result<DetectedPackage, Box<dyn error::Error>> {
-    let contents = fs.read_cargo_toml(dir)?;
-    let value: Value = toml::from_str(&contents)?;
+) -> Result<DetectedPackage, AppError> {
+    let manifest = read_manifest(dir, fs)?;
 
-    if let Some(package_table) = value.get("package")
+    if let Some(package_table) = manifest.get("package")
         && let Some(name) = package_table.get("name")
         && let Some(name_str) = name.as_str()
     {
         return Ok(DetectedPackage::Package(name_str.to_string()));
     }
 
-    Err(format!(
-        "Could not find package name in {}/Cargo.toml",
-        dir.display()
-    )
-    .into())
+    Err(PackageNameMissingError::new(dir).into())
 }
 
 #[cfg(all(test, not(miri)))]
@@ -94,6 +90,7 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use crate::ParseManifestError;
     use crate::pal::FilesystemFacade;
 
     #[test]
@@ -180,8 +177,8 @@ version = "0.1.0"
         .unwrap();
 
         let fs = FilesystemFacade::target();
-        extract_package_name(temp_dir.path(), &fs)
-            .expect_err("Expected an error when package name is missing");
+        let error = extract_package_name(temp_dir.path(), &fs).unwrap_err();
+        assert!(error.find_source::<PackageNameMissingError>().is_some());
     }
 
     #[test]
@@ -234,12 +231,7 @@ version = "0.1.0"
 
         let fs = FilesystemFacade::target();
         // detect_package should fail because the Cargo.toml is malformed.
-        let result = detect_package(&context, &fs);
-        assert!(result.is_err());
-        let error_msg = result.unwrap_err().to_string();
-        assert!(
-            error_msg.contains("TOML") || error_msg.contains("parse"),
-            "Expected TOML parse error, got: {error_msg}"
-        );
+        let error = detect_package(&context, &fs).unwrap_err();
+        assert!(error.find_source::<ParseManifestError>().is_some());
     }
 }

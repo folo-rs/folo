@@ -39,10 +39,18 @@ use cbh_engines::FsBenchOutputSource;
 use cbh_git::{GitHistory, SystemGitHistory, TokioBenchRunner, capture};
 use cbh_probe::SystemProbe;
 use cbh_storage::{Storage, build_storage, project_objects_prefix};
+use ohno::AppError;
 use tick::Clock;
 
 use super::collect::{CollectDeps, CollectSummary, default_bench_command, run_engines};
-use crate::{BackfillOptions, CollectOptions, RunError, RunOutcome, finish_with_flush};
+use crate::errors::{
+    AddWorktreeFailedError, FirstParentWalkFailedError, RemoveWorktreeFailedError,
+    ResetWorktreeFailedError, ResolveRefFailedError, bench_failure_reason,
+};
+use crate::{
+    BackfillError, BackfillOptions, CollectOptions, DuplicateResultError, RunOutcome,
+    finish_with_flush,
+};
 
 /// Read access to a repository's commit topology plus the worktree lifecycle a
 /// backfill needs to check out each commit in isolation.
@@ -72,7 +80,7 @@ trait CommitRunner {
     /// anywhere under this project's partitions. A commit in this set has already
     /// been backfilled, so the default skip-existing mode skips it without
     /// benchmarking. Probed once per backfill.
-    fn recorded_commits(&self) -> impl Future<Output = Result<HashSet<String>, RunError>>;
+    fn recorded_commits(&self) -> impl Future<Output = Result<HashSet<String>, AppError>>;
 
     /// Runs the engines in `worktree` and reports the outcome. Recoverable
     /// build/bench failures are reported as [`CommitOutcome::BenchFailed`];
@@ -82,7 +90,7 @@ trait CommitRunner {
         &self,
         worktree: &Path,
         commit: &str,
-    ) -> impl Future<Output = Result<CommitOutcome, RunError>>;
+    ) -> impl Future<Output = Result<CommitOutcome, AppError>>;
 }
 
 /// What happened when a single commit was processed.
@@ -111,7 +119,7 @@ pub(crate) async fn execute(
     options: &BackfillOptions,
     workspace_dir: &Path,
     bench_command: Option<Vec<String>>,
-) -> Result<RunOutcome, RunError> {
+) -> Result<RunOutcome, AppError> {
     // `--repo` selects the repository to backfill (where git history is read and
     // worktrees are created), relative to the ambient base; it defaults to the
     // base directory itself.
@@ -154,13 +162,13 @@ pub(crate) async fn execute(
 /// Validation precedes any worktree work, so a precondition failure leaves the
 /// repository untouched. The worktree is always torn down — on success and on
 /// failure — and a stop after a per-commit failure surfaces as
-/// [`RunError::Backfill`] (a non-zero exit) carrying the partial summary.
+/// a [`BackfillError`] (a non-zero exit) carrying the partial summary.
 async fn execute_backfill<G, C>(
     options: &BackfillOptions,
     git: &G,
     runner: &C,
     worktree: &Path,
-) -> Result<RunOutcome, RunError>
+) -> Result<RunOutcome, AppError>
 where
     G: BackfillGit,
     C: CommitRunner,
@@ -172,16 +180,16 @@ where
 
     git.add_worktree(worktree, first)
         .await
-        .map_err(RunError::Io)?;
+        .map_err(|error| AddWorktreeFailedError::caused_by(worktree, first, error))?;
     let result = run_commits(options, git, runner, worktree, &commits).await;
     let teardown = git.remove_worktree(worktree).await;
 
     let report = result?;
-    teardown.map_err(RunError::Io)?;
+    teardown.map_err(|error| RemoveWorktreeFailedError::caused_by(worktree, error))?;
 
     let message = report.render(commits.len());
     if report.stopped.is_some() {
-        Err(RunError::Backfill { message })
+        Err(BackfillError::new(message).into())
     } else {
         Ok(RunOutcome::Completed { message })
     }
@@ -195,19 +203,22 @@ where
 async fn plan_commits<G: BackfillGit>(
     options: &BackfillOptions,
     git: &G,
-) -> Result<Vec<String>, RunError> {
+) -> Result<Vec<String>, AppError> {
     let from = resolve_required(git, &options.from, "--from").await?;
     let to = resolve_required(git, &options.to, "--to").await?;
 
-    let mut ancestry = git.first_parent(&to).await.map_err(RunError::Io)?;
+    let mut ancestry = git
+        .first_parent(&to)
+        .await
+        .map_err(|error| FirstParentWalkFailedError::caused_by(&to, error))?;
     let start = ancestry
         .iter()
         .position(|commit| commit == &from)
-        .ok_or_else(|| RunError::Backfill {
-            message: format!(
+        .ok_or_else(|| {
+            BackfillError::new(format!(
                 "--from ({}) is not a first-parent ancestor of --to ({})",
                 options.from, options.to
-            ),
+            ))
         })?;
 
     Ok(ancestry.split_off(start))
@@ -218,12 +229,12 @@ async fn resolve_required<G: BackfillGit>(
     git: &G,
     reference: &str,
     flag: &str,
-) -> Result<String, RunError> {
+) -> Result<String, AppError> {
     git.resolve(reference)
         .await
-        .map_err(RunError::Io)?
-        .ok_or_else(|| RunError::Backfill {
-            message: format!("cannot resolve {flag} ({reference}) to a commit"),
+        .map_err(|error| ResolveRefFailedError::caused_by(reference, error))?
+        .ok_or_else(|| {
+            BackfillError::new(format!("cannot resolve {flag} ({reference}) to a commit")).into()
         })
 }
 
@@ -237,7 +248,7 @@ async fn run_commits<G, C>(
     runner: &C,
     worktree: &Path,
     commits: &[String],
-) -> Result<BackfillReport, RunError>
+) -> Result<BackfillReport, AppError>
 where
     G: BackfillGit,
     C: CommitRunner,
@@ -256,7 +267,9 @@ where
             report.skipped_existing.push(commit.clone());
             continue;
         }
-        git.reset_to(worktree, commit).await.map_err(RunError::Io)?;
+        git.reset_to(worktree, commit)
+            .await
+            .map_err(|error| ResetWorktreeFailedError::caused_by(worktree, commit, error))?;
         match runner.run(worktree, commit).await? {
             CommitOutcome::Stored { cases } => report.stored.push((commit.clone(), cases)),
             CommitOutcome::SkippedExisting => report.skipped_existing.push(commit.clone()),
@@ -354,19 +367,23 @@ fn worktree_path() -> PathBuf {
 /// A stored set (or several) is success; a duplicate is a resumable skip; an
 /// empty harvest is a non-fatal skip; a build/bench failure is recoverable;
 /// everything else (storage, configuration, I/O) is infrastructure and aborts.
-fn map_collect_result(result: Result<CollectSummary, RunError>) -> Result<CommitOutcome, RunError> {
-    match result {
-        Ok(summary) if summary.stored > 0 => Ok(CommitOutcome::Stored {
-            cases: summary.harvested,
-        }),
-        Ok(_) => Ok(CommitOutcome::SkippedEmpty),
-        Err(RunError::Duplicate { .. }) => Ok(CommitOutcome::SkippedExisting),
-        Err(
-            error @ (RunError::Engine { .. } | RunError::Command { .. } | RunError::Parse { .. }),
-        ) => Ok(CommitOutcome::BenchFailed {
-            reason: error.to_string(),
-        }),
-        Err(other) => Err(other),
+fn map_collect_result(result: Result<CollectSummary, AppError>) -> Result<CommitOutcome, AppError> {
+    let error = match result {
+        Ok(summary) if summary.stored > 0 => {
+            return Ok(CommitOutcome::Stored {
+                cases: summary.harvested,
+            });
+        }
+        Ok(_) => return Ok(CommitOutcome::SkippedEmpty),
+        Err(error) => error,
+    };
+
+    if error.find_source::<DuplicateResultError>().is_some() {
+        return Ok(CommitOutcome::SkippedExisting);
+    }
+    match bench_failure_reason(&error) {
+        Some(reason) => Ok(CommitOutcome::BenchFailed { reason }),
+        None => Err(error),
     }
 }
 
@@ -499,7 +516,7 @@ struct SystemCommitRunner<'a, S> {
 }
 
 impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
-    async fn recorded_commits(&self) -> Result<HashSet<String>, RunError> {
+    async fn recorded_commits(&self) -> Result<HashSet<String>, AppError> {
         // Every stored object lives under the project's objects subtree, so one list
         // of that prefix yields the full history; the clean objects' commit segments
         // are the commits already backfilled. A dirty snapshot does not count as a
@@ -514,7 +531,7 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
     }
 
     #[cfg_attr(test, mutants::skip)] // Wires real adapters; the result mapping is tested via `map_collect_result`.
-    async fn run(&self, worktree: &Path, _commit: &str) -> Result<CommitOutcome, RunError> {
+    async fn run(&self, worktree: &Path, _commit: &str) -> Result<CommitOutcome, AppError> {
         let probe = SystemProbe::in_dir(worktree);
         let runner = TokioBenchRunner::in_dir(worktree);
         let target_root = worktree.join("target");
@@ -573,7 +590,8 @@ mod tests {
     use futures::executor::block_on;
 
     use super::*;
-    use crate::StorageError;
+    use crate::errors::ParseOutputError;
+    use crate::{EngineFailedError, StorageError};
 
     /// A canned per-commit result the fake [`CommitRunner`] returns.
     #[derive(Clone)]
@@ -666,7 +684,7 @@ mod tests {
     }
 
     impl CommitRunner for FakeCommitRunner {
-        fn recorded_commits(&self) -> impl Future<Output = Result<HashSet<String>, RunError>> {
+        fn recorded_commits(&self) -> impl Future<Output = Result<HashSet<String>, AppError>> {
             ready(Ok(self.complete.clone()))
         }
 
@@ -674,7 +692,7 @@ mod tests {
             &self,
             _worktree: &Path,
             commit: &str,
-        ) -> impl Future<Output = Result<CommitOutcome, RunError>> {
+        ) -> impl Future<Output = Result<CommitOutcome, AppError>> {
             self.ran.borrow_mut().push(commit.to_owned());
             let result = match self.outcomes.get(commit) {
                 Some(FakeResult::Stored(cases)) => Ok(CommitOutcome::Stored { cases: *cases }),
@@ -684,7 +702,7 @@ mod tests {
                     reason: reason.clone(),
                 }),
                 Some(FakeResult::Infra(message)) => {
-                    Err(RunError::Io(io::Error::other(message.clone())))
+                    Err(StorageError::io(io::Error::other(message.clone())).into())
                 }
                 None => Ok(CommitOutcome::Stored { cases: 1 }),
             };
@@ -741,10 +759,8 @@ mod tests {
     fn plan_rejects_an_unresolvable_endpoint() {
         let git = FakeBackfillGit::new(fixture());
         let error = block_on(plan_commits(&options("absent", "f2"), &git)).unwrap_err();
-        let RunError::Backfill { message } = error else {
-            panic!("expected a backfill error, got {error:?}");
-        };
-        assert!(message.contains("cannot resolve --from"), "{message}");
+        assert!(error.find_source::<BackfillError>().is_some());
+        assert!(error.message().contains("cannot resolve --from"));
     }
 
     #[test]
@@ -752,10 +768,8 @@ mod tests {
         // f1 is on the feature side, not in master's first-parent ancestry.
         let git = FakeBackfillGit::new(fixture());
         let error = block_on(plan_commits(&options("f1", "c3"), &git)).unwrap_err();
-        let RunError::Backfill { message } = error else {
-            panic!("expected a backfill error, got {error:?}");
-        };
-        assert!(message.contains("not a first-parent ancestor"), "{message}");
+        assert!(error.find_source::<BackfillError>().is_some());
+        assert!(error.message().contains("not a first-parent ancestor"));
     }
 
     #[test]
@@ -886,7 +900,8 @@ mod tests {
         opts.ignore_errors = true;
 
         let error = block_on(run_commits(&opts, &git, &runner, &worktree(), &commits)).unwrap_err();
-        assert!(matches!(error, RunError::Io(_)), "{error:?}");
+        assert!(bench_failure_reason(&error).is_none());
+        assert!(error.find_source::<StorageError>().is_some());
         // The loop stopped at the failing commit; f1 was never reached.
         assert!(runner.ran.borrow().iter().eq(["c0", "c1"].iter()));
     }
@@ -1132,10 +1147,8 @@ mod tests {
         ))
         .unwrap_err();
 
-        let RunError::Backfill { message } = error else {
-            panic!("expected a backfill error, got {error:?}");
-        };
-        assert!(message.contains("stopped at c1"), "{message}");
+        assert!(error.find_source::<BackfillError>().is_some());
+        assert!(error.message().contains("stopped at c1"));
         // Teardown still happened despite the failure.
         assert!(git.removed.borrow().iter().eq(std::iter::once(&worktree())));
     }
@@ -1152,7 +1165,7 @@ mod tests {
         ))
         .unwrap_err();
 
-        assert!(matches!(error, RunError::Io(_)), "{error:?}");
+        assert!(error.find_source::<StorageError>().is_some());
         assert!(git.removed.borrow().iter().eq(std::iter::once(&worktree())));
     }
 
@@ -1174,26 +1187,53 @@ mod tests {
         .unwrap();
         assert_eq!(empty, CommitOutcome::SkippedEmpty);
 
-        let duplicate = map_collect_result(Err(RunError::Duplicate {
-            key: "v1/p/objects/callgrind/t/m1/abc/clean.json".to_owned(),
-        }))
+        let duplicate = map_collect_result(Err(DuplicateResultError::new(
+            "v1/p/objects/callgrind/t/m1/abc/clean.json",
+        )
+        .into()))
         .unwrap();
         assert_eq!(duplicate, CommitOutcome::SkippedExisting);
 
-        let failed = map_collect_result(Err(RunError::Engine {
-            engine: "callgrind".to_owned(),
-            code: Some(101),
-        }))
-        .unwrap();
+        let failed =
+            map_collect_result(Err(EngineFailedError::new("callgrind", 101).into())).unwrap();
         let CommitOutcome::BenchFailed { reason } = failed else {
             panic!("expected a bench failure");
         };
-        assert!(reason.contains("101"), "{reason}");
+        assert!(reason.contains("101"));
 
-        let infra = map_collect_result(Err(RunError::Storage(StorageError::NotFound {
-            key: "k".to_owned(),
-        })));
-        assert!(matches!(infra, Err(RunError::Storage(_))), "{infra:?}");
+        let infra = map_collect_result(Err(StorageError::not_found("k").into())).unwrap_err();
+        assert!(infra.find_source::<StorageError>().is_some());
+    }
+
+    #[test]
+    fn a_recorded_bench_failure_never_carries_a_backtrace_into_the_summary() {
+        // Under `--ignore-errors` the summary is the *success* path, so a per-commit
+        // reason is re-rendered inline on its own line. `ohno` appends both
+        // `caused by:` and a captured backtrace after the failing error's own
+        // message, so a cause whose rendering carries those shapes stands in for a
+        // run with `RUST_BACKTRACE` set without the test mutating the environment.
+        let parse_failure = io::Error::other(
+            "the JSON is malformed\n\nBacktrace:\n   0: cbh_engines::parse_callgrind_summary",
+        );
+        let outcome = map_collect_result(Err(ParseOutputError::caused_by(
+            "target/callgrind/summary.json",
+            parse_failure,
+        )
+        .into()))
+        .unwrap();
+        let CommitOutcome::BenchFailed { reason } = outcome else {
+            panic!("expected a bench failure");
+        };
+
+        let mut report = BackfillReport::default();
+        report.failed.push(("c0ffeec0ffee".to_owned(), reason));
+        let rendered = report.render(1);
+
+        assert!(!rendered.contains("Backtrace:"));
+        assert!(!rendered.contains("caused by:"));
+        assert!(rendered.contains("failed c0ffeec0ffee (failed to parse benchmark output"));
+        // The per-commit note stays on the single line the summary reserves for it.
+        assert_eq!(rendered.lines().count(), 2);
     }
 
     #[test]

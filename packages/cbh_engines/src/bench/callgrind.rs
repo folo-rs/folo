@@ -7,8 +7,7 @@
 //! fixtures fails and the mismatch is caught immediately.
 
 use std::collections::BTreeMap;
-use std::error::Error;
-use std::fmt;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use cbh_model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
 use nonempty::NonEmpty;
@@ -18,35 +17,48 @@ use serde::Deserialize;
 const SUPPORTED_VERSION: &str = "6";
 
 /// An error encountered while parsing a Callgrind `summary.json`.
-#[derive(Debug)]
-pub enum CallgrindParseError {
-    /// The text was not valid JSON or did not match the expected shape.
-    Json(serde_json::Error),
-    /// The summary declared a schema version the tool does not support.
-    UnsupportedVersion(String),
+///
+/// Which condition was hit is the error's source — a [`CallgrindJsonError`] or an
+/// [`UnsupportedCallgrindVersionError`] — reachable via
+/// `ohno::ErrorExt::find_source`. This type contributes no wording of its own, so
+/// it displays as the underlying failure.
+#[ohno::error]
+#[no_constructors]
+#[from(CallgrindJsonError, UnsupportedCallgrindVersionError)]
+pub struct CallgrindParseError;
+
+/// A Callgrind `summary.json` was malformed.
+///
+/// The text was not valid JSON or did not match the expected shape.
+#[ohno::error]
+#[display("failed to parse Callgrind summary")]
+#[from(serde_json::Error)]
+pub struct CallgrindJsonError;
+
+/// A Callgrind summary declared a schema version the tool does not support.
+#[ohno::error]
+#[display(
+    "unsupported Gungraun summary schema version {version:?} \
+     (expected {supported_version:?})"
+)]
+pub struct UnsupportedCallgrindVersionError {
+    version: String,
+    /// The display template can only interpolate this type's own fields, so the
+    /// version the parser understands travels with the error instead of being
+    /// read from `SUPPORTED_VERSION` at format time.
+    supported_version: String,
 }
 
-impl fmt::Display for CallgrindParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Json(error) => write!(f, "failed to parse Callgrind summary: {error}"),
-            Self::UnsupportedVersion(version) => write!(
-                f,
-                "unsupported Gungraun summary schema version {version:?} \
-                 (expected {SUPPORTED_VERSION:?})"
-            ),
-        }
-    }
-}
-
-impl Error for CallgrindParseError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Json(error) => Some(error),
-            Self::UnsupportedVersion(_) => None,
-        }
-    }
-}
+// The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
+// which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
+// However, ohno error types are immutable after construction — no &self method mutates internal
+// state — so observing them through a shared reference during unwind is harmless.
+impl UnwindSafe for CallgrindParseError {}
+impl RefUnwindSafe for CallgrindParseError {}
+impl UnwindSafe for CallgrindJsonError {}
+impl RefUnwindSafe for CallgrindJsonError {}
+impl UnwindSafe for UnsupportedCallgrindVersionError {}
+impl RefUnwindSafe for UnsupportedCallgrindVersionError {}
 
 /// Parses one Callgrind `summary.json` into a [`BenchmarkResult`].
 ///
@@ -61,9 +73,10 @@ pub fn parse_callgrind_summary(json: &str) -> Result<BenchmarkResult, CallgrindP
 
 /// Deserializes and version-checks a summary without mapping it.
 fn parse_summary(json: &str) -> Result<Summary, CallgrindParseError> {
-    let summary: Summary = serde_json::from_str(json).map_err(CallgrindParseError::Json)?;
+    let summary: Summary = serde_json::from_str(json).map_err(CallgrindJsonError::from)?;
     if summary.version != SUPPORTED_VERSION {
-        return Err(CallgrindParseError::UnsupportedVersion(summary.version));
+        let error = UnsupportedCallgrindVersionError::new(summary.version, SUPPORTED_VERSION);
+        return Err(error.into());
     }
     Ok(summary)
 }
@@ -234,9 +247,40 @@ mod tests {
         reason = "metric values are exact integer-derived counts"
     )]
 
+    use std::error;
+    use std::fmt::Debug;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use nonempty::nonempty;
+    use ohno::ErrorExt;
+    use static_assertions::assert_impl_all;
 
     use super::*;
+
+    assert_impl_all!(
+        CallgrindParseError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        CallgrindJsonError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        UnsupportedCallgrindVersionError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
 
     const SINGLE_FIXTURE: &str =
         include_str!("../../tests/fixtures/callgrind/single_unparametrized.summary.json");
@@ -325,33 +369,57 @@ mod tests {
     fn rejects_unsupported_version() {
         let altered = SINGLE_FIXTURE.replace("\"version\": \"6\"", "\"version\": \"7\"");
         let error = parse_callgrind_summary(&altered).unwrap_err();
-        match error {
-            CallgrindParseError::UnsupportedVersion(version) => assert_eq!(version, "7"),
-            CallgrindParseError::Json(error) => panic!("unexpected json error: {error}"),
-        }
+        let unsupported = error
+            .find_source::<UnsupportedCallgrindVersionError>()
+            .unwrap();
+        assert_eq!(unsupported.version, "7");
+        assert!(error.find_source::<CallgrindJsonError>().is_none());
+        // The version the parser understands travels with the error, so the parse
+        // path has to hand it the constant rather than an unrelated string.
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("(expected {SUPPORTED_VERSION:?})"))
+        );
     }
 
     #[test]
     fn rejects_malformed_json() {
         let error = parse_callgrind_summary("{ not json").unwrap_err();
-        assert!(matches!(error, CallgrindParseError::Json(_)));
+        assert!(error.find_source::<CallgrindJsonError>().is_some());
+        assert!(
+            error
+                .find_source::<UnsupportedCallgrindVersionError>()
+                .is_none()
+        );
     }
 
     #[test]
     fn error_display_and_source() {
         let json_error = parse_callgrind_summary("{ not json").unwrap_err();
         assert!(
-            json_error.to_string().contains("failed to parse Callgrind"),
-            "{json_error}"
+            json_error
+                .to_string()
+                .contains("failed to parse Callgrind summary")
         );
-        assert!(json_error.source().is_some());
+        assert!(json_error.find_source::<serde_json::Error>().is_some());
 
-        let version_error = CallgrindParseError::UnsupportedVersion("9".to_owned());
-        assert!(
-            version_error.to_string().contains("\"9\""),
-            "{version_error}"
-        );
-        assert!(version_error.source().is_none());
+        let version_error = UnsupportedCallgrindVersionError::new("9", SUPPORTED_VERSION);
+        assert!(version_error.to_string().contains("\"9\""));
+        assert!(error::Error::source(&version_error).is_none());
+    }
+
+    #[test]
+    fn callgrind_parse_error_displays_as_the_underlying_failure() {
+        let version_error = UnsupportedCallgrindVersionError::new("9", SUPPORTED_VERSION);
+        let expected = version_error.to_string();
+
+        let error = CallgrindParseError::from(version_error);
+
+        // The wrapper adds no wording of its own, so a caller that only prints the
+        // error still sees the specific failure. Matching on the prefix tolerates
+        // the optional trailing backtrace block.
+        assert!(error.to_string().starts_with(&expected));
     }
 
     fn summary_json(callgrind_body: &str) -> String {

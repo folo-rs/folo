@@ -11,7 +11,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use cargo_freeze_deps::{RunError, RunInput, run};
+use cargo_freeze_deps::{
+    InvalidVersionError, ParseError, ReadFileError, RunInput, WriteFileError, run,
+};
 use serial_test::serial;
 
 /// RAII helper: restores the process current directory when dropped, even on panic.
@@ -282,19 +284,38 @@ tokio = "^1.48"
 
 #[test]
 #[cfg_attr(miri, ignore)]
-fn missing_file_returns_io_error() {
+fn missing_file_returns_read_error() {
     let temp_dir = tempfile::tempdir().unwrap();
     let missing = temp_dir.path().join("does-not-exist.toml");
 
-    match run(&RunInput {
+    let error = run(&RunInput {
         path: missing,
         output: None,
     })
-    .unwrap_err()
-    {
-        RunError::Io(_) => {}
-        other => panic!("expected Io error, got {other:?}"),
-    }
+    .unwrap_err();
+
+    assert!(error.find_source::<ReadFileError>().is_some());
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn unwritable_output_returns_write_error() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let path = write_cargo_toml(
+        temp_dir.path(),
+        r#"[dependencies]
+serde = "1.2.3"
+"#,
+    );
+
+    // Writing over an existing directory fails on every platform we support.
+    let error = run(&RunInput {
+        path,
+        output: Some(temp_dir.path().to_path_buf()),
+    })
+    .unwrap_err();
+
+    assert!(error.find_source::<WriteFileError>().is_some());
 }
 
 #[test]
@@ -303,10 +324,9 @@ fn invalid_toml_returns_parse_error() {
     let temp_dir = tempfile::tempdir().unwrap();
     let path = write_cargo_toml(temp_dir.path(), "this is = not [valid toml");
 
-    match run(&RunInput { path, output: None }).unwrap_err() {
-        RunError::Parse(_) => {}
-        other => panic!("expected Parse error, got {other:?}"),
-    }
+    let error = run(&RunInput { path, output: None }).unwrap_err();
+
+    assert!(error.find_source::<ParseError>().is_some());
 }
 
 #[test]
@@ -320,13 +340,11 @@ serde = "not-a-version"
 "#,
     );
 
-    match run(&RunInput { path, output: None }).unwrap_err() {
-        RunError::InvalidVersion { dep, version, .. } => {
-            assert_eq!(dep, "serde");
-            assert_eq!(version, "not-a-version");
-        }
-        other => panic!("expected InvalidVersion error, got {other:?}"),
-    }
+    let error = run(&RunInput { path, output: None }).unwrap_err();
+    let invalid = error.find_source::<InvalidVersionError>().unwrap();
+
+    assert_eq!(invalid.dep(), "serde");
+    assert_eq!(invalid.version(), "not-a-version");
 }
 
 #[test]

@@ -1,7 +1,7 @@
 //! The stable identity of a benchmark series and the prefix used to scope it.
 
-use std::error::Error;
 use std::fmt;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::str::FromStr;
 
 use nonempty::NonEmpty;
@@ -86,7 +86,7 @@ impl BenchmarkIdPrefix {
     pub fn new(value: impl Into<String>) -> Result<Self, EmptyBenchmarkIdPrefix> {
         let value = value.into();
         if value.is_empty() {
-            return Err(EmptyBenchmarkIdPrefix);
+            return Err(EmptyBenchmarkIdPrefix::new());
         }
         Ok(Self(value))
     }
@@ -128,23 +128,43 @@ impl From<BenchmarkIdPrefix> for String {
 
 /// The error returned when constructing a [`BenchmarkIdPrefix`] from an empty
 /// string.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+///
+/// The error carries a backtrace, so it is [`Clone`] but neither `Copy` nor
+/// comparable by equality; callers detect it from the `Err` case rather than by
+/// comparing error values.
+#[ohno::error]
+#[derive(Clone)]
+#[display("a benchmark-id prefix must not be empty")]
 pub struct EmptyBenchmarkIdPrefix;
 
-impl fmt::Display for EmptyBenchmarkIdPrefix {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("a benchmark-id prefix must not be empty")
-    }
-}
-
-impl Error for EmptyBenchmarkIdPrefix {}
+// The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
+// which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
+// However, ohno error types are immutable after construction — no &self method mutates internal
+// state — so observing them through a shared reference during unwind is harmless.
+impl UnwindSafe for EmptyBenchmarkIdPrefix {}
+impl RefUnwindSafe for EmptyBenchmarkIdPrefix {}
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::error;
+    use std::fmt::Debug;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use nonempty::nonempty;
+    use static_assertions::assert_impl_all;
 
     use super::*;
+
+    assert_impl_all!(
+        EmptyBenchmarkIdPrefix: Clone,
+        Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
 
     #[test]
     fn leading_segment_distinguishes_otherwise_equal_ids() {
@@ -193,12 +213,9 @@ mod tests {
 
     #[test]
     fn benchmark_id_prefix_rejects_an_empty_string() {
-        assert_eq!(BenchmarkIdPrefix::new(""), Err(EmptyBenchmarkIdPrefix));
-        assert_eq!("".parse::<BenchmarkIdPrefix>(), Err(EmptyBenchmarkIdPrefix));
-        assert_eq!(
-            BenchmarkIdPrefix::try_from(String::new()),
-            Err(EmptyBenchmarkIdPrefix)
-        );
+        BenchmarkIdPrefix::new("").unwrap_err();
+        "".parse::<BenchmarkIdPrefix>().unwrap_err();
+        BenchmarkIdPrefix::try_from(String::new()).unwrap_err();
     }
 
     #[test]

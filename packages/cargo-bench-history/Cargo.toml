@@ -37,6 +37,7 @@ futures = { workspace = true }
 jiff = { workspace = true, features = ["serde"] }
 mimalloc = { workspace = true }
 nonempty = { workspace = true }
+ohno = { workspace = true, features = ["app-err"] }
 serde_json = { workspace = true }
 tick = { workspace = true, features = ["tokio"] }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thread"] }
@@ -66,6 +67,7 @@ futures = { workspace = true, features = ["executor"] }
 mutants = { workspace = true }
 reqwest = { workspace = true, features = ["gzip", "rustls"] }
 serial_test = { workspace = true }
+static_assertions = { workspace = true }
 tempfile = { workspace = true }
 testing = { path = "../testing" }
 tick = { workspace = true, features = ["test-util"] }

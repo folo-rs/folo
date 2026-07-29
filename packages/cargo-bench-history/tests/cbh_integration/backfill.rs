@@ -133,10 +133,8 @@ async fn backfill_stops_on_a_failing_commit_by_default() {
     let c3 = workspace.commit_removing_file("c3 fixes the build", "BROKEN");
 
     let error = workspace.drive(&["backfill", &c1, &c3]).await.unwrap_err();
-    let RunError::Backfill { message } = error else {
-        panic!("expected a backfill error, got {error:?}");
-    };
-    assert!(message.contains("stopped at"), "{message}");
+    assert!(error.find_source::<BackfillError>().is_some());
+    assert!(error.message().contains("stopped at"));
 
     // Only the first (healthy) commit was stored before the stop; c3 never ran.
     let objects = workspace.stored_objects();

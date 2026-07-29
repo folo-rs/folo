@@ -5,19 +5,22 @@ use std::path::Path;
 
 use cbh_config::{default_template, resolve_config_path};
 use cbh_diag::{Reporter, ReporterExt, StderrReporter};
+use ohno::AppError;
 
 use crate::config_writer::{ConfigWriter, TokioConfigWriter};
-use crate::{InstallOptions, RunError, RunOutcome};
+use crate::errors::WriteConfigFailedError;
+use crate::{InstallOptions, RunOutcome};
 
 /// Executes the `install` command against the real filesystem.
 ///
 /// # Errors
 ///
-/// Returns [`RunError::Io`] if the configuration file cannot be written.
+/// Returns a [`WriteConfigFailedError`] if the configuration file cannot be
+/// written.
 pub(crate) async fn execute(
     options: &InstallOptions,
     workspace_dir: &Path,
-) -> Result<RunOutcome, RunError> {
+) -> Result<RunOutcome, AppError> {
     let writer = TokioConfigWriter;
     let reporter = StderrReporter::new(options.verbose);
     execute_install(options, workspace_dir, &writer, &reporter).await
@@ -31,7 +34,7 @@ async fn execute_install<W: ConfigWriter>(
     workspace_dir: &Path,
     writer: &W,
     reporter: &dyn Reporter,
-) -> Result<RunOutcome, RunError> {
+) -> Result<RunOutcome, AppError> {
     let path = resolve_config_path(workspace_dir, options.config_path.as_deref());
 
     reporter.note_with(|| {
@@ -40,7 +43,10 @@ async fn execute_install<W: ConfigWriter>(
             path.display()
         )
     });
-    let written = writer.write_new(&path, default_template()).await?;
+    let written = writer
+        .write_new(&path, default_template())
+        .await
+        .map_err(|error| WriteConfigFailedError::caused_by(&path, error))?;
     if written {
         reporter.note_with(|| "configuration did not exist; wrote the starter template".to_owned());
     } else {

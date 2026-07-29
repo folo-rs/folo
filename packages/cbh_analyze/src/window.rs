@@ -7,7 +7,7 @@ use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use jiff::{Span, Timestamp};
 
-use crate::AnalyzeError;
+use crate::{AnalysisFailedError, AnalyzeError};
 
 /// Auto-detects the analysis mode from the resolved topology and recorded data.
 ///
@@ -67,8 +67,12 @@ fn default_history_since(now: Timestamp) -> Result<Timestamp, AnalyzeError> {
     now.to_zoned(TimeZone::UTC)
         .checked_sub(Span::new().months(HISTORY_DEFAULT_LOOKBACK_MONTHS))
         .map(|zoned| zoned.timestamp())
-        .map_err(|error| AnalyzeError::Analyze {
-            message: format!("default --since window is out of the representable range: {error}"),
+        .map_err(|error| {
+            AnalysisFailedError::caused_by(
+                "default --since window is out of the representable range",
+                error,
+            )
+            .into()
         })
 }
 
@@ -142,12 +146,11 @@ fn parse_instant(
     if let Ok(span) = value.parse::<Span>() {
         return Ok(Some(instant_before(span, flag, now)?));
     }
-    Err(AnalyzeError::Analyze {
-        message: format!(
-            "invalid {flag} value {value:?}; expected an RFC 3339 timestamp, a YYYY-MM-DD \
-             date, or a relative duration such as \"6 months\" or \"30 days ago\""
-        ),
-    })
+    Err(AnalysisFailedError::new(format!(
+        "invalid {flag} value {value:?}; expected an RFC 3339 timestamp, a YYYY-MM-DD \
+         date, or a relative duration such as \"6 months\" or \"30 days ago\""
+    ))
+    .into())
 }
 
 /// Resolves a relative [`Span`] to the instant that far before `now`, treating the
@@ -159,8 +162,12 @@ fn instant_before(span: Span, flag: &str, now: Timestamp) -> Result<Timestamp, A
     now.to_zoned(TimeZone::UTC)
         .checked_sub(span.abs())
         .map(|zoned| zoned.timestamp())
-        .map_err(|error| AnalyzeError::Analyze {
-            message: format!("{flag} duration is out of the representable range: {error}"),
+        .map_err(|error| {
+            AnalysisFailedError::caused_by(
+                format!("{flag} duration is out of the representable range"),
+                error,
+            )
+            .into()
         })
 }
 
@@ -169,9 +176,10 @@ fn instant_before(span: Span, flag: &str, now: Timestamp) -> Result<Timestamp, A
 mod tests {
     use cbh_detect::AnalysisMode;
     use jiff::Timestamp;
+    use ohno::ErrorExt as _;
 
     use super::*;
-    use crate::AnalyzeError;
+    use crate::AnalysisFailedError;
 
     fn ts(seconds: i64) -> Timestamp {
         Timestamp::from_second(seconds).unwrap()
@@ -304,6 +312,6 @@ mod tests {
     fn since_rejects_garbage() {
         let now: Timestamp = "2024-06-01T00:00:00Z".parse().unwrap();
         let error = parse_since(Some("not-a-date"), now).unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
+        assert!(error.find_source::<AnalysisFailedError>().is_some());
     }
 }

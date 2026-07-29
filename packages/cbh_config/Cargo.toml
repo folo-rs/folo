@@ -18,12 +18,14 @@ doc = false
 
 [dependencies]
 cbh_command = { workspace = true }
+ohno = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["fs"] }
 toml = { workspace = true, features = ["parse", "serde"] }
 
 [dev-dependencies]
 mutants = { workspace = true }
+static_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
 

@@ -2,9 +2,11 @@
 //! and where its benchmark history is stored.
 
 use std::error::Error;
+use std::io;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::Path;
-use std::{fmt, io};
 
+use ohno::OhnoCore;
 use serde::Deserialize;
 
 /// The starter configuration written by `install`.
@@ -107,7 +109,7 @@ pub struct AzureStorageConfig {
 /// the configuration schema.
 pub fn parse_config(text: &str) -> Result<Config, ConfigError> {
     toml::from_str(text)
-        .map_err(|error| ConfigError::new(format!("failed to parse configuration: {error}")))
+        .map_err(|error| ConfigError::caused_by("failed to parse configuration", error))
 }
 
 /// Loads and parses the configuration file at `path`.
@@ -131,10 +133,10 @@ pub async fn load_config(path: &Path, explicit: bool) -> Result<Config, ConfigEr
             return Ok(Config::default());
         }
         Err(error) => {
-            return Err(ConfigError::new(format!(
-                "failed to read configuration at {}: {error}",
-                path.display()
-            )));
+            return Err(ConfigError::caused_by(
+                format!("failed to read configuration at {}", path.display()),
+                error,
+            ));
         }
     };
     parse_config(&text)
@@ -151,11 +153,26 @@ pub fn default_template() -> &'static str {
 /// Carries a single human-readable message rather than categorizing failures:
 /// the construction sites (a file read, a TOML parse, an unresolvable
 /// `--local`/`--cache` selection) each bake their context into the message, and
-/// nothing downstream branches on a kind.
-#[derive(Debug)]
+/// nothing downstream branches on a kind. An underlying failure, when there is
+/// one, is attached as the error source instead of being folded into the
+/// message.
+#[derive(ohno::Error)]
+#[display("{message}")]
+// Other crates in the workspace construct this error while wrapping it into their own error
+// types, which the generated `pub(crate)` constructors would not permit.
+#[no_constructors]
 pub struct ConfigError {
     message: String,
+    #[error]
+    core: OhnoCore,
 }
+
+// The OhnoCore field contains Arc<dyn Error + Send + Sync>, which is !UnwindSafe because Arc
+// requires T: RefUnwindSafe and trait objects are !RefUnwindSafe. However, ohno error types are
+// immutable after construction — no &self method mutates internal state — so observing them
+// through a shared reference during unwind is harmless.
+impl UnwindSafe for ConfigError {}
+impl RefUnwindSafe for ConfigError {}
 
 impl ConfigError {
     /// Creates a configuration error carrying `message`.
@@ -163,22 +180,41 @@ impl ConfigError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            core: OhnoCore::default(),
+        }
+    }
+
+    /// Creates a configuration error carrying `message`, caused by `error`.
+    #[must_use]
+    pub(crate) fn caused_by(
+        message: impl Into<String>,
+        error: impl Into<Box<dyn Error + Send + Sync>>,
+    ) -> Self {
+        Self {
+            message: message.into(),
+            core: OhnoCore::from(error),
         }
     }
 }
 
-impl fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl Error for ConfigError {}
-
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::fmt::Debug;
+
+    use ohno::ErrorExt;
+    use static_assertions::assert_impl_all;
+
     use super::*;
+
+    assert_impl_all!(
+        ConfigError: Send,
+        Sync,
+        Debug,
+        Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
 
     #[test]
     fn default_template_has_no_engines_section() {
@@ -341,9 +377,22 @@ key = \"ci-pool-a\"
     }
 
     #[test]
-    fn config_error_display_is_the_message() {
+    fn config_error_without_a_cause_renders_only_its_message() {
         let error = ConfigError::new("boom");
-        assert_eq!(error.to_string(), "boom");
+        assert_eq!(error.message(), "boom");
+    }
+
+    #[test]
+    fn config_error_renders_its_cause_as_a_source() {
+        let error = ConfigError::caused_by("boom", io::Error::other("inner"));
+
+        assert!(error.find_source::<io::Error>().is_some());
+
+        // The cause is carried as a source rather than folded into the message, so the
+        // message stands alone on the first line and the cause follows it.
+        let message = error.message();
+        assert_eq!(message.lines().next(), Some("boom"));
+        assert!(message.contains("inner"));
     }
 
     #[tokio::test]
@@ -378,6 +427,7 @@ key = \"ci-pool-a\"
             "{message}"
         );
         assert!(message.contains("absent.toml"), "{message}");
+        assert!(error.find_source::<io::Error>().is_some());
     }
 
     #[tokio::test]

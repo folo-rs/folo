@@ -503,8 +503,6 @@ async fn prune_without_a_repository_errors() {
     let workspace = Workspace::new(&storage_only_config());
 
     let error = workspace.drive(&["prune", "--dirty"]).await.unwrap_err();
-    let RunError::Analyze { message } = error else {
-        panic!("expected an analyze error, got {error:?}");
-    };
-    assert!(message.contains("requires a git repository"), "{message}");
+    assert!(error.find_source::<AnalysisFailedError>().is_some());
+    assert!(error.message().contains("requires a git repository"));
 }

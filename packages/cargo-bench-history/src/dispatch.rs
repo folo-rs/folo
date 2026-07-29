@@ -5,9 +5,11 @@ use std::path::PathBuf;
 
 use cbh_analyze::AutoFacets;
 use cbh_storage::StorageOverride;
+use ohno::AppError;
 use tick::Clock;
 
-use crate::{Command, RunError, RunOutcome, commands};
+use crate::errors::WorkingDirectoryFailedError;
+use crate::{Command, RunOutcome, commands};
 
 /// Test-only overrides for [`run_with_overrides`].
 ///
@@ -53,10 +55,10 @@ pub struct Overrides {
 ///
 /// # Errors
 ///
-/// Returns a `RunError` if a command fails (for example, a configuration or
-/// storage error).
+/// Returns an error if a command fails (for example, a configuration or storage
+/// error).
 #[doc(hidden)]
-pub async fn run(command: &Command) -> Result<RunOutcome, RunError> {
+pub async fn run(command: &Command) -> Result<RunOutcome, AppError> {
     run_with_overrides(command, Overrides::default()).await
 }
 
@@ -71,13 +73,13 @@ pub async fn run(command: &Command) -> Result<RunOutcome, RunError> {
 ///
 /// # Errors
 ///
-/// Returns a `RunError` if a command fails (for example, a configuration or
-/// storage error).
+/// Returns an error if a command fails (for example, a configuration or storage
+/// error).
 #[doc(hidden)]
 pub async fn run_with_overrides(
     command: &Command,
     overrides: Overrides,
-) -> Result<RunOutcome, RunError> {
+) -> Result<RunOutcome, AppError> {
     let Overrides {
         workspace_dir,
         target_root,
@@ -88,7 +90,7 @@ pub async fn run_with_overrides(
     } = overrides;
     let workspace_dir = match workspace_dir {
         Some(dir) => dir,
-        None => std::env::current_dir().map_err(RunError::Io)?,
+        None => std::env::current_dir().map_err(WorkingDirectoryFailedError::caused_by)?,
     };
     let workspace_dir = workspace_dir.as_path();
     let storage_override = storage_override.map(StorageOverride::into_facade);

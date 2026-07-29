@@ -55,3 +55,69 @@ to ensure that the panic does not occur when already unwinding for another panic
 Whenever a numeric value must be non-zero, prefer `NonZero<usize>` over `usize`,
 in both private APIs/logic and public APIs. Prefer `NonZero<usize>` over
 `NonZeroUsize`.
+
+## Defining error types
+
+Error types are built with `ohno`. Binaries aggregate with `ohno::AppError` (enable
+the `app-err` feature); libraries expose their own error type.
+
+Place an error type next to the API that produces it when it belongs to exactly one
+module — `cbh_config`'s `ConfigError` lives in `config.rs`, `cbh_engines`'
+`CallgrindParseError` in `bench/callgrind.rs`. Collect them into a dedicated
+`src/errors.rs` (or `src/error.rs`, matching whichever name the package already
+uses) once they span several modules or grow past a handful, as in `cbh_analyze`,
+`cbh_storage`, and the three CLI binaries.
+
+`ohno` rejects enums, so define **one type per distinct failure condition** and
+group them under a wrapper the API returns. The wrapper is transparent by default:
+
+```rust
+#[ohno::error]
+#[no_constructors]
+#[from(NotAFileError, ManifestParseError)]
+pub struct ManifestError;
+```
+
+Omitting `#[display]` on a type that carries a source makes it render the source's
+message verbatim with no `caused by:` line, so wrapping adds nothing a user sees.
+`#[no_constructors]` is what stops such a wrapper from being constructed without a
+source, which would render the literal type name.
+
+Callers discriminate with `find_source::<T>()` (needs `use ohno::ErrorExt;`; on
+`AppError` it is inherent). Add a `kind` field, a `#[display("{kind}")]` and a
+`kind()` accessor **only** where a production caller actually branches on the
+condition — not speculatively, and not merely because tests could use it.
+
+Further rules:
+
+* Generated `new`/`caused_by` are always `pub(crate)` regardless of the type's
+  visibility. When another crate must construct the error — including from its
+  tests — add `#[no_constructors]`, an explicit `#[error] core: ohno::OhnoCore`
+  field, and a hand-written `pub fn`. An unused generated constructor also trips
+  `dead_code`, which is a second reason to reach for `#[no_constructors]`.
+* `#[display]` arguments are implicitly rewritten as `&self.<expr>`, so write
+  `path.display()`, never `self.path.display()`. Literals and constants are not
+  accepted. On a tuple struct, `{0}` fails — write `#[display("{}", 0)]`.
+* No `Clone` is generated; derive it explicitly when needed and pin it with
+  `static_assertions`. `PartialEq`, `Eq` and `Copy` cannot be recovered at all,
+  because the type carries a `Backtrace` and an `Arc`.
+* Never convert a foreign error type through a blanket `From` impl when the
+  destination distinguishes conditions — `?` will then silently pick one category.
+  Offer a named constructor instead and let each call site choose.
+* Never fold another error's `to_string()` or `message()` into a `String` field.
+  Attach it as a source with `caused_by` instead. A folded string bakes in that
+  error's backtrace, which then reappears wherever the field is rendered — including
+  in summaries printed on success paths.
+* Do not prefix a message with its category (`"I/O error: "`, `"configuration
+  error: "`). The type already names the condition, and the wrapper it travels
+  through is transparent, so the prefix only adds noise.
+* Prefer a type that names the operation over one that just wraps `io::Error`: a
+  bare `io::Error` says what went wrong but never what was being attempted.
+* Add a field accessor only when a caller outside the defining module reads it.
+  In-module tests read private fields directly; a sibling module means widening
+  the field to `pub(crate)`, not adding a `pub fn`.
+
+Each error carries its own backtrace, so a wrapper chain prints one backtrace block
+per level under `RUST_BACKTRACE=1`. Never assert on a full `to_string()`. See the
+unwind-safety chapter for the manual `UnwindSafe`/`RefUnwindSafe` impls these types
+require.

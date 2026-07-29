@@ -436,14 +436,10 @@ async fn examine_rejects_an_unknown_metric() {
         ])
         .await
         .unwrap_err();
-    let RunError::Analyze { message } = error else {
-        panic!("expected an analyze error, got {error:?}");
-    };
-    assert!(message.contains("unknown metric"), "{message}");
-    assert!(
-        message.contains("instruction_count"),
-        "the error lists valid names: {message}"
-    );
+    assert!(error.find_source::<AnalysisFailedError>().is_some());
+    assert!(error.message().contains("unknown metric"));
+    // The error lists the valid names.
+    assert!(error.message().contains("instruction_count"));
 }
 
 /// An unmatched benchmark id is not an error: runs enter the analysis but none
@@ -490,10 +486,8 @@ async fn examine_without_a_repository_errors() {
         ])
         .await
         .unwrap_err();
-    let RunError::Analyze { message } = error else {
-        panic!("expected an analyze error, got {error:?}");
-    };
-    assert!(message.contains("requires a git repository"), "{message}");
+    assert!(error.find_source::<AnalysisFailedError>().is_some());
+    assert!(error.message().contains("requires a git repository"));
 }
 
 /// The benchmark id names the series to pivot, so it must be present: an empty
@@ -515,13 +509,8 @@ async fn examine_rejects_an_empty_benchmark() {
         ])
         .await
         .unwrap_err();
-    let RunError::Analyze { message } = error else {
-        panic!("expected an analyze error, got {error:?}");
-    };
-    assert!(
-        message.contains("--benchmark must not be empty"),
-        "{message}"
-    );
+    assert!(error.find_source::<AnalysisFailedError>().is_some());
+    assert!(error.message().contains("--benchmark must not be empty"));
 }
 
 /// `--no-text` suppresses the text report, so with no file output requested there
@@ -544,10 +533,8 @@ async fn examine_requires_an_output() {
         ])
         .await
         .unwrap_err();
-    let RunError::Analyze { message } = error else {
-        panic!("expected an analyze error, got {error:?}");
-    };
-    assert!(message.contains("no output selected"), "{message}");
+    assert!(error.find_source::<AnalysisFailedError>().is_some());
+    assert!(error.message().contains("no output selected"));
 }
 
 /// When runs exist but the selection window excludes them all, `examine` gives the

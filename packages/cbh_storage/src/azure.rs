@@ -34,8 +34,9 @@ use cbh_diag::{Reporter, ReporterExt};
 use futures::TryStreamExt as _;
 use jiff::Timestamp;
 
-use super::{
-    PendingInvalidation, Storage, StorageError, cache_epoch_key, github_oidc, validate_key,
+use crate::{
+    PendingInvalidation, Storage, StorageError, StorageErrorKind, cache_epoch_key, github_oidc,
+    validate_key,
 };
 
 /// The HTTP content coding declared on every uploaded blob. The storage layer
@@ -90,7 +91,7 @@ impl AzureBlobStorage {
     ///
     /// # Errors
     ///
-    /// Returns [`StorageError::Config`] if the endpoint is not a valid base URL,
+    /// Returns [`Config`](StorageErrorKind::Config) if the endpoint is not a valid base URL,
     /// or is not HTTPS (Entra ID authentication requires TLS).
     pub(crate) fn from_config(
         account: &str,
@@ -139,7 +140,7 @@ impl AzureBlobStorage {
     ///
     /// # Errors
     ///
-    /// Returns [`StorageError::Config`] if the endpoint is not a valid base URL, or
+    /// Returns [`Config`](StorageErrorKind::Config) if the endpoint is not a valid base URL, or
     /// is not HTTPS (Entra ID authentication requires TLS, even through this seam).
     pub(crate) fn from_parts(
         account: &str,
@@ -307,7 +308,7 @@ impl Storage for AzureBlobStorage {
             .await
         {
             Ok(()) => Ok(()),
-            Err(StorageError::AlreadyExists { .. }) => {
+            Err(error) if matches!(error.kind(), StorageErrorKind::AlreadyExists { .. }) => {
                 self.upload_with_retry(&client, &compressed, key, false)
                     .await?;
                 self.invalidation.arm();
@@ -328,12 +329,10 @@ impl Storage for AzureBlobStorage {
                     .collect()
                     .await
                     .map_err(|error| azure_io(&error))?;
-                cbh_codec::decompress(&bytes).map_err(StorageError::Io)
+                cbh_codec::decompress(&bytes).map_err(StorageError::io)
             }
             Err(error) if matches!(classify(&error), Fault::NotFound | Fault::ContainerMissing) => {
-                Err(StorageError::NotFound {
-                    key: key.to_owned(),
-                })
+                Err(StorageError::not_found(key))
             }
             Err(error) => Err(azure_io(&error)),
         }
@@ -383,9 +382,7 @@ impl Storage for AzureBlobStorage {
                 Ok(())
             }
             Err(error) if matches!(classify(&error), Fault::NotFound | Fault::ContainerMissing) => {
-                Err(StorageError::NotFound {
-                    key: key.to_owned(),
-                })
+                Err(StorageError::not_found(key))
             }
             Err(error) => Err(azure_io(&error)),
         }
@@ -563,7 +560,7 @@ async fn upload(client: &BlobClient, bytes: &[u8], if_not_exists: bool) -> azure
 ///
 /// # Errors
 ///
-/// Returns [`StorageError::Config`] if the endpoint is not a valid base URL, or is
+/// Returns [`Config`](StorageErrorKind::Config) if the endpoint is not a valid base URL, or is
 /// not HTTPS (Entra ID authentication requires TLS).
 fn container_endpoint_url(
     account: &str,
@@ -626,12 +623,8 @@ fn classify(error: &azure_core::Error) -> Fault {
 /// Maps an Azure error to a [`StorageError`] for the object identified by `key`.
 fn map_error(error: &azure_core::Error, key: &str) -> StorageError {
     match classify(error) {
-        Fault::NotFound | Fault::ContainerMissing => StorageError::NotFound {
-            key: key.to_owned(),
-        },
-        Fault::AlreadyExists => StorageError::AlreadyExists {
-            key: key.to_owned(),
-        },
+        Fault::NotFound | Fault::ContainerMissing => StorageError::not_found(key),
+        Fault::AlreadyExists => StorageError::already_exists(key),
         Fault::Other => azure_io(error),
     }
 }
@@ -644,19 +637,17 @@ fn map_error(error: &azure_core::Error, key: &str) -> StorageError {
 /// acquisition failure). The `Debug` representation preserves the full error
 /// chain, so the underlying fault is visible in diagnostics.
 fn azure_io(error: &azure_core::Error) -> StorageError {
-    StorageError::Io(io::Error::other(format!("Azure Blob error: {error:?}")))
+    StorageError::io(io::Error::other(format!("Azure Blob error: {error:?}")))
 }
 
 /// Builds a generic storage I/O error from a static message.
 fn io_error(message: &'static str) -> StorageError {
-    StorageError::Io(io::Error::other(message))
+    StorageError::io(io::Error::other(message))
 }
 
 /// Builds a storage configuration error.
 fn config_error(message: impl Into<String>) -> StorageError {
-    StorageError::Config {
-        message: message.into(),
-    }
+    StorageError::config(message)
 }
 
 #[cfg(test)]
@@ -721,16 +712,16 @@ mod tests {
     fn map_error_distinguishes_not_found_already_exists_and_io() {
         let key = "object";
         assert!(matches!(
-            map_error(&http_error(StatusCode::NotFound, None), key),
-            StorageError::NotFound { .. }
+            map_error(&http_error(StatusCode::NotFound, None), key).kind(),
+            StorageErrorKind::NotFound { .. }
         ));
         assert!(matches!(
-            map_error(&http_error(StatusCode::Conflict, None), key),
-            StorageError::AlreadyExists { .. }
+            map_error(&http_error(StatusCode::Conflict, None), key).kind(),
+            StorageErrorKind::AlreadyExists { .. }
         ));
         assert!(matches!(
-            map_error(&http_error(StatusCode::InternalServerError, None), key),
-            StorageError::Io(_)
+            map_error(&http_error(StatusCode::InternalServerError, None), key).kind(),
+            StorageErrorKind::Io
         ));
     }
 
@@ -843,12 +834,10 @@ mod tests {
             Some("http://insecure.example/account".to_owned()),
         )
         .unwrap_err();
-        match error {
-            StorageError::Config { message } => {
-                assert!(message.contains("https"), "{message}");
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        let StorageErrorKind::Config { message } = error.kind() else {
+            panic!("unexpected error: {error:?}");
+        };
+        assert!(message.contains("https"));
     }
 
     #[test]
@@ -863,12 +852,10 @@ mod tests {
             Arc::new(UnusedHttpClient),
         )
         .unwrap_err();
-        match error {
-            StorageError::Config { message } => {
-                assert!(message.contains("https"), "{message}");
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        let StorageErrorKind::Config { message } = error.kind() else {
+            panic!("unexpected error: {error:?}");
+        };
+        assert!(message.contains("https"));
     }
 
     #[test]
@@ -891,7 +878,7 @@ mod tests {
     fn invalid_endpoint_is_a_config_error() {
         let error = AzureBlobStorage::from_config("prod", "history", Some("not a url".to_owned()))
             .unwrap_err();
-        assert!(matches!(error, StorageError::Config { .. }), "{error:?}");
+        assert!(matches!(error.kind(), StorageErrorKind::Config { .. }));
     }
 
     #[test]
@@ -918,9 +905,9 @@ mod tests {
         );
 
         let put = block_on(storage.put("../bad", b"x")).unwrap_err();
-        assert!(matches!(put, StorageError::InvalidKey { .. }), "{put:?}");
+        assert!(matches!(put.kind(), StorageErrorKind::InvalidKey { .. }));
         let get = block_on(storage.get("../bad")).unwrap_err();
-        assert!(matches!(get, StorageError::InvalidKey { .. }), "{get:?}");
+        assert!(matches!(get.kind(), StorageErrorKind::InvalidKey { .. }));
     }
 
     // =======================================================================
@@ -1353,7 +1340,7 @@ mod tests {
         storage.put("v1/present.json", b"x").await.unwrap();
 
         let error = storage.get("v1/absent.json").await.unwrap_err();
-        assert!(matches!(error, StorageError::NotFound { .. }), "{error:?}");
+        assert!(matches!(error.kind(), StorageErrorKind::NotFound { .. }));
     }
 
     #[tokio::test]
@@ -1370,7 +1357,7 @@ mod tests {
         // No put, so the container does not exist: a get must still resolve to a
         // plain not-found rather than an I/O error.
         let error = storage.get("v1/absent.json").await.unwrap_err();
-        assert!(matches!(error, StorageError::NotFound { .. }), "{error:?}");
+        assert!(matches!(error.kind(), StorageErrorKind::NotFound { .. }));
     }
 
     #[tokio::test]
@@ -1395,7 +1382,7 @@ mod tests {
             vec!["v1/proj/clean.json".to_owned()]
         );
         let error = storage.get("v1/proj/dirty.json").await.unwrap_err();
-        assert!(matches!(error, StorageError::NotFound { .. }), "{error:?}");
+        assert!(matches!(error.kind(), StorageErrorKind::NotFound { .. }));
     }
 
     #[tokio::test]
@@ -1414,7 +1401,7 @@ mod tests {
         storage.put("v1/present.json", b"x").await.unwrap();
 
         let error = storage.delete("v1/absent.json").await.unwrap_err();
-        assert!(matches!(error, StorageError::NotFound { .. }), "{error:?}");
+        assert!(matches!(error.kind(), StorageErrorKind::NotFound { .. }));
     }
 
     #[tokio::test]
@@ -1431,7 +1418,7 @@ mod tests {
         // No put, so the container does not exist: a delete must still resolve to
         // a plain not-found rather than an I/O error.
         let error = storage.delete("v1/absent.json").await.unwrap_err();
-        assert!(matches!(error, StorageError::NotFound { .. }), "{error:?}");
+        assert!(matches!(error.kind(), StorageErrorKind::NotFound { .. }));
     }
 
     #[tokio::test]
@@ -1452,7 +1439,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(error, StorageError::AlreadyExists { .. }),
+            matches!(error.kind(), StorageErrorKind::AlreadyExists { .. }),
             "{error:?}"
         );
         // The original value is preserved.
@@ -1580,7 +1567,7 @@ mod tests {
             .await
             .expect_err("a forbidden upload must surface as an error");
 
-        assert!(matches!(error, StorageError::Io(_)));
+        assert!(matches!(error.kind(), StorageErrorKind::Io));
         assert!(
             !storage.invalidation.take(),
             "a failed write-once probe must not arm invalidation"

@@ -9,12 +9,15 @@
 
 mod cli;
 mod detection;
+mod errors;
 mod execution;
+mod manifest;
 mod pal;
 mod run;
 mod types;
 mod workspace;
 
 pub use cli::{Cli, EarlyExit};
+pub use errors::*;
 pub use run::run;
 pub use types::*;

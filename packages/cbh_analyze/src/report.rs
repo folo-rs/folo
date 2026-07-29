@@ -17,7 +17,7 @@ use std::path::Path;
 
 use cbh_render::ReportFormat;
 
-use crate::AnalyzeError;
+use crate::{AnalysisFailedError, AnalyzeError};
 
 /// The rendered reports a single analysis pass produced, one `Some` per requested
 /// format.
@@ -62,7 +62,7 @@ impl ReportRequest {
     ///
     /// # Errors
     ///
-    /// Returns [`AnalyzeError::Analyze`] when nothing would be produced — `--no-text`
+    /// Returns an [`AnalysisFailedError`] when nothing would be produced — `--no-text`
     /// suppresses the only default output and neither file format was requested — so a
     /// run that would produce nothing is rejected up front rather than completing
     /// silently.
@@ -72,11 +72,11 @@ impl ReportRequest {
         json: Option<&Path>,
     ) -> Result<Self, AnalyzeError> {
         if no_text && markdown.is_none() && json.is_none() {
-            return Err(AnalyzeError::Analyze {
-                message: "no output selected: --no-text suppresses the text report, so request at \
-                          least one of --markdown <path> or --json <path>"
-                    .to_owned(),
-            });
+            return Err(AnalysisFailedError::new(
+                "no output selected: --no-text suppresses the text report, so request at \
+                 least one of --markdown <path> or --json <path>",
+            )
+            .into());
         }
         Ok(Self {
             no_text,
@@ -91,7 +91,7 @@ impl ReportRequest {
     ///
     /// # Errors
     ///
-    /// Returns [`AnalyzeError::Analyze`] when nothing would be produced — `--no-text`
+    /// Returns an [`AnalysisFailedError`] when nothing would be produced — `--no-text`
     /// suppresses the text report and none of `--markdown`, `--markdown-summary`, or
     /// `--json` was requested — so a run that would produce nothing is rejected up
     /// front rather than completing silently.
@@ -102,12 +102,12 @@ impl ReportRequest {
         markdown_summary: Option<&Path>,
     ) -> Result<Self, AnalyzeError> {
         if no_text && markdown.is_none() && json.is_none() && markdown_summary.is_none() {
-            return Err(AnalyzeError::Analyze {
-                message: "no output selected: --no-text suppresses the text report, so request at \
-                          least one of --markdown <path>, --markdown-summary <path>, or --json \
-                          <path>"
-                    .to_owned(),
-            });
+            return Err(AnalysisFailedError::new(
+                "no output selected: --no-text suppresses the text report, so request at \
+                 least one of --markdown <path>, --markdown-summary <path>, or --json \
+                 <path>",
+            )
+            .into());
         }
         Ok(Self {
             no_text,
@@ -159,6 +159,8 @@ impl ReportRequest {
 mod tests {
     use std::path::PathBuf;
 
+    use ohno::ErrorExt as _;
+
     use super::*;
 
     /// A render stub that names the format it was asked for, so a test can tell which
@@ -170,12 +172,11 @@ mod tests {
     #[test]
     fn resolve_rejects_a_run_that_would_render_nothing() {
         let error = ReportRequest::resolve(true, None, None).unwrap_err();
-        match error {
-            AnalyzeError::Analyze { message } => {
-                assert!(message.contains("no output selected"), "{message}");
-            }
-            other => panic!("expected an analyze error, got {other:?}"),
-        }
+        let message = error
+            .find_source::<AnalysisFailedError>()
+            .unwrap()
+            .message();
+        assert!(message.contains("no output selected"));
     }
 
     #[test]
@@ -228,14 +229,13 @@ mod tests {
     #[test]
     fn resolve_analyze_rejects_a_run_that_would_render_nothing() {
         let error = ReportRequest::resolve_analyze(true, None, None, None).unwrap_err();
-        match error {
-            AnalyzeError::Analyze { message } => {
-                assert!(message.contains("no output selected"), "{message}");
-                // The analyze variant names its extra format in the guidance.
-                assert!(message.contains("--markdown-summary"), "{message}");
-            }
-            other => panic!("expected an analyze error, got {other:?}"),
-        }
+        let message = error
+            .find_source::<AnalysisFailedError>()
+            .unwrap()
+            .message();
+        assert!(message.contains("no output selected"));
+        // The analyze form names its extra format in the guidance.
+        assert!(message.contains("--markdown-summary"));
     }
 
     #[test]

@@ -448,9 +448,11 @@ dependencies = [
  "mimalloc",
  "mutants",
  "nonempty",
+ "ohno",
  "reqwest",
  "serde_json",
  "serial_test",
+ "static_assertions",
  "tempfile",
  "testing",
  "tick",
@@ -494,7 +496,9 @@ dependencies = [
  "mimalloc",
  "mockall",
  "mutants",
+ "ohno",
  "serial_test",
+ "static_assertions",
  "tempfile",
  "toml",
 ]
@@ -506,8 +510,10 @@ dependencies = [
  "clap",
  "mimalloc",
  "mutants",
+ "ohno",
  "semver",
  "serial_test",
+ "static_assertions",
  "tempfile",
  "toml_edit",
 ]
@@ -536,8 +542,10 @@ dependencies = [
  "jiff",
  "mutants",
  "nonempty",
+ "ohno",
  "serde",
  "serde_json",
+ "static_assertions",
  "tick",
 ]
 
@@ -577,7 +585,9 @@ version = "0.0.9"
 dependencies = [
  "cbh_command",
  "mutants",
+ "ohno",
  "serde",
+ "static_assertions",
  "tempfile",
  "tokio",
  "toml",
@@ -620,8 +630,10 @@ dependencies = [
  "jiff",
  "mutants",
  "nonempty",
+ "ohno",
  "serde",
  "serde_json",
+ "static_assertions",
  "tempfile",
  "tokio",
 ]
@@ -644,9 +656,11 @@ dependencies = [
  "criterion",
  "jiff",
  "nonempty",
+ "ohno",
  "serde",
  "serde_json",
  "smallvec",
+ "static_assertions",
 ]
 
 [[package]]
@@ -697,10 +711,12 @@ dependencies = [
  "futures",
  "jiff",
  "mutants",
+ "ohno",
  "reqwest",
  "serde",
  "serde_json",
  "serial_test",
+ "static_assertions",
  "tempfile",
  "tokio",
 ]

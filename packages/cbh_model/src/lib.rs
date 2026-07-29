@@ -33,7 +33,9 @@ mod identifiers;
 mod metric;
 mod run;
 
-pub use aggregate::{AggregateError, Combined, Selection, min_per_metric};
+pub use aggregate::{
+    AggregateError, Combined, MissingCaseError, MissingMetricError, Selection, min_per_metric,
+};
 pub use benchmark_id::{BenchmarkId, BenchmarkIdPrefix, EmptyBenchmarkIdPrefix};
 pub use bless::{BLESS_SCHEMA_VERSION, BlessingRecord};
 pub use comparability::{

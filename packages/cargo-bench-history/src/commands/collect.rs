@@ -23,15 +23,23 @@ use cbh_probe::{
     EnvironmentProbe, HardwareProfile, RustcInfo, SystemProbe, describe_fingerprint_components,
     resolve_machine_key,
 };
-use cbh_storage::{Storage, StorageError, StorageFacade, build_storage};
+use cbh_storage::{Storage, StorageErrorKind, StorageFacade, build_storage};
 use jiff::Timestamp;
+use ohno::AppError;
 use tick::Clock;
 
+use crate::errors::{
+    BenchCommandFailedError, EngineFailedError, EngineTerminatedError, GitProbeFailedError,
+    HarvestFailedError, InconsistentRunsError, InvalidCommandError, ParseOutputError,
+    ToolchainProbeFailedError,
+};
 use crate::model::{
     BenchmarkResult, DiscriminantSet, Engine, EnvironmentInfo, GitInfo, MachineInfo, MachineKey,
     Run, RunContext, TargetTriple, ToolchainInfo, detect_environment, min_per_metric,
 };
-use crate::{CollectOptions, LocalStorageSelection, RunError, RunOutcome, finish_with_flush};
+use crate::{
+    CollectOptions, DuplicateResultError, LocalStorageSelection, RunOutcome, finish_with_flush,
+};
 
 /// The program and base arguments the production tool runs to benchmark the
 /// workspace. The first-class scope flags (`--workspace`/`--package`/`--bench`)
@@ -86,7 +94,7 @@ pub(crate) async fn execute(
     target_root: Option<PathBuf>,
     bench_command: Option<Vec<String>>,
     storage_override: Option<StorageFacade>,
-) -> Result<RunOutcome, RunError> {
+) -> Result<RunOutcome, AppError> {
     let reporter = StderrReporter::new(options.verbose);
 
     // `--repo` selects the repository the run operates on (where benches run, git
@@ -239,13 +247,16 @@ pub(crate) struct SharedContext {
 pub(crate) async fn probe_context<P>(
     probe: &P,
     env: &dyn Fn(&str) -> Option<String>,
-) -> Result<SharedContext, RunError>
+) -> Result<SharedContext, AppError>
 where
     P: EnvironmentProbe,
 {
-    let rustc = probe.toolchain().await?;
+    let rustc = probe
+        .toolchain()
+        .await
+        .map_err(ToolchainProbeFailedError::caused_by)?;
     Ok(SharedContext {
-        git: probe.git().await?,
+        git: probe.git().await.map_err(GitProbeFailedError::caused_by)?,
         target_triple: TargetTriple::from(rustc.host.clone().unwrap_or_default()),
         rustc,
         env: detect_environment(env),
@@ -317,7 +328,7 @@ pub(crate) struct CollectSummary {
 pub(crate) async fn execute_collect<R, P, O, S>(
     options: &CollectOptions,
     deps: &CollectDeps<'_, R, P, O, S>,
-) -> Result<RunOutcome, RunError>
+) -> Result<RunOutcome, AppError>
 where
     R: BenchRunner,
     P: EnvironmentProbe,
@@ -347,7 +358,7 @@ where
 /// With `--best-of N` the whole suite runs `N` times and each metric is reduced to
 /// its minimum across the runs (see [`min_per_metric`]), so a transient slowdown
 /// on one run is discarded rather than stored. Every run must measure the same set
-/// of cases and metrics; a mismatch fails the collection ([`RunError::Inconsistent`]).
+/// of cases and metrics; a mismatch fails the collection ([`InconsistentRunsError`]).
 /// The stored run takes its timeline position and dirty-snapshot key from the
 /// first run's start, and the git/toolchain/hardware context is probed once after
 /// the runs finish (it does not change between them). `N == 1` reproduces a plain
@@ -355,7 +366,7 @@ where
 pub(crate) async fn run_engines<R, P, O, S>(
     options: &CollectOptions,
     deps: &CollectDeps<'_, R, P, O, S>,
-) -> Result<CollectSummary, RunError>
+) -> Result<CollectSummary, AppError>
 where
     R: BenchRunner,
     P: EnvironmentProbe,
@@ -418,11 +429,15 @@ where
             });
         }
 
-        let status = deps.runner.run_benches(&argv, &env).await?;
+        let status = deps
+            .runner
+            .run_benches(&argv, &env)
+            .await
+            .map_err(|error| BenchCommandFailedError::caused_by(argv.join(" "), error))?;
         if !status.success {
-            return Err(RunError::Engine {
-                engine: BENCH_COMMAND_LABEL.to_owned(),
-                code: status.code,
+            return Err(match status.code {
+                Some(code) => EngineFailedError::new(BENCH_COMMAND_LABEL, code).into(),
+                None => EngineTerminatedError::new(BENCH_COMMAND_LABEL).into(),
             });
         }
         deps.reporter.note_with(|| {
@@ -488,7 +503,7 @@ pub(crate) async fn finalize_and_store<S>(
     triple_note: &str,
     per_engine: &[Vec<Vec<BenchmarkResult>>],
     run_start: SystemTime,
-) -> Result<CollectSummary, RunError>
+) -> Result<CollectSummary, AppError>
 where
     S: Storage,
 {
@@ -523,10 +538,8 @@ where
 
     for (bucket, engine) in per_engine.iter().zip(Engine::ALL) {
         let runs = bucket.len();
-        let combined = min_per_metric(bucket).map_err(|error| RunError::Inconsistent {
-            engine: engine.to_string(),
-            message: error.to_string(),
-        })?;
+        let combined = min_per_metric(bucket)
+            .map_err(|error| InconsistentRunsError::caused_by(engine.to_string(), error))?;
         note_best_of_selections(store.reporter, engine, runs, &combined.selections);
 
         let summary =
@@ -658,12 +671,13 @@ fn note_best_of_selections(
 fn build_bench_argv(
     bench_command: &[String],
     options: &CollectOptions,
-) -> Result<Vec<String>, RunError> {
+) -> Result<Vec<String>, AppError> {
     let Some((program, _)) = bench_command.split_first() else {
-        return Err(RunError::Command {
-            engine: BENCH_COMMAND_LABEL.to_owned(),
-            message: "the benchmark command is empty".to_owned(),
-        });
+        return Err(InvalidCommandError::new(
+            BENCH_COMMAND_LABEL,
+            "the benchmark command is empty",
+        )
+        .into());
     };
     debug_assert!(!program.is_empty());
 
@@ -719,11 +733,14 @@ pub(crate) async fn harvest_records<O>(
     reporter: &dyn Reporter,
     engine: Engine,
     since: Option<SystemTime>,
-) -> Result<Vec<BenchmarkResult>, RunError>
+) -> Result<Vec<BenchmarkResult>, AppError>
 where
     O: BenchOutputSource,
 {
-    let harvest = output.collect(engine, since, reporter).await?;
+    let harvest = output
+        .collect(engine, since, reporter)
+        .await
+        .map_err(|error| HarvestFailedError::caused_by(engine.to_string(), error))?;
     parse_harvest(&harvest, reporter)
 }
 
@@ -740,7 +757,7 @@ async fn store_engine<S>(
     engine: Engine,
     records: Vec<BenchmarkResult>,
     run_start: SystemTime,
-) -> Result<EngineSummary, RunError>
+) -> Result<EngineSummary, AppError>
 where
     S: Storage,
 {
@@ -887,7 +904,7 @@ enum StoreOutcome {
 ///
 /// A normal run is write-once: if an object already exists at the key (a clean
 /// re-run of the same commit, or a dirty snapshot sharing an effective second),
-/// the collision surfaces as [`RunError::Duplicate`] so the caller can refuse it.
+/// the collision surfaces as [`DuplicateResultError`] so the caller can refuse it.
 /// `--overwrite` replaces any existing object in place instead; `--skip-existing`
 /// instead treats the existing object as a success that writes nothing — the
 /// append-only mode the CI collection uses so it never overwrites an object
@@ -898,21 +915,23 @@ async fn store_result<S: Storage>(
     bytes: &[u8],
     overwrite: bool,
     skip_existing: bool,
-) -> Result<StoreOutcome, RunError> {
+) -> Result<StoreOutcome, AppError> {
     if overwrite {
         storage.put_overwrite(object_key, bytes).await?;
         return Ok(StoreOutcome::Stored);
     }
     match storage.put(object_key, bytes).await {
         Ok(()) => Ok(StoreOutcome::Stored),
-        Err(StorageError::AlreadyExists { key }) => {
-            if skip_existing {
-                Ok(StoreOutcome::Skipped)
-            } else {
-                Err(RunError::Duplicate { key })
+        Err(error) => match error.kind() {
+            StorageErrorKind::AlreadyExists { key } => {
+                if skip_existing {
+                    Ok(StoreOutcome::Skipped)
+                } else {
+                    Err(DuplicateResultError::new(key.clone()).into())
+                }
             }
-        }
-        Err(error) => Err(error.into()),
+            _ => Err(error.into()),
+        },
     }
 }
 
@@ -926,15 +945,13 @@ async fn store_result<S: Storage>(
 fn parse_harvest(
     harvest: &Harvest,
     reporter: &dyn Reporter,
-) -> Result<Vec<BenchmarkResult>, RunError> {
+) -> Result<Vec<BenchmarkResult>, AppError> {
     match harvest {
         Harvest::Callgrind(summaries) => {
             let mut records = Vec::with_capacity(summaries.len());
             for summary in summaries {
-                let record =
-                    parse_callgrind_summary(&summary.content).map_err(|error| RunError::Parse {
-                        message: format!("{}: {error}", summary.path.display()),
-                    })?;
+                let record = parse_callgrind_summary(&summary.content)
+                    .map_err(|error| ParseOutputError::caused_by(&summary.path, error))?;
                 records.push(record);
             }
             Ok(records)
@@ -942,12 +959,8 @@ fn parse_harvest(
         Harvest::Criterion(cases) => {
             let mut records = Vec::with_capacity(cases.len());
             for case in cases {
-                let record =
-                    parse_criterion_case(&case.benchmark, &case.estimates).map_err(|error| {
-                        RunError::Parse {
-                            message: format!("{}: {error}", case.dir.display()),
-                        }
-                    })?;
+                let record = parse_criterion_case(&case.benchmark, &case.estimates)
+                    .map_err(|error| ParseOutputError::caused_by(&case.dir, error))?;
                 records.push(record);
             }
             Ok(records)
@@ -955,11 +968,8 @@ fn parse_harvest(
         Harvest::AllocTracker(files) => {
             let mut records = Vec::with_capacity(files.len());
             for file in files {
-                let record = parse_alloc_tracker_operation(&file.content).map_err(|error| {
-                    RunError::Parse {
-                        message: format!("{}: {error}", file.path.display()),
-                    }
-                })?;
+                let record = parse_alloc_tracker_operation(&file.content)
+                    .map_err(|error| ParseOutputError::caused_by(&file.path, error))?;
                 push_or_skip(&mut records, record, file, reporter);
             }
             Ok(records)
@@ -967,11 +977,8 @@ fn parse_harvest(
         Harvest::AllTheTime(files) => {
             let mut records = Vec::with_capacity(files.len());
             for file in files {
-                let record = parse_all_the_time_operation(&file.content).map_err(|error| {
-                    RunError::Parse {
-                        message: format!("{}: {error}", file.path.display()),
-                    }
-                })?;
+                let record = parse_all_the_time_operation(&file.content)
+                    .map_err(|error| ParseOutputError::caused_by(&file.path, error))?;
                 push_or_skip(&mut records, record, file, reporter);
             }
             Ok(records)
@@ -1079,6 +1086,7 @@ mod tests {
     use futures::executor::block_on;
 
     use super::*;
+    use crate::StorageError;
     use crate::model::{BenchmarkIdPrefix, BlessingRecord};
 
     const SINGLE_FIXTURE: &str =
@@ -1158,17 +1166,15 @@ mod tests {
 
     impl Storage for FailingStorage {
         async fn put(&self, _key: &str, _bytes: &[u8]) -> Result<(), StorageError> {
-            Err(StorageError::Io(io::Error::other("disk full")))
+            Err(StorageError::io(io::Error::other("disk full")))
         }
 
         async fn put_overwrite(&self, _key: &str, _bytes: &[u8]) -> Result<(), StorageError> {
-            Err(StorageError::Io(io::Error::other("disk full")))
+            Err(StorageError::io(io::Error::other("disk full")))
         }
 
         async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
-            Err(StorageError::NotFound {
-                key: key.to_owned(),
-            })
+            Err(StorageError::not_found(key))
         }
 
         async fn list(&self, _prefix: &str) -> Result<Vec<String>, StorageError> {
@@ -1176,9 +1182,7 @@ mod tests {
         }
 
         async fn delete(&self, key: &str) -> Result<(), StorageError> {
-            Err(StorageError::NotFound {
-                key: key.to_owned(),
-            })
+            Err(StorageError::not_found(key))
         }
     }
 
@@ -1194,10 +1198,8 @@ mod tests {
             false,
         ))
         .unwrap_err();
-        assert!(
-            matches!(error, RunError::Storage(_)),
-            "expected a storage error, got {error:?}"
-        );
+        let found = error.find_source::<StorageError>().unwrap();
+        assert!(matches!(found.kind(), StorageErrorKind::Io));
     }
 
     fn frozen_time() -> SystemTime {
@@ -1624,7 +1626,7 @@ mod tests {
         probe: &FakeProbe,
         output: &FakeOutput,
         storage: &MemoryStorage,
-    ) -> Result<RunOutcome, RunError> {
+    ) -> Result<RunOutcome, AppError> {
         drive_at(FROZEN_UNIX, options, runner, probe, output, storage)
     }
 
@@ -1635,7 +1637,7 @@ mod tests {
         probe: &FakeProbe,
         output: &FakeOutput,
         storage: &MemoryStorage,
-    ) -> Result<RunOutcome, RunError> {
+    ) -> Result<RunOutcome, AppError> {
         let reporter = StderrReporter::new(true);
         drive_at_with(now_unix, options, runner, probe, output, storage, &reporter)
     }
@@ -1648,7 +1650,7 @@ mod tests {
         output: &FakeOutput,
         storage: &MemoryStorage,
         reporter: &dyn Reporter,
-    ) -> Result<RunOutcome, RunError> {
+    ) -> Result<RunOutcome, AppError> {
         let now = SystemTime::UNIX_EPOCH
             .checked_add(Duration::from_secs(now_unix))
             .unwrap();
@@ -1860,10 +1862,8 @@ mod tests {
         )
         .unwrap_err();
 
-        let RunError::Duplicate { key } = error else {
-            panic!("expected a duplicate error, got {error:?}");
-        };
-        assert!(key.ends_with("/clean.json"), "{key}");
+        let duplicate = error.find_source::<DuplicateResultError>().unwrap();
+        assert!(duplicate.key().ends_with("/clean.json"));
         // The second run left the single stored object untouched.
         assert_eq!(storage.keys().len(), 1);
     }
@@ -2134,7 +2134,7 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(matches!(error, RunError::Duplicate { .. }), "{error:?}");
+        assert!(error.find_source::<DuplicateResultError>().is_some());
         assert_eq!(storage.keys().len(), 1);
 
         // With --overwrite the clash is resolved by replacing the object in place.
@@ -2243,13 +2243,9 @@ mod tests {
         )
         .unwrap_err();
 
-        match error {
-            RunError::Engine { engine, code } => {
-                assert_eq!(engine, "cargo bench");
-                assert_eq!(code, Some(101));
-            }
-            other => panic!("expected engine error, got {other:?}"),
-        }
+        let failure = error.find_source::<EngineFailedError>().unwrap();
+        assert_eq!(failure.engine(), "cargo bench");
+        assert_eq!(failure.code(), 101);
         assert!(storage.keys().is_empty());
     }
 
@@ -2351,14 +2347,10 @@ mod tests {
         )
         .unwrap_err();
 
-        match error {
-            RunError::Parse { message } => {
-                assert!(message.contains("Criterion"), "{message}");
-                // The offending case directory is named so failures are actionable.
-                assert!(message.contains("new"), "{message}");
-            }
-            other => panic!("expected parse error, got {other:?}"),
-        }
+        assert!(error.find_source::<ParseOutputError>().is_some());
+        assert!(error.message().contains("Criterion"));
+        // The offending case directory is named so failures are actionable.
+        assert!(error.message().contains("new"));
         assert!(storage.keys().is_empty());
     }
 
@@ -2374,13 +2366,9 @@ mod tests {
         )
         .unwrap_err();
 
-        match error {
-            RunError::Parse { message } => {
-                // The offending operation file is named so failures are actionable.
-                assert!(message.contains("allocate_vec.json"), "{message}");
-            }
-            other => panic!("expected parse error, got {other:?}"),
-        }
+        assert!(error.find_source::<ParseOutputError>().is_some());
+        // The offending operation file is named so failures are actionable.
+        assert!(error.message().contains("allocate_vec.json"));
         assert!(storage.keys().is_empty());
     }
 
@@ -2396,12 +2384,8 @@ mod tests {
         )
         .unwrap_err();
 
-        match error {
-            RunError::Parse { message } => {
-                assert!(message.contains("read_cell.json"), "{message}");
-            }
-            other => panic!("expected parse error, got {other:?}"),
-        }
+        assert!(error.find_source::<ParseOutputError>().is_some());
+        assert!(error.message().contains("read_cell.json"));
         assert!(storage.keys().is_empty());
     }
 
@@ -2651,15 +2635,10 @@ mod tests {
         )
         .unwrap_err();
 
-        match error {
-            RunError::Parse { message } => {
-                assert!(message.contains("Callgrind"), "{message}");
-                // The offending file is named so multi-summary failures are
-                // actionable.
-                assert!(message.contains("summary.json"), "{message}");
-            }
-            other => panic!("expected parse error, got {other:?}"),
-        }
+        assert!(error.find_source::<ParseOutputError>().is_some());
+        assert!(error.message().contains("Callgrind"));
+        // The offending file is named so multi-summary failures are actionable.
+        assert!(error.message().contains("summary.json"));
         assert!(storage.keys().is_empty());
     }
 
@@ -2779,13 +2758,9 @@ mod tests {
     #[test]
     fn build_bench_argv_rejects_an_empty_command() {
         let error = build_bench_argv(&[], &CollectOptions::default()).unwrap_err();
-        match error {
-            RunError::Command { engine, message } => {
-                assert_eq!(engine, "cargo bench");
-                assert!(message.contains("empty"), "{message}");
-            }
-            other => panic!("expected command error, got {other:?}"),
-        }
+        assert!(error.find_source::<InvalidCommandError>().is_some());
+        assert!(error.message().contains("cargo bench"));
+        assert!(error.message().contains("empty"));
     }
 
     // --- best-of-N orchestration ---------------------------------------------
@@ -2905,7 +2880,7 @@ mod tests {
         output: &O,
         storage: &MemoryStorage,
         reporter: &dyn Reporter,
-    ) -> Result<RunOutcome, RunError>
+    ) -> Result<RunOutcome, AppError>
     where
         R: BenchRunner,
         O: BenchOutputSource,
@@ -3126,13 +3101,9 @@ mod tests {
         let error =
             drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap_err();
 
-        match error {
-            RunError::Engine { engine, code } => {
-                assert_eq!(engine, "cargo bench");
-                assert_eq!(code, Some(101));
-            }
-            other => panic!("expected an engine failure, got {other:?}"),
-        }
+        let failure = error.find_source::<EngineFailedError>().unwrap();
+        assert_eq!(failure.engine(), "cargo bench");
+        assert_eq!(failure.code(), 101);
         assert_eq!(
             runner.call_count(),
             2,
@@ -3158,13 +3129,9 @@ mod tests {
         let error =
             drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap_err();
 
-        match error {
-            RunError::Inconsistent { engine, message } => {
-                assert_eq!(engine, Engine::AllTheTime.to_string());
-                assert!(message.contains("read_cell"), "{message}");
-            }
-            other => panic!("expected an inconsistency error, got {other:?}"),
-        }
+        assert!(error.find_source::<InconsistentRunsError>().is_some());
+        assert!(error.message().contains(&Engine::AllTheTime.to_string()));
+        assert!(error.message().contains("read_cell"));
         assert!(storage.keys().is_empty());
     }
 

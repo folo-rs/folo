@@ -1,28 +1,38 @@
+use ohno::AppError;
+
 use crate::detection::{DetectedPackage, detect_package};
 use crate::execution::{execute_with_cargo_args, execute_with_env_var};
 use crate::pal::{Filesystem, FilesystemFacade};
-use crate::types::{OutsidePackageAction, RunError, RunInput, RunOutcome};
 use crate::workspace::validate_workspace_context;
+use crate::{
+    CommandExecutionError, OutsidePackageAction, OutsidePackageError, RunInput, RunOutcome,
+};
+
 /// Core logic of the tool, extracted for testability.
 ///
 /// This function contains all the business logic without any process-global dependencies
 /// like `std::env::args()`, making it suitable for direct testing.
+///
+/// # Errors
+///
+/// Returns an error if the current directory and the target path are not in the same Cargo
+/// workspace, if the package owning the target path cannot be determined, if the target path
+/// is outside any package and that was configured to be an error, or if the subcommand cannot
+/// be executed.
 #[doc(hidden)]
-pub fn run(input: &RunInput) -> Result<RunOutcome, RunError> {
+pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
     run_with_filesystem(input, &FilesystemFacade::target())
 }
 
 /// Internal implementation of `run` that accepts a filesystem abstraction.
 ///
 /// This allows mocking filesystem operations in tests.
-fn run_with_filesystem(input: &RunInput, fs: &impl Filesystem) -> Result<RunOutcome, RunError> {
+fn run_with_filesystem(input: &RunInput, fs: &impl Filesystem) -> Result<RunOutcome, AppError> {
     // Validate that we are running from within the same workspace as the target path.
     // This also canonicalizes paths and finds the workspace root, which we reuse later.
-    let workspace_context = validate_workspace_context(&input.path, fs)
-        .map_err(|e| RunError::WorkspaceValidation(e.to_string()))?;
+    let workspace_context = validate_workspace_context(&input.path, fs)?;
 
-    let detected_package = detect_package(&workspace_context, fs)
-        .map_err(|e| RunError::PackageDetection(e.to_string()))?;
+    let detected_package = detect_package(&workspace_context, fs)?;
 
     // Handle outside package actions.
     match (&detected_package, &input.outside_package) {
@@ -31,7 +41,7 @@ fn run_with_filesystem(input: &RunInput, fs: &impl Filesystem) -> Result<RunOutc
             return Ok(RunOutcome::Ignored);
         }
         (DetectedPackage::Workspace, OutsidePackageAction::Error) => {
-            return Err(RunError::OutsidePackage);
+            return Err(OutsidePackageError::new().into());
         }
         (DetectedPackage::Package(name), _) => {
             println!("Detected package: {name}");
@@ -56,7 +66,7 @@ fn run_with_filesystem(input: &RunInput, fs: &impl Filesystem) -> Result<RunOutc
             &input.subcommand,
         ),
     }
-    .map_err(RunError::CommandExecution)?;
+    .map_err(CommandExecutionError::caused_by)?;
 
     let subcommand_succeeded = exit_status.success();
 
@@ -109,6 +119,10 @@ mod mock_tests {
     use super::*;
     use crate::detection::WorkspaceContext;
     use crate::pal::{FilesystemFacade, MockFilesystem};
+    use crate::{
+        CurrentDirectoryError, CurrentDirectoryOutsideWorkspaceError, PackageNameMissingError,
+        ParseManifestError, ReadManifestError, TargetPathNotFoundError,
+    };
 
     /// Helper to create a mock filesystem for a simple workspace with one package.
     ///
@@ -238,11 +252,11 @@ version = "0.1.0"
 
         let fs = FilesystemFacade::from_mock(mock);
 
-        let result =
-            validate_workspace_context(Path::new("/workspace/package_a/src/nonexistent.rs"), &fs);
+        let error =
+            validate_workspace_context(Path::new("/workspace/package_a/src/nonexistent.rs"), &fs)
+                .unwrap_err();
 
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("does not exist"));
+        assert!(error.find_source::<TargetPathNotFoundError>().is_some());
     }
 
     #[test]
@@ -299,10 +313,9 @@ version = "0.1.0"
         };
 
         // The file exists when cargo_toml_exists is called, but disappears when we try to read it.
-        let result = detect_package(&context, &fs);
+        let error = detect_package(&context, &fs).unwrap_err();
 
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("deleted"));
+        assert!(error.find_source::<ReadManifestError>().is_some());
     }
 
     #[test]
@@ -344,14 +357,9 @@ version = "0.1.0"
             workspace_root: PathBuf::from("/workspace"),
         };
 
-        let result = detect_package(&context, &fs);
+        let error = detect_package(&context, &fs).unwrap_err();
 
-        assert!(result.is_err());
-        let error_msg = result.unwrap_err().to_string();
-        assert!(
-            error_msg.contains("TOML") || error_msg.contains("parse"),
-            "Expected TOML parse error, got: {error_msg}"
-        );
+        assert!(error.find_source::<ParseManifestError>().is_some());
     }
 
     #[test]
@@ -393,15 +401,9 @@ version = "0.1.0"
             workspace_root: PathBuf::from("/workspace"),
         };
 
-        let result = detect_package(&context, &fs);
+        let error = detect_package(&context, &fs).unwrap_err();
 
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Could not find package name")
-        );
+        assert!(error.find_source::<PackageNameMissingError>().is_some());
     }
 
     #[test]
@@ -480,14 +482,12 @@ version = "0.1.0"
 
         let fs = FilesystemFacade::from_mock(mock);
 
-        let result = validate_workspace_context(Path::new("file.rs"), &fs);
+        let error = validate_workspace_context(Path::new("file.rs"), &fs).unwrap_err();
 
-        assert!(result.is_err());
         assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("not within a Cargo workspace")
+            error
+                .find_source::<CurrentDirectoryOutsideWorkspaceError>()
+                .is_some()
         );
     }
 
@@ -504,9 +504,9 @@ version = "0.1.0"
 
         let fs = FilesystemFacade::from_mock(mock);
 
-        let result = validate_workspace_context(Path::new("file.rs"), &fs);
+        let error = validate_workspace_context(Path::new("file.rs"), &fs).unwrap_err();
 
-        result.unwrap_err();
+        assert!(error.find_source::<CurrentDirectoryError>().is_some());
     }
 
     #[test]

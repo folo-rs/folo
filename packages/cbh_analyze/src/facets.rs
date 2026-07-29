@@ -7,7 +7,7 @@ use cbh_model::Engine;
 use nonempty::NonEmpty;
 
 use super::selection::Selection;
-use crate::AnalyzeError;
+use crate::{AnalysisFailedError, AnalyzeError};
 
 /// The current machine's auto-detected facet values, used as the default when a
 /// query facet is omitted (see the *Discriminant set & query facets* section of
@@ -138,14 +138,13 @@ pub(crate) fn facets_are_unconstrained(facets: &DiscriminantSetQuery) -> bool {
 fn parse_engine(name: Option<&str>) -> Result<Option<Engine>, AnalyzeError> {
     match name {
         None => Ok(None),
-        Some(name) => Engine::from_name(name)
-            .map(Some)
-            .ok_or_else(|| AnalyzeError::Analyze {
-                message: format!(
-                    "unknown engine {name:?}; expected one of: criterion, callgrind, \
-                     alloc_tracker, all_the_time"
-                ),
-            }),
+        Some(name) => Engine::from_name(name).map(Some).ok_or_else(|| {
+            AnalysisFailedError::new(format!(
+                "unknown engine {name:?}; expected one of: criterion, callgrind, \
+                 alloc_tracker, all_the_time"
+            ))
+            .into()
+        }),
     }
 }
 

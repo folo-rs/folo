@@ -35,7 +35,7 @@ use cbh_storage::Storage;
 
 use super::dataset::SiblingObservation;
 use super::load::load_objects_concurrently;
-use crate::AnalyzeError;
+use crate::{AnalysisFailedError, AnalyzeError};
 
 /// A surviving branch finding whose comparison base sits behind the merge-base.
 struct LaggingFinding<'a> {
@@ -258,11 +258,15 @@ where
     });
 
     let loaded = load_objects_concurrently(storage, needed, |key, bytes| {
-        let text = str::from_utf8(&bytes).map_err(|error| AnalyzeError::Analyze {
-            message: format!("stored object {key} is not valid UTF-8: {error}"),
+        let text = str::from_utf8(&bytes).map_err(|error| {
+            AnalysisFailedError::caused_by(format!("stored object {key} is not valid UTF-8"), error)
         })?;
-        RunPoints::from_json(text).map_err(|error| AnalyzeError::Analyze {
-            message: format!("stored object {key} is not a valid result set: {error}"),
+        RunPoints::from_json(text).map_err(|error| {
+            AnalysisFailedError::caused_by(
+                format!("stored object {key} is not a valid result set"),
+                error,
+            )
+            .into()
         })
     })
     .await?;

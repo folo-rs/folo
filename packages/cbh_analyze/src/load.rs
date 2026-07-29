@@ -18,7 +18,7 @@ use cbh_storage::{Storage, project_objects_prefix};
 use futures::{StreamExt as _, TryStreamExt as _};
 
 use super::facets::describe_facets;
-use crate::AnalyzeError;
+use crate::{AnalysisFailedError, AnalyzeError};
 
 /// One commit's run tally within a discriminant set, the granularity the report
 /// summaries and the `list runs` breakdown need.
@@ -223,7 +223,7 @@ pub(crate) async fn list_candidates<S: Storage>(
     });
 
     let list_started = Instant::now();
-    let keys = storage.list(&prefix).await.map_err(AnalyzeError::Storage)?;
+    let keys = storage.list(&prefix).await?;
     reporter.timing("storage.list(prefix) round-trip", list_started.elapsed());
     reporter.note_with(|| format!("storage returned {}", count_noun(keys.len(), "object key")));
 
@@ -348,7 +348,7 @@ where
     S: Storage,
     F: Fn(&str, Vec<u8>) -> Result<T, AnalyzeError>,
 {
-    let bytes = storage.get(&key).await.map_err(AnalyzeError::Storage)?;
+    let bytes = storage.get(&key).await?;
     let value = parse(&key, bytes)?;
     Ok((key, parsed, value))
 }
@@ -429,12 +429,18 @@ where
             let mut run_index = RunIndex::new();
             let mut admitted: Vec<(String, bool)> = Vec::with_capacity(chunk.len());
             for (rank, key, parsed) in chunk {
-                let bytes = storage.get(&key).await.map_err(AnalyzeError::Storage)?;
-                let text = str::from_utf8(&bytes).map_err(|error| AnalyzeError::Analyze {
-                    message: format!("stored object {key} is not valid UTF-8: {error}"),
+                let bytes = storage.get(&key).await?;
+                let text = str::from_utf8(&bytes).map_err(|error| {
+                    AnalysisFailedError::caused_by(
+                        format!("stored object {key} is not valid UTF-8"),
+                        error,
+                    )
                 })?;
-                let run = RunPoints::from_json(text).map_err(|error| AnalyzeError::Analyze {
-                    message: format!("stored object {key} is not a valid result set: {error}"),
+                let run = RunPoints::from_json(text).map_err(|error| {
+                    AnalysisFailedError::caused_by(
+                        format!("stored object {key} is not a valid result set"),
+                        error,
+                    )
                 })?;
                 let topo_index = order
                     .get(&parsed.commit)

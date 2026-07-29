@@ -19,28 +19,26 @@
 //! through this parser so a field renamed or dropped on either side of the
 //! boundary fails the build.
 
-use std::error::Error;
-use std::fmt;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use cbh_model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
 use nonempty::NonEmpty;
 use serde::Deserialize;
 
 /// An error encountered while parsing an `alloc_tracker` operation file.
-#[derive(Debug)]
-pub struct AllocTrackerParseError(serde_json::Error);
+///
+/// The underlying deserialization failure is carried as the error's source.
+#[ohno::error]
+#[display("failed to parse alloc_tracker output")]
+#[from(serde_json::Error)]
+pub struct AllocTrackerParseError;
 
-impl fmt::Display for AllocTrackerParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "failed to parse alloc_tracker output: {}", self.0)
-    }
-}
-
-impl Error for AllocTrackerParseError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.0)
-    }
-}
+// The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
+// which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
+// However, ohno error types are immutable after construction — no &self method mutates internal
+// state — so observing them through a shared reference during unwind is harmless.
+impl UnwindSafe for AllocTrackerParseError {}
+impl RefUnwindSafe for AllocTrackerParseError {}
 
 /// Parses one `alloc_tracker` operation file into a [`BenchmarkResult`].
 ///
@@ -55,7 +53,7 @@ impl Error for AllocTrackerParseError {
 pub fn parse_alloc_tracker_operation(
     json: &str,
 ) -> Result<Option<BenchmarkResult>, AllocTrackerParseError> {
-    let output: OperationOutput = serde_json::from_str(json).map_err(AllocTrackerParseError)?;
+    let output: OperationOutput = serde_json::from_str(json)?;
     Ok(output_to_record(&output))
 }
 
@@ -124,7 +122,23 @@ mod tests {
     )]
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
+    use std::error;
+    use std::fmt::Debug;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use ohno::ErrorExt;
+    use static_assertions::assert_impl_all;
+
     use super::*;
+
+    assert_impl_all!(
+        AllocTrackerParseError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
 
     const ALLOCATE_VEC_FIXTURE: &str =
         include_str!("../../tests/fixtures/alloc_tracker/allocate_vec.json");
@@ -249,10 +263,11 @@ mod tests {
     fn rejects_malformed_json() {
         let error = parse_alloc_tracker_operation("{ not json").unwrap_err();
         assert!(
-            error.to_string().contains("failed to parse alloc_tracker"),
-            "{error}"
+            error
+                .to_string()
+                .contains("failed to parse alloc_tracker output")
         );
-        assert!(error.source().is_some());
+        assert!(error.find_source::<serde_json::Error>().is_some());
     }
 
     /// Parses a fixture that is expected to yield a stored record.
