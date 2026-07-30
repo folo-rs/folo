@@ -62,6 +62,20 @@ pub struct MissingCaseError {
 impl UnwindSafe for MissingCaseError {}
 impl RefUnwindSafe for MissingCaseError {}
 
+impl MissingCaseError {
+    /// The benchmark case that is absent from one of the runs.
+    #[must_use]
+    pub fn id(&self) -> &BenchmarkId {
+        &self.id
+    }
+
+    /// Zero-based index of the run the case is absent from.
+    #[must_use]
+    pub fn run_index(&self) -> usize {
+        self.run_index
+    }
+}
+
 /// A metric of a given kind is present for a case in some runs but absent from
 /// another.
 #[ohno::error]
@@ -83,6 +97,26 @@ pub struct MissingMetricError {
 // state — so observing them through a shared reference during unwind is harmless.
 impl UnwindSafe for MissingMetricError {}
 impl RefUnwindSafe for MissingMetricError {}
+
+impl MissingMetricError {
+    /// The benchmark case whose metric is absent from one of the runs.
+    #[must_use]
+    pub fn id(&self) -> &BenchmarkId {
+        &self.id
+    }
+
+    /// The kind of metric that is absent.
+    #[must_use]
+    pub fn kind(&self) -> MetricKind {
+        self.kind
+    }
+
+    /// Zero-based index of the run the metric is absent from.
+    #[must_use]
+    pub fn run_index(&self) -> usize {
+        self.run_index
+    }
+}
 
 /// A cross-run inconsistency that makes a best-of-N reduction ill-defined.
 ///
@@ -438,8 +472,8 @@ mod tests {
         let error = min_per_metric(&runs).unwrap_err();
 
         let missing = error.find_source::<MissingCaseError>().unwrap();
-        assert_eq!(missing.id.qualified(), "b");
-        assert_eq!(missing.run_index, 1);
+        assert_eq!(missing.id().qualified(), "b");
+        assert_eq!(missing.run_index(), 1);
     }
 
     #[test]
@@ -453,8 +487,8 @@ mod tests {
         let error = min_per_metric(&runs).unwrap_err();
 
         let missing = error.find_source::<MissingCaseError>().unwrap();
-        assert_eq!(missing.id.qualified(), "b");
-        assert_eq!(missing.run_index, 0);
+        assert_eq!(missing.id().qualified(), "b");
+        assert_eq!(missing.run_index(), 0);
     }
 
     #[test]
@@ -470,9 +504,9 @@ mod tests {
         let error = min_per_metric(&runs).unwrap_err();
 
         let missing = error.find_source::<MissingMetricError>().unwrap();
-        assert_eq!(missing.id.qualified(), "case");
-        assert_eq!(missing.kind, MetricKind::ProcessorTime);
-        assert_eq!(missing.run_index, 1);
+        assert_eq!(missing.id().qualified(), "case");
+        assert_eq!(missing.kind(), MetricKind::ProcessorTime);
+        assert_eq!(missing.run_index(), 1);
     }
 
     #[test]
@@ -488,8 +522,8 @@ mod tests {
         let error = min_per_metric(&runs).unwrap_err();
 
         let missing = error.find_source::<MissingMetricError>().unwrap();
-        assert_eq!(missing.kind, MetricKind::ProcessorTime);
-        assert_eq!(missing.run_index, 0);
+        assert_eq!(missing.kind(), MetricKind::ProcessorTime);
+        assert_eq!(missing.run_index(), 0);
     }
 
     #[test]

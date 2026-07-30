@@ -60,6 +60,20 @@ impl RefUnwindSafe for CallgrindJsonError {}
 impl UnwindSafe for UnsupportedCallgrindVersionError {}
 impl RefUnwindSafe for UnsupportedCallgrindVersionError {}
 
+impl UnsupportedCallgrindVersionError {
+    /// The schema version the summary declared.
+    #[must_use]
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+
+    /// The schema version this tool understands.
+    #[must_use]
+    pub fn supported_version(&self) -> &str {
+        &self.supported_version
+    }
+}
+
 /// Parses one Callgrind `summary.json` into a [`BenchmarkResult`].
 ///
 /// # Errors
@@ -372,7 +386,8 @@ mod tests {
         let unsupported = error
             .find_source::<UnsupportedCallgrindVersionError>()
             .unwrap();
-        assert_eq!(unsupported.version, "7");
+        assert_eq!(unsupported.version(), "7");
+        assert_eq!(unsupported.supported_version(), SUPPORTED_VERSION);
         assert!(error.find_source::<CallgrindJsonError>().is_none());
         // The version the parser understands travels with the error, so the parse
         // path has to hand it the constant rather than an unrelated string.
