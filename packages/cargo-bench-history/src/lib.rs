@@ -162,12 +162,12 @@
 //! for the series reads `n/a` (a null value in JSON) while still naming its commit
 //! and title. It requires a repository, runs no detection or re-baselining, and shows
 //! every selected observation (clean before dirty, each flagged, so a commit with
-//! several observations gets a row each); `--verbose` explains where the listed range
-//! opens and closes. An unknown metric name is rejected. An empty pivot is explained
-//! by one of two hints: when no run enters the selection at all, the same "matched no
-//! runs" hint `analyze` gives; when runs enter but none carry the named
-//! `(benchmark, metric)` pair, a distinct hint pointing at the unmatched benchmark id
-//! or metric name.
+//! several observations contributes one row per observation); `--verbose` explains
+//! where the listed range opens and closes. An unknown metric name is rejected. An
+//! empty pivot is explained by one of two hints: when no run enters the selection at
+//! all, the same "matched no runs" hint `analyze` gives; when runs enter but none
+//! carry the named `(benchmark, metric)` pair, a distinct hint pointing at the
+//! unmatched benchmark id or metric name.
 //!
 //! ## `bless` / `unbless`
 //!

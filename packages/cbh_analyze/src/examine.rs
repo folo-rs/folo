@@ -261,8 +261,9 @@ struct SetPivot {
     /// The comparable partition these points share.
     set: DiscriminantSet,
     /// One row per commit in the pivot's range, oldest first by git topology. A
-    /// commit carrying several observations contributes one row each (clean before
-    /// dirty); a commit carrying none contributes a single data-less row.
+    /// commit carrying several observations contributes one row per observation
+    /// (clean before dirty); a commit carrying none contributes a single data-less
+    /// row.
     points: Vec<DataPoint>,
 }
 
@@ -363,7 +364,8 @@ fn pivot_range(observations: &[&[SeriesPoint]], tip_index: usize) -> Option<(usi
 /// Lists every commit in `range` against one set's `observations`, mirroring how the
 /// chart materializes a data-less commit as a gap.
 ///
-/// A commit with observations contributes one row each, in the order the series
+/// A commit with observations contributes one row per observation, in the order the
+/// series
 /// already holds them (clean before dirty, then object ordinal); a commit with none
 /// contributes a single data-less row. `observations` is ordered by ascending
 /// topological index, so one forward cursor walks it alongside the range.
