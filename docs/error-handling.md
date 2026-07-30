@@ -91,19 +91,27 @@ condition — not speculatively, and not merely because tests could use it.
 Further rules:
 
 * Generated `new`/`caused_by` are always `pub(crate)` regardless of the type's
-  visibility. When another crate must construct the error — including from its
-  tests — add `#[no_constructors]`, an explicit `#[error] core: ohno::OhnoCore`
-  field, and a hand-written `pub fn`. An unused generated constructor also trips
-  `dead_code`, which is a second reason to reach for `#[no_constructors]`.
+  visibility, and cannot be overloaded — a hand-written `pub fn new` beside them is a
+  duplicate definition. When another crate must construct the error — including the
+  defining crate's own `tests/` directory — add `#[no_constructors]` and write the
+  constructors by hand. Under `#[derive(ohno::Error)]` that also means declaring the
+  `#[error] core: OhnoCore` field, as `cbh_config`'s `ConfigError` and `cbh_storage`'s
+  `StorageError` do. The `#[ohno::error]` attribute form injects that field itself, so
+  there a hand-written constructor only has to initialize `ohno_core`.
 * `#[display]` arguments are implicitly rewritten as `&self.<expr>`, so write
   `path.display()`, never `self.path.display()`. Literals and constants are not
   accepted. On a tuple struct, `{0}` fails — write `#[display("{}", 0)]`.
 * No `Clone` is generated; derive it explicitly when needed and pin it with
   `static_assertions`. `PartialEq`, `Eq` and `Copy` cannot be recovered at all,
   because the type carries a `Backtrace` and an `Arc`.
-* Never convert a foreign error type through a blanket `From` impl when the
-  destination distinguishes conditions — `?` will then silently pick one category.
-  Offer a named constructor instead and let each call site choose.
+* A `From` impl for a foreign error type is safe only when the source draws no
+  distinction the destination also draws. `io::Error` carries its own `kind()` and
+  `StorageErrorKind` separately distinguishes `NotFound`, so no `From<io::Error>` can
+  be correct: `cbh_storage`'s `local.rs` maps `io::ErrorKind::NotFound` to `NotFound`
+  in `get`/`delete`, to a skipped directory in `list`, and to `Io` in `put`. The right
+  category is a function of the call site, which `From::from` never sees. Without the
+  impl, `?` on a foreign error is a compile error that forces the author to choose;
+  adding one turns that question into a silent default.
 * Never fold another error's `to_string()` or `message()` into a `String` field.
   Attach it as a source with `caused_by` instead. A folded string bakes in that
   error's backtrace, which then reappears wherever the field is rendered — including
