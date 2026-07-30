@@ -8,7 +8,7 @@
 # Collects the whole workspace's benchmark history (excluding the slow, special-purpose
 # `benchmarks` package) into the prod Azure store, keyed by the current commit. The machine
 # partition for every engine is the runner's OWN auto-detected hardware fingerprint,
-# NOT a fixed key: the GitHub-hosted runner pool is heterogeneous, and pinning every SKU onto one
+# NOT a fixed key: the GitHub-hosted runner pool is heterogeneous, and pinning every runner onto one
 # shared series just mixes incomparable machines and jitters daily. Letting each runner stamp
 # its real fingerprint splits the data into one clean series per hardware type; the analyze job is
 # fed the exact fingerprints collected this run (see gh-analyze-bench-history) so it surveys only
@@ -20,7 +20,7 @@
 # enough apart in time that a transient slowdown is unlikely to hit every one. This roughly
 # triples the wall-clock benchmark portion of the collect job (see bench-history.yml's
 # `timeout-minutes`). `--verbose` makes the collect log spell out the resolved machine key and the
-# fingerprint components behind it, so a key change (a runner-pool SKU shift) is debuggable from the
+# fingerprint components behind it, so a key change (a runner hardware shift) is debuggable from the
 # log alone. `--skip-existing` makes a re-run on an unchanged commit a no-op append (each
 # already-stored object is skipped, not overwritten), so a re-triggered run of an
 # already-collected commit never bumps the cache-invalidation marker the `analyze` job's
@@ -85,8 +85,8 @@ gh-collect-bench-history:
 # branch-unique head commit, i.e. exactly the packages collected here (see
 # gh-analyze-pr-bench-history and .github/workflows/design.md). Everything else is identical to the
 # push-to-main collect: each runner stamps its OWN real hardware fingerprint (no fixed key), so PR
-# wall-clock series live on the same per-SKU partitions as main's baseline, `--best-of 3` sheds
-# one-sided runner jitter, `--verbose` logs the resolved key and its components, and
+# wall-clock series live on the same per-machine-key partitions as main's baseline, `--best-of 3`
+# sheds one-sided runner jitter, `--verbose` logs the resolved key and its components, and
 # `--skip-existing` makes a re-run of the same head SHA a no-op append. There is no recollect mode on
 # PRs (that repairs main's permanent history); the scope decision lives in
 # scripts/bench-history/BenchHistoryCollect.psm1 (Pester-tested via `just test-scripts`), so this is
