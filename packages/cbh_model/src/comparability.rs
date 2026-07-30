@@ -132,11 +132,16 @@ impl DiscriminantSet {
     /// The storage prefix that all runs in this series share, within `project`.
     ///
     /// Layout:
-    /// `{STORAGE_VERSION}/{project}/{OBJECTS_SEGMENT}/{engine}/{target_triple}/{machine}`.
+    /// `{STORAGE_VERSION}/{project}/{OBJECTS_SEGMENT}/{engine}/{target_triple}/{machine}/`.
     /// The fixed `objects` segment separates the data subtree from a project's
     /// metadata siblings (e.g. the cache-invalidation marker); below this prefix the
     /// history is organized by commit (see [`clean_key`] and [`dirty_key`]) so
     /// `analyze` can resolve a series from git topology.
+    ///
+    /// The trailing separator is part of the contract: storage listings match on a
+    /// plain string prefix, so without it a listing of this partition would also
+    /// return a sibling partition whose machine key merely *starts with* this one
+    /// (`ci` picking up `ci-pool`), silently mixing two independent data sets.
     ///
     /// [`clean_key`]: Self::clean_key
     /// [`dirty_key`]: Self::dirty_key
@@ -146,62 +151,75 @@ impl DiscriminantSet {
         let engine = self.engine.as_str();
         let triple = &self.target_triple;
         let machine_key = &self.machine_key;
-        format!("{STORAGE_VERSION}/{project}/{OBJECTS_SEGMENT}/{engine}/{triple}/{machine_key}")
+        format!("{STORAGE_VERSION}/{project}/{OBJECTS_SEGMENT}/{engine}/{triple}/{machine_key}/")
     }
 
     /// The object key for the canonical (clean working tree) result at `commit`.
     ///
-    /// Layout: `{prefix}/{commit}/clean.json`. A clean run is keyed solely by its
-    /// commit, so it is deterministic: a second clean run of the same commit maps
-    /// to the same key and collides, which the write-once storage detects so `run`
-    /// can refuse the duplicate unless an overwrite is explicitly requested.
+    /// Layout: `{prefix}{commit}/clean.json`, where `{prefix}` is
+    /// [`partition_prefix`] and already ends in a separator. A clean run is keyed
+    /// solely by its commit, so it is deterministic: a second clean run of the same
+    /// commit maps to the same key and collides, which the write-once storage
+    /// detects so `run` can refuse the duplicate unless an overwrite is explicitly
+    /// requested.
     ///
     /// `commit` is sanitized so the directory name always forms a single segment.
+    ///
+    /// [`partition_prefix`]: Self::partition_prefix
     #[must_use]
     pub fn clean_key(&self, project: &str, commit: &str) -> String {
         let prefix = self.partition_prefix(project);
         let commit = sanitize_segment(commit);
-        format!("{prefix}/{commit}/clean.json")
+        format!("{prefix}{commit}/clean.json")
     }
 
     /// The object key for a dirty (uncommitted-changes) snapshot at `commit`,
     /// observed at `observation_unix`.
     ///
-    /// Layout: `{prefix}/{commit}/dirty-{observation_unix}.json`. Because a dirty
+    /// Layout: `{prefix}{commit}/dirty-{observation_unix}.json`, where `{prefix}`
+    /// is [`partition_prefix`] and already ends in a separator. Because a dirty
     /// snapshot does not correspond to committed code, it is distinguished by its
     /// observation time rather than by the commit alone, so multiple dirty
     /// snapshots on the same base commit coexist; only two snapshots sharing an
     /// observation second collide.
     ///
     /// `commit` is sanitized so the directory name always forms a single segment.
+    ///
+    /// [`partition_prefix`]: Self::partition_prefix
     #[must_use]
     pub fn dirty_key(&self, project: &str, commit: &str, observation_unix: i64) -> String {
         let prefix = self.partition_prefix(project);
         let commit = sanitize_segment(commit);
-        format!("{prefix}/{commit}/dirty-{observation_unix}.json")
+        format!("{prefix}{commit}/dirty-{observation_unix}.json")
     }
 
     /// The blessing sidecar key for this set's commit directory, issued at
     /// `issued_unix`.
     ///
-    /// Layout: `{prefix}/{commit}/bless-{issued_unix}.json`. `commit` is sanitized
+    /// Layout: `{prefix}{commit}/bless-{issued_unix}.json`, where `{prefix}` is
+    /// [`partition_prefix`] and already ends in a separator. `commit` is sanitized
     /// so the directory name always forms a single segment.
+    ///
+    /// [`partition_prefix`]: Self::partition_prefix
     #[must_use]
     pub fn bless_key(&self, project: &str, commit: &str, issued_unix: i64) -> String {
         let prefix = self.partition_prefix(project);
         let commit = sanitize_segment(commit);
-        format!("{prefix}/{commit}/bless-{issued_unix}.json")
+        format!("{prefix}{commit}/bless-{issued_unix}.json")
     }
 
     /// The storage prefix shared by every object recorded at `commit` in this
-    /// partition (`{prefix}/{commit}/`), used to enumerate a commit directory.
+    /// partition (`{prefix}{commit}/`, where `{prefix}` is [`partition_prefix`] and
+    /// already ends in a separator), used to enumerate a commit directory.
     ///
     /// `commit` is sanitized so the directory name always forms a single segment.
+    ///
+    /// [`partition_prefix`]: Self::partition_prefix
     #[must_use]
     pub fn commit_prefix(&self, project: &str, commit: &str) -> String {
         let prefix = self.partition_prefix(project);
         let commit = sanitize_segment(commit);
-        format!("{prefix}/{commit}/")
+        format!("{prefix}{commit}/")
     }
 }
 
@@ -416,7 +434,7 @@ mod tests {
         );
         assert_eq!(
             set.partition_prefix("folo"),
-            "v1/folo/objects/alloc_tracker/x86_64-pc-windows-msvc/abc123"
+            "v1/folo/objects/alloc_tracker/x86_64-pc-windows-msvc/abc123/"
         );
     }
 
@@ -431,7 +449,7 @@ mod tests {
         );
         assert_eq!(
             set.partition_prefix("folo"),
-            "v1/folo/objects/all_the_time/x86_64-pc-windows-msvc/abc123"
+            "v1/folo/objects/all_the_time/x86_64-pc-windows-msvc/abc123/"
         );
     }
 
@@ -444,7 +462,31 @@ mod tests {
         );
         assert_eq!(
             set.partition_prefix("folo"),
-            "v1/folo/objects/criterion/x86_64-pc-windows-msvc/abc123"
+            "v1/folo/objects/criterion/x86_64-pc-windows-msvc/abc123/"
+        );
+    }
+
+    #[test]
+    fn partition_prefix_does_not_match_a_sibling_machine_key() {
+        // Storage listings match on a plain string prefix, so a partition prefix
+        // that stopped at the machine key would also return every sibling key that
+        // merely starts with it. The trailing separator keeps the two independent
+        // data sets apart.
+        let triple = TargetTriple::from("x86_64-pc-windows-msvc");
+        let ci = DiscriminantSet::new(Engine::Criterion, &triple, &MachineKey::from("ci"));
+        let pool = DiscriminantSet::new(Engine::Criterion, &triple, &MachineKey::from("ci-pool"));
+
+        assert!(
+            !pool
+                .clean_key("folo", "abc123")
+                .starts_with(&ci.partition_prefix("folo")),
+            "{} must not fall under {}",
+            pool.clean_key("folo", "abc123"),
+            ci.partition_prefix("folo")
+        );
+        assert!(
+            ci.clean_key("folo", "abc123")
+                .starts_with(&ci.partition_prefix("folo"))
         );
     }
 
@@ -581,10 +623,13 @@ mod tests {
         );
         assert_eq!(
             set.partition_prefix("team/app"),
-            "v1/team_app/objects/criterion/weird_triple/machine_one"
+            "v1/team_app/objects/criterion/weird_triple/machine_one/"
         );
-        // The partition prefix has exactly the six canonical segments.
-        assert_eq!(set.partition_prefix("team/app").split('/').count(), 6);
+        // The partition prefix has exactly the six canonical segments and ends in
+        // the separator that keeps a listing inside this partition.
+        let prefix = set.partition_prefix("team/app");
+        assert!(prefix.ends_with('/'), "{prefix}");
+        assert_eq!(prefix.trim_end_matches('/').split('/').count(), 6);
     }
 
     #[test]

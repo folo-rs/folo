@@ -253,6 +253,73 @@ where
     })
 }
 
+/// The storage partition a run's results are keyed under, less the engine.
+///
+/// A stored object's discriminant set is `engine / target_triple / machine_key`.
+/// The engine varies across the engines of a single run, while the other two are
+/// fixed by the host and the `--machine-key` override — so they are derived once,
+/// here. This is the one place that derivation lives, so `backfill`'s pre-check
+/// and the store path share it rather than reimplementing it.
+///
+/// The target triple is whatever `rustc -vV` reports in the checkout being
+/// probed, and a worktree governs its own toolchain — so `backfill`, which
+/// derives the partition once from the newest checkout in its range, holds that
+/// partition for the whole range only as long as every toolchain in the range
+/// resolves to the same host triple. Pinning a bare channel does; a
+/// fully-qualified pin carrying its own host triple (`1.75.0-x86_64-unknown-linux-musl`)
+/// does not, and a range that crosses such a change scans one partition while
+/// writing another.
+///
+/// The components are held exactly as probed;
+/// [`discriminant_set`](Self::discriminant_set) is what sanitizes them into path
+/// segments, so the effective-partition announcement still reports what the host
+/// reported.
+pub(crate) struct Partition {
+    /// Effective target triple: the toolchain host, or an `import` override.
+    pub(crate) target_triple: TargetTriple,
+    /// Effective machine key: an explicit `--machine-key` or the auto-detected
+    /// hardware fingerprint.
+    pub(crate) machine_key: MachineKey,
+}
+
+impl Partition {
+    /// The discriminant set this partition forms together with `engine`.
+    pub(crate) fn discriminant_set(&self, engine: Engine) -> DiscriminantSet {
+        DiscriminantSet::new(engine, &self.target_triple, &self.machine_key)
+    }
+}
+
+/// Derives the storage partition from an already-probed host context.
+///
+/// `machine_key_override` is the `--machine-key` value, which wins over the
+/// hardware fingerprint; `None` uses the fingerprint.
+pub(crate) fn partition_of(
+    shared: &SharedContext,
+    machine_key_override: Option<&str>,
+) -> Partition {
+    Partition {
+        target_triple: shared.target_triple.clone(),
+        machine_key: MachineKey::from(resolve_machine_key(machine_key_override, &shared.hardware)),
+    }
+}
+
+/// Probes the host and derives the storage partition a run there would write to.
+///
+/// The read-side counterpart of the store path: `backfill` calls this against the
+/// worktree probe before any commit is benchmarked, so the commits it treats as
+/// already recorded are exactly the ones present in the partition it would write.
+pub(crate) async fn probe_partition<P>(
+    probe: &P,
+    env: &dyn Fn(&str) -> Option<String>,
+    machine_key_override: Option<&str>,
+) -> Result<Partition, RunError>
+where
+    P: EnvironmentProbe,
+{
+    let shared = probe_context(probe, env).await?;
+    Ok(partition_of(&shared, machine_key_override))
+}
+
 /// The injected collaborators the store back half operates against, shared by
 /// `collect` and `import`.
 ///
@@ -498,12 +565,12 @@ where
     // uses — an explicit `--machine-key` or the auto-detected fingerprint). It
     // mirrors the query commands' effective-selection summary so the partition a
     // run writes and an `analyze` reads is stated the same way.
-    let effective_machine_key = resolve_machine_key(params.machine_key, &shared.hardware);
+    let partition = partition_of(shared, params.machine_key);
     store.reporter.announce(&partition_selection_summary(
         operation,
         shared.target_triple.as_str(),
         triple_note,
-        &effective_machine_key,
+        partition.machine_key.as_str(),
         params.machine_key.is_some(),
     ));
     // Under --verbose, spell out the individual hardware factors behind the
@@ -529,8 +596,16 @@ where
         })?;
         note_best_of_selections(store.reporter, engine, runs, &combined.selections);
 
-        let summary =
-            store_engine(store, shared, params, engine, combined.results, run_start).await?;
+        let summary = store_engine(
+            store,
+            shared,
+            params,
+            &partition,
+            engine,
+            combined.results,
+            run_start,
+        )
+        .await?;
         if summary.stored {
             stored = stored.saturating_add(1);
         }
@@ -559,7 +634,7 @@ where
 ///
 /// A pure formatter so the wording is unit-tested without a probe; the effective
 /// values are resolved by the caller.
-fn partition_selection_summary(
+pub(crate) fn partition_selection_summary(
     operation: &str,
     target_triple: &str,
     triple_note: &str,
@@ -730,13 +805,15 @@ where
 /// Stores one engine's reduced result set (unless suppressed).
 ///
 /// The back half of collecting an engine: given the records to persist (already
-/// reduced across the `--best-of` runs), it builds the run context and storage
-/// key and writes the object. `run_start` is the first run's start, which stamps
-/// the observation time and any dirty-snapshot second.
+/// reduced across the `--best-of` runs) and the [`Partition`] the run writes to,
+/// it builds the run context and storage key and writes the object. `run_start` is
+/// the first run's start, which stamps the observation time and any dirty-snapshot
+/// second.
 async fn store_engine<S>(
     store: &FinalizeDeps<'_, S>,
     shared: &SharedContext,
     params: &StoreParams<'_>,
+    partition: &Partition,
     engine: Engine,
     records: Vec<BenchmarkResult>,
     run_start: SystemTime,
@@ -799,10 +876,10 @@ where
     let run = Run::new(context, records);
 
     // Every engine partitions its history by a machine key so only equivalent
-    // machines share a series. An explicit `--machine-key` overrides the computed
-    // hardware fingerprint.
-    let machine_key = MachineKey::from(resolve_machine_key(params.machine_key, &shared.hardware));
-    let key = DiscriminantSet::new(engine, target_triple, &machine_key);
+    // machines share a series; the run's partition supplies that key (an explicit
+    // `--machine-key` or the computed hardware fingerprint) for every engine.
+    let machine_key = &partition.machine_key;
+    let key = partition.discriminant_set(engine);
     // History is organized by commit, so the full commit ID names the directory
     // (`analyze` resolves which commits to read from git topology). A clean run is
     // keyed solely by its commit and so is deterministic; a dirty snapshot adds its
@@ -1837,6 +1914,52 @@ mod tests {
             set.context.toolchain.target_triple,
             "x86_64-pc-windows-msvc"
         );
+    }
+
+    #[test]
+    fn probed_partition_is_the_partition_that_is_written_to() {
+        // The backfill pre-check asks `probe_partition` which partition a run here
+        // would occupy and then scans exactly that. If the two ever diverged, a
+        // backfill would scan one partition and write to another, so every commit
+        // would look unrecorded and be benchmarked again. Both the auto-detected
+        // fingerprint and an explicit `--machine-key` must line up.
+        for machine_key in [None, Some("ci-pool-a".to_owned())] {
+            let options = CollectOptions {
+                machine_key: machine_key.clone(),
+                ..CollectOptions::default()
+            };
+            let storage = MemoryStorage::new();
+
+            drive(
+                &options,
+                &FakeRunner::succeeding(),
+                &FakeProbe::new(),
+                &FakeOutput::with_two_callgrind_summaries(),
+                &storage,
+            )
+            .unwrap();
+
+            let env = |_name: &str| None::<String>;
+            let partition = block_on(probe_partition(
+                &FakeProbe::new(),
+                &env,
+                options.machine_key.as_deref(),
+            ))
+            .unwrap();
+            let prefix = partition
+                .discriminant_set(Engine::Callgrind)
+                .partition_prefix("folo");
+
+            let keys = storage.keys();
+            assert!(
+                keys.iter().all(|key| key.starts_with(&prefix)),
+                "machine key {machine_key:?} scanned {prefix} but wrote {keys:?}"
+            );
+            assert!(
+                !keys.is_empty(),
+                "machine key {machine_key:?} stored nothing"
+            );
+        }
     }
 
     #[test]

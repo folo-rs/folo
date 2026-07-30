@@ -255,8 +255,8 @@ jobs:
 
       # Collect only the delta-affected packages (space-separated from the delta job), keyed by the
       # PR head commit and stamped with THIS runner's real hardware fingerprint (no fixed key) so the
-      # wall-clock series lives on the same per-SKU partitions as main's baseline. `--skip-existing`
-      # makes a re-run of the same head SHA a no-op append.
+      # wall-clock series lives on the same per-machine-key partitions as main's baseline.
+      # `--skip-existing` makes a re-run of the same head SHA a no-op append.
       - name: Collect PR benchmark history
         shell: pwsh
         env:

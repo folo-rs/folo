@@ -23,3 +23,18 @@ later:
    or better than the stable-helper baseline. The stdlib version uses an
    LLVM intrinsic and should be at least as effective as the
    `#[cold] #[inline(never)] fn` workaround.
+
+## Reorder bench-history object-key segments to `triple/machine/engine`
+
+`cargo-bench-history` keys stored objects as
+`v1/<project>/objects/<engine>/<target_triple>/<machine>/<commit>/…`
+(`packages/cbh_model/src/comparability.rs`), putting the engine outermost.
+
+Target triple and machine key identify completely independent data sets, so
+they belong outermost, with the engines nested inside one machine's data. Under
+the current order "everything this machine key recorded" is not a single
+prefix, so a partition-scoped scan — such as `backfill`'s skip-existing
+pre-check — needs one listing per engine instead of one listing overall.
+
+Reordering rewrites every stored key, so it is not worth a storage-schema break
+on its own. Do it as part of the next change that breaks the schema anyway.

@@ -865,6 +865,9 @@ impl PruneCommand {
 }
 
 /// Replay `collect` across a range of historical commits.
+///
+/// The range is walked newest commit first, so a run that is cut short has filled
+/// the most recent — and most comparison-relevant — gaps.
 #[derive(Args, Debug)]
 struct BackfillCommand {
     /// Oldest commit of the range to backfill, inclusive; a commit ID, tag, or ref such
@@ -922,7 +925,8 @@ struct BackfillCommand {
     #[arg(long, help_heading = HEADING_ENV)]
     overwrite: bool,
 
-    /// Continue past commits whose build or benchmark fails instead of stopping.
+    /// Continue past commits whose build or benchmark fails instead of stopping at
+    /// the newest failing one.
     #[arg(long, help_heading = HEADING_ENV)]
     ignore_errors: bool,
 
