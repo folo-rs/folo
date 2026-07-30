@@ -6,18 +6,22 @@
 //! `AnalyzeOptions` and `ExamineOptions`) resolved via
 //! the shared [`select_dataset`](super::select_dataset) path, so a selection
 //! parameter added to `analyze` applies here unchanged. Where `list` counts the
-//! selected runs, `examine` names one `(benchmark, metric)` series and prints its
-//! points — one row per recorded observation, in git first-parent order, pairing
-//! the value with the short commit id and the start of the commit's title so a
-//! maintainer can correlate a value's move with the commit that caused it.
+//! selected runs, `examine` names one `(benchmark, metric)` series and lists every
+//! commit it spans, in git first-parent order, pairing each value with the short
+//! commit id and the start of the commit's title so a maintainer can correlate a
+//! value's move with the commit that caused it. A commit carrying no selected
+//! observation is listed as `n/a`, so the listing is a complete range of commits
+//! rather than a sparse set of measurements.
 //!
-//! It runs no detection, re-baselining, or blessing: it shows every selected point
-//! exactly as the chart would plot it (a commit's clean run and its dirty snapshots
-//! each contribute a flagged row, clean before dirty). The text and Markdown
-//! renderings lead each set with the same small line chart `analyze` draws (reusing
-//! its renderer). Like `analyze` it needs a resolvable repository — first-parent topology
-//! to order the points and each commit's title to label them — and repeats the pivot
-//! once per matching discriminant set.
+//! It runs no detection, re-baselining, or blessing: it shows every selected
+//! observation with the value and dirty flag exactly as recorded (a commit's clean
+//! run and its dirty snapshots each contribute a flagged row, clean before dirty).
+//! The text and Markdown
+//! renderings lead each set with the whole-series line chart history-mode `analyze`
+//! draws for a finding (reusing its renderer), which plots that set's real
+//! observations only. Like `analyze` it needs a resolvable repository — first-parent
+//! topology to order and name the commits and each commit's title to label them —
+//! and repeats the pivot once per matching discriminant set.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -28,6 +32,7 @@ use cbh_config::{
     Config, cache_env, load_config, resolve_cache_path, resolve_config_path, resolve_local_path,
     resolve_project_id, resolve_repo, storage_env,
 };
+use cbh_detect::SeriesPoint;
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
 use cbh_model::{BenchmarkIdPrefix, DiscriminantSet, MetricKind};
@@ -47,6 +52,10 @@ use crate::{AnalyzeError, RenderedReports, ReportRequest};
 /// keep. The truncation is a readability convenience of those renderings; the JSON
 /// form carries the full title.
 const TITLE_LIMIT: usize = 50;
+
+/// What the text and Markdown tables show in place of a value for a commit that
+/// carries no data point in this pivot.
+const NO_DATA: &str = "n/a";
 
 /// The real `examine`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
@@ -165,7 +174,14 @@ where
         metric_kind,
         &dataset.series,
         &dataset.commit_subjects,
+        &dataset.ordered_commits,
         dataset.tip_index,
+    );
+    report_listed_range(
+        &pivot,
+        &dataset.ordered_commits,
+        dataset.run_index.total(),
+        reporter,
     );
 
     // When the pivot is empty, explain why: either no run entered the selection at
@@ -215,21 +231,28 @@ fn parse_metric(name: &str) -> Result<MetricKind, AnalyzeError> {
 
 /// One recorded observation of the examined series.
 #[derive(Clone, Debug)]
-struct DataPoint {
-    /// The commit the run was measured against (full commit ID, or a label in tests).
-    commit: String,
-    /// The short commit id shown in the text and Markdown tables.
-    short_commit: String,
+struct Observation {
     /// The measured value.
     value: f64,
     /// Whether the observation came from a dirty (uncommitted-tree) snapshot.
     dirty: bool,
+}
+
+/// One row of the pivot: a commit in the listed range, and the observation it
+/// carries — or none, when no selected run recorded this series against it.
+#[derive(Clone, Debug)]
+struct DataPoint {
+    /// The commit the row names (full commit ID, or a label in tests).
+    commit: String,
     /// The commit's full title (subject), empty when topology reported none.
     title: String,
-    /// First-parent topological index of the commit. Chart-only: it places each point
-    /// in its own per-commit column and materializes the data-less commits between
-    /// observations as gaps. The point table and JSON never read it.
+    /// First-parent topological index of the commit (oldest = 0). It places the
+    /// row's observation in its own per-commit chart column; the tables and JSON
+    /// never render it.
     topo_index: usize,
+    /// The measurement recorded here, or `None` for a commit with no data point in
+    /// this pivot — which the tables show as [`NO_DATA`].
+    observation: Option<Observation>,
 }
 
 /// One discriminant set's slice of the pivot.
@@ -237,7 +260,10 @@ struct DataPoint {
 struct SetPivot {
     /// The comparable partition these points share.
     set: DiscriminantSet,
-    /// The observations, oldest first by git topology (clean before dirty).
+    /// One row per commit in the pivot's range, oldest first by git topology. A
+    /// commit carrying several observations contributes one row per observation
+    /// (clean before dirty); a commit carrying none contributes a single data-less
+    /// row.
     points: Vec<DataPoint>,
 }
 
@@ -254,6 +280,9 @@ struct Pivot {
     unit: &'static str,
     /// The per-set slices, one entry per discriminant set carrying the series.
     sets: Vec<SetPivot>,
+    /// The inclusive first-parent index range every set lists, for the verbose
+    /// note. `None` when no set carries the series.
+    range: Option<(usize, usize)>,
     /// Trailing-fill target for each set's chart: the analyzed tip's first-parent
     /// index, so a series that stops short of the tip renders the data-less commits
     /// after its last observation as a gap. Chart-only.
@@ -261,48 +290,42 @@ struct Pivot {
 }
 
 /// Narrows the reconstructed series to the one `(benchmark, metric)` pair, once per
-/// discriminant set, and turns each into its ordered data points.
+/// discriminant set, and lists every commit in the pivot's range against it.
 ///
-/// `tip_index` is the analyzed tip's first-parent index, carried onto the pivot as the
-/// chart's trailing-fill target so a series that stops short of the tip renders a
-/// trailing gap (see [`chart_of_points`]).
+/// `tip_index` is the analyzed tip's first-parent index: it both closes the listed
+/// range and serves as the chart's trailing-fill target, so a series that stops short
+/// of the tip renders a trailing gap in both (see [`chart_of_points`]).
+/// `ordered_commits` names the commit at each first-parent index, so a commit with no
+/// observation can still be listed.
 fn build_pivot(
     project_id: &str,
     benchmark: &str,
     metric_kind: MetricKind,
     series: &[Series],
     commit_subjects: &HashMap<String, String>,
+    ordered_commits: &[String],
     tip_index: usize,
 ) -> Pivot {
-    let mut sets: Vec<SetPivot> = series
+    let mut matching: Vec<&Series> = series
         .iter()
         .filter(|one| one.kind == metric_kind && one.id.qualified() == benchmark)
-        .map(|one| {
-            let points = one
-                .points
-                .iter()
-                .map(|point| {
-                    let commit = point.commit.as_deref().unwrap_or("unknown");
-                    let title = commit_subjects.get(commit).cloned().unwrap_or_default();
-                    DataPoint {
-                        short_commit: short_commit_id(commit).to_owned(),
-                        commit: commit.to_owned(),
-                        value: point.value,
-                        dirty: point.dirty,
-                        title,
-                        topo_index: point.topo_index,
-                    }
-                })
-                .collect();
-            SetPivot {
-                set: one.set.clone(),
-                points,
-            }
-        })
         .collect();
     // Sort the sets deterministically so the same data set always renders in the
     // same order regardless of series-build order.
-    sets.sort_by(|left, right| left.set.cmp(&right.set));
+    matching.sort_by(|left, right| left.set.cmp(&right.set));
+
+    let observations: Vec<&[SeriesPoint]> =
+        matching.iter().map(|one| one.points.as_slice()).collect();
+    let range = pivot_range(&observations, tip_index);
+    let sets = matching
+        .iter()
+        .map(|one| SetPivot {
+            set: one.set.clone(),
+            points: range.map_or_else(Vec::new, |range| {
+                points_in_range(&one.points, range, ordered_commits, commit_subjects)
+            }),
+        })
+        .collect();
 
     Pivot {
         project: project_id.to_owned(),
@@ -310,8 +333,131 @@ fn build_pivot(
         metric: metric_kind.as_str(),
         unit: metric_kind.as_unit(),
         sets,
+        range,
         base_ref: Some(tip_index),
     }
+}
+
+/// The inclusive first-parent index range every set lists: from the earliest
+/// observation of *any* matching set to the analyzed tip.
+///
+/// The start is a union across the sets rather than each set's own first
+/// observation, so every set lists exactly the same commits and their tables can be
+/// read side by side. `None` when no set carries an observation — there is then
+/// nothing to anchor a range to, and nothing to list.
+///
+/// The start is the minimum topological index rather than the leading point's, so
+/// the range covers every observation even if a set ever arrives unsorted.
+///
+/// The tip closes the range unconditionally: it is the last commit of the
+/// first-parent ancestry the topological indices were assigned from, so no
+/// observation can sit past it.
+fn pivot_range(observations: &[&[SeriesPoint]], tip_index: usize) -> Option<(usize, usize)> {
+    let start = observations
+        .iter()
+        .flat_map(|points| points.iter())
+        .map(|point| point.topo_index)
+        .min()?;
+    Some((start, tip_index))
+}
+
+/// Lists every commit in `range` against one set's `observations`, mirroring how the
+/// chart materializes a data-less commit as a gap.
+///
+/// A commit with observations contributes one row per observation, in the order the
+/// series
+/// already holds them (clean before dirty, then object ordinal); a commit with none
+/// contributes a single data-less row. `observations` is ordered by ascending
+/// topological index, so one forward cursor walks it alongside the range.
+fn points_in_range(
+    observations: &[SeriesPoint],
+    range: (usize, usize),
+    ordered_commits: &[String],
+    commit_subjects: &HashMap<String, String>,
+) -> Vec<DataPoint> {
+    let (start, end) = range;
+    // Every commit in the range contributes at least one row, and a commit with
+    // several observations contributes one each.
+    let mut points = Vec::with_capacity(
+        end.saturating_sub(start)
+            .saturating_add(1)
+            .saturating_add(observations.len()),
+    );
+    let mut cursor = observations
+        .iter()
+        .skip_while(|point| point.topo_index < start)
+        .peekable();
+    for topo_index in start..=end {
+        let commit = ordered_commits
+            .get(topo_index)
+            .expect("the range is bounded by the same first-parent ancestry it indexes");
+        let title = commit_subjects.get(commit).cloned().unwrap_or_default();
+        let mut listed = false;
+        while let Some(point) = cursor.next_if(|point| point.topo_index == topo_index) {
+            points.push(DataPoint {
+                commit: commit.clone(),
+                title: title.clone(),
+                topo_index,
+                observation: Some(Observation {
+                    value: point.value,
+                    dirty: point.dirty,
+                }),
+            });
+            listed = true;
+        }
+        if !listed {
+            points.push(DataPoint {
+                commit: commit.clone(),
+                title,
+                topo_index,
+                observation: None,
+            });
+        }
+    }
+    points
+}
+
+/// Explains, under `--verbose`, which commits the listing spans and why it opens
+/// and closes where it does — so a reader can tell an `n/a` row (a commit inside the
+/// range with no data) from a commit the range deliberately never reached.
+fn report_listed_range(
+    pivot: &Pivot,
+    ordered_commits: &[String],
+    entered: usize,
+    reporter: &dyn Reporter,
+) {
+    reporter.note_with(|| {
+        let Some((start, end)) = pivot.range else {
+            if entered == 0 {
+                return "commit listing spans no commits: no run entered the selection at all, \
+                        so there is no observation to anchor a range to"
+                    .to_owned();
+            }
+            return format!(
+                "commit listing spans no commits: {} entered the selection, but none recorded \
+                 benchmark {} with metric {}, so there is no observation to anchor a range to",
+                count_noun(entered, "run"),
+                pivot.benchmark,
+                pivot.metric
+            );
+        };
+        let name = |index: usize| {
+            ordered_commits
+                .get(index)
+                .map_or("<unknown>", |commit| short_commit_id(commit))
+        };
+        format!(
+            "commit listing spans {} from {} to {}: the range opens at the earliest observation \
+             across the {} carrying this series (first-parent index {start}) and closes at the \
+             analyzed tip (index {end}), so every set lists the same commits and their tables \
+             line up; a commit inside the range with no selected observation is listed as \
+             {NO_DATA} rather than omitted, and `--since` is what narrows the range",
+            count_noun(end.saturating_sub(start).saturating_add(1), "commit"),
+            name(start),
+            name(end),
+            count_noun(pivot.sets.len(), "discriminant set"),
+        )
+    });
 }
 
 /// The hint shown when runs entered the selection but none carried the examined
@@ -338,17 +484,50 @@ fn short_commit_id(commit_id: &str) -> &str {
     commit_id.get(..12).unwrap_or(commit_id)
 }
 
+/// The value cell of a row: the formatted measurement, or [`NO_DATA`] for a commit
+/// carrying no data point.
+fn cell_value(point: &DataPoint) -> String {
+    point.observation.as_ref().map_or_else(
+        || NO_DATA.to_owned(),
+        |observation| format_value(observation.value),
+    )
+}
+
+/// Whether a row's observation came from a dirty snapshot. A data-less row is not
+/// dirty: it has no run whose cleanliness could be described.
+fn is_dirty(point: &DataPoint) -> bool {
+    point
+        .observation
+        .as_ref()
+        .is_some_and(|observation| observation.dirty)
+}
+
 /// The line chart of a set's observations, drawn before its data points (the same
-/// chart `analyze` renders for a finding). Each observation sits in its own per-commit
-/// column, with the data-less commits between observations — and, when `base_ref`
-/// extends past the last observation, the trailing commits up to the analyzed tip —
-/// rendered as gaps. `None` when there are too few points to plot.
+/// chart history-mode `analyze` renders for a finding). Each observation sits in its
+/// own per-commit column, with the data-less commits between observations — and,
+/// when `base_ref` extends past the last observation, the trailing commits up to the
+/// analyzed tip — rendered as gaps. `None` when there are too few points to plot.
+///
+/// The chart plots the real observations only, so it trims its own leading gap: a
+/// set whose first observation is later than the listed range's start draws a chart
+/// that begins after its table does.
 fn chart_of_points(points: &[DataPoint], base_ref: Option<usize>) -> Option<String> {
-    let pairs: Vec<(usize, f64)> = points
-        .iter()
-        .map(|point| (point.topo_index, point.value))
-        .collect();
+    let pairs: Vec<(usize, f64)> = observed_pairs(points);
     chart_series(&pairs, base_ref)
+}
+
+/// The `(topological index, value)` pairs of the rows that carry an observation —
+/// the chart's input, which ignores the data-less rows the tables list.
+fn observed_pairs(points: &[DataPoint]) -> Vec<(usize, f64)> {
+    points
+        .iter()
+        .filter_map(|point| {
+            point
+                .observation
+                .as_ref()
+                .map(|observation| (point.topo_index, observation.value))
+        })
+        .collect()
 }
 
 /// Renders the pivot in the requested format, appending the diagnostic hint and
@@ -390,21 +569,17 @@ fn render_pivot_text(pivot: &Pivot, hint: Option<&str>, warning: Option<&str>) -
             let commit_width = set
                 .points
                 .iter()
-                .map(|point| point.short_commit.len())
+                .map(|point| short_commit_id(&point.commit).len())
                 .max()
                 .unwrap_or(0);
-            let values: Vec<String> = set
-                .points
-                .iter()
-                .map(|point| format_value(point.value))
-                .collect();
+            let values: Vec<String> = set.points.iter().map(cell_value).collect();
             let value_width = values.iter().map(String::len).max().unwrap_or(0);
             for (point, value) in set.points.iter().zip(&values) {
                 let title = truncate_title(&point.title);
-                let marker = if point.dirty { "  (dirty)" } else { "" };
+                let marker = if is_dirty(point) { "  (dirty)" } else { "" };
                 lines.push(format!(
                     "  {commit:<commit_width$}  {value:>value_width$}  {title}{marker}",
-                    commit = point.short_commit,
+                    commit = short_commit_id(&point.commit),
                 ));
             }
         }
@@ -438,11 +613,15 @@ fn render_pivot_markdown(pivot: &Pivot, hint: Option<&str>, warning: Option<&str
             lines.push("| Commit | Value | Kind | Title |".to_owned());
             lines.push("| --- | --- | --- | --- |".to_owned());
             for point in &set.points {
-                let kind = if point.dirty { "dirty" } else { "clean" };
+                let kind = match &point.observation {
+                    Some(observation) if observation.dirty => "dirty",
+                    Some(_) => "clean",
+                    None => NO_DATA,
+                };
                 lines.push(format!(
                     "| {} | {} | {} | {} |",
-                    point.short_commit,
-                    format_value(point.value),
+                    short_commit_id(&point.commit),
+                    cell_value(point),
                     kind,
                     escape_cell(&truncate_title(&point.title)),
                 ));
@@ -457,8 +636,12 @@ fn render_pivot_json(pivot: &Pivot, hint: Option<&str>, warning: Option<&str>) -
     #[derive(Serialize)]
     struct JsonPoint<'a> {
         commit: &'a str,
-        value: f64,
-        dirty: bool,
+        /// `null` for a commit that carries no data point in this pivot.
+        value: Option<f64>,
+        /// Absent for a commit that carries no data point: there is no run whose
+        /// cleanliness the flag could describe.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        dirty: Option<bool>,
         title: &'a str,
     }
     #[derive(Serialize)]
@@ -493,8 +676,8 @@ fn render_pivot_json(pivot: &Pivot, hint: Option<&str>, warning: Option<&str>) -
                 .iter()
                 .map(|point| JsonPoint {
                     commit: &point.commit,
-                    value: point.value,
-                    dirty: point.dirty,
+                    value: point.observation.as_ref().map(|one| one.value),
+                    dirty: point.observation.as_ref().map(|one| one.dirty),
                     title: &point.title,
                 })
                 .collect(),
@@ -741,6 +924,29 @@ mod tests {
             .expect("the Markdown report was rendered for the requested path")
     }
 
+    /// Drives `examine_with` and returns the diagnostic notes the run emitted, for
+    /// the tests that assert on `--verbose` reasoning rather than on the report.
+    fn examine_notes(
+        storage: &MemoryStorage,
+        git: &FakeGitHistory,
+        options: &ExamineOptions,
+    ) -> Vec<String> {
+        let reporter = RecordingReporter::new();
+        block_on(examine_with(
+            git,
+            storage,
+            "folo",
+            &config(),
+            options,
+            &auto(),
+            Timestamp::from_second(0).unwrap(),
+            &reporter,
+            &spawner(),
+        ))
+        .unwrap();
+        reporter.notes()
+    }
+
     #[test]
     fn pivots_one_series_into_ordered_points() {
         let storage = MemoryStorage::new();
@@ -770,7 +976,7 @@ mod tests {
         let sets = parsed["sets"].as_array().unwrap();
         assert_eq!(sets.len(), 1);
         let points = sets[0]["points"].as_array().unwrap();
-        assert_eq!(points.len(), 3);
+        assert_eq!(points.len(), 4, "every commit c0..=c3 is listed: {report}");
         // Oldest first by topology.
         assert_eq!(points[0]["commit"], "c0");
         assert_eq!(points[0]["value"], 100.0);
@@ -778,6 +984,10 @@ mod tests {
         assert_eq!(points[0]["title"], "Add the pull benchmark");
         assert_eq!(points[2]["commit"], "c2");
         assert_eq!(points[2]["value"], 128.0);
+        // Data stops before the tip, which is listed without a value.
+        assert_eq!(points[3]["commit"], "c3");
+        assert!(points[3]["value"].is_null(), "{report}");
+        assert!(points[3].get("dirty").is_none(), "{report}");
     }
 
     #[test]
@@ -864,6 +1074,21 @@ mod tests {
 
         let text = examine(&storage, &git, &options());
         assert!(text.contains("(dirty)"), "the dirty row is flagged: {text}");
+        assert_eq!(
+            text.matches("(dirty)").count(),
+            1,
+            "only the dirty row is flagged, not the clean one: {text}"
+        );
+
+        let markdown = examine_markdown(&storage, &git, &options());
+        assert!(
+            markdown.contains("| c3 | 100 | clean |"),
+            "the clean run's kind: {markdown}"
+        );
+        assert!(
+            markdown.contains("| c3 | 118 | dirty |"),
+            "the dirty snapshot's kind: {markdown}"
+        );
     }
 
     #[test]
@@ -879,7 +1104,11 @@ mod tests {
         let report = examine_json(&storage, &git, &options());
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         let points = parsed["sets"][0]["points"].as_array().unwrap();
-        assert_eq!(points.len(), 1);
+        assert_eq!(
+            points.len(),
+            4,
+            "c0's observation plus the three data-less commits after it: {report}"
+        );
         // The instruction-count value, not the conditional-branches one.
         assert_eq!(points[0]["value"], 100.0);
 
@@ -1002,17 +1231,48 @@ mod tests {
         );
     }
 
-    /// A `DataPoint` at the given topology and value, with the other fields fixed —
-    /// enough to drive [`chart_of_points`] and [`cbh_render::topology_columns`].
+    /// A `DataPoint` carrying an observation at the given topology and value, with
+    /// the other fields fixed — enough to drive [`chart_of_points`] and
+    /// [`cbh_render::topology_columns`].
     fn data_point(topo: usize, value: f64) -> DataPoint {
         DataPoint {
             commit: format!("c{topo}"),
-            short_commit: format!("c{topo}"),
-            value,
-            dirty: false,
             title: String::new(),
             topo_index: topo,
+            observation: Some(Observation {
+                value,
+                dirty: false,
+            }),
         }
+    }
+
+    /// A `DataPoint` for a commit that carries no observation — the `n/a` row.
+    fn gap_point(topo: usize) -> DataPoint {
+        DataPoint {
+            commit: format!("c{topo}"),
+            title: String::new(),
+            topo_index: topo,
+            observation: None,
+        }
+    }
+
+    /// A series observation at the given topology, carrying the fields the pivot
+    /// reads and neutral values for the rest.
+    fn observation(topo: usize, value: f64) -> SeriesPoint {
+        SeriesPoint {
+            topo_index: topo,
+            dirty: false,
+            object_ordinal: 0,
+            commit: None,
+            value,
+            interval_low: None,
+            interval_high: None,
+        }
+    }
+
+    /// The ordered first-parent ancestry the pivot names its commits from.
+    fn ordered_commits(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
     }
 
     #[test]
@@ -1022,9 +1282,10 @@ mod tests {
         let gapped = [
             data_point(0, 100.0),
             data_point(1, 130.0),
+            gap_point(2),
             data_point(3, 128.0),
         ];
-        let pairs: Vec<(usize, f64)> = gapped.iter().map(|p| (p.topo_index, p.value)).collect();
+        let pairs = observed_pairs(&gapped);
         // The span (3) is below the chart width, so the column count is exact and
         // independent of the 48-wide cap: one column per commit c0..=c3.
         let columns = cbh_render::topology_columns(&pairs, Some(3), 48);
@@ -1064,8 +1325,9 @@ mod tests {
             data_point(0, 100.0),
             data_point(1, 130.0),
             data_point(2, 128.0),
+            gap_point(3),
         ];
-        let pairs: Vec<(usize, f64)> = points.iter().map(|p| (p.topo_index, p.value)).collect();
+        let pairs = observed_pairs(&points);
         let columns = cbh_render::topology_columns(&pairs, Some(3), 48);
         assert_eq!(columns.len(), 4, "the tip commit c3 gets its own column");
         assert_eq!(
@@ -1084,10 +1346,36 @@ mod tests {
     }
 
     #[test]
-    fn a_data_less_interior_commit_still_lists_only_real_observations() {
+    fn a_late_starting_sets_chart_still_trims_its_leading_gap() {
+        // A set whose table opens with `n/a` rows charts only from its own first
+        // observation: the table lists the shared commit range, while the chart shows
+        // the shape of that set's series. A deliberate divergence.
+        let points = [
+            gap_point(0),
+            gap_point(1),
+            data_point(2, 128.0),
+            data_point(3, 126.0),
+        ];
+        let pairs = observed_pairs(&points);
+        assert_eq!(
+            pairs,
+            [(2, 128.0), (3, 126.0)],
+            "the leading gaps never reach the chart"
+        );
+        let columns = cbh_render::topology_columns(&pairs, Some(3), 48);
+        assert_eq!(
+            columns.len(),
+            2,
+            "the chart opens at the set's first observation, not the range's start"
+        );
+        assert!(columns.iter().all(|value| value.is_finite()));
+    }
+
+    #[test]
+    fn lists_a_data_less_interior_commit_as_n_a() {
         // Store c0, c1, c3 — skipping the interior c2 — on the linear history whose
-        // tip is c3. The chart materializes c2 as a gap, but the point table and JSON
-        // list only the three real observations.
+        // tip is c3. The chart materializes c2 as a gap, and so does the listing: c2
+        // gets a row of its own, without a value but still naming its commit.
         let storage = MemoryStorage::new();
         store(
             &storage,
@@ -1109,12 +1397,23 @@ mod tests {
         let report = examine_json(&storage, &git, &options());
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         let points = parsed["sets"][0]["points"].as_array().unwrap();
-        assert_eq!(points.len(), 3, "only the real observations: {report}");
+        assert_eq!(points.len(), 4, "every commit c0..=c3 is listed: {report}");
         let commits: Vec<&str> = points
             .iter()
             .map(|point| point["commit"].as_str().unwrap())
             .collect();
-        assert_eq!(commits, ["c0", "c1", "c3"], "no phantom c2 row: {report}");
+        assert_eq!(commits, ["c0", "c1", "c2", "c3"], "{report}");
+        // The gap entry carries no value and no cleanliness flag...
+        assert!(points[2]["value"].is_null(), "{report}");
+        assert!(points[2].get("dirty").is_none(), "{report}");
+        // ...but still names what its commit changed.
+        assert_eq!(
+            points[2]["title"], "Refactor the observer to shave allocations off the record path",
+            "{report}"
+        );
+        // An observation entry carries both, and neither shape leaks the topology.
+        assert_eq!(points[0]["value"], 100.0, "{report}");
+        assert_eq!(points[0]["dirty"], false, "{report}");
         assert!(
             points[0].get("topo_index").is_none(),
             "the JSON point carries no topology index: {report}"
@@ -1125,10 +1424,374 @@ mod tests {
             text.contains('┤') || text.contains('┼'),
             "the chart is drawn across the gap: {text}"
         );
-        assert!(text.contains("c3"), "the c3 row is present: {text}");
         assert!(
-            !text.contains("| c2 |") && !text.contains("  c2  "),
-            "the data-less c2 never becomes a row: {text}"
+            text.contains(NO_DATA),
+            "the data-less c2 reads {NO_DATA}: {text}"
+        );
+        assert!(
+            text.contains("Refactor the observer to shave allocations off the"),
+            "the data-less row still carries its commit title: {text}"
+        );
+    }
+
+    #[test]
+    fn lists_the_trailing_commits_up_to_the_tip_as_n_a() {
+        // Data stops at c1 while the analyzed tip is c3: the listing runs to the tip,
+        // so c2 and c3 are both listed without a value.
+        let storage = MemoryStorage::new();
+        store(
+            &storage,
+            &clean_key("c0"),
+            &single_metric_run(0, "c0", 100.0),
+        );
+        store(
+            &storage,
+            &clean_key("c1"),
+            &single_metric_run(1, "c1", 130.0),
+        );
+        let git = linear_git();
+
+        let report = examine_json(&storage, &git, &options());
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let points = parsed["sets"][0]["points"].as_array().unwrap();
+        assert_eq!(points.len(), 4, "the listing runs to the tip: {report}");
+        assert_eq!(points[1]["value"], 130.0, "{report}");
+        assert!(points[2]["value"].is_null(), "{report}");
+        assert!(points[3]["value"].is_null(), "{report}");
+    }
+
+    #[test]
+    fn the_listing_opens_at_the_earliest_observation_of_any_set() {
+        // Callgrind first records at c0, Criterion only at c2. The range is the union
+        // of the two, so both sets list c0..=c3 and Criterion's earlier commits read
+        // `n/a` — keeping the two tables aligned row for row.
+        let storage = MemoryStorage::new();
+        store(
+            &storage,
+            &clean_key("c0"),
+            &single_metric_run(0, "c0", 100.0),
+        );
+        store(
+            &storage,
+            "v1/folo/objects/criterion/x86_64-unknown-linux-gnu/m1/c2/clean.json",
+            &single_metric_run(2, "c2", 200.0),
+        );
+        let git = linear_git();
+
+        let opts = ExamineOptions {
+            engine: vec!["all".to_owned()],
+            ..options()
+        };
+        let report = examine_json(&storage, &git, &opts);
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let sets = parsed["sets"].as_array().unwrap();
+        assert_eq!(sets.len(), 2, "{report}");
+        for set in sets {
+            let commits: Vec<&str> = set["points"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|point| point["commit"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                commits,
+                ["c0", "c1", "c2", "c3"],
+                "every set lists the same commits: {report}"
+            );
+        }
+        let criterion = sets
+            .iter()
+            .find(|set| set["engine"] == "criterion")
+            .expect("the criterion set is present");
+        let points = criterion["points"].as_array().unwrap();
+        assert!(
+            points[0]["value"].is_null() && points[1]["value"].is_null(),
+            "criterion's listing opens before its own first observation: {report}"
+        );
+        assert_eq!(points[2]["value"], 200.0, "{report}");
+    }
+
+    #[test]
+    fn no_dirty_leaves_the_commit_as_an_n_a_row() {
+        // c0 has a clean run and the tip c3 only a dirty snapshot, admitted by the
+        // base-tip dirty exception. `--no-dirty` drops that snapshot, and the tip
+        // becomes an `n/a` row rather than vanishing from the listing.
+        let storage = MemoryStorage::new();
+        store(
+            &storage,
+            &clean_key("c0"),
+            &single_metric_run(0, "c0", 100.0),
+        );
+        store(
+            &storage,
+            &dirty_key("c3", 400),
+            &single_metric_run(4, "c3", 118.0),
+        );
+        let mut git = linear_git();
+        git.mark_dirty();
+
+        let admitted = examine_json(&storage, &git, &options());
+        let parsed: serde_json::Value = serde_json::from_str(&admitted).unwrap();
+        let points = parsed["sets"][0]["points"].as_array().unwrap();
+        assert_eq!(
+            points[3]["value"], 118.0,
+            "the snapshot is listed: {admitted}"
+        );
+        assert_eq!(points[3]["dirty"], true, "{admitted}");
+
+        let opts = ExamineOptions {
+            no_dirty: true,
+            ..options()
+        };
+        let report = examine_json(&storage, &git, &opts);
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let points = parsed["sets"][0]["points"].as_array().unwrap();
+        assert_eq!(points.len(), 4, "the tip is still listed: {report}");
+        assert_eq!(points[3]["commit"], "c3", "{report}");
+        assert!(
+            points[3]["value"].is_null(),
+            "its only run was excluded: {report}"
+        );
+    }
+
+    #[test]
+    fn markdown_renders_a_data_less_commit_as_n_a() {
+        let storage = MemoryStorage::new();
+        store(
+            &storage,
+            &clean_key("c0"),
+            &single_metric_run(0, "c0", 100.0),
+        );
+        let git = linear_git();
+
+        let report = examine_markdown(&storage, &git, &options());
+        assert!(report.contains("| c0 | 100 | clean |"), "{report}");
+        assert!(report.contains("| c1 | n/a | n/a |"), "{report}");
+    }
+
+    #[test]
+    fn the_text_value_column_stays_aligned_with_an_n_a_row() {
+        // The `n/a` cell takes part in the value-column width, so the values still
+        // read straight down.
+        let storage = MemoryStorage::new();
+        store(
+            &storage,
+            &clean_key("c0"),
+            &single_metric_run(0, "c0", 123_456.0),
+        );
+        let git = linear_git();
+
+        let report = examine(&storage, &git, &options());
+        let value = format_value(123_456.0);
+        let cell_end = |needle: &str| {
+            let line = report
+                .lines()
+                .find(|line| line.contains(needle))
+                .unwrap_or_else(|| panic!("the {needle} row is present: {report}"));
+            line.find(needle)
+                .expect("the needle was just located on this line")
+                + needle.len()
+        };
+        assert_eq!(
+            cell_end(&value),
+            cell_end(NO_DATA),
+            "both value cells end in the same column: {report}"
+        );
+    }
+
+    #[test]
+    fn pivot_range_is_none_when_no_set_carries_an_observation() {
+        let empty: [&[SeriesPoint]; 0] = [];
+        assert_eq!(pivot_range(&empty, 3), None);
+        let no_points: [&[SeriesPoint]; 1] = [&[]];
+        assert_eq!(pivot_range(&no_points, 3), None);
+    }
+
+    #[test]
+    fn pivot_range_opens_at_the_first_observation_and_closes_at_the_tip() {
+        let points = [observation(1, 100.0), observation(2, 130.0)];
+        let sets: [&[SeriesPoint]; 1] = [&points];
+        assert_eq!(pivot_range(&sets, 5), Some((1, 5)));
+    }
+
+    #[test]
+    fn pivot_range_unions_the_earliest_observation_across_sets() {
+        // Whichever order the sets arrive in, the range opens at the earliest
+        // observation of any of them.
+        let early = [observation(1, 100.0)];
+        let late = [observation(4, 200.0)];
+        let forwards: [&[SeriesPoint]; 2] = [&early, &late];
+        let backwards: [&[SeriesPoint]; 2] = [&late, &early];
+        assert_eq!(pivot_range(&forwards, 5), Some((1, 5)));
+        assert_eq!(pivot_range(&backwards, 5), Some((1, 5)));
+    }
+
+    #[test]
+    fn pivot_range_of_a_tip_only_set_is_the_tip_alone() {
+        let points = [observation(3, 100.0)];
+        let sets: [&[SeriesPoint]; 1] = [&points];
+        assert_eq!(pivot_range(&sets, 3), Some((3, 3)));
+    }
+
+    #[test]
+    fn points_in_range_lists_every_commit_and_every_observation() {
+        // c0 carries a clean run and a dirty snapshot, c2 a clean run, and c1 and c3
+        // nothing: five rows across four commits.
+        let observations = [
+            observation(0, 100.0),
+            SeriesPoint {
+                dirty: true,
+                ..observation(0, 110.0)
+            },
+            observation(2, 130.0),
+        ];
+        let commits = ordered_commits(&["c0", "c1", "c2", "c3"]);
+        let mut subjects = HashMap::new();
+        subjects.insert("c1".to_owned(), "Optimize the hot loop".to_owned());
+
+        let points = points_in_range(&observations, (0, 3), &commits, &subjects);
+        let listed: Vec<(&str, Option<f64>)> = points
+            .iter()
+            .map(|point| {
+                (
+                    point.commit.as_str(),
+                    point.observation.as_ref().map(|one| one.value),
+                )
+            })
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("c0", Some(100.0)),
+                ("c0", Some(110.0)),
+                ("c1", None),
+                ("c2", Some(130.0)),
+                ("c3", None),
+            ]
+        );
+        assert!(is_dirty(&points[1]), "the snapshot keeps its dirty flag");
+        assert_eq!(
+            points[2].title, "Optimize the hot loop",
+            "a data-less row still carries its commit title"
+        );
+        assert!(
+            points[4].title.is_empty(),
+            "a commit whose subject topology did not report lists an empty title"
+        );
+    }
+
+    #[test]
+    fn points_in_range_lists_only_the_commits_inside_the_range() {
+        // Observations outside the range are not listed, and the range's own bounds
+        // decide which commits appear.
+        let observations = [
+            observation(0, 100.0),
+            observation(1, 130.0),
+            observation(3, 128.0),
+        ];
+        let commits = ordered_commits(&["c0", "c1", "c2", "c3"]);
+        let points = points_in_range(&observations, (1, 2), &commits, &HashMap::new());
+        let listed: Vec<(&str, Option<f64>)> = points
+            .iter()
+            .map(|point| {
+                (
+                    point.commit.as_str(),
+                    point.observation.as_ref().map(|one| one.value),
+                )
+            })
+            .collect();
+        assert_eq!(listed, [("c1", Some(130.0)), ("c2", None)]);
+    }
+
+    #[test]
+    fn the_verbose_note_explains_the_listed_range() {
+        let storage = MemoryStorage::new();
+        store(
+            &storage,
+            &clean_key("c1"),
+            &single_metric_run(1, "c1", 130.0),
+        );
+        let git = linear_git();
+
+        let notes = examine_notes(&storage, &git, &options());
+        let note = notes
+            .iter()
+            .find(|note| note.starts_with("commit listing spans"))
+            .unwrap_or_else(|| panic!("the range note is emitted: {notes:?}"));
+        assert!(note.contains("3 commits"), "the commit count: {note}");
+        assert!(note.contains("from c1 to c3"), "both endpoints: {note}");
+        assert!(
+            note.contains("earliest observation"),
+            "why the range opens there: {note}"
+        );
+        assert!(
+            note.contains("analyzed tip"),
+            "why the range closes there: {note}"
+        );
+        assert!(
+            note.contains("1 discriminant set"),
+            "how many sets the union spans: {note}"
+        );
+        assert!(
+            note.contains(NO_DATA),
+            "what a data-less commit reads as: {note}"
+        );
+        assert!(
+            note.contains("`--since`"),
+            "which lever narrows the range: {note}"
+        );
+    }
+
+    #[test]
+    fn the_verbose_note_explains_an_unmatched_series() {
+        let storage = MemoryStorage::new();
+        store(
+            &storage,
+            &clean_key("c0"),
+            &single_metric_run(0, "c0", 100.0),
+        );
+        let git = linear_git();
+
+        let opts = ExamineOptions {
+            benchmark: "nm/nm::observe/nonexistent".to_owned(),
+            ..options()
+        };
+        let notes = examine_notes(&storage, &git, &opts);
+        let note = notes
+            .iter()
+            .find(|note| note.starts_with("commit listing spans"))
+            .unwrap_or_else(|| panic!("the range note is emitted: {notes:?}"));
+        assert!(note.contains("no commits"), "nothing is listed: {note}");
+        assert!(
+            note.contains("1 run entered the selection"),
+            "runs did enter the selection: {note}"
+        );
+        assert!(
+            note.contains("nonexistent"),
+            "which series found no observation: {note}"
+        );
+    }
+
+    #[test]
+    fn the_verbose_note_explains_an_empty_selection() {
+        // Nothing was ever recorded, so the range is anchorless for a different
+        // reason than an unmatched series: no run entered the selection at all.
+        let storage = MemoryStorage::new();
+        let git = linear_git();
+
+        let notes = examine_notes(&storage, &git, &options());
+        let note = notes
+            .iter()
+            .find(|note| note.starts_with("commit listing spans"))
+            .unwrap_or_else(|| panic!("the range note is emitted: {notes:?}"));
+        assert!(note.contains("no commits"), "nothing is listed: {note}");
+        assert!(
+            note.contains("no run entered the selection"),
+            "the selection itself is empty: {note}"
+        );
+        assert!(
+            !note.contains("but none recorded"),
+            "an empty selection is not an unmatched series: {note}"
         );
     }
 

@@ -1,9 +1,9 @@
 use crate::harness::*;
 
 /// `examine` pivots one `(benchmark, metric)` series into its raw per-commit data
-/// points: one JSON row per recorded observation, oldest first by git topology,
-/// pairing each value with the commit it was measured against and that commit's
-/// title.
+/// points: one JSON row per commit in the listed range, oldest first by git
+/// topology, pairing each value with the commit it was measured against and that
+/// commit's title.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn examine_pivots_a_rising_history_into_points() {
@@ -115,7 +115,7 @@ async fn examine_renders_a_text_pivot_with_titles() {
     assert!(axis < first_point, "a chart leads the points: {message}");
 }
 
-/// `examine` renders a per-set Markdown table with a row per observation.
+/// `examine` renders a per-set Markdown table with a row per listed commit.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn examine_renders_a_markdown_table() {
@@ -415,6 +415,105 @@ async fn examine_dirty_tree_on_the_base_warns() {
         "{message}"
     );
     assert!(parsed["warning"].is_null(), "{message}");
+}
+
+/// A commit inside the listed range that recorded nothing for the series is listed
+/// as `n/a` rather than skipped, so the table represents the same commits the
+/// leading chart draws columns for.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn examine_lists_commits_without_data_as_n_a() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
+    workspace.commit_dated("2024-01-02", "c2");
+    workspace.commit_dated("2024-01-03", "c3");
+    workspace.seed_callgrind("c3", 130.0);
+
+    let message = workspace
+        .drive_json(&[
+            "examine",
+            "--benchmark",
+            "nm/nm::observe/pull",
+            "--metric",
+            "instruction_count",
+        ])
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
+    let points = parsed["sets"][0]["points"].as_array().unwrap();
+    assert_eq!(points.len(), 3, "one row per commit c1..=c3: {message}");
+    assert_eq!(points[0]["value"].as_f64().unwrap(), 100.0, "{message}");
+    assert!(
+        points[1]["value"].is_null(),
+        "c2 recorded nothing: {message}"
+    );
+    assert!(
+        points[1].get("dirty").is_none(),
+        "a data-less entry carries no cleanliness flag: {message}"
+    );
+    assert_eq!(
+        points[1]["title"], "c2",
+        "the data-less row still names its commit: {message}"
+    );
+    assert_eq!(points[2]["value"].as_f64().unwrap(), 130.0, "{message}");
+
+    // The text pivot lists the same three commits, the middle one without a value.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&[
+            "examine",
+            "--benchmark",
+            "nm/nm::observe/pull",
+            "--metric",
+            "instruction_count",
+        ])
+        .await
+        .unwrap()
+    else {
+        panic!("expected a completed outcome");
+    };
+    assert!(message.contains("n/a"), "{message}");
+}
+
+/// The listed range spans the merge-base on a feature branch: base-side and
+/// branch-side commits are listed alike, and the ones carrying no data read `n/a`.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn examine_lists_the_range_across_a_merge_base() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
+    workspace.commit_dated("2024-01-02", "c2");
+    workspace.checkout_new_branch("feature");
+    workspace.commit_dated("2024-01-03", "f1");
+    workspace.commit_dated("2024-01-04", "f2");
+    workspace.seed_callgrind("f2", 130.0);
+
+    let message = workspace
+        .drive_json(&[
+            "examine",
+            "--benchmark",
+            "nm/nm::observe/pull",
+            "--metric",
+            "instruction_count",
+        ])
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
+    let points = parsed["sets"][0]["points"].as_array().unwrap();
+    let titles: Vec<&str> = points
+        .iter()
+        .map(|point| point["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        titles,
+        vec!["c1", "c2", "f1", "f2"],
+        "the range runs from the earliest observation through the branch tip: {message}"
+    );
+    let values: Vec<Option<f64>> = points.iter().map(|point| point["value"].as_f64()).collect();
+    assert_eq!(
+        values,
+        vec![Some(100.0), None, None, Some(130.0)],
+        "{message}"
+    );
 }
 
 /// An unknown `--metric` is rejected up front, before any load, listing the valid

@@ -154,18 +154,21 @@
 //! ## `examine`
 //!
 //! A drill-down sibling of `list runs` over the same `analyze`/`list` selection: it
-//! pivots the small chart `analyze` draws into its raw data points. Given the two
+//! pivots the small chart `analyze` draws into a per-commit listing. Given the two
 //! required options `--benchmark <qualified-id>` and `--metric <name>` — the one
 //! command that names a metric, meant to be pasted from an `analyze` finding — it
-//! prints one row per recorded observation of that series, in git first-parent
-//! order and once per matching discriminant set, pairing the value with the short
-//! commit id and the first 50 characters of the commit's title (JSON keeps the full
-//! title and full-precision value). It requires a repository, runs no detection or
-//! re-baselining, and shows every selected point (clean before dirty, each flagged).
-//! An unknown metric name is rejected. An empty pivot is explained by one of two
-//! hints: when no run enters the selection at all, the same "matched no runs" hint
-//! `analyze` gives; when runs enter but none carry the named `(benchmark, metric)`
-//! pair, a distinct hint pointing at the unmatched benchmark id or metric name.
+//! lists every commit from the earliest one carrying that series in any matching
+//! discriminant set up to the analyzed tip, in git first-parent order and once per
+//! set, pairing the value with the short commit id and the first 50 characters of the
+//! commit's title (JSON keeps the full title and full-precision value). Every set
+//! shares that range, so their listings cover the same commits; a commit with no data
+//! point reads `n/a` (null in JSON), and one with several observations contributes a
+//! row per observation (clean before dirty, each flagged). It requires a repository
+//! and runs no detection or re-baselining. An unknown metric name is rejected. An
+//! empty pivot is explained by one of two hints: when no run enters the selection at
+//! all, the same "matched no runs" hint `analyze` gives; when runs enter but none
+//! carry the named `(benchmark, metric)` pair, a distinct hint pointing at the
+//! unmatched benchmark id or metric name.
 //!
 //! ## `bless` / `unbless`
 //!
