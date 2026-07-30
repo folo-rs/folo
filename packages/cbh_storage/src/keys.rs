@@ -21,7 +21,8 @@ pub(crate) fn is_plain_segment(segment: &str) -> bool {
 ///
 /// # Errors
 ///
-/// Returns [`InvalidKey`](crate::StorageErrorKind::InvalidKey) if any segment of `key`
+/// Returns a [`StorageError`] whose [`kind()`](StorageError::kind) is
+/// [`InvalidKey`](crate::StorageErrorKind::InvalidKey) if any segment of `key`
 /// is not a single ordinary path component.
 pub(crate) fn validate_key(key: &str) -> Result<(), StorageError> {
     for segment in key.split('/') {

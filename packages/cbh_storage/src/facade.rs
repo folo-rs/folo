@@ -211,7 +211,8 @@ impl StorageFacade {
 ///
 /// # Errors
 ///
-/// Returns [`Config`](crate::StorageErrorKind::Config) if no storage is selected (no
+/// Returns a [`StorageError`] whose [`kind()`](StorageError::kind) is
+/// [`Config`](crate::StorageErrorKind::Config) if no storage is selected (no
 /// `--local` and no configured cloud backend), or if the selected cloud backend cannot
 /// be built — for example an Azure backend with a non-HTTPS endpoint.
 pub fn build_storage(
@@ -354,7 +355,8 @@ impl StorageOverride {
 ///
 /// # Errors
 ///
-/// Returns [`Config`](crate::StorageErrorKind::Config) if the endpoint is not a valid base URL.
+/// Returns a [`StorageError`] whose [`kind()`](StorageError::kind) is
+/// [`Config`](crate::StorageErrorKind::Config) if the endpoint is not a valid base URL.
 #[doc(hidden)]
 pub fn azure_backend_from_parts(
     account: &str,

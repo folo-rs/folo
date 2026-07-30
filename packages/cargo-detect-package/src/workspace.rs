@@ -47,10 +47,12 @@ pub(crate) fn validate_workspace_context(
         }
     };
 
-    // Canonicalize the resolved target path - it must exist.
+    // Canonicalize the resolved target path - it must exist. The error names the resolved
+    // path rather than the argument, because a relative argument is probed at two different
+    // absolute locations and only the resolved one says where the lookup actually failed.
     let absolute_target_path = fs
         .canonicalize(&resolved_target_path)
-        .map_err(|error| TargetPathNotFoundError::caused_by(target_path, error))?;
+        .map_err(|error| TargetPathNotFoundError::caused_by(&resolved_target_path, error))?;
 
     // Find workspace root for the target path.
     let target_workspace_root = find_workspace_root(&absolute_target_path, fs)

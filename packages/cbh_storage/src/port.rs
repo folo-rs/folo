@@ -15,7 +15,8 @@ pub trait Storage: fmt::Debug + Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`InvalidKey`](crate::StorageErrorKind::InvalidKey) if `key` is malformed,
+    /// Returns a [`StorageError`] whose [`kind()`](StorageError::kind) is
+    /// [`InvalidKey`](crate::StorageErrorKind::InvalidKey) if `key` is malformed,
     /// [`AlreadyExists`](crate::StorageErrorKind::AlreadyExists) if an object is already
     /// stored at `key`, or [`Io`](crate::StorageErrorKind::Io) if the object cannot be
     /// written.
@@ -35,7 +36,8 @@ pub trait Storage: fmt::Debug + Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`InvalidKey`](crate::StorageErrorKind::InvalidKey) if `key` is malformed, or
+    /// Returns a [`StorageError`] whose [`kind()`](StorageError::kind) is
+    /// [`InvalidKey`](crate::StorageErrorKind::InvalidKey) if `key` is malformed, or
     /// [`Io`](crate::StorageErrorKind::Io) if the object cannot be written.
     fn put_overwrite(
         &self,
@@ -50,7 +52,8 @@ pub trait Storage: fmt::Debug + Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`InvalidKey`](crate::StorageErrorKind::InvalidKey) if `key` is malformed,
+    /// Returns a [`StorageError`] whose [`kind()`](StorageError::kind) is
+    /// [`InvalidKey`](crate::StorageErrorKind::InvalidKey) if `key` is malformed,
     /// [`NotFound`](crate::StorageErrorKind::NotFound) if no object exists at `key`, or
     /// [`Io`](crate::StorageErrorKind::Io) if it cannot be read.
     fn get(&self, key: &str) -> impl Future<Output = Result<Vec<u8>, StorageError>> + Send;
@@ -59,14 +62,16 @@ pub trait Storage: fmt::Debug + Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`Io`](crate::StorageErrorKind::Io) if the listing cannot be produced.
+    /// Returns a [`StorageError`] whose [`kind()`](StorageError::kind) is
+    /// [`Io`](crate::StorageErrorKind::Io) if the listing cannot be produced.
     fn list(&self, prefix: &str) -> impl Future<Output = Result<Vec<String>, StorageError>>;
 
     /// Removes the object stored at `key`.
     ///
     /// # Errors
     ///
-    /// Returns [`InvalidKey`](crate::StorageErrorKind::InvalidKey) if `key` is malformed,
+    /// Returns a [`StorageError`] whose [`kind()`](StorageError::kind) is
+    /// [`InvalidKey`](crate::StorageErrorKind::InvalidKey) if `key` is malformed,
     /// [`NotFound`](crate::StorageErrorKind::NotFound) if no object exists at `key`, or
     /// [`Io`](crate::StorageErrorKind::Io) if it cannot be removed.
     fn delete(&self, key: &str) -> impl Future<Output = Result<(), StorageError>>;

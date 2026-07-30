@@ -91,7 +91,8 @@ impl AzureBlobStorage {
     ///
     /// # Errors
     ///
-    /// Returns [`Config`](StorageErrorKind::Config) if the endpoint is not a valid base URL,
+    /// Returns a [`StorageError`] whose [`kind()`](StorageError::kind) is
+    /// [`Config`](StorageErrorKind::Config) if the endpoint is not a valid base URL,
     /// or is not HTTPS (Entra ID authentication requires TLS).
     pub(crate) fn from_config(
         account: &str,
@@ -140,7 +141,8 @@ impl AzureBlobStorage {
     ///
     /// # Errors
     ///
-    /// Returns [`Config`](StorageErrorKind::Config) if the endpoint is not a valid base URL, or
+    /// Returns a [`StorageError`] whose [`kind()`](StorageError::kind) is
+    /// [`Config`](StorageErrorKind::Config) if the endpoint is not a valid base URL, or
     /// is not HTTPS (Entra ID authentication requires TLS, even through this seam).
     pub(crate) fn from_parts(
         account: &str,
@@ -560,7 +562,8 @@ async fn upload(client: &BlobClient, bytes: &[u8], if_not_exists: bool) -> azure
 ///
 /// # Errors
 ///
-/// Returns [`Config`](StorageErrorKind::Config) if the endpoint is not a valid base URL, or is
+/// Returns a [`StorageError`] whose [`kind()`](StorageError::kind) is
+/// [`Config`](StorageErrorKind::Config) if the endpoint is not a valid base URL, or is
 /// not HTTPS (Entra ID authentication requires TLS).
 fn container_endpoint_url(
     account: &str,
