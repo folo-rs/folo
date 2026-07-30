@@ -73,7 +73,7 @@ build profile. Stability of the *inputs* is the responsibility of whoever builds
 benchmarks. Apply the flag in your own benchmark build path — a `just` recipe, a CI step, a
 `cargo bench` wrapper — so that every run the tool collects is built the same way.
 
-Two consequences worth planning for:
+Consequences worth planning for:
 
 - **Only wall-clock engines need it.** Instruction-count engines (for example Callgrind) count
   executed instructions, which do not depend on where functions land, so alignment neither helps
@@ -90,3 +90,8 @@ Two consequences worth planning for:
   request that touches an affected wall-clock benchmark can show a one-time-shift-sized move in its
   performance comment. Those findings are advisory rather than merge gates and clear themselves
   once the aligned baseline fills in.
+- **Backfilling across the change mixes the two configurations.** `RUSTFLAGS` reaches
+  [`backfill`](../commands/backfill.md) from the invocation, not from the commit being measured,
+  so backfilling commits that predate the alignment change measures them *with* alignment while
+  their originally-collected neighbours lack it. Keep backfilled ranges recent enough to stay
+  inside one configuration, or expect an extra step where the two meet.

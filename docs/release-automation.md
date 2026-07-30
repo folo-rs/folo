@@ -118,7 +118,7 @@ jobs:
 crates.io **Trusted Publishing (OIDC)** is the credential model: the job carries
 `id-token: write` and no `CARGO_REGISTRY_TOKEN` exists anywhere. `release-plz`
 performs the crates.io OIDC token exchange itself, so no long-lived crates.io
-token is stored. This matches the repo's OIDC-first posture (the nightly
+token is stored. This matches the repo's OIDC-first posture (the
 `bench-history` workflow already federates into Azure the same way). The GitHub
 side (tags + releases) uses the ambient `secrets.GITHUB_TOKEN` with
 `contents: write`.
@@ -253,8 +253,9 @@ build-binaries:
 
 #### Target matrix
 
-Native runners, one per target, no cross-compilation — the same runner set as the
-nightly `bench-history` matrix plus macOS. This table is the single `triple → runner`
+Native runners, one per target, no cross-compilation — the `bench-history` matrix's two
+x86_64 runners plus the ARM and macOS targets binaries are published for. This table is the
+single `triple → runner`
 source that `plan-binaries` joins each missing `(crate, target)` pair against to set
 its `os`:
 

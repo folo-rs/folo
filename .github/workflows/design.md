@@ -74,7 +74,12 @@ workflow's concurrency group so cancel-in-progress reclaims the stale run. Both 
 workflow and the PR benchmark-history workflow pair with such a close companion. The exception
 is history collection on `main`, which is keyed on the commit **SHA**: each commit is a distinct
 measurement, so distinct commits must run in parallel and only a redundant re-trigger of the
-*same* commit is deduplicated. Schedule-driven workflows carry no concurrency block at all.
+*same* commit is deduplicated. A schedule-driven workflow carries a concurrency block only when
+a duplicate run would be expensive: the nightly history backfill groups on itself with
+cancellation **off**, so a manual dispatch queues behind the scheduled run rather than
+duplicating hours of benchmarking. Keeping it out of collection's SHA-keyed group matters for
+the same reason — a scheduled run's SHA is the current tip, so a shared group would let the
+nightly and that tip's own collection cancel each other.
 
 ## Thin steps
 
@@ -145,6 +150,7 @@ Two managed identities exist, each registered with exactly the subjects its even
 | Event | OIDC subject | Identity | Consumer |
 | --- | --- | --- | --- |
 | push to `main` | `…:ref:refs/heads/main` | prod | `bench-history.yml` |
+| schedule on `main` | `…:ref:refs/heads/main` | prod | `bench-history-backfill.yml` |
 | pull request | `…:pull_request` | prod | `pr-bench-history.yml` |
 | push to `main` | `…:ref:refs/heads/main` | test | `test-azure` backend tests |
 | pull request | `…:pull_request` | test | `test-azure` backend tests |
@@ -166,13 +172,21 @@ intermediate commits. It writes to a dedicated production storage account under 
 production managed identity, kept entirely separate from the throwaway account the test jobs
 use, so the long-lived data store never depends on test infrastructure. Collection is
 append-only and idempotent, which is what makes a re-run safe and lets a read-through cache
-of the bulk history persist between runs. Collection stamps the wall-clock (per-machine)
-engines with a fixed `github` machine key instead of the auto-detected hardware fingerprint,
-and analysis reads only that key: the GitHub-hosted runner pool may hold differently-specced
-machines, so fingerprinting would fork the series on every SKU change and let unrelated
-machines pollute the data set, whereas one fixed key keeps a single series (accepting the
-pool's jitter) that a deliberate blessing absorbs across a genuine hardware migration.
-To blunt that jitter rather than merely accept it, collection runs the whole suite several
+of the bulk history persist between runs.
+
+Collection stamps every engine's results with the runner's **own auto-detected hardware
+fingerprint**, with no fixed key override. The GitHub-hosted pool is heterogeneous, so a
+single shared key would blend genuinely different machines into one jittery series;
+fingerprinting instead splits the pool into one clean series per hardware type. Because
+collection is a matrix and analysis is a single job that cannot re-derive those keys from its
+own hardware, each collect leg writes its fingerprint out as an artifact and the analysis job
+threads exactly the keys collected this run into its selection — scoping the analysis to the
+machines that actually measured this commit, without assuming anything about other data in
+the shared store. The cost of that split is sparseness: consecutive commits land on whatever
+hardware the pool handed out, so each per-key series sees only a fraction of `main`'s commits.
+The nightly backfill below exists to densify them.
+
+To blunt the residual within-machine jitter, collection runs the whole suite several
 times per commit and keeps, per metric, the minimum sample: runner interference is one-sided
 (a contended host only ever makes a benchmark slower) and the repeats are spaced apart in
 time, so the minimum is the reading least perturbed by transient noise. This trades a
@@ -190,8 +204,9 @@ commit and *overwrites* its stored point instead of appending the pushed tip. Th
 resolves is that the collection tool lives in the same repository as the benchmarks, so a naive
 "check out that commit and re-run" would also run the tool as it shipped at that commit. Instead
 the re-collection benchmarks the code *at* the target commit in a throwaway worktree while
-running the current tool, so only the measured code — never the collection logic — comes from
-the past. The overwrite bumps the cache-invalidation marker so downstream analysis refreshes,
+running the current tool, so the measured code and the compiler that builds it come from that
+commit while the collection logic does not. The overwrite bumps the cache-invalidation marker
+so downstream analysis refreshes,
 and it deliberately discards any blessings recorded at that commit, since a fresh measurement
 invalidates a level that was previously accepted. Analysis is unaffected by the input and always
 surveys the current `main` tip.
@@ -210,6 +225,56 @@ regressions never fail the run. Because a GitHub issue body is size-capped and a
 analysis can exceed it, the issue carries a **condensed summary** (the top findings) and
 links to the **full Markdown and JSON reports**, which the job uploads as a run artifact — so
 the issue always fits while the complete data stays one click away.
+
+### Nightly history backfill
+
+A scheduled companion workflow densifies the per-machine-key series the push workflow leaves
+sparse. At 02:00 UTC — clear of the cache warmup's midnight slot — it runs the collection tool's
+`backfill` in its default skip-existing mode over a window of recent `main` commits, on the same
+two platforms, so whichever machine key its runner draws that night receives the newest commits
+that key is missing. It is purely a producer: it performs no analysis and raises no alert.
+Analysis stays with the push workflow, which surveys a densified series the next time one of its
+runners draws that same machine key.
+
+The window is computed per run rather than fixed. Its newest end is the newest first-parent
+commit at least 24 hours old, which keeps the nightly from racing a push-collect that may still
+be measuring a recent commit (collection runs for hours). Its oldest end is 14 days
+back: history older than that has no comparison value against the current tip, since detection
+reads only a short window of recent points, and the same bound caps how far back the
+measurement-configuration caveat below can plant an odd-looking point.
+
+Being killed by the clock is the expected outcome, not a failure. One commit costs as much as a
+push-collect and more — the backfill worktree's build directory sits outside the shared
+dependency cache, so it always builds cold — so a night fills roughly one gap per platform
+against the six-hour hosted-runner ceiling. The job therefore carries the maximum
+`timeout-minutes` *together with* `continue-on-error`, which is what turns the kill into an
+unremarkable end rather than a red scheduled workflow, and it ignores per-commit errors so one
+unbuildable commit does not end the walk. Because backfill works newest-first, whatever the run
+managed to finish is the most comparison-relevant part of the range. A kill landing in the
+seconds a commit spends writing its per-engine results leaves that commit stored for only some
+engines, and later runs count it as filled; repairing it takes a `backfill --overwrite` over
+that commit. The accepted cost is that a
+genuinely broken nightly — bad credentials, a tool bug, every commit failing — is equally green
+and silent; this is an opportunistic job, and such breakage still surfaces within hours in the
+push workflow, which does alert.
+
+It carries its own concurrency group instead of joining history collection's. A scheduled run's
+SHA *is* the current tip, so sharing that SHA-keyed, cancel-in-progress group would put the
+nightly and the tip commit's own collection into one group where whichever started later kills
+the other — hours of benchmarking discarded in either direction. The backfill's own group merely
+stops a manual dispatch from duplicating a scheduled run, queueing it instead. The dispatch
+exists as an escape hatch: it can override the computed newest endpoint to step over a commit
+that fails slowly and would otherwise be re-selected every night.
+
+Two fidelity caveats ride along, both worth recognising before an unexplained step in a series
+is read as a real regression. A backfilled commit is built with the toolchain that commit pins,
+but its `RUSTFLAGS` and benchmark scope come from the current checkout — they are caller intent
+that a general-purpose tool cannot recover from a historical worktree — so a commit older than
+the newest change to either is measured slightly differently from its pushed neighbours; the
+14-day window is what bounds this. Separately, the hosted runner images roll weekly and the
+hardware fingerprint does not capture the image version, so a gap filled tonight may be measured
+on a newer image than the neighbour it sits between — an exposure the pushed series already
+carries, and strictly better than leaving the gap empty.
 
 ### PR benchmark history
 
@@ -299,12 +364,14 @@ safe even when slightly stale.
 
 ## Failure alerting
 
-The history, release, and validation workflows all open a GitHub issue on failure, but with
+The push-triggered history collection, release, and validation workflows all open a GitHub
+issue on failure, but with
 deliberately different lifecycles matched to what failed. A benchmark-history failure is
 a recurring condition on a rolling target, so it opens a *deduplicated* tracking issue
 (keyed on a fixed title) that a companion job closes automatically once the workflow is
 green again — exactly one open issue per persistent failure, cleared without manual
-intervention. A release failure is a discrete event tied to one publish attempt, so it
+intervention. The nightly backfill is deliberately outside this scheme and files nothing (see
+Nightly history backfill). A release failure is a discrete event tied to one publish attempt, so it
 opens a *per-run* issue (identified by the failing run) that stays open until a human
 investigates; each failed release is tracked individually rather than folded into a
 rolling issue. A push-to-`main` Validation failure follows the same per-run shape as the
@@ -385,4 +452,7 @@ explicit cap is sized as the job's own work budget *plus* that ~90-minute cold-s
 allowance; sizing a cap to the warm-cache setup time alone would make a cache miss spuriously
 fail the job. Jobs whose work is comfortably bounded carry no explicit cap and rely on
 GitHub's default ceiling, which already clears a cold setup with room to spare. Explicit caps
-exist only to stop a genuinely stuck run, never to bound the expected duration.
+exist only to stop a genuinely stuck run, never to bound the expected duration. The nightly
+history backfill is the deliberate exception: its work is unbounded by nature (it keeps filling
+gaps until it runs out of range), so it takes the ceiling as its run budget and pairs the cap
+with `continue-on-error` so being cut off is an ordinary end rather than a failure.

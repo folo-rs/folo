@@ -1,7 +1,8 @@
 # Azure infrastructure for the benchmark-history data store
 
 This directory provisions the Azure storage account that holds the **real,
-long-lived benchmark history** collected by the `bench-history` GitHub workflow
+long-lived benchmark history** collected by the `bench-history` GitHub workflow and its
+nightly backfill companion
 (and by local `cargo run -p cargo-bench-history -- collect` invocations). It is the production data store,
 as opposed to the throwaway test account in
 [`infra/azure-bench-history-test/`](../azure-bench-history-test/).
@@ -17,8 +18,9 @@ the environment can be deleted and re-created with one command.
   disabled** (Entra ID only, so there is no account key to leak). Container and blob
   soft-delete are disabled, matching the test account.
 - A **dedicated user-assigned managed identity** (`id-folo-bench-history-prod`) with
-  **GitHub OIDC federated credentials** for `main` and for same-repo **pull requests**. Both
-  the bench-history workflow (on `main`) and the PR benchmark-history workflow federate into
+  **GitHub OIDC federated credentials** for `main` and for same-repo **pull requests**. The
+  bench-history workflow and its nightly backfill companion (both running on `main`) and the
+  PR benchmark-history workflow federate into
   it with no stored secret: `cargo-bench-history` mints a fresh GitHub OIDC token on
   demand and exchanges it with Entra for each access token (so a multi-hour run stays
   authenticated). The pull-request credential (subject `…:pull_request`) is what lets the PR

@@ -8,7 +8,7 @@
 # Collects the whole workspace's benchmark history (excluding the slow, special-purpose
 # `benchmarks` package) into the prod Azure store, keyed by the current commit. The machine
 # partition for every engine is the runner's OWN auto-detected hardware fingerprint,
-# NOT a fixed key: the GitHub-hosted runner pool is heterogeneous, and pinning every SKU onto one
+# NOT a fixed key: the GitHub-hosted runner pool is heterogeneous, and pinning every runner onto one
 # shared series just mixes incomparable machines and jitters daily. Letting each runner stamp
 # its real fingerprint splits the data into one clean series per hardware type; the analyze job is
 # fed the exact fingerprints collected this run (see gh-analyze-bench-history) so it surveys only
@@ -20,7 +20,7 @@
 # enough apart in time that a transient slowdown is unlikely to hit every one. This roughly
 # triples the wall-clock benchmark portion of the collect job (see bench-history.yml's
 # `timeout-minutes`). `--verbose` makes the collect log spell out the resolved machine key and the
-# fingerprint components behind it, so a key change (a runner-pool SKU shift) is debuggable from the
+# fingerprint components behind it, so a key change (a runner hardware shift) is debuggable from the
 # log alone. `--skip-existing` makes a re-run on an unchanged commit a no-op append (each
 # already-stored object is skipped, not overwritten), so a re-triggered run of an
 # already-collected commit never bumps the cache-invalidation marker the `analyze` job's
@@ -31,18 +31,20 @@
 # `collect` job wires it from the optional `recollect_commit_id` workflow_dispatch input), this
 # recipe instead re-measures that ONE historical commit and OVERWRITES its stored point, rather
 # than appending the pushed commit. It does so with `backfill <id> <id> --overwrite`, which
-# benchmarks the code AT that commit inside a throwaway git worktree (never the primary checkout)
-# while running THIS (HEAD) build of the tool - so a data point corrupted by a bad benchmark day
-# (transient spikes, a degraded runner) is replaced by a clean re-run under the CURRENT collection
-# logic, never the tool version that happened to ship at that commit. `--overwrite` bumps the
-# cloud cache-invalidation marker so the `analyze` job's read-through cache refreshes; note it also
-# drops any blessings recorded at that commit, which must be re-applied if the re-measured level is
-# still an intentional step change. The value should be a real commit on `main`'s first-parent
-# history: the module validates only the SHA *format*, and `backfill` then requires the id to
-# *resolve* to a commit in the clone (failing loudly otherwise) - but neither checks main
-# ancestry, so a resolvable off-main commit is not rejected; it would just overwrite/store a
-# point the `analyze` job (which surveys only `main`) never surfaces. The mode selection and the
-# untrusted-input validation live in
+# benchmarks the code AT that commit inside a throwaway git worktree (never the primary checkout),
+# built with the toolchain that commit pins, while running THIS (HEAD) build of the tool - so a data
+# point corrupted by a bad benchmark day (transient spikes, a degraded runner) is replaced by a clean
+# re-run under the CURRENT collection logic, never the tool version that happened to ship at that
+# commit. Note the RUSTFLAGS below come from HEAD's constants.env rather than that commit's, so a
+# recollect of a commit older than the newest change to them measures it slightly differently from
+# how it was originally collected. `--overwrite` bumps the cloud cache-invalidation marker so the
+# `analyze` job's read-through cache refreshes; note it also drops any blessings recorded at that
+# commit, which must be re-applied if the re-measured level is still an intentional step change.
+# The value should be a real commit on `main`'s first-parent history: the module validates only the
+# SHA *format*, and `backfill` then requires the id to *resolve* to a commit in the clone (failing
+# loudly otherwise) - but neither checks main ancestry, so a resolvable off-main commit is not
+# rejected; it would just overwrite/store a point the `analyze` job (which surveys only `main`)
+# never surfaces. The mode selection and the untrusted-input validation live in
 # scripts/bench-history/BenchHistoryCollect.psm1 (Pester-tested via `just test-scripts`), so this
 # recipe is a thin import + call; the value is read from the environment, never spliced into the
 # script body.
@@ -83,8 +85,8 @@ gh-collect-bench-history:
 # branch-unique head commit, i.e. exactly the packages collected here (see
 # gh-analyze-pr-bench-history and .github/workflows/design.md). Everything else is identical to the
 # push-to-main collect: each runner stamps its OWN real hardware fingerprint (no fixed key), so PR
-# wall-clock series live on the same per-SKU partitions as main's baseline, `--best-of 3` sheds
-# one-sided runner jitter, `--verbose` logs the resolved key and its components, and
+# wall-clock series live on the same per-machine-key partitions as main's baseline, `--best-of 3`
+# sheds one-sided runner jitter, `--verbose` logs the resolved key and its components, and
 # `--skip-existing` makes a re-run of the same head SHA a no-op append. There is no recollect mode on
 # PRs (that repairs main's permanent history); the scope decision lives in
 # scripts/bench-history/BenchHistoryCollect.psm1 (Pester-tested via `just test-scripts`), so this is
@@ -119,6 +121,71 @@ gh-collect-pr-bench-history packages:
 
     Write-Verbose "Collecting PR benchmark history scoped to the packages impacted by this PR: $($packageList -join ', ')." -Verbose
     $toolArgs = Get-BenchHistoryCollectCommand -RecollectCommitId '' -Package $packageList -Verbose
+    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- @toolArgs
+
+# Fills gaps in the benchmark history of the machine partition THIS runner happens to belong to
+# (.github/workflows/bench-history-backfill.yml, nightly). The GitHub-hosted runner pool is
+# heterogeneous, so consecutive pushes to `main` are measured by different hardware and every
+# per-machine-key series ends up sparse: a commit measured under one machine key is simply missing
+# from every other machine key's series. This recipe walks a rolling window of recent `main` history
+# and measures the commits this runner's own partition lacks, relying on the tool's default
+# skip-existing behaviour so a commit already recorded for this partition costs nothing. Which
+# partition gets densified is whatever the nightly runner draws - this is opportunistic
+# densification of recent history, not a guarantee for any particular series.
+#
+# The window comes from Get-BenchHistoryBackfillCommand (scripts/bench-history/BenchHistoryCollect.psm1,
+# Pester-tested via `just test-scripts`), so this recipe is a thin import + call: its range end is the
+# newest first-parent commit at least 24 hours old - old enough that the push-triggered collection of
+# it has long since finished, so the two never race for the same commit - and its range start the
+# oldest first-parent commit reachable from that end and newer than 14 days, since older points have
+# no comparison value against current tips. An EMPTY argument vector means no commit is eligible yet
+# (every commit is still inside the quarantine), which is a successful no-op rather than a failure.
+# The scope, `--best-of 3` and `--verbose` are the same ones gh-collect-bench-history uses - a point
+# measured with a narrower scope or a lower best-of would not be comparable to its pushed neighbours,
+# and would still count as recorded and never be revisited. `--ignore-errors` walks past a commit
+# that fails to build instead of abandoning the rest of the window; there is no `--overwrite` (an
+# existing point is exactly what should be skipped) and no `--machine-key` (each runner stamps its
+# own real hardware fingerprint).
+#
+# Each commit is built with the toolchain it pins, but the RUSTFLAGS below come from HEAD's
+# constants.env, so a commit older than the newest change to them is measured slightly differently
+# from how its pushed neighbours were. The 14-day window is what bounds that exposure.
+#
+# BACKFILL_TO_COMMIT (empty on the scheduled run) overrides the computed range end, which is how an
+# operator steps over a commit that fails slowly and would otherwise be re-selected every night. It
+# is read from the environment, never spliced into the script body, and the module validates its SHA
+# format before it becomes a range endpoint.
+#
+# There is no analyze step here: analysis runs on the next push, which surveys whatever this run
+# appended.
+[group('automation')]
+[script]
+gh-backfill-bench-history:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    Import-Module ./scripts/bench-history/BenchHistoryCollect.psm1 -Force
+
+    # Build the benchmarks with 64-byte function alignment so the collected wall-clock series are
+    # stable against link-layout shifts (see constants.env); the tool spawns `cargo bench` as a child
+    # that inherits this RUSTFLAGS, and the padding is never executed so instruction and allocation
+    # counts are unaffected. Treat any RUSTFLAGS the runner set as opaque: remove only a pre-existing
+    # -align-all-functions token (in any -C/--codegen spelling), then append the stability value so
+    # the 64-byte setting always wins - never duplicated, never silently skipped in favour of a stray
+    # value.
+    $kept_rustflags = ("$env:RUSTFLAGS" -replace '(^|\s)(-C\s*|--codegen(?:\s+|=))llvm-args=-align-all-functions=\d+', '').Trim()
+    $env:RUSTFLAGS = (@($kept_rustflags, $env:BENCH_STABILITY_RUSTFLAGS) | Where-Object { $_ }) -join " "
+
+    # The window resolution - including the nothing-eligible case and the untrusted-input validation -
+    # lives in the module so it is Pester-tested (BenchHistoryCollect.Tests.ps1); this step runs
+    # whatever subcommand + flags it returns.
+    $toolArgs = @(Get-BenchHistoryBackfillCommand -ToCommitId $env:BACKFILL_TO_COMMIT -Verbose)
+    if ($toolArgs.Count -eq 0) {
+        Write-Verbose "No commit is old enough to backfill yet, so there is nothing to measure this run." -Verbose
+        return
+    }
+
     cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- @toolArgs
 
 # Writes THIS runner's real hardware machine key (the fingerprint the collect step just stamped its

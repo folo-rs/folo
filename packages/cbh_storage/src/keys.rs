@@ -61,10 +61,10 @@ pub(crate) fn cache_epoch_key(project: &str) -> String {
 /// The listing prefix that covers every **data** object of `project`:
 /// `{STORAGE_VERSION}/<project>/{OBJECTS_SEGMENT}/`.
 ///
-/// Data loaders (`analyze`/`list`/`prune`, `backfill`'s recorded-commit scan) list
-/// under this prefix so they enumerate only benchmark objects, never a per-project
-/// metadata sibling such as the [`cache_epoch_key`] marker. The read-through cache
-/// also wipes exactly this subtree when invalidating one project's mirror.
+/// Data loaders (`analyze`/`list`/`prune`) list under this prefix so they
+/// enumerate only benchmark objects, never a per-project metadata sibling such as
+/// the [`cache_epoch_key`] marker. The read-through cache also wipes exactly this
+/// subtree when invalidating one project's mirror.
 #[must_use]
 pub fn project_objects_prefix(project: &str) -> String {
     format!(

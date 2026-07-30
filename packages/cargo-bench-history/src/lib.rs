@@ -96,12 +96,16 @@
 //! history for a repository that adopted the tool late. Each commit is checked out
 //! in a dedicated git **worktree** (the primary checkout is never touched, so a
 //! dirty working tree is fine) and benched there, taking its timeline position
-//! from where the commit sits in git history. The range `<from> <to>` only needs to form a
-//! first-parent chain; it does not have to lie on the current branch. Commits that
-//! already have a stored result are skipped
-//! (so backfill is resumable and cheap to re-run); `--overwrite` re-benches the
-//! whole range. A commit that fails to build or bench stops the run unless
-//! `--ignore-errors` continues past it.
+//! from where the commit sits in git history. The range `<from> <to>` only needs
+//! to form a first-parent chain; it does not have to lie on the current branch.
+//! The range is processed newest commit first, so a run cut short has filled the
+//! most recent — and most comparison-relevant — gaps. Each commit is built by the
+//! toolchain its own checkout selects, so a `rust-toolchain.toml` in history
+//! governs its own build and a `cargo +nightly run … backfill` does not impose
+//! `nightly` on it. Commits that already have a stored result for this host's
+//! target triple and machine key are skipped (so backfill is resumable and cheap
+//! to re-run); `--overwrite` re-benches the whole range. A commit that fails to
+//! build or bench stops the run unless `--ignore-errors` continues past it.
 //!
 //! ## `analyze`
 //!

@@ -116,8 +116,9 @@ async fn backfill_spans_a_merge_commit_along_first_parent() {
     }
 }
 
-/// A commit that fails to benchmark stops the backfill by default: earlier commits
-/// are stored, but the loop halts at the failure and reports a non-zero exit.
+/// A commit that fails to benchmark stops the backfill by default: the newer
+/// commits are stored, but the loop halts at the failure and reports a non-zero
+/// exit.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn backfill_stops_on_a_failing_commit_by_default() {
@@ -136,10 +137,11 @@ async fn backfill_stops_on_a_failing_commit_by_default() {
     assert!(error.find_source::<BackfillError>().is_some());
     assert!(error.message().contains("stopped at"));
 
-    // Only the first (healthy) commit was stored before the stop; c3 never ran.
+    // The walk is newest-first, so only c3 (healthy) was stored before the stop at
+    // c2; c1 never ran.
     let objects = workspace.stored_objects();
     assert_eq!(objects.len(), 1, "{objects:?}");
-    assert!(objects[0].0.contains(&c1), "{:?}", objects[0].0);
+    assert!(objects[0].0.contains(&c3), "{:?}", objects[0].0);
 }
 
 /// `backfill --help` is an early exit whose usage text documents the range

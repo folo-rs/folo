@@ -1,12 +1,21 @@
 //! The `backfill` command: replay `collect` across a range of historical commits.
 //!
 //! Backfilling bootstraps a history for a repository that adopted the tool late,
-//! and supports ad-hoc "what did this look like N commits ago" investigations. It
-//! checks out each commit of a range in a dedicated git **worktree** (never the
-//! primary checkout) and runs the configured engines there exactly as the `collect`
-//! command does. A backfilled run carries no commit timestamp of its own; its
-//! position on the timeline is where its commit sits in git history, resolved live
-//! at analyze time (see the `backfill` command in `DESIGN.md`).
+//! fills gaps left by a heterogeneous CI machine pool, and supports ad-hoc "what
+//! did this look like N commits ago" investigations. It checks out each commit of
+//! a range in a dedicated git **worktree** (never the primary checkout) and runs
+//! the configured engines there exactly as the `collect` command does, except that
+//! the worktree's own `rust-toolchain.toml` governs the build rather than the
+//! toolchain this tool was launched with. A backfilled run carries no commit
+//! timestamp of its own; its position on the timeline is where its commit sits in
+//! git history, resolved live at analyze time (see the `backfill` command in
+//! `DESIGN.md`).
+//!
+//! The range is walked **newest commit first**. The newest gaps are the ones
+//! current comparisons draw on, so a run that is cut short (a CI job timeout) has
+//! spent its time on the most valuable commits. The endpoints are independent of
+//! that walk: `--from` names the oldest commit of the range and `--to` the newest,
+//! both inclusive.
 //!
 //! Like `collect`, the orchestration is generic over small ports so the loop logic is
 //! exercised with in-memory fakes (Miri-safe): a [`BackfillGit`] port for the git
@@ -16,12 +25,13 @@
 //! worktree-rooted probe, engine runner, and output source.
 //!
 //! Before any commit is benchmarked, the commits that already have a stored
-//! (clean) result are listed once from storage. In the default skip-existing mode
-//! a commit already present is skipped outright, so its (expensive) benchmark
-//! execution never runs; this makes a backfill resumable and cheap to re-run. A
-//! commit with a clean result for only some engines is still skipped — use
-//! `--overwrite` to re-benchmark every commit (for example after adding a new
-//! bench), which replaces results in place rather than colliding with them.
+//! (clean) result **in the partition this run would write to** are listed once from
+//! storage. In the default skip-existing mode a commit already present is skipped
+//! outright, so its (expensive) benchmark execution never runs; this makes a
+//! backfill resumable and cheap to re-run. A commit with a clean result for only
+//! some engines is still skipped — use `--overwrite` to re-benchmark every commit
+//! (for example after adding a new bench), which replaces results in place rather
+//! than colliding with them.
 
 use std::collections::HashSet;
 use std::future::Future;
@@ -34,19 +44,23 @@ use cbh_config::{
     load_config, resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo,
     storage_env,
 };
-use cbh_diag::{StderrReporter, count_noun};
+use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_engines::FsBenchOutputSource;
 use cbh_git::{GitHistory, SystemGitHistory, TokioBenchRunner, capture};
 use cbh_probe::SystemProbe;
-use cbh_storage::{Storage, build_storage, project_objects_prefix};
+use cbh_storage::{Storage, build_storage};
 use ohno::AppError;
 use tick::Clock;
 
-use super::collect::{CollectDeps, CollectSummary, default_bench_command, run_engines};
+use super::collect::{
+    CollectDeps, CollectSummary, Partition, default_bench_command, partition_selection_summary,
+    probe_partition, run_engines,
+};
 use crate::errors::{
     AddWorktreeFailedError, FirstParentWalkFailedError, RemoveWorktreeFailedError,
     ResetWorktreeFailedError, ResolveRefFailedError, bench_failure_reason,
 };
+use crate::model::{Engine, StorageKey, parse_key};
 use crate::{
     BackfillError, BackfillOptions, CollectOptions, DuplicateResultError, RunOutcome,
     finish_with_flush,
@@ -76,10 +90,23 @@ trait BackfillGit {
 
 /// Runs and stores the configured engines for one already-checked-out commit.
 trait CommitRunner {
-    /// The set of commits (by full commit ID) that already have a stored clean result
-    /// anywhere under this project's partitions. A commit in this set has already
-    /// been backfilled, so the default skip-existing mode skips it without
-    /// benchmarking. Probed once per backfill.
+    /// The set of commits (by full commit ID) that already have a stored clean
+    /// result **in the partition this backfill writes to** — this host's target
+    /// triple and machine key (or the `--machine-key` override), across every
+    /// engine. A commit in that set has already been backfilled here, so the
+    /// default skip-existing mode skips it without benchmarking. Probed once per
+    /// backfill.
+    ///
+    /// Other target triples and machine keys are independent data sets: a commit
+    /// measured on another platform or another machine pool leaves this
+    /// partition's gap open, so it must not count as recorded. Engines, by
+    /// contrast, are unioned — no rule says which engines a run produces (Callgrind
+    /// records nothing off Linux), so requiring all of them would never skip
+    /// anything.
+    ///
+    /// Implementations announce the partition they scanned. A backfill that a job
+    /// timeout ends never reaches the summary, so the pre-check has to state its
+    /// own inputs to leave any trace of what the run decided to measure.
     fn recorded_commits(&self) -> impl Future<Output = Result<HashSet<String>, AppError>>;
 
     /// Runs the engines in `worktree` and reports the outcome. Recoverable
@@ -135,22 +162,24 @@ pub(crate) async fn execute(
     let bench_command = bench_command.unwrap_or_else(default_bench_command);
 
     let git = SystemBackfillGit::new(base);
+    let worktree = worktree_path();
+    let reporter = StderrReporter::new(options.verbose);
     let runner = SystemCommitRunner {
         project_id: &project_id,
         storage: &storage,
         tool_version: env!("CARGO_PKG_VERSION"),
         options,
         bench_command: &bench_command,
+        worktree: &worktree,
+        reporter: &reporter,
     };
-    let worktree = worktree_path();
 
-    let result = execute_backfill(options, &git, &runner, &worktree).await;
+    let result = execute_backfill(options, &git, &runner, &worktree, &reporter).await;
     // Flush the cache-invalidation marker once for the whole range: where a
     // `backfill --overwrite` replaces an already-stored object it arms the shared
     // backend, and a single coalesced bump invalidates other machines' caches.
     // Filling a gap with a brand-new object is additive and never arms it, so an
     // append-only backfill is a cheap no-op.
-    let reporter = StderrReporter::new(options.verbose);
     let flush = storage
         .flush_pending_invalidation(&project_id, &reporter)
         .await;
@@ -168,20 +197,24 @@ async fn execute_backfill<G, C>(
     git: &G,
     runner: &C,
     worktree: &Path,
+    reporter: &dyn Reporter,
 ) -> Result<RunOutcome, AppError>
 where
     G: BackfillGit,
     C: CommitRunner,
 {
     let commits = plan_commits(options, git).await?;
+    // Seeding the worktree at the first commit that will be processed saves it one
+    // checkout; `run_commits` resets the worktree for every commit it runs anyway,
+    // so this is an optimization rather than a precondition.
     let first = commits
         .first()
-        .expect("the planned range always contains at least the --from commit");
+        .expect("the planned range is inclusive of both endpoints, so it is never empty");
 
     git.add_worktree(worktree, first)
         .await
         .map_err(|error| AddWorktreeFailedError::caused_by(worktree, first, error))?;
-    let result = run_commits(options, git, runner, worktree, &commits).await;
+    let result = run_commits(options, git, runner, worktree, &commits, reporter).await;
     let teardown = git.remove_worktree(worktree).await;
 
     let report = result?;
@@ -195,11 +228,16 @@ where
     }
 }
 
-/// Validates the request and resolves the oldest-first, inclusive commit range.
+/// Validates the request and resolves the inclusive commit range, **newest commit
+/// first**.
 ///
 /// Requires both endpoints to resolve and requires `--from` to be a first-parent
 /// ancestor of `--to`. The range is derived purely from `--to`'s first-parent
 /// history, so backfilling does not depend on the current checkout.
+///
+/// `--from` names the oldest commit of the range and `--to` the newest; the
+/// returned order is the reverse, so a run cut short has filled the most recent
+/// gaps.
 async fn plan_commits<G: BackfillGit>(
     options: &BackfillOptions,
     git: &G,
@@ -221,7 +259,11 @@ async fn plan_commits<G: BackfillGit>(
             ))
         })?;
 
-    Ok(ancestry.split_off(start))
+    // The ancestry arrives oldest-first, which is what locating `--from` above
+    // needs; the reversal therefore happens only once that endpoint has been found.
+    let mut range = ancestry.split_off(start);
+    range.reverse();
+    Ok(range)
 }
 
 /// Resolves `reference` to a commit ID, mapping an absent ref to a clear error.
@@ -240,14 +282,24 @@ async fn resolve_required<G: BackfillGit>(
 
 /// Runs each commit of the range in the worktree, aggregating a [`BackfillReport`].
 ///
-/// A per-commit build/bench failure stops the loop unless `--ignore-errors` is
-/// set; an infrastructure error always aborts (propagated as `Err`).
+/// `commits` arrives newest-first, so the most recent gaps are filled before a run
+/// is cut short. A per-commit build/bench failure stops the loop unless
+/// `--ignore-errors` is set — which, in this order, means the run stops at the
+/// *newest* failing commit and leaves the older ones untouched; an infrastructure
+/// error always aborts (propagated as `Err`).
+///
+/// What the skip pre-check decided is announced before the loop rather than left
+/// to [`BackfillReport::render`]: a run that is cut short by a job timeout — the
+/// designed steady state of a nightly backfill — never reaches the summary, and
+/// the pre-check is precisely the step whose misbehaviour would show up as a run
+/// that quietly measures nothing.
 async fn run_commits<G, C>(
     options: &BackfillOptions,
     git: &G,
     runner: &C,
     worktree: &Path,
     commits: &[String],
+    reporter: &dyn Reporter,
 ) -> Result<BackfillReport, AppError>
 where
     G: BackfillGit,
@@ -262,8 +314,26 @@ where
     } else {
         runner.recorded_commits().await?
     };
+    // Only the overlap with this range matters: the listings cover the partition's
+    // whole history, which reaches beyond `--from`..`--to`.
+    let already_recorded = commits
+        .iter()
+        .filter(|commit| recorded.contains(*commit))
+        .count();
+    reporter.announce(&scan_outcome_summary(
+        commits.len(),
+        already_recorded,
+        options.overwrite,
+    ));
+
     for commit in commits {
         if recorded.contains(commit) {
+            reporter.note_with(|| {
+                format!(
+                    "skipping {}: a clean result for it is already stored in this partition",
+                    short(commit)
+                )
+            });
             report.skipped_existing.push(commit.clone());
             continue;
         }
@@ -284,6 +354,31 @@ where
         }
     }
     Ok(report)
+}
+
+/// Builds the always-on line stating what the skip pre-check decided for a range
+/// of `total` commits, `already_recorded` of which the pre-check found stored in
+/// this partition.
+///
+/// It names the rule that produced the split and the flag that changes it, so a
+/// run whose measured count is surprising can be diagnosed from this one line —
+/// which, in a run that a job timeout ends before the summary, is the only record
+/// of the decision.
+///
+/// A pure formatter so the wording is unit-tested without a store.
+fn scan_outcome_summary(total: usize, already_recorded: usize, overwrite: bool) -> String {
+    let range = format!("backfilling {}, newest first", count_noun(total, "commit"));
+    if overwrite {
+        return format!(
+            "{range}: --overwrite disables the skip pre-check, so every commit is \
+             re-measured and its stored result replaced"
+        );
+    }
+    let to_measure = total.saturating_sub(already_recorded);
+    format!(
+        "{range}: {already_recorded} already recorded in this partition and skipped \
+         without benchmarking (pass --overwrite to re-measure them), {to_measure} to measure"
+    )
 }
 
 /// The per-commit outcomes a backfill accumulated, rendered into a summary.
@@ -387,14 +482,60 @@ fn map_collect_result(result: Result<CollectSummary, AppError>) -> Result<Commit
     }
 }
 
-/// The commit (full commit ID) recorded by a stored clean object, or `None` when the key
-/// is not a clean object.
+/// The commits that already have a stored clean result in `partition`.
 ///
-/// A clean key is `…/<commit>/clean.json`, so the commit is the path segment
-/// immediately before the `clean.json` filename. Dirty snapshots and any other
-/// keys are ignored.
-fn commit_of_clean_key(key: &str) -> Option<&str> {
-    key.strip_suffix("/clean.json")?.rsplit('/').next()
+/// Scans one narrow listing per engine — the engine is the outermost discriminant
+/// segment, so a machine's partitions do not form a single prefix — and unions the
+/// results, because no rule says which engines a run must produce (Callgrind
+/// records nothing off Linux, so an intersection would never be satisfied there).
+///
+/// A listing matches a plain string prefix, so every key it returns is re-parsed
+/// rather than sliced by hand: only a key that decomposes into a clean object of
+/// this partition contributes its commit. Dirty snapshots and blessing sidecars are
+/// not backfilled results and are ignored.
+async fn recorded_commits_in<S: Storage>(
+    storage: &S,
+    project_id: &str,
+    partition: &Partition,
+    reporter: &dyn Reporter,
+) -> Result<HashSet<String>, AppError> {
+    let mut recorded = HashSet::new();
+    for engine in Engine::ALL {
+        let prefix = partition
+            .discriminant_set(engine)
+            .partition_prefix(project_id);
+        let keys = storage.list(&prefix).await?;
+        let before = recorded.len();
+        let clean_commits: Vec<String> = keys
+            .iter()
+            .filter_map(|key| parse_key(key))
+            .filter(StorageKey::is_clean)
+            .map(|parsed| parsed.commit)
+            .collect();
+        let clean = clean_commits.len();
+        recorded.extend(clean_commits);
+        reporter.note_with(|| {
+            format!(
+                "listed {prefix}: {} objects, {clean} of them clean results, \
+                 adding {} commit(s) not already contributed by another engine",
+                keys.len(),
+                recorded.len().saturating_sub(before)
+            )
+        });
+    }
+    reporter.note_with(|| {
+        format!(
+            "{} commit(s) are recorded in this partition across all engines. The engines \
+             are unioned rather than intersected because no rule says which engines a run \
+             produces (Callgrind records nothing off Linux, so an intersection would never \
+             be satisfied there). Only clean results count: a dirty snapshot measures an \
+             uncommitted working tree and a blessing is an annotation, so neither fills a \
+             gap. No other target triple or machine key is listed, because those are \
+             independent data sets whose results say nothing about this one",
+            recorded.len()
+        )
+    });
+    Ok(recorded)
 }
 
 /// The real [`BackfillGit`], shelling out to `git` in a fixed repository.
@@ -513,32 +654,48 @@ struct SystemCommitRunner<'a, S> {
     options: &'a BackfillOptions,
     /// The benchmark command (`cargo bench` in production) run in each worktree.
     bench_command: &'a [String],
+    /// The worktree every commit is checked out into. The pre-check probes it for
+    /// the partition, so it reads the same partition each commit then writes to.
+    worktree: &'a Path,
+    /// Diagnostic sink for the pre-check, and for each per-commit `collect`.
+    reporter: &'a dyn Reporter,
 }
 
 impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
+    #[cfg_attr(test, mutants::skip)] // Probes the real host; the scan is tested separately.
     async fn recorded_commits(&self) -> Result<HashSet<String>, AppError> {
-        // Every stored object lives under the project's objects subtree, so one list
-        // of that prefix yields the full history; the clean objects' commit segments
-        // are the commits already backfilled. A dirty snapshot does not count as a
-        // backfilled commit, so only clean objects contribute.
-        let prefix = project_objects_prefix(self.project_id);
-        let keys = self.storage.list(&prefix).await?;
-        Ok(keys
-            .iter()
-            .filter_map(|key| commit_of_clean_key(key))
-            .map(ToOwned::to_owned)
-            .collect())
+        // The partition comes from the same helper (and the same worktree probe)
+        // the store path uses, so the commits treated as already recorded are
+        // exactly the ones that would collide were they benchmarked again — the
+        // `--machine-key` override included.
+        let probe = SystemProbe::in_worktree(self.worktree);
+        let env = |name: &str| std::env::var(name).ok();
+        let partition = probe_partition(&probe, &env, self.options.machine_key.as_deref()).await?;
+
+        // Always-on, because a nightly backfill is designed to end in a job
+        // timeout and never reaches the summary: this line is what tells a reader
+        // which partition the run considered, and therefore what it measured.
+        self.reporter.announce(&partition_selection_summary(
+            "scanning for already-backfilled commits",
+            partition.target_triple.as_str(),
+            "toolchain host of the newest checkout in the range",
+            partition.machine_key.as_str(),
+            self.options.machine_key.is_some(),
+        ));
+        recorded_commits_in(self.storage, self.project_id, &partition, self.reporter).await
     }
 
     #[cfg_attr(test, mutants::skip)] // Wires real adapters; the result mapping is tested via `map_collect_result`.
     async fn run(&self, worktree: &Path, _commit: &str) -> Result<CommitOutcome, AppError> {
-        let probe = SystemProbe::in_dir(worktree);
-        let runner = TokioBenchRunner::in_dir(worktree);
+        // A historical checkout is built and described by the toolchain it pins
+        // itself, not by the one that happened to build this tool, so the stored
+        // provenance names the compiler that produced the numbers.
+        let probe = SystemProbe::in_worktree(worktree);
+        let runner = TokioBenchRunner::in_worktree(worktree);
         let target_root = worktree.join("target");
         let output = FsBenchOutputSource::new(target_root.clone());
         let clock = Clock::new_tokio();
         let env = |name: &str| std::env::var(name).ok();
-        let reporter = StderrReporter::new(self.options.verbose);
 
         // A backfilled run is always clean (the worktree is a pristine checkout)
         // and takes its timeline position from the commit's committer date.
@@ -571,7 +728,7 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
             tool_version: self.tool_version,
             target_root: &target_root,
             bench_command: self.bench_command,
-            reporter: &reporter,
+            reporter: self.reporter,
         };
 
         map_collect_result(run_engines(&collect_options, &deps).await)
@@ -585,12 +742,14 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::future::{Future, ready};
 
+    use cbh_diag::RecordingReporter;
     use cbh_git::FakeGitHistory;
     use cbh_storage::MemoryStorage;
     use futures::executor::block_on;
 
     use super::*;
     use crate::errors::ParseOutputError;
+    use crate::model::{MachineKey, TargetTriple};
     use crate::{EngineFailedError, StorageError};
 
     /// A canned per-commit result the fake [`CommitRunner`] returns.
@@ -738,13 +897,32 @@ mod tests {
         PathBuf::from("/tmp/cargo-bench-history-worktree-test")
     }
 
+    /// Drives [`run_commits`] over `commits`, discarding the diagnostics the
+    /// separate reporting tests assert on.
+    fn drive_commits<G: BackfillGit, C: CommitRunner>(
+        options: &BackfillOptions,
+        git: &G,
+        runner: &C,
+        commits: &[String],
+    ) -> Result<BackfillReport, AppError> {
+        let reporter = RecordingReporter::new();
+        block_on(run_commits(
+            options,
+            git,
+            runner,
+            &worktree(),
+            commits,
+            &reporter,
+        ))
+    }
+
     #[test]
-    fn plan_enumerates_inclusive_first_parent_range_oldest_first() {
+    fn plan_enumerates_inclusive_first_parent_range_newest_first() {
         let git = FakeBackfillGit::new(fixture());
         let commits = block_on(plan_commits(&options("c1", "f2"), &git)).unwrap();
         assert!(
-            commits.iter().eq(["c1", "f1", "f2"].iter()),
-            "inclusive of both endpoints, oldest first: {commits:?}"
+            commits.iter().eq(["f2", "f1", "c1"].iter()),
+            "inclusive of both endpoints, newest first: {commits:?}"
         );
     }
 
@@ -779,7 +957,7 @@ mod tests {
         let git = FakeBackfillGit::new(fixture());
         let commits = block_on(plan_commits(&options("c0", "c3"), &git)).unwrap();
         assert!(
-            commits.iter().eq(["c0", "c1", "c2", "c3"].iter()),
+            commits.iter().eq(["c3", "c2", "c1", "c0"].iter()),
             "the range is derived from --to, independent of the checkout: {commits:?}"
         );
     }
@@ -799,14 +977,7 @@ mod tests {
             "f2".to_owned(),
         ];
 
-        let report = block_on(run_commits(
-            &options("c0", "f2"),
-            &git,
-            &runner,
-            &worktree(),
-            &commits,
-        ))
-        .unwrap();
+        let report = drive_commits(&options("c0", "f2"), &git, &runner, &commits).unwrap();
 
         assert!(
             report
@@ -839,14 +1010,7 @@ mod tests {
         let runner = FakeCommitRunner::new().with("c1", FakeResult::BenchFailed("boom".to_owned()));
         let commits = vec!["c0".to_owned(), "c1".to_owned(), "f1".to_owned()];
 
-        let report = block_on(run_commits(
-            &options("c0", "f1"),
-            &git,
-            &runner,
-            &worktree(),
-            &commits,
-        ))
-        .unwrap();
+        let report = drive_commits(&options("c0", "f1"), &git, &runner, &commits).unwrap();
 
         assert!(
             report
@@ -873,7 +1037,7 @@ mod tests {
         let mut opts = options("c0", "f1");
         opts.ignore_errors = true;
 
-        let report = block_on(run_commits(&opts, &git, &runner, &worktree(), &commits)).unwrap();
+        let report = drive_commits(&opts, &git, &runner, &commits).unwrap();
 
         assert!(
             report
@@ -899,41 +1063,50 @@ mod tests {
         let mut opts = options("c0", "f1");
         opts.ignore_errors = true;
 
-        let error = block_on(run_commits(&opts, &git, &runner, &worktree(), &commits)).unwrap_err();
+        let error = drive_commits(&opts, &git, &runner, &commits).unwrap_err();
         assert!(bench_failure_reason(&error).is_none());
         assert!(error.find_source::<StorageError>().is_some());
         // The loop stopped at the failing commit; f1 was never reached.
         assert!(runner.ran.borrow().iter().eq(["c0", "c1"].iter()));
     }
 
-    /// Builds a real [`SystemCommitRunner`] over an in-memory store for testing the
-    /// storage-backed `recorded_commits` query.
-    fn system_runner<'a>(
-        storage: &'a MemoryStorage,
-        options: &'a BackfillOptions,
-    ) -> SystemCommitRunner<'a, MemoryStorage> {
-        SystemCommitRunner {
-            project_id: "proj",
-            storage,
-            tool_version: "0.0.0-test",
-            options,
-            bench_command: &[],
+    /// The project the storage-scan tests write and read under.
+    const PROJECT: &str = "proj";
+
+    /// The target triple the storage-scan tests treat as this host's.
+    const TRIPLE: &str = "x86_64-unknown-linux-gnu";
+
+    /// The machine key the storage-scan tests treat as this host's. It is a strict
+    /// prefix of `ci-pool` so the sibling-key cases are meaningful.
+    const MACHINE: &str = "ci";
+
+    /// The partition a backfill would write to on a host with `machine_key`.
+    fn partition(machine_key: &str) -> Partition {
+        Partition {
+            target_triple: TargetTriple::from(TRIPLE),
+            machine_key: MachineKey::from(machine_key),
         }
     }
 
-    #[test]
-    fn commit_of_clean_key_extracts_the_commit_only_for_clean_objects() {
-        assert_eq!(
-            commit_of_clean_key("v1/proj/objects/callgrind/triple/m1/abc123/clean.json"),
-            Some("abc123")
-        );
-        // A dirty snapshot is not a backfilled commit.
-        assert_eq!(
-            commit_of_clean_key("v1/proj/objects/criterion/triple/mk/abc123/dirty-42.json"),
-            None
-        );
-        // An unrelated key contributes nothing.
-        assert_eq!(commit_of_clean_key("v1/proj/index.json"), None);
+    /// Stores an empty object under `key`, standing in for a recorded result.
+    fn store(storage: &MemoryStorage, key: &str) {
+        block_on(storage.put(key, b"{}")).unwrap();
+    }
+
+    /// The commits `recorded_commits_in` finds for `machine_key`, sorted.
+    fn recorded(storage: &MemoryStorage, machine_key: &str) -> Vec<String> {
+        let reporter = RecordingReporter::new();
+        let mut commits: Vec<_> = block_on(recorded_commits_in(
+            storage,
+            PROJECT,
+            &partition(machine_key),
+            &reporter,
+        ))
+        .unwrap()
+        .into_iter()
+        .collect();
+        commits.sort();
+        commits
     }
 
     #[test]
@@ -942,14 +1115,7 @@ mod tests {
         let runner = FakeCommitRunner::new().complete("c1");
         let commits = vec!["c0".to_owned(), "c1".to_owned(), "f1".to_owned()];
 
-        let report = block_on(run_commits(
-            &options("c0", "f1"),
-            &git,
-            &runner,
-            &worktree(),
-            &commits,
-        ))
-        .unwrap();
+        let report = drive_commits(&options("c0", "f1"), &git, &runner, &commits).unwrap();
 
         // c1 was recognized as already recorded and reported as skipped-existing.
         assert!(report.skipped_existing.iter().eq(std::iter::once(&"c1")));
@@ -981,7 +1147,7 @@ mod tests {
         let mut opts = options("c0", "f1");
         opts.overwrite = true;
 
-        let report = block_on(run_commits(&opts, &git, &runner, &worktree(), &commits)).unwrap();
+        let report = drive_commits(&opts, &git, &runner, &commits).unwrap();
 
         // With --overwrite the pre-check is bypassed: every commit, including the
         // already-recorded c1, is reset and run.
@@ -998,51 +1164,175 @@ mod tests {
     }
 
     #[test]
-    fn recorded_commits_collects_every_clean_commit_across_partitions() {
+    fn run_commits_announces_what_the_skip_pre_check_decided() {
+        // A nightly backfill is designed to be killed by a job timeout and never
+        // reaches the summary, so the split between skipped and to-be-measured
+        // commits has to be stated up front or the run leaves no record of it.
+        let git = FakeBackfillGit::new(fixture());
+        let runner = FakeCommitRunner::new().complete("c1");
+        let commits = vec!["c0".to_owned(), "c1".to_owned(), "f1".to_owned()];
+        let reporter = RecordingReporter::new();
+
+        _ = block_on(run_commits(
+            &options("c0", "f1"),
+            &git,
+            &runner,
+            &worktree(),
+            &commits,
+            &reporter,
+        ))
+        .unwrap();
+
+        let announcements = reporter.announcements();
+        assert!(
+            announcements.iter().any(|line| line.contains("3 commits")
+                && line.contains("1 already recorded")
+                && line.contains("2 to measure")),
+            "{announcements:?}"
+        );
+        // Progress is visible per commit under --verbose, so a run cut short still
+        // shows how far the skipping got.
+        assert!(reporter.contains("skipping c1"), "{:?}", reporter.notes());
+    }
+
+    #[test]
+    fn scan_outcome_summary_states_the_split_and_the_rule_behind_it() {
+        let partial = scan_outcome_summary(10, 4, false);
+        assert!(
+            partial.contains("backfilling 10 commits, newest first"),
+            "{partial}"
+        );
+        assert!(partial.contains("4 already recorded"), "{partial}");
+        assert!(partial.contains("6 to measure"), "{partial}");
+        // The flag that changes the decision is named, so a surprising count is
+        // actionable from this line alone.
+        assert!(partial.contains("--overwrite"), "{partial}");
+
+        // A range with nothing left to do still says so rather than staying silent.
+        let complete = scan_outcome_summary(10, 10, false);
+        assert!(complete.contains("0 to measure"), "{complete}");
+
+        // With --overwrite the pre-check never ran, so no count is invented for it.
+        let overwriting = scan_outcome_summary(10, 0, true);
+        assert!(
+            overwriting.contains("--overwrite disables the skip pre-check"),
+            "{overwriting}"
+        );
+        assert!(!overwriting.contains("to measure"), "{overwriting}");
+    }
+
+    #[test]
+    fn recorded_commits_explains_each_listing_and_the_union_rule() {
+        // The verbose trail must let a reader reconstruct why a commit counted:
+        // which prefixes were listed, what each contributed, and which objects were
+        // deliberately not counted.
         let storage = MemoryStorage::new();
-        let opts = BackfillOptions::default();
-        let runner = system_runner(&storage, &opts);
+        store(
+            &storage,
+            "v1/proj/objects/criterion/x86_64-unknown-linux-gnu/ci/c0/clean.json",
+        );
+        let reporter = RecordingReporter::new();
 
-        // Two engines record c0 (under different partitions); c1 has only a dirty
-        // snapshot; a different project's clean run must not leak in.
-        block_on(storage.put(
-            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/c0/clean.json",
-            b"{}",
-        ))
-        .unwrap();
-        block_on(storage.put(
-            "v1/proj/objects/criterion/x86_64-unknown-linux-gnu/mk/c0/clean.json",
-            b"{}",
-        ))
-        .unwrap();
-        block_on(storage.put(
-            "v1/proj/objects/criterion/x86_64-unknown-linux-gnu/mk/c1/dirty-7.json",
-            b"{}",
-        ))
-        .unwrap();
-        block_on(storage.put(
-            "v1/other/objects/callgrind/x86_64-unknown-linux-gnu/m1/c9/clean.json",
-            b"{}",
+        _ = block_on(recorded_commits_in(
+            &storage,
+            PROJECT,
+            &partition(MACHINE),
+            &reporter,
         ))
         .unwrap();
 
-        let recorded = block_on(runner.recorded_commits()).unwrap();
+        let notes = reporter.notes();
+        assert!(
+            notes.iter().any(|note| {
+                note.contains("v1/proj/objects/criterion/x86_64-unknown-linux-gnu/ci/")
+                    && note.contains("1 of them clean")
+            }),
+            "{notes:?}"
+        );
+        assert!(
+            reporter.contains("unioned rather than intersected"),
+            "{notes:?}"
+        );
+        assert!(reporter.contains("independent data sets"), "{notes:?}");
+    }
 
-        // Only c0 has a clean result under this project: a dirty-only commit and
-        // another project's commit are excluded.
-        let mut commits: Vec<_> = recorded.into_iter().collect();
-        commits.sort();
-        assert_eq!(commits, vec!["c0".to_owned()]);
+    #[test]
+    fn recorded_commits_counts_any_engine_of_the_partition() {
+        let storage = MemoryStorage::new();
+        // No rule says which engines a run produces, so a clean result from any one
+        // of them means the partition's gap for that commit is filled.
+        store(
+            &storage,
+            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/ci/c0/clean.json",
+        );
+        store(
+            &storage,
+            "v1/proj/objects/criterion/x86_64-unknown-linux-gnu/ci/c1/clean.json",
+        );
+
+        assert_eq!(recorded(&storage, MACHINE), ["c0", "c1"]);
+    }
+
+    #[test]
+    fn recorded_commits_ignores_a_sibling_machine_key() {
+        let storage = MemoryStorage::new();
+        // `ci-pool` is a different machine and thus a different data set, even
+        // though its key starts with this host's `ci`.
+        store(
+            &storage,
+            "v1/proj/objects/criterion/x86_64-unknown-linux-gnu/ci-pool/c0/clean.json",
+        );
+
+        assert!(recorded(&storage, MACHINE).is_empty());
+        // The same object is exactly what the sibling machine itself would skip.
+        assert_eq!(recorded(&storage, "ci-pool"), ["c0"]);
+    }
+
+    #[test]
+    fn recorded_commits_ignores_another_target_triple() {
+        let storage = MemoryStorage::new();
+        // Numbers from another platform say nothing about this one.
+        store(
+            &storage,
+            "v1/proj/objects/criterion/aarch64-apple-darwin/ci/c0/clean.json",
+        );
+
+        assert!(recorded(&storage, MACHINE).is_empty());
+    }
+
+    #[test]
+    fn recorded_commits_ignores_another_project() {
+        let storage = MemoryStorage::new();
+        store(
+            &storage,
+            "v1/other/objects/criterion/x86_64-unknown-linux-gnu/ci/c0/clean.json",
+        );
+
+        assert!(recorded(&storage, MACHINE).is_empty());
+    }
+
+    #[test]
+    fn recorded_commits_ignores_objects_that_are_not_clean_results() {
+        let storage = MemoryStorage::new();
+        // A dirty snapshot is a working-tree measurement and a blessing sidecar is
+        // an annotation; neither fills a backfill gap.
+        store(
+            &storage,
+            "v1/proj/objects/criterion/x86_64-unknown-linux-gnu/ci/c0/dirty-7.json",
+        );
+        store(
+            &storage,
+            "v1/proj/objects/criterion/x86_64-unknown-linux-gnu/ci/c1/bless-7.json",
+        );
+
+        assert!(recorded(&storage, MACHINE).is_empty());
     }
 
     #[test]
     fn recorded_commits_is_empty_when_nothing_is_stored() {
         let storage = MemoryStorage::new();
-        let opts = BackfillOptions::default();
-        let runner = system_runner(&storage, &opts);
 
-        let recorded = block_on(runner.recorded_commits()).unwrap();
-        assert!(recorded.is_empty());
+        assert!(recorded(&storage, MACHINE).is_empty());
     }
 
     #[test]
@@ -1118,6 +1408,7 @@ mod tests {
             &git,
             &runner,
             &worktree(),
+            &RecordingReporter::new(),
         ))
         .unwrap();
 
@@ -1125,12 +1416,13 @@ mod tests {
             panic!("expected a completed outcome");
         };
         assert!(message.contains("4 stored"), "{message}");
-        // The worktree was created once at the first commit and then removed.
+        // The worktree was created once, at the newest commit — the first one the
+        // newest-first walk processes — and then removed.
         assert!(
             git.added
                 .borrow()
                 .iter()
-                .eq(std::iter::once(&(worktree(), "c0".to_owned())))
+                .eq(std::iter::once(&(worktree(), "f2".to_owned())))
         );
         assert!(git.removed.borrow().iter().eq(std::iter::once(&worktree())));
     }
@@ -1144,6 +1436,7 @@ mod tests {
             &git,
             &runner,
             &worktree(),
+            &RecordingReporter::new(),
         ))
         .unwrap_err();
 
@@ -1162,6 +1455,7 @@ mod tests {
             &git,
             &runner,
             &worktree(),
+            &RecordingReporter::new(),
         ))
         .unwrap_err();
 
