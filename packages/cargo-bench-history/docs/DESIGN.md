@@ -651,38 +651,28 @@ gives; when runs enter but none carry the named `(benchmark, metric)` pair, a di
 pointing at the unmatched benchmark id or metric name.
 
 `examine` runs **no detection and no re-baselining** — it has no findings, modes, or
-blessings — which is why the analysis-only flags (improvements, inactive findings) are not
-part of its surface. What it lists is a **complete commit listing**: every commit in the
-examined range gets a row, and a commit that carries no data point for the examined series
-and selection is marked `n/a`. The range opens at the earliest commit at which *any*
-matching discriminant set carries the series and closes at the analyzed tip, and that
-opening is a **union across the sets**, so every set lists exactly the same commits in the
-same order and two sets can be read side by side, commit for commit. A commit that does
-carry data contributes one row per **observation** instead — a clean run and the dirty
-snapshots at the same commit each get a row, ordered clean-before-dirty and flagged, so a
-value's provenance is unambiguous. Nothing caps the listing; `--since` is the way to bound
-the range, and `--verbose` states the resolved range and why it opens and closes where it
-does.
+blessings, which is why the analysis-only flags (improvements, inactive findings) are not
+part of its surface. It lists **every commit** from the earliest one at which any matching
+set carries the series through to the analyzed tip: a commit carrying data contributes a row
+per **observation** (clean run before dirty snapshots, each flagged, so a value's provenance
+is unambiguous), and a commit carrying none is marked `n/a`. That opening is a union across
+the sets, so every set lists the same commits and two of them can be read side by side.
+Nothing caps the listing; `--since` bounds it, and `--verbose` states the resolved range.
 
 The three output renderings compose from one pass as everywhere else: the per-commit table
 on stdout by default, the same table in Markdown, and a machine-readable JSON form that
-mirrors the table row for row and carries, per discriminant set, the ordered rows with
-full-precision values and each commit's full title — the 50-character title truncation is a
-readability convenience of the text and Markdown tables, not of the data. A commit with no
-data point carries no value and no clean/dirty flag there, so a consumer distinguishes a gap
-from a measurement without parsing a marker. The text and Markdown renderings **lead each
-set with the same whole-series chart history-mode `analyze` draws**, reusing its renderer, so
-a maintainer sees the shape of the series before reading the rows beneath it. The chart is
-deliberately **not** the table: it plots that set's own real observations, one
-topology-accurate column per first-parent commit — so a data-less commit between
-observations, or a trailing run of them up to the analyzed tip, is a visible gap — but it
-trims its own leading gap, so a set whose first observation falls after the shared range
-start opens its chart later than its table. Beyond the fixed chart width it also bins
-several commits into one column (§8.6), so a long range makes the chart an approximation
-while the table stays exact, commit by commit. The table is the complete listing; the
-chart is the shape of the series. The line is drawn **uncolored**, and only when a set has
-at least two observations. The JSON form carries no chart (a charting concern the human
-reports draw from internally, not data a consumer reconstructs).
+mirrors it row for row with full-precision values and each commit's full title — the
+50-character title truncation is a readability convenience of the text and Markdown tables,
+not of the data — carrying a null value and no clean/dirty flag where a commit has no data.
+The text and Markdown renderings **lead each set with the same line chart history-mode
+`analyze` draws**, reusing its renderer, so a maintainer sees the shape of the series before
+reading the rows beneath it. The chart is not the table: it plots that set's real
+observations only and trims its leading gap, so a late-starting set opens its chart after its
+table, and beyond the fixed chart width it bins commits into shared columns (§8.6). The table
+is the complete listing; the chart is the shape of the series. The line is drawn
+**uncolored**, and only when a set has at least two observations. The JSON form carries no
+chart (a charting concern the human reports draw from internally, not data a consumer
+reconstructs).
 
 ### 7.9 `import`
 
