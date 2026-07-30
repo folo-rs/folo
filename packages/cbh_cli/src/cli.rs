@@ -685,10 +685,12 @@ impl ListCommand {
 /// Show the raw per-commit data points of one `(benchmark, metric)` series.
 ///
 /// A drill-down sibling of `list runs`: it resolves exactly the data set a matching
-/// `analyze`/`list` would, then pivots one named series into its data points — one
-/// row per recorded observation, in git first-parent order, pairing the value with
-/// the short commit id and the start of the commit's title. Both `--benchmark` and
-/// `--metric` are required.
+/// `analyze`/`list` would, then pivots one named series into a per-commit listing —
+/// every commit from the earliest one carrying the series in any matching set up to
+/// the analyzed tip, in git first-parent order, pairing the value with the short
+/// commit id and the start of the commit's title. A commit with several observations
+/// gets a row each, clean before dirty; a commit with no data point reads `n/a`. Both
+/// `--benchmark` and `--metric` are required.
 #[derive(Args, Debug)]
 struct ExamineCommand {
     #[command(flatten)]

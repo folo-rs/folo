@@ -150,18 +150,24 @@
 //! ## `examine`
 //!
 //! A drill-down sibling of `list runs` over the same `analyze`/`list` selection: it
-//! pivots the small chart `analyze` draws into its raw data points. Given the two
-//! required options `--benchmark <qualified-id>` and `--metric <name>` — the one
-//! command that names a metric, meant to be pasted from an `analyze` finding — it
-//! prints one row per recorded observation of that series, in git first-parent
-//! order and once per matching discriminant set, pairing the value with the short
-//! commit id and the first 50 characters of the commit's title (JSON keeps the full
-//! title and full-precision value). It requires a repository, runs no detection or
-//! re-baselining, and shows every selected point (clean before dirty, each flagged).
-//! An unknown metric name is rejected. An empty pivot is explained by one of two
-//! hints: when no run enters the selection at all, the same "matched no runs" hint
-//! `analyze` gives; when runs enter but none carry the named `(benchmark, metric)`
-//! pair, a distinct hint pointing at the unmatched benchmark id or metric name.
+//! pivots the small chart `analyze` draws into a per-commit listing of raw data
+//! points. Given the two required options `--benchmark <qualified-id>` and
+//! `--metric <name>` — the one command that names a metric, meant to be pasted from
+//! an `analyze` finding — it lists every commit from the earliest one at which any
+//! matching discriminant set carries that series up to the analyzed tip, oldest
+//! first in git first-parent order and once per set, pairing the value with the
+//! short commit id and the first 50 characters of the commit's title (JSON keeps the
+//! full title and full-precision value). The range is shared by every set, so their
+//! listings cover the same commits in the same order, and a commit with no data point
+//! for the series reads `n/a` (a null value in JSON) while still naming its commit
+//! and title. It requires a repository, runs no detection or re-baselining, and shows
+//! every selected observation (clean before dirty, each flagged, so a commit with
+//! several observations gets a row each); `--verbose` explains where the listed range
+//! opens and closes. An unknown metric name is rejected. An empty pivot is explained
+//! by one of two hints: when no run enters the selection at all, the same "matched no
+//! runs" hint `analyze` gives; when runs enter but none carry the named
+//! `(benchmark, metric)` pair, a distinct hint pointing at the unmatched benchmark id
+//! or metric name.
 //!
 //! ## `bless` / `unbless`
 //!

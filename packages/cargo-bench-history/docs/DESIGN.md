@@ -624,7 +624,7 @@ default, or the most recent blessing of every benchmark across the analysis wind
 
 `examine` answers the question a finding raises: *which commits actually moved this
 number?* Where `analyze` reports that a benchmark's metric shifted and draws a small chart,
-`examine` **pivots that chart into its data points** — one row per recorded observation of a
+`examine` **pivots that chart into a per-commit listing** — a row for every commit of a
 single `(benchmark, metric)` series, in git first-parent order, each row pairing the value
 with the short commit id and the start of the commit's title. A maintainer reads the values
 down the column, spots where one jumps, and reads across to the title to correlate the move
@@ -634,9 +634,9 @@ It is a **drill-down sibling of `list runs`**: both are read-only previews over 
 exact data-set selection that never analyze, so `examine` reuses that selection pipeline
 unchanged and stays in the same lockstep — a selection parameter added to `analyze` is added
 to `list`, `prune`, and `examine` alike. Like `analyze` it requires a resolvable repository
-(it needs first-parent topology to order the points and each commit's title to label them)
-and repeats the pivot once **per matching discriminant set**, since the same series can exist
-under several triples or machine keys.
+(it needs first-parent topology to enumerate and order the listed commits and each commit's
+title to label them) and repeats the pivot once **per matching discriminant set**, since the
+same series can exist under several triples or machine keys.
 
 Two required options name the series, and they are the one place a command names a
 **metric**: `--benchmark <qualified-id>` selects exactly one benchmark identity and
@@ -651,22 +651,38 @@ gives; when runs enter but none carry the named `(benchmark, metric)` pair, a di
 pointing at the unmatched benchmark id or metric name.
 
 `examine` runs **no detection and no re-baselining** — it has no findings, modes, or
-blessings. It lists every selected **observation** (a commit carrying both a clean run and
-dirty snapshots contributes a row each, ordered clean-before-dirty and flagged, so a value's
-provenance is unambiguous), which is why the analysis-only flags (improvements, inactive
-findings) are not part of its surface. The three output renderings compose from one pass as
-everywhere else: the per-commit table on stdout by default, the same table in Markdown, and a
-machine-readable JSON form that carries, per discriminant set, the ordered points with
+blessings — which is why the analysis-only flags (improvements, inactive findings) are not
+part of its surface. What it lists is a **complete commit listing**: every commit in the
+examined range gets a row, and a commit that carries no data point for the examined series
+and selection is marked `n/a`. The range opens at the earliest commit at which *any*
+matching discriminant set carries the series and closes at the analyzed tip, and that
+opening is a **union across the sets**, so every set lists exactly the same commits in the
+same order and two sets can be read side by side, commit for commit. A commit that does
+carry data contributes one row per **observation** instead — a clean run and the dirty
+snapshots at the same commit each get a row, ordered clean-before-dirty and flagged, so a
+value's provenance is unambiguous. Nothing caps the listing; `--since` is the way to bound
+the range, and `--verbose` states the resolved range and why it opens and closes where it
+does.
+
+The three output renderings compose from one pass as everywhere else: the per-commit table
+on stdout by default, the same table in Markdown, and a machine-readable JSON form that
+mirrors the table row for row and carries, per discriminant set, the ordered rows with
 full-precision values and each commit's full title — the 50-character title truncation is a
-readability convenience of the text and Markdown tables, not of the data. The text and
-Markdown renderings **lead each set with the same small line chart `analyze` draws**, reusing
-its renderer, so a maintainer sees the shape of the series before reading the points it
-pivots; the chart is **topology-accurate** — one column per first-parent commit, so a
-data-less commit between observations (or a trailing run of them up to the analyzed tip)
-renders as a gap that the tabular points, which list only real observations, do not carry.
-The line is drawn **uncolored**, and only when a set has at least two points. The JSON form
-carries no chart (a charting concern the human reports draw from internally, not data a
-consumer reconstructs).
+readability convenience of the text and Markdown tables, not of the data. A commit with no
+data point carries no value and no clean/dirty flag there, so a consumer distinguishes a gap
+from a measurement without parsing a marker. The text and Markdown renderings **lead each
+set with the same whole-series chart history-mode `analyze` draws**, reusing its renderer, so
+a maintainer sees the shape of the series before reading the rows beneath it. The chart is
+deliberately **not** the table: it plots that set's own real observations, one
+topology-accurate column per first-parent commit — so a data-less commit between
+observations, or a trailing run of them up to the analyzed tip, is a visible gap — but it
+trims its own leading gap, so a set whose first observation falls after the shared range
+start opens its chart later than its table. Beyond the fixed chart width it also bins
+several commits into one column (§8.6), so a long range makes the chart an approximation
+while the table stays exact, commit by commit. The table is the complete listing; the
+chart is the shape of the series. The line is drawn **uncolored**, and only when a set has
+at least two observations. The JSON form carries no chart (a charting concern the human
+reports draw from internally, not data a consumer reconstructs).
 
 ### 7.9 `import`
 
