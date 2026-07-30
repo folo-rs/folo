@@ -748,12 +748,13 @@ fn invalid_toml_package_detection_error() {
     std::env::set_current_dir(original_dir).unwrap();
 
     // The malformed Cargo.toml is encountered while walking up from the target path in search
-    // of the workspace root, so the parse failure surfaces from workspace validation.
+    // of the workspace root. The manifest exists and simply cannot be parsed, so the parse
+    // failure is what surfaces — the target is not "outside a workspace".
     let error = result.unwrap_err();
     assert!(
         error
             .find_source::<TargetPathOutsideWorkspaceError>()
-            .is_some()
+            .is_none()
     );
     assert!(error.find_source::<ParseManifestError>().is_some());
 }

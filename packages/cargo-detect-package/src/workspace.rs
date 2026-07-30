@@ -27,9 +27,10 @@ pub(crate) fn validate_workspace_context(
 ) -> Result<WorkspaceContext, AppError> {
     let current_dir = fs.current_dir().map_err(CurrentDirectoryError::caused_by)?;
 
-    // Find workspace root from the current directory.
-    let current_workspace_root = find_workspace_root(&current_dir, fs)
-        .map_err(CurrentDirectoryOutsideWorkspaceError::caused_by)?
+    // Find workspace root from the current directory. A read or parse failure of a manifest
+    // that does exist propagates as itself: it says the manifest is broken, not that there is
+    // no workspace. Only `None` means the walk reached the filesystem root without finding one.
+    let current_workspace_root = find_workspace_root(&current_dir, fs)?
         .ok_or_else(CurrentDirectoryOutsideWorkspaceError::new)?;
 
     // Resolve the target path - try to make it absolute.
@@ -54,9 +55,9 @@ pub(crate) fn validate_workspace_context(
         .canonicalize(&resolved_target_path)
         .map_err(|error| TargetPathNotFoundError::caused_by(&resolved_target_path, error))?;
 
-    // Find workspace root for the target path.
-    let target_workspace_root = find_workspace_root(&absolute_target_path, fs)
-        .map_err(TargetPathOutsideWorkspaceError::caused_by)?
+    // Find workspace root for the target path, distinguishing a broken manifest from an
+    // absent workspace for the same reason as above.
+    let target_workspace_root = find_workspace_root(&absolute_target_path, fs)?
         .ok_or_else(TargetPathOutsideWorkspaceError::new)?;
 
     // Verify both paths are in the same workspace.
