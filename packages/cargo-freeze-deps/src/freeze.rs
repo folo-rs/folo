@@ -159,19 +159,14 @@ fn freeze_version_in_item(
     version_item: &mut Item,
     outcome: &mut RunOutcome,
 ) -> Result<(), AppError> {
-    // `Item::Table` and `Item::ArrayOfTables` are not `Value`s, so there is no
-    // `Value::type_name()` to report and we name the encountered type ourselves.
-    const TABLE_TYPE_NAME: &str = "table";
-
     match version_item {
         Item::Value(Value::String(s)) => freeze_version_string(dep_name, s, outcome),
-        Item::Value(other) => {
-            Err(UnexpectedVersionTypeError::new(dep_name, other.type_name()).into())
-        }
+        // A `version` key parsed as `Item::None` carries no value to freeze.
         Item::None => Ok(()),
-        Item::Table(_) | Item::ArrayOfTables(_) => {
-            Err(UnexpectedVersionTypeError::new(dep_name, TABLE_TYPE_NAME).into())
-        }
+        // `Item::type_name()` names every remaining shape, including the ones that are not
+        // `Value`s, so the diagnostic points at the construct the author actually wrote —
+        // an array of tables is reported as such rather than as a plain table.
+        other => Err(UnexpectedVersionTypeError::new(dep_name, other.type_name()).into()),
     }
 }
 
@@ -803,8 +798,7 @@ serde = "=1.2.3"
 
     #[test]
     fn freeze_version_in_item_rejects_table_version() {
-        // Exercises the `Item::Table | Item::ArrayOfTables` arm of `freeze_version_in_item`
-        // — a `version` key that resolves to a nested table rather than a string. Real
+        // A `version` key that resolves to a nested table rather than a string. Real
         // user-authored TOML can produce this with `[dependencies.serde.version]`.
         let mut item = Item::Table(toml_edit::Table::new());
         let mut outcome = RunOutcome {
@@ -815,5 +809,22 @@ serde = "=1.2.3"
         let unexpected = error.find_source::<UnexpectedVersionTypeError>().unwrap();
 
         assert_eq!(unexpected.dep, "dep");
+        assert!(unexpected.to_string().contains("of type table"));
+    }
+
+    #[test]
+    fn freeze_version_in_item_rejects_array_of_tables_version() {
+        // An array of tables is a distinct TOML construct from a table, written as repeated
+        // `[[dependencies.serde.version]]` headers. Reporting it as a table would send the
+        // author looking for the wrong syntax.
+        let mut item = Item::ArrayOfTables(toml_edit::ArrayOfTables::new());
+        let mut outcome = RunOutcome {
+            frozen_count: 0,
+            skipped_count: 0,
+        };
+        let error = freeze_version_in_item("dep", &mut item, &mut outcome).unwrap_err();
+        let unexpected = error.find_source::<UnexpectedVersionTypeError>().unwrap();
+
+        assert!(unexpected.to_string().contains("of type array of tables"));
     }
 }

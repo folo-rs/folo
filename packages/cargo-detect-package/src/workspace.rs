@@ -301,12 +301,44 @@ version = "0.1.0"
     }
 
     #[test]
-    #[serial] // This test uses a relative path that depends on the current working directory for resolution.
+    #[serial] // This test changes the global working directory, so must run serially.
     fn validate_workspace_context_relative_path_outside() {
-        let fs = FilesystemFacade::target();
-        let error =
-            validate_workspace_context(Path::new("../../../outside_workspace/file.rs"), &fs)
-                .unwrap_err();
-        assert!(error.find_source::<TargetPathNotFoundError>().is_some());
+        // A relative path with `..` components can escape the workspace the current directory
+        // belongs to. The whole tree is built under one temporary directory so the outcome
+        // does not depend on what happens to exist above the checkout on this machine.
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        let workspace_root = temp_dir.path().join("workspace");
+        fs::create_dir_all(&workspace_root).unwrap();
+        fs::write(
+            workspace_root.join("Cargo.toml"),
+            r#"[workspace]
+members = []
+resolver = "2"
+"#,
+        )
+        .unwrap();
+
+        // A sibling of the workspace root: it exists, so path resolution succeeds, but no
+        // manifest at or above it declares a workspace.
+        let outside_dir = temp_dir.path().join("outside_workspace");
+        fs::create_dir_all(&outside_dir).unwrap();
+        fs::write(outside_dir.join("file.rs"), "// outside any workspace\n").unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&workspace_root).unwrap();
+
+        let filesystem = FilesystemFacade::target();
+        let result =
+            validate_workspace_context(Path::new("../outside_workspace/file.rs"), &filesystem);
+
+        std::env::set_current_dir(original_dir).unwrap();
+
+        let error = result.unwrap_err();
+        assert!(
+            error
+                .find_source::<TargetPathOutsideWorkspaceError>()
+                .is_some()
+        );
     }
 }
