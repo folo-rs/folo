@@ -6,16 +6,23 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use event_listener::Event;
 use events_once::EventLake;
-use infinity_pool::{BlindPool, BlindPooledMut};
+use multitude::Arena;
 
-use crate::VicinalTask;
+use crate::ErasedTaskHandle;
 
+/// Everything a processor's worker threads share: the work they draw from, the storage that
+/// work lives in, and the signals that tell them to wake up or stop.
+///
+/// One instance exists per processor that has ever had a task spawned on it, and every
+/// worker pinned to that processor operates on the same instance. Keeping the state
+/// per-processor rather than per-pool is what gives spawned work its locality: a task is
+/// queued on, allocated on, and executed on the processor that spawned it.
 pub(crate) struct ProcessorState {
     /// Queue for high-priority tasks. These are executed before regular tasks.
-    pub(crate) urgent_queue: Mutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
+    pub(crate) urgent_queue: Mutex<VecDeque<ErasedTaskHandle>>,
 
     /// Queue for normal-priority tasks.
-    pub(crate) regular_queue: Mutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
+    pub(crate) regular_queue: Mutex<VecDeque<ErasedTaskHandle>>,
 
     /// Event used to wake up sleeping workers when new tasks are added.
     pub(crate) wake_event: Event,
@@ -27,8 +34,13 @@ pub(crate) struct ProcessorState {
     /// Used for lazy initialization of workers.
     pub(crate) workers_spawned: AtomicBool,
 
-    /// Pool for storing task objects to avoid repeated allocation.
-    pub(crate) task_pool: BlindPool,
+    /// Backing storage for the task objects queued on this processor.
+    ///
+    /// An arena is neither `Sync` nor cloneable, so the mutex is what lets every thread
+    /// spawning onto this processor share one arena. It is held for the duration of a single
+    /// allocation and released before the task is enqueued, so it never overlaps with either
+    /// queue lock and an allocation never delays a worker dequeuing work.
+    pub(crate) task_arena: Mutex<Arena>,
 
     /// Pool for storing oneshot channels used to return task results.
     pub(crate) result_channel_pool: EventLake,
@@ -45,7 +57,7 @@ impl ProcessorState {
             wake_event: Event::new(),
             shutdown_flag: AtomicBool::new(false),
             workers_spawned: AtomicBool::new(false),
-            task_pool: BlindPool::new(),
+            task_arena: Mutex::new(Arena::new()),
             result_channel_pool: EventLake::new(),
             tasks_spawned: AtomicU64::new(0),
         }
