@@ -15,10 +15,11 @@ use crate::{
 ///
 /// # Errors
 ///
-/// Returns an error if the current directory and the target path are not in the same Cargo
-/// workspace, if the package owning the target path cannot be determined, if the target path
-/// is outside any package and that was configured to be an error, or if the subcommand cannot
-/// be executed.
+/// Returns an error if the current directory cannot be read; a workspace manifest
+/// cannot be read or parsed; the target cannot be resolved; the current directory
+/// and target are not in the same Cargo workspace; the owning package cannot be
+/// determined; an outside-package target is configured as an error; or the
+/// subcommand cannot be executed.
 #[doc(hidden)]
 pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
     run_with_filesystem(input, &FilesystemFacade::target())

@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::{fmt, io};
 
@@ -52,13 +53,22 @@ impl StorageError {
         })
     }
 
+    pub(crate) fn config_caused_by(
+        message: impl Into<String>,
+        error: impl Into<Box<dyn Error + Send + Sync>>,
+    ) -> Self {
+        Self::of_kind_caused_by(
+            StorageErrorKind::Config {
+                message: message.into(),
+            },
+            error,
+        )
+    }
+
     /// An I/O operation failed; `error` becomes the source of the returned error.
     #[must_use]
     pub fn io(error: io::Error) -> Self {
-        Self {
-            kind: StorageErrorKind::Io,
-            core: OhnoCore::from(error),
-        }
+        Self::of_kind_caused_by(StorageErrorKind::Io, error)
     }
 
     /// The category of the failure, carrying the key or message it concerns.
@@ -71,6 +81,30 @@ impl StorageError {
         Self {
             kind,
             core: OhnoCore::default(),
+        }
+    }
+
+    pub(crate) fn not_found_caused_by(
+        key: impl Into<String>,
+        error: impl Into<Box<dyn Error + Send + Sync>>,
+    ) -> Self {
+        Self::of_kind_caused_by(StorageErrorKind::NotFound { key: key.into() }, error)
+    }
+
+    pub(crate) fn already_exists_caused_by(
+        key: impl Into<String>,
+        error: impl Into<Box<dyn Error + Send + Sync>>,
+    ) -> Self {
+        Self::of_kind_caused_by(StorageErrorKind::AlreadyExists { key: key.into() }, error)
+    }
+
+    fn of_kind_caused_by(
+        kind: StorageErrorKind,
+        error: impl Into<Box<dyn Error + Send + Sync>>,
+    ) -> Self {
+        Self {
+            kind,
+            core: OhnoCore::from(error),
         }
     }
 }
@@ -123,7 +157,6 @@ impl fmt::Display for StorageErrorKind {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::error::Error;
     use std::fmt::Debug;
 
     use ohno::ErrorExt as _;
@@ -135,20 +168,23 @@ mod tests {
     assert_impl_all!(StorageErrorKind: Send, Sync, Debug, UnwindSafe, RefUnwindSafe);
 
     #[test]
-    fn not_found_display_includes_key() {
+    fn storage_error_kind_display_is_non_empty() {
+        assert!(!StorageErrorKind::Io.to_string().is_empty());
+    }
+
+    #[test]
+    fn not_found_retains_key() {
         let error = StorageError::not_found("v1/x");
 
-        assert!(error.message().contains("v1/x"));
         assert!(matches!(error.kind(), StorageErrorKind::NotFound { key } if key == "v1/x"));
     }
 
     #[test]
-    fn io_display_and_source() {
+    fn io_retains_source() {
         let error = StorageError::io(io::Error::other("disk gone"));
 
-        assert!(error.message().contains("disk gone"));
         assert!(matches!(error.kind(), StorageErrorKind::Io));
-        assert!(error.source().is_some());
+        assert!(error.find_source::<io::Error>().is_some());
     }
 
     #[test]
@@ -159,30 +195,30 @@ mod tests {
     }
 
     #[test]
-    fn invalid_key_display_and_no_source() {
+    fn invalid_key_retains_key_and_has_no_source() {
         let error = StorageError::invalid_key("v1/../escape");
 
-        assert!(error.message().contains("v1/../escape"));
-        assert!(matches!(error.kind(), StorageErrorKind::InvalidKey { .. }));
+        assert!(
+            matches!(error.kind(), StorageErrorKind::InvalidKey { key } if key == "v1/../escape")
+        );
         assert!(error.source().is_none());
     }
 
     #[test]
-    fn already_exists_display_and_no_source() {
+    fn already_exists_retains_key_and_has_no_source() {
         let error = StorageError::already_exists("v1/dup");
 
-        assert!(error.message().contains("v1/dup"));
         assert!(matches!(error.kind(), StorageErrorKind::AlreadyExists { key } if key == "v1/dup"));
         assert!(error.source().is_none());
     }
 
     #[test]
-    fn config_display_and_no_source() {
+    fn config_retains_message_and_has_no_source() {
         let error = StorageError::config("both keys set");
 
-        assert!(error.message().contains("both keys set"));
-        assert!(error.message().contains("configuration"));
-        assert!(matches!(error.kind(), StorageErrorKind::Config { .. }));
+        assert!(
+            matches!(error.kind(), StorageErrorKind::Config { message } if message == "both keys set")
+        );
         assert!(error.source().is_none());
     }
 }

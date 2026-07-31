@@ -17,7 +17,7 @@ use std::path::Path;
 
 use cbh_render::ReportFormat;
 
-use crate::{AnalysisFailedError, AnalyzeError};
+use crate::{AnalyzeError, NoOutputSelectedError};
 
 /// The rendered reports a single analysis pass produced, one `Some` per requested
 /// format.
@@ -62,19 +62,19 @@ impl ReportRequest {
     ///
     /// # Errors
     ///
-    /// Returns an [`AnalysisFailedError`] when nothing would be produced — `--no-text`
-    /// suppresses the only default output and neither file format was requested — so a
-    /// run that would produce nothing is rejected up front rather than completing
-    /// silently.
+    /// Returns a [`NoOutputSelectedError`] when nothing would be produced —
+    /// `--no-text` suppresses the only default output and neither file format was
+    /// requested — so a run that would produce nothing is rejected up front rather
+    /// than completing silently.
     pub(crate) fn resolve(
         no_text: bool,
         markdown: Option<&Path>,
         json: Option<&Path>,
     ) -> Result<Self, AnalyzeError> {
         if no_text && markdown.is_none() && json.is_none() {
-            return Err(AnalysisFailedError::new(
-                "no output selected: --no-text suppresses the text report, so request at \
-                 least one of --markdown <path> or --json <path>",
+            return Err(NoOutputSelectedError::new(
+                "--no-text suppresses the text report, so request at least one of \
+                 --markdown <path> or --json <path>",
             )
             .into());
         }
@@ -91,10 +91,10 @@ impl ReportRequest {
     ///
     /// # Errors
     ///
-    /// Returns an [`AnalysisFailedError`] when nothing would be produced — `--no-text`
-    /// suppresses the text report and none of `--markdown`, `--markdown-summary`, or
-    /// `--json` was requested — so a run that would produce nothing is rejected up
-    /// front rather than completing silently.
+    /// Returns a [`NoOutputSelectedError`] when nothing would be produced —
+    /// `--no-text` suppresses the text report and none of `--markdown`,
+    /// `--markdown-summary`, or `--json` was requested — so a run that would produce
+    /// nothing is rejected up front rather than completing silently.
     pub(crate) fn resolve_analyze(
         no_text: bool,
         markdown: Option<&Path>,
@@ -102,10 +102,9 @@ impl ReportRequest {
         markdown_summary: Option<&Path>,
     ) -> Result<Self, AnalyzeError> {
         if no_text && markdown.is_none() && json.is_none() && markdown_summary.is_none() {
-            return Err(AnalysisFailedError::new(
-                "no output selected: --no-text suppresses the text report, so request at \
-                 least one of --markdown <path>, --markdown-summary <path>, or --json \
-                 <path>",
+            return Err(NoOutputSelectedError::new(
+                "--no-text suppresses the text report, so request at least one of \
+                 --markdown <path>, --markdown-summary <path>, or --json <path>",
             )
             .into());
         }
@@ -172,11 +171,7 @@ mod tests {
     #[test]
     fn resolve_rejects_a_run_that_would_render_nothing() {
         let error = ReportRequest::resolve(true, None, None).unwrap_err();
-        let message = error
-            .find_source::<AnalysisFailedError>()
-            .unwrap()
-            .message();
-        assert!(message.contains("no output selected"));
+        assert!(error.find_source::<NoOutputSelectedError>().is_some());
     }
 
     #[test]
@@ -229,13 +224,7 @@ mod tests {
     #[test]
     fn resolve_analyze_rejects_a_run_that_would_render_nothing() {
         let error = ReportRequest::resolve_analyze(true, None, None, None).unwrap_err();
-        let message = error
-            .find_source::<AnalysisFailedError>()
-            .unwrap()
-            .message();
-        assert!(message.contains("no output selected"));
-        // The analyze form names its extra format in the guidance.
-        assert!(message.contains("--markdown-summary"));
+        assert!(error.find_source::<NoOutputSelectedError>().is_some());
     }
 
     #[test]

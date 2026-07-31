@@ -36,7 +36,7 @@ use super::{
 };
 use crate::{
     AnalysisFailedError, AnalyzeError, CommitterTimeFailedError, RenderedReports, ReportRequest,
-    ResolveRefFailedError,
+    RepositoryRequiredError, ResolveRefFailedError,
 };
 
 /// The real `list`: load configuration, wire the configured storage and git
@@ -599,10 +599,7 @@ where
         .await
         .map_err(|error| ResolveRefFailedError::caused_by("HEAD", error))?
         .ok_or_else(|| {
-            AnalysisFailedError::new(
-                "this command requires a git repository: could not resolve HEAD. \
-                 Run inside a repository (or pass --repo).",
-            )
+            RepositoryRequiredError::new("HEAD", "Run inside a repository (or pass --repo).")
         })?;
     let facets = resolve_facets(selection, Some(auto))?;
     let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
@@ -905,6 +902,7 @@ mod tests {
     use ohno::ErrorExt as _;
 
     use super::*;
+    use crate::{NoOutputSelectedError, RepositoryRequiredError};
 
     fn config() -> Config {
         Config::default()
@@ -1395,7 +1393,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<RepositoryRequiredError>().is_some());
     }
 
     #[test]
@@ -1454,11 +1452,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        let message = error
-            .find_source::<AnalysisFailedError>()
-            .unwrap()
-            .message();
-        assert!(message.contains("no output selected"));
+        assert!(error.find_source::<NoOutputSelectedError>().is_some());
     }
 
     #[test]
@@ -1535,12 +1529,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        let message = error
-            .find_source::<AnalysisFailedError>()
-            .unwrap()
-            .message();
-        assert!(message.contains("--all"));
-        assert!(message.contains("list blessings"));
+        assert!(error.find_source::<AnalysisFailedError>().is_some());
     }
 
     #[test]
@@ -1746,11 +1735,7 @@ mod tests {
         let storage = MemoryStorage::new();
         // No commits: HEAD does not resolve.
         let error = list_blessings_error(&storage, &FakeGitHistory::new());
-        let message = error
-            .find_source::<AnalysisFailedError>()
-            .unwrap()
-            .message();
-        assert!(message.contains("could not resolve HEAD"));
+        assert!(error.find_source::<RepositoryRequiredError>().is_some());
     }
 
     #[test]
@@ -1781,11 +1766,8 @@ mod tests {
         // HEAD is c3 in `linear_git`; a sidecar there with corrupt bytes.
         block_on(storage.put(&bless_key("c3", 100), &[0xff, 0xfe, 0x00])).unwrap();
         let error = list_blessings_error(&storage, &linear_git());
-        let message = error
-            .find_source::<AnalysisFailedError>()
-            .unwrap()
-            .message();
-        assert!(message.contains("is not valid UTF-8"));
+        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<std::string::FromUtf8Error>().is_some());
     }
 
     #[test]
@@ -1793,11 +1775,8 @@ mod tests {
         let storage = MemoryStorage::new();
         block_on(storage.put(&bless_key("c3", 100), b"{ not a blessing record")).unwrap();
         let error = list_blessings_error(&storage, &linear_git());
-        let message = error
-            .find_source::<AnalysisFailedError>()
-            .unwrap()
-            .message();
-        assert!(message.contains("is not a valid blessing"));
+        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<serde_json::Error>().is_some());
     }
 
     #[test]

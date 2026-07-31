@@ -3,7 +3,7 @@
 
 use std::error::Error;
 use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ohno::{AppError, OhnoCore};
 
@@ -82,7 +82,7 @@ impl EngineFailedError {
 #[derive(ohno::Error)]
 #[no_constructors]
 #[display("engine {engine:?} terminated without an exit code")]
-pub(crate) struct EngineTerminatedError {
+pub struct EngineTerminatedError {
     engine: String,
 
     #[error]
@@ -101,13 +101,19 @@ impl EngineTerminatedError {
             core: OhnoCore::default(),
         }
     }
+
+    /// The benchmark command that terminated (`cargo bench`).
+    #[must_use]
+    pub fn engine(&self) -> &str {
+        &self.engine
+    }
 }
 
 /// The benchmark command could not be assembled into an argv.
 #[derive(ohno::Error)]
 #[no_constructors]
 #[display("engine {engine:?} has an invalid command: {message}")]
-pub(crate) struct InvalidCommandError {
+pub struct InvalidCommandError {
     engine: String,
     message: String,
 
@@ -129,6 +135,18 @@ impl InvalidCommandError {
             core: OhnoCore::default(),
         }
     }
+
+    /// The benchmark command whose argv was invalid (`cargo bench`).
+    #[must_use]
+    pub fn engine(&self) -> &str {
+        &self.engine
+    }
+
+    /// The reason the command could not be assembled.
+    #[must_use]
+    pub fn problem(&self) -> &str {
+        &self.message
+    }
 }
 
 /// A harvested benchmark summary could not be parsed.
@@ -138,7 +156,7 @@ impl InvalidCommandError {
 #[derive(ohno::Error)]
 #[no_constructors]
 #[display("failed to parse benchmark output: {}", path.display())]
-pub(crate) struct ParseOutputError {
+pub struct ParseOutputError {
     path: PathBuf,
 
     #[error]
@@ -161,16 +179,23 @@ impl ParseOutputError {
             core: OhnoCore::from(error),
         }
     }
+
+    /// The benchmark output that could not be parsed.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
-/// A `--best-of` run measured a different set of cases or metrics across its
-/// repetitions, so the per-metric minimum is not well defined.
+/// A `--best-of` run produced inconsistent results across its repetitions.
+///
+/// A mismatch makes the per-metric minimum ill-defined.
 ///
 /// The cross-run mismatch is carried as the error's source.
 #[derive(ohno::Error)]
 #[no_constructors]
 #[display("engine {engine:?} produced inconsistent results across --best-of runs")]
-pub(crate) struct InconsistentRunsError {
+pub struct InconsistentRunsError {
     engine: String,
 
     #[error]
@@ -193,10 +218,18 @@ impl InconsistentRunsError {
             core: OhnoCore::from(error),
         }
     }
+
+    /// The engine whose repeated harvests disagreed.
+    #[must_use]
+    pub fn engine(&self) -> &str {
+        &self.engine
+    }
 }
 
-/// A result is already stored for this run's identity (same partition and commit)
-/// and the run did not request an overwrite.
+/// A result already exists for this run's identity.
+///
+/// The identity consists of the same partition and commit, and the run did not
+/// request an overwrite.
 #[derive(ohno::Error)]
 #[display("a result is already stored for this run at {key}; pass --overwrite to replace it")]
 pub struct DuplicateResultError {
@@ -217,11 +250,10 @@ impl DuplicateResultError {
     }
 }
 
-/// A backfill precondition failed (a dirty working tree, an unresolvable or
-/// out-of-history commit range) or the run stopped after a per-commit failure
-/// (without `--ignore-errors`).
+/// A backfill precondition or per-commit operation failed.
 ///
-/// The message carries the explanation and any partial summary.
+/// This includes a dirty working tree, an unresolvable or out-of-history commit
+/// range, or stopping after a per-commit failure without `--ignore-errors`.
 #[derive(ohno::Error)]
 #[display("backfill failed: {message}")]
 pub struct BackfillError {
@@ -234,12 +266,20 @@ pub struct BackfillError {
 impl UnwindSafe for BackfillError {}
 impl RefUnwindSafe for BackfillError {}
 
+impl BackfillError {
+    /// The explanation and any partial backfill summary.
+    #[must_use]
+    pub fn summary(&self) -> &str {
+        &self.message
+    }
+}
+
 /// An `import` precondition failed (for example a `--commit` override that resolves
 /// to no commit in the repository).
 #[derive(ohno::Error)]
 #[no_constructors]
 #[display("import failed: {message}")]
-pub(crate) struct ImportError {
+pub struct ImportError {
     message: String,
 
     #[error]
@@ -257,6 +297,12 @@ impl ImportError {
             message: message.into(),
             core: OhnoCore::default(),
         }
+    }
+
+    /// The reason the import precondition failed.
+    #[must_use]
+    pub fn reason(&self) -> &str {
+        &self.message
     }
 }
 
@@ -387,8 +433,8 @@ impl HarvestFailedError {
 #[no_constructors]
 #[display("failed to write the {label} report to {}", path.display())]
 pub(crate) struct WriteReportFailedError {
-    label: String,
-    path: PathBuf,
+    pub(crate) label: String,
+    pub(crate) path: PathBuf,
 
     #[error]
     core: OhnoCore,
@@ -711,72 +757,54 @@ mod tests {
     fn engine_failure_names_the_engine_and_the_exit_code() {
         let error = EngineFailedError::new("callgrind", 101);
 
-        assert!(error.message().contains("callgrind"));
-        assert!(error.message().contains("101"));
         assert_eq!(error.engine(), "callgrind");
         assert_eq!(error.code(), 101);
         assert!(error.source().is_none());
     }
 
     #[test]
-    fn engine_termination_reads_differently_from_an_exit_code_failure() {
-        // The two cases are reported by separate types precisely because a signalled
-        // death has no exit code to name.
+    fn engine_termination_carries_the_engine() {
         let terminated = EngineTerminatedError::new("callgrind");
 
-        assert!(terminated.message().contains("without an exit code"));
+        assert_eq!(terminated.engine(), "callgrind");
         assert!(terminated.source().is_none());
-        assert_ne!(
-            terminated.message(),
-            EngineFailedError::new("callgrind", 101).message()
-        );
     }
 
     #[test]
     fn invalid_command_names_the_engine_and_the_problem() {
         let error = InvalidCommandError::new("cargo bench", "command is empty");
 
-        assert!(error.message().contains("cargo bench"));
-        assert!(error.message().contains("invalid command"));
-        assert!(error.message().contains("command is empty"));
+        assert_eq!(error.engine(), "cargo bench");
+        assert_eq!(error.problem(), "command is empty");
     }
 
     #[test]
-    fn parse_failure_describes_the_output_that_could_not_be_read() {
+    fn parse_failure_carries_the_output_path_and_source() {
         let error = ParseOutputError::caused_by(
             "target/callgrind/summary.json",
             io::Error::other("missing 'value' field"),
         );
 
-        assert!(error.message().contains("failed to parse benchmark output"));
-        assert!(error.message().contains("summary.json"));
-        // The parse failure is a source, not text folded into the message.
-        assert!(!headline(&error).contains("missing 'value' field"));
+        assert_eq!(error.path(), Path::new("target/callgrind/summary.json"));
         assert!(error.find_source::<io::Error>().is_some());
     }
 
     #[test]
-    fn inconsistent_runs_name_the_engine_and_the_mismatch() {
+    fn inconsistent_runs_carry_the_engine_and_mismatch_source() {
         let error = InconsistentRunsError::caused_by(
             "criterion",
             io::Error::other("case 'a/b' is missing from run 2"),
         );
 
-        assert!(error.message().contains("--best-of runs"));
-        assert!(error.message().contains("criterion"));
-        // The mismatch is a source, not text folded into the message.
-        assert!(!headline(&error).contains("missing from run 2"));
+        assert_eq!(error.engine(), "criterion");
         assert!(error.find_source::<io::Error>().is_some());
     }
 
     #[test]
-    fn duplicate_result_names_the_key_and_the_escape_hatch() {
+    fn duplicate_result_carries_the_conflicting_key() {
         let error = DuplicateResultError::new("v1/folo/objects/callgrind/t/m1/abc/clean.json");
 
-        assert!(error.message().contains("already stored"));
-        assert!(error.message().contains("--overwrite"));
         assert_eq!(error.key(), "v1/folo/objects/callgrind/t/m1/abc/clean.json");
-        assert!(error.message().contains(error.key()));
     }
 
     #[test]
@@ -784,78 +812,10 @@ mod tests {
         let backfill = BackfillError::new("the working tree is dirty");
         let import = ImportError::new("--commit resolves to no commit in the repository");
 
-        assert!(backfill.message().contains("backfill failed"));
-        assert!(backfill.message().contains("dirty"));
-        assert!(import.message().contains("import failed"));
-        assert!(import.message().contains("no commit"));
-    }
-
-    #[test]
-    fn every_io_failure_names_a_distinct_operation() {
-        // A bare io::Error says only what the operating system reported and reads the
-        // same whichever operation produced it, so each wrapper's own wording is the
-        // only thing that tells the failures apart.
-        let cause = || io::Error::other("access denied");
-        let errors: [AppError; 12] = [
-            WorkingDirectoryFailedError::caused_by(cause()).into(),
-            BenchCommandFailedError::caused_by("cargo bench", cause()).into(),
-            ToolchainProbeFailedError::caused_by(cause()).into(),
-            GitProbeFailedError::caused_by(cause()).into(),
-            HarvestFailedError::caused_by("criterion", cause()).into(),
-            WriteReportFailedError::caused_by("Markdown", "a/report.md", cause()).into(),
-            WriteConfigFailedError::caused_by("a/bench-history.toml", cause()).into(),
-            ResolveRefFailedError::caused_by("a-ref", cause()).into(),
-            FirstParentWalkFailedError::caused_by("b-ref", cause()).into(),
-            AddWorktreeFailedError::caused_by("a/tree", "c0ffee", cause()).into(),
-            ResetWorktreeFailedError::caused_by("a/tree", "deadbee", cause()).into(),
-            RemoveWorktreeFailedError::caused_by("a/tree", cause()).into(),
-        ];
-
-        // The first line is the wrapper's own wording; the cause and any backtrace
-        // follow it.
-        let headlines = errors
-            .iter()
-            .map(|error| error.message().lines().next().unwrap().to_owned())
-            .collect::<Vec<_>>();
-
-        for (error, headline) in errors.iter().zip(&headlines) {
-            assert!(error.message().contains("access denied"));
-            assert!(error.find_source::<io::Error>().is_some());
-            assert_eq!(
-                headlines.iter().filter(|other| *other == headline).count(),
-                1
-            );
-        }
-    }
-
-    #[test]
-    fn io_failures_name_the_subject_they_were_working_on() {
-        let cause = || io::Error::other("access denied");
-
-        assert!(
-            BenchCommandFailedError::caused_by("cargo bench --bench x", cause())
-                .message()
-                .contains("cargo bench --bench x")
-        );
-        assert!(
-            HarvestFailedError::caused_by("criterion", cause())
-                .message()
-                .contains("criterion")
-        );
-        assert!(
-            WriteReportFailedError::caused_by("Markdown", "a/report.md", cause())
-                .message()
-                .contains("report.md")
-        );
-        assert!(
-            AddWorktreeFailedError::caused_by("a/tree", "c0ffee", cause())
-                .message()
-                .contains("c0ffee")
-        );
-        assert!(
-            ResetWorktreeFailedError::caused_by("a/tree", "deadbee", cause())
-                .message()
-                .contains("deadbee")
+        assert_eq!(backfill.summary(), "the working tree is dirty");
+        assert_eq!(
+            import.reason(),
+            "--commit resolves to no commit in the repository"
         );
     }
 

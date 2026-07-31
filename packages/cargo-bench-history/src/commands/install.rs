@@ -79,6 +79,7 @@ fn install_message(path: &Path, written: bool) -> String {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::io;
     use std::path::PathBuf;
 
     use cbh_config::default_config_path;
@@ -178,6 +179,28 @@ mod tests {
             "{:?}",
             reporter.notes()
         );
+    }
+
+    #[test]
+    fn install_maps_a_configuration_write_failure() {
+        let writer = MemoryConfigWriter::failing();
+        let reporter = RecordingReporter::new();
+        let path = default_config_path();
+
+        let error = block_on(execute_install(
+            &InstallOptions::default(),
+            no_workspace(),
+            &writer,
+            &reporter,
+        ))
+        .unwrap_err();
+
+        assert!(error.find_source::<WriteConfigFailedError>().is_some());
+        assert_eq!(
+            error.find_source::<io::Error>().unwrap().kind(),
+            io::ErrorKind::Other
+        );
+        assert!(writer.written(&path).is_none());
     }
 
     #[test]

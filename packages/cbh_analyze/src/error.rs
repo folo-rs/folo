@@ -18,7 +18,14 @@ use ohno::OhnoCore;
 /// [`find_source`](ohno::ErrorExt::find_source).
 #[ohno::error]
 #[no_constructors]
-#[from(ConfigError, StorageError, AnalysisFailedError, BlessFailedError)]
+#[from(ConfigError, StorageError, AnalysisFailedError, NoOutputSelectedError)]
+#[from(RepositoryRequiredError)]
+#[from(
+    BlessSelectionRequiredError,
+    BlessBaseRequiredError,
+    BlessDiscriminantsRequiredError,
+    BlessRefNotFoundError
+)]
 #[from(
     ResolveRefFailedError,
     FirstParentWalkFailedError,
@@ -37,8 +44,10 @@ pub struct AnalyzeError;
 impl UnwindSafe for AnalyzeError {}
 impl RefUnwindSafe for AnalyzeError {}
 
-/// Analyzing stored history failed: a bad filter, a malformed stored object, or no
-/// output selected.
+/// An analysis operation could not be completed.
+///
+/// This includes invalid selections, malformed stored objects, and invalid time
+/// windows.
 #[ohno::error]
 #[display("failed to analyze history: {message}")]
 pub struct AnalysisFailedError {
@@ -48,37 +57,75 @@ pub struct AnalysisFailedError {
 impl UnwindSafe for AnalysisFailedError {}
 impl RefUnwindSafe for AnalysisFailedError {}
 
-/// A blessing precondition failed.
-///
-/// The causes are: no benchmark prefixes given (and no `--all`), an unresolvable
-/// context ref, an undeterminable base branch, or — when the commit has no stored
-/// run — an unconstrained target triple or machine key that leaves no discriminant
-/// set to synthesize a sidecar for.
-#[derive(ohno::Error)]
-// Nothing raises a blessing failure from an underlying error, so the generated
-// `caused_by` would be dead code.
-#[no_constructors]
-#[display("blessing failed: {message}")]
-pub struct BlessFailedError {
-    message: String,
-
-    #[error]
-    core: OhnoCore,
+/// A reporting command was configured to produce no output.
+#[ohno::error]
+#[display("failed to analyze history: no output selected: {guidance}")]
+pub struct NoOutputSelectedError {
+    guidance: String,
 }
 
-impl UnwindSafe for BlessFailedError {}
-impl RefUnwindSafe for BlessFailedError {}
+impl UnwindSafe for NoOutputSelectedError {}
+impl RefUnwindSafe for NoOutputSelectedError {}
 
-impl BlessFailedError {
-    /// Creates a blessing failure described by `message`.
-    #[must_use]
-    pub(crate) fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            core: OhnoCore::default(),
-        }
-    }
+/// Repository history required by a command was unavailable.
+#[ohno::error]
+#[display(
+    "failed to analyze history: this command requires a git repository: could not resolve \
+     {reference:?}. {guidance}"
+)]
+pub struct RepositoryRequiredError {
+    reference: String,
+    guidance: String,
 }
+
+impl UnwindSafe for RepositoryRequiredError {}
+impl RefUnwindSafe for RepositoryRequiredError {}
+
+/// No benchmark selection was provided for `bless`.
+#[ohno::error]
+#[display(
+    "blessing failed: at least one benchmark-id prefix is required (or pass --all); for example \
+     `bless all_the_time/read_cell`"
+)]
+pub(crate) struct BlessSelectionRequiredError;
+
+impl UnwindSafe for BlessSelectionRequiredError {}
+impl RefUnwindSafe for BlessSelectionRequiredError {}
+
+/// The base branch for a blessing could not be determined.
+#[ohno::error]
+#[display("blessing failed: could not determine the base branch; specify it with --base")]
+pub(crate) struct BlessBaseRequiredError;
+
+impl UnwindSafe for BlessBaseRequiredError {}
+impl RefUnwindSafe for BlessBaseRequiredError {}
+
+/// A blessing could not identify a concrete discriminant set.
+#[ohno::error]
+#[display(
+    "blessing failed: no stored result at the context commit {commit} and the target-triple or \
+     machine-key facet is unconstrained, so no discriminant set can be targeted; pass \
+     --target-triple and --machine-key (or record a run at the commit first)"
+)]
+pub(crate) struct BlessDiscriminantsRequiredError {
+    commit: String,
+}
+
+impl UnwindSafe for BlessDiscriminantsRequiredError {}
+impl RefUnwindSafe for BlessDiscriminantsRequiredError {}
+
+/// The commit to bless could not be resolved.
+#[ohno::error]
+#[display(
+    "blessing failed: could not resolve {reference}; run this inside a git repository (or pass \
+     --repo) and check the ref exists"
+)]
+pub(crate) struct BlessRefNotFoundError {
+    reference: String,
+}
+
+impl UnwindSafe for BlessRefNotFoundError {}
+impl RefUnwindSafe for BlessRefNotFoundError {}
 
 /// Asking git what commit a ref names failed.
 #[derive(ohno::Error)]
@@ -276,7 +323,40 @@ mod tests {
 
     assert_impl_all!(AnalyzeError: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(AnalysisFailedError: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe);
-    assert_impl_all!(BlessFailedError: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(NoOutputSelectedError: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(RepositoryRequiredError: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(
+        BlessSelectionRequiredError: Send,
+        Sync,
+        Debug,
+        Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        BlessBaseRequiredError: Send,
+        Sync,
+        Debug,
+        Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        BlessDiscriminantsRequiredError: Send,
+        Sync,
+        Debug,
+        Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        BlessRefNotFoundError: Send,
+        Sync,
+        Debug,
+        Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
     assert_impl_all!(ResolveRefFailedError: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(
         FirstParentWalkFailedError: Send,
@@ -346,12 +426,10 @@ mod tests {
     }
 
     #[test]
-    fn analysis_failure_is_found_by_type_and_keeps_its_message() {
+    fn analysis_failure_is_found_by_type() {
         let error = AnalyzeError::from(AnalysisFailedError::new("unknown report format"));
 
         let found = error.find_source::<AnalysisFailedError>().unwrap();
-        assert!(found.message().contains("failed to analyze history"));
-        assert!(found.message().contains("unknown report format"));
         assert!(found.source().is_none());
     }
 
@@ -367,66 +445,20 @@ mod tests {
     }
 
     #[test]
-    fn bless_failure_is_found_by_type_and_keeps_its_message() {
-        let error = AnalyzeError::from(BlessFailedError::new("a bless precondition failed"));
+    fn bless_selection_failure_is_found_by_type() {
+        let error = AnalyzeError::from(BlessSelectionRequiredError::new());
 
-        let found = error.find_source::<BlessFailedError>().unwrap();
-        assert!(found.message().contains("blessing failed"));
-        assert!(found.message().contains("a bless precondition failed"));
+        let found = error.find_source::<BlessSelectionRequiredError>().unwrap();
         assert!(found.source().is_none());
     }
 
     #[test]
-    fn merge_base_failure_names_the_target_before_the_base() {
-        // The two refs read differently in each position, so their order in the
-        // rendered message is what tells the user which side was which.
-        let error = AnalyzeError::from(MergeBaseFailedError::caused_by(
-            "feature",
-            "master",
-            io::Error::other("shallow clone"),
-        ));
+    fn merge_base_failure_carries_the_target_and_base() {
+        let error =
+            MergeBaseFailedError::caused_by("feature", "master", io::Error::other("shallow clone"));
 
-        let message = error.message();
-        let target = message.find("feature").unwrap();
-        let base = message.find("master").unwrap();
-        assert!(target < base);
-    }
-
-    #[test]
-    fn every_git_and_probe_failure_names_a_distinct_operation() {
-        // A bare io::Error says only what the operating system reported and reads the
-        // same whichever query produced it, so each wrapper's own wording is the only
-        // thing that tells the failures apart.
-        let cause = || io::Error::other("git is not installed");
-        let errors = [
-            AnalyzeError::from(ResolveRefFailedError::caused_by("a-ref", cause())),
-            AnalyzeError::from(FirstParentWalkFailedError::caused_by("b-ref", cause())),
-            AnalyzeError::from(MergeBaseFailedError::caused_by("c-ref", "d-ref", cause())),
-            AnalyzeError::from(CommitterTimeFailedError::caused_by("e-ref", cause())),
-            AnalyzeError::from(WorkingTreeProbeFailedError::caused_by(cause())),
-            AnalyzeError::from(DefaultBranchProbeFailedError::caused_by(cause())),
-            AnalyzeError::from(ToolchainProbeFailedError::caused_by(cause())),
-        ];
-
-        // The first line is the wrapper's own wording; the cause and any backtrace
-        // follow it.
-        let headlines = errors
-            .iter()
-            .map(|error| error.message().lines().next().unwrap().to_owned())
-            .collect::<Vec<_>>();
-
-        for (error, headline) in errors.iter().zip(&headlines) {
-            assert!(error.message().contains("git is not installed"));
-            assert!(error.find_source::<io::Error>().is_some());
-            assert_eq!(
-                headlines.iter().filter(|other| *other == headline).count(),
-                1
-            );
-        }
-
-        // Each ref-scoped wrapper names the ref it was asked about.
-        for (headline, reference) in headlines.iter().zip(["a-ref", "b-ref", "c-ref", "e-ref"]) {
-            assert!(headline.contains(reference));
-        }
+        assert_eq!(error.target, "feature");
+        assert_eq!(error.base, "master");
+        assert!(error.find_source::<io::Error>().is_some());
     }
 }

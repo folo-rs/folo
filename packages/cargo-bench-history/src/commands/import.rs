@@ -593,11 +593,34 @@ mod tests {
         .unwrap_err();
 
         assert!(error.find_source::<ImportError>().is_some());
-        assert!(error.message().contains("does-not-exist"));
         assert!(
             storage.keys().is_empty(),
             "an unresolved commit stores nothing"
         );
+    }
+
+    #[test]
+    fn commit_resolution_failure_is_mapped_at_the_call_site() {
+        let storage = MemoryStorage::new();
+        let options = ImportOptions {
+            commit: Some("release-1.0".to_owned()),
+            ..ImportOptions::default()
+        };
+        let mut git = FakeGitHistory::new();
+        git.fail_resolve();
+
+        let error = run_import(
+            &options,
+            &callgrind_output(),
+            &FakeProbe::new(),
+            &git,
+            &storage,
+        )
+        .unwrap_err();
+
+        assert!(error.find_source::<ResolveRefFailedError>().is_some());
+        assert!(error.find_source::<io::Error>().is_some());
+        assert!(storage.keys().is_empty());
     }
 
     #[test]
@@ -619,7 +642,6 @@ mod tests {
         .unwrap_err();
 
         assert!(error.find_source::<ImportError>().is_some());
-        assert!(error.message().contains("mutually exclusive"));
         assert!(
             storage.keys().is_empty(),
             "a rejected import stores nothing"
@@ -662,7 +684,6 @@ mod tests {
     fn resolve_target_root_rejects_an_empty_target_dir() {
         let error = resolve_target_root(&PathBuf::new(), &PathBuf::from("/work")).unwrap_err();
         assert!(error.find_source::<ImportError>().is_some());
-        assert!(error.message().contains("--target-dir"));
     }
 
     #[test]

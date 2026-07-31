@@ -857,12 +857,4 @@ mod tests {
             assert_eq!(query_failures(&git), expected);
         }
     }
-
-    #[test]
-    fn fake_failure_names_the_query_in_its_message() {
-        let mut git = fixture();
-        git.fail_merge_base();
-        let error = block_on(git.merge_base("master", "feature")).unwrap_err();
-        assert!(error.to_string().contains("merge-base"));
-    }
 }

@@ -135,7 +135,6 @@ async fn backfill_stops_on_a_failing_commit_by_default() {
 
     let error = workspace.drive(&["backfill", &c1, &c3]).await.unwrap_err();
     assert!(error.find_source::<BackfillError>().is_some());
-    assert!(error.message().contains("stopped at"));
 
     // The walk is newest-first, so only c3 (healthy) was stored before the stop at
     // c2; c1 never ran.

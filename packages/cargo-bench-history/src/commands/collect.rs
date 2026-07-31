@@ -1001,10 +1001,11 @@ async fn store_result<S: Storage>(
         Ok(()) => Ok(StoreOutcome::Stored),
         Err(error) => match error.kind() {
             StorageErrorKind::AlreadyExists { key } => {
+                let key = key.clone();
                 if skip_existing {
                     Ok(StoreOutcome::Skipped)
                 } else {
-                    Err(DuplicateResultError::new(key.clone()).into())
+                    Err(DuplicateResultError::caused_by(key, error).into())
                 }
             }
             _ => Err(error.into()),
@@ -1163,8 +1164,8 @@ mod tests {
     use futures::executor::block_on;
 
     use super::*;
-    use crate::StorageError;
     use crate::model::{BenchmarkIdPrefix, BlessingRecord};
+    use crate::{MissingCaseError, StorageError};
 
     const SINGLE_FIXTURE: &str =
         include_str!("../../tests/fixtures/callgrind/single_unparametrized.summary.json");
@@ -1450,6 +1451,7 @@ mod tests {
     #[derive(Clone)]
     struct FakeRunner {
         status: EngineStatus,
+        failure: Option<io::ErrorKind>,
         calls: Arc<Mutex<Vec<Vec<String>>>>,
         envs: Arc<Mutex<Vec<RecordedEnv>>>,
     }
@@ -1461,6 +1463,7 @@ mod tests {
                     success: true,
                     code: Some(0),
                 },
+                failure: None,
                 calls: Arc::default(),
                 envs: Arc::default(),
             }
@@ -1472,6 +1475,7 @@ mod tests {
                     success: false,
                     code: Some(code),
                 },
+                failure: None,
                 calls: Arc::default(),
                 envs: Arc::default(),
             }
@@ -1485,6 +1489,19 @@ mod tests {
                     success: false,
                     code: None,
                 },
+                failure: None,
+                calls: Arc::default(),
+                envs: Arc::default(),
+            }
+        }
+
+        fn io_failing() -> Self {
+            Self {
+                status: EngineStatus {
+                    success: false,
+                    code: None,
+                },
+                failure: Some(io::ErrorKind::Other),
                 calls: Arc::default(),
                 envs: Arc::default(),
             }
@@ -1507,6 +1524,9 @@ mod tests {
         ) -> io::Result<EngineStatus> {
             self.calls.lock().unwrap().push(argv.to_vec());
             self.envs.lock().unwrap().push(env.to_vec());
+            if let Some(kind) = self.failure {
+                return Err(io::Error::from(kind));
+            }
             Ok(self.status)
         }
     }
@@ -1516,6 +1536,8 @@ mod tests {
         git: GitInfo,
         rustc: RustcInfo,
         hardware: HardwareProfile,
+        git_failure: Option<io::ErrorKind>,
+        toolchain_failure: Option<io::ErrorKind>,
     }
 
     impl FakeProbe {
@@ -1541,16 +1563,34 @@ mod tests {
                     processor_models: vec!["Test CPU 3000".to_owned()],
                     processor_speeds: vec![(3141, 8)],
                 },
+                git_failure: None,
+                toolchain_failure: None,
             }
+        }
+
+        fn with_git_failure(mut self) -> Self {
+            self.git_failure = Some(io::ErrorKind::Other);
+            self
+        }
+
+        fn with_toolchain_failure(mut self) -> Self {
+            self.toolchain_failure = Some(io::ErrorKind::Other);
+            self
         }
     }
 
     impl EnvironmentProbe for FakeProbe {
         async fn git(&self) -> io::Result<GitInfo> {
+            if let Some(kind) = self.git_failure {
+                return Err(io::Error::from(kind));
+            }
             Ok(self.git.clone())
         }
 
         async fn toolchain(&self) -> io::Result<RustcInfo> {
+            if let Some(kind) = self.toolchain_failure {
+                return Err(io::Error::from(kind));
+            }
             Ok(self.rustc.clone())
         }
 
@@ -1572,6 +1612,7 @@ mod tests {
         criterion: Vec<RawCriterionCase>,
         alloc: Vec<RawOperationFile>,
         time: Vec<RawOperationFile>,
+        failure: Option<Engine>,
     }
 
     impl FakeOutput {
@@ -1686,6 +1727,13 @@ mod tests {
                 ..Self::default()
             }
         }
+
+        fn failing(engine: Engine) -> Self {
+            Self {
+                failure: Some(engine),
+                ..Self::default()
+            }
+        }
     }
 
     impl BenchOutputSource for FakeOutput {
@@ -1695,6 +1743,9 @@ mod tests {
             _since: Option<SystemTime>,
             _reporter: &dyn Reporter,
         ) -> io::Result<Harvest> {
+            if self.failure == Some(engine) {
+                return Err(io::Error::other("injected harvest failure"));
+            }
             Ok(match engine {
                 Engine::Callgrind => Harvest::Callgrind(self.callgrind.clone()),
                 Engine::Criterion => Harvest::Criterion(self.criterion.clone()),
@@ -2000,6 +2051,7 @@ mod tests {
 
         let duplicate = error.find_source::<DuplicateResultError>().unwrap();
         assert!(duplicate.key().ends_with("/clean.json"));
+        assert!(error.find_source::<StorageError>().is_some());
         // The second run left the single stored object untouched.
         assert_eq!(storage.keys().len(), 1);
     }
@@ -2399,10 +2451,91 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error.find_source::<EngineTerminatedError>().is_some());
+        let terminated = error.find_source::<EngineTerminatedError>().unwrap();
+        assert_eq!(terminated.engine(), "cargo bench");
         assert!(error.find_source::<EngineFailedError>().is_none());
-        assert!(error.message().contains("cargo bench"));
-        assert!(error.message().contains("without an exit code"));
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn benchmark_command_io_failure_is_mapped_at_the_call_site() {
+        let storage = MemoryStorage::new();
+        let error = drive(
+            &CollectOptions::default(),
+            &FakeRunner::io_failing(),
+            &FakeProbe::new(),
+            &FakeOutput::default(),
+            &storage,
+        )
+        .unwrap_err();
+
+        assert!(error.find_source::<BenchCommandFailedError>().is_some());
+        assert_eq!(
+            error.find_source::<io::Error>().unwrap().kind(),
+            io::ErrorKind::Other
+        );
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn toolchain_probe_failure_is_mapped_at_the_call_site() {
+        let storage = MemoryStorage::new();
+        let error = drive(
+            &CollectOptions::default(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new().with_toolchain_failure(),
+            &FakeOutput::default(),
+            &storage,
+        )
+        .unwrap_err();
+
+        assert!(error.find_source::<ToolchainProbeFailedError>().is_some());
+        assert!(error.find_source::<GitProbeFailedError>().is_none());
+        assert_eq!(
+            error.find_source::<io::Error>().unwrap().kind(),
+            io::ErrorKind::Other
+        );
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn git_probe_failure_is_mapped_at_the_call_site() {
+        let storage = MemoryStorage::new();
+        let error = drive(
+            &CollectOptions::default(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new().with_git_failure(),
+            &FakeOutput::default(),
+            &storage,
+        )
+        .unwrap_err();
+
+        assert!(error.find_source::<GitProbeFailedError>().is_some());
+        assert!(error.find_source::<ToolchainProbeFailedError>().is_none());
+        assert_eq!(
+            error.find_source::<io::Error>().unwrap().kind(),
+            io::ErrorKind::Other
+        );
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn harvest_failure_is_mapped_at_the_call_site() {
+        let storage = MemoryStorage::new();
+        let error = drive(
+            &CollectOptions::default(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            &FakeOutput::failing(Engine::Criterion),
+            &storage,
+        )
+        .unwrap_err();
+
+        assert!(error.find_source::<HarvestFailedError>().is_some());
+        assert_eq!(
+            error.find_source::<io::Error>().unwrap().kind(),
+            io::ErrorKind::Other
+        );
         assert!(storage.keys().is_empty());
     }
 
@@ -2504,10 +2637,8 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error.find_source::<ParseOutputError>().is_some());
-        assert!(error.message().contains("Criterion"));
-        // The offending case directory is named so failures are actionable.
-        assert!(error.message().contains("new"));
+        let parse = error.find_source::<ParseOutputError>().unwrap();
+        assert_eq!(parse.path(), Path::new("criterion/grp/std/now/new"));
         assert!(storage.keys().is_empty());
     }
 
@@ -2523,9 +2654,8 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error.find_source::<ParseOutputError>().is_some());
-        // The offending operation file is named so failures are actionable.
-        assert!(error.message().contains("allocate_vec.json"));
+        let parse = error.find_source::<ParseOutputError>().unwrap();
+        assert_eq!(parse.path(), Path::new("alloc_tracker/allocate_vec.json"));
         assert!(storage.keys().is_empty());
     }
 
@@ -2541,8 +2671,8 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error.find_source::<ParseOutputError>().is_some());
-        assert!(error.message().contains("read_cell.json"));
+        let parse = error.find_source::<ParseOutputError>().unwrap();
+        assert_eq!(parse.path(), Path::new("all_the_time/read_cell.json"));
         assert!(storage.keys().is_empty());
     }
 
@@ -2792,10 +2922,8 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error.find_source::<ParseOutputError>().is_some());
-        assert!(error.message().contains("Callgrind"));
-        // The offending file is named so multi-summary failures are actionable.
-        assert!(error.message().contains("summary.json"));
+        let parse = error.find_source::<ParseOutputError>().unwrap();
+        assert_eq!(parse.path(), Path::new("a/summary.json"));
         assert!(storage.keys().is_empty());
     }
 
@@ -2915,9 +3043,9 @@ mod tests {
     #[test]
     fn build_bench_argv_rejects_an_empty_command() {
         let error = build_bench_argv(&[], &CollectOptions::default()).unwrap_err();
-        assert!(error.find_source::<InvalidCommandError>().is_some());
-        assert!(error.message().contains("cargo bench"));
-        assert!(error.message().contains("empty"));
+        let invalid = error.find_source::<InvalidCommandError>().unwrap();
+        assert_eq!(invalid.engine(), "cargo bench");
+        assert_eq!(invalid.problem(), "the benchmark command is empty");
     }
 
     // --- best-of-N orchestration ---------------------------------------------
@@ -3286,9 +3414,9 @@ mod tests {
         let error =
             drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap_err();
 
-        assert!(error.find_source::<InconsistentRunsError>().is_some());
-        assert!(error.message().contains(&Engine::AllTheTime.to_string()));
-        assert!(error.message().contains("read_cell"));
+        let inconsistent = error.find_source::<InconsistentRunsError>().unwrap();
+        assert_eq!(inconsistent.engine(), Engine::AllTheTime.to_string());
+        assert!(error.find_source::<MissingCaseError>().is_some());
         assert!(storage.keys().is_empty());
     }
 

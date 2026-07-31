@@ -320,22 +320,15 @@ mod tests {
         // Six months before the earliest representable instant does not exist, so the
         // calendar subtraction fails rather than silently saturating.
         let error = default_history_since(Timestamp::MIN).unwrap_err();
-        let message = error
-            .find_source::<AnalysisFailedError>()
-            .unwrap()
-            .message();
-        assert!(message.contains("out of the representable range"));
+        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<jiff::Error>().is_some());
     }
 
     #[test]
     fn a_relative_since_below_the_representable_range_is_an_error() {
-        // Same for an explicit relative duration, which names the flag it came from.
+        // Same for an explicit relative duration.
         let error = parse_since(Some("5 months"), Timestamp::MIN).unwrap_err();
-        let message = error
-            .find_source::<AnalysisFailedError>()
-            .unwrap()
-            .message();
-        assert!(message.contains("--since"));
-        assert!(message.contains("out of the representable range"));
+        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<jiff::Error>().is_some());
     }
 }

@@ -229,6 +229,30 @@ edition = "2021"
     }
 
     #[test]
+    #[serial] // This test changes the global working directory, so must run serially.
+    fn malformed_current_workspace_manifest_is_a_parse_error() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        fs::write(temp_dir.path().join("Cargo.toml"), "not valid TOML [").unwrap();
+        fs::write(temp_dir.path().join("target.rs"), "// target\n").unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        let filesystem = FilesystemFacade::target();
+        let result = validate_workspace_context(Path::new("target.rs"), &filesystem);
+
+        std::env::set_current_dir(original_dir).unwrap();
+
+        let error = result.unwrap_err();
+        assert!(error.find_source::<crate::ParseManifestError>().is_some());
+        assert!(
+            error
+                .find_source::<CurrentDirectoryOutsideWorkspaceError>()
+                .is_none()
+        );
+    }
+
+    #[test]
     #[serial] // This test changes the global working directory, so must run serially to avoid interference with other tests.
     fn validate_workspace_context_different_workspaces() {
         // This test verifies that the tool rejects when current dir and target are in different

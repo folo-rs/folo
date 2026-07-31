@@ -54,7 +54,8 @@ use super::{
     resolve_now,
 };
 use crate::{
-    AnalyzeError, BlessFailedError, FirstParentWalkFailedError, ResolveRefFailedError,
+    AnalyzeError, BlessBaseRequiredError, BlessDiscriminantsRequiredError, BlessRefNotFoundError,
+    BlessSelectionRequiredError, FirstParentWalkFailedError, ResolveRefFailedError,
     WorkingTreeProbeFailedError,
 };
 
@@ -183,11 +184,7 @@ where
         // whole commit.
         Vec::new()
     } else if options.prefixes.is_empty() {
-        return Err(BlessFailedError::new(
-            "at least one benchmark-id prefix is required (or pass --all); for example \
-             `bless all_the_time/read_cell`",
-        )
-        .into());
+        return Err(BlessSelectionRequiredError::new().into());
     } else {
         options.prefixes.clone()
     };
@@ -203,9 +200,7 @@ where
     // commit joins the base's first-parent history.
     let base = resolve_base(git, config, options.base.as_deref())
         .await?
-        .ok_or_else(|| {
-            BlessFailedError::new("could not determine the base branch; specify it with --base")
-        })?;
+        .ok_or_else(BlessBaseRequiredError::new)?;
 
     let selection = Selection::from_bless(options);
     let facets = resolve_facets(&selection, Some(auto))?;
@@ -285,12 +280,7 @@ where
         ));
         let sets = synthesize_target_sets(&facets);
         if sets.is_empty() {
-            return Err(BlessFailedError::new(format!(
-                "no stored result at the context commit {short} and the target-triple or \
-                 machine-key facet is unconstrained, so no discriminant set can be targeted; \
-                 pass --target-triple and --machine-key (or record a run at the commit first)"
-            ))
-            .into());
+            return Err(BlessDiscriminantsRequiredError::new(short).into());
         }
         sets.into_iter()
             .map(|set| {
@@ -413,13 +403,9 @@ async fn resolve_commit<G: GitHistory>(git: &G, reference: &str) -> Result<Strin
         .resolve(reference)
         .await
         .map_err(|error| ResolveRefFailedError::caused_by(reference, error))?;
-    resolved.ok_or_else(|| {
-        BlessFailedError::new(format!(
-            "could not resolve {reference}; run this inside a git repository (or pass --repo) \
-             and check the ref exists"
-        ))
-        .into()
-    })
+    resolved
+        .ok_or_else(|| BlessRefNotFoundError::new(reference))
+        .map_err(Into::into)
 }
 
 /// The first twelve characters of a commit ID (all of it when shorter), for messages.
@@ -626,8 +612,7 @@ mod tests {
         let storage = MemoryStorage::new();
         block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes())).unwrap();
         let error = drive_bless(&storage, &master_git(), &bless_options(&[])).unwrap_err();
-        let message = error.find_source::<BlessFailedError>().unwrap().message();
-        assert!(message.contains("prefix"));
+        assert!(error.find_source::<BlessSelectionRequiredError>().is_some());
     }
 
     #[test]
@@ -912,9 +897,11 @@ mod tests {
         };
 
         let error = drive_bless(&storage, &master_git(), &options).unwrap_err();
-        let message = error.find_source::<BlessFailedError>().unwrap().message();
-        assert!(message.contains("no stored result"));
-        assert!(message.contains("machine-key"));
+        assert!(
+            error
+                .find_source::<BlessDiscriminantsRequiredError>()
+                .is_some()
+        );
         assert!(stored_blessings(&storage).is_empty());
     }
 
@@ -985,8 +972,7 @@ mod tests {
         let git = FakeGitHistory::new();
         let error =
             drive_bless(&storage, &git, &bless_options(&["all_the_time/read_cell"])).unwrap_err();
-        let message = error.find_source::<BlessFailedError>().unwrap().message();
-        assert!(message.contains("could not resolve HEAD"));
+        assert!(error.find_source::<BlessRefNotFoundError>().is_some());
     }
 
     #[test]
@@ -1039,9 +1025,7 @@ mod tests {
             .head("master"); // No `.mark_default(...)`.
         let error =
             drive_bless(&storage, &git, &bless_options(&["all_the_time/read_cell"])).unwrap_err();
-        let message = error.find_source::<BlessFailedError>().unwrap().message();
-        assert!(message.contains("could not determine the base branch"));
-        assert!(message.contains("--base"));
+        assert!(error.find_source::<BlessBaseRequiredError>().is_some());
     }
 
     #[test]

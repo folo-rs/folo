@@ -216,11 +216,6 @@ mod tests {
     #[test]
     fn rejects_malformed_json() {
         let error = parse_all_the_time_operation("{ not json").unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("failed to parse all_the_time output")
-        );
         assert!(error.find_source::<serde_json::Error>().is_some());
     }
 

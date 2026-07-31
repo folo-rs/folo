@@ -8,8 +8,8 @@
 //! workspace convention. They also use a CWD-guard RAII helper so the current directory
 //! is restored even when an assertion fails mid-test.
 
-use std::fs;
 use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 use cargo_freeze_deps::{
     InvalidVersionError, ParseError, ReadFileError, RunInput, WriteFileError, run,
@@ -295,6 +295,7 @@ fn missing_file_returns_read_error() {
     .unwrap_err();
 
     assert!(error.find_source::<ReadFileError>().is_some());
+    assert!(error.find_source::<io::Error>().is_some());
 }
 
 #[test]
@@ -316,6 +317,7 @@ serde = "1.2.3"
     .unwrap_err();
 
     assert!(error.find_source::<WriteFileError>().is_some());
+    assert!(error.find_source::<io::Error>().is_some());
 }
 
 #[test]
@@ -327,6 +329,7 @@ fn invalid_toml_returns_parse_error() {
     let error = run(&RunInput { path, output: None }).unwrap_err();
 
     assert!(error.find_source::<ParseError>().is_some());
+    assert!(error.find_source::<toml_edit::TomlError>().is_some());
 }
 
 #[test]
@@ -345,6 +348,7 @@ serde = "not-a-version"
 
     assert_eq!(invalid.dep(), "serde");
     assert_eq!(invalid.version(), "not-a-version");
+    assert!(error.find_source::<semver::Error>().is_some());
 }
 
 #[test]

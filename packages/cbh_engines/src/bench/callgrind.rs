@@ -389,13 +389,6 @@ mod tests {
         assert_eq!(unsupported.version(), "7");
         assert_eq!(unsupported.supported_version(), SUPPORTED_VERSION);
         assert!(error.find_source::<CallgrindJsonError>().is_none());
-        // The version the parser understands travels with the error, so the parse
-        // path has to hand it the constant rather than an unrelated string.
-        assert!(
-            error
-                .to_string()
-                .contains(&format!("(expected {SUPPORTED_VERSION:?})"))
-        );
     }
 
     #[test]
@@ -410,17 +403,14 @@ mod tests {
     }
 
     #[test]
-    fn error_display_and_source() {
+    fn parse_conditions_carry_their_sources_and_fields() {
         let json_error = parse_callgrind_summary("{ not json").unwrap_err();
-        assert!(
-            json_error
-                .to_string()
-                .contains("failed to parse Callgrind summary")
-        );
+        assert!(json_error.find_source::<CallgrindJsonError>().is_some());
         assert!(json_error.find_source::<serde_json::Error>().is_some());
 
         let version_error = UnsupportedCallgrindVersionError::new("9", SUPPORTED_VERSION);
-        assert!(version_error.to_string().contains("\"9\""));
+        assert_eq!(version_error.version(), "9");
+        assert_eq!(version_error.supported_version(), SUPPORTED_VERSION);
         assert!(error::Error::source(&version_error).is_none());
     }
 

@@ -121,7 +121,7 @@ trait CommitRunner {
 }
 
 /// What happened when a single commit was processed.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 enum CommitOutcome {
     /// Results were stored; `cases` benchmark cases were harvested.
     Stored {
@@ -137,6 +137,8 @@ enum CommitOutcome {
     BenchFailed {
         /// Human-readable failure description.
         reason: String,
+        /// The original benchmark failure, retained if this failure stops the run.
+        error: AppError,
     },
 }
 
@@ -217,12 +219,12 @@ where
     let result = run_commits(options, git, runner, worktree, &commits, reporter).await;
     let teardown = git.remove_worktree(worktree).await;
 
-    let report = result?;
+    let mut report = result?;
     teardown.map_err(|error| RemoveWorktreeFailedError::caused_by(worktree, error))?;
 
     let message = report.render(commits.len());
-    if report.stopped.is_some() {
-        Err(BackfillError::new(message).into())
+    if let Some(error) = report.stopped_error.take() {
+        Err(BackfillError::caused_by(message, error).into())
     } else {
         Ok(RunOutcome::Completed { message })
     }
@@ -344,10 +346,11 @@ where
             CommitOutcome::Stored { cases } => report.stored.push((commit.clone(), cases)),
             CommitOutcome::SkippedExisting => report.skipped_existing.push(commit.clone()),
             CommitOutcome::SkippedEmpty => report.skipped_empty.push(commit.clone()),
-            CommitOutcome::BenchFailed { reason } => {
+            CommitOutcome::BenchFailed { reason, error } => {
                 report.failed.push((commit.clone(), reason));
                 if !options.ignore_errors {
                     report.stopped = Some(commit.clone());
+                    report.stopped_error = Some(error);
                     break;
                 }
             }
@@ -394,6 +397,8 @@ struct BackfillReport {
     failed: Vec<(String, String)>,
     /// The commit the run stopped at after a failure (without `--ignore-errors`).
     stopped: Option<String>,
+    /// The original failure at `stopped`, retained for the returned error chain.
+    stopped_error: Option<AppError>,
 }
 
 impl BackfillReport {
@@ -477,7 +482,7 @@ fn map_collect_result(result: Result<CollectSummary, AppError>) -> Result<Commit
         return Ok(CommitOutcome::SkippedExisting);
     }
     match bench_failure_reason(&error) {
-        Some(reason) => Ok(CommitOutcome::BenchFailed { reason }),
+        Some(reason) => Ok(CommitOutcome::BenchFailed { reason, error }),
         None => Err(error),
     }
 }
@@ -768,6 +773,9 @@ mod tests {
         added: RefCell<Vec<(PathBuf, String)>>,
         resets: RefCell<Vec<(PathBuf, String)>>,
         removed: RefCell<Vec<PathBuf>>,
+        fail_add: bool,
+        fail_reset: bool,
+        fail_remove: bool,
     }
 
     impl FakeBackfillGit {
@@ -777,7 +785,25 @@ mod tests {
                 added: RefCell::new(Vec::new()),
                 resets: RefCell::new(Vec::new()),
                 removed: RefCell::new(Vec::new()),
+                fail_add: false,
+                fail_reset: false,
+                fail_remove: false,
             }
+        }
+
+        fn with_add_failure(mut self) -> Self {
+            self.fail_add = true;
+            self
+        }
+
+        fn with_reset_failure(mut self) -> Self {
+            self.fail_reset = true;
+            self
+        }
+
+        fn with_remove_failure(mut self) -> Self {
+            self.fail_remove = true;
+            self
         }
     }
 
@@ -798,19 +824,31 @@ mod tests {
             self.added
                 .borrow_mut()
                 .push((path.to_owned(), commit.to_owned()));
-            ready(Ok(()))
+            ready(if self.fail_add {
+                Err(io::Error::other("injected add-worktree failure"))
+            } else {
+                Ok(())
+            })
         }
 
         fn reset_to(&self, path: &Path, commit: &str) -> impl Future<Output = io::Result<()>> {
             self.resets
                 .borrow_mut()
                 .push((path.to_owned(), commit.to_owned()));
-            ready(Ok(()))
+            ready(if self.fail_reset {
+                Err(io::Error::other("injected reset-worktree failure"))
+            } else {
+                Ok(())
+            })
         }
 
         fn remove_worktree(&self, path: &Path) -> impl Future<Output = io::Result<()>> {
             self.removed.borrow_mut().push(path.to_owned());
-            ready(Ok(()))
+            ready(if self.fail_remove {
+                Err(io::Error::other("injected remove-worktree failure"))
+            } else {
+                Ok(())
+            })
         }
     }
 
@@ -859,6 +897,7 @@ mod tests {
                 Some(FakeResult::SkippedEmpty) => Ok(CommitOutcome::SkippedEmpty),
                 Some(FakeResult::BenchFailed(reason)) => Ok(CommitOutcome::BenchFailed {
                     reason: reason.clone(),
+                    error: EngineFailedError::new("cargo bench", 1).into(),
                 }),
                 Some(FakeResult::Infra(message)) => {
                     Err(StorageError::io(io::Error::other(message.clone())).into())
@@ -938,7 +977,6 @@ mod tests {
         let git = FakeBackfillGit::new(fixture());
         let error = block_on(plan_commits(&options("absent", "f2"), &git)).unwrap_err();
         assert!(error.find_source::<BackfillError>().is_some());
-        assert!(error.message().contains("cannot resolve --from"));
     }
 
     #[test]
@@ -947,7 +985,32 @@ mod tests {
         let git = FakeBackfillGit::new(fixture());
         let error = block_on(plan_commits(&options("f1", "c3"), &git)).unwrap_err();
         assert!(error.find_source::<BackfillError>().is_some());
-        assert!(error.message().contains("not a first-parent ancestor"));
+    }
+
+    #[test]
+    fn plan_maps_a_ref_resolution_failure() {
+        let mut history = fixture();
+        history.fail_resolve();
+        let git = FakeBackfillGit::new(history);
+
+        let error = block_on(plan_commits(&options("c1", "f2"), &git)).unwrap_err();
+
+        assert!(error.find_source::<ResolveRefFailedError>().is_some());
+        assert!(error.find_source::<FirstParentWalkFailedError>().is_none());
+        assert!(error.find_source::<io::Error>().is_some());
+    }
+
+    #[test]
+    fn plan_maps_a_first_parent_walk_failure() {
+        let mut history = fixture();
+        history.fail_first_parent();
+        let git = FakeBackfillGit::new(history);
+
+        let error = block_on(plan_commits(&options("c1", "f2"), &git)).unwrap_err();
+
+        assert!(error.find_source::<FirstParentWalkFailedError>().is_some());
+        assert!(error.find_source::<ResolveRefFailedError>().is_none());
+        assert!(error.find_source::<io::Error>().is_some());
     }
 
     #[test]
@@ -1368,6 +1431,7 @@ mod tests {
             skipped_empty: vec!["ccccccc".to_owned()],
             failed: vec![("ddddddd".to_owned(), "boom".to_owned())],
             stopped: Some("ddddddd".to_owned()),
+            stopped_error: None,
         };
 
         let rendered = report.render(5);
@@ -1428,6 +1492,57 @@ mod tests {
     }
 
     #[test]
+    fn execute_maps_an_add_worktree_failure() {
+        let git = FakeBackfillGit::new(fixture()).with_add_failure();
+        let error = block_on(execute_backfill(
+            &options("c0", "f2"),
+            &git,
+            &FakeCommitRunner::new(),
+            &worktree(),
+            &RecordingReporter::new(),
+        ))
+        .unwrap_err();
+
+        assert!(error.find_source::<AddWorktreeFailedError>().is_some());
+        assert!(error.find_source::<io::Error>().is_some());
+        assert!(git.removed.borrow().is_empty());
+    }
+
+    #[test]
+    fn execute_maps_a_reset_failure_and_still_tears_down() {
+        let git = FakeBackfillGit::new(fixture()).with_reset_failure();
+        let error = block_on(execute_backfill(
+            &options("c0", "f2"),
+            &git,
+            &FakeCommitRunner::new(),
+            &worktree(),
+            &RecordingReporter::new(),
+        ))
+        .unwrap_err();
+
+        assert!(error.find_source::<ResetWorktreeFailedError>().is_some());
+        assert!(error.find_source::<io::Error>().is_some());
+        assert!(git.removed.borrow().iter().eq(std::iter::once(&worktree())));
+    }
+
+    #[test]
+    fn execute_maps_a_remove_worktree_failure() {
+        let git = FakeBackfillGit::new(fixture()).with_remove_failure();
+        let error = block_on(execute_backfill(
+            &options("c0", "f2"),
+            &git,
+            &FakeCommitRunner::new(),
+            &worktree(),
+            &RecordingReporter::new(),
+        ))
+        .unwrap_err();
+
+        assert!(error.find_source::<RemoveWorktreeFailedError>().is_some());
+        assert!(error.find_source::<io::Error>().is_some());
+        assert!(git.removed.borrow().iter().eq(std::iter::once(&worktree())));
+    }
+
+    #[test]
     fn execute_returns_error_and_tears_down_when_stopped() {
         let git = FakeBackfillGit::new(fixture());
         let runner = FakeCommitRunner::new().with("c1", FakeResult::BenchFailed("boom".to_owned()));
@@ -1441,7 +1556,7 @@ mod tests {
         .unwrap_err();
 
         assert!(error.find_source::<BackfillError>().is_some());
-        assert!(error.message().contains("stopped at c1"));
+        assert!(error.find_source::<EngineFailedError>().is_some());
         // Teardown still happened despite the failure.
         assert!(git.removed.borrow().iter().eq(std::iter::once(&worktree())));
     }
@@ -1471,7 +1586,7 @@ mod tests {
             labels: Vec::new(),
         }))
         .unwrap();
-        assert_eq!(stored, CommitOutcome::Stored { cases: 7 });
+        assert!(matches!(stored, CommitOutcome::Stored { cases: 7 }));
 
         let empty = map_collect_result(Ok(CollectSummary {
             stored: 0,
@@ -1479,21 +1594,22 @@ mod tests {
             labels: Vec::new(),
         }))
         .unwrap();
-        assert_eq!(empty, CommitOutcome::SkippedEmpty);
+        assert!(matches!(empty, CommitOutcome::SkippedEmpty));
 
         let duplicate = map_collect_result(Err(DuplicateResultError::new(
             "v1/p/objects/callgrind/t/m1/abc/clean.json",
         )
         .into()))
         .unwrap();
-        assert_eq!(duplicate, CommitOutcome::SkippedExisting);
+        assert!(matches!(duplicate, CommitOutcome::SkippedExisting));
 
         let failed =
             map_collect_result(Err(EngineFailedError::new("callgrind", 101).into())).unwrap();
-        let CommitOutcome::BenchFailed { reason } = failed else {
+        let CommitOutcome::BenchFailed { reason, error } = failed else {
             panic!("expected a bench failure");
         };
         assert!(reason.contains("101"));
+        assert!(error.find_source::<EngineFailedError>().is_some());
 
         let infra = map_collect_result(Err(StorageError::not_found("k").into())).unwrap_err();
         assert!(infra.find_source::<StorageError>().is_some());
@@ -1515,7 +1631,11 @@ mod tests {
         )
         .into()))
         .unwrap();
-        let CommitOutcome::BenchFailed { reason } = outcome else {
+        let CommitOutcome::BenchFailed {
+            reason,
+            error: _error,
+        } = outcome
+        else {
             panic!("expected a bench failure");
         };
 

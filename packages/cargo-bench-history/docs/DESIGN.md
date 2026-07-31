@@ -1053,6 +1053,18 @@ in-process suite, while everything that touches the outside world — storage, g
 filesystem, engine parsing, and the CLI — is factored into its own crate too, with the binary
 shell wiring them together.
 
+**Diagnostics and error boundary.** The shell writes successful reports and machine-readable
+data to stdout, while progress, effective-selection and effective-partition summaries, verbose
+reasoning, timings, and failures go to stderr. Benchmark child processes inherit the parent
+process's standard streams and may write directly to either one.
+
+Operational failures remain typed and retain their underlying sources across package
+boundaries. The shell's application boundary aggregates them with `ohno::AppError`, preserving
+condition-specific inspection, causal context, and optional backtraces without forcing all
+packages into one closed error taxonomy or flattening causes into strings. Each layer adds only
+the context it owns, transparent boundaries avoid repeating a source's message, and the CLI
+renders the resulting chain once before returning a failure status.
+
 **Async ports and adapters.** The app is async by default on the Tokio runtime, but pure
 logic stays synchronous — parse, map, comparability, series, findings, format — and is the
 Miri-safe bulk of the code and tests. Async is pushed only to the I/O edges, each a small
@@ -1062,7 +1074,7 @@ probes, the benchmark-output harvester, the config writer for `install`, the dia
 reporter, and storage. The reporter carries three independent channels — verbose-gated
 per-object **notes**, independent stage **timings**, and **always-on one-line summaries**
 (the effective-selection and effective-partition lines above) — all written to stderr so
-stdout stays a clean machine-readable stream of reports and JSON. Time comes from an
+shell diagnostics do not enter the reports and JSON written to stdout. Time comes from an
 injected clock (the workspace `tick` crate), so
 tests drive it deterministically and orchestration never reads the wall clock directly.
 Orchestration takes the injected ports, and the public async entry wires the real adapters.

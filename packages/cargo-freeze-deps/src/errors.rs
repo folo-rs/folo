@@ -55,9 +55,7 @@ impl RefUnwindSafe for ParseError {}
 #[ohno::error]
 #[display("Dependency '{dep}' has a non-string version field of type {actual_type}")]
 pub struct UnexpectedVersionTypeError {
-    // Crate-visible so that the freeze module's unit tests can assert on the attributed
-    // dependency without this becoming public API surface.
-    pub(crate) dep: String,
+    dep: String,
     actual_type: String,
 }
 
@@ -67,6 +65,20 @@ pub struct UnexpectedVersionTypeError {
 // state — so observing them through a shared reference during unwind is harmless.
 impl UnwindSafe for UnexpectedVersionTypeError {}
 impl RefUnwindSafe for UnexpectedVersionTypeError {}
+
+impl UnexpectedVersionTypeError {
+    /// Name of the dependency whose version field is malformed.
+    #[must_use]
+    pub fn dep(&self) -> &str {
+        &self.dep
+    }
+
+    /// The TOML type found in the dependency's `version` field.
+    #[must_use]
+    pub fn actual_type(&self) -> &str {
+        &self.actual_type
+    }
+}
 
 /// A dependency's version requirement is not valid `SemVer`.
 #[doc(hidden)]
@@ -106,6 +118,7 @@ mod tests {
     use std::path::Path;
     use std::{error, io};
 
+    use ohno::ErrorExt as _;
     use static_assertions::assert_impl_all;
 
     use super::*;
@@ -152,55 +165,49 @@ mod tests {
     );
 
     #[test]
-    fn read_file_error_display_names_operation_and_path() {
+    fn read_file_error_carries_path_and_source() {
         let error = ReadFileError::caused_by(
             Path::new("some/Cargo.toml"),
             io::Error::new(io::ErrorKind::NotFound, "missing"),
         );
 
-        let display = error.to_string();
-        assert!(display.contains("read"));
-        assert!(display.contains("some/Cargo.toml"));
+        assert_eq!(error.path, Path::new("some/Cargo.toml"));
+        assert!(error.find_source::<io::Error>().is_some());
     }
 
     #[test]
-    fn write_file_error_display_names_operation_and_path() {
+    fn write_file_error_carries_path_and_source() {
         let error = WriteFileError::caused_by(
             Path::new("some/Cargo.toml"),
             io::Error::new(io::ErrorKind::PermissionDenied, "denied"),
         );
 
-        let display = error.to_string();
-        assert!(display.contains("write"));
-        assert!(display.contains("some/Cargo.toml"));
+        assert_eq!(error.path, Path::new("some/Cargo.toml"));
+        assert!(error.find_source::<io::Error>().is_some());
     }
 
     #[test]
     fn parse_error_carries_the_underlying_failure() {
         let error = ParseError::caused_by(io::Error::new(io::ErrorKind::InvalidData, "bad toml"));
 
-        assert!(error.to_string().contains("bad toml"));
+        assert!(error.find_source::<io::Error>().is_some());
     }
 
     #[test]
-    fn unexpected_version_type_error_display_names_dep_and_type() {
+    fn unexpected_version_type_error_carries_dep_and_type() {
         let error = UnexpectedVersionTypeError::new("serde", "integer");
 
-        let display = error.to_string();
-        assert!(display.contains("serde"));
-        assert!(display.contains("integer"));
-        assert_eq!(error.dep, "serde");
+        assert_eq!(error.dep(), "serde");
+        assert_eq!(error.actual_type(), "integer");
     }
 
     #[test]
-    fn invalid_version_error_display_names_dep_and_version() {
+    fn invalid_version_error_carries_dep_version_and_source() {
         let source = "not-a-version".parse::<semver::VersionReq>().unwrap_err();
         let error = InvalidVersionError::caused_by("serde", "not-a-version", source);
 
-        let display = error.to_string();
-        assert!(display.contains("serde"));
-        assert!(display.contains("not-a-version"));
         assert_eq!(error.dep(), "serde");
         assert_eq!(error.version(), "not-a-version");
+        assert!(error.find_source::<semver::Error>().is_some());
     }
 }

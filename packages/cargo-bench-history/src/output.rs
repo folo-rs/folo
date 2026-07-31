@@ -306,10 +306,10 @@ mod tests {
             &rendered,
         ))
         .unwrap_err();
-
-        assert!(error.find_source::<WriteReportFailedError>().is_some());
-        assert!(error.message().contains("JSON"));
-        assert!(error.message().contains("report.json"));
+        let write_error = error.find_source::<WriteReportFailedError>().unwrap();
+        assert_eq!(write_error.label, "JSON");
+        assert_eq!(write_error.path, json);
+        assert!(error.find_source::<io::Error>().is_some());
     }
 }
 

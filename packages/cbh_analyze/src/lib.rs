@@ -52,11 +52,14 @@ pub use bless::{bless, unbless};
 pub(crate) use cbh_detect::{Series, SeriesFilter, apply_blessings};
 pub(crate) use cbh_render::{ReportFormat, chart_series, format_value};
 pub(crate) use dataset::{empty_history_hint, select_dataset};
-pub use error::{AnalysisFailedError, AnalyzeError, BlessFailedError};
+pub use error::{
+    AnalysisFailedError, AnalyzeError, NoOutputSelectedError, RepositoryRequiredError,
+};
 pub(crate) use error::{
-    CommitterTimeFailedError, DefaultBranchProbeFailedError, FirstParentWalkFailedError,
-    MergeBaseFailedError, ResolveRefFailedError, ToolchainProbeFailedError,
-    WorkingTreeProbeFailedError,
+    BlessBaseRequiredError, BlessDiscriminantsRequiredError, BlessRefNotFoundError,
+    BlessSelectionRequiredError, CommitterTimeFailedError, DefaultBranchProbeFailedError,
+    FirstParentWalkFailedError, MergeBaseFailedError, ResolveRefFailedError,
+    ToolchainProbeFailedError, WorkingTreeProbeFailedError,
 };
 pub use examine::execute as examine;
 pub use facets::AutoFacets;

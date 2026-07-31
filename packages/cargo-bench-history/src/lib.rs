@@ -324,7 +324,9 @@ mod errors;
 mod outcome;
 mod output;
 
-pub use cbh_analyze::AutoFacets;
+pub use cbh_analyze::{
+    AnalysisFailedError, AutoFacets, NoOutputSelectedError, RepositoryRequiredError,
+};
 pub use cbh_cli::{Cli, EarlyExit};
 pub use cbh_command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
@@ -334,11 +336,15 @@ pub use cbh_command::{
 pub use cbh_config::{ConfigError, default_template};
 pub(crate) use cbh_model as model;
 pub(crate) use cbh_storage::finish_with_flush;
-pub use cbh_storage::{StorageError, StorageOverride, azure_backend_from_parts};
+pub use cbh_storage::{StorageError, StorageErrorKind, StorageOverride, azure_backend_from_parts};
 pub use dispatch::{Overrides, run, run_with_overrides};
-pub use errors::{BackfillError, DuplicateResultError, EngineFailedError};
+pub use errors::{
+    BackfillError, DuplicateResultError, EngineFailedError, EngineTerminatedError, ImportError,
+    InconsistentRunsError, InvalidCommandError, ParseOutputError,
+};
 pub use model::{
-    BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, EnvironmentProvider, GitInfo,
-    Metric, MetricKind, Run, RunContext, SCHEMA_VERSION, ToolchainInfo,
+    AggregateError, BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo,
+    EnvironmentProvider, GitInfo, Metric, MetricKind, MissingCaseError, MissingMetricError, Run,
+    RunContext, SCHEMA_VERSION, ToolchainInfo,
 };
 pub use outcome::RunOutcome;

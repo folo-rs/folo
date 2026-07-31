@@ -112,9 +112,7 @@ fn build_credential(
     let credential: Arc<dyn TokenCredential> =
         ClientAssertionCredential::new(params.tenant_id, params.client_id, assertion, None)
             .map_err(|error| {
-                StorageError::config(format!(
-                    "could not initialize GitHub OIDC credential: {error}"
-                ))
+                StorageError::config_caused_by("could not initialize GitHub OIDC credential", error)
             })?;
     Ok(credential)
 }
@@ -207,6 +205,7 @@ mod tests {
     use azure_core::http::headers::Headers;
     use azure_core::http::{AsyncRawResponse, StatusCode};
     use futures::executor::block_on;
+    use ohno::ErrorExt as _;
 
     use super::*;
     use crate::StorageErrorKind;
@@ -465,6 +464,7 @@ mod tests {
         };
         let error = build_credential(params, http_client).expect_err("error");
         assert!(matches!(error.kind(), StorageErrorKind::Config { .. }));
+        assert!(error.find_source::<Error>().is_some());
     }
 
     #[test]

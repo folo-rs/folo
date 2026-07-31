@@ -94,6 +94,24 @@ package_a = { path = "../package_a" }
     temp_dir
 }
 
+/// Creates a workspace and an existing sibling file outside it under one temporary root.
+fn create_workspace_with_sibling_file() -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let workspace_root = temp_dir.path().join("workspace");
+    fs::create_dir_all(&workspace_root).unwrap();
+    fs::write(
+        workspace_root.join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"2\"\n",
+    )
+    .unwrap();
+
+    let outside_file = temp_dir.path().join("outside").join("file.rs");
+    fs::create_dir_all(outside_file.parent().unwrap()).unwrap();
+    fs::write(&outside_file, "// outside the workspace\n").unwrap();
+
+    (temp_dir, workspace_root, outside_file)
+}
+
 /// Creates a separate workspace for cross-workspace testing.
 fn create_separate_workspace() -> tempfile::TempDir {
     let temp_dir = tempfile::tempdir().unwrap();
@@ -384,17 +402,10 @@ fn cross_workspace_rejection() {
 #[serial] // Changes working directory.
 #[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
 fn outside_workspace_rejection() {
-    let workspace = create_simple_workspace();
-    let workspace_root = workspace.path();
+    let (_temp_dir, workspace_root, outside_file) = create_workspace_with_sibling_file();
 
     let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(workspace_root).unwrap();
-
-    let outside_file = if cfg!(windows) {
-        PathBuf::from("C:\\Windows\\System32\\notepad.exe")
-    } else {
-        PathBuf::from("/etc/passwd")
-    };
+    std::env::set_current_dir(&workspace_root).unwrap();
 
     let input = RunInput {
         path: outside_file,
@@ -419,14 +430,13 @@ fn outside_workspace_rejection() {
 #[serial] // Changes working directory.
 #[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
 fn relative_path_escape_rejection() {
-    let workspace = create_simple_workspace();
-    let workspace_root = workspace.path();
+    let (_temp_dir, workspace_root, _outside_file) = create_workspace_with_sibling_file();
 
     let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(workspace_root).unwrap();
+    std::env::set_current_dir(&workspace_root).unwrap();
 
     let input = RunInput {
-        path: PathBuf::from("../../../outside_file.rs"),
+        path: PathBuf::from("../outside/file.rs"),
         via_env: Some("PKG".to_string()),
         outside_package: OutsidePackageAction::Workspace,
         subcommand: get_test_command(),
@@ -436,7 +446,12 @@ fn relative_path_escape_rejection() {
 
     std::env::set_current_dir(original_dir).unwrap();
 
-    assert!(result.is_err(), "Expected error for path escape attempt");
+    let error = result.unwrap_err();
+    assert!(
+        error
+            .find_source::<TargetPathOutsideWorkspaceError>()
+            .is_some()
+    );
 }
 
 #[test]

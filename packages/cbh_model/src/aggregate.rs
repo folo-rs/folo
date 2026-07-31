@@ -76,8 +76,7 @@ impl MissingCaseError {
     }
 }
 
-/// A metric of a given kind is present for a case in some runs but absent from
-/// another.
+/// A metric is present for a case in some runs but absent from another.
 #[ohno::error]
 #[display(
     "metric '{}' for benchmark case '{id}' is missing from run {}; every \
@@ -130,9 +129,8 @@ impl MissingMetricError {
 /// contributes no wording of its own, so it displays as the underlying
 /// inconsistency.
 ///
-/// The error carries a backtrace and holds its source behind an `Arc`, so it is
-/// [`Clone`] but not comparable by equality; identify a specific inconsistency
-/// through its source rather than by comparing error values.
+/// The error is [`Clone`] but not comparable by equality; identify a specific
+/// inconsistency through its source instead.
 #[ohno::error]
 #[derive(Clone)]
 #[no_constructors]
@@ -527,17 +525,16 @@ mod tests {
     }
 
     #[test]
-    fn error_messages_name_the_case_and_run() {
+    fn errors_carry_the_missing_case_metric_and_run() {
         let missing_case = MissingCaseError::new(id("some/case"), 2_usize);
-        let text = missing_case.to_string();
-        assert!(text.contains("some/case"), "{text}");
-        assert!(text.contains("run 3"), "{text}");
+        assert_eq!(missing_case.id().qualified(), "some/case");
+        assert_eq!(missing_case.run_index(), 2);
 
         let missing_metric =
             MissingMetricError::new(id("some/case"), MetricKind::WallTime, 0_usize);
-        let text = missing_metric.to_string();
-        assert!(text.contains("wall_time"), "{text}");
-        assert!(text.contains("run 1"), "{text}");
+        assert_eq!(missing_metric.id().qualified(), "some/case");
+        assert_eq!(missing_metric.kind(), MetricKind::WallTime);
+        assert_eq!(missing_metric.run_index(), 0);
     }
 
     #[test]

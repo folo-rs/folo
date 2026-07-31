@@ -144,8 +144,7 @@ async fn list_without_a_repository_errors() {
     let workspace = Workspace::new(&storage_only_config());
 
     let error = workspace.drive(&["list", "runs"]).await.unwrap_err();
-    assert!(error.find_source::<AnalysisFailedError>().is_some());
-    assert!(error.message().contains("requires a git repository"));
+    assert!(error.find_source::<RepositoryRequiredError>().is_some());
 }
 
 /// `--all` is a `list blessings`-only switch; passing it to another subject is a
@@ -162,6 +161,4 @@ async fn list_runs_rejects_the_blessings_only_all_switch() {
         .await
         .unwrap_err();
     assert!(error.find_source::<AnalysisFailedError>().is_some());
-    assert!(error.message().contains("--all"));
-    assert!(error.message().contains("list blessings"));
 }

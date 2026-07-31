@@ -394,13 +394,13 @@ mod tests {
     }
 
     #[test]
-    fn error_display_and_source() {
+    fn parse_conditions_carry_their_sources() {
         let benchmark_error =
             parse_criterion_case("{ not json", STD_INSTANT_ESTIMATES).unwrap_err();
         assert!(
             benchmark_error
-                .to_string()
-                .contains("failed to parse Criterion benchmark.json")
+                .find_source::<BenchmarkParseError>()
+                .is_some()
         );
         assert!(benchmark_error.find_source::<serde_json::Error>().is_some());
 
@@ -408,8 +408,8 @@ mod tests {
             parse_criterion_case(STD_INSTANT_BENCHMARK, "{ not json").unwrap_err();
         assert!(
             estimates_error
-                .to_string()
-                .contains("failed to parse Criterion estimates.json")
+                .find_source::<EstimatesParseError>()
+                .is_some()
         );
         assert!(estimates_error.find_source::<serde_json::Error>().is_some());
     }

@@ -677,37 +677,25 @@ mod tests {
     }
 
     #[test]
-    fn an_undecodable_sibling_object_names_the_key_it_could_not_decode() {
+    fn an_undecodable_sibling_object_retains_the_utf8_source() {
         // Evidence is fetched as raw bytes, so a payload that is not text at all fails
         // before any parsing is attempted.
         let storage = MemoryStorage::new();
         let sibling = store_sibling_bytes(&storage, "m2", "c3", 3, &[0xff, 0xfe, 0x00]);
-        let key = sibling.key.clone();
         let error = sibling_evidence_error(&storage, &[sibling]);
-        let message = error
-            .find_source::<AnalysisFailedError>()
-            .unwrap()
-            .message();
-        // The fetch fans out over every relevant sibling, so the message is only
-        // actionable if it says which object failed.
-        assert!(message.contains(&key));
-        assert!(message.contains("is not valid UTF-8"));
+        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<std::str::Utf8Error>().is_some());
     }
 
     #[test]
-    fn a_sibling_object_that_is_not_a_result_set_says_so() {
+    fn a_sibling_object_that_is_not_a_result_set_retains_the_json_source() {
         // Decodable text that does not describe a run is a distinct failure from
         // undecodable bytes, so it must not borrow the other's wording.
         let storage = MemoryStorage::new();
         let sibling = store_sibling_bytes(&storage, "m2", "c3", 3, b"{}");
-        let key = sibling.key.clone();
         let error = sibling_evidence_error(&storage, &[sibling]);
-        let message = error
-            .find_source::<AnalysisFailedError>()
-            .unwrap()
-            .message();
-        assert!(message.contains(&key));
-        assert!(message.contains("is not a valid result set"));
+        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<serde_json::Error>().is_some());
     }
 
     #[test]

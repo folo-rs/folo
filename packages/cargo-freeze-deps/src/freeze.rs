@@ -596,6 +596,7 @@ serde = "=1.2.3"
         let error = freeze_document(input).unwrap_err();
 
         assert!(error.find_source::<ParseError>().is_some());
+        assert!(error.find_source::<toml_edit::TomlError>().is_some());
     }
 
     #[test]
@@ -609,6 +610,7 @@ serde = "garbage"
 
         assert_eq!(invalid.dep(), "serde");
         assert_eq!(invalid.version(), "garbage");
+        assert!(error.find_source::<semver::Error>().is_some());
     }
 
     #[test]
@@ -620,7 +622,8 @@ serde = { version = 123 }
         let error = freeze_document(input).unwrap_err();
         let unexpected = error.find_source::<UnexpectedVersionTypeError>().unwrap();
 
-        assert_eq!(unexpected.dep, "serde");
+        assert_eq!(unexpected.dep(), "serde");
+        assert_eq!(unexpected.actual_type(), "integer");
     }
 
     #[test]
@@ -632,7 +635,8 @@ version = 123
         let error = freeze_document(input).unwrap_err();
         let unexpected = error.find_source::<UnexpectedVersionTypeError>().unwrap();
 
-        assert_eq!(unexpected.dep, "serde");
+        assert_eq!(unexpected.dep(), "serde");
+        assert_eq!(unexpected.actual_type(), "integer");
     }
 
     // -- Aggregated counts and idempotency ------------------------------------------------
@@ -808,8 +812,8 @@ serde = "=1.2.3"
         let error = freeze_version_in_item("dep", &mut item, &mut outcome).unwrap_err();
         let unexpected = error.find_source::<UnexpectedVersionTypeError>().unwrap();
 
-        assert_eq!(unexpected.dep, "dep");
-        assert!(unexpected.to_string().contains("of type table"));
+        assert_eq!(unexpected.dep(), "dep");
+        assert_eq!(unexpected.actual_type(), "table");
     }
 
     #[test]
@@ -825,6 +829,6 @@ serde = "=1.2.3"
         let error = freeze_version_in_item("dep", &mut item, &mut outcome).unwrap_err();
         let unexpected = error.find_source::<UnexpectedVersionTypeError>().unwrap();
 
-        assert!(unexpected.to_string().contains("of type array of tables"));
+        assert_eq!(unexpected.actual_type(), "array of tables");
     }
 }

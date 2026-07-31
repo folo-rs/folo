@@ -13,7 +13,8 @@ use jiff::Timestamp;
 use super::selection::Selection;
 use crate::{
     AnalysisFailedError, AnalyzeError, DefaultBranchProbeFailedError, FirstParentWalkFailedError,
-    MergeBaseFailedError, ResolveRefFailedError, WorkingTreeProbeFailedError,
+    MergeBaseFailedError, RepositoryRequiredError, ResolveRefFailedError,
+    WorkingTreeProbeFailedError,
 };
 
 /// How the base-branch dirty-tip exception is gated.
@@ -103,10 +104,10 @@ where
         .await
         .map_err(|error| ResolveRefFailedError::caused_by(target_ref, error))?
     else {
-        return Err(AnalysisFailedError::new(format!(
-            "this command requires a git repository: could not resolve {target_ref:?}. \
-             Run inside a repository (or pass --repo / --context)."
-        ))
+        return Err(RepositoryRequiredError::new(
+            target_ref,
+            "Run inside a repository (or pass --repo / --context).",
+        )
         .into());
     };
 

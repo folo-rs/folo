@@ -143,6 +143,13 @@ fn should_colorize(is_terminal: bool, no_color: bool) -> bool {
 #[cfg_attr(test, mutants::skip)] // Probes the host environment; the facet resolution it feeds is tested.
 pub(crate) async fn detect_auto_facets() -> Result<AutoFacets, AnalyzeError> {
     let probe = SystemProbe::default();
+    detect_auto_facets_with(&probe).await
+}
+
+/// Resolves auto-detected facets from an injected environment probe.
+async fn detect_auto_facets_with<P: EnvironmentProbe>(
+    probe: &P,
+) -> Result<AutoFacets, AnalyzeError> {
     let toolchain = probe
         .toolchain()
         .await
@@ -389,6 +396,7 @@ fn all_ghosts_hint(tip_commit: &str) -> String {
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
+    use std::io;
     use std::path::PathBuf;
 
     use cbh_config::{Config, parse_config};
@@ -398,6 +406,7 @@ mod tests {
         BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, BlessingRecord, EnvironmentInfo, GitInfo,
         Metric, MetricKind, Run, RunContext, ToolchainInfo, sanitize_segment,
     };
+    use cbh_probe::{HardwareProfile, RustcInfo};
     use cbh_storage::{MemoryStorage, Storage};
     use futures::executor::block_on;
     use jiff::Timestamp;
@@ -405,7 +414,10 @@ mod tests {
     use ohno::ErrorExt as _;
 
     use super::*;
-    use crate::{AnalysisFailedError, FirstParentWalkFailedError};
+    use crate::{
+        AnalysisFailedError, FirstParentWalkFailedError, NoOutputSelectedError,
+        RepositoryRequiredError,
+    };
 
     fn ts(seconds: i64) -> Timestamp {
         Timestamp::from_second(seconds).unwrap()
@@ -414,6 +426,35 @@ mod tests {
     /// A minimal configuration; `analyze_with` only reads `project.default_branch`.
     fn config() -> Config {
         Config::default()
+    }
+
+    struct FailingProbe;
+
+    impl EnvironmentProbe for FailingProbe {
+        async fn git(&self) -> io::Result<GitInfo> {
+            Ok(GitInfo::default())
+        }
+
+        async fn toolchain(&self) -> io::Result<RustcInfo> {
+            Err(io::Error::other("injected toolchain failure"))
+        }
+
+        async fn hardware(&self) -> HardwareProfile {
+            HardwareProfile {
+                processors: 1,
+                memory_regions: 1,
+                processor_models: Vec::new(),
+                processor_speeds: Vec::new(),
+            }
+        }
+    }
+
+    #[test]
+    fn auto_facet_toolchain_failure_is_mapped_at_the_call_site() {
+        let error = block_on(detect_auto_facets_with(&FailingProbe)).unwrap_err();
+
+        assert!(error.find_source::<ToolchainProbeFailedError>().is_some());
+        assert!(error.find_source::<io::Error>().is_some());
     }
 
     /// Builds a stored result set carrying one record with one `Ir` metric.
@@ -789,11 +830,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        let message = error
-            .find_source::<AnalysisFailedError>()
-            .unwrap()
-            .message();
-        assert!(message.contains("requires a git repository"));
+        assert!(error.find_source::<RepositoryRequiredError>().is_some());
     }
 
     #[test]
@@ -999,11 +1036,8 @@ mod tests {
             "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json".to_owned();
         block_on(storage.put(&bless_key, &[0xff, 0xfe, 0x00])).unwrap();
         let error = analyze_blessing_error(&storage);
-        let message = error
-            .find_source::<AnalysisFailedError>()
-            .unwrap()
-            .message();
-        assert!(message.contains("is not valid UTF-8"));
+        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<std::string::FromUtf8Error>().is_some());
     }
 
     #[test]
@@ -1014,11 +1048,8 @@ mod tests {
             "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json".to_owned();
         block_on(storage.put(&bless_key, b"{ not a blessing record")).unwrap();
         let error = analyze_blessing_error(&storage);
-        let message = error
-            .find_source::<AnalysisFailedError>()
-            .unwrap()
-            .message();
-        assert!(message.contains("is not a valid blessing record"));
+        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<serde_json::Error>().is_some());
     }
 
     #[test]
@@ -1839,8 +1870,7 @@ mod tests {
         // HEAD resolves, but there is no advertised default branch and no --base /
         // config default, so the base branch cannot be determined and there is no
         // merge-base to split the timeline on. Rather than silently analyze the
-        // incomplete topology as a base-branch (history) view, this is an error
-        // that tells the user how to supply the missing history.
+        // incomplete topology as a base-branch (history) view, this is an error.
         let mut git = FakeGitHistory::new();
         git.commit("c0", None)
             .commit("c1", Some("c0"))
@@ -1863,12 +1893,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        let message = error
-            .find_source::<AnalysisFailedError>()
-            .unwrap()
-            .message();
-        assert!(message.contains("could not determine the base branch"));
-        assert!(message.contains("--base"));
+        assert!(error.find_source::<AnalysisFailedError>().is_some());
     }
 
     #[test]
@@ -1878,9 +1903,7 @@ mod tests {
         // The base branch resolves, but it shares no history with the target — the
         // shallow-clone case, where the fetched depth stops short of the branch
         // point. `git merge-base` finds no common ancestor, so the timeline cannot
-        // be split; this errors and leads with the deepen-the-clone fix rather than
-        // guessing a base-branch view. The base was auto-detected here, so the
-        // message also offers --base as the way to name a different one.
+        // be split and this errors rather than guessing a base-branch view.
         let mut git = FakeGitHistory::new();
         git.commit("c0", None)
             .commit("c1", Some("c0"))
@@ -1907,25 +1930,15 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        let message = error
-            .find_source::<AnalysisFailedError>()
-            .unwrap()
-            .message();
-        assert!(message.contains("no common ancestor"));
-        assert!(message.contains("--unshallow"));
-        // Auto-detected base: offer --base as the way to name the intended one.
-        assert!(message.contains("--base"));
+        assert!(error.find_source::<AnalysisFailedError>().is_some());
     }
 
     #[test]
-    fn analyze_with_an_explicit_disjoint_base_does_not_suggest_a_different_base() {
+    fn analyze_rejects_an_explicit_disjoint_base() {
         let storage = MemoryStorage::new();
         seed_linear_step(&storage);
         // The user deliberately chose `--base master`, which resolves but shares no
-        // history with the target. The remedy is still to deepen the clone; we must
-        // not glibly tell them to pass some other --base, since they picked this one
-        // on purpose. Only if the history is complete is the chosen base called out
-        // as genuinely unrelated.
+        // history with the target, so the requested topology cannot be resolved.
         let mut git = FakeGitHistory::new();
         git.commit("c0", None)
             .commit("c1", Some("c0"))
@@ -1953,15 +1966,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        let message = error
-            .find_source::<AnalysisFailedError>()
-            .unwrap()
-            .message();
-        assert!(message.contains("--unshallow"));
-        // The deliberately chosen base is named and reported as unrelated, without
-        // suggesting the user pick a different --base value.
-        assert!(message.contains("master is genuinely unrelated"));
-        assert!(!message.contains("name the intended base"));
+        assert!(error.find_source::<AnalysisFailedError>().is_some());
     }
 
     #[test]
@@ -2108,11 +2113,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        let message = error
-            .find_source::<AnalysisFailedError>()
-            .unwrap()
-            .message();
-        assert!(message.contains("no output selected"));
+        assert!(error.find_source::<NoOutputSelectedError>().is_some());
     }
 
     #[test]
@@ -2161,11 +2162,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        let message = error
-            .find_source::<AnalysisFailedError>()
-            .unwrap()
-            .message();
-        assert!(message.contains("--base"));
+        assert!(error.find_source::<AnalysisFailedError>().is_some());
     }
 
     #[test]

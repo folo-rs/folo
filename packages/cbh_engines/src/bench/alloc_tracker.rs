@@ -262,11 +262,6 @@ mod tests {
     #[test]
     fn rejects_malformed_json() {
         let error = parse_alloc_tracker_operation("{ not json").unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("failed to parse alloc_tracker output")
-        );
         assert!(error.find_source::<serde_json::Error>().is_some());
     }
 

@@ -148,14 +148,10 @@ pub fn default_template() -> &'static str {
     DEFAULT_TEMPLATE
 }
 
-/// An error encountered while loading configuration.
+/// Loading configuration or resolving a configured option failed.
 ///
-/// Carries a single human-readable message rather than categorizing failures:
-/// the construction sites (a file read, a TOML parse, an unresolvable
-/// `--local`/`--cache` selection) each bake their context into the message, and
-/// nothing downstream branches on a kind. An underlying failure, when there is
-/// one, is attached as the error source instead of being folded into the
-/// message.
+/// The message identifies the failed operation. An underlying failure, when
+/// present, is attached as the error source.
 #[derive(ohno::Error)]
 #[display("{message}")]
 // Other crates in the workspace construct this error while wrapping it into their own error
@@ -369,17 +365,13 @@ key = \"ci-pool-a\"
         // leftover `[storage.local]` table is not silently ignored the way a wholly
         // unknown section is: it fails to parse, pointing the user at `--local`.
         let error = parse_config("[storage.local]\npath = \"x\"\n").unwrap_err();
-        let message = error.to_string();
-        assert!(
-            message.contains("unknown variant `local`"),
-            "unexpected parse error: {message}"
-        );
+        assert!(error.find_source::<toml::de::Error>().is_some());
     }
 
     #[test]
-    fn config_error_without_a_cause_renders_only_its_message() {
+    fn config_error_without_a_cause_has_no_source() {
         let error = ConfigError::new("boom");
-        assert_eq!(error.message(), "boom");
+        assert!(Error::source(&error).is_none());
     }
 
     #[test]
