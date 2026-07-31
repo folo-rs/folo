@@ -187,6 +187,14 @@ jobs:
   test-x64:
     needs: [delta]
     if: needs.delta.outputs.skip_all != 'true'
+    # Whether a coverage report was produced at all. A delta-scoped run can measure only packages
+    # that carry no instrumented code, which leaves nothing to upload and nothing for the coverage
+    # notification gate to release. The matrix legs measure the same scope and write this output in
+    # completion order, so the last one to finish decides. Were platform-gated code ever to make
+    # them disagree, the worst case is a commit whose coverage status goes unreleased - never one
+    # released off an incomplete set of uploads.
+    outputs:
+      coverage_report: ${{ steps.coverage.outputs.report }}
     strategy:
       fail-fast: false
       matrix:
@@ -202,11 +210,21 @@ jobs:
         uses: ./.github/actions/setup-environment
 
       - name: Run tests with coverage on ${{ matrix.platform }}
+        id: coverage
+        shell: pwsh
         run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+
           just package="${{ needs.delta.outputs.packages }}" coverage-measure
           just coverage-report-ci
 
+          $report = if (Test-Path lcov.info) { 'true' } else { 'false' }
+          "report=$report" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
+
       - name: Upload coverage to Codecov
+        if: steps.coverage.outputs.report == 'true'
         uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -867,7 +885,8 @@ jobs:
   # ran and failed, an expected upload is missing and the build is already red - so we do
   # NOT release a status off an incomplete set, which would post the very "coverage
   # decreased" result this gate exists to prevent. A `skip_all` run uploads no coverage at
-  # all, so `test-x64` is skipped and this job does not run.
+  # all, so `test-x64` is skipped and this job does not run - and so does a run whose scope
+  # holds no instrumented code, where `test-x64` succeeds but produces no report to upload.
   #
   # Like the upload jobs, this runs for fork PRs too: the token is empty there and the
   # action falls back to tokenless notification (this is a public repository), so
@@ -877,6 +896,7 @@ jobs:
     if: >-
       !cancelled()
       && needs.test-x64.result == 'success'
+      && needs.test-x64.outputs.coverage_report == 'true'
       && (needs.test-azurite.result == 'success' || needs.test-azurite.result == 'skipped')
     runs-on: ubuntu-latest
 
