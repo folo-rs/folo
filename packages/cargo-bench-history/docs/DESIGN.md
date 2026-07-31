@@ -12,7 +12,7 @@ analyzes that history for trends that snapshot / "previous run" tools cannot see
 It stores every result over time (local path or Azure blob), runs in multiple
 environments (dev PC, GitHub Actions, ADO), and partitions data only where results are
 not otherwise comparable. Its commands are `collect`, `install`, `analyze`, `examine`,
-`backfill`, `list`, `prune`, `bless`, and `unbless`.
+`backfill`, `list`, `prune`, `rekey`, `bless`, and `unbless`.
 
 ## 1. Benchmark engines and what they emit
 
@@ -66,7 +66,7 @@ flowchart LR
   end
   A1 --> RR[BenchmarkResult]
   A2 --> RR
-  CTX[RunContext: git + env + toolchain + machine] --> RS[Run]
+  CTX[RunContext: git + env + toolchain + machine + best-of] --> RS[Run]
   RR --> RS
   RS -->|collect stores| ST[(Storage: local / Azure)]
   ST -->|analyze| SE[Series engine] --> F[Findings report]
@@ -203,20 +203,28 @@ The goal is a fingerprint equal for pool-equivalent machines and different for g
 different hardware; it is **never** keyed on hostname or serial, since cloud pool nodes
 differ in name but are equivalent. It hashes the stable, pool-equivalent attributes
 available without elevated privileges across platforms — all from the in-workspace
-`many_cpus`: the processor and memory-region counts, the distinct processor models present
-(a sorted, deduplicated list), and a histogram of the per-processor relative speeds (as
-`(speed, count)` pairs). The speed histogram distinguishes machines that agree on their
-counts and models but differ in their mix of processor speeds (for example a hybrid
-performance/efficiency core layout versus a uniform one). Finer signals such as RAM size were
-left out for little discriminating value in homogeneous CI pools.
+`many_cpus`: the processor and memory-region counts and the distinct processor models
+present (a sorted, deduplicated list). Finer signals such as RAM size were left out for
+little discriminating value in homogeneous CI pools.
+
+A factor qualifies only if it is a **property of the hardware**, not a reading the same
+machine can report differently from one boot to the next. Per-processor speed metrics fail
+that test: they are boot-time calibration figures, so an identical runner can produce a
+different value after a reboot, and hashing them fragments one machine's history across
+several keys — the exact failure the key exists to prevent. They add no discriminating
+power either, since the processor model set already says what the processors are, so they
+are recorded as provenance (§5) and never hashed. A machine's speed mix is therefore
+answered from its stored runs rather than from its key.
 
 Because the key is persisted and compared across machines and tool versions, it uses a
 **fixed** hash (not a seeded/default hasher) over a version-tagged canonical string,
 truncated to a compact path segment, and a golden test pins a fixed profile to its digest
-so an accidental change to the canonical form is caught. A command-line override wins over
-the computed fingerprint (it is CLI-only — a committed config would carry a machine key
-wrong for some checkouts). The key is computed for every run, because every engine is
-partitioned by it.
+so an accidental change to the canonical form is caught. The version tag is what makes a
+change to the factor set an explicit, visible fork of stored history rather than a silent
+break, and `rekey` (§7.10) closes such a fork afterwards by migrating the stored objects
+onto the new format. A command-line override wins over the computed fingerprint (it is
+CLI-only — a committed config would carry a machine key wrong for some checkouts). The key
+is computed for every run, because every engine is partitioned by it.
 
 There is no machine-independent partition: every engine — Callgrind instruction counts and
 `alloc_tracker` allocations included — is keyed by the host fingerprint, because those
@@ -225,13 +233,14 @@ special meaning; it is an ordinary machine-key value like any other, reachable o
 an explicit `--machine-key synthetic` (or `--machine-key all`).
 
 The individual factors behind the fingerprint (the version tag, processor and memory-region
-counts, processor models, and the per-processor speed histogram) are surfaced for debugging:
-`collect` and the query commands emit them to standard error under `--verbose`, and the
-standalone `machine-key` command prints the key to standard output (with `--verbose` adding
-the factors to standard error). The latter exists so CI can capture the real per-runner key
-and thread it into a later `analyze` selection.
-The same factors and resulting fingerprint are also recorded on every stored run as
-write-only provenance (see §5).
+counts, and processor models) are surfaced for debugging: `collect` and the query commands
+emit them to standard error under `--verbose`, and the standalone `machine-key` command
+prints the key to standard output (with `--verbose` adding the factors to standard error).
+Only true factors appear there, so what is shown is exactly what the key depends on. The
+latter exists so CI can capture the real per-runner key and thread it into a later `analyze`
+selection. Those factors, the resulting fingerprint, and the speed histogram that is
+deliberately not a factor are also recorded on every stored run as write-only provenance
+(see §5).
 
 ## 5. Run context
 
@@ -245,14 +254,30 @@ version, machine key). Git and environment access go through a small abstraction
 logic is unit-testable without a real repo or CI.
 
 The context also carries optional **host-hardware provenance** (`context.machine`): the
-fingerprint factors (processor and memory-region counts, processor models, per-processor speed
-histogram) and the auto-detected key they hash to. It is **write-only** — nothing reads it
-back — and exists purely so that a
-later change in a machine key can be traced to the specific factor that moved (for example, a
-runner pool swapping CPU models). It records the auto-detected fingerprint regardless of any
-`--machine-key` override, and is an additive, backward-compatible field (absent on runs
-written before it existed and on the non-`collect` construction sites that do not probe
-hardware), so its introduction only bumps the schema version for legibility.
+fingerprint factors (processor and memory-region counts, processor models), the
+per-processor speed histogram, and the auto-detected key the factors hash to. It is
+**write-only** — nothing reads it back — and exists purely so that a later change in a
+machine key can be traced to the specific factor that moved (for example, a runner pool
+swapping CPU models). The speed histogram is recorded even though it is not a factor (§4),
+because it is the sharpest available evidence of what the host actually was. It records the
+auto-detected fingerprint regardless of any `--machine-key` override, and is an additive,
+backward-compatible field (absent on runs written before it existed and on the non-`collect`
+construction sites that do not probe hardware), so its introduction only bumps the schema
+version for legibility.
+
+Alongside it the context records the **measurement protocol** the numbers were produced
+under: how many repetitions of the whole suite the stored values were reduced from — one for
+a plain collection or an import, `N` under `--best-of N` (§7.1). This matters because the
+reduction keeps the **minimum** of those samples, and the expected value of a minimum falls
+as the sample count rises: changing the count moves the recorded level of *every* benchmark
+at once. The count is therefore part of what was measured, a history spanning two counts is
+not measuring the same quantity throughout, and without the count stored, such a change of
+protocol is indistinguishable after the fact from a change in the code. It is recorded from
+the repetitions that actually ran rather than the requested figure, so it can never claim a
+repetition that did not happen. Like the hardware provenance it is write-only and additive
+(absent on runs written before it existed), and it is deliberately **not** a discriminant:
+what a window spanning two counts should mean for detection is a separate question from
+being able to see that it happened at all.
 
 ## 6. Storage
 
@@ -406,6 +431,13 @@ bench` exit still aborts fail-fast. `N == 1` reproduces a plain single run. Two 
 remain: a runner that is slow for the *entire* job is not corrected by the minimum, and
 Callgrind's deterministic counts make min-of-N a (costly) no-op for that engine — but the
 single `cargo bench` interface cannot select engines, so both are accepted.
+
+Because the reduction keeps the minimum, `N` is part of the measurement protocol rather than
+a mere performance knob: raising or lowering it shifts the recorded level of every benchmark
+at once. Every stored run therefore records the count it was reduced from (§5), so which
+protocol produced a value stays recoverable from the stored data. Under `--verbose` the same
+fact is spelled out per engine, next to the per-metric list of samples and the one that was
+kept.
 
 `collect` always persists — there is no separate publish step (`--no-store` runs without
 writing, for dry runs). A clean point writes the deterministic clean key, refused by
@@ -738,6 +770,82 @@ lets a test attribute a whole synthetic series across history from a single HEAD
 still exist: `import` never invents git topology, so real integration testing still requires
 a real history.
 
+### 7.10 `rekey`
+
+The machine key is version-tagged so a change to its factor set forks stored history
+visibly rather than silently (§4). A fork is honest but not free: the same machine's series
+splits into two short, non-comparable stretches, and short stretches are exactly what the
+detector reports badly on. `rekey` **closes the fork by migrating stored objects onto the
+current key format**, merging the fragments back into one continuous series. It needs no
+benchmark re-run because every stored run already records the full hardware profile behind
+its key (§5), so both the retired and the current key can be recomputed from the object
+itself.
+
+**Copy, never move.** Every migrated object is written to its new key with the write-once
+put and the source is left exactly where it is; nothing is ever deleted. That makes the
+command idempotent for free — a second pass finds each destination already present — and
+makes a bad outcome recoverable by deleting the copies. A destination that already exists
+with **different** bytes is a genuine conflict rather than a repeat, so the pass stops. The
+copies of an earlier pass are ordinary stored objects that a later pass reads back, so a
+later pass excludes every object standing at a destination it would itself write; otherwise
+the merge assessment would compare a group against a set that contains it and invent a merge
+the store does not face.
+
+One current key can only hold one object per commit and kind, so two partitions that merge
+and both hold the same commit put two **distinct** objects — distinct because their hardware
+rendered apart, which is why they were keyed apart — in contention for one key. Neither
+stands for the other, so both are left where they are and the contested destination is
+reported. The merged series simply carries no point at that commit, which reads as an
+ordinary gap.
+
+**Only proven hardware hashes move.** The machine segment of a key is not necessarily a
+hardware hash: `collect` accepts an explicit `--machine-key` override for stable CI-pool
+keys, and such a partition is a deliberate operator decision that would be corrupted by
+moving it. Recomputation alone cannot tell the two apart, because an override-keyed run
+still records the real host's fingerprint. So an object is migrated only when its key
+segment *is* the retired hash of its own recorded hardware. Every other segment — an
+override, or a segment already equal to the current hash — is reported and left untouched.
+
+Both recomputations rest on a faithful reimplementation of the retired rendering rule, so
+the pass first **proves** that reimplementation against the data: a run records the machine
+key its own capture computed, so recomputing the retired *and* current hashes of its recorded
+hardware must reproduce that fingerprint under one of the two — the retired one for history
+captured before the format changed, the current one for history captured after. A fingerprint
+that matches neither means the reimplemented rendering is not the one that keyed this store,
+which invalidates every subsequent decision, so the pass is abandoned rather than the object
+skipped. Objects that record no hardware at all cannot be placed and are reported, never
+silently dropped. Blessing sidecars record no hardware of their own, so they follow the
+mapping their partition's runs establish; a blessing under a partition holding no runs is
+reported and left.
+
+**Merging is not always safe, so the default is a dry run.** Writing requires an explicit
+`--apply`; a bare `rekey` reports what would happen. Splicing two key partitions into one
+series concatenates two sets of measurements. If both really are the same machine their
+levels agree and the merge is invisible — the intended outcome. If they systematically
+differ, the merge *manufactures* a step change at the splice and floods the next analysis
+with fresh findings: precisely the failure the key change exists to remove. The report
+therefore states, for every pair of partitions that would merge and every `(benchmark,
+metric)` both hold, the **level offset** between their medians (absolute and relative) and
+the **interleaving pattern** over commit order — whether the two occupy overlapping stretches
+of history (interleaved: one machine rebooting, harmless) or disjoint ones (time-blocked:
+indistinguishable from a real change at the boundary).
+
+An offset large enough to be reportable **refuses the migration**, in the dry run and under
+`--apply` alike, so the preview can never disagree with what applying would do. The
+threshold is half of the detector's own practical-significance floors (§8.2), read from the
+same configuration and composed the same way — relative *and* absolute together. The medians
+compared here estimate a whole group's level, while the detector compares the regimes on either
+side of a change point, so the two need not coincide; halving the floor is the margin that
+covers the difference and keeps a merge below the threshold well clear of what the detector
+calls practically significant. `--allow-level-shift` proceeds anyway, for an operator who has
+read the report and accepts the step.
+
+`rekey` takes **no discriminant facets** and is deliberately outside the `analyze` / `list` /
+`prune` selection lockstep. Those commands select a comparable slice of history to reason
+about; `rekey` is a whole-store maintenance pass whose correctness comes from processing
+every object, and a facet would silently migrate half a partition — leaving history in a
+state neither key format describes.
+
 ## 8. Analysis
 
 A series is built per `(discriminant set, benchmark identity, metric)`, ordered by git
@@ -749,14 +857,14 @@ count, so its per-iteration figure wobbles too. The detector therefore treats ev
 noisy and never trusts a value as exact.
 
 This surprises people, because re-running Callgrind on one *unchanged* machine often prints
-the same count every time — the counter is deterministic for a fixed binary and fixed input.
-What is not fixed is everything feeding it across the commits we compare: a different OS or
-CPU-microcode patch level, a different compiler patch release, the compiler's own run-to-run
-nondeterministic code-generation choices (inlining, ordering, layout) even at the same
-version, and Criterion scheduling a different iteration count when background load differs
-(which changes how first-touch and buffer-resize costs are amortized). Any one of these moves
-the measured number without the code under test changing, so no metric is reproducible commit
-to commit.
+the same count every time — its simulated counter barely notices the machine conditions that
+move a timing. What is not fixed is everything feeding it across the commits we compare: a
+different OS or CPU-microcode patch level, a different compiler patch release, the compiler's
+own run-to-run nondeterministic code-generation choices (inlining, ordering, layout) even at
+the same version, and Criterion scheduling a different iteration count when background load
+differs (which changes how first-touch and buffer-resize costs are amortized). Any one of these
+moves the measured number without the code under test changing, so no metric is reproducible
+commit to commit.
 
 For the Callgrind engine this layout-sensitivity is decisive at microbenchmark scale, and it
 is why only a subset of its events is persisted. The instruction count (`Ir`) and the two
@@ -785,7 +893,7 @@ improvement; there is no per-metric polarity for the analysis to key off.
 
 ### 8.1 Findings: change-points and drift
 
-Two finding *methods* are emitted per series and ranked together by descending relative
+History mode emits two finding *methods* per series, ranked together by descending relative
 move:
 
 1. **Change-point (step)** — the primary finding. A single most-likely level shift is
@@ -800,62 +908,158 @@ move:
 
 When both fire on one series, the **better-fitting model wins**: the step and line models
 are each scored by their residual, so sharp steps route to the change-point method and
-smooth ramps to drift, and the two never double-report one event.
+smooth ramps to drift, and the two never double-report one event. A branch-mode finding is a
+level shift too, so it reports as a change-point; the difference is which test established it
+(§8.2).
 
 ### 8.2 Noise-aware gating
 
-The same gates run for every engine; only their inputs differ. Pettitt *locates* the split
-(its analytic p-value is too conservative on short series to gate on), and a change-point is
-reported only when all of these hold: a **Mann–Whitney** rank test finds the two regimes
-statistically distinguishable; the move clears a **practical-magnitude floor**, so a
-statistically-real but trivial wobble stays silent; the move stands above the series'
-own **residual scatter** about the fitted step — the median-absolute-residual gate that is
-the primary noise check for *every* engine, in place of trusting a value as exact; and the
-two regimes are **well-separated populations**, not merely distinguishable ones. That last
-gate is an *effect-size* check — the Mann–Whitney **probability of superiority**, the share
-of after-vs-before pairs that move in the finding's direction — and it must clear a floor
-(`min_regime_separation`, default 0.85). It is a deliberate complement to the two robust
-gates above, which share a **50% breakdown point**: a *stationary but very noisy* series
-whose value oscillates between two levels defeats them, because Pettitt aligns the split
-with the dominant level on each side, leaving under half of each regime "off-level" so the
-median residual collapses toward zero and the p-value shrinks with sample size regardless of
-overlap. The probability of superiority does not drift with sample size, so it stays low
-(the regimes overlap heavily) and vetoes the spurious step while leaving every genuine level
-shift — where it sits near 1.0 — untouched. Where the points carry confidence intervals,
-non-overlap of the regime intervals is an *additional* veto — it can only *suppress* a
-candidate the other gates would report (declaring the move noise when the intervals overlap),
-never manufacture a finding; where they do not, the residual and separation gates stand
-alone. The same separation gate guards the branch-comparison detector, which likewise
-contrasts two regimes; the resolved-spike detector needs no such gate — its
-recover-to-baseline shape does not arise from a stationary oscillation in the first place.
+The gates exist to suppress **noise** — movement the measurement itself manufactures — and
+nothing else. They are deliberately *not* a filter for changes a reader might find
+uninteresting. A level shift caused by a runner swap, a toolchain bump, or a hardware refresh
+is a genuine move of the measured level and **is reported**; deciding that its cause makes it
+acceptable is a human judgement, recorded with a blessing (§8.6). Every floor is therefore
+tuned to the **measurement floor** — the magnitude below which a metric stops carrying
+information about the code — rather than to what someone might call important, because a gate
+wide enough to hide an infrastructure step would hide the regressions that share its shape.
+
+The same gates run for every engine; only their inputs differ. A change-point needs a minimum
+number of points on **each** side of the split, so a one-off blip on the newest point cannot
+flag; a series too short to hold two such regimes is not evaluated at all, since no split in
+it could satisfy that floor. Whether a series meets that minimum in the window its mode reads
+is also what makes it a member of the false-discovery family (§8.3).
+
+Pettitt *locates* the split (its analytic p-value is too conservative on short series to gate
+on), and a change-point is reported only when all of these hold: a **Mann–Whitney** rank test
+finds the two regimes statistically distinguishable; the move clears the
+**practical-magnitude floor**, so a statistically-real but trivial wobble stays silent; the
+move stands above the series' own **residual scatter** about the fitted step — the
+median-absolute-residual gate that is the primary noise check for *every* engine, in place of
+trusting a value as exact; and the two regimes are **well-separated populations**, not merely
+distinguishable ones. That last gate is an *effect-size* check — the Mann–Whitney
+**probability of superiority**, the share of after-vs-before pairs that move in the finding's
+direction. It is a deliberate complement to the two robust gates above, which share a **50%
+breakdown point**: a *stationary but very noisy* series whose value oscillates between two
+levels defeats them, because Pettitt aligns the split with the dominant level on each side,
+leaving under half of each regime "off-level" so the median residual collapses toward zero and
+the p-value shrinks with sample size regardless of overlap. The probability of superiority
+does not drift with sample size, so it stays low (the regimes overlap heavily) and vetoes the
+spurious step while leaving every genuine level shift — where it sits near 1.0 — untouched.
+Where the points carry confidence intervals, non-overlap of the regime intervals is an
+*additional* veto — it can only *suppress* a candidate the other gates would report (declaring
+the move noise when the intervals overlap), never manufacture a finding; where they do not,
+the residual and separation gates stand alone. The separation gate belongs to this detector
+alone, because Pettitt is free to place its split anywhere inside one series: the
+resolved-spike detector's recover-to-baseline shape does not arise from a stationary
+oscillation in the first place, and the branch comparison has no interior split to misplace.
 
 Drift mirrors this: Mann–Kendall establishes the trend, Theil–Sen sizes it, and the total
 movement must clear the practical floor and exceed the residual scatter about the fitted
 line; the confidence-interval-width gate is applied additionally when intervals are present,
 again only able to suppress a candidate and never to create one.
 
+**Judging a branch tip.** Branch mode asks a different question — not "did this series change
+somewhere" but "is one new commit at this level surprising, given how much the base level
+moves from commit to commit?" — so it needs its own statistic. Two properties shape it:
+
+* **A commit is one observation.** Several stored runs at one commit are re-measurements of a
+  single build on a single runner, not independent evidence about the base level, so each
+  commit's runs collapse to that commit's median before anything is compared. What remains is
+  the *between-commit* scatter, which is the only dispersion a new commit can be judged
+  against. The comparison window is counted in **commits** for the same reason: a
+  run-counted window would shrink to a handful of commits on any repository that records
+  several runs each, and would mean a different thing on every repository.
+
+  This collapsing is **branch mode's alone**. History mode reads the series' raw points: its
+  testability check counts stored points against the minimum series length, and Pettitt and
+  Mann–Whitney rank those same raw points. Where a commit carries several stored runs — a
+  re-run, a backfill, repeated dirty snapshots — history mode therefore counts them as
+  independent evidence, and a rank test fed replicate values is over-confident by however many
+  replicates it was given. On a store that records one run per commit, which is the shape
+  continuous integration produces, the two modes see the same data and the asymmetry does not
+  arise.
+* **One new observation, not a second sample.** The tip's level is judged against a
+  **Student-t prediction interval** for a single future observation drawn from the recent base
+  commits, so the interval carries the scatter of the base levels *plus* the uncertainty in
+  their mean and widens correctly when the window is short. The centre it measures from is that
+  window's **mean**, and the magnitude the finding reports is measured from the same centre, so
+  the move a report states is the move its p-value tested.
+
+  Both the centre and the scale are deliberately non-robust. A real step that landed on the base
+  branch inside the window inflates the scatter and can silence a genuine finding, but making
+  the scale robust while the centre is not is strictly worse: the mean then sits between the two
+  levels and a tip at either of them reads as displaced, so a branch that changed nothing is
+  flagged. Being conservative exactly while the base is unsettled is the intended trade, and it
+  self-heals once the step ages out of the window.
+
+  The scatter estimate is bounded below by the metric's **quantum** — the smallest difference a
+  stored value can express. A counted metric moves in whole units, so a base window can repeat
+  one integer and observe a scatter of exactly zero, and an unbounded estimate would make any
+  move infinitely significant; one count, one byte, or one allocation stands in for the missing
+  scatter. A time carries no quantum at all: it is a regression slope over a run's iterations,
+  which resolves far below a clock tick, so a timing base that observes no scatter is treated as
+  degenerate and yields no verdict rather than a manufactured one.
+
+  This quantum is a distinct quantity from the absolute magnitude floor below. The quantum
+  guards the *denominator* against a degenerate zero; the magnitude floor gates the *move*
+  against what is worth acting on. Conflating them would impose the magnitude floor as an
+  absolute detection threshold, which on a short benchmark costs several times the sensitivity
+  the statistics can otherwise deliver.
+
+Branch mode holds its **relative** floor above history's — a pull-request comment is read by
+everyone who touches the branch, so a false alarm there costs more than a missed marginal
+move. Where the engine reports per-point dispersion, two further vetoes apply: the base and tip
+intervals must not overlap, and the move must clear a multiple of the measurement noise band.
+Like every interval-derived check, both can only *suppress* a candidate the other gates would
+report.
+
+Whichever test produces a finding also fixes its reported **confidence**, in both modes: the
+complement of that test's p-value. Confidence therefore states the strength of the evidence,
+never the threshold the finding had to clear.
+
 The **practical-magnitude floor** is a hard threshold below which no finding surfaces,
-regardless of engine, direction, or how confidently it was measured. A change too small to
-warrant a human's attention is dropped even when the statistics are certain — this is what
-keeps a low-noise engine like Callgrind from surfacing sub-threshold trivia. It has two
-parts, composed by conjunction so a move must clear both: a **relative floor** (a minimum
-percentage) applied to every metric, and an **absolute floor** applied only to *quantized*
-metrics — the Callgrind integer counts, which move in whole units with no confidence
-interval. Because such a count changes in discrete steps, a single-unit run-to-run wobble on
-a small baseline is a large *percentage* move that the relative floor alone would admit;
-requiring the move to also span a minimum number of those units suppresses that quantization
-jitter. Continuous, dispersion-bearing metrics (wall and processor time, `alloc_tracker`
-figures) are exempt from the absolute floor.
+regardless of engine, direction, mode, or how confidently it was measured. A change too small
+to warrant a human's attention is dropped even when the statistics are certain — this is what
+keeps a low-noise engine like Callgrind from surfacing sub-threshold trivia. It has two parts,
+composed by conjunction so a move must clear both, and **both apply to every metric**: a
+**relative floor** (a minimum percentage) and an **absolute floor** in the metric's own units.
+The absolute floor expresses what a percentage cannot — the magnitude below which a move is not
+worth a human's attention — so its value differs by metric class because those units do: a
+handful of instructions is build layout shifting rather than work done, a fraction of a
+nanosecond is not worth acting on however confidently it was measured, and a fraction of an
+allocation cannot happen. Neither floor alone suffices. Without the absolute floor a benchmark
+whose baseline is a couple of nanoseconds turns scheduling jitter into a double-digit
+percentage move; without the relative floor a large baseline would flag on a move that is
+noise at its scale.
 
 The gate thresholds are centralized as a single policy rather than embedded throughout the
-detectors, so maintainers can review and tune the complete policy together.
+detectors, so maintainers can review and tune the complete policy together. Each threshold is
+documented there with the reasoning that sets its value; this document describes the rules
+rather than restating their numbers.
 
 ### 8.3 Multiple-comparison discipline
 
 A repository has many benchmarks × metrics; testing each independently would flood the
 report with false positives. Because no engine is exempt from noise, **every** candidate's
-p-value enters a single **Benjamini–Hochberg** false-discovery-rate procedure — there is no
-bypass — and only survivors are reported.
+p-value enters a single **Benjamini–Hochberg** false-discovery-rate procedure, and only
+survivors are reported.
+
+The procedure only controls anything if its **family** is right. A false-discovery rate is
+defined over every hypothesis that was *tested*, not over the ones that came back positive:
+handed only the survivors of the detectors' own screens, it would compare p-values that
+already cleared a stricter threshold against its own loosest one and could never reject any of
+them. The family is therefore every series that produced a **testable** statistic — including
+every series that raised no candidate at all, since each had the same opportunity to yield a
+false positive. Testability is one mode-aware predicate (enough points in the window the
+mode's detector reads), and detection short-circuits on that same predicate, so a series is
+either judged *and* counted or neither.
+
+Because every mode's verdict rests on a real p-value and on that one family definition, the
+correction applies uniformly to history and branch analysis rather than being a history-mode
+concept.
+
+That same predicate is what every report accounts for (§8.9): a series is judged, counted in
+the family, and reported as judged together, or it is none of the three.
 
 All of this math lives in a pure, Miri-safe statistics crate (`cbh_stats`), unit-tested
 with named, value-asserting cases on hand-computable inputs rather than threshold-mutation
@@ -881,7 +1085,7 @@ never a silent fall-through to history.
 
 * **history** — the base-branch view: auto-selected when the analyzed tip *is* the
   merge-base with the base and no dirty run is recorded on top of it. It applies the
-  long-range change-point, drift, and false-discovery techniques, and reports regressions
+  long-range change-point and drift techniques, and reports regressions
   only by default (steady improvement on the base branch is expected; a flag opts into
   improvements).
 * **branch** — auto-selected otherwise (commits past the merge-base, or a dirty run
@@ -893,14 +1097,16 @@ never a silent fall-through to history.
 
 The two driving scenarios are a scheduled base-branch regression watch (history) and a
 per-PR feature-branch evaluation (branch). Long-range trend analysis is meaningless on one
-or two branch points, which is why the techniques differ by mode:
+or two branch points, which is why the techniques differ by mode. The false-discovery
+correction is not one of the differences: it spans whichever series the running mode found
+testable (§8.3).
 
 | Technique | history | branch |
 |---|---|---|
 | Change-point (Pettitt + engine gating) | ✅ | — |
 | Monotonic drift (Mann–Kendall + Theil–Sen) | ✅ | — |
-| Benjamini–Hochberg false-discovery filter | ✅ | — |
-| Latest-commit vs. base | — | ✅ |
+| Tip commit vs. base (Student-t prediction interval) | — | ✅ |
+| Benjamini–Hochberg false-discovery filter | ✅ | ✅ |
 | Improvements reported | opt-in | ✅ |
 | Resolved (inactive) findings reported | opt-in | — |
 
@@ -918,6 +1124,12 @@ via the base-tip dirty exception.
 History mode distinguishes a change that is **still in effect** from one that has **already
 been addressed**, so a long history does not keep re-flagging events a reviewer has handled.
 Every history-mode finding therefore carries an active flag distinguishing the two.
+
+Blessing is also how a *real but uninteresting* shift is disposed of. The detector reports
+that the measured level moved; whether a runner swap, a toolchain bump, or a deliberate
+tradeoff caused it is a judgement the gates cannot make and do not try to (§8.2), so it is
+recorded here instead — once, against the commit it happened at, rather than by widening a
+threshold that would also hide real regressions.
 
 * **Resolved spikes** — when a level rose and later returned to its prior baseline, the
   current state matches the baseline and there is nothing to act on. Such a finding is
@@ -990,6 +1202,11 @@ Markdown values round to four significant figures. A consumer keys off a top-lev
 "notable" flag (post or stay silent) and reads each finding's direction, magnitude, and
 attribution.
 
+Every format also states what the analysis **judged** (§8.9): a coverage tally in the header of
+all three, prose qualifying a silent verdict where there are no findings, and, in JSON, a
+structured census with the per-reason breakdown so automation can gate on coverage rather than
+on the absence of findings.
+
 Separate from those three canonical formats, `analyze` can also render a condensed Markdown
 **summary** — a single derived view for a size-limited consumer. It reuses the Markdown
 finding blocks but keeps only the top findings by magnitude and drops the per-facet grouping,
@@ -1039,6 +1256,51 @@ affected set. It is per-set metadata, distinct from the top-level dirty-base-tip
 in every format (§8.7) — after each affected set's header in text and Markdown, once per affected
 set in the condensed summary, and as an optional `comparison_base_lags` array on each JSON set — and
 never changes finding selection or the exit code.
+
+### 8.9 Accounting for what was judged
+
+Every report states **how many series it judged, out of how many it accounted for**, and names
+the reason for each series it did not judge. Without that, silence is ambiguous: the identical
+"no notable changes" is printed when every series was judged and none moved, when every series
+was too short to test, when the benchmarks stopped being collected, and when a mis-set gate
+switched detection off. Only the first of those is an all-clear, and a monitoring tool that
+cannot distinguish them can go blind without anyone noticing.
+
+The claim a silent report makes is therefore narrow and stated outright: *these N series were
+judged and none of them moved beyond the measurement floor*. It says nothing about the series it
+could not judge — and, where a level did move, nothing about **why** it moved: the detector
+reports that a measured level changed and leaves the cause to a human (§8.2, §8.6).
+
+The accounting unit is the **series**, the unit the detectors judge, and it covers every series
+the analysis reconstructed, including those dropped before detection. Each unjudged series
+carries exactly one reason — the first that applies in pipeline order:
+
+* **not measured at the analyzed tip commit** — the ghost filter (§8.5) dropped it: the
+  benchmark is no longer part of the suite at the analyzed commit.
+* **too few points in the analyzed window** — shorter than the minimum the mode's detector
+  evaluates (§8.2).
+* **too few points since its blessing** — long enough overall, but its active segment (§8.6)
+  is not.
+* **not measured on the branch** — branch mode has no tip-side observation to judge.
+* **too few base-branch commits to compare against** — branch mode has a tip observation but
+  too few base levels to build a prediction interval from.
+
+The set of judged series is exactly the false-discovery family (§8.3), so the coverage a report
+states is the same fact the correction is computed from and the two cannot drift apart.
+
+How it surfaces (§8.7) follows what a reader needs where:
+
+* Every format carries the **coverage tally** in its header — judged of accounted-for — so a
+  report bearing findings still discloses what it did not look at, in one field.
+* A report with **no findings** additionally qualifies its silence in prose: what the silence
+  covers, and, when anything was unjudged, a one-line breakdown by reason. This is where the
+  ambiguity actually bites, and a healthy repository pays exactly one sentence for it.
+* JSON carries the full census — the totals and a per-reason breakdown — as structured data, so
+  automation can gate on coverage instead of on the absence of findings.
+* **Verbose** diagnostics name each unjudged series individually, with the evidence it carried
+  and the gate rule that declined it, so the verdict can be reconstructed rather than trusted.
+* An analysis that accounted for **no series at all** states no coverage; there is nothing to
+  qualify, and the empty-outcome hint (§7.3) already explains why the run found nothing.
 
 ## 9. Architecture
 

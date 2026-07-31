@@ -430,7 +430,8 @@ jobs:
 
       # Compose the rolling comment body (always, into comment-body.md): when notable, the condensed
       # summary + a link to the full-report artifact + a "how to read" footer; otherwise a compact
-      # "no regressions" state. The hidden marker is embedded so the module finds this same comment
+      # state derived from the report's series census, so an all-clear is claimed only when series
+      # were actually judged. The hidden marker is embedded so the module finds this same comment
       # on the next push. The comment is advisory - it explicitly is NOT a merge gate.
       - name: Compose PR benchmark comment
         shell: pwsh
@@ -499,6 +500,58 @@ jobs:
               $footer
             )
           } else {
+            # No findings is not automatically good news. The detector only reaches a verdict on a
+            # series it has enough evidence to judge, so "no findings" is worth a checkmark ONLY
+            # when everything in scope was actually judged. Read the census the report carries and
+            # let it decide, or the most-read surface of this tool would report success precisely
+            # when it has gone blind.
+            #
+            # Ghost series - those not measured at the analyzed tip commit - are excluded from the
+            # denominator. A PR benchmarks only the impacted packages (the Collection scope line
+            # above says which), while analysis reads the whole store, so every series belonging to
+            # an untouched package is a ghost. Counting those would render the healthy case as
+            # "judged 12 of 3000" and train readers to ignore the one field meant to expose a blind
+            # run. What remains is the in-scope population this PR could actually be judged on.
+            $reportJson = Get-Content (Join-Path $env:SCRATCH_DIR 'report.json') -Raw | ConvertFrom-Json
+            $censusProperty = $reportJson.PSObject.Properties['census']
+            if ($null -eq $censusProperty) {
+              $verdict = @(
+                '⚠️ **No benchmark results were produced**, so nothing was compared against `main`.'
+                ''
+                'This is not an all-clear: the run did not measure this PR. Check the workflow logs.'
+              )
+            } else {
+              $census = $censusProperty.Value
+              $ghosts = 0
+              foreach ($entry in @($census.reasons)) {
+                if ($entry.reason -eq 'ghost') { $ghosts = [int]$entry.count }
+              }
+              $judged = [int]$census.judged
+              $inScope = [int]$census.total - $ghosts
+              if ($inScope -le 0) {
+                $verdict = @(
+                  '⚠️ **Nothing in scope was measured**, so this PR was not assessed against `main`.'
+                  ''
+                  'This is not an all-clear. No benchmark series was recorded at the analyzed commit; check the workflow logs.'
+                )
+              } elseif ($judged -eq 0) {
+                $verdict = @(
+                  "⚠️ **Nothing was judged.** None of the $inScope in-scope series had enough base-branch history to compare against, so this PR was not assessed."
+                  ''
+                  'This is not an all-clear. A series needs a minimum run of base-branch measurements before a change can be told apart from noise; these become assessable as `main` accumulates more.'
+                )
+              } elseif ($judged -lt $inScope) {
+                $verdict = @(
+                  "⚠️ **No regressions among the $judged of $inScope series that could be judged.**"
+                  ''
+                  "The remaining $($inScope - $judged) lacked enough base-branch history to compare against and were not assessed, so this is only a partial all-clear. Run ``cargo bench-history analyze`` with ``--verbose`` to see which series and why."
+                )
+              } else {
+                $verdict = @(
+                  "✅ No benchmark regressions detected against ``main`` (all $inScope in-scope series judged)."
+                )
+              }
+            }
             $parts = @(
               $header
               ''
@@ -506,7 +559,7 @@ jobs:
               ''
               $analyzedLine
               ''
-              '✅ No benchmark regressions detected against `main`.'
+            ) + $verdict + @(
               ''
               'This check is advisory and never blocks the merge. It refreshes on every push.'
             )

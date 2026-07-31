@@ -84,6 +84,8 @@ Consequences worth planning for:
   [`bless`](../commands/bless.md) the affected series at it —
   `cargo bench-history bless --all --context <commit>` accepts the whole workspace in one step — so
   history-mode analysis reads the step as an accepted baseline change rather than a regression.
+  The step *will* be reported until you do: noticing that the measured level moved is the
+  detector's job, and recognizing that a build-flag change caused it is yours.
 - **Pull-request comparisons re-baseline on their own.** Blessing re-baselines history-mode
   analysis only; a pull request is judged directly against the recent base-branch points, which
   blessing does not adjust. Until enough aligned points accumulate on the base branch, a pull
@@ -95,3 +97,12 @@ Consequences worth planning for:
   so backfilling commits that predate the alignment change measures them *with* alignment while
   their originally-collected neighbours lack it. Keep backfilled ranges recent enough to stay
   inside one configuration, or expect an extra step where the two meet.
+
+## The repetition count is part of the protocol
+
+[`collect --best-of N`](../commands/collect.md) is a second source of movement with no source
+change, and this one is self-inflicted. It runs the suite `N` times and stores the per-metric
+**minimum**, and the expected value of a minimum falls as the sample count rises — so raising
+or lowering `N` shifts the recorded level of every benchmark at once. Pick a value per machine
+and project and keep it fixed. Every stored run records the count it was reduced from, so the
+protocol behind a value stays recoverable from the stored data.

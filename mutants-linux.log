@@ -1,0 +1,1136 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.58s
+Found 1133 mutants to test
+unviable packages/cargo-bench-history/src/config_writer.rs:28:13: replace && with || in <impl ConfigWriter for TokioConfigWriter>::write_new in 70s build
+caught   packages/cargo-bench-history/src/config_writer.rs:27:9: replace <impl ConfigWriter for TokioConfigWriter>::write_new -> io::Result<bool> with Ok(true) in 84s build + 2s test
+caught   packages/cargo-bench-history/src/config_writer.rs:27:9: replace <impl ConfigWriter for TokioConfigWriter>::write_new -> io::Result<bool> with Ok(false) in 82s build + 2s test
+caught   packages/cargo-bench-history/src/config_writer.rs:28:16: delete ! in <impl ConfigWriter for TokioConfigWriter>::write_new in 82s build + 2s test
+unviable packages/cargo-bench-history/src/dispatch.rs:60:5: replace run -> Result<RunOutcome, RunError> with Ok(Default::default()) in 4s build
+caught   packages/cargo-bench-history/src/config_writer.rs:47:27: replace match guard error.kind() == io::ErrorKind::AlreadyExists with true in <impl ConfigWriter for TokioConfigWriter>::write_new in 85s build + 2s test
+unviable packages/cargo-bench-history/src/dispatch.rs:81:5: replace run_with_overrides -> Result<RunOutcome, RunError> with Ok(Default::default()) in 3s build
+caught   packages/cargo-bench-history/src/config_writer.rs:47:40: replace == with != in <impl ConfigWriter for TokioConfigWriter>::write_new in 17s build + 1s test
+caught   packages/cargo-bench-history/src/config_writer.rs:47:27: replace match guard error.kind() == io::ErrorKind::AlreadyExists with false in <impl ConfigWriter for TokioConfigWriter>::write_new in 92s build + 2s test
+caught   packages/cargo-bench-history/src/outcome.rs:58:9: replace RunOutcome::stdout_text -> Option<&str> with Some("") in 9s build + 1s test
+caught   packages/cargo-bench-history/src/outcome.rs:58:9: replace RunOutcome::stdout_text -> Option<&str> with None in 11s build + 0s test
+caught   packages/cargo-bench-history/src/outcome.rs:58:9: replace RunOutcome::stdout_text -> Option<&str> with Some("xyzzy") in 10s build + 0s test
+unviable packages/cargo-bench-history/src/outcome.rs:170:9: replace <impl Error for RunError>::source -> Option<&(dyn Error +'static)> with Some(Box::leak(Box::new(Default::default()))) in 1s build
+unviable packages/cargo-bench-history/src/outcome.rs:189:9: replace <impl From<ConfigError> for RunError>::from -> Self with Default::default() in 1s build
+caught   packages/cargo-bench-history/src/outcome.rs:62:10: delete ! in RunOutcome::stdout_text in 10s build + 0s test
+caught   packages/cargo-bench-history/src/outcome.rs:140:9: replace <impl fmt::Display for RunError>::fmt -> fmt::Result with Ok(Default::default()) in 9s build + 0s test
+unviable packages/cargo-bench-history/src/outcome.rs:195:9: replace <impl From<StorageError> for RunError>::from -> Self with Default::default() in 1s build
+unviable packages/cargo-bench-history/src/outcome.rs:201:9: replace <impl From<io::Error> for RunError>::from -> Self with Default::default() in 1s build
+unviable packages/cargo-bench-history/src/outcome.rs:210:9: replace <impl From<AnalyzeError> for RunError>::from -> Self with Default::default() in 1s build
+caught   packages/cargo-bench-history/src/outcome.rs:170:9: replace <impl Error for RunError>::source -> Option<&(dyn Error +'static)> with None in 6s build + 0s test
+unviable packages/cargo-bench-history/src/output.rs:61:13: replace && with || in <impl OutputWriter for TokioOutputWriter>::write in 1s build
+unviable packages/cargo-bench-history/src/commands/backfill.rs:145:5: replace execute -> Result<RunOutcome, RunError> with Ok(Default::default()) in 1s build
+unviable packages/cargo-bench-history/src/commands/backfill.rs:198:5: replace execute_backfill -> Result<RunOutcome, RunError> with Ok(Default::default()) in 2s build
+caught   packages/cargo-bench-history/src/output.rs:59:9: replace <impl OutputWriter for TokioOutputWriter>::write -> io::Result<()> with Ok(()) in 4s build + 0s test
+caught   packages/cargo-bench-history/src/output.rs:61:16: delete ! in <impl OutputWriter for TokioOutputWriter>::write in 4s build + 0s test
+caught   packages/cargo-bench-history/src/output.rs:128:5: replace write_report -> Result<(), RunError> with Ok(()) in 4s build + 0s test
+caught   packages/cargo-bench-history/src/output.rs:91:5: replace write_reports -> Result<(), RunError> with Ok(()) in 4s build + 0s test
+caught   packages/cargo-bench-history/src/commands/backfill.rs:237:5: replace plan_commits -> Result<Vec<String>, RunError> with Ok(vec![]) in 4s build + 0s test
+caught   packages/cargo-bench-history/src/commands/backfill.rs:237:5: replace plan_commits -> Result<Vec<String>, RunError> with Ok(vec![String::new()]) in 4s build + 0s test
+caught   packages/cargo-bench-history/src/commands/backfill.rs:237:5: replace plan_commits -> Result<Vec<String>, RunError> with Ok(vec!["xyzzy".into()]) in 4s build + 0s test
+caught   packages/cargo-bench-history/src/commands/backfill.rs:243:35: replace == with != in plan_commits in 5s build + 0s test
+caught   packages/cargo-bench-history/src/commands/backfill.rs:264:5: replace resolve_required -> Result<String, RunError> with Ok(String::new()) in 4s build + 0s test
+caught   packages/cargo-bench-history/src/commands/backfill.rs:264:5: replace resolve_required -> Result<String, RunError> with Ok("xyzzy".into()) in 4s build + 0s test
+caught   packages/cargo-bench-history/src/commands/backfill.rs:297:5: replace run_commits -> Result<BackfillReport, RunError> with Ok(Default::default()) in 4s build + 0s test
+caught   packages/cargo-bench-history/src/commands/backfill.rs:336:20: delete ! in run_commits in 4s build + 0s test
+caught   packages/cargo-bench-history/src/commands/backfill.rs:357:5: replace scan_outcome_summary -> String with String::new() in 5s build + 0s test
+caught   packages/cargo-bench-history/src/commands/backfill.rs:357:5: replace scan_outcome_summary -> String with "xyzzy".into() in 4s build + 0s test
+caught   packages/cargo-bench-history/src/commands/backfill.rs:389:9: replace BackfillReport::render -> String with String::new() in 4s build + 0s test
+caught   packages/cargo-bench-history/src/commands/backfill.rs:389:9: replace BackfillReport::render -> String with "xyzzy".into() in 4s build + 0s test
+unviable packages/cargo-bench-history/src/commands/backfill.rs:453:5: replace map_collect_result -> Result<CommitOutcome, RunError> with Ok(Default::default()) in 1s build
+caught   packages/cargo-bench-history/src/commands/backfill.rs:426:5: replace short -> &str with "" in 4s build + 0s test
+caught   packages/cargo-bench-history/src/commands/backfill.rs:426:5: replace short -> &str with "xyzzy" in 4s build + 0s test
+caught   packages/cargo-bench-history/src/commands/backfill.rs:431:5: replace worktree_path -> PathBuf with Default::default() in 4s build + 0s test
+caught   packages/cargo-bench-history/src/commands/backfill.rs:454:24: replace match guard summary.stored > 0 with false in map_collect_result in 4s build + 1s test
+caught   packages/cargo-bench-history/src/commands/backfill.rs:454:24: replace match guard summary.stored > 0 with true in map_collect_result in 4s build + 1s test
+caught   packages/cargo-bench-history/src/commands/backfill.rs:454:39: replace > with == in map_collect_result in 5s build + 0s test
+caught   packages/cargo-bench-history/src/commands/backfill.rs:454:39: replace > with < in map_collect_result in 5s build + 0s test
+unviable packages/cargo-bench-history/src/commands/collect.rs:91:5: replace execute -> Result<RunOutcome, RunError> with Ok(Default::default()) in 1s build
+caught   packages/cargo-bench-history/src/commands/backfill.rs:454:39: replace > with >= in map_collect_result in 5s build + 0s test
+caught   packages/cargo-bench-history/src/commands/backfill.rs:485:5: replace recorded_commits_in -> Result<HashSet<String>, RunError> with Ok(HashSet::new()) in 5s build + 0s test
+caught   packages/cargo-bench-history/src/commands/backfill.rs:485:5: replace recorded_commits_in -> Result<HashSet<String>, RunError> with Ok(HashSet::from_iter([String::new()])) in 4s build + 1s test
+caught   packages/cargo-bench-history/src/commands/backfill.rs:485:5: replace recorded_commits_in -> Result<HashSet<String>, RunError> with Ok(HashSet::from_iter(["xyzzy".into()])) in 4s build + 1s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:187:5: replace describe_storage -> String with String::new() in 5s build + 0s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:187:5: replace describe_storage -> String with "xyzzy".into() in 4s build + 0s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:188:9: delete match arm (Some(LocalStorageSelection::Path(_)), Some(path)) in describe_storage in 5s build + 0s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:191:9: delete match arm (Some(LocalStorageSelection::FromEnv), Some(path)) in describe_storage in 5s build + 0s test
+unviable packages/cargo-bench-history/src/commands/collect.rs:248:5: replace probe_context -> Result<SharedContext, RunError> with Ok(Default::default()) in 1s build
+unviable packages/cargo-bench-history/src/commands/collect.rs:290:9: replace Partition::discriminant_set -> DiscriminantSet with Default::default() in 1s build
+unviable packages/cargo-bench-history/src/commands/collect.rs:302:5: replace partition_of -> Partition with Default::default() in 1s build
+caught   packages/cargo-bench-history/src/commands/collect.rs:209:5: replace default_bench_command -> Vec<String> with vec![String::new()] in 4s build + 0s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:209:5: replace default_bench_command -> Vec<String> with vec![] in 5s build + 0s test
+unviable packages/cargo-bench-history/src/commands/collect.rs:321:5: replace probe_partition -> Result<Partition, RunError> with Ok(Default::default()) in 1s build
+unviable packages/cargo-bench-history/src/commands/collect.rs:411:5: replace execute_collect -> Result<RunOutcome, RunError> with Ok(Default::default()) in 2s build
+caught   packages/cargo-bench-history/src/commands/collect.rs:209:5: replace default_bench_command -> Vec<String> with vec!["xyzzy".into()] in 5s build + 1s test
+unviable packages/cargo-bench-history/src/commands/collect.rs:449:5: replace run_engines -> Result<CollectSummary, RunError> with Ok(Default::default()) in 3s build
+caught   packages/cargo-bench-history/src/commands/collect.rs:474:13: replace > with < in run_engines in 7s build + 1s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:474:13: replace > with == in run_engines in 8s build + 0s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:474:13: replace > with >= in run_engines in 7s build + 0s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:496:17: replace > with == in run_engines in 7s build + 0s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:496:17: replace > with >= in run_engines in 6s build + 0s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:496:17: replace > with < in run_engines in 6s build + 0s test
+unviable packages/cargo-bench-history/src/commands/collect.rs:585:5: replace finalize_and_store -> Result<CollectSummary, RunError> with Ok(Default::default()) in 2s build
+unviable packages/cargo-bench-history/src/commands/collect.rs:695:5: replace machine_info -> MachineInfo with Default::default() in 2s build
+caught   packages/cargo-bench-history/src/commands/collect.rs:506:12: delete ! in run_engines in 6s build + 1s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:664:5: replace partition_selection_summary -> String with String::new() in 6s build + 1s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:664:5: replace partition_selection_summary -> String with "xyzzy".into() in 5s build + 1s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:715:5: replace note_best_of_selections with () in 6s build + 0s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:715:13: replace <= with > in note_best_of_selections in 5s build + 0s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:725:30: replace == with != in note_best_of_selections in 5s build + 1s test
+unviable packages/cargo-bench-history/src/commands/collect.rs:824:5: replace harvest_records -> Result<Vec<BenchmarkResult>, RunError> with Ok(vec![Default::default()]) in 2s build
+caught   packages/cargo-bench-history/src/commands/collect.rs:760:5: replace build_bench_argv -> Result<Vec<String>, RunError> with Ok(vec!["xyzzy".into()]) in 5s build + 0s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:760:5: replace build_bench_argv -> Result<Vec<String>, RunError> with Ok(vec![String::new()]) in 6s build + 0s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:760:5: replace build_bench_argv -> Result<Vec<String>, RunError> with Ok(vec![]) in 6s build + 0s test
+unviable packages/cargo-bench-history/src/commands/collect.rs:847:5: replace store_engine -> Result<EngineSummary, RunError> with Ok(Default::default()) in 1s build
+caught   packages/cargo-bench-history/src/commands/collect.rs:797:8: delete ! in build_bench_argv in 5s build + 0s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:824:5: replace harvest_records -> Result<Vec<BenchmarkResult>, RunError> with Ok(vec![]) in 5s build + 0s test
+unviable packages/cargo-bench-history/src/commands/collect.rs:1016:5: replace store_result -> Result<StoreOutcome, RunError> with Ok(Default::default()) in 2s build
+unviable packages/cargo-bench-history/src/commands/collect.rs:1044:5: replace parse_harvest -> Result<Vec<BenchmarkResult>, RunError> with Ok(vec![Default::default()]) in 2s build
+caught   packages/cargo-bench-history/src/commands/collect.rs:856:14: replace == with != in store_engine in 6s build + 0s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:1044:5: replace parse_harvest -> Result<Vec<BenchmarkResult>, RunError> with Ok(vec![]) in 6s build + 0s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:1104:5: replace push_or_skip with () in 6s build + 0s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:1122:5: replace build_message -> String with String::new() in 6s build + 0s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:1122:5: replace build_message -> String with "xyzzy".into() in 6s build + 0s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:1134:8: delete ! in build_message in 6s build + 0s test
+unviable packages/cargo-bench-history/src/commands/import.rs:48:5: replace execute -> Result<RunOutcome, RunError> with Ok(Default::default()) in 1s build
+unviable packages/cargo-bench-history/src/commands/import.rs:166:5: replace orchestrate_import -> Result<RunOutcome, RunError> with Ok(Default::default()) in 2s build
+unviable packages/cargo-bench-history/src/commands/import.rs:237:5: replace apply_overrides -> Result<SharedContext, RunError> with Ok(Default::default()) in 1s build
+caught   packages/cargo-bench-history/src/commands/collect.rs:1144:5: replace timestamp_from -> Timestamp with Default::default() in 5s build + 0s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:1165:5: replace target_root_from -> PathBuf with Default::default() in 5s build + 0s test
+caught   packages/cargo-bench-history/src/commands/collect.rs:1151:5: replace resolve_target_root_in -> PathBuf with Default::default() in 5s build + 0s test
+unviable packages/cargo-bench-history/src/commands/install.rs:21:5: replace execute -> Result<RunOutcome, RunError> with Ok(Default::default()) in 1s build
+caught   packages/cargo-bench-history/src/commands/import.rs:129:5: replace resolve_target_root -> Result<PathBuf, RunError> with Ok(Default::default()) in 5s build + 0s test
+unviable packages/cargo-bench-history/src/commands/install.rs:35:5: replace execute_install -> Result<RunOutcome, RunError> with Ok(Default::default()) in 1s build
+caught   packages/cargo-bench-history/src/commands/import.rs:166:26: replace && with || in orchestrate_import in 5s build + 0s test
+unviable packages/cargo-bench-history/src/commands/machine_key.rs:36:5: replace machine_key_outcome -> RunOutcome with Default::default() in 2s build
+unviable packages/cargo-bench-history/src/commands/machine_key.rs:24:5: replace execute -> Result<RunOutcome, RunError> with Ok(Default::default()) in 2s build
+unviable packages/cargo-bench-history/src/commands/reporting.rs:37:5: replace analyze -> Result<RunOutcome, RunError> with Ok(Default::default()) in 1s build
+unviable packages/cargo-bench-history/src/commands/reporting.rs:66:5: replace list -> Result<RunOutcome, RunError> with Ok(Default::default()) in 1s build
+unviable packages/cargo-bench-history/src/commands/reporting.rs:94:5: replace examine -> Result<RunOutcome, RunError> with Ok(Default::default()) in 1s build
+unviable packages/cargo-bench-history/src/commands/reporting.rs:148:5: replace rekey -> Result<RunOutcome, RunError> with Ok(Default::default()) in 1s build
+caught   packages/cargo-bench-history/src/commands/install.rs:57:5: replace install_message -> String with "xyzzy".into() in 4s build + 0s test
+unviable packages/cargo-bench-history/src/commands/reporting.rs:122:5: replace prune -> Result<RunOutcome, RunError> with Ok(Default::default()) in 1s build
+caught   packages/cargo-bench-history/src/commands/install.rs:57:5: replace install_message -> String with String::new() in 4s build + 0s test
+unviable packages/cargo-bench-history/src/commands/reporting.rs:175:5: replace bless -> Result<RunOutcome, RunError> with Ok(Default::default()) in 1s build
+unviable packages/cargo-bench-history/src/commands/reporting.rs:190:5: replace unbless -> Result<RunOutcome, RunError> with Ok(Default::default()) in 1s build
+caught   packages/cbh_analyze/src/announce.rs:23:5: replace announce_selection with () in 11s build + 0s test
+caught   packages/cbh_analyze/src/bless.rs:178:5: replace bless_with -> Result<String, AnalyzeError> with Ok(String::new()) in 11s build + 0s test
+caught   packages/cbh_analyze/src/announce.rs:62:5: replace selection_announcement -> String with String::new() in 11s build + 0s test
+caught   packages/cbh_analyze/src/bless.rs:178:5: replace bless_with -> Result<String, AnalyzeError> with Ok("xyzzy".into()) in 11s build + 0s test
+caught   packages/cbh_analyze/src/announce.rs:62:5: replace selection_announcement -> String with "xyzzy".into() in 11s build + 0s test
+caught   packages/cbh_analyze/src/bless.rs:244:40: replace == with != in bless_with in 10s build + 0s test
+caught   packages/cbh_analyze/src/bless.rs:260:35: replace && with || in bless_with in 4s build + 0s test
+caught   packages/cbh_analyze/src/bless.rs:245:8: delete ! in bless_with in 5s build + 0s test
+caught   packages/cbh_analyze/src/bless.rs:357:5: replace unbless_with -> Result<String, AnalyzeError> with Ok(String::new()) in 4s build + 0s test
+caught   packages/cbh_analyze/src/bless.rs:266:45: replace == with != in bless_with in 4s build + 0s test
+caught   packages/cbh_analyze/src/bless.rs:266:53: replace && with || in bless_with in 4s build + 0s test
+caught   packages/cbh_analyze/src/bless.rs:357:5: replace unbless_with -> Result<String, AnalyzeError> with Ok("xyzzy".into()) in 4s build + 0s test
+caught   packages/cbh_analyze/src/bless.rs:384:53: replace && with || in unbless_with in 4s build + 0s test
+caught   packages/cbh_analyze/src/bless.rs:384:45: replace == with != in unbless_with in 4s build + 0s test
+caught   packages/cbh_analyze/src/bless.rs:395:30: replace == with != in unbless_with in 4s build + 0s test
+caught   packages/cbh_analyze/src/bless.rs:410:5: replace resolve_commit -> Result<String, AnalyzeError> with Ok(String::new()) in 4s build + 0s test
+caught   packages/cbh_analyze/src/bless.rs:410:5: replace resolve_commit -> Result<String, AnalyzeError> with Ok("xyzzy".into()) in 4s build + 0s test
+caught   packages/cbh_analyze/src/bless.rs:423:5: replace short_commit_id -> &str with "" in 4s build + 0s test
+unviable packages/cbh_analyze/src/bless.rs:441:5: replace synthesize_target_sets -> Vec<DiscriminantSet> with vec![Default::default()] in 2s build
+caught   packages/cbh_analyze/src/bless.rs:423:5: replace short_commit_id -> &str with "xyzzy" in 4s build + 0s test
+caught   packages/cbh_analyze/src/bless.rs:441:5: replace synthesize_target_sets -> Vec<DiscriminantSet> with vec![] in 4s build + 0s test
+caught   packages/cbh_analyze/src/bless.rs:474:5: replace concrete_facet_values -> Vec<String> with vec![] in 4s build + 0s test
+caught   packages/cbh_analyze/src/bless.rs:474:5: replace concrete_facet_values -> Vec<String> with vec![String::new()] in 4s build + 0s test
+caught   packages/cbh_analyze/src/bless.rs:474:5: replace concrete_facet_values -> Vec<String> with vec!["xyzzy".into()] in 4s build + 0s test
+unviable packages/cbh_analyze/src/comparison_base.rs:87:5: replace classify_comparison_base_lags -> HashMap<DiscriminantSet, Vec<ComparisonBaseLag>> with HashMap::from_iter([(Default::default(), vec![])]) in 2s build
+unviable packages/cbh_analyze/src/comparison_base.rs:87:5: replace classify_comparison_base_lags -> HashMap<DiscriminantSet, Vec<ComparisonBaseLag>> with HashMap::from_iter([(Default::default(), vec![Default::default()])]) in 2s build
+caught   packages/cbh_analyze/src/comparison_base.rs:87:5: replace classify_comparison_base_lags -> HashMap<DiscriminantSet, Vec<ComparisonBaseLag>> with HashMap::new() in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:193:5: replace loaded_series_prove_mismatch -> bool with true in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:193:5: replace loaded_series_prove_mismatch -> bool with false in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:197:13: replace && with || in loaded_series_prove_mismatch in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:196:13: replace && with || in loaded_series_prove_mismatch in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:195:30: replace == with != in loaded_series_prove_mismatch in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:195:13: replace && with || in loaded_series_prove_mismatch in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:196:31: replace == with != in loaded_series_prove_mismatch in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:200:21: replace && with || in loaded_series_prove_mismatch in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:199:21: replace && with || in loaded_series_prove_mismatch in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:198:17: delete ! in loaded_series_prove_mismatch in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:199:41: replace > with < in loaded_series_prove_mismatch in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:199:41: replace > with == in loaded_series_prove_mismatch in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:199:41: replace > with >= in loaded_series_prove_mismatch in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:200:41: replace <= with > in loaded_series_prove_mismatch in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:211:5: replace evidence_proves_mismatch -> bool with true in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:211:5: replace evidence_proves_mismatch -> bool with false in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:215:13: replace && with || in evidence_proves_mismatch in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:214:13: replace && with || in evidence_proves_mismatch in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:213:13: replace && with || in evidence_proves_mismatch in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:213:35: replace > with == in evidence_proves_mismatch in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:213:35: replace > with < in evidence_proves_mismatch in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:213:35: replace > with >= in evidence_proves_mismatch in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:214:35: replace <= with > in evidence_proves_mismatch in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:217:21: replace && with || in evidence_proves_mismatch in 4s build + 0s test
+unviable packages/cbh_analyze/src/comparison_base.rs:237:5: replace load_sibling_evidence -> Result<Vec<SiblingEvidence>, AnalyzeError> with Ok(vec![Default::default()]) in 2s build
+caught   packages/cbh_analyze/src/comparison_base.rs:216:28: replace == with != in evidence_proves_mismatch in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:220:51: replace == with != in evidence_proves_mismatch in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:237:5: replace load_sibling_evidence -> Result<Vec<SiblingEvidence>, AnalyzeError> with Ok(vec![]) in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:243:17: replace && with || in load_sibling_evidence in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:242:17: replace && with || in load_sibling_evidence in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:242:39: replace > with == in load_sibling_evidence in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:242:39: replace > with < in load_sibling_evidence in 5s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:242:39: replace > with >= in load_sibling_evidence in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:243:39: replace <= with > in load_sibling_evidence in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:245:21: replace && with || in load_sibling_evidence in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:245:24: delete ! in load_sibling_evidence in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:287:5: replace is_sibling_set -> bool with true in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:287:5: replace is_sibling_set -> bool with false in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:288:9: replace && with || in is_sibling_set in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:289:9: replace && with || in is_sibling_set in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:287:22: replace == with != in is_sibling_set in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:288:36: replace == with != in is_sibling_set in 4s build + 0s test
+unviable packages/cbh_analyze/src/dataset.rs:125:5: replace select_dataset -> Result<SelectedDataSet, AnalyzeError> with Ok(Default::default()) in 2s build
+caught   packages/cbh_analyze/src/comparison_base.rs:289:34: replace != with == in is_sibling_set in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:294:5: replace reason_rank -> u8 with 0 in 4s build + 0s test
+caught   packages/cbh_analyze/src/comparison_base.rs:294:5: replace reason_rank -> u8 with 1 in 4s build + 0s test
+caught   packages/cbh_analyze/src/dataset.rs:141:34: delete ! in select_dataset in 5s build + 0s test
+caught   packages/cbh_analyze/src/dataset.rs:142:8: delete ! in select_dataset in 4s build + 0s test
+caught   packages/cbh_analyze/src/dataset.rs:271:12: delete ! in select_dataset in 4s build + 0s test
+caught   packages/cbh_analyze/src/dataset.rs:193:13: replace && with || in select_dataset in 4s build + 0s test
+unviable packages/cbh_analyze/src/dataset.rs:495:5: replace admit_sibling_observations -> Vec<SiblingObservation> with vec![Default::default()] in 2s build
+caught   packages/cbh_analyze/src/dataset.rs:282:16: delete ! in select_dataset in 5s build + 2s test
+caught   packages/cbh_analyze/src/dataset.rs:282:13: replace && with || in select_dataset in 5s build + 2s test
+caught   packages/cbh_analyze/src/dataset.rs:394:13: replace == with != in select_dataset in 5s build + 1s test
+caught   packages/cbh_analyze/src/dataset.rs:495:5: replace admit_sibling_observations -> Vec<SiblingObservation> with vec![] in 5s build + 1s test
+caught   packages/cbh_analyze/src/dataset.rs:509:23: replace > with == in admit_sibling_observations in 5s build + 1s test
+caught   packages/cbh_analyze/src/dataset.rs:509:23: replace > with < in admit_sibling_observations in 7s build + 1s test
+caught   packages/cbh_analyze/src/dataset.rs:509:23: replace > with >= in admit_sibling_observations in 7s build + 2s test
+caught   packages/cbh_analyze/src/dataset.rs:558:5: replace effective_selection_summary -> String with String::new() in 7s build + 2s test
+caught   packages/cbh_analyze/src/dataset.rs:558:5: replace effective_selection_summary -> String with "xyzzy".into() in 7s build + 1s test
+caught   packages/cbh_analyze/src/dataset.rs:601:5: replace empty_history_hint -> Option<String> with None in 7s build + 1s test
+caught   packages/cbh_analyze/src/dataset.rs:601:5: replace empty_history_hint -> Option<String> with Some(String::new()) in 7s build + 1s test
+caught   packages/cbh_analyze/src/dataset.rs:601:5: replace empty_history_hint -> Option<String> with Some("xyzzy".into()) in 6s build + 2s test
+caught   packages/cbh_analyze/src/dataset.rs:601:8: delete ! in empty_history_hint in 7s build + 1s test
+caught   packages/cbh_analyze/src/dataset.rs:605:24: replace == with != in empty_history_hint in 7s build + 1s test
+caught   packages/cbh_analyze/src/dataset.rs:630:25: replace > with == in empty_history_hint in 7s build + 1s test
+caught   packages/cbh_analyze/src/dataset.rs:630:25: replace > with < in empty_history_hint in 6s build + 1s test
+caught   packages/cbh_analyze/src/dataset.rs:630:25: replace > with >= in empty_history_hint in 6s build + 2s test
+caught   packages/cbh_analyze/src/dataset.rs:638:30: replace > with == in empty_history_hint in 6s build + 2s test
+caught   packages/cbh_analyze/src/dataset.rs:638:30: replace > with < in empty_history_hint in 6s build + 2s test
+caught   packages/cbh_analyze/src/dataset.rs:638:30: replace > with >= in empty_history_hint in 6s build + 2s test
+caught   packages/cbh_analyze/src/dataset.rs:645:20: replace > with == in empty_history_hint in 6s build + 1s test
+caught   packages/cbh_analyze/src/dataset.rs:645:20: replace > with < in empty_history_hint in 6s build + 1s test
+caught   packages/cbh_analyze/src/dataset.rs:645:20: replace > with >= in empty_history_hint in 7s build + 1s test
+unviable packages/cbh_analyze/src/error.rs:55:9: replace <impl Error for AnalyzeError>::source -> Option<&(dyn Error +'static)> with Some(Box::leak(Box::new(Default::default()))) in 2s build
+unviable packages/cbh_analyze/src/error.rs:66:9: replace <impl From<ConfigError> for AnalyzeError>::from -> Self with Default::default() in 2s build
+unviable packages/cbh_analyze/src/error.rs:72:9: replace <impl From<StorageError> for AnalyzeError>::from -> Self with Default::default() in 2s build
+unviable packages/cbh_analyze/src/error.rs:78:9: replace <impl From<io::Error> for AnalyzeError>::from -> Self with Default::default() in 2s build
+caught   packages/cbh_analyze/src/error.rs:43:9: replace <impl fmt::Display for AnalyzeError>::fmt -> fmt::Result with Ok(Default::default()) in 5s build + 1s test
+unviable packages/cbh_analyze/src/examine.rs:204:5: replace parse_metric -> Result<MetricKind, AnalyzeError> with Ok(Default::default()) in 3s build
+unviable packages/cbh_analyze/src/examine.rs:277:5: replace build_pivot -> Pivot with Default::default() in 3s build
+caught   packages/cbh_analyze/src/error.rs:55:9: replace <impl Error for AnalyzeError>::source -> Option<&(dyn Error +'static)> with None in 7s build + 1s test
+caught   packages/cbh_analyze/src/examine.rs:133:5: replace examine_with -> Result<RenderedReports, AnalyzeError> with Ok(Default::default()) in 6s build + 1s test
+caught   packages/cbh_analyze/src/examine.rs:174:19: delete ! in examine_with in 6s build + 1s test
+caught   packages/cbh_analyze/src/examine.rs:279:47: replace && with || in build_pivot in 6s build + 1s test
+caught   packages/cbh_analyze/src/examine.rs:279:32: replace == with != in build_pivot in 6s build + 0s test
+caught   packages/cbh_analyze/src/examine.rs:279:69: replace == with != in build_pivot in 5s build + 1s test
+caught   packages/cbh_analyze/src/examine.rs:320:5: replace unmatched_series_hint -> String with String::new() in 5s build + 1s test
+caught   packages/cbh_analyze/src/examine.rs:332:5: replace truncate_title -> String with String::new() in 5s build + 0s test
+caught   packages/cbh_analyze/src/examine.rs:320:5: replace unmatched_series_hint -> String with "xyzzy".into() in 5s build + 0s test
+caught   packages/cbh_analyze/src/examine.rs:332:5: replace truncate_title -> String with "xyzzy".into() in 4s build + 0s test
+caught   packages/cbh_analyze/src/examine.rs:338:5: replace short_commit_id -> &str with "" in 5s build + 0s test
+caught   packages/cbh_analyze/src/examine.rs:338:5: replace short_commit_id -> &str with "xyzzy" in 5s build + 0s test
+caught   packages/cbh_analyze/src/examine.rs:347:5: replace chart_of_points -> Option<String> with None in 5s build + 0s test
+caught   packages/cbh_analyze/src/examine.rs:347:5: replace chart_of_points -> Option<String> with Some(String::new()) in 5s build + 0s test
+caught   packages/cbh_analyze/src/examine.rs:347:5: replace chart_of_points -> Option<String> with Some("xyzzy".into()) in 5s build + 0s test
+caught   packages/cbh_analyze/src/examine.rs:362:5: replace render_pivot -> String with String::new() in 4s build + 0s test
+caught   packages/cbh_analyze/src/examine.rs:362:5: replace render_pivot -> String with "xyzzy".into() in 5s build + 0s test
+caught   packages/cbh_analyze/src/examine.rs:370:5: replace render_pivot_text -> String with String::new() in 4s build + 0s test
+caught   packages/cbh_analyze/src/examine.rs:370:5: replace render_pivot_text -> String with "xyzzy".into() in 5s build + 0s test
+caught   packages/cbh_analyze/src/examine.rs:417:5: replace render_pivot_markdown -> String with String::new() in 4s build + 0s test
+caught   packages/cbh_analyze/src/examine.rs:417:5: replace render_pivot_markdown -> String with "xyzzy".into() in 4s build + 0s test
+caught   packages/cbh_analyze/src/examine.rs:457:5: replace render_pivot_json -> String with String::new() in 4s build + 0s test
+caught   packages/cbh_analyze/src/examine.rs:457:5: replace render_pivot_json -> String with "xyzzy".into() in 4s build + 0s test
+caught   packages/cbh_analyze/src/examine.rs:519:5: replace escape_cell -> String with String::new() in 4s build + 0s test
+caught   packages/cbh_analyze/src/examine.rs:519:5: replace escape_cell -> String with "xyzzy".into() in 4s build + 0s test
+caught   packages/cbh_analyze/src/examine.rs:525:5: replace append_hint_and_warning with () in 4s build + 0s test
+caught   packages/cbh_analyze/src/facets.rs:38:5: replace resolve_facet -> FacetFilter with Default::default() in 4s build + 0s test
+caught   packages/cbh_analyze/src/facets.rs:60:5: replace resolve_facets -> Result<DiscriminantSetQuery, AnalyzeError> with Ok(Default::default()) in 4s build + 0s test
+caught   packages/cbh_analyze/src/facets.rs:75:5: replace describe_facets -> String with String::new() in 4s build + 0s test
+caught   packages/cbh_analyze/src/facets.rs:75:5: replace describe_facets -> String with "xyzzy".into() in 4s build + 0s test
+caught   packages/cbh_analyze/src/facets.rs:92:5: replace describe_filter -> Option<String> with None in 4s build + 0s test
+caught   packages/cbh_analyze/src/facets.rs:92:5: replace describe_filter -> Option<String> with Some(String::new()) in 4s build + 0s test
+caught   packages/cbh_analyze/src/facets.rs:92:5: replace describe_filter -> Option<String> with Some("xyzzy".into()) in 4s build + 0s test
+caught   packages/cbh_analyze/src/facets.rs:107:5: replace describe_effective_facets -> String with String::new() in 4s build + 0s test
+caught   packages/cbh_analyze/src/facets.rs:107:5: replace describe_effective_facets -> String with "xyzzy".into() in 4s build + 0s test
+caught   packages/cbh_analyze/src/facets.rs:121:5: replace describe_effective_filter -> String with String::new() in 4s build + 0s test
+caught   packages/cbh_analyze/src/facets.rs:121:5: replace describe_effective_filter -> String with "xyzzy".into() in 4s build + 0s test
+caught   packages/cbh_analyze/src/facets.rs:132:5: replace facets_are_unconstrained -> bool with true in 4s build + 0s test
+caught   packages/cbh_analyze/src/facets.rs:134:9: replace && with || in facets_are_unconstrained in 4s build + 0s test
+caught   packages/cbh_analyze/src/facets.rs:132:5: replace facets_are_unconstrained -> bool with false in 4s build + 0s test
+unviable packages/cbh_analyze/src/facets.rs:139:5: replace parse_engine -> Result<Option<Engine>, AnalyzeError> with Ok(Some(Default::default())) in 2s build
+unviable packages/cbh_analyze/src/history.rs:97:5: replace resolve_history -> Result<ResolvedHistory, AnalyzeError> with Ok(Default::default()) in 2s build
+caught   packages/cbh_analyze/src/facets.rs:133:9: replace && with || in facets_are_unconstrained in 4s build + 0s test
+caught   packages/cbh_analyze/src/facets.rs:139:5: replace parse_engine -> Result<Option<Engine>, AnalyzeError> with Ok(None) in 4s build + 0s test
+caught   packages/cbh_analyze/src/history.rs:209:49: replace match guard !selection.no_dirty with true in resolve_history in 4s build + 0s test
+caught   packages/cbh_analyze/src/history.rs:146:12: delete ! in resolve_history in 4s build + 0s test
+caught   packages/cbh_analyze/src/history.rs:209:49: replace match guard !selection.no_dirty with false in resolve_history in 4s build + 0s test
+caught   packages/cbh_analyze/src/history.rs:209:49: delete ! in resolve_history in 4s build + 0s test
+caught   packages/cbh_analyze/src/history.rs:215:35: delete ! in resolve_history in 4s build + 0s test
+caught   packages/cbh_analyze/src/history.rs:230:9: delete ! in resolve_history in 4s build + 0s test
+unviable packages/cbh_analyze/src/history.rs:302:5: replace resolve_base -> Result<Option<ResolvedBase>, AnalyzeError> with Ok(Some(Default::default())) in 2s build
+caught   packages/cbh_analyze/src/history.rs:253:40: replace == with != in resolve_history in 4s build + 0s test
+unviable packages/cbh_analyze/src/history.rs:314:9: replace && with || in resolve_base in 2s build
+caught   packages/cbh_analyze/src/history.rs:272:5: replace dirty_base_exception_warning -> String with String::new() in 4s build + 0s test
+caught   packages/cbh_analyze/src/history.rs:272:5: replace dirty_base_exception_warning -> String with "xyzzy".into() in 4s build + 0s test
+unviable packages/cbh_analyze/src/history.rs:322:9: replace && with || in resolve_base in 2s build
+caught   packages/cbh_analyze/src/history.rs:302:5: replace resolve_base -> Result<Option<ResolvedBase>, AnalyzeError> with Ok(None) in 4s build + 0s test
+unviable packages/cbh_analyze/src/list.rs:236:5: replace build_listing -> Listing with Default::default() in 2s build
+caught   packages/cbh_analyze/src/list.rs:121:5: replace list_with -> Result<RenderedReports, AnalyzeError> with Ok(Default::default()) in 4s build + 0s test
+caught   packages/cbh_analyze/src/list.rs:126:20: replace && with || in list_with in 4s build + 0s test
+caught   packages/cbh_analyze/src/list.rs:126:39: replace != with == in list_with in 4s build + 1s test
+caught   packages/cbh_analyze/src/list.rs:239:68: replace == with != in build_listing in 5s build + 0s test
+caught   packages/cbh_analyze/src/list.rs:274:5: replace series_noun -> String with String::new() in 5s build + 0s test
+caught   packages/cbh_analyze/src/list.rs:274:5: replace series_noun -> String with "xyzzy".into() in 5s build + 0s test
+caught   packages/cbh_analyze/src/list.rs:285:5: replace commit_line -> String with String::new() in 5s build + 0s test
+caught   packages/cbh_analyze/src/list.rs:285:5: replace commit_line -> String with "xyzzy".into() in 5s build + 0s test
+caught   packages/cbh_analyze/src/list.rs:285:33: replace == with != in commit_line in 4s build + 0s test
+caught   packages/cbh_analyze/src/list.rs:290:33: replace == with != in commit_line in 5s build + 0s test
+caught   packages/cbh_analyze/src/list.rs:306:5: replace render_listing -> String with String::new() in 4s build + 0s test
+caught   packages/cbh_analyze/src/list.rs:306:5: replace render_listing -> String with "xyzzy".into() in 4s build + 0s test
+caught   packages/cbh_analyze/src/list.rs:314:5: replace render_listing_text -> String with String::new() in 4s build + 0s test
+caught   packages/cbh_analyze/src/list.rs:345:5: replace render_listing_markdown -> String with String::new() in 4s build + 0s test
+caught   packages/cbh_analyze/src/list.rs:314:5: replace render_listing_text -> String with "xyzzy".into() in 4s build + 0s test
+caught   packages/cbh_analyze/src/list.rs:345:5: replace render_listing_markdown -> String with "xyzzy".into() in 4s build + 0s test
+caught   packages/cbh_analyze/src/list.rs:383:5: replace render_listing_json -> String with String::new() in 4s build + 0s test
+caught   packages/cbh_analyze/src/list.rs:383:5: replace render_listing_json -> String with "xyzzy".into() in 4s build + 0s test
+unviable packages/cbh_analyze/src/list.rs:560:5: replace list_blessings -> Result<(String, Vec<BlessingEntry>), AnalyzeError> with Ok((String::new(), vec![Default::default()])) in 2s build
+caught   packages/cbh_analyze/src/list.rs:455:5: replace append_hint_and_warning with () in 4s build + 0s test
+caught   packages/cbh_analyze/src/list.rs:468:5: replace render_discriminants -> String with String::new() in 4s build + 0s test
+caught   packages/cbh_analyze/src/list.rs:468:5: replace render_discriminants -> String with "xyzzy".into() in 4s build + 0s test
+unviable packages/cbh_analyze/src/list.rs:560:5: replace list_blessings -> Result<(String, Vec<BlessingEntry>), AnalyzeError> with Ok(("xyzzy".into(), vec![Default::default()])) in 2s build
+caught   packages/cbh_analyze/src/list.rs:560:5: replace list_blessings -> Result<(String, Vec<BlessingEntry>), AnalyzeError> with Ok((String::new(), vec![])) in 4s build + 0s test
+unviable packages/cbh_analyze/src/list.rs:594:5: replace blessings_at_head -> Result<(String, Vec<BlessingEntry>), AnalyzeError> with Ok((String::new(), vec![Default::default()])) in 2s build
+caught   packages/cbh_analyze/src/list.rs:560:5: replace list_blessings -> Result<(String, Vec<BlessingEntry>), AnalyzeError> with Ok(("xyzzy".into(), vec![])) in 4s build + 0s test
+unviable packages/cbh_analyze/src/list.rs:594:5: replace blessings_at_head -> Result<(String, Vec<BlessingEntry>), AnalyzeError> with Ok(("xyzzy".into(), vec![Default::default()])) in 2s build
+caught   packages/cbh_analyze/src/list.rs:594:5: replace blessings_at_head -> Result<(String, Vec<BlessingEntry>), AnalyzeError> with Ok((String::new(), vec![])) in 4s build + 0s test
+caught   packages/cbh_analyze/src/list.rs:594:5: replace blessings_at_head -> Result<(String, Vec<BlessingEntry>), AnalyzeError> with Ok(("xyzzy".into(), vec![])) in 4s build + 1s test
+unviable packages/cbh_analyze/src/list.rs:657:5: replace blessings_across_window -> Result<(String, Vec<BlessingEntry>), AnalyzeError> with Ok((String::new(), vec![Default::default()])) in 3s build
+caught   packages/cbh_analyze/src/list.rs:613:12: delete ! in blessings_at_head in 5s build + 1s test
+caught   packages/cbh_analyze/src/list.rs:613:32: replace && with || in blessings_at_head in 5s build + 1s test
+caught   packages/cbh_analyze/src/list.rs:613:49: replace == with != in blessings_at_head in 5s build + 1s test
+unviable packages/cbh_analyze/src/list.rs:657:5: replace blessings_across_window -> Result<(String, Vec<BlessingEntry>), AnalyzeError> with Ok(("xyzzy".into(), vec![Default::default()])) in 3s build
+caught   packages/cbh_analyze/src/list.rs:657:5: replace blessings_across_window -> Result<(String, Vec<BlessingEntry>), AnalyzeError> with Ok((String::new(), vec![])) in 6s build + 1s test
+caught   packages/cbh_analyze/src/list.rs:657:5: replace blessings_across_window -> Result<(String, Vec<BlessingEntry>), AnalyzeError> with Ok(("xyzzy".into(), vec![])) in 6s build + 1s test
+caught   packages/cbh_analyze/src/list.rs:674:12: delete ! in blessings_across_window in 6s build + 2s test
+caught   packages/cbh_analyze/src/list.rs:691:5: replace short_commit_id -> &str with "" in 6s build + 2s test
+caught   packages/cbh_analyze/src/list.rs:691:5: replace short_commit_id -> &str with "xyzzy" in 6s build + 2s test
+caught   packages/cbh_analyze/src/list.rs:702:5: replace render_blessings -> String with String::new() in 7s build + 2s test
+caught   packages/cbh_analyze/src/list.rs:702:5: replace render_blessings -> String with "xyzzy".into() in 7s build + 1s test
+unviable packages/cbh_analyze/src/list.rs:712:5: replace group_by_set -> Vec<(&DiscriminantSet, Vec<&BlessingEntry>)> with vec![(Box::leak(Box::new(Default::default())), vec![])] in 2s build
+unviable packages/cbh_analyze/src/list.rs:712:5: replace group_by_set -> Vec<(&DiscriminantSet, Vec<&BlessingEntry>)> with vec![(Box::leak(Box::new(Default::default())), vec![Box::leak(Box::new(Default::default()))])] in 2s build
+caught   packages/cbh_analyze/src/list.rs:712:5: replace group_by_set -> Vec<(&DiscriminantSet, Vec<&BlessingEntry>)> with vec![] in 6s build + 1s test
+caught   packages/cbh_analyze/src/list.rs:715:34: replace match guard **set == entry.set with true in group_by_set in 6s build + 1s test
+caught   packages/cbh_analyze/src/list.rs:715:34: replace match guard **set == entry.set with false in group_by_set in 6s build + 1s test
+caught   packages/cbh_analyze/src/list.rs:715:40: replace == with != in group_by_set in 6s build + 1s test
+caught   packages/cbh_analyze/src/list.rs:728:5: replace render_blessings_text -> String with String::new() in 7s build + 2s test
+caught   packages/cbh_analyze/src/list.rs:728:5: replace render_blessings_text -> String with "xyzzy".into() in 7s build + 1s test
+caught   packages/cbh_analyze/src/list.rs:774:5: replace render_blessings_markdown -> String with String::new() in 6s build + 1s test
+caught   packages/cbh_analyze/src/list.rs:774:5: replace render_blessings_markdown -> String with "xyzzy".into() in 7s build + 2s test
+caught   packages/cbh_analyze/src/list.rs:831:5: replace render_blessings_json -> String with String::new() in 7s build + 2s test
+caught   packages/cbh_analyze/src/list.rs:831:5: replace render_blessings_json -> String with "xyzzy".into() in 6s build + 2s test
+caught   packages/cbh_analyze/src/list.rs:872:18: delete ! in render_blessings_json in 7s build + 2s test
+caught   packages/cbh_analyze/src/load.rs:58:9: replace RunIndex::record with () in 7s build + 2s test
+caught   packages/cbh_analyze/src/load.rs:84:9: replace RunIndex::merge with () in 7s build + 2s test
+caught   packages/cbh_analyze/src/load.rs:101:9: replace RunIndex::total -> usize with 0 in 6s build + 2s test
+caught   packages/cbh_analyze/src/load.rs:101:9: replace RunIndex::total -> usize with 1 in 6s build + 1s test
+caught   packages/cbh_analyze/src/load.rs:106:9: replace RunIndex::is_empty -> bool with true in 6s build + 1s test
+caught   packages/cbh_analyze/src/load.rs:106:9: replace RunIndex::is_empty -> bool with false in 6s build + 1s test
+caught   packages/cbh_analyze/src/load.rs:106:20: replace == with != in RunIndex::is_empty in 6s build + 1s test
+caught   packages/cbh_analyze/src/load.rs:111:9: replace RunIndex::runs_in_set -> usize with 0 in 6s build + 1s test
+unviable packages/cbh_analyze/src/load.rs:124:9: replace RunIndex::sets -> impl Iterator<Item =(&DiscriminantSet, &BTreeMap<usize, CommitCounts>)> with ::std::iter::once((Box::leak(Box::new(Default::default())), Box::leak(Box::new(BTreeMap::new())))) in 2s build
+unviable packages/cbh_analyze/src/load.rs:124:9: replace RunIndex::sets -> impl Iterator<Item =(&DiscriminantSet, &BTreeMap<usize, CommitCounts>)> with ::std::iter::once((Box::leak(Box::new(Default::default())), Box::leak(Box::new(BTreeMap::from_iter([(1, Default::default())]))))) in 2s build
+unviable packages/cbh_analyze/src/load.rs:124:9: replace RunIndex::sets -> impl Iterator<Item =(&DiscriminantSet, &BTreeMap<usize, CommitCounts>)> with ::std::iter::once((Box::leak(Box::new(Default::default())), Box::leak(Box::new(BTreeMap::from_iter([(0, Default::default())]))))) in 2s build
+caught   packages/cbh_analyze/src/load.rs:111:9: replace RunIndex::runs_in_set -> usize with 1 in 5s build + 0s test
+unviable packages/cbh_analyze/src/load.rs:186:5: replace facet_filtered_candidates -> Result<Vec<(String, StorageKey)>, AnalyzeError> with Ok(vec![(String::new(), Default::default())]) in 2s build
+caught   packages/cbh_analyze/src/load.rs:124:9: replace RunIndex::sets -> impl Iterator<Item =(&DiscriminantSet, &BTreeMap<usize, CommitCounts>)> with ::std::iter::empty() in 5s build + 0s test
+unviable packages/cbh_analyze/src/load.rs:186:5: replace facet_filtered_candidates -> Result<Vec<(String, StorageKey)>, AnalyzeError> with Ok(vec![("xyzzy".into(), Default::default())]) in 2s build
+unviable packages/cbh_analyze/src/load.rs:214:5: replace list_candidates -> Result<CandidateListing, AnalyzeError> with Ok(Default::default()) in 2s build
+caught   packages/cbh_analyze/src/load.rs:186:5: replace facet_filtered_candidates -> Result<Vec<(String, StorageKey)>, AnalyzeError> with Ok(vec![]) in 5s build + 1s test
+unviable packages/cbh_analyze/src/load.rs:330:5: replace load_objects_concurrently -> Result<Vec<(String, StorageKey, T)>, AnalyzeError> with Ok(vec![(String::new(), Default::default(), Default::default())]) in 2s build
+caught   packages/cbh_analyze/src/load.rs:242:12: delete ! in list_candidates in 5s build + 0s test
+caught   packages/cbh_analyze/src/load.rs:258:53: replace && with || in list_candidates in 5s build + 0s test
+caught   packages/cbh_analyze/src/load.rs:258:32: replace && with || in list_candidates in 5s build + 0s test
+caught   packages/cbh_analyze/src/load.rs:258:13: delete ! in list_candidates in 5s build + 0s test
+caught   packages/cbh_analyze/src/load.rs:330:5: replace load_objects_concurrently -> Result<Vec<(String, StorageKey, T)>, AnalyzeError> with Ok(vec![]) in 5s build + 0s test
+unviable packages/cbh_analyze/src/load.rs:330:5: replace load_objects_concurrently -> Result<Vec<(String, StorageKey, T)>, AnalyzeError> with Ok(vec![("xyzzy".into(), Default::default(), Default::default())]) in 2s build
+unviable packages/cbh_analyze/src/load.rs:351:5: replace fetch_one -> Result<(String, StorageKey, T), AnalyzeError> with Ok((String::new(), Default::default(), Default::default())) in 2s build
+unviable packages/cbh_analyze/src/load.rs:351:5: replace fetch_one -> Result<(String, StorageKey, T), AnalyzeError> with Ok(("xyzzy".into(), Default::default(), Default::default())) in 2s build
+unviable packages/cbh_analyze/src/load.rs:408:5: replace fold_runs_chunked -> Result<WorkerFold, AnalyzeError> with Ok(Default::default()) in 2s build
+caught   packages/cbh_analyze/src/load.rs:445:21: replace && with || in fold_runs_chunked in 4s build + 0s test
+caught   packages/cbh_analyze/src/load.rs:414:14: replace == with != in fold_runs_chunked in 4s build + 0s test
+caught   packages/cbh_analyze/src/load.rs:488:5: replace ordinal_of -> u32 with 0 in 4s build + 0s test
+caught   packages/cbh_analyze/src/load.rs:488:5: replace ordinal_of -> u32 with 1 in 5s build + 0s test
+caught   packages/cbh_analyze/src/pipeline.rs:127:5: replace resolve_now -> Timestamp with Default::default() in 4s build + 0s test
+caught   packages/cbh_analyze/src/pipeline.rs:135:5: replace should_colorize -> bool with true in 4s build + 0s test
+caught   packages/cbh_analyze/src/pipeline.rs:135:17: replace && with || in should_colorize in 4s build + 0s test
+caught   packages/cbh_analyze/src/pipeline.rs:135:5: replace should_colorize -> bool with false in 5s build + 0s test
+caught   packages/cbh_analyze/src/pipeline.rs:135:20: delete ! in should_colorize in 4s build + 0s test
+caught   packages/cbh_analyze/src/pipeline.rs:197:5: replace analyze_with -> Result<(RenderedReports, usize), AnalyzeError> with Ok((Default::default(), 1)) in 4s build + 0s test
+caught   packages/cbh_analyze/src/pipeline.rs:197:5: replace analyze_with -> Result<(RenderedReports, usize), AnalyzeError> with Ok((Default::default(), 0)) in 4s build + 0s test
+caught   packages/cbh_analyze/src/pipeline.rs:292:19: delete ! in analyze_with in 4s build + 0s test
+caught   packages/cbh_analyze/src/pipeline.rs:322:57: replace == with != in analyze_with in 4s build + 0s test
+caught   packages/cbh_analyze/src/pipeline.rs:325:48: replace == with != in analyze_with in 4s build + 0s test
+caught   packages/cbh_analyze/src/pipeline.rs:338:39: replace && with || in analyze_with in 4s build + 0s test
+caught   packages/cbh_analyze/src/pipeline.rs:338:35: replace > with < in analyze_with in 4s build + 0s test
+caught   packages/cbh_analyze/src/pipeline.rs:338:35: replace > with == in analyze_with in 4s build + 0s test
+caught   packages/cbh_analyze/src/pipeline.rs:338:35: replace > with >= in analyze_with in 4s build + 0s test
+caught   packages/cbh_analyze/src/pipeline.rs:388:5: replace all_ghosts_hint -> String with String::new() in 4s build + 0s test
+caught   packages/cbh_analyze/src/pipeline.rs:417:48: replace > with == in note_series_census in 4s build + 0s test
+caught   packages/cbh_analyze/src/pipeline.rs:388:5: replace all_ghosts_hint -> String with "xyzzy".into() in 5s build + 0s test
+caught   packages/cbh_analyze/src/pipeline.rs:410:5: replace note_series_census with () in 4s build + 0s test
+caught   packages/cbh_analyze/src/pipeline.rs:417:48: replace > with < in note_series_census in 4s build + 0s test
+caught   packages/cbh_analyze/src/pipeline.rs:417:48: replace > with >= in note_series_census in 4s build + 0s test
+unviable packages/cbh_analyze/src/prune.rs:66:9: replace Scope::from_options -> Result<Option<Self>, AnalyzeError> with Ok(Some(Default::default())) in 2s build
+caught   packages/cbh_analyze/src/pipeline.rs:449:46: replace == with != in note_series_census in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:66:9: replace Scope::from_options -> Result<Option<Self>, AnalyzeError> with Ok(None) in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:72:28: replace && with || in Scope::from_options in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:72:31: delete ! in Scope::from_options in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:85:9: replace Scope::touches_clean -> bool with true in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:85:9: replace Scope::touches_clean -> bool with false in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:90:9: replace Scope::touches_dirty -> bool with true in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:90:9: replace Scope::touches_dirty -> bool with false in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:99:5: replace prune_since_reason -> &'static str with "" in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:99:5: replace prune_since_reason -> &'static str with "xyzzy" in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:189:5: replace prune_with -> Result<RenderedReports, AnalyzeError> with Ok(Default::default()) in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:236:26: replace && with || in prune_with in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:236:29: delete ! in prune_with in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:287:25: replace && with || in prune_with in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:277:24: delete ! in prune_with in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:250:34: delete ! in prune_with in 5s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:286:30: replace == with != in prune_with in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:287:28: delete ! in prune_with in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:303:24: delete ! in prune_with in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:371:8: delete ! in prune_with in 5s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:397:5: replace commit_is_eligible -> bool with false in 5s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:397:5: replace commit_is_eligible -> bool with true in 5s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:401:41: replace > with == in commit_is_eligible in 5s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:401:41: replace > with < in commit_is_eligible in 5s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:401:41: replace > with >= in commit_is_eligible in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:440:5: replace selected_index -> Option<usize> with None in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:410:5: replace commit_matches -> bool with true in 5s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:410:5: replace commit_matches -> bool with false in 5s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:440:5: replace selected_index -> Option<usize> with Some(0) in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:440:5: replace selected_index -> Option<usize> with Some(1) in 4s build + 0s test
+unviable packages/cbh_analyze/src/prune.rs:543:5: replace build_plan -> Plan with Default::default() in 2s build
+caught   packages/cbh_analyze/src/prune.rs:448:8: delete ! in selected_index in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:457:8: delete ! in selected_index in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:480:9: replace RunKind::is_run -> bool with false in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:480:9: replace RunKind::is_run -> bool with true in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:550:82: replace == with != in build_plan in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:574:56: delete ! in build_plan in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:585:53: delete ! in build_plan in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:591:5: replace verb -> &'static str with "xyzzy" in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:591:5: replace verb -> &'static str with "" in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:596:5: replace blessing_suffix -> String with String::new() in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:596:5: replace blessing_suffix -> String with "xyzzy".into() in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:596:18: replace == with != in blessing_suffix in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:605:5: replace render_plan -> String with String::new() in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:613:5: replace render_plan_text -> String with String::new() in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:605:5: replace render_plan -> String with "xyzzy".into() in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:613:5: replace render_plan_text -> String with "xyzzy".into() in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:652:5: replace render_plan_markdown -> String with String::new() in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:652:5: replace render_plan_markdown -> String with "xyzzy".into() in 4s build + 0s test
+caught   packages/cbh_analyze/src/prune.rs:693:5: replace render_plan_json -> String with String::new() in 4s build + 0s test
+unviable packages/cbh_analyze/src/report.rs:74:9: replace ReportRequest::resolve -> Result<Self, AnalyzeError> with Ok(Default::default()) in 2s build
+unviable packages/cbh_analyze/src/report.rs:104:9: replace ReportRequest::resolve_analyze -> Result<Self, AnalyzeError> with Ok(Default::default()) in 3s build
+caught   packages/cbh_analyze/src/report.rs:74:42: replace && with || in ReportRequest::resolve in 5s build + 1s test
+caught   packages/cbh_analyze/src/report.rs:74:20: replace && with || in ReportRequest::resolve in 5s build + 1s test
+caught   packages/cbh_analyze/src/prune.rs:693:5: replace render_plan_json -> String with "xyzzy".into() in 5s build + 1s test
+caught   packages/cbh_analyze/src/report.rs:104:60: replace && with || in ReportRequest::resolve_analyze in 6s build + 0s test
+caught   packages/cbh_analyze/src/report.rs:104:42: replace && with || in ReportRequest::resolve_analyze in 6s build + 1s test
+caught   packages/cbh_analyze/src/report.rs:104:20: replace && with || in ReportRequest::resolve_analyze in 6s build + 1s test
+unviable packages/cbh_analyze/src/selection.rs:31:9: replace Selection<'a>::from_analyze -> Self with Default::default() in 3s build
+unviable packages/cbh_analyze/src/selection.rs:43:9: replace Selection<'a>::from_list -> Self with Default::default() in 2s build
+caught   packages/cbh_analyze/src/report.rs:130:9: replace ReportRequest::render -> RenderedReports with Default::default() in 6s build + 2s test
+caught   packages/cbh_analyze/src/report.rs:131:20: delete ! in ReportRequest::render in 6s build + 2s test
+caught   packages/cbh_analyze/src/report.rs:148:9: replace ReportRequest::render_analyze -> RenderedReports with Default::default() in 6s build + 2s test
+unviable packages/cbh_analyze/src/selection.rs:55:9: replace Selection<'a>::from_examine -> Self with Default::default() in 3s build
+caught   packages/cbh_analyze/src/report.rs:149:20: delete ! in ReportRequest::render_analyze in 6s build + 1s test
+unviable packages/cbh_analyze/src/selection.rs:67:9: replace Selection<'a>::from_prune -> Self with Default::default() in 2s build
+unviable packages/cbh_analyze/src/selection.rs:86:9: replace Selection<'a>::from_bless -> Self with Default::default() in 2s build
+unviable packages/cbh_analyze/src/selection.rs:99:9: replace Selection<'a>::from_unbless -> Self with Default::default() in 2s build
+unviable packages/cbh_analyze/src/window.rs:25:5: replace auto_mode -> AnalysisMode with Default::default() in 2s build
+caught   packages/cbh_analyze/src/window.rs:25:26: replace && with || in auto_mode in 6s build + 1s test
+caught   packages/cbh_analyze/src/window.rs:25:29: delete ! in auto_mode in 6s build + 1s test
+caught   packages/cbh_analyze/src/window.rs:34:5: replace since_cutoff_reason -> &'static str with "" in 6s build + 1s test
+caught   packages/cbh_analyze/src/window.rs:34:5: replace since_cutoff_reason -> &'static str with "xyzzy" in 6s build + 1s test
+caught   packages/cbh_analyze/src/window.rs:36:20: replace == with != in since_cutoff_reason in 6s build + 0s test
+caught   packages/cbh_analyze/src/window.rs:52:5: replace resolve_since -> Result<Option<Timestamp>, AnalyzeError> with Ok(None) in 6s build + 1s test
+caught   packages/cbh_analyze/src/window.rs:52:5: replace resolve_since -> Result<Option<Timestamp>, AnalyzeError> with Ok(Some(Default::default())) in 5s build + 1s test
+caught   packages/cbh_analyze/src/window.rs:55:13: replace == with != in resolve_since in 5s build + 1s test
+caught   packages/cbh_analyze/src/window.rs:67:5: replace default_history_since -> Result<Timestamp, AnalyzeError> with Ok(Default::default()) in 6s build + 1s test
+caught   packages/cbh_analyze/src/window.rs:83:5: replace parse_since -> Result<Option<Timestamp>, AnalyzeError> with Ok(None) in 6s build + 1s test
+caught   packages/cbh_analyze/src/window.rs:98:5: replace before_since_cutoff -> bool with true in 6s build + 1s test
+caught   packages/cbh_analyze/src/window.rs:83:5: replace parse_since -> Result<Option<Timestamp>, AnalyzeError> with Ok(Some(Default::default())) in 6s build + 1s test
+caught   packages/cbh_analyze/src/window.rs:98:5: replace before_since_cutoff -> bool with false in 5s build + 1s test
+caught   packages/cbh_analyze/src/window.rs:101:36: replace < with == in before_since_cutoff in 5s build + 1s test
+caught   packages/cbh_analyze/src/window.rs:101:36: replace < with > in before_since_cutoff in 6s build + 0s test
+caught   packages/cbh_analyze/src/window.rs:101:36: replace < with <= in before_since_cutoff in 6s build + 0s test
+caught   packages/cbh_analyze/src/window.rs:128:5: replace parse_instant -> Result<Option<Timestamp>, AnalyzeError> with Ok(None) in 5s build + 1s test
+caught   packages/cbh_analyze/src/window.rs:128:5: replace parse_instant -> Result<Option<Timestamp>, AnalyzeError> with Ok(Some(Default::default())) in 5s build + 1s test
+caught   packages/cbh_analyze/src/window.rs:159:5: replace instant_before -> Result<Timestamp, AnalyzeError> with Ok(Default::default()) in 5s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:119:5: replace rekey_with -> Result<RenderedReports, AnalyzeError> with Ok(Default::default()) in 5s build + 2s test
+caught   packages/cbh_analyze/src/rekey/command.rs:164:5: replace resolve_commit_order -> Result<HashMap<String, usize>, AnalyzeError> with Ok(HashMap::new()) in 5s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:164:5: replace resolve_commit_order -> Result<HashMap<String, usize>, AnalyzeError> with Ok(HashMap::from_iter([(String::new(), 0)])) in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:164:5: replace resolve_commit_order -> Result<HashMap<String, usize>, AnalyzeError> with Ok(HashMap::from_iter([(String::new(), 1)])) in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:164:5: replace resolve_commit_order -> Result<HashMap<String, usize>, AnalyzeError> with Ok(HashMap::from_iter([("xyzzy".into(), 0)])) in 6s build + 1s test
+unviable packages/cbh_analyze/src/rekey/command.rs:232:5: replace scan_store -> Result<Scan, AnalyzeError> with Ok(Default::default()) in 2s build
+unviable packages/cbh_analyze/src/rekey/command.rs:277:5: replace decode_run -> Result<RunFacts, AnalyzeError> with Ok(Default::default()) in 2s build
+unviable packages/cbh_analyze/src/rekey/command.rs:374:9: replace Plan::destination_sets -> Vec<&DiscriminantSet> with vec![Box::leak(Box::new(Default::default()))] in 3s build
+caught   packages/cbh_analyze/src/rekey/command.rs:164:5: replace resolve_commit_order -> Result<HashMap<String, usize>, AnalyzeError> with Ok(HashMap::from_iter([("xyzzy".into(), 1)])) in 5s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:374:9: replace Plan::destination_sets -> Vec<&DiscriminantSet> with vec![] in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:386:9: replace Plan::key_override_objects -> usize with 0 in 6s build + 1s test
+unviable packages/cbh_analyze/src/rekey/command.rs:412:5: replace build_plan -> Result<Plan, AnalyzeError> with Ok(Default::default()) in 3s build
+caught   packages/cbh_analyze/src/rekey/command.rs:386:9: replace Plan::key_override_objects -> usize with 1 in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:391:9: replace Plan::unmapped_blessing_objects -> usize with 0 in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:391:9: replace Plan::unmapped_blessing_objects -> usize with 1 in 6s build + 2s test
+caught   packages/cbh_analyze/src/rekey/command.rs:458:42: replace && with || in build_plan in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:640:5: replace withdraw_colliding_copies -> BTreeMap<String, Vec<String>> with BTreeMap::new() in 5s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:458:53: replace != with == in build_plan in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:458:19: replace != with == in build_plan in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:640:5: replace withdraw_colliding_copies -> BTreeMap<String, Vec<String>> with BTreeMap::from_iter([(String::new(), vec![])]) in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:640:5: replace withdraw_colliding_copies -> BTreeMap<String, Vec<String>> with BTreeMap::from_iter([(String::new(), vec![String::new()])]) in 6s build + 2s test
+caught   packages/cbh_analyze/src/rekey/command.rs:640:5: replace withdraw_colliding_copies -> BTreeMap<String, Vec<String>> with BTreeMap::from_iter([(String::new(), vec!["xyzzy".into()])]) in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:640:5: replace withdraw_colliding_copies -> BTreeMap<String, Vec<String>> with BTreeMap::from_iter([("xyzzy".into(), vec![String::new()])]) in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:640:5: replace withdraw_colliding_copies -> BTreeMap<String, Vec<String>> with BTreeMap::from_iter([("xyzzy".into(), vec!["xyzzy".into()])]) in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:640:5: replace withdraw_colliding_copies -> BTreeMap<String, Vec<String>> with BTreeMap::from_iter([("xyzzy".into(), vec![])]) in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:647:49: replace > with == in withdraw_colliding_copies in 6s build + 1s test
+unviable packages/cbh_analyze/src/rekey/command.rs:664:5: replace classify_segment -> SegmentIdentity with Default::default() in 3s build
+caught   packages/cbh_analyze/src/rekey/command.rs:647:49: replace > with < in withdraw_colliding_copies in 5s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:647:49: replace > with >= in withdraw_colliding_copies in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:658:26: delete ! in withdraw_colliding_copies in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:664:16: replace == with != in classify_segment in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:666:23: replace == with != in classify_segment in 5s build + 2s test
+unviable packages/cbh_analyze/src/rekey/command.rs:688:5: replace destination_set -> DiscriminantSet with Default::default() in 3s build
+caught   packages/cbh_analyze/src/rekey/command.rs:675:5: replace current_machine_key -> String with String::new() in 5s build + 2s test
+caught   packages/cbh_analyze/src/rekey/command.rs:675:5: replace current_machine_key -> String with "xyzzy".into() in 6s build + 1s test
+unviable packages/cbh_analyze/src/rekey/command.rs:728:5: replace stage_points -> StagedPoints with Default::default() in 3s build
+caught   packages/cbh_analyze/src/rekey/command.rs:697:5: replace destination_key -> String with String::new() in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:697:5: replace destination_key -> String with "xyzzy".into() in 6s build + 2s test
+caught   packages/cbh_analyze/src/rekey/command.rs:755:5: replace describe_hardware with () in 6s build + 2s test
+caught   packages/cbh_analyze/src/rekey/command.rs:776:5: replace announce_plan with () in 5s build + 2s test
+caught   packages/cbh_analyze/src/rekey/command.rs:828:29: replace == with != in refuse_unsafe_merges in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:799:5: replace refuse_unsafe_merges -> Result<(), AnalyzeError> with Ok(()) in 7s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:848:5: replace describe_offset -> String with "xyzzy".into() in 6s build + 2s test
+caught   packages/cbh_analyze/src/rekey/command.rs:848:5: replace describe_offset -> String with String::new() in 7s build + 2s test
+caught   packages/cbh_analyze/src/rekey/command.rs:876:5: replace apply_plan -> Result<(), AnalyzeError> with Ok(()) in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:900:29: replace == with != in apply_plan in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:931:5: replace render_plan -> String with String::new() in 6s build + 2s test
+caught   packages/cbh_analyze/src/rekey/command.rs:931:5: replace render_plan -> String with "xyzzy".into() in 6s build + 2s test
+caught   packages/cbh_analyze/src/rekey/command.rs:940:5: replace verb -> &'static str with "" in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:940:5: replace verb -> &'static str with "xyzzy" in 5s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:945:5: replace signed -> String with String::new() in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:945:5: replace signed -> String with "xyzzy".into() in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:945:25: replace < with > in signed in 6s build + 2s test
+caught   packages/cbh_analyze/src/rekey/command.rs:945:25: replace < with == in signed in 6s build + 2s test
+caught   packages/cbh_analyze/src/rekey/command.rs:945:25: replace < with <= in signed in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:951:5: replace signed_percent -> String with String::new() in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:952:28: replace < with == in signed_percent in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:951:5: replace signed_percent -> String with "xyzzy".into() in 7s build + 2s test
+caught   packages/cbh_analyze/src/rekey/command.rs:952:28: replace < with > in signed_percent in 6s build + 2s test
+caught   packages/cbh_analyze/src/rekey/command.rs:952:28: replace < with <= in signed_percent in 6s build + 2s test
+caught   packages/cbh_analyze/src/rekey/command.rs:957:5: replace render_plan_text -> String with "xyzzy".into() in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:957:5: replace render_plan_text -> String with String::new() in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:1022:5: replace render_plan_markdown -> String with "xyzzy".into() in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:1022:5: replace render_plan_markdown -> String with String::new() in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:1081:5: replace untouched_lines -> Vec<String> with vec![] in 5s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:1081:5: replace untouched_lines -> Vec<String> with vec![String::new()] in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:1082:8: delete ! in untouched_lines in 5s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:1081:5: replace untouched_lines -> Vec<String> with vec!["xyzzy".into()] in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:1089:8: delete ! in untouched_lines in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/command.rs:1096:8: delete ! in untouched_lines in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/command.rs:1103:8: delete ! in untouched_lines in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/command.rs:1114:26: replace > with == in untouched_lines in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/command.rs:1114:26: replace > with < in untouched_lines in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/command.rs:1114:26: replace > with >= in untouched_lines in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/command.rs:1125:5: replace describe_counts -> String with "xyzzy".into() in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/command.rs:1125:5: replace describe_counts -> String with String::new() in 5s build + 1s test
+unviable packages/cbh_analyze/src/rekey/command.rs:1285:5: replace json_counts -> Vec<JsonCountEntry<'_>> with vec![Default::default()] in 3s build
+caught   packages/cbh_analyze/src/rekey/command.rs:1133:5: replace render_plan_json -> String with String::new() in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/command.rs:1133:5: replace render_plan_json -> String with "xyzzy".into() in 5s build + 1s test
+caught   packages/cbh_analyze/src/rekey/command.rs:1285:5: replace json_counts -> Vec<JsonCountEntry<'_>> with vec![] in 6s build + 0s test
+caught   packages/cbh_analyze/src/rekey/legacy_key.rs:33:5: replace legacy_machine_key -> String with String::new() in 5s build + 1s test
+caught   packages/cbh_analyze/src/rekey/legacy_key.rs:33:5: replace legacy_machine_key -> String with "xyzzy".into() in 5s build + 1s test
+caught   packages/cbh_analyze/src/rekey/legacy_key.rs:55:5: replace canonical -> String with String::new() in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/legacy_key.rs:55:5: replace canonical -> String with "xyzzy".into() in 5s build + 1s test
+caught   packages/cbh_analyze/src/rekey/legacy_key.rs:67:5: replace normalize_model -> String with String::new() in 5s build + 1s test
+caught   packages/cbh_analyze/src/rekey/legacy_key.rs:67:5: replace normalize_model -> String with "xyzzy".into() in 5s build + 1s test
+caught   packages/cbh_analyze/src/rekey/legacy_key.rs:76:5: replace render_models -> String with "xyzzy".into() in 5s build + 1s test
+caught   packages/cbh_analyze/src/rekey/legacy_key.rs:76:5: replace render_models -> String with String::new() in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/legacy_key.rs:79:12: delete ! in render_models in 7s build + 1s test
+caught   packages/cbh_analyze/src/rekey/legacy_key.rs:93:5: replace render_speed_histogram -> String with String::new() in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/legacy_key.rs:93:5: replace render_speed_histogram -> String with "xyzzy".into() in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/legacy_key.rs:95:18: replace == with != in render_speed_histogram in 6s build + 1s test
+unviable packages/cbh_analyze/src/rekey/merge.rs:124:9: replace GroupPair::blocking_offsets -> impl Iterator<Item =&MetricOffset> with ::std::iter::once(Box::leak(Box::new(Default::default()))) in 3s build
+caught   packages/cbh_analyze/src/rekey/merge.rs:73:9: replace Interleaving::as_str -> &'static str with "" in 5s build + 1s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:73:9: replace Interleaving::as_str -> &'static str with "xyzzy" in 5s build + 1s test
+unviable packages/cbh_analyze/src/rekey/merge.rs:152:9: replace MergeAnalysis::blocking -> Vec<(&PartitionMerge, &GroupPair, &MetricOffset)> with vec![(Box::leak(Box::new(Default::default())), Box::leak(Box::new(Default::default())), Box::leak(Box::new(Default::default())))] in 2s build
+caught   packages/cbh_analyze/src/rekey/merge.rs:124:9: replace GroupPair::blocking_offsets -> impl Iterator<Item =&MetricOffset> with ::std::iter::empty() in 6s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:152:9: replace MergeAnalysis::blocking -> Vec<(&PartitionMerge, &GroupPair, &MetricOffset)> with vec![] in 6s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:184:9: replace MergeTolerance::absolute_for -> f64 with 0.0 in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:184:9: replace MergeTolerance::absolute_for -> f64 with 1.0 in 5s build + 1s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:184:9: replace MergeTolerance::absolute_for -> f64 with -1.0 in 5s build + 1s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:200:9: replace MergeTolerance::is_exceeded -> bool with true in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:200:9: replace MergeTolerance::is_exceeded -> bool with false in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:200:41: replace && with || in MergeTolerance::is_exceeded in 5s build + 0s test
+unviable packages/cbh_analyze/src/rekey/merge.rs:206:5: replace merge_offset_tolerance -> MergeTolerance with Default::default() in 2s build
+caught   packages/cbh_analyze/src/rekey/merge.rs:200:24: replace >= with < in MergeTolerance::is_exceeded in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:200:59: replace >= with < in MergeTolerance::is_exceeded in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:208:45: replace * with + in merge_offset_tolerance in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:208:45: replace * with / in merge_offset_tolerance in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:209:57: replace * with + in merge_offset_tolerance in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:209:57: replace * with / in merge_offset_tolerance in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:210:55: replace * with + in merge_offset_tolerance in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:210:55: replace * with / in merge_offset_tolerance in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:211:57: replace * with + in merge_offset_tolerance in 5s build + 0s test
+unviable packages/cbh_analyze/src/rekey/merge.rs:266:5: replace compare_groups -> GroupPair with Default::default() in 2s build
+caught   packages/cbh_analyze/src/rekey/merge.rs:211:57: replace * with / in merge_offset_tolerance in 4s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:225:5: replace analyze_merges -> MergeAnalysis with Default::default() in 4s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:229:46: replace >= with < in analyze_merges in 4s build + 1s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:269:9: delete match arm (Some(left), Some(right)) in compare_groups in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:269:44: replace < with == in compare_groups in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:269:44: replace < with > in compare_groups in 5s build + 1s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:269:44: replace < with <= in compare_groups in 6s build + 1s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:292:5: replace first_position -> Option<usize> with None in 7s build + 1s test
+unviable packages/cbh_analyze/src/rekey/merge.rs:311:5: replace classify_interleaving -> (Interleaving, usize) with (Default::default(), 1) in 3s build
+unviable packages/cbh_analyze/src/rekey/merge.rs:311:5: replace classify_interleaving -> (Interleaving, usize) with (Default::default(), 0) in 3s build
+caught   packages/cbh_analyze/src/rekey/merge.rs:292:5: replace first_position -> Option<usize> with Some(0) in 7s build + 2s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:292:5: replace first_position -> Option<usize> with Some(1) in 8s build + 1s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:339:53: replace == with != in classify_interleaving in 7s build + 1s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:341:51: replace || with && in classify_interleaving in 8s build + 1s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:341:34: replace < with == in classify_interleaving in 8s build + 1s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:341:34: replace < with > in classify_interleaving in 8s build + 1s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:341:34: replace < with <= in classify_interleaving in 8s build + 1s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:341:68: replace < with == in classify_interleaving in 6s build + 0s test
+unviable packages/cbh_analyze/src/rekey/merge.rs:360:5: replace level_offsets -> Vec<MetricOffset> with vec![Default::default()] in 3s build
+caught   packages/cbh_analyze/src/rekey/merge.rs:341:68: replace < with > in classify_interleaving in 6s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:341:68: replace < with <= in classify_interleaving in 6s build + 0s test
+unviable packages/cbh_analyze/src/rekey/merge.rs:384:5: replace levels -> BTreeMap<(String, MetricKind), f64> with BTreeMap::from_iter([((String::new(), Default::default()), 0.0)]) in 2s build
+caught   packages/cbh_analyze/src/rekey/merge.rs:360:5: replace level_offsets -> Vec<MetricOffset> with vec![] in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:367:43: replace - with + in level_offsets in 5s build + 0s test
+unviable packages/cbh_analyze/src/rekey/merge.rs:384:5: replace levels -> BTreeMap<(String, MetricKind), f64> with BTreeMap::from_iter([((String::new(), Default::default()), 1.0)]) in 2s build
+unviable packages/cbh_analyze/src/rekey/merge.rs:384:5: replace levels -> BTreeMap<(String, MetricKind), f64> with BTreeMap::from_iter([((String::new(), Default::default()), -1.0)]) in 2s build
+unviable packages/cbh_analyze/src/rekey/merge.rs:384:5: replace levels -> BTreeMap<(String, MetricKind), f64> with BTreeMap::from_iter([(("xyzzy".into(), Default::default()), 1.0)]) in 2s build
+unviable packages/cbh_analyze/src/rekey/merge.rs:384:5: replace levels -> BTreeMap<(String, MetricKind), f64> with BTreeMap::from_iter([(("xyzzy".into(), Default::default()), 0.0)]) in 2s build
+caught   packages/cbh_analyze/src/rekey/merge.rs:367:43: replace - with / in level_offsets in 4s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:384:5: replace levels -> BTreeMap<(String, MetricKind), f64> with BTreeMap::new() in 5s build + 0s test
+unviable packages/cbh_analyze/src/rekey/merge.rs:384:5: replace levels -> BTreeMap<(String, MetricKind), f64> with BTreeMap::from_iter([(("xyzzy".into(), Default::default()), -1.0)]) in 2s build
+caught   packages/cbh_analyze/src/rekey/merge.rs:403:29: replace <= with > in relative_offset in 4s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:403:5: replace relative_offset -> f64 with 0.0 in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:403:5: replace relative_offset -> f64 with 1.0 in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:403:5: replace relative_offset -> f64 with -1.0 in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:404:27: replace * with / in relative_offset in 4s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:404:27: replace * with + in relative_offset in 5s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:404:57: replace != with == in relative_offset in 4s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:406:18: replace / with % in relative_offset in 4s build + 0s test
+caught   packages/cbh_analyze/src/rekey/merge.rs:406:18: replace / with * in relative_offset in 5s build + 0s test
+caught   packages/cbh_detect/src/detect/discriminant.rs:41:9: replace FacetFilter::passes -> bool with true in 8s build + 0s test
+caught   packages/cbh_detect/src/detect/discriminant.rs:41:9: replace FacetFilter::passes -> bool with false in 8s build + 0s test
+caught   packages/cbh_detect/src/detect/discriminant.rs:78:9: replace DiscriminantSetQuery::matches -> bool with true in 8s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:210:9: replace AnalysisMode::as_str -> &'static str with "" in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:210:9: replace AnalysisMode::as_str -> &'static str with "xyzzy" in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:249:9: replace AnalysisContext::keeps -> bool with true in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:249:9: replace AnalysisContext::keeps -> bool with false in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/discriminant.rs:80:13: replace && with || in DiscriminantSetQuery::matches in 9s build + 0s test
+caught   packages/cbh_detect/src/detect/discriminant.rs:78:9: replace DiscriminantSetQuery::matches -> bool with false in 9s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:251:52: replace || with && in AnalysisContext::keeps in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:251:27: replace == with != in AnalysisContext::keeps in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/discriminant.rs:79:13: replace && with || in DiscriminantSetQuery::matches in 9s build + 1s test
+caught   packages/cbh_detect/src/detect/findings.rs:262:9: replace AnalysisContext::reports_improvements -> bool with true in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:262:9: replace AnalysisContext::reports_improvements -> bool with false in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:310:9: replace UnjudgedReason::as_str -> &'static str with "" in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:310:9: replace UnjudgedReason::as_str -> &'static str with "xyzzy" in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:323:9: replace UnjudgedReason::describe -> &'static str with "" in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:323:9: replace UnjudgedReason::describe -> &'static str with "xyzzy" in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:353:9: replace Testability::is_judged -> bool with true in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:353:14: replace == with != in Testability::is_judged in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:353:9: replace Testability::is_judged -> bool with false in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:373:9: replace SeriesCensus::record with () in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:384:9: replace SeriesCensus::record_unjudged with () in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:384:19: replace == with != in SeriesCensus::record_unjudged in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:394:9: replace SeriesCensus::merge with () in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:418:9: replace SeriesCensus::total -> usize with 0 in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:410:9: replace SeriesCensus::unjudged -> usize with 1 in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:404:9: replace SeriesCensus::judged -> usize with 0 in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:404:9: replace SeriesCensus::judged -> usize with 1 in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:410:9: replace SeriesCensus::unjudged -> usize with 0 in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:418:9: replace SeriesCensus::total -> usize with 1 in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/findings.rs:424:9: replace SeriesCensus::reasons -> impl Iterator<Item =(UnjudgedReason, usize)>+'_ with ::std::iter::once((Default::default(), 0)) in 1s build
+unviable packages/cbh_detect/src/detect/findings.rs:424:9: replace SeriesCensus::reasons -> impl Iterator<Item =(UnjudgedReason, usize)>+'_ with ::std::iter::once((Default::default(), 1)) in 1s build
+caught   packages/cbh_detect/src/detect/findings.rs:424:9: replace SeriesCensus::reasons -> impl Iterator<Item =(UnjudgedReason, usize)>+'_ with ::std::iter::empty() in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:545:24: replace == with != in Finding::is_regression in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:545:9: replace Finding::is_regression -> bool with true in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:545:9: replace Finding::is_regression -> bool with false in 2s build + 0s test
+unviable packages/cbh_detect/src/detect/findings.rs:580:5: replace series_value_of -> SeriesValue with Default::default() in 1s build
+caught   packages/cbh_detect/src/detect/findings.rs:574:5: replace count_to_f64 -> f64 with 0.0 in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:574:5: replace count_to_f64 -> f64 with 1.0 in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:574:5: replace count_to_f64 -> f64 with -1.0 in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:606:5: replace build_chart_series -> (Vec<SeriesValue>, Option<usize>) with (vec![], Some(0)) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:606:5: replace build_chart_series -> (Vec<SeriesValue>, Option<usize>) with (vec![], None) in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/findings.rs:606:5: replace build_chart_series -> (Vec<SeriesValue>, Option<usize>) with (vec![Default::default()], Some(0)) in 1s build
+unviable packages/cbh_detect/src/detect/findings.rs:606:5: replace build_chart_series -> (Vec<SeriesValue>, Option<usize>) with (vec![Default::default()], None) in 1s build
+unviable packages/cbh_detect/src/detect/findings.rs:606:5: replace build_chart_series -> (Vec<SeriesValue>, Option<usize>) with (vec![Default::default()], Some(1)) in 0s build
+caught   packages/cbh_detect/src/detect/findings.rs:606:5: replace build_chart_series -> (Vec<SeriesValue>, Option<usize>) with (vec![], Some(1)) in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/findings.rs:633:5: replace branch_chart_series -> (Vec<SeriesValue>, Option<usize>) with (vec![Default::default()], None) in 1s build
+unviable packages/cbh_detect/src/detect/findings.rs:633:5: replace branch_chart_series -> (Vec<SeriesValue>, Option<usize>) with (vec![Default::default()], Some(0)) in 0s build
+unviable packages/cbh_detect/src/detect/findings.rs:633:5: replace branch_chart_series -> (Vec<SeriesValue>, Option<usize>) with (vec![Default::default()], Some(1)) in 0s build
+caught   packages/cbh_detect/src/detect/findings.rs:633:5: replace branch_chart_series -> (Vec<SeriesValue>, Option<usize>) with (vec![], None) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:633:5: replace branch_chart_series -> (Vec<SeriesValue>, Option<usize>) with (vec![], Some(0)) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:633:5: replace branch_chart_series -> (Vec<SeriesValue>, Option<usize>) with (vec![], Some(1)) in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/findings.rs:669:5: replace direction_of -> Direction with Default::default() in 0s build
+caught   packages/cbh_detect/src/detect/findings.rs:659:5: replace owned_commit -> Option<String> with None in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:659:5: replace owned_commit -> Option<String> with Some(String::new()) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:659:5: replace owned_commit -> Option<String> with Some("xyzzy".into()) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:669:14: replace > with == in direction_of in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:669:14: replace > with < in direction_of in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:669:14: replace > with >= in direction_of in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:681:5: replace relative_delta_of -> f64 with 0.0 in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:681:5: replace relative_delta_of -> f64 with 1.0 in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:681:5: replace relative_delta_of -> f64 with -1.0 in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:681:23: replace <= with > in relative_delta_of in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:684:15: replace / with % in relative_delta_of in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:684:15: replace / with * in relative_delta_of in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:696:5: replace absolute_floor -> f64 with 0.0 in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:696:5: replace absolute_floor -> f64 with 1.0 in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:696:5: replace absolute_floor -> f64 with -1.0 in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:718:5: replace scatter_floor -> f64 with 0.0 in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:718:5: replace scatter_floor -> f64 with 1.0 in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:718:5: replace scatter_floor -> f64 with -1.0 in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:734:5: replace clears_absolute_floor -> bool with false in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:734:5: replace clears_absolute_floor -> bool with true in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:734:17: replace >= with < in clears_absolute_floor in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:740:5: replace regime_interval -> Option<(f64, f64)> with None in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:740:5: replace regime_interval -> Option<(f64, f64)> with Some((0.0, 0.0)) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:740:5: replace regime_interval -> Option<(f64, f64)> with Some((0.0, 1.0)) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:740:5: replace regime_interval -> Option<(f64, f64)> with Some((0.0, -1.0)) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:740:5: replace regime_interval -> Option<(f64, f64)> with Some((1.0, 0.0)) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:740:5: replace regime_interval -> Option<(f64, f64)> with Some((1.0, 1.0)) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:740:5: replace regime_interval -> Option<(f64, f64)> with Some((1.0, -1.0)) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:740:5: replace regime_interval -> Option<(f64, f64)> with Some((-1.0, 0.0)) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:740:5: replace regime_interval -> Option<(f64, f64)> with Some((-1.0, 1.0)) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:740:5: replace regime_interval -> Option<(f64, f64)> with Some((-1.0, -1.0)) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:759:5: replace intervals_disjoint -> bool with true in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:759:5: replace intervals_disjoint -> bool with false in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:759:24: replace || with && in intervals_disjoint in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:759:13: replace < with == in intervals_disjoint in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:759:13: replace < with > in intervals_disjoint in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:759:13: replace < with <= in intervals_disjoint in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:759:35: replace > with == in intervals_disjoint in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:759:35: replace > with >= in intervals_disjoint in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:759:35: replace > with < in intervals_disjoint in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:765:5: replace median_half_width -> Option<f64> with None in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:765:5: replace median_half_width -> Option<f64> with Some(0.0) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:765:5: replace median_half_width -> Option<f64> with Some(1.0) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:765:5: replace median_half_width -> Option<f64> with Some(-1.0) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:768:13: delete match arm (Some(low), Some(high)) in median_half_width in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:768:58: replace / with % in median_half_width in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:768:58: replace / with * in median_half_width in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:768:51: replace - with / in median_half_width in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:781:5: replace step_model_residual -> Option<f64> with None in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:768:51: replace - with + in median_half_width in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:781:5: replace step_model_residual -> Option<f64> with Some(0.0) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:781:5: replace step_model_residual -> Option<f64> with Some(1.0) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:781:5: replace step_model_residual -> Option<f64> with Some(-1.0) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:787:29: replace - with + in step_model_residual in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:787:29: replace - with / in step_model_residual in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:788:48: replace - with + in step_model_residual in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:788:48: replace - with / in step_model_residual in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:795:5: replace line_model_residual -> Option<f64> with None in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:795:5: replace line_model_residual -> Option<f64> with Some(0.0) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:795:5: replace line_model_residual -> Option<f64> with Some(1.0) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:795:5: replace line_model_residual -> Option<f64> with Some(-1.0) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:798:38: replace - with + in line_model_residual in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:798:38: replace - with / in line_model_residual in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:798:51: replace + with - in line_model_residual in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:798:51: replace + with * in line_model_residual in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:798:59: replace * with + in line_model_residual in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:798:59: replace * with / in line_model_residual in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:806:5: replace sample_step_residual -> Option<f64> with None in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:806:5: replace sample_step_residual -> Option<f64> with Some(0.0) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:806:5: replace sample_step_residual -> Option<f64> with Some(1.0) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:806:5: replace sample_step_residual -> Option<f64> with Some(-1.0) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:811:48: replace - with + in sample_step_residual in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:810:29: replace - with + in sample_step_residual in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:810:29: replace - with / in sample_step_residual in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:823:5: replace exceeds_residual_noise -> bool with false in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:811:48: replace - with / in sample_step_residual in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:823:5: replace exceeds_residual_noise -> bool with true in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:824:39: replace > with == in exceeds_residual_noise in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:824:39: replace > with >= in exceeds_residual_noise in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:824:72: replace * with / in exceeds_residual_noise in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:824:39: replace > with < in exceeds_residual_noise in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:824:72: replace * with + in exceeds_residual_noise in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:846:5: replace regimes_are_separated -> bool with true in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:846:5: replace regimes_are_separated -> bool with false in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:854:21: replace - with + in regimes_are_separated in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:851:40: replace >= with < in regimes_are_separated in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:854:21: replace - with / in regimes_are_separated in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:856:25: replace >= with < in regimes_are_separated in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:874:5: replace arbitrate -> Option<Candidate> with None in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/findings.rs:874:5: replace arbitrate -> Option<Candidate> with Some(Default::default()) in 1s build
+caught   packages/cbh_detect/src/detect/findings.rs:883:45: replace match guard line < step with false in arbitrate in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:883:45: replace match guard line < step with true in arbitrate in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:883:50: replace < with > in arbitrate in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:883:50: replace < with <= in arbitrate in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:883:50: replace < with == in arbitrate in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:910:5: replace evaluate_change_point -> Option<Candidate> with None in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/findings.rs:910:5: replace evaluate_change_point -> Option<Candidate> with Some(Default::default()) in 0s build
+caught   packages/cbh_detect/src/detect/findings.rs:917:39: replace || with && in evaluate_change_point in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:917:19: replace < with == in evaluate_change_point in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:917:19: replace < with > in evaluate_change_point in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:917:19: replace < with <= in evaluate_change_point in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:917:52: replace < with == in evaluate_change_point in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:917:52: replace < with > in evaluate_change_point in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:917:52: replace < with <= in evaluate_change_point in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:925:24: replace - with + in evaluate_change_point in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:925:24: replace - with / in evaluate_change_point in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:926:20: replace <= with > in evaluate_change_point in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:933:21: replace >= with < in evaluate_change_point in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:936:29: replace < with == in evaluate_change_point in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:936:29: replace < with > in evaluate_change_point in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/findings.rs:953:7: replace && with || in evaluate_change_point in 1s build
+caught   packages/cbh_detect/src/detect/findings.rs:945:8: delete ! in evaluate_change_point in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:936:29: replace < with <= in evaluate_change_point in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:939:8: delete ! in evaluate_change_point in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:942:8: delete ! in evaluate_change_point in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:953:10: delete ! in evaluate_change_point in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:971:30: replace - with + in evaluate_change_point in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/findings.rs:999:5: replace evaluate_drift -> Option<Candidate> with Some(Default::default()) in 1s build
+caught   packages/cbh_detect/src/detect/findings.rs:971:30: replace - with / in evaluate_change_point in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1001:10: replace < with == in evaluate_drift in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:999:5: replace evaluate_drift -> Option<Candidate> with None in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1001:10: replace < with > in evaluate_drift in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1001:10: replace < with <= in evaluate_drift in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1006:22: replace >= with < in evaluate_drift in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1012:28: replace + with - in evaluate_drift in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1012:28: replace + with * in evaluate_drift in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1012:36: replace * with + in evaluate_drift in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1012:36: replace * with / in evaluate_drift in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1013:24: replace - with + in evaluate_drift in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1013:24: replace - with / in evaluate_drift in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1014:20: replace <= with > in evaluate_drift in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1018:29: replace < with == in evaluate_drift in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1018:29: replace < with > in evaluate_drift in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/findings.rs:1031:9: replace && with || in evaluate_drift in 0s build
+caught   packages/cbh_detect/src/detect/findings.rs:1021:8: delete ! in evaluate_drift in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1018:29: replace < with <= in evaluate_drift in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1024:8: delete ! in evaluate_drift in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1031:24: replace <= with > in evaluate_drift in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1031:31: replace * with + in evaluate_drift in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1031:31: replace * with / in evaluate_drift in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1048:30: replace - with + in evaluate_drift in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/findings.rs:1078:5: replace recent_commits -> Vec<&'a SeriesPoint> with vec![Box::leak(Box::new(Default::default()))] in 0s build
+caught   packages/cbh_detect/src/detect/findings.rs:1048:30: replace - with / in evaluate_drift in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1078:5: replace recent_commits -> Vec<&'a SeriesPoint> with vec![] in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/findings.rs:1107:5: replace split_at_merge_base -> (Vec<&SeriesPoint>, Vec<&SeriesPoint>) with (vec![], vec![Box::leak(Box::new(Default::default()))]) in 0s build
+unviable packages/cbh_detect/src/detect/findings.rs:1107:5: replace split_at_merge_base -> (Vec<&SeriesPoint>, Vec<&SeriesPoint>) with (vec![Box::leak(Box::new(Default::default()))], vec![]) in 1s build
+unviable packages/cbh_detect/src/detect/findings.rs:1107:5: replace split_at_merge_base -> (Vec<&SeriesPoint>, Vec<&SeriesPoint>) with (vec![Box::leak(Box::new(Default::default()))], vec![Box::leak(Box::new(Default::default()))]) in 0s build
+caught   packages/cbh_detect/src/detect/findings.rs:1083:20: replace != with == in recent_commits in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1084:24: replace == with != in recent_commits in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1107:5: replace split_at_merge_base -> (Vec<&SeriesPoint>, Vec<&SeriesPoint>) with (vec![], vec![]) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1113:42: replace || with && in split_at_merge_base in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1113:29: replace > with >= in split_at_merge_base in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1113:29: replace > with == in split_at_merge_base in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1113:29: replace > with < in split_at_merge_base in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1113:77: replace && with || in split_at_merge_base in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1113:63: replace == with != in split_at_merge_base in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/findings.rs:1136:5: replace latest_commit_points -> Vec<&'a SeriesPoint> with vec![Box::leak(Box::new(Default::default()))] in 1s build
+caught   packages/cbh_detect/src/detect/findings.rs:1136:5: replace latest_commit_points -> Vec<&'a SeriesPoint> with vec![] in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1141:61: replace && with || in latest_commit_points in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1141:42: replace == with != in latest_commit_points in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1141:76: replace == with != in latest_commit_points in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1159:5: replace commit_levels -> Vec<f64> with vec![] in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1159:5: replace commit_levels -> Vec<f64> with vec![0.0] in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1159:5: replace commit_levels -> Vec<f64> with vec![1.0] in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1159:5: replace commit_levels -> Vec<f64> with vec![-1.0] in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1164:20: replace != with == in commit_levels in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1214:5: replace prediction_interval_p -> Option<f64> with None in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1214:5: replace prediction_interval_p -> Option<f64> with Some(0.0) in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1214:5: replace prediction_interval_p -> Option<f64> with Some(1.0) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1214:5: replace prediction_interval_p -> Option<f64> with Some(-1.0) in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1215:10: replace < with > in prediction_interval_p in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1215:10: replace < with <= in prediction_interval_p in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1215:10: replace < with == in prediction_interval_p in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1221:29: replace * with + in prediction_interval_p in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1221:29: replace * with / in prediction_interval_p in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1221:36: replace + with - in prediction_interval_p in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1221:36: replace + with * in prediction_interval_p in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1221:42: replace / with * in prediction_interval_p in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1221:42: replace / with % in prediction_interval_p in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1222:50: replace <= with > in prediction_interval_p in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1222:32: replace || with && in prediction_interval_p in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1225:29: replace / with % in prediction_interval_p in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1225:29: replace / with * in prediction_interval_p in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1225:21: replace - with + in prediction_interval_p in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1226:46: replace - with + in prediction_interval_p in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1225:21: replace - with / in prediction_interval_p in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1226:46: replace - with / in prediction_interval_p in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/findings.rs:1257:5: replace compare_samples -> Option<Candidate> with Some(Default::default()) in 0s build
+caught   packages/cbh_detect/src/detect/findings.rs:1257:5: replace compare_samples -> Option<Candidate> with None in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1261:24: replace - with + in compare_samples in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1267:28: replace < with > in compare_samples in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1267:28: replace < with == in compare_samples in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1262:20: replace <= with > in compare_samples in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1261:24: replace - with / in compare_samples in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1267:28: replace < with <= in compare_samples in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1270:29: replace < with == in compare_samples in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/findings.rs:1289:9: replace && with || in compare_samples in 0s build
+caught   packages/cbh_detect/src/detect/findings.rs:1270:29: replace < with > in compare_samples in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1270:29: replace < with <= in compare_samples in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1285:20: replace >= with < in compare_samples in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1273:8: delete ! in compare_samples in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1276:8: delete ! in compare_samples in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/findings.rs:1301:9: replace && with || in compare_samples in 0s build
+caught   packages/cbh_detect/src/detect/findings.rs:1289:12: delete ! in compare_samples in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1301:24: replace <= with > in compare_samples in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1301:56: replace * with + in compare_samples in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1301:56: replace * with / in compare_samples in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1317:30: replace - with + in compare_samples in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1317:30: replace - with / in compare_samples in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/findings.rs:1346:5: replace evaluate_branch -> Option<Candidate> with Some(Default::default()) in 1s build
+unviable packages/cbh_detect/src/detect/findings.rs:1375:5: replace active_view -> Series with Default::default() in 1s build
+caught   packages/cbh_detect/src/detect/findings.rs:1346:5: replace evaluate_branch -> Option<Candidate> with None in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1375:28: replace == with != in active_view in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1400:5: replace stamp_history with () in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/findings.rs:1428:5: replace evaluate_resolved_spike -> Option<Candidate> with Some(Default::default()) in 0s build
+caught   packages/cbh_detect/src/detect/findings.rs:1409:5: replace short_commit -> String with String::new() in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1409:5: replace short_commit -> String with "xyzzy".into() in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1428:5: replace evaluate_resolved_spike -> Option<Candidate> with None in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1430:10: replace > with < in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1430:10: replace > with >= in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1430:10: replace > with == in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1435:10: replace < with == in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1435:10: replace < with > in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1435:10: replace < with <= in evaluate_resolved_spike in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/findings.rs:1454:17: replace && with || in evaluate_resolved_spike in 0s build
+caught   packages/cbh_detect/src/detect/findings.rs:1442:34: replace - with / in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1442:62: replace >= with < in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1442:34: replace - with + in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1450:17: replace <= with > in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1452:19: replace <= with > in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1456:39: replace - with + in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1456:39: replace - with / in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1458:37: replace > with == in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1458:37: replace > with < in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1458:37: replace > with >= in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1471:9: replace || with && in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1470:9: replace || with && in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1469:24: replace <= with > in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1470:57: replace < with == in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1470:57: replace < with <= in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1470:57: replace < with > in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1471:12: delete ! in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1479:8: delete ! in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1484:38: replace || with && in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1484:15: replace >= with < in evaluate_resolved_spike in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1501:30: replace - with / in evaluate_resolved_spike in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1484:52: replace >= with < in evaluate_resolved_spike in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1501:30: replace - with + in evaluate_resolved_spike in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1564:5: replace find_changes_spawned -> Detection with Default::default() in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/findings.rs:1578:5: replace testability -> Testability with Default::default() in 1s build
+caught   packages/cbh_detect/src/detect/findings.rs:1584:30: replace >= with < in testability in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1586:43: replace > with == in testability in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1586:43: replace > with < in testability in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1597:17: replace < with == in testability in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1586:43: replace > with >= in testability in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1597:17: replace < with > in testability in 2s build + 0s test
+unviable packages/cbh_detect/src/detect/findings.rs:1621:5: replace finalize_findings -> Vec<Finding> with vec![Default::default()] in 1s build
+unviable packages/cbh_detect/src/detect/findings.rs:1698:5: replace detect_all_spawned -> (Vec<Candidate>, SeriesCensus) with (vec![Default::default()], Default::default()) in 0s build
+caught   packages/cbh_detect/src/detect/findings.rs:1621:5: replace finalize_findings -> Vec<Finding> with vec![] in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1597:17: replace < with <= in testability in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1641:16: delete ! in finalize_findings in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1649:16: delete ! in finalize_findings in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/findings.rs:1698:5: replace detect_all_spawned -> (Vec<Candidate>, SeriesCensus) with (vec![], Default::default()) in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/findings.rs:1732:5: replace detect_range -> (Vec<Candidate>, SeriesCensus) with (vec![Default::default()], Default::default()) in 1s build
+unviable packages/cbh_detect/src/detect/findings.rs:1743:13: replace && with || in detect_range in 1s build
+unviable packages/cbh_detect/src/detect/findings.rs:1762:5: replace detect_one -> Option<Candidate> with Some(Default::default()) in 1s build
+caught   packages/cbh_detect/src/detect/findings.rs:1762:5: replace detect_one -> Option<Candidate> with None in 2s build + 1s test
+caught   packages/cbh_detect/src/detect/findings.rs:1732:5: replace detect_range -> (Vec<Candidate>, SeriesCensus) with (vec![], Default::default()) in 2s build + 1s test
+unviable packages/cbh_detect/src/detect/noise_gates.rs:27:47: replace * with / in 1s build
+unviable packages/cbh_detect/src/detect/noise_gates.rs:27:47: replace * with + in 1s build
+caught   packages/cbh_detect/src/detect/findings.rs:1774:33: replace && with || in detect_one in 2s build + 1s test
+caught   packages/cbh_detect/src/detect/parallel.rs:54:5: replace balanced_chunk_sizes -> impl Iterator<Item = usize> with ::std::iter::empty() in 2s build + 1s test
+unviable packages/cbh_detect/src/detect/run_points.rs:44:9: replace RunPoints::from_json -> Result<Self, serde_json::Error> with Ok(Default::default()) in 1s build
+caught   packages/cbh_detect/src/detect/parallel.rs:54:5: replace balanced_chunk_sizes -> impl Iterator<Item = usize> with ::std::iter::once(0) in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/parallel.rs:54:5: replace balanced_chunk_sizes -> impl Iterator<Item = usize> with ::std::iter::once(1) in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/parallel.rs:57:18: replace < with == in balanced_chunk_sizes in 3s build + 0s test
+caught   packages/cbh_detect/src/detect/parallel.rs:57:18: replace < with > in balanced_chunk_sizes in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/parallel.rs:57:18: replace < with <= in balanced_chunk_sizes in 2s build + 0s test
+unviable packages/cbh_detect/src/detect/run_points.rs:50:9: replace RunPoints::results -> &[ResultPoints] with Vec::leak(vec![Default::default()]) in 1s build
+unviable packages/cbh_detect/src/detect/run_points.rs:56:9: replace <impl From<&Run> for RunPoints>::from -> Self with Default::default() in 1s build
+unviable packages/cbh_detect/src/detect/run_points.rs:110:5: replace deserialize_metric_points -> Result<SmallVec<[MetricPoint; 2]>, D::Error> with Ok(SmallVec::from_iter([[Default::default(); 2]])) in 1s build
+unviable packages/cbh_detect/src/detect/run_points.rs:110:5: replace deserialize_metric_points -> Result<SmallVec<[MetricPoint; 2]>, D::Error> with Ok(SmallVec::new([Default::default(); 2])) in 1s build
+unviable packages/cbh_detect/src/detect/run_points.rs:110:5: replace deserialize_metric_points -> Result<SmallVec<[MetricPoint; 2]>, D::Error> with Ok(SmallVec::from([Default::default(); 2])) in 0s build
+caught   packages/cbh_detect/src/detect/run_points.rs:50:9: replace RunPoints::results -> &[ResultPoints] with Vec::leak(Vec::new()) in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/run_points.rs:110:5: replace deserialize_metric_points -> Result<SmallVec<[MetricPoint; 2]>, D::Error> with Ok(SmallVec::new()) in 2s build + 0s test
+unviable packages/cbh_detect/src/detect/run_points.rs:143:9: replace RawMetricPoint<'_>::into_point -> Option<MetricPoint> with Some(Default::default()) in 1s build
+caught   packages/cbh_detect/src/detect/run_points.rs:143:9: replace RawMetricPoint<'_>::into_point -> Option<MetricPoint> with None in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/selection.rs:33:9: replace DirtyAdmission::admits_dirty -> bool with true in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/selection.rs:33:9: replace DirtyAdmission::admits_dirty -> bool with false in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/selection.rs:40:9: replace DirtyAdmission::is_base_exception -> bool with true in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/selection.rs:77:5: replace select_commits -> Vec<SelectedCommit> with vec![Default::default()] in 1s build
+caught   packages/cbh_detect/src/detect/selection.rs:40:9: replace DirtyAdmission::is_base_exception -> bool with false in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/selection.rs:77:5: replace select_commits -> Vec<SelectedCommit> with vec![] in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/selection.rs:77:85: replace == with != in select_commits in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/selection.rs:83:65: replace > with == in select_commits in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/selection.rs:83:65: replace > with < in select_commits in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/selection.rs:83:65: replace > with >= in select_commits in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/selection.rs:84:36: replace == with != in select_commits in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/selection.rs:85:66: replace && with || in select_commits in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/selection.rs:85:51: replace && with || in select_commits in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/selection.rs:85:41: replace && with || in select_commits in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/selection.rs:85:28: delete ! in select_commits in 2s build + 0s test
+unviable packages/cbh_detect/src/detect/series.rs:166:5: replace build_series -> Vec<Series> with vec![Default::default()] in 1s build
+caught   packages/cbh_detect/src/detect/selection.rs:87:35: replace && with || in select_commits in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/series.rs:132:5: replace prefixes_accept -> bool with false in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/series.rs:132:5: replace prefixes_accept -> bool with true in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/series.rs:166:5: replace build_series -> Vec<Series> with vec![] in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/series.rs:278:9: replace SeriesBuilder::with_prefixes -> Self with Default::default() in 1s build
+caught   packages/cbh_detect/src/detect/series.rs:210:5: replace ordinal_of -> u32 with 0 in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/series.rs:210:5: replace ordinal_of -> u32 with 1 in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/series.rs:313:12: delete ! in SeriesBuilder::push in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/series.rs:322:16: delete ! in SeriesBuilder::push in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/series.rs:304:9: replace SeriesBuilder::push with () in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/series.rs:375:9: replace SeriesBuilder::merge with () in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/series.rs:414:9: replace SeriesBuilder::intern -> Arc<str> with Arc::new("") in 1s build
+caught   packages/cbh_detect/src/detect/series.rs:333:42: replace == with != in SeriesBuilder::push in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/series.rs:414:9: replace SeriesBuilder::intern -> Arc<str> with Arc::new("xyzzy") in 1s build
+caught   packages/cbh_detect/src/detect/series.rs:385:46: replace == with != in SeriesBuilder::merge in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/series.rs:428:9: replace SeriesBuilder::finish -> Vec<Series> with vec![Default::default()] in 1s build
+caught   packages/cbh_detect/src/detect/series.rs:428:9: replace SeriesBuilder::finish -> Vec<Series> with vec![] in 1s build + 0s test
+unviable packages/cbh_detect/src/detect/series.rs:539:5: replace retain_present_at_context -> Vec<(DiscriminantSet, BenchmarkId)> with vec![(Default::default(), Default::default())] in 1s build
+caught   packages/cbh_detect/src/detect/series.rs:489:5: replace apply_blessings with () in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/series.rs:505:55: replace < with == in apply_blessings in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/series.rs:505:55: replace < with > in apply_blessings in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/series.rs:505:55: replace < with <= in apply_blessings in 1s build + 0s test
+caught   packages/cbh_detect/src/detect/series.rs:539:5: replace retain_present_at_context -> Vec<(DiscriminantSet, BenchmarkId)> with vec![] in 2s build + 0s test
+caught   packages/cbh_detect/src/detect/series.rs:544:50: replace == with != in retain_present_at_context in 3s build + 0s test
+unviable packages/cbh_model/src/aggregate.rs:118:5: replace min_per_metric -> Result<Combined, AggregateError> with Ok(Default::default()) in 9s build
+caught   packages/cbh_model/src/aggregate.rs:155:48: replace < with > in min_per_metric in 13s build + 0s test
+caught   packages/cbh_model/src/aggregate.rs:155:48: replace < with == in min_per_metric in 13s build + 0s test
+caught   packages/cbh_model/src/aggregate.rs:202:16: delete ! in check_case_consistency in 3s build + 0s test
+caught   packages/cbh_model/src/aggregate.rs:76:9: replace <impl fmt::Display for AggregateError>::fmt -> fmt::Result with Ok(Default::default()) in 13s build + 0s test
+caught   packages/cbh_model/src/aggregate.rs:155:48: replace < with <= in min_per_metric in 11s build + 0s test
+caught   packages/cbh_model/src/aggregate.rs:195:5: replace check_case_consistency -> Result<(), AggregateError> with Ok(()) in 11s build + 0s test
+unviable packages/cbh_model/src/aggregate.rs:264:5: replace find_metric -> Option<&crate::Metric> with Some(Box::leak(Box::new(Default::default()))) in 1s build
+caught   packages/cbh_model/src/aggregate.rs:264:53: replace == with != in find_metric in 2s build + 0s test
+caught   packages/cbh_model/src/aggregate.rs:212:16: delete ! in check_case_consistency in 2s build + 0s test
+caught   packages/cbh_model/src/aggregate.rs:231:5: replace check_metric_consistency -> Result<(), AggregateError> with Ok(()) in 2s build + 0s test
+caught   packages/cbh_model/src/aggregate.rs:264:5: replace find_metric -> Option<&crate::Metric> with None in 2s build + 0s test
+caught   packages/cbh_model/src/benchmark_id.rs:52:9: replace BenchmarkId::qualified -> String with String::new() in 1s build + 0s test
+caught   packages/cbh_model/src/benchmark_id.rs:52:9: replace BenchmarkId::qualified -> String with "xyzzy".into() in 1s build + 0s test
+unviable packages/cbh_model/src/benchmark_id.rs:111:9: replace <impl FromStr for BenchmarkIdPrefix>::from_str -> Result<Self, Self::Err> with Ok(Default::default()) in 1s build
+unviable packages/cbh_model/src/benchmark_id.rs:119:9: replace <impl TryFrom<String> for BenchmarkIdPrefix>::try_from -> Result<Self, Self::Error> with Ok(Default::default()) in 1s build
+caught   packages/cbh_model/src/benchmark_id.rs:62:9: replace <impl fmt::Display for BenchmarkId>::fmt -> fmt::Result with Ok(Default::default()) in 2s build + 0s test
+caught   packages/cbh_model/src/benchmark_id.rs:97:9: replace BenchmarkIdPrefix::as_str -> &str with "xyzzy" in 2s build + 0s test
+caught   packages/cbh_model/src/benchmark_id.rs:97:9: replace BenchmarkIdPrefix::as_str -> &str with "" in 2s build + 0s test
+caught   packages/cbh_model/src/benchmark_id.rs:103:9: replace <impl fmt::Display for BenchmarkIdPrefix>::fmt -> fmt::Result with Ok(Default::default()) in 2s build + 0s test
+caught   packages/cbh_model/src/benchmark_id.rs:125:9: replace <impl From<BenchmarkIdPrefix> for String>::from -> Self with Default::default() in 1s build + 0s test
+caught   packages/cbh_model/src/benchmark_id.rs:136:9: replace <impl fmt::Display for EmptyBenchmarkIdPrefix>::fmt -> fmt::Result with Ok(Default::default()) in 1s build + 0s test
+unviable packages/cbh_model/src/bless.rs:81:9: replace BlessingRecord::from_json -> Result<Self, serde_json::Error> with Ok(Default::default()) in 1s build
+caught   packages/cbh_model/src/bless.rs:72:9: replace BlessingRecord::to_json -> Result<String, serde_json::Error> with Ok(String::new()) in 1s build + 0s test
+caught   packages/cbh_model/src/bless.rs:72:9: replace BlessingRecord::to_json -> Result<String, serde_json::Error> with Ok("xyzzy".into()) in 1s build + 0s test
+caught   packages/cbh_model/src/bless.rs:91:9: replace BlessingRecord::matches -> bool with true in 1s build + 0s test
+unviable packages/cbh_model/src/comparability.rs:65:9: replace Engine::from_name -> Option<Self> with Some(Default::default()) in 1s build
+caught   packages/cbh_model/src/bless.rs:91:9: replace BlessingRecord::matches -> bool with false in 2s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:54:9: replace Engine::as_str -> &'static str with "" in 2s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:54:9: replace Engine::as_str -> &'static str with "xyzzy" in 2s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:65:9: replace Engine::from_name -> Option<Self> with None in 2s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:66:13: delete match arm "criterion" in Engine::from_name in 2s build + 0s test
+unviable packages/cbh_model/src/comparability.rs:80:9: replace <impl Ord for Engine>::cmp -> Ordering with Default::default() in 1s build
+unviable packages/cbh_model/src/comparability.rs:86:9: replace <impl PartialOrd for Engine>::partial_cmp -> Option<Ordering> with Some(Default::default()) in 1s build
+caught   packages/cbh_model/src/comparability.rs:68:13: delete match arm "alloc_tracker" in Engine::from_name in 2s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:67:13: delete match arm "callgrind" in Engine::from_name in 2s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:69:13: delete match arm "all_the_time" in Engine::from_name in 2s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:86:9: replace <impl PartialOrd for Engine>::partial_cmp -> Option<Ordering> with None in 2s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:92:9: replace <impl fmt::Display for Engine>::fmt -> fmt::Result with Ok(Default::default()) in 1s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:150:9: replace DiscriminantSet::partition_prefix -> String with String::new() in 2s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:150:9: replace DiscriminantSet::partition_prefix -> String with "xyzzy".into() in 2s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:171:9: replace DiscriminantSet::clean_key -> String with String::new() in 2s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:171:9: replace DiscriminantSet::clean_key -> String with "xyzzy".into() in 2s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:191:9: replace DiscriminantSet::dirty_key -> String with String::new() in 1s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:191:9: replace DiscriminantSet::dirty_key -> String with "xyzzy".into() in 2s build + 1s test
+caught   packages/cbh_model/src/comparability.rs:206:9: replace DiscriminantSet::bless_key -> String with String::new() in 2s build + 1s test
+unviable packages/cbh_model/src/comparability.rs:264:9: replace ObjectKind::from_file_segment -> Option<Self> with Some(Default::default()) in 1s build
+caught   packages/cbh_model/src/comparability.rs:220:9: replace DiscriminantSet::commit_prefix -> String with String::new() in 2s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:206:9: replace DiscriminantSet::bless_key -> String with "xyzzy".into() in 2s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:220:9: replace DiscriminantSet::commit_prefix -> String with "xyzzy".into() in 3s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:228:9: replace <impl fmt::Display for DiscriminantSet>::fmt -> fmt::Result with Ok(Default::default()) in 3s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:264:9: replace ObjectKind::from_file_segment -> Option<Self> with None in 2s build + 1s test
+caught   packages/cbh_model/src/comparability.rs:264:17: replace == with != in ObjectKind::from_file_segment in 2s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:320:9: replace StorageKey::is_clean -> bool with true in 2s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:320:9: replace StorageKey::is_clean -> bool with false in 2s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:326:9: replace StorageKey::is_dirty -> bool with true in 2s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:326:9: replace StorageKey::is_dirty -> bool with false in 2s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:332:9: replace StorageKey::is_bless -> bool with true in 1s build + 0s test
+unviable packages/cbh_model/src/comparability.rs:356:5: replace parse_key -> Option<StorageKey> with Some(Default::default()) in 1s build
+caught   packages/cbh_model/src/comparability.rs:332:9: replace StorageKey::is_bless -> bool with false in 1s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:339:9: replace StorageKey::bless_key -> String with String::new() in 1s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:339:9: replace StorageKey::bless_key -> String with "xyzzy".into() in 1s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:356:5: replace parse_key -> Option<StorageKey> with None in 1s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:370:36: replace || with && in parse_key in 1s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:370:17: replace != with == in parse_key in 1s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:370:48: replace != with == in parse_key in 1s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:405:5: replace sanitize_segment -> String with String::new() in 1s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:415:27: replace || with && in sanitize_segment in 1s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:405:5: replace sanitize_segment -> String with "xyzzy".into() in 1s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:408:42: replace || with && in sanitize_segment in 1s build + 0s test
+caught   packages/cbh_model/src/context.rs:177:5: replace detect_environment -> EnvironmentInfo with Default::default() in 1s build + 0s test
+caught   packages/cbh_model/src/comparability.rs:415:56: replace == with != in sanitize_segment in 1s build + 0s test
+unviable packages/cbh_model/src/metric.rs:59:9: replace Metric::with_dispersion -> Self with Default::default() in 0s build
+caught   packages/cbh_model/src/context.rs:177:41: replace == with != in detect_environment in 1s build + 0s test
+unviable packages/cbh_model/src/metric.rs:138:9: replace MetricKind::from_name -> Option<Self> with Some(Default::default()) in 0s build
+caught   packages/cbh_model/src/metric.rs:122:9: replace MetricKind::as_str -> &'static str with "" in 1s build + 0s test
+caught   packages/cbh_model/src/metric.rs:122:9: replace MetricKind::as_str -> &'static str with "xyzzy" in 1s build + 0s test
+caught   packages/cbh_model/src/metric.rs:138:9: replace MetricKind::from_name -> Option<Self> with None in 1s build + 0s test
+caught   packages/cbh_model/src/metric.rs:138:57: replace == with != in MetricKind::from_name in 1s build + 0s test
+caught   packages/cbh_model/src/metric.rs:144:9: replace MetricKind::as_unit -> &'static str with "" in 1s build + 0s test
+caught   packages/cbh_model/src/metric.rs:144:9: replace MetricKind::as_unit -> &'static str with "xyzzy" in 1s build + 0s test
+unviable packages/cbh_model/src/run.rs:59:9: replace Run::from_json -> Result<Self, serde_json::Error> with Ok(Default::default()) in 0s build
+caught   packages/cbh_model/src/run.rs:50:9: replace Run::to_json -> Result<String, serde_json::Error> with Ok("xyzzy".into()) in 1s build + 0s test
+caught   packages/cbh_model/src/run.rs:50:9: replace Run::to_json -> Result<String, serde_json::Error> with Ok(String::new()) in 1s build + 0s test
+unviable packages/cbh_model/src/run.rs:125:9: replace RawMetric<'_>::into_metric -> Option<Metric> with Some(Default::default()) in 0s build
+caught   packages/cbh_model/src/run.rs:94:5: replace deserialize_metrics -> Result<MetricList, D::Error> with Ok(Default::default()) in 1s build + 0s test
+caught   packages/cbh_model/src/run.rs:125:9: replace RawMetric<'_>::into_metric -> Option<Metric> with None in 1s build + 0s test
+caught   packages/cbh_probe/src/host.rs:18:5: replace parse_rustc_verbose -> RustcInfo with Default::default() in 7s build + 0s test
+caught   packages/cbh_probe/src/host.rs:43:5: replace non_empty -> Option<String> with Some(String::new()) in 7s build + 0s test
+caught   packages/cbh_probe/src/host.rs:43:5: replace non_empty -> Option<String> with None in 7s build + 0s test
+caught   packages/cbh_probe/src/host.rs:43:5: replace non_empty -> Option<String> with Some("xyzzy".into()) in 7s build + 0s test
+caught   packages/cbh_probe/src/machine.rs:78:5: replace canonical -> String with String::new() in 7s build + 0s test
+caught   packages/cbh_probe/src/machine.rs:78:5: replace canonical -> String with "xyzzy".into() in 7s build + 0s test
+caught   packages/cbh_probe/src/machine.rs:89:5: replace normalize_model -> String with String::new() in 0s build + 0s test
+caught   packages/cbh_probe/src/machine.rs:96:5: replace speed_histogram -> Vec<(u64, usize)> with vec![] in 0s build + 0s test
+caught   packages/cbh_probe/src/machine.rs:96:5: replace speed_histogram -> Vec<(u64, usize)> with vec![(0, 0)] in 0s build + 0s test
+caught   packages/cbh_probe/src/machine.rs:89:5: replace normalize_model -> String with "xyzzy".into() in 0s build + 0s test
+caught   packages/cbh_probe/src/machine.rs:96:5: replace speed_histogram -> Vec<(u64, usize)> with vec![(0, 1)] in 0s build + 0s test
+caught   packages/cbh_probe/src/machine.rs:96:5: replace speed_histogram -> Vec<(u64, usize)> with vec![(1, 0)] in 0s build + 0s test
+caught   packages/cbh_probe/src/machine.rs:96:5: replace speed_histogram -> Vec<(u64, usize)> with vec![(1, 1)] in 1s build + 0s test
+caught   packages/cbh_probe/src/machine.rs:127:5: replace distinct_models -> Vec<String> with vec![] in 1s build + 0s test
+caught   packages/cbh_probe/src/machine.rs:113:5: replace render_models -> String with String::new() in 1s build + 0s test
+caught   packages/cbh_probe/src/machine.rs:113:5: replace render_models -> String with "xyzzy".into() in 1s build + 0s test
+caught   packages/cbh_probe/src/machine.rs:116:12: delete ! in render_models in 1s build + 0s test
+caught   packages/cbh_probe/src/machine.rs:127:5: replace distinct_models -> Vec<String> with vec![String::new()] in 0s build + 0s test
+caught   packages/cbh_probe/src/machine.rs:127:5: replace distinct_models -> Vec<String> with vec!["xyzzy".into()] in 1s build + 0s test
+caught   packages/cbh_probe/src/machine.rs:140:5: replace fingerprint -> String with String::new() in 1s build + 0s test
+caught   packages/cbh_probe/src/machine.rs:130:12: delete ! in distinct_models in 1s build + 0s test
+caught   packages/cbh_probe/src/machine.rs:140:5: replace fingerprint -> String with "xyzzy".into() in 0s build + 0s test
+caught   packages/cbh_probe/src/machine.rs:159:5: replace resolve_machine_key -> String with String::new() in 0s build + 0s test
+caught   packages/cbh_probe/src/machine.rs:159:5: replace resolve_machine_key -> String with "xyzzy".into() in 1s build + 0s test
+unviable packages/cbh_probe/src/probe.rs:83:9: replace ProbeScope::repo -> Option<&Path> with Some(Box::leak(Box::new(Default::default()))) in 0s build
+caught   packages/cbh_probe/src/machine.rs:177:5: replace describe_fingerprint_components -> String with String::new() in 0s build + 0s test
+caught   packages/cbh_probe/src/machine.rs:177:5: replace describe_fingerprint_components -> String with "xyzzy".into() in 0s build + 0s test
+caught   packages/cbh_probe/src/probe.rs:83:9: replace ProbeScope::repo -> Option<&Path> with None in 0s build + 0s test
+caught   packages/cbh_probe/src/probe.rs:97:9: replace SystemProbe::in_dir -> Self with Default::default() in 0s build + 0s test
+caught   packages/cbh_probe/src/probe.rs:113:9: replace SystemProbe::in_worktree -> Self with Default::default() in 0s build + 0s test
+caught   packages/cbh_probe/src/probe.rs:181:5: replace fallback_host_triple -> String with String::new() in 1s build + 0s test
+caught   packages/cbh_probe/src/probe.rs:171:5: replace resolve_toolchain -> RustcInfo with Default::default() in 0s build + 0s test
+caught   packages/cbh_probe/src/probe.rs:181:5: replace fallback_host_triple -> String with "xyzzy".into() in 0s build + 0s test
+caught   packages/cbh_probe/src/probe.rs:188:5: replace host_triple_for -> String with String::new() in 0s build + 0s test
+caught   packages/cbh_probe/src/probe.rs:188:5: replace host_triple_for -> String with "xyzzy".into() in 0s build + 0s test
+1133 mutants tested in 16m: 961 caught, 172 unviable

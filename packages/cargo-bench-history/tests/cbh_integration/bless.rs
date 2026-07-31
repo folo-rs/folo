@@ -90,9 +90,9 @@ async fn list_blessings_reports_the_blessing_recorded_at_head() {
     assert_eq!(blessings.len(), 1, "{message}");
     assert_eq!(blessings[0]["commit"], short_head, "{message}");
     // The blessed commit's committer date is read from git topology (HEAD is the
-    // seeded c6, dated 2024-01-06), not from a denormalized copy on the sidecar.
+    // seeded tip c10, dated 2024-01-10), not from a denormalized copy on the sidecar.
     assert_eq!(
-        blessings[0]["commit_time"], "2024-01-06T00:00:00Z",
+        blessings[0]["commit_time"], "2024-01-10T00:00:00Z",
         "{message}"
     );
     assert!(
@@ -216,16 +216,12 @@ async fn bless_on_a_merged_in_side_commit_warns_off_first_parent() {
 #[cfg_attr(miri, ignore)]
 async fn bless_before_capture_applies_once_the_data_lands() {
     let workspace = Workspace::clean_repo(&storage_only_config());
-    // Build the full commit history first, capturing no data yet.
-    for (date, label) in [
-        ("2024-01-01", "c1"),
-        ("2024-01-02", "c2"),
-        ("2024-01-03", "c3"),
-        ("2024-01-04", "c4"),
-        ("2024-01-05", "c5"),
-        ("2024-01-06", "c6"),
-    ] {
-        workspace.commit_dated(date, label);
+    // Build the full commit history first, capturing no data yet. The chain is
+    // `MIN_SERIES_POINTS` long so the later-landing step is a real regression the
+    // blessing must suppress (not one too short to flag regardless).
+    let dates = sequential_dates("2024-01-01", MIN_SERIES_POINTS);
+    for (index, date) in dates.iter().enumerate() {
+        workspace.commit_dated(date, &format!("c{}", index + 1));
     }
 
     // Pre-emptively accept the tip before any run exists there. With no data to
@@ -239,12 +235,10 @@ async fn bless_before_capture_applies_once_the_data_lands() {
     assert!(message.contains("Blessed"), "{message}");
 
     // Now capture the rising Callgrind history over those same commits.
-    workspace.seed_callgrind("c1", 100.0);
-    workspace.seed_callgrind("c2", 100.0);
-    workspace.seed_callgrind("c3", 100.0);
-    workspace.seed_callgrind("c4", 130.0);
-    workspace.seed_callgrind("c5", 130.0);
-    workspace.seed_callgrind("c6", 130.0);
+    for (index, _) in dates.iter().enumerate() {
+        let value = if index < MIN_REGIME { 100.0 } else { 130.0 };
+        workspace.seed_callgrind(&format!("c{}", index + 1), value);
+    }
 
     // The pre-emptive blessing occupies the exact Callgrind set the run landed in,
     // so the regression is suppressed with no re-bless.
@@ -263,12 +257,14 @@ async fn bless_before_capture_applies_once_the_data_lands() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_include_inactive_surfaces_a_recovered_spike() {
     let workspace = Workspace::clean_repo(&storage_only_config());
-    // An eight-point baseline, a two-point spike, then an eight-point return to the
-    // baseline level. No engine is exact, so the spike's rise and recovery must each
-    // be long enough to clear a Mann-Whitney gate before it registers at all.
-    for (day, value) in std::iter::repeat_n(10.0, 8)
-        .chain([20.0, 20.0])
-        .chain(std::iter::repeat_n(10.0, 8))
+    // A `MIN_REGIME`-point baseline, a `MIN_REGIME`-point spike, then a
+    // `MIN_REGIME`-point return to the baseline level. Each regime must be at least
+    // `MIN_REGIME` points long for the change-point detector to trust both the rise
+    // and the recovery, so the spike registers as an inactive (self-corrected)
+    // finding.
+    for (day, value) in std::iter::repeat_n(10.0, MIN_REGIME)
+        .chain(std::iter::repeat_n(20.0, MIN_REGIME))
+        .chain(std::iter::repeat_n(10.0, MIN_REGIME))
         .enumerate()
     {
         let day = day + 1;

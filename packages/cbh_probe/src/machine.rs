@@ -8,6 +8,15 @@
 //! *name* is deliberately not a factor, since pool machines have distinct names
 //! but equivalent hardware.
 //!
+//! Only stable properties of the hardware take part: the processor and
+//! memory-region counts and the distinct processor models present. Readings that
+//! the same machine can report differently from one boot to the next — the
+//! per-processor speed metrics above all, which are boot-time calibration figures
+//! rather than hardware identity — are probed as provenance but never hashed. A
+//! key that moves while the hardware stands still would fragment one machine's
+//! history into incomparable pieces, which is the failure the fingerprint exists
+//! to prevent.
+//!
 //! The key is surfaced two ways for operators. [`resolve_machine_key`] yields the
 //! key itself (what `collect` stamps every result with and the
 //! `machine-key` command prints), while [`describe_fingerprint_components`] renders
@@ -24,14 +33,17 @@ use sha2::{Digest, Sha256};
 /// Bumping it deliberately forks the machine key (and thus the stored series) so
 /// that a change to which factors are hashed is an explicit, visible event rather
 /// than a silent break in history.
-const FINGERPRINT_VERSION: &str = "mk2";
+const FINGERPRINT_VERSION: &str = "mk3";
 
 /// Number of hex characters kept from the SHA-256 digest. Eight bytes (64 bits)
 /// is short enough for a readable path segment yet wide enough that accidental
 /// collisions between distinct hardware profiles are not a practical concern.
 const FINGERPRINT_HEX_LEN: usize = 16;
 
-/// Hardware facts that identify a machine for partitioning benchmark results.
+/// Hardware facts probed from the host.
+///
+/// Some are fingerprint factors, identifying the machine that benchmark results are
+/// partitioned by; the rest are provenance recorded beside them.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HardwareProfile {
     /// Maximum number of logical processors the system reports.
@@ -47,27 +59,27 @@ pub struct HardwareProfile {
     /// Histogram of the per-processor relative speeds the system reports, as
     /// `(speed, count)` pairs sorted ascending by speed.
     ///
-    /// This distinguishes machines that agree on processor and memory-region
-    /// counts but differ in their mix of processor speeds (for example a hybrid
-    /// performance/efficiency core layout versus a uniform one).
+    /// Provenance only — deliberately **not** a fingerprint factor. The reading
+    /// behind it is a boot-time calibration figure, so the same machine can report
+    /// a different value after a reboot; hashing it would split one machine's
+    /// history across several keys. The processor model set already identifies
+    /// what the processors are.
     pub processor_speeds: Vec<(u64, usize)>,
 }
 
 /// Renders a profile to its canonical, hashable string (pure).
 ///
-/// The factors are emitted in a fixed order as `key=value` lines, prefixed with the
-/// fingerprint version. Models are rendered as a sorted, deduplicated, comma-joined
-/// list, and the speed histogram in its fixed ascending order, so machines that differ
-/// only cosmetically - in model order, duplicate models, or incidental whitespace - hash
-/// consistently. An absent model set and an empty histogram both contribute an empty
-/// value.
+/// The fingerprint factors are emitted in a fixed order as `key=value` lines, prefixed
+/// with the fingerprint version. Models are rendered as a sorted, deduplicated,
+/// comma-joined list, so machines that differ only cosmetically - in model order,
+/// duplicate models, or incidental whitespace - hash consistently. An absent model set
+/// contributes an empty value.
 fn canonical(profile: &HardwareProfile) -> String {
     format!(
-        "{FINGERPRINT_VERSION}\nprocessors={}\nmemory_regions={}\nprocessor_models={}\nprocessor_speeds={}",
+        "{FINGERPRINT_VERSION}\nprocessors={}\nmemory_regions={}\nprocessor_models={}",
         profile.processors,
         profile.memory_regions,
         render_models(&profile.processor_models),
-        render_speed_histogram(&profile.processor_speeds),
     )
 }
 
@@ -77,33 +89,9 @@ fn normalize_model(model: &str) -> String {
     model.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Renders a speed histogram to a canonical `speedxcount` list joined by commas,
-/// for example `3141x4,6283x2` (pure). Because `HardwareProfile::processor_speeds`
-/// is public, a caller may supply the pairs in any order, split one speed across
-/// several entries, or include zero-count entries. Counts are therefore merged per
-/// speed, zero-count speeds dropped, and the result rendered ascending by speed, so
-/// that any two representations of the same histogram render — and hash —
-/// identically. An empty histogram renders as an empty string.
-fn render_speed_histogram(speeds: &[(u64, usize)]) -> String {
-    let mut merged: BTreeMap<u64, usize> = BTreeMap::new();
-    for &(speed, count) in speeds {
-        if count == 0 {
-            continue;
-        }
-        let total = merged.entry(speed).or_insert(0);
-        *total = total
-            .checked_add(count)
-            .expect("processor count cannot exceed the usize range");
-    }
-    merged
-        .iter()
-        .map(|(speed, count)| format!("{speed}x{count}"))
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
 /// Builds a speed histogram from a sequence of per-processor speeds: `(speed,
-/// count)` pairs sorted ascending by speed (pure).
+/// count)` pairs sorted ascending by speed (pure). The result is recorded as
+/// provenance and does not enter the fingerprint.
 fn speed_histogram(speeds: impl IntoIterator<Item = u64>) -> Vec<(u64, usize)> {
     let mut counts: BTreeMap<u64, usize> = BTreeMap::new();
     for speed in speeds {
@@ -179,9 +167,11 @@ pub fn resolve_machine_key(override_key: Option<&str>, profile: &HardwareProfile
 ///
 /// It reports the fingerprint version tag and each hardware factor using the same
 /// normalized values that enter the hash, so that when a machine key changes the
-/// specific factor responsible can be identified from a `--verbose` log. An absent model
-/// set is shown as `<none>` (matching the empty value it contributes to the canonical
-/// string) rather than omitted, so its absence is itself visible.
+/// specific factor responsible can be identified from a `--verbose` log. Facts that the
+/// profile carries as provenance rather than as factors are left out, so what is shown
+/// is exactly what the key depends on. An absent model set is shown as `<none>`
+/// (matching the empty value it contributes to the canonical string) rather than
+/// omitted, so its absence is itself visible.
 #[must_use]
 pub fn describe_fingerprint_components(profile: &HardwareProfile) -> String {
     let models = render_models(&profile.processor_models);
@@ -190,23 +180,18 @@ pub fn describe_fingerprint_components(profile: &HardwareProfile) -> String {
     } else {
         models
     };
-    let speeds = render_speed_histogram(&profile.processor_speeds);
-    let speeds = if speeds.is_empty() {
-        "<none>".to_owned()
-    } else {
-        speeds
-    };
     format!(
-        "version={FINGERPRINT_VERSION}, processors={}, memory_regions={}, processor_models={models}, processor_speeds={speeds}",
+        "version={FINGERPRINT_VERSION}, processors={}, memory_regions={}, \
+         processor_models={models}",
         profile.processors, profile.memory_regions,
     )
 }
 
 /// Profiles the host hardware (best effort).
 ///
-/// The processor and memory-region counts, the per-processor speed histogram and the
-/// distinct processor models all come from `many_cpus`, so the fingerprint is built from
-/// a single, consistent hardware source.
+/// The processor and memory-region counts, the distinct processor models and the
+/// per-processor speed histogram all come from `many_cpus`, so the fingerprint and the
+/// provenance recorded beside it are built from a single, consistent hardware source.
 #[cfg_attr(test, mutants::skip)] // Queries the host; the pure logic it feeds is tested.
 pub(crate) fn system_profile() -> HardwareProfile {
     let hardware = many_cpus::SystemHardware::current();
@@ -262,20 +247,7 @@ mod tests {
         // factor set, ordering, version tag, or hash changes, this must be
         // updated deliberately (and existing history is understood to fork).
         let key = fingerprint(&profile(8, 1, &["Test CPU 3000"]));
-        assert_eq!(key, "1e3277ddba18263f");
-    }
-
-    #[test]
-    fn fingerprint_is_stable_for_a_fixed_profile_with_speeds() {
-        // Companion golden that pins the rendering of the speed histogram into the
-        // hash, so a change to how speeds enter the key is a deliberate event.
-        let key = fingerprint(&profile_with_speeds(
-            4,
-            1,
-            &["Test CPU 3000"],
-            vec![(3141, 2), (6283, 2)],
-        ));
-        assert_eq!(key, "55e2e3746d2a53be");
+        assert_eq!(key, "4ffd697efb295d32");
     }
 
     #[test]
@@ -297,39 +269,21 @@ mod tests {
         assert_ne!(base, fingerprint(&profile(8, 1, &["Model B"])));
         assert_ne!(base, fingerprint(&profile(8, 1, &["Model A", "Model B"])));
         assert_ne!(base, fingerprint(&profile(8, 1, &[])));
-        assert_ne!(
-            base,
-            fingerprint(&profile_with_speeds(8, 1, &["Model A"], vec![(3141, 8)])),
-        );
     }
 
     #[test]
-    fn distinct_speed_histograms_produce_distinct_fingerprints() {
+    fn processor_speeds_do_not_change_the_fingerprint() {
+        // The speed reading is a boot-time calibration figure, so one machine can
+        // report a different histogram after a reboot. Hardware that agrees on the
+        // real factors must therefore land on one key however its speeds read,
+        // otherwise a single runner's history fragments across keys.
+        let absent = profile(8, 1, &["Model A"]);
         let uniform = profile_with_speeds(8, 1, &["Model A"], vec![(3141, 8)]);
+        let drifted = profile_with_speeds(8, 1, &["Model A"], vec![(3142, 8)]);
         let hybrid = profile_with_speeds(8, 1, &["Model A"], vec![(3141, 4), (6283, 4)]);
-        assert_ne!(fingerprint(&uniform), fingerprint(&hybrid));
-    }
-
-    #[test]
-    fn speed_histogram_order_does_not_change_the_fingerprint() {
-        // `HardwareProfile::processor_speeds` is public, so a caller can supply the
-        // same histogram with its pairs in a different order. Rendering sorts them,
-        // so equivalent hardware still hashes to the same fingerprint.
-        let ascending = profile_with_speeds(8, 1, &["Model A"], vec![(3141, 4), (6283, 4)]);
-        let descending = profile_with_speeds(8, 1, &["Model A"], vec![(6283, 4), (3141, 4)]);
-        assert_eq!(fingerprint(&ascending), fingerprint(&descending));
-    }
-
-    #[test]
-    fn equivalent_speed_histogram_representations_produce_the_same_fingerprint() {
-        // `HardwareProfile::processor_speeds` is public, so a caller can express the
-        // same histogram as split or zero-padded entries. Rendering merges counts
-        // per speed and drops zero counts, so those representations hash alike.
-        let canonical = profile_with_speeds(8, 1, &["Model A"], vec![(3141, 4)]);
-        let split = profile_with_speeds(8, 1, &["Model A"], vec![(3141, 1), (3141, 3)]);
-        let zero_padded = profile_with_speeds(8, 1, &["Model A"], vec![(3141, 4), (6283, 0)]);
-        assert_eq!(fingerprint(&canonical), fingerprint(&split));
-        assert_eq!(fingerprint(&canonical), fingerprint(&zero_padded));
+        assert_eq!(fingerprint(&absent), fingerprint(&uniform));
+        assert_eq!(fingerprint(&absent), fingerprint(&drifted));
+        assert_eq!(fingerprint(&absent), fingerprint(&hybrid));
     }
 
     #[test]
@@ -355,28 +309,28 @@ mod tests {
         let rendered = canonical(&profile(8, 1, &["CPU X"]));
         assert_eq!(
             rendered,
-            "mk2\nprocessors=8\nmemory_regions=1\nprocessor_models=CPU X\nprocessor_speeds="
+            "mk3\nprocessors=8\nmemory_regions=1\nprocessor_models=CPU X"
         );
     }
 
     #[test]
-    fn canonical_renders_the_speed_histogram_in_order() {
+    fn canonical_ignores_the_provenance_speed_histogram() {
         let rendered = canonical(&profile_with_speeds(
-            4,
+            8,
             1,
             &["CPU X"],
-            vec![(3141, 2), (6283, 2)],
+            vec![(3141, 2), (6283, 6)],
         ));
         assert_eq!(
             rendered,
-            "mk2\nprocessors=4\nmemory_regions=1\nprocessor_models=CPU X\nprocessor_speeds=3141x2,6283x2"
+            "mk3\nprocessors=8\nmemory_regions=1\nprocessor_models=CPU X"
         );
     }
 
     #[test]
     fn canonical_renders_absent_models_as_empty() {
         let rendered = canonical(&profile(2, 1, &[]));
-        assert!(rendered.contains("\nprocessor_models=\n"), "{rendered}");
+        assert!(rendered.ends_with("\nprocessor_models="), "{rendered}");
     }
 
     #[test]
@@ -408,9 +362,12 @@ mod tests {
             &["Intel  Xeon  E5", "AMD EPYC"],
             vec![(3141, 6), (6283, 2)],
         ));
+        // The speed histogram the profile carries as provenance is not a factor, so
+        // it must not surface among the components the key depends on.
         assert_eq!(
             described,
-            "version=mk2, processors=8, memory_regions=1, processor_models=AMD EPYC,Intel Xeon E5, processor_speeds=3141x6,6283x2"
+            "version=mk3, processors=8, memory_regions=1, \
+             processor_models=AMD EPYC,Intel Xeon E5"
         );
     }
 
@@ -419,7 +376,7 @@ mod tests {
         let described = describe_fingerprint_components(&profile(4, 2, &[]));
         assert_eq!(
             described,
-            "version=mk2, processors=4, memory_regions=2, processor_models=<none>, processor_speeds=<none>"
+            "version=mk3, processors=4, memory_regions=2, processor_models=<none>"
         );
     }
 
@@ -428,32 +385,6 @@ mod tests {
         let histogram = speed_histogram([6283, 3141, 6283, 3141, 3141]);
         assert_eq!(histogram, vec![(3141, 3), (6283, 2)]);
         assert_eq!(speed_histogram(std::iter::empty()), Vec::new());
-    }
-
-    #[test]
-    fn render_speed_histogram_joins_pairs_with_commas() {
-        assert_eq!(
-            render_speed_histogram(&[(3141, 4), (6283, 2)]),
-            "3141x4,6283x2"
-        );
-        assert_eq!(render_speed_histogram(&[]), "");
-    }
-
-    #[test]
-    fn render_speed_histogram_sorts_pairs_ascending() {
-        assert_eq!(
-            render_speed_histogram(&[(6283, 2), (3141, 4)]),
-            "3141x4,6283x2"
-        );
-    }
-
-    #[test]
-    fn render_speed_histogram_merges_duplicate_speeds_and_drops_zero_counts() {
-        // Duplicate speeds are summed into a single entry...
-        assert_eq!(render_speed_histogram(&[(3141, 2), (3141, 2)]), "3141x4");
-        // ...and zero-count speeds contribute nothing to the canonical string.
-        assert_eq!(render_speed_histogram(&[(3141, 4), (6283, 0)]), "3141x4");
-        assert_eq!(render_speed_histogram(&[(3141, 0)]), "");
     }
 
     #[test]
@@ -496,5 +427,39 @@ mod tests {
         assert!(hardware.memory_regions >= 1, "{hardware:?}");
         // The fingerprint of whatever this machine is must be well-formed.
         assert_eq!(fingerprint(&hardware).len(), FINGERPRINT_HEX_LEN);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Queries real hardware, which Miri cannot model.
+    fn a_rebooted_host_keeps_its_fingerprint() {
+        // A reboot can shift the speed calibration a host reports without any hardware
+        // changing — a notch moves, or the processors split across one more notch than
+        // before. Applied to this machine's real profile, only the recorded provenance
+        // moves, so the key its history accumulates under must stay put — otherwise one
+        // runner's series splits at every reboot.
+        //
+        // The recalibration appends a notch at a speed no current notch uses, which
+        // keeps the histogram well formed and differs from the original by length
+        // alone. That holds whatever this host reports, including a host that reports
+        // no speed histogram at all, so the test pins the fingerprint rather than the
+        // shape of the machine it happens to run on.
+        let hardware = system_profile();
+        let unused_speed = hardware
+            .processor_speeds
+            .iter()
+            .map(|&(speed, _)| speed)
+            .max()
+            .map_or(0, |highest| highest.saturating_add(1));
+        let mut processor_speeds = hardware.processor_speeds.clone();
+        processor_speeds.push((unused_speed, 1));
+        let recalibrated = HardwareProfile {
+            processor_speeds,
+            ..hardware.clone()
+        };
+        assert_ne!(
+            hardware.processor_speeds, recalibrated.processor_speeds,
+            "{hardware:?}"
+        );
+        assert_eq!(fingerprint(&hardware), fingerprint(&recalibrated));
     }
 }

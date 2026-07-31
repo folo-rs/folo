@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use cbh_command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
     ExamineOptions, ImportOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection,
-    MachineKeyOptions, PruneOptions, UnblessOptions,
+    MachineKeyOptions, PruneOptions, RekeyOptions, UnblessOptions,
 };
 use cbh_model::BenchmarkIdPrefix;
 use clap::{ArgGroup, Args, Parser, Subcommand as ClapSubcommand, ValueEnum};
@@ -98,6 +98,7 @@ impl Cli {
             Subcommand::List(command) => Command::List(command.into_options()),
             Subcommand::MachineKey(command) => Command::MachineKey(command.into_options()),
             Subcommand::Prune(command) => Command::Prune(command.into_options()),
+            Subcommand::Rekey(command) => Command::Rekey(command.into_options()),
             Subcommand::Unbless(command) => Command::Unbless(command.into_options()),
         }
     }
@@ -144,6 +145,8 @@ enum Subcommand {
     Examine(ExamineCommand),
     /// Delete stored runs (and their blessing sidecars) from the resolved data set.
     Prune(PruneCommand),
+    /// Re-partition stored objects under the current machine-key format.
+    Rekey(RekeyCommand),
     /// Remove blessings recorded at the current commit.
     Unbless(UnblessCommand),
 }
@@ -812,6 +815,81 @@ struct PruneCommand {
     /// with no recorded run. May be given alone to remove only blessings.
     #[arg(long, help_heading = HEADING_FILTER)]
     include_blessings: bool,
+}
+
+/// Re-partition stored objects under the current machine-key format.
+///
+/// A machine key is a versioned hash of the host's hardware factors, so a change to
+/// the factor set splits one machine's history into a fragment per key format.
+/// `rekey` recomputes every stored object's key from the hardware the object itself
+/// recorded and copies it to the current key, rejoining the fragments without
+/// re-running a benchmark.
+///
+/// It sees the whole store, so it takes no `--engine`/`--target-triple`/
+/// `--machine-key` facets: a partition left behind would stay fragmented with
+/// nothing to say which ones were covered. It only ever copies — nothing is deleted
+/// or overwritten — so the old partition survives and a repeated run is a no-op.
+/// Objects stored under an explicit machine key (a `collect --machine-key` override
+/// such as a CI pool name) are left exactly where they are, since their partitioning
+/// was a decision rather than a hardware fingerprint.
+///
+/// The default pass writes nothing and reports the plan, including how far apart the
+/// partitions that would merge sit and whether they alternate through history or
+/// occupy disjoint stretches of it.
+#[derive(Args, Debug)]
+struct RekeyCommand {
+    #[command(flatten)]
+    env: EnvArgs,
+
+    /// Perform the copies. Without it the pass reports its plan and writes nothing.
+    #[arg(long, help_heading = HEADING_ENV)]
+    apply: bool,
+
+    /// Merge partitions even when their measurement levels disagree enough to
+    /// manufacture a step change.
+    ///
+    /// Merging splices two sets of measurements into one series. If the two
+    /// partitions really are the same machine, their levels agree and the splice is
+    /// invisible; if they systematically differ, the merged series gains a step at
+    /// the splice point that the next analysis reports as a regression. Passing this
+    /// flag accepts that: you are asserting the level difference is understood, and
+    /// you may see fresh findings on the merged benchmarks.
+    #[arg(long, help_heading = HEADING_ENV)]
+    allow_level_shift: bool,
+
+    #[command(flatten)]
+    output: OutputArgs,
+
+    #[command(flatten)]
+    commit_selection: RekeyCommitArgs,
+}
+
+/// Commit selection for `rekey`: the ref whose history orders the stored runs.
+#[derive(Args, Debug)]
+#[command(next_help_heading = HEADING_COMMIT)]
+struct RekeyCommitArgs {
+    /// Ref whose first-parent line places stored runs in history, so the report can
+    /// say whether merging partitions alternate or occupy disjoint stretches
+    /// (defaults to HEAD).
+    #[arg(long, value_name = "REF")]
+    context: Option<String>,
+}
+
+impl RekeyCommand {
+    fn into_options(self) -> RekeyOptions {
+        RekeyOptions {
+            config_path: self.env.config,
+            repo: self.env.repo,
+            local: local_selection(self.env.local),
+            context: self.commit_selection.context,
+            apply: self.apply,
+            allow_level_shift: self.allow_level_shift,
+            no_text: self.output.no_text,
+            markdown: self.output.markdown,
+            json: self.output.json,
+            verbose: self.env.verbose,
+        }
+    }
 }
 
 /// Commit selection for `prune`: the range of commits whose data is removed.
@@ -2074,6 +2152,64 @@ mod tests {
         assert!(!options.clean);
         assert!(!options.dirty);
         assert!(options.include_blessings);
+    }
+
+    #[test]
+    fn rekey_collects_every_option_it_maps() {
+        // `RekeyCommand::into_options` is a pure argument mapping, so nothing else in
+        // the suite would notice a dropped or crossed field. Pass a distinct,
+        // non-default value for every one of them and read each back.
+        let command = parse(&[
+            "rekey",
+            "--config",
+            "/etc/bench_history.toml",
+            "--repo",
+            "/work/folo",
+            "--local=/var/history",
+            "--context",
+            "release",
+            "--apply",
+            "--allow-level-shift",
+            "--no-text",
+            "--markdown",
+            "rekey.md",
+            "--json",
+            "rekey.json",
+            "--verbose",
+        ]);
+        let Command::Rekey(options) = command else {
+            panic!("expected rekey command");
+        };
+        assert_eq!(
+            options.config_path,
+            Some(PathBuf::from("/etc/bench_history.toml"))
+        );
+        assert_eq!(options.repo, Some(PathBuf::from("/work/folo")));
+        assert_eq!(
+            options.local,
+            Some(LocalStorageSelection::Path(PathBuf::from("/var/history")))
+        );
+        assert_eq!(options.context.as_deref(), Some("release"));
+        assert!(options.apply);
+        assert!(options.allow_level_shift);
+        assert!(options.no_text);
+        assert_eq!(options.markdown, Some(PathBuf::from("rekey.md")));
+        assert_eq!(options.json, Some(PathBuf::from("rekey.json")));
+        assert!(options.verbose);
+    }
+
+    #[test]
+    fn rekey_defaults_to_a_reporting_pass_that_writes_nothing() {
+        // The two flags that let this command modify stored history must both be off
+        // unless asked for, so a bare `rekey` can only report.
+        let Command::Rekey(options) = parse(&["rekey"]) else {
+            panic!("expected rekey command");
+        };
+        assert!(!options.apply, "rekey reports its plan unless --apply");
+        assert!(
+            !options.allow_level_shift,
+            "a level-shifting merge is refused unless --allow-level-shift"
+        );
     }
 
     #[test]

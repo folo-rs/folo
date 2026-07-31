@@ -16,8 +16,9 @@ use cbh_config::{
     resolve_project_id, resolve_repo, storage_env,
 };
 use cbh_detect::{
-    AnalysisConfig, AnalysisContext, Series, SeriesFilter, apply_blessings, find_changes_spawned,
-    retain_present_at_context, short_commit,
+    AnalysisConfig, AnalysisContext, AnalysisMode, Detection, Series, SeriesCensus, SeriesFilter,
+    Testability, UnjudgedReason, apply_blessings, find_changes_spawned, retain_present_at_context,
+    short_commit, testability,
 };
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
@@ -221,8 +222,9 @@ where
     // *before* detection also keeps them out of the false-discovery-rate
     // correction, so a removed benchmark cannot dilute the correction for real
     // ones. Presence is read from the raw points, independent of re-baselining.
-    let ghosts_excluded = {
+    let (ghosts_excluded, ghost_series) = {
         let ghost_started = Instant::now();
+        let before = series.len();
         let ghosts = retain_present_at_context(&mut series, &dataset.tip_commit);
         for (set, id) in &ghosts {
             reporter.note_with(|| {
@@ -245,7 +247,10 @@ where
             "ghost filter (retain_present_at_context)",
             ghost_started.elapsed(),
         );
-        ghosts.len()
+        // The tally counts benchmarks (one per dropped identity); the census counts
+        // series, so a benchmark carrying several metrics is accounted for once per
+        // metric there.
+        (ghosts.len(), before.saturating_sub(series.len()))
     };
 
     // Re-baseline blessed series before detection (history mode only; branch
@@ -268,11 +273,18 @@ where
     // remaining per-set reporting reads them back through this same handle.
     let series: Arc<[Series]> = Arc::from(series);
     let detect_started = Instant::now();
-    let findings = find_changes_spawned(Arc::clone(&series), context, spawner).await;
+    let Detection {
+        findings,
+        mut census,
+    } = find_changes_spawned(Arc::clone(&series), context, spawner).await;
+    // The ghost filter judged nothing either, and it ran before detection could see
+    // those series, so its exclusions join the same account.
+    census.record_unjudged(UnjudgedReason::Ghost, ghost_series);
     reporter.timing(
         "change detection (find_changes: per-series detectors + FDR filter)",
         detect_started.elapsed(),
     );
+    note_series_census(reporter, &series, &context, &census);
     let regressions = findings
         .iter()
         .filter(|finding| finding.is_regression())
@@ -357,6 +369,7 @@ where
         hint: hint.as_deref(),
         warning: warning.as_deref(),
         ghosts_excluded,
+        census,
     };
     let render_started = Instant::now();
     let rendered = request.render_analyze(
@@ -379,6 +392,75 @@ fn all_ghosts_hint(tip_commit: &str) -> String {
         from history.",
         short_commit(tip_commit)
     )
+}
+
+/// Explains, under `--verbose`, which series the detectors judged and what each of
+/// the rest lacked.
+///
+/// The report discloses the tallies; this trail names the individual series behind
+/// them and the gate that declined each, so the verdict can be reconstructed rather
+/// than merely counted. Ghost-filtered series are already named one by one where they
+/// are dropped, so only the summary repeats them here.
+fn note_series_census<R: Reporter + ?Sized>(
+    reporter: &R,
+    series: &[Series],
+    context: &AnalysisContext,
+    census: &SeriesCensus,
+) {
+    reporter.if_enabled(|notes| {
+        for one in series {
+            let Testability::Unjudged(reason) = testability(one, context) else {
+                continue;
+            };
+            // A blessed series is judged only on what came after the blessing, so name
+            // that window rather than the misleading full length.
+            let evidence = if one.active_start > 0 {
+                format!(
+                    "{}, of which {} since its blessing",
+                    count_noun(one.points.len(), "point"),
+                    one.points.len().saturating_sub(one.active_start),
+                )
+            } else {
+                count_noun(one.points.len(), "point")
+            };
+            notes.note(&format!(
+                "not judging {} {} in {}: {} — it carries {evidence}",
+                one.id.qualified(),
+                one.kind.as_str(),
+                one.set,
+                reason.describe(),
+            ));
+        }
+        let config = &context.config;
+        let rule = match context.mode {
+            AnalysisMode::History => format!(
+                "history mode judges a series only from {} in the analyzed window, \
+                 since a change point needs {} on each side of it",
+                count_noun(config.min_series_points, "point"),
+                count_noun(config.min_regime, "point"),
+            ),
+            AnalysisMode::Branch => format!(
+                "branch mode judges a series only with a measurement on the branch and \
+                 {} in the {}-commit comparison window to judge it against",
+                count_noun(config.min_series_points, "base-branch commit"),
+                config.compare_window,
+            ),
+        };
+        let breakdown = if census.unjudged() == 0 {
+            "every series was judged".to_owned()
+        } else {
+            census
+                .reasons()
+                .map(|(reason, count)| format!("{count} {}", reason.describe()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        notes.note(&format!(
+            "series census: judged {} of {} series; {breakdown}; {rule}",
+            census.judged(),
+            census.total(),
+        ));
+    });
 }
 
 #[cfg(test)]
@@ -486,156 +568,177 @@ mod tests {
         block_on(storage.put(key, json.as_bytes())).unwrap();
     }
 
-    /// A linear master history `c0 - c1 - c2 - c3`, HEAD at the tip. Each commit
-    /// carries committer time `ts(N)` for `cN`, matching the `effective`-second
-    /// convention the seeders use, so the topology-decided `--since`
-    /// cutoff can be exercised.
+    /// Commits each regime of a seeded step holds: the production `min_regime`
+    /// gate, the fewest points the change-point detector trusts on either side of
+    /// the split it locates.
+    const REGIME_COMMITS: usize = 5;
+
+    /// Commits a history-mode fixture holds: two full regimes, which is the
+    /// production `min_series_points` gate — the shortest series the history
+    /// detectors evaluate at all.
+    const HISTORY_COMMITS: usize = 2 * REGIME_COMMITS;
+
+    /// Base-side commits a branch-mode fixture holds. Branch mode collapses each
+    /// base commit's runs to that commit's level and needs `min_series_points` such
+    /// levels before it will judge the branch tip against them, so a branch
+    /// fixture's base line is as long as a whole history fixture.
+    const BASE_COMMITS: usize = HISTORY_COMMITS;
+
+    /// Commits a selection-only fixture holds. Deliberately below
+    /// [`HISTORY_COMMITS`]: the tests that use it assert on which runs the selection
+    /// admits — topology, dirty handling, facets, `--since` — never on findings.
+    const SELECTION_COMMITS: usize = 4;
+
+    #[test]
+    fn fixture_sizes_match_the_analysis_gates() {
+        // The fixture sizes above are literals so the seeded shapes read plainly, but
+        // each one exists to satisfy a production gate. Bind them to the gates here,
+        // so moving a gate fails loudly instead of silently making fixtures vacuous.
+        let config = AnalysisConfig::default();
+        assert_eq!(
+            REGIME_COMMITS, config.min_regime,
+            "a seeded step must hold a full regime on each side of its split"
+        );
+        assert_eq!(
+            HISTORY_COMMITS, config.min_series_points,
+            "a history fixture must be long enough for the detectors to judge it"
+        );
+        assert!(
+            BASE_COMMITS <= config.compare_window,
+            "a branch fixture's whole base line must fit the comparison window"
+        );
+        assert!(
+            SELECTION_COMMITS < config.min_series_points,
+            "the selection fixture is deliberately too short to be judged"
+        );
+    }
+
+    /// The name of the `index`th commit on a master fixture's line.
+    fn commit_name(index: usize) -> String {
+        format!("c{index}")
+    }
+
+    /// Appends a linear chain of `commits` commits named `c0 … c{commits-1}` to
+    /// `git`, returning the tip's name.
+    ///
+    /// Each `cN` carries committer time `ts(N)`, the same `effective`-second
+    /// convention the seeders use, so the topology-decided `--since` cutoff can be
+    /// exercised.
+    fn append_master_chain(git: &mut FakeGitHistory, commits: usize) -> String {
+        let mut parent: Option<String> = None;
+        for index in 0..commits {
+            let commit = commit_name(index);
+            git.commit_at(
+                &commit,
+                parent.as_deref(),
+                ts(i64::try_from(index).unwrap()),
+            );
+            parent = Some(commit);
+        }
+        parent.expect("a chain fixture always holds at least one commit")
+    }
+
+    /// A linear master history of `commits` commits, HEAD at the tip and `master`
+    /// advertised as the default branch.
+    fn master_chain(commits: usize) -> FakeGitHistory {
+        let mut git = FakeGitHistory::new();
+        let tip = append_master_chain(&mut git, commits);
+        git.branch("master", &tip)
+            .head("master")
+            .mark_default("master");
+        git
+    }
+
+    /// A master history of `base_commits` commits with a two-commit feature branch
+    /// forked off `c{fork}`, HEAD on `feature`:
+    ///
+    /// ```text
+    /// master:  c0 - … - c{fork} - … - c{base_commits-1}
+    ///                        \
+    /// feature:                f1 - f2   (HEAD)
+    /// ```
+    fn feature_chain(base_commits: usize, fork: usize) -> FakeGitHistory {
+        let mut git = FakeGitHistory::new();
+        let master_tip = append_master_chain(&mut git, base_commits);
+        let forked_at = i64::try_from(base_commits).unwrap();
+        git.commit_at("f1", Some(&commit_name(fork)), ts(forked_at))
+            .commit_at("f2", Some("f1"), ts(forked_at.saturating_add(1)))
+            .branch("master", &master_tip)
+            .branch("feature", "f2")
+            .head("feature")
+            .mark_default("master");
+        git
+    }
+
+    /// A feature branch forked off the tip of a `base_commits`-long master line, so
+    /// every base commit is an ancestor of the feature tip.
+    fn feature_off_tip(base_commits: usize) -> FakeGitHistory {
+        feature_chain(base_commits, base_commits.saturating_sub(1))
+    }
+
+    /// A short linear master history `c0 - c1 - c2 - c3`, HEAD at the tip.
+    ///
+    /// Deliberately too short to be judged (see [`SELECTION_COMMITS`]): it serves
+    /// the tests that assert on which runs the selection admits.
     fn linear_git() -> FakeGitHistory {
-        let mut git = FakeGitHistory::new();
-        git.commit_at("c0", None, ts(0))
-            .commit_at("c1", Some("c0"), ts(1))
-            .commit_at("c2", Some("c1"), ts(2))
-            .commit_at("c3", Some("c2"), ts(3))
-            .branch("master", "c3")
-            .head("master")
-            .mark_default("master");
-        git
+        master_chain(SELECTION_COMMITS)
     }
 
-    /// A master history with a feature branch off `c1`:
-    ///
-    /// ```text
-    /// master:  c0 - c1 - c2 - c3
-    ///                \
-    /// feature:        f1 - f2   (HEAD)
-    /// ```
+    /// A short master history with a feature branch off `c1`, HEAD on the feature
+    /// branch. Like [`linear_git`], it serves the selection-only tests.
     fn feature_git() -> FakeGitHistory {
-        let mut git = FakeGitHistory::new();
-        git.commit("c0", None)
-            .commit("c1", Some("c0"))
-            .commit("c2", Some("c1"))
-            .commit("c3", Some("c2"))
-            .commit("f1", Some("c1"))
-            .commit("f2", Some("f1"))
-            .branch("master", "c3")
-            .branch("feature", "f2")
-            .head("feature")
-            .mark_default("master");
-        git
+        feature_chain(SELECTION_COMMITS, 1)
     }
 
-    /// A master history `c0 - c1 - c2 - c3` with a feature branch off the tip `c3`:
+    /// A linear master history long enough for the history detectors to reach a
+    /// verdict ([`HISTORY_COMMITS`] commits), HEAD at the tip.
+    fn history_git() -> FakeGitHistory {
+        master_chain(HISTORY_COMMITS)
+    }
+
+    /// A feature branch off the master tip, over a base line long enough for branch
+    /// mode to judge the tip against ([`BASE_COMMITS`] commits).
+    fn branch_git() -> FakeGitHistory {
+        feature_off_tip(BASE_COMMITS)
+    }
+
+    /// A feature branch off a master tip that carries no base data.
     ///
-    /// ```text
-    /// master:  c0 - c1 - c2 - c3
-    ///                          \
-    /// feature:                  f1 - f2   (HEAD)
-    /// ```
-    ///
-    /// The four-commit base line gives a branch comparison a baseline large enough
-    /// to reach rank-test significance against a raised feature regime; branching at
-    /// the tip keeps every base commit an ancestor of the feature tip.
-    fn feature_tip_git() -> FakeGitHistory {
-        let mut git = FakeGitHistory::new();
-        git.commit("c0", None)
-            .commit("c1", Some("c0"))
-            .commit("c2", Some("c1"))
-            .commit("c3", Some("c2"))
-            .commit("f1", Some("c3"))
-            .commit("f2", Some("f1"))
-            .branch("master", "c3")
-            .branch("feature", "f2")
-            .head("feature")
-            .mark_default("master");
-        git
+    /// Master runs one commit past the [`BASE_COMMITS`] base line the seeders fill,
+    /// and the merge-base is that unmeasured tip, so a surviving branch finding's
+    /// comparison base lags the merge-base by exactly one commit.
+    fn lagging_branch_git() -> FakeGitHistory {
+        feature_off_tip(BASE_COMMITS.saturating_add(1))
     }
 
-    /// A five-commit master history `c0..c4` with a feature branch off the tip `c4`:
-    ///
-    /// ```text
-    /// master:  c0 - c1 - c2 - c3 - c4
-    ///                               \
-    /// feature:                       f1 - f2   (HEAD)
-    /// ```
-    ///
-    /// Lets the PR runner's machine key carry base data only up to `c3` (one commit
-    /// behind the `c4` merge-base) while a sibling machine key holds `c4`, so a
-    /// surviving branch finding's comparison base lags by one commit.
-    fn feature_off_c4_git() -> FakeGitHistory {
-        let mut git = FakeGitHistory::new();
-        git.commit("c0", None)
-            .commit("c1", Some("c0"))
-            .commit("c2", Some("c1"))
-            .commit("c3", Some("c2"))
-            .commit("c4", Some("c3"))
-            .commit("f1", Some("c4"))
-            .commit("f2", Some("f1"))
-            .branch("master", "c4")
-            .branch("feature", "f2")
-            .head("feature")
-            .mark_default("master");
-        git
+    /// A linear master history whose tip carries no clean run: master runs one
+    /// commit past the [`BASE_COMMITS`] base line the seeders fill, so a fixture can
+    /// place dirty snapshots on a tip that holds nothing else.
+    fn unmeasured_tip_git() -> FakeGitHistory {
+        master_chain(BASE_COMMITS.saturating_add(1))
     }
 
-    /// Seeds the PR runner's (`m1`) base and feature runs for [`feature_off_c4_git`]:
-    /// a flat base line at `c0..c3` (the `c4` tip is missing for `m1`) and a raised
-    /// feature regime `f1`, `f2`, and a dirty `f2` snapshot, large enough to flag.
-    fn seed_lagging_branch(storage: &MemoryStorage) {
-        store(storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
-        store(storage, &clean_key("c1"), &ir_set(1, "c1", 100.0));
-        store(storage, &clean_key("c2"), &ir_set(2, "c2", 100.0));
-        store(storage, &clean_key("c3"), &ir_set(3, "c3", 100.0));
-        store(storage, &clean_key("f1"), &ir_set(4, "f1", 130.0));
-        store(storage, &clean_key("f2"), &ir_set(5, "f2", 130.0));
-        store(storage, &dirty_key("f2", 6), &ir_set(6, "f2", 130.0));
+    /// The master commit just past the seeded base line — the tip of both
+    /// [`lagging_branch_git`] and [`unmeasured_tip_git`].
+    fn unmeasured_tip() -> String {
+        commit_name(BASE_COMMITS)
     }
 
-    ///
-    /// Long enough to host a sustained level shift with at least two points on
-    /// each side, which the change-point detector requires before it flags.
-    fn linear6_git() -> FakeGitHistory {
-        let mut git = FakeGitHistory::new();
-        git.commit("c0", None)
-            .commit("c1", Some("c0"))
-            .commit("c2", Some("c1"))
-            .commit("c3", Some("c2"))
-            .commit("c4", Some("c3"))
-            .commit("c5", Some("c4"))
-            .branch("master", "c5")
-            .head("master")
-            .mark_default("master");
-        git
-    }
-
-    /// A six-commit master history `c0..c5` with a feature branch off `c1`,
-    /// HEAD on the feature branch. The longer master line lets `--context master`
-    /// reconstruct a sustained step.
-    fn feature6_git() -> FakeGitHistory {
-        let mut git = FakeGitHistory::new();
-        git.commit("c0", None)
-            .commit("c1", Some("c0"))
-            .commit("c2", Some("c1"))
-            .commit("c3", Some("c2"))
-            .commit("c4", Some("c3"))
-            .commit("c5", Some("c4"))
-            .commit("f1", Some("c1"))
-            .commit("f2", Some("f1"))
-            .branch("master", "c5")
-            .branch("feature", "f2")
-            .head("feature")
-            .mark_default("master");
-        git
-    }
-
-    /// Seeds a clean linear sustained-step history (`c0..c5` =
-    /// 100,100,100,130,130,130) under the default partition, so the change-point
-    /// detector flags a single major regression at `c3`.
-    fn seed_linear_step(storage: &MemoryStorage) {
-        for (index, value) in [100.0, 100.0, 100.0, 130.0, 130.0, 130.0]
+    /// The values of a sustained step: [`REGIME_COMMITS`] points at `before`
+    /// followed by [`REGIME_COMMITS`] at `after` — the shortest series that can hold
+    /// a change point, and exactly [`HISTORY_COMMITS`] points long.
+    fn step_values(before: f64, after: f64) -> Vec<f64> {
+        [before; REGIME_COMMITS]
             .into_iter()
-            .enumerate()
-        {
-            let commit = format!("c{index}");
+            .chain([after; REGIME_COMMITS])
+            .collect()
+    }
+
+    /// Stores one clean `Ir` run per value under the default partition: `values[N]`
+    /// on commit `cN`, observed at `ts(N)`.
+    fn seed_master(storage: &MemoryStorage, values: &[f64]) {
+        for (index, &value) in values.iter().enumerate() {
+            let commit = commit_name(index);
             let second = i64::try_from(index).unwrap();
             store(
                 storage,
@@ -643,6 +746,46 @@ mod tests {
                 &ir_set(second, &commit, value),
             );
         }
+    }
+
+    /// Seeds a clean linear sustained-step history under the default partition, so
+    /// the change-point detector flags a single major regression at the split.
+    fn seed_linear_step(storage: &MemoryStorage) {
+        seed_master(storage, &step_values(100.0, 130.0));
+    }
+
+    /// Seeds a flat base line of `base_commits` clean runs (`c0 …`) plus a raised
+    /// feature regime: clean `f1` and `f2` runs and a dirty `f2` snapshot on top of
+    /// them. Returns the number of runs stored.
+    fn seed_raised_feature(storage: &MemoryStorage, base_commits: usize) -> usize {
+        seed_master(storage, &vec![100.0; base_commits]);
+        let observed = i64::try_from(base_commits).unwrap();
+        let dirty_at = observed.saturating_add(2);
+        store(storage, &clean_key("f1"), &ir_set(observed, "f1", 130.0));
+        store(
+            storage,
+            &clean_key("f2"),
+            &ir_set(observed.saturating_add(1), "f2", 130.0),
+        );
+        store(
+            storage,
+            &dirty_key("f2", dirty_at),
+            &ir_set(dirty_at, "f2", 130.0),
+        );
+        base_commits.saturating_add(3)
+    }
+
+    /// The observation second the extra merge-base run in a lagging-base fixture
+    /// carries: past every run [`seed_lagging_branch`] stores, so it is
+    /// unambiguously the newest base observation.
+    const SIBLING_OBSERVED: i64 = 100;
+
+    /// Seeds the PR runner's (`m1`) runs for [`lagging_branch_git`]: the flat base
+    /// line stops at `c{BASE_COMMITS-1}`, one commit short of the merge-base tip
+    /// that `m1` never measured, so a surviving branch finding's comparison base
+    /// lags by one commit.
+    fn seed_lagging_branch(storage: &MemoryStorage) {
+        seed_raised_feature(storage, BASE_COMMITS);
     }
 
     fn options() -> AnalyzeOptions {
@@ -706,6 +849,33 @@ mod tests {
         (report, regressions, reporter)
     }
 
+    /// Asserts that a rendered report reached the history detectors at all: exactly
+    /// one series survived selection, the report itself states that it judged that
+    /// series, and it carries at least [`HISTORY_COMMITS`] runs — the shortest series
+    /// the detectors evaluate.
+    ///
+    /// A "nothing was flagged" assertion only says something about the gates when the
+    /// data cleared that bar; without this check the same silence is also what an
+    /// unanalyzed or ghost-filtered series produces.
+    fn assert_history_was_judged(parsed: &serde_json::Value) {
+        assert_eq!(parsed["series"], 1, "{parsed}");
+        assert_eq!(
+            parsed["census"]["judged"], 1,
+            "the report must account for the series as judged: {parsed}"
+        );
+        assert_eq!(
+            parsed["census"]["unjudged"], 0,
+            "nothing may have been silently dropped: {parsed}"
+        );
+        let runs = parsed["runs"]
+            .as_u64()
+            .expect("the report tallies the runs it loaded");
+        assert!(
+            runs >= u64::try_from(HISTORY_COMMITS).unwrap(),
+            "the analyzed series must be long enough to be judged: {parsed}"
+        );
+    }
+
     #[test]
     fn should_colorize_only_in_an_interactive_terminal_without_no_color() {
         assert!(should_colorize(true, false), "terminal, NO_COLOR unset");
@@ -723,7 +893,7 @@ mod tests {
         block_on(storage.put("v1/folo/objects/bogus.json", b"{}")).unwrap();
         let reporter = RecordingReporter::new();
         block_on(analyze_with(
-            &linear6_git(),
+            &history_git(),
             &storage,
             "folo",
             &config(),
@@ -804,7 +974,7 @@ mod tests {
     fn official_view_detects_a_clean_regression_in_topology_order() {
         let storage = MemoryStorage::new();
         seed_linear_step(&storage);
-        let git = linear6_git();
+        let git = history_git();
         let (report, regressions) = analyze(&git, &storage, "folo", &options());
         assert_eq!(regressions, 1);
         assert!(report.contains("regression"), "{report}");
@@ -818,7 +988,7 @@ mod tests {
         // keys off the finding list directly), so assert it there.
         let storage = MemoryStorage::new();
         seed_linear_step(&storage);
-        let (report, regressions, _) = analyze_json(&linear6_git(), &storage, "folo", &options());
+        let (report, regressions, _) = analyze_json(&history_git(), &storage, "folo", &options());
         assert_eq!(regressions, 1);
         assert!(report.contains("\"notable\": true"), "{report}");
 
@@ -845,7 +1015,7 @@ mod tests {
 
         let reporter = RecordingReporter::new();
         block_on(analyze_with(
-            &linear6_git(),
+            &history_git(),
             &storage,
             "folo",
             &config(),
@@ -868,7 +1038,7 @@ mod tests {
         seed_linear_step(&clean);
         let reporter = RecordingReporter::new();
         block_on(analyze_with(
-            &linear6_git(),
+            &history_git(),
             &clean,
             "folo",
             &config(),
@@ -906,7 +1076,7 @@ mod tests {
 
         let reporter = RecordingReporter::new();
         block_on(analyze_with(
-            &linear6_git(),
+            &history_git(),
             &storage,
             "folo",
             &config(),
@@ -947,7 +1117,7 @@ mod tests {
     /// Drives history-mode analyze expecting the blessing load to fail.
     fn analyze_blessing_error(storage: &MemoryStorage) -> AnalyzeError {
         block_on(analyze_with(
-            &linear6_git(),
+            &history_git(),
             storage,
             "folo",
             &config(),
@@ -965,7 +1135,7 @@ mod tests {
     fn history_mode_rejects_a_non_utf8_blessing_on_the_analyzed_history() {
         let storage = MemoryStorage::new();
         seed_linear_step(&storage);
-        // c3 is on the linear6 history, so history mode loads its sidecar.
+        // c3 is on the analyzed history, so history mode loads its sidecar.
         let bless_key =
             "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json".to_owned();
         block_on(storage.put(&bless_key, &[0xff, 0xfe, 0x00])).unwrap();
@@ -1015,7 +1185,7 @@ mod tests {
 
         let reporter = RecordingReporter::new();
         block_on(analyze_with(
-            &linear6_git(),
+            &history_git(),
             &storage,
             "folo",
             &config(),
@@ -1121,6 +1291,208 @@ mod tests {
     }
 
     #[test]
+    fn the_verbose_census_states_when_nothing_was_left_unjudged() {
+        // The healthy case still explains itself: a reader of the trail sees that the
+        // suite was judged in full, not that the breakdown was omitted.
+        let storage = MemoryStorage::new();
+        seed_linear_step(&storage);
+
+        let (_, _, reporter) = analyze_json(&history_git(), &storage, "folo", &options());
+        assert!(
+            reporter.contains("series census: judged 1 of 1 series; every series was judged"),
+            "{:?}",
+            reporter.notes()
+        );
+    }
+
+    #[test]
+    fn a_blessed_series_with_too_little_evidence_left_names_its_active_window() {
+        // A blessing re-baselines a series, so the points before it are no longer
+        // evidence. Such a series is long yet unjudged, and the trail must state the
+        // window that was actually short rather than the full length that was not.
+        let storage = MemoryStorage::new();
+        seed_linear_step(&storage);
+        let blessed_at = commit_name(HISTORY_COMMITS - 3);
+        let record = BlessingRecord::new(
+            blessed_at.clone(),
+            ts(i64::try_from(HISTORY_COMMITS).unwrap()),
+            vec![BenchmarkIdPrefix::new("nm").unwrap()],
+            "0.0.1".to_owned(),
+        );
+        let bless_key = format!(
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/{blessed_at}/bless-3.json"
+        );
+        block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
+
+        let (report, regressions, reporter) =
+            analyze_json(&history_git(), &storage, "folo", &options());
+        assert_eq!(regressions, 0, "the blessed step is re-baselined: {report}");
+        assert_eq!(parse_census_judged(&report), 0, "{report}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&report).unwrap()["census"]["reasons"][0]["reason"],
+            "too_few_points_since_blessing",
+            "{report}"
+        );
+        assert!(
+            reporter.contains(
+                "with too few points since being blessed — it carries 10 points, \
+                 of which 3 since its blessing"
+            ),
+            "{:?}",
+            reporter.notes()
+        );
+    }
+
+    /// The `census.judged` tally of a rendered JSON report.
+    fn parse_census_judged(report: &str) -> u64 {
+        serde_json::from_str::<serde_json::Value>(report).unwrap()["census"]["judged"]
+            .as_u64()
+            .expect("every report carries a census")
+    }
+
+    #[test]
+    fn the_census_accounts_for_every_series_and_explains_each_exclusion() {
+        // Three series, one of each fate: `kept` runs the full history and is judged,
+        // `ghost` stops before the tip, and `young` appears only at the end. Silence
+        // over this suite covers one series in three, and the report must say so — on
+        // both the machine-readable surface and the verbose trail.
+        let storage = MemoryStorage::new();
+        for index in 0..HISTORY_COMMITS {
+            let commit = commit_name(index);
+            let second = i64::try_from(index).unwrap();
+            let mut benches = vec![("kept", 100.0)];
+            if index < 3 {
+                benches.push(("ghost", 100.0));
+            }
+            if index >= HISTORY_COMMITS - 2 {
+                benches.push(("young", 100.0));
+            }
+            store(
+                &storage,
+                &clean_key(&commit),
+                &multi_bench(second, &commit, &benches),
+            );
+        }
+
+        let (report, regressions, reporter) =
+            analyze_json(&history_git(), &storage, "folo", &options());
+        assert_eq!(regressions, 0);
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        let census = &parsed["census"];
+        assert_eq!(census["total"], 3, "{report}");
+        assert_eq!(census["judged"], 1, "{report}");
+        assert_eq!(census["unjudged"], 2, "{report}");
+        assert_eq!(census["reasons"][0]["reason"], "ghost", "{report}");
+        assert_eq!(census["reasons"][0]["count"], 1, "{report}");
+        assert_eq!(census["reasons"][1]["reason"], "too_few_points", "{report}");
+        assert_eq!(census["reasons"][1]["count"], 1, "{report}");
+
+        // The trail names the series that was declined, what it carried, and the rule
+        // that declined it, so the verdict can be reconstructed rather than trusted.
+        assert!(
+            reporter.contains("not judging young instruction_count"),
+            "{:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains("with too few points in the analyzed window — it carries 2 points"),
+            "{:?}",
+            reporter.notes()
+        );
+        assert!(
+            !reporter.contains("since its blessing"),
+            "an unblessed series carries no blessing window to name: {:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains("series census: judged 1 of 3 series"),
+            "{:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains("history mode judges a series only from 10 points"),
+            "{:?}",
+            reporter.notes()
+        );
+    }
+
+    #[test]
+    fn the_census_counts_ghost_series_while_the_tally_counts_ghost_benchmarks() {
+        // One benchmark carrying two metrics disappears before the tip. It is a single
+        // ghost benchmark but two unjudged series, and the two tallies must each count
+        // in their own unit rather than borrow the other's.
+        let storage = MemoryStorage::new();
+        for index in 0_usize..3 {
+            let commit = commit_name(index);
+            let second = i64::try_from(index).unwrap();
+            store(
+                &storage,
+                &clean_key(&commit),
+                &two_metric_set(second, &commit, 100.0, 200.0),
+            );
+        }
+
+        let (report, _, _) = analyze_json(&linear_git(), &storage, "folo", &options());
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(parsed["ghosts_excluded"], 1, "one benchmark: {report}");
+        assert_eq!(parsed["series"], 0, "none survived the filter: {report}");
+        assert_eq!(parsed["census"]["total"], 2, "two series: {report}");
+        assert_eq!(parsed["census"]["judged"], 0, "{report}");
+        assert_eq!(
+            parsed["census"]["reasons"][0]["reason"], "ghost",
+            "{report}"
+        );
+        assert_eq!(parsed["census"]["reasons"][0]["count"], 2, "{report}");
+    }
+
+    #[test]
+    fn a_branch_analysis_accounts_for_a_metric_the_branch_never_measured() {
+        // The benchmark still runs on the branch, but it stopped reporting one of its
+        // two metrics there. That metric's series is not silent — it is unjudged for a
+        // reason of its own, which the report names rather than folding into the
+        // shortfalls of the judged history.
+        let storage = MemoryStorage::new();
+        for index in 0..BASE_COMMITS {
+            let commit = commit_name(index);
+            let second = i64::try_from(index).unwrap();
+            store(
+                &storage,
+                &clean_key(&commit),
+                &two_metric_set(second, &commit, 100.0, 200.0),
+            );
+        }
+        let observed = i64::try_from(BASE_COMMITS).unwrap();
+        store(&storage, &clean_key("f1"), &ir_set(observed, "f1", 130.0));
+        store(
+            &storage,
+            &clean_key("f2"),
+            &ir_set(observed.saturating_add(1), "f2", 130.0),
+        );
+
+        let (report, regressions, reporter) =
+            analyze_json(&branch_git(), &storage, "folo", &options());
+        assert_eq!(regressions, 1, "the measured metric still moved: {report}");
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(parsed["census"]["total"], 2, "{report}");
+        assert_eq!(parsed["census"]["judged"], 1, "{report}");
+        assert_eq!(
+            parsed["census"]["reasons"][0]["reason"], "not_measured_on_branch",
+            "{report}"
+        );
+        assert_eq!(parsed["census"]["reasons"][0]["count"], 1, "{report}");
+        assert!(
+            reporter.contains("not judging nm/nm::observe/pull conditional_branches"),
+            "{:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains("branch mode judges a series only with a measurement on the branch"),
+            "{:?}",
+            reporter.notes()
+        );
+    }
+
+    #[test]
     fn a_ghost_benchmark_is_excluded() {
         // `kept` is measured through the tip (c0..c3); `ghost` disappears after c2.
         // The tip is c3, so `ghost` is no longer part of the current suite there.
@@ -1191,19 +1563,16 @@ mod tests {
 
     #[test]
     fn series_order_follows_topology_not_observation_time() {
-        // Topology is c0..c5 with a sustained step at c3 (100,100,100,130,130,130),
-        // but the objects' observation clock is reversed (c0 newest, c5 oldest).
-        // Ordering by topology reconstructs the rising step and flags a regression;
-        // were the provenance-only observation time ever allowed to order the series
-        // it would reverse into a falling step (an improvement, no regression). So a
-        // single detected regression proves topology won.
+        // Topology is a rising sustained step along `c0 …`, but the objects'
+        // observation clock is reversed (c0 newest, the tip oldest). Ordering by
+        // topology reconstructs the rising step and flags a regression; were the
+        // provenance-only observation time ever allowed to order the series it would
+        // reverse into a falling step (an improvement, no regression). So a single
+        // detected regression proves topology won.
         let storage = MemoryStorage::new();
-        for (index, value) in [100.0, 100.0, 100.0, 130.0, 130.0, 130.0]
-            .into_iter()
-            .enumerate()
-        {
-            let commit = format!("c{index}");
-            // Reverse the clock: c0 has the newest observation time, c5 the oldest.
+        for (index, value) in step_values(100.0, 130.0).into_iter().enumerate() {
+            let commit = commit_name(index);
+            // Reverse the clock: c0 has the newest observation time, the tip the oldest.
             let second = 100 - i64::try_from(index).unwrap();
             store(
                 &storage,
@@ -1211,7 +1580,7 @@ mod tests {
                 &ir_set(second, &commit, value),
             );
         }
-        let git = linear6_git();
+        let git = history_git();
         let (_, regressions) = analyze(&git, &storage, "folo", &options());
         assert_eq!(regressions, 1, "the step must be read in topology order");
     }
@@ -1219,64 +1588,61 @@ mod tests {
     #[test]
     fn official_view_excludes_dirty_runs() {
         // A dirty snapshot on the master tip must not enter the official timeline.
+        // The clean line reaches the tip and is long enough to be judged, so the
+        // silent verdict is evidence that the wild dirty value stayed out — not that
+        // the series was too short (or ghost-filtered) to be looked at.
         let storage = MemoryStorage::new();
-        for (index, value) in [100.0, 100.0, 100.0].into_iter().enumerate() {
-            let commit = format!("c{index}");
-            let second = i64::try_from(index).unwrap();
-            store(
-                &storage,
-                &clean_key(&commit),
-                &ir_set(second, &commit, value),
-            );
-        }
+        seed_master(&storage, &[100.0; HISTORY_COMMITS]);
         // A wildly different dirty value on the tip: if admitted it would flag.
-        store(&storage, &dirty_key("c3", 500), &ir_set(500, "c3", 999.0));
-        let git = linear_git();
+        let tip = commit_name(HISTORY_COMMITS.saturating_sub(1));
+        store(&storage, &dirty_key(&tip, 500), &ir_set(500, &tip, 999.0));
+        let git = history_git();
 
         let (report, regressions, _) = analyze_json(&git, &storage, "folo", &options());
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-        assert_eq!(parsed["runs"], 3, "the dirty tip run is excluded");
+        assert_eq!(
+            parsed["runs"], HISTORY_COMMITS,
+            "the dirty tip run is excluded"
+        );
+        assert_history_was_judged(&parsed);
         assert_eq!(regressions, 0);
     }
 
     #[test]
     fn feature_view_admits_dirty_after_the_merge_base() {
-        // feature branched at the master tip c3; the target side rises at f1 and a
-        // dirty f2 snapshot sustains the new level. The dirty run is admitted
-        // (runs == 7) and is essential to the flag: no engine is exact, so the raised
-        // regime must clear a rank test against the baseline. With only the two clean
-        // feature points the 4-vs-2 split is underpowered; the dirty f2 snapshot tips
-        // it to a significant 4-vs-3 difference.
+        // feature branched at the master tip; the target side rises at f1 and a dirty
+        // f2 snapshot sustains the new level. Branch mode judges the tip's latest
+        // cohort, which is the dirty snapshot because it sorts after the clean f2 run
+        // sharing its commit — so the finding is about the admitted dirty state, and
+        // the run tally proves that state entered the analysis at all.
         let storage = MemoryStorage::new();
-        store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
-        store(&storage, &clean_key("c1"), &ir_set(1, "c1", 100.0));
-        store(&storage, &clean_key("c2"), &ir_set(2, "c2", 100.0));
-        store(&storage, &clean_key("c3"), &ir_set(3, "c3", 100.0));
-        store(&storage, &clean_key("f1"), &ir_set(4, "f1", 130.0));
-        store(&storage, &clean_key("f2"), &ir_set(5, "f2", 130.0));
-        store(&storage, &dirty_key("f2", 6), &ir_set(6, "f2", 130.0));
-        let git = feature_tip_git();
+        let runs = seed_raised_feature(&storage, BASE_COMMITS);
+        let git = branch_git();
 
         let (report, regressions, _) = analyze_json(&git, &storage, "folo", &options());
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-        assert_eq!(parsed["runs"], 7, "the dirty f2 snapshot is admitted");
-        assert_eq!(regressions, 1, "the admitted dirty f2 completes the step");
+        assert_eq!(parsed["runs"], runs, "the dirty f2 snapshot is admitted");
+        assert_eq!(
+            regressions, 1,
+            "the admitted dirty f2 carries the raised level"
+        );
     }
 
     #[test]
     fn a_lagging_comparison_base_with_a_sibling_run_warns_of_a_mismatch() {
-        // The PR runner's key (m1) carries base data only through c3, one commit
-        // behind the c4 merge-base, while a sibling key (m2) holds the same benchmark
-        // and metric at c4. The finding's comparison base therefore lags by one commit
-        // because of machine-key rotation, and every surface must disclose it.
+        // The PR runner's key (m1) carries base data only up to one commit behind the
+        // merge-base, while a sibling key (m2) holds the same benchmark and metric at
+        // the merge-base itself. The finding's comparison base therefore lags by one
+        // commit because of machine-key rotation, and every surface must disclose it.
         let storage = MemoryStorage::new();
         seed_lagging_branch(&storage);
+        let merge_base = unmeasured_tip();
         store(
             &storage,
-            &clean_key_in("callgrind", "x86_64-unknown-linux-gnu", "m2", "c4"),
-            &ir_set(7, "c4", 100.0),
+            &clean_key_in("callgrind", "x86_64-unknown-linux-gnu", "m2", &merge_base),
+            &ir_set(SIBLING_OBSERVED, &merge_base, 100.0),
         );
-        let git = feature_off_c4_git();
+        let git = lagging_branch_git();
 
         let (text, regressions) = analyze(&git, &storage, "folo", &options());
         assert_eq!(regressions, 1);
@@ -1300,7 +1666,7 @@ mod tests {
         // reason is ordinary missing base data rather than machine-key rotation.
         let storage = MemoryStorage::new();
         seed_lagging_branch(&storage);
-        let git = feature_off_c4_git();
+        let git = lagging_branch_git();
 
         let (text, regressions) = analyze(&git, &storage, "folo", &options());
         assert_eq!(regressions, 1);
@@ -1320,14 +1686,22 @@ mod tests {
 
     #[test]
     fn a_comparison_base_reaching_the_merge_base_warns_of_nothing() {
-        // When m1 also carries the c4 merge-base tip, the comparison base reaches it
-        // and no comparison-base warning is emitted on any surface.
+        // When m1 also carries the merge-base tip, the comparison base reaches it and
+        // no comparison-base warning is emitted on any surface. The finding still
+        // survives, so the silence is about the lag classification rather than about
+        // there being nothing to report.
         let storage = MemoryStorage::new();
         seed_lagging_branch(&storage);
-        store(&storage, &clean_key("c4"), &ir_set(7, "c4", 100.0));
-        let git = feature_off_c4_git();
+        let merge_base = unmeasured_tip();
+        store(
+            &storage,
+            &clean_key(&merge_base),
+            &ir_set(SIBLING_OBSERVED, &merge_base, 100.0),
+        );
+        let git = lagging_branch_git();
 
-        let (text, _) = analyze(&git, &storage, "folo", &options());
+        let (text, regressions) = analyze(&git, &storage, "folo", &options());
+        assert_eq!(regressions, 1, "{text}");
         assert!(!text.contains("comparison base is"), "{text}");
 
         let (report, _, _) = analyze_json(&git, &storage, "folo", &options());
@@ -1341,12 +1715,14 @@ mod tests {
     #[test]
     fn history_mode_never_warns_of_a_lagging_comparison_base() {
         // History mode has no single comparison base, so the warning never applies
-        // even when older commits carry data under a different machine key.
+        // even when older commits carry data under a different machine key. The step
+        // is flagged, so the absent warning is not merely an absent finding.
         let storage = MemoryStorage::new();
         seed_linear_step(&storage);
-        let git = linear6_git();
+        let git = history_git();
 
-        let (text, _) = analyze(&git, &storage, "folo", &options());
+        let (text, regressions) = analyze(&git, &storage, "folo", &options());
+        assert_eq!(regressions, 1, "{text}");
         assert!(!text.contains("comparison base is"), "{text}");
     }
 
@@ -1423,35 +1799,33 @@ mod tests {
     fn dirty_tree_on_base_branch_admits_tip_dirty_runs_with_a_warning() {
         // On the base branch (official view) with a currently-dirty working tree,
         // the dirty snapshots on the tip are the user's in-flight work and ARE
-        // admitted, with a warning that they are ephemeral. Three snapshots at the
-        // raised level form a regime large enough to clear the rank test against the
-        // clean baseline.
+        // admitted, with a warning that they are ephemeral. Admitting them puts the
+        // analysis in branch mode, judging the tip's dirty cohort against the clean
+        // base line below it.
         let storage = MemoryStorage::new();
-        for (index, value) in [100.0, 100.0, 100.0].into_iter().enumerate() {
-            let commit = format!("c{index}");
-            let second = i64::try_from(index).unwrap();
+        seed_master(&storage, &[100.0; BASE_COMMITS]);
+        let tip = unmeasured_tip();
+        for observed in [300, 400, 500] {
             store(
                 &storage,
-                &clean_key(&commit),
-                &ir_set(second, &commit, value),
+                &dirty_key(&tip, observed),
+                &ir_set(observed, &tip, 130.0),
             );
         }
-        store(&storage, &dirty_key("c3", 300), &ir_set(300, "c3", 130.0));
-        store(&storage, &dirty_key("c3", 400), &ir_set(400, "c3", 130.0));
-        store(&storage, &dirty_key("c3", 500), &ir_set(500, "c3", 130.0));
-        let mut git = linear_git();
+        let mut git = unmeasured_tip_git();
         git.mark_dirty();
 
         let (report, regressions, reporter) = analyze_json(&git, &storage, "folo", &options());
 
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(
-            parsed["runs"], 6,
+            parsed["runs"],
+            BASE_COMMITS.saturating_add(3),
             "all three dirty tip snapshots are admitted"
         );
         assert_eq!(regressions, 1, "the dirty tip snapshots complete the step");
         assert_eq!(
-            parsed["tip_commit"], "c3",
+            parsed["tip_commit"], tip,
             "the report names the analyzed tip"
         );
         assert_eq!(
@@ -1515,7 +1889,7 @@ mod tests {
         // mode here.
         let storage = MemoryStorage::new();
         seed_linear_step(&storage);
-        let mut git = linear6_git();
+        let mut git = history_git();
         git.mark_dirty();
 
         let (report, regressions, reporter) = analyze_json(&git, &storage, "folo", &options());
@@ -1527,7 +1901,7 @@ mod tests {
         );
         assert_eq!(
             regressions, 1,
-            "history mode flags the sustained clean step at c3"
+            "history mode flags the sustained clean step"
         );
         assert!(
             parsed["warning"].is_null(),
@@ -1635,21 +2009,11 @@ mod tests {
     #[test]
     fn explicit_branch_selects_the_official_master_view() {
         // From a feature checkout, `--context master` analyzes master's own history:
-        // six clean commits with a sustained step at c3.
+        // a full-length clean line carrying a sustained step whose raised regime the
+        // feature tip's own first-parent walk never reaches.
         let storage = MemoryStorage::new();
-        for (index, value) in [100.0, 100.0, 100.0, 130.0, 130.0, 130.0]
-            .into_iter()
-            .enumerate()
-        {
-            let commit = format!("c{index}");
-            let second = i64::try_from(index).unwrap();
-            store(
-                &storage,
-                &clean_key(&commit),
-                &ir_set(second, &commit, value),
-            );
-        }
-        let git = feature6_git();
+        seed_linear_step(&storage);
+        let git = feature_chain(HISTORY_COMMITS, 1);
 
         let opts = AnalyzeOptions {
             context: Some("master".to_owned()),
@@ -1657,27 +2021,35 @@ mod tests {
         };
         let (report, regressions, _) = analyze_json(&git, &storage, "folo", &opts);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-        assert_eq!(parsed["runs"], 6, "master's six commits");
+        assert_eq!(parsed["runs"], HISTORY_COMMITS, "master's whole line");
         assert_eq!(regressions, 1);
     }
 
     #[test]
     fn within_a_commit_clean_precedes_dirty() {
-        // On a target-side commit, a clean run and dirty snapshots both load; the
-        // clean run is the baseline and the later dirty values are the latest
-        // points. Three dirty snapshots at the raised level form a regime large
-        // enough to clear the rank test against the four-commit clean baseline.
+        // On a target-side commit, a clean run and dirty snapshots both load. Branch
+        // mode judges the tip's latest cohort — the contiguous suffix sharing the last
+        // point's commit and dirty flag — so the flag can only come from the dirty
+        // snapshots sorting after the clean f2 run at the baseline level. Were the
+        // ordering reversed the cohort would be that clean run and nothing would flag.
         let storage = MemoryStorage::new();
-        store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
-        store(&storage, &clean_key("c1"), &ir_set(1, "c1", 100.0));
-        store(&storage, &clean_key("c2"), &ir_set(2, "c2", 100.0));
-        store(&storage, &clean_key("c3"), &ir_set(3, "c3", 100.0));
-        store(&storage, &clean_key("f1"), &ir_set(4, "f1", 100.0));
-        store(&storage, &clean_key("f2"), &ir_set(5, "f2", 100.0));
-        store(&storage, &dirty_key("f2", 6), &ir_set(6, "f2", 130.0));
-        store(&storage, &dirty_key("f2", 7), &ir_set(7, "f2", 130.0));
-        store(&storage, &dirty_key("f2", 8), &ir_set(8, "f2", 130.0));
-        let git = feature_tip_git();
+        seed_master(&storage, &[100.0; BASE_COMMITS]);
+        let observed = i64::try_from(BASE_COMMITS).unwrap();
+        store(&storage, &clean_key("f1"), &ir_set(observed, "f1", 100.0));
+        store(
+            &storage,
+            &clean_key("f2"),
+            &ir_set(observed.saturating_add(1), "f2", 100.0),
+        );
+        for offset in 2..5_i64 {
+            let second = observed.saturating_add(offset);
+            store(
+                &storage,
+                &dirty_key("f2", second),
+                &ir_set(second, "f2", 130.0),
+            );
+        }
+        let git = branch_git();
 
         let (_, regressions, _) = analyze_json(&git, &storage, "folo", &options());
         assert_eq!(regressions, 1, "the dirty f2 values are the latest points");
@@ -1818,14 +2190,8 @@ mod tests {
         // incomplete topology as a base-branch (history) view, this is an error
         // that tells the user how to supply the missing history.
         let mut git = FakeGitHistory::new();
-        git.commit("c0", None)
-            .commit("c1", Some("c0"))
-            .commit("c2", Some("c1"))
-            .commit("c3", Some("c2"))
-            .commit("c4", Some("c3"))
-            .commit("c5", Some("c4"))
-            .branch("master", "c5")
-            .head("master"); // No `.mark_default(...)`.
+        let tip = append_master_chain(&mut git, HISTORY_COMMITS);
+        git.branch("master", &tip).head("master"); // No `.mark_default(...)`.
         let error = block_on(analyze_with(
             &git,
             &storage,
@@ -1859,16 +2225,12 @@ mod tests {
         // guessing a base-branch view. The base was auto-detected here, so the
         // message also offers --base as the way to name a different one.
         let mut git = FakeGitHistory::new();
-        git.commit("c0", None)
-            .commit("c1", Some("c0"))
-            .commit("c2", Some("c1"))
-            .commit("c3", Some("c2"))
-            .commit("c4", Some("c3"))
-            .commit("c5", Some("c4"))
+        let tip = append_master_chain(&mut git, HISTORY_COMMITS);
+        git
             // A disjoint base history with no common ancestor with the target.
             .commit("m0", None)
             .branch("master", "m0")
-            .branch("feature", "c5")
+            .branch("feature", &tip)
             .head("feature")
             .mark_default("master");
         let error = block_on(analyze_with(
@@ -1902,15 +2264,10 @@ mod tests {
         // on purpose. Only if the history is complete is the chosen base called out
         // as genuinely unrelated.
         let mut git = FakeGitHistory::new();
-        git.commit("c0", None)
-            .commit("c1", Some("c0"))
-            .commit("c2", Some("c1"))
-            .commit("c3", Some("c2"))
-            .commit("c4", Some("c3"))
-            .commit("c5", Some("c4"))
-            .commit("m0", None)
+        let tip = append_master_chain(&mut git, HISTORY_COMMITS);
+        git.commit("m0", None)
             .branch("master", "m0")
-            .branch("feature", "c5")
+            .branch("feature", &tip)
             .head("feature")
             .mark_default("master");
         let mut options = options();
@@ -1947,18 +2304,15 @@ mod tests {
         let storage = MemoryStorage::new();
         let raw_project = "my project/v2";
         let sanitized = sanitize_segment(raw_project);
-        for (index, value) in [100.0, 100.0, 100.0, 130.0, 130.0, 130.0]
-            .into_iter()
-            .enumerate()
-        {
-            let commit = format!("c{index}");
+        for (index, value) in step_values(100.0, 130.0).into_iter().enumerate() {
+            let commit = commit_name(index);
             let second = i64::try_from(index).unwrap();
             let key = format!(
                 "v1/{sanitized}/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/clean.json"
             );
             store(&storage, &key, &ir_set(second, &commit, value));
         }
-        let git = linear6_git();
+        let git = history_git();
 
         let (report, regressions) = analyze(&git, &storage, raw_project, &options());
         assert_eq!(
@@ -1975,7 +2329,7 @@ mod tests {
         // The shell maps this into an always-successful `RunOutcome`.
         let storage = MemoryStorage::new();
         seed_linear_step(&storage);
-        let git = linear6_git();
+        let git = history_git();
 
         let (_, regressions) = block_on(analyze_with(
             &git,
@@ -2013,7 +2367,9 @@ mod tests {
         block_on(storage.put("v1/folo/objects/callgrind/README.txt", b"not json")).unwrap();
         let git = linear_git();
 
-        let (_, regressions) = analyze(&git, &storage, "folo", &options());
+        let (report, regressions, _) = analyze_json(&git, &storage, "folo", &options());
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(parsed["runs"], 1, "only the real result object loaded");
         assert_eq!(regressions, 0);
     }
 

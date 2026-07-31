@@ -59,8 +59,18 @@ is that each mode reports a sensible, explainable *mix* of regressions and
 improvements rather than flagging everything or nothing. See the module docs in
 `src/scenario.rs` for the exact family/divisor math.
 
+A seeded shape only becomes a *finding* once the history carries the evidence the
+analysis gates demand: a series is judged at all only from the detectors' minimum
+number of points, and a step is trusted only when a full regime sits on each side of
+it. Roughly half the commits carry a run, so a `--commits` below twice the minimum
+series length produces no findings at all, and for a stretch above that only part of
+the seeded set surfaces. Sizing at eight times the minimum regime (currently
+`--commits 40`) sits clear of that stretch, which is what the smoke tests seed.
+
 A given `--seed` and sizing reproduce a **byte-identical** dataset (fixed dataset
-anchor + SplitMix64 generator), so timings are comparable across runs.
+anchor + SplitMix64 generator), so timings are comparable across runs. The seeded
+shapes are relative to each series' own base value, so the *findings* depend on the
+sizing alone — the seed moves every value but changes no verdict.
 
 ## Running it
 
@@ -131,8 +141,8 @@ benchmarks / set: 1000
 main commits:     2000
   with a run:     1002
 ...
-mode        duration   objects   series  regressions  improvements  notable
-----        --------   -------   ------  -----------  ------------  -------
-history     240.400s     20040    20000        11400          4000      yes
-branch       81.164s     20220    20000         8119             0      yes
+mode        duration        cpu   cpu%   objects   series  regressions  improvements  notable
+----        -------- ----------   ----   -------   ------  -----------  ------------  -------
+history     240.400s  1105.204s    46%     20040    20000        11400          4000      yes
+branch       81.164s   402.918s    41%     20220    20000         8119             0      yes
 ```

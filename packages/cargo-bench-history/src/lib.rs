@@ -151,6 +151,25 @@
 //! `--prune-base` confirms it. Narrow the selection with a facet, a `<commit>`
 //! argument, or `--since`. `--dry-run` previews without deleting.
 //!
+//! ## `rekey`
+//!
+//! Migrates stored objects onto the current machine-key format, merging history an
+//! earlier key format split across several partitions back into continuous series.
+//! Nothing is re-benchmarked: every stored run records the hardware profile behind
+//! its key, so both the retired and the current key are recomputed from the object.
+//! An object moves only when its key's machine segment *is* the retired hash of the
+//! hardware it records; an explicit `--machine-key` override, an already-current
+//! segment, and a run recording no hardware are each reported and left in place.
+//! Migration is a copy: the source object stays, so a second pass finds every
+//! destination present and writes nothing; two objects that would claim one key are
+//! both left in place and reported. `--apply` is required to write — a bare
+//! `rekey` reports the plan, including, for every pair of partitions that would
+//! merge, the level offset between their medians and whether they interleave over
+//! commit order or occupy disjoint stretches of it. A level offset beyond half the
+//! detector's practical-significance floors refuses the migration in both modes;
+//! `--allow-level-shift` accepts the step it would introduce. `--verbose` states the
+//! hardware and both keys behind every per-object decision.
+//!
 //! ## `examine`
 //!
 //! A drill-down sibling of `list runs` over the same `analyze`/`list` selection: it
@@ -194,10 +213,9 @@
 //! touched. This is the key `collect` stamps every result with, so CI captures it and
 //! threads the exact keys a collection produced into the matching `analyze` selection
 //! (see the per-push and per-PR workflows). Under `--verbose` the individual factors
-//! behind the fingerprint (processor count, memory regions, processor models, the
-//! per-processor speed histogram, and the factor-set version tag) are written to
-//! standard error, so a change in the key can be traced to the specific factor that
-//! moved.
+//! behind the fingerprint (processor count, memory regions, processor models, and the
+//! factor-set version tag) are written to standard error, so a change in the key can be
+//! traced to the specific factor that moved.
 //!
 //! # Selecting data: options shared by the query commands
 //!
@@ -328,7 +346,7 @@ pub use cbh_cli::{Cli, EarlyExit};
 pub use cbh_command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
     ExamineOptions, ImportOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection,
-    MachineKeyOptions, PruneOptions, UnblessOptions,
+    MachineKeyOptions, PruneOptions, RekeyOptions, UnblessOptions,
 };
 pub use cbh_config::{ConfigError, default_template};
 pub(crate) use cbh_model as model;

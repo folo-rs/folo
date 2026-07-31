@@ -119,6 +119,7 @@ pub async fn run_with_overrides(
         Command::Prune(options) => {
             commands::prune(options, workspace_dir, clock, storage_override, auto_facets).await
         }
+        Command::Rekey(options) => commands::rekey(options, workspace_dir, storage_override).await,
         Command::Backfill(options) => {
             commands::backfill(options, workspace_dir, bench_command).await
         }

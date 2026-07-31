@@ -66,6 +66,10 @@ Semantics and per-command behaviour: DESIGN §7–§8.
 one query view that does **not** (a pure index over storage keys). `examine` is the one
 command that names a `--metric` (its input is an `analyze` finding, which prints the metric).
 
+`rekey` is deliberately **outside** the lockstep and takes no facets: it is a whole-store
+maintenance pass whose correctness comes from processing every object, so a facet would
+migrate half a partition. Do not add facet options to it.
+
 ## Hidden `import` command
 
 `import` is a hidden, unsupported sibling of `collect` — the store path with the `cargo bench`

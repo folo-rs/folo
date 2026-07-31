@@ -16,5 +16,18 @@ from different machines are never mixed.
 `--verbose` additionally reports the factors behind the key on standard error, for tracing a
 key change to the hardware detail that moved.
 
+The key hashes only **properties of the hardware**: the processor and memory-region counts and
+the distinct processor models present. Readings that the same machine can report differently
+from one boot to the next — per-processor speeds above all, which are boot-time calibration
+figures rather than hardware identity — are deliberately excluded. Hashing them would fork one
+runner's history at every reboot, which is exactly the fragmentation the key exists to prevent,
+and they add no discriminating power the processor models do not already carry. They are
+recorded with every run as provenance instead, so a machine's speed mix is answered from its
+stored runs rather than from its key.
+
+The key is version-tagged, so a change to the factors it hashes forks stored history into a
+new partition rather than silently mixing incomparable data.
+[`rekey`](rekey.md) closes such a fork by migrating the stored objects onto the new format.
+
 See [Comparability and partitioning](../concepts/comparability.md) for how the machine key
 fits into the discriminant set.

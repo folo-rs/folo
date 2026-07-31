@@ -20,8 +20,9 @@ mod signal_validation;
 
 pub use discriminant::{DiscriminantSetQuery, FacetFilter};
 pub use findings::{
-    AnalysisConfig, AnalysisContext, AnalysisMode, Direction, Finding, FindingMethod, SeriesValue,
-    find_changes_spawned, short_commit,
+    AnalysisConfig, AnalysisContext, AnalysisMode, Detection, Direction, Finding, FindingMethod,
+    SeriesCensus, SeriesValue, Testability, UnjudgedReason, find_changes_spawned, short_commit,
+    testability,
 };
 pub use parallel::{balanced_chunk_sizes, worker_count};
 pub use run_points::{MetricPoint, ResultPoints, RunPoints};

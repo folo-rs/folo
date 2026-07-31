@@ -13,7 +13,7 @@ pub(crate) use cargo_bench_history::{
     default_template, run, run_with_overrides,
 };
 use cbh_codec as codec;
-use cbh_model::{DiscriminantSet, Engine, MachineKey, TargetTriple};
+use cbh_model::{DiscriminantSet, Engine, MachineInfo, MachineKey, TargetTriple};
 pub(crate) use jiff::Timestamp;
 use nonempty::nonempty;
 pub(crate) use serial_test::serial;
@@ -38,6 +38,59 @@ pub(crate) const HARNESS_AUTO_TRIPLE: &str = "x86_64-unknown-linux-gnu";
 /// exercise per-machine isolation seed additional, explicit machine keys and
 /// select them with an explicit `--machine-key`.
 pub(crate) const HARNESS_AUTO_MACHINE_KEY: &str = "harness-auto-machine";
+
+/// The minimum number of points a change-point regime (the flat side and the
+/// stepped side of a split) must hold before the history detector trusts the
+/// split. Mirrors `cbh_detect::AnalysisConfig::default().min_regime`; the
+/// [`fixture_gate_sizes_match_the_detector_defaults`] guard test keeps the two in
+/// lockstep. Fixtures build a flat regime and a stepped regime of this size so a
+/// seeded step clears the detector's per-regime persistence gate.
+pub(crate) const MIN_REGIME: usize = 5;
+
+/// The minimum number of points a series must carry to be analysed at all — below
+/// it the series is not judged and is not even counted in the false-discovery
+/// family. Equal to two full regimes and mirrors
+/// `cbh_detect::AnalysisConfig::default().min_series_points` (also the value of
+/// `DRIFT_MIN_POINTS` and the base-side commit-level floor branch mode demands).
+/// Fixtures seed at least this many points so their series is judged rather than
+/// silently skipped.
+pub(crate) const MIN_SERIES_POINTS: usize = 2 * MIN_REGIME;
+
+/// Processors the `rekey` fixture hardware records.
+///
+/// The fixture is one machine whose boot-time speed calibration was read
+/// differently across reboots. The two speeds fork the retired (`mk2`) key, which
+/// hashed the speed histogram, while the current (`mk3`) key — which does not —
+/// puts both under one partition. That is exactly the fragmentation `rekey`
+/// repairs, so the fixture reproduces it literally.
+pub(crate) const REKEY_PROCESSORS: usize = 8;
+
+/// Memory regions the `rekey` fixture hardware records.
+pub(crate) const REKEY_MEMORY_REGIONS: usize = 1;
+
+/// Processor model the `rekey` fixture hardware records.
+pub(crate) const REKEY_PROCESSOR_MODEL: &str = "Test CPU 3000";
+
+/// The lower of the two boot-time speed readings the `rekey` fixture hardware
+/// reports.
+pub(crate) const REKEY_SLOW_SPEED: u64 = 3141;
+
+/// The higher of the two boot-time speed readings the `rekey` fixture hardware
+/// reports.
+pub(crate) const REKEY_FAST_SPEED: u64 = 3142;
+
+/// The retired-format machine key the slow reading of the fixture hardware hashes
+/// to. Pinned here so the suite proves the migration lands on the exact partitions
+/// the stored history occupies, rather than on whatever the code happens to
+/// compute.
+pub(crate) const REKEY_SLOW_LEGACY_KEY: &str = "f2717448bb41b899";
+
+/// The retired-format machine key the fast reading of the fixture hardware hashes
+/// to.
+pub(crate) const REKEY_FAST_LEGACY_KEY: &str = "6400c9f0b4bb3763";
+
+/// The current-format machine key both readings of the fixture hardware hash to.
+pub(crate) const REKEY_CURRENT_KEY: &str = "4ffd697efb295d32";
 
 /// Canonical faker `--callgrind` identity/metric fragments, kept in lockstep with
 /// what the `collect` identity assertions expect. A fragment is everything after
@@ -1025,6 +1078,92 @@ impl Workspace {
         objects.pop().unwrap()
     }
 
+    /// Every stored object key, sorted. Unlike [`stored_objects`](Self::stored_objects)
+    /// this parses nothing, so it also sees blessing sidecars.
+    pub(crate) fn stored_keys(&self) -> Vec<String> {
+        let store = self.root().join("store");
+        let mut files = Vec::new();
+        collect_json_files(&store, &mut files);
+        let mut keys: Vec<String> = files
+            .into_iter()
+            .map(|path| {
+                path.strip_prefix(&store)
+                    .unwrap()
+                    .components()
+                    .map(|component| component.as_os_str().to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join("/")
+            })
+            .collect();
+        keys.sort();
+        keys
+    }
+
+    /// Seeds a clean Callgrind run under `machine_key` that records the fixture
+    /// hardware read at `speed`, so `rekey` can recompute both key formats from the
+    /// object's own provenance.
+    pub(crate) fn seed_rekey_clean(&self, machine_key: &str, speed: u64, label: &str, value: f64) {
+        let commit_id = self.commit_id(label);
+        let observed = self.committer_time(&commit_id);
+        let key = seed_clean_key(
+            Engine::Callgrind,
+            HARNESS_AUTO_TRIPLE,
+            machine_key,
+            &commit_id,
+        );
+        self.seed(
+            &key,
+            &rekey_result_set(observed.as_second(), &commit_id, speed, value),
+        );
+    }
+
+    /// Seeds a dirty Callgrind snapshot under `machine_key` recording the fixture
+    /// hardware read at `speed`.
+    pub(crate) fn seed_rekey_dirty(
+        &self,
+        machine_key: &str,
+        speed: u64,
+        observed: &str,
+        label: &str,
+        value: f64,
+    ) {
+        let commit_id = self.commit_id(label);
+        let effective: Timestamp = format!("{observed}T00:00:00Z").parse().unwrap();
+        let key = seed_dirty_key(
+            Engine::Callgrind,
+            HARNESS_AUTO_TRIPLE,
+            machine_key,
+            &commit_id,
+            effective.as_second(),
+        );
+        self.seed(
+            &key,
+            &rekey_result_set(effective.as_second(), &commit_id, speed, value),
+        );
+    }
+
+    /// Seeds a blessing sidecar under `machine_key`. The sidecar records no hardware
+    /// of its own, so `rekey` can only move it by following the runs of its own
+    /// partition.
+    pub(crate) fn seed_rekey_bless(&self, machine_key: &str, issued: &str, label: &str) {
+        let commit_id = self.commit_id(label);
+        let issued_at: Timestamp = format!("{issued}T00:00:00Z").parse().unwrap();
+        let key = DiscriminantSet::new(
+            Engine::Callgrind,
+            &TargetTriple::from(HARNESS_AUTO_TRIPLE),
+            &MachineKey::from(machine_key),
+        )
+        .bless_key(SEED_PROJECT, &commit_id, issued_at.as_second());
+        let record = serde_json::json!({
+            "schema_version": SCHEMA_VERSION,
+            "commit": commit_id,
+            "issued_at": issued_at.to_string(),
+            "prefixes": ["nm"],
+            "tool_version": TOOL_VERSION,
+        });
+        self.seed_raw_json(&key, &serde_json::to_string(&record).unwrap());
+    }
+
     /// Writes `set` to `key` (a `/`-separated object key) under the local store,
     /// mirroring the layout `collect` produces — including the gzip body encoding the
     /// storage layer applies, so the production read path inflates it correctly.
@@ -1149,31 +1288,49 @@ impl Workspace {
         );
     }
 
-    /// Seeds a flat history followed by a clear, sustained upward step — a
-    /// regression with enough points on each side to satisfy the change-point
-    /// detector's persistence requirement.
+    /// Seeds a flat-then-stepped clean Callgrind history: [`MIN_REGIME`] commits at
+    /// `baseline` then [`MIN_REGIME`] commits at `raised`, labeled `{prefix}1`..
+    /// and dated one day apart from `first_date` (`YYYY-MM-DD`). The series holds
+    /// [`MIN_SERIES_POINTS`] points — the minimum the change-point detector will
+    /// analyse — with each regime long enough to clear the per-regime persistence
+    /// gate, so a step between the regimes is a trustable sustained change.
+    pub(crate) fn seed_stepped_callgrind(
+        &self,
+        first_date: &str,
+        prefix: &str,
+        baseline: f64,
+        raised: f64,
+    ) {
+        for (index, date) in sequential_dates(first_date, MIN_SERIES_POINTS)
+            .into_iter()
+            .enumerate()
+        {
+            let label = format!(
+                "{prefix}{}",
+                index.checked_add(1).expect("commit index overflow")
+            );
+            self.commit_dated(&date, &label);
+            let value = if index < MIN_REGIME { baseline } else { raised };
+            self.seed_callgrind(&label, value);
+        }
+    }
+
+    /// Seeds a flat clean Callgrind history followed by a clear, sustained upward
+    /// step: [`MIN_REGIME`] commits at 100 then [`MIN_REGIME`] commits at 130,
+    /// labeled `c1`.. and dated one day apart from 2024-01-01. The series holds
+    /// [`MIN_SERIES_POINTS`] points — long enough that the change-point detector
+    /// analyses it, with each regime clearing the per-regime persistence gate.
     pub(crate) fn seed_rising_callgrind_history(&self) {
-        self.commit_dated("2024-01-01", "c1");
-        self.seed_callgrind("c1", 100.0);
-        self.commit_dated("2024-01-02", "c2");
-        self.seed_callgrind("c2", 100.0);
-        self.commit_dated("2024-01-03", "c3");
-        self.seed_callgrind("c3", 100.0);
-        self.commit_dated("2024-01-04", "c4");
-        self.seed_callgrind("c4", 130.0);
-        self.commit_dated("2024-01-05", "c5");
-        self.seed_callgrind("c5", 130.0);
-        self.commit_dated("2024-01-06", "c6");
-        self.seed_callgrind("c6", 130.0);
+        self.seed_stepped_callgrind("2024-01-01", "c", 100.0, 130.0);
     }
 
     /// Seeds a rising Callgrind history for `count` distinct benchmarks sharing one
     /// partition, so a single analysis pass yields `count` regression findings of
     /// distinct magnitudes. Each benchmark holds a flat baseline of 100 across the
-    /// first three commits, then steps to a benchmark-specific higher value across
-    /// the last three — a sustained regression the change-point detector flags.
-    /// Benchmark `i` steps to `120 + i`, so magnitudes are distinct and strictly
-    /// increasing, giving the global ranking a deterministic order.
+    /// first [`MIN_REGIME`] commits, then steps to a benchmark-specific higher value
+    /// across the last [`MIN_REGIME`] — a sustained regression the change-point
+    /// detector flags. Benchmark `i` steps to `120 + i`, so magnitudes are distinct
+    /// and strictly increasing, giving the global ranking a deterministic order.
     pub(crate) fn seed_many_rising_callgrind_history(&self, count: usize) {
         let baseline = vec![100.0; count];
         // `count` is a small test parameter; a u16 cast keeps the value exact and
@@ -1183,21 +1340,18 @@ impl Workspace {
                 120.0 + f64::from(u16::try_from(index).expect("benchmark count fits in u16"))
             })
             .collect();
-        for (date, label) in [
-            ("2024-01-01", "c1"),
-            ("2024-01-02", "c2"),
-            ("2024-01-03", "c3"),
-        ] {
-            self.commit_dated(date, label);
-            self.seed_many_callgrind(label, &baseline);
-        }
-        for (date, label) in [
-            ("2024-01-04", "c4"),
-            ("2024-01-05", "c5"),
-            ("2024-01-06", "c6"),
-        ] {
-            self.commit_dated(date, label);
-            self.seed_many_callgrind(label, &raised);
+        for (index, date) in sequential_dates("2024-01-01", MIN_SERIES_POINTS)
+            .into_iter()
+            .enumerate()
+        {
+            let label = format!("c{}", index.checked_add(1).expect("commit index overflow"));
+            self.commit_dated(&date, &label);
+            let values = if index < MIN_REGIME {
+                &baseline
+            } else {
+                &raised
+            };
+            self.seed_many_callgrind(&label, values);
         }
     }
 
@@ -1263,25 +1417,20 @@ impl Workspace {
     }
 
     /// Seeds a flat Criterion `wall_time` history then a clear, sustained upward
-    /// step. Four points on each side give the rank-sum gate enough power to
-    /// distinguish the step from noise.
+    /// step: [`MIN_REGIME`] commits at 20 then [`MIN_REGIME`] commits at 30, labeled
+    /// `d1`.. and dated one day apart from 2024-02-01. The series holds
+    /// [`MIN_SERIES_POINTS`] points, long enough for the change-point detector to
+    /// analyse it with each regime clearing the per-regime persistence gate.
     pub(crate) fn seed_rising_criterion_history(&self, machine: &str) {
-        self.commit_dated("2024-02-01", "d1");
-        self.seed_criterion("d1", machine, 20.0);
-        self.commit_dated("2024-02-02", "d2");
-        self.seed_criterion("d2", machine, 20.0);
-        self.commit_dated("2024-02-03", "d3");
-        self.seed_criterion("d3", machine, 20.0);
-        self.commit_dated("2024-02-04", "d4");
-        self.seed_criterion("d4", machine, 20.0);
-        self.commit_dated("2024-02-05", "d5");
-        self.seed_criterion("d5", machine, 30.0);
-        self.commit_dated("2024-02-06", "d6");
-        self.seed_criterion("d6", machine, 30.0);
-        self.commit_dated("2024-02-07", "d7");
-        self.seed_criterion("d7", machine, 30.0);
-        self.commit_dated("2024-02-08", "d8");
-        self.seed_criterion("d8", machine, 30.0);
+        for (index, date) in sequential_dates("2024-02-01", MIN_SERIES_POINTS)
+            .into_iter()
+            .enumerate()
+        {
+            let label = format!("d{}", index.checked_add(1).expect("commit index overflow"));
+            self.commit_dated(&date, &label);
+            let value = if index < MIN_REGIME { 20.0 } else { 30.0 };
+            self.seed_criterion(&label, machine, value);
+        }
     }
 
     /// Seeds one Callgrind result set carrying two distinct benchmark identities,
@@ -1446,6 +1595,23 @@ impl Drop for ClearedTargetDir {
             std::env::set_var("CARGO_TARGET_DIR", previous);
         }
     }
+}
+
+/// Produces `count` consecutive `YYYY-MM-DD` date strings starting at `start`
+/// (`YYYY-MM-DD`), one calendar day apart. Fixtures use it to generate commit
+/// chains long enough to clear the detectors' minimum-evidence gates without
+/// hand-writing every date. Callers keep `start` and `count` inside `analyze`'s
+/// default six-month look-back window (see [`analysis_now`]).
+pub(crate) fn sequential_dates(start: &str, count: usize) -> Vec<String> {
+    let mut date: jiff::civil::Date = start.parse().expect("start is a valid YYYY-MM-DD date");
+    let mut dates = Vec::with_capacity(count);
+    for _ in 0..count {
+        dates.push(date.to_string());
+        date = date
+            .tomorrow()
+            .expect("date stays within the supported range");
+    }
+    dates
 }
 
 /// A fixed clock anchor for `analyze`/`list`'s history-mode default `--since`
@@ -1645,6 +1811,37 @@ pub(crate) fn time_result_set_with_dispersion(
     Run::new(context, vec![record])
 }
 
+/// The number of series a rendered text report states it judged, read from the
+/// coverage field every analysis report carries in its header.
+///
+/// Panics when the report carries no coverage field: a report that accounted for no
+/// series at all cannot support any claim about the detectors.
+pub(crate) fn judged_series(report: &str) -> usize {
+    let (_, tail) = report
+        .split_once("series judged: ")
+        .unwrap_or_else(|| panic!("the report header states its series coverage: {report}"));
+    let (judged, _) = tail
+        .split_once(" of ")
+        .unwrap_or_else(|| panic!("the coverage field reads `judged of total`: {report}"));
+    judged
+        .parse()
+        .unwrap_or_else(|_| panic!("the coverage field counts series: {report}"))
+}
+
+/// Asserts that an analysis actually reached a verdict on at least one series.
+///
+/// An assertion that nothing was flagged only says something about the detectors
+/// when the data reached them. The same silence is also what a history too short to
+/// judge, a ghost-filtered benchmark, or a detector switched off by a bad gate
+/// produces — so a test asserting an absence states this first, and thereby cannot
+/// pass vacuously.
+pub(crate) fn assert_history_was_judged(report: &str) {
+    assert!(
+        judged_series(report) > 0,
+        "the analysis judged nothing, so its silence proves nothing: {report}"
+    );
+}
+
 pub(crate) fn ir_of(record: &BenchmarkResult) -> f64 {
     record
         .metrics
@@ -1711,6 +1908,29 @@ pub(crate) fn ir_result_set(effective: i64, commit: &str, value: f64) -> Run {
     )
 }
 
+/// Builds a Callgrind result set that also records the `rekey` fixture hardware,
+/// read at `speed`, with the fingerprint the retired key format derived from it.
+///
+/// A real run records the auto-detected hardware hash as its fingerprint whatever
+/// key it is stored under, so the fixture does the same: the fingerprint follows
+/// the hardware, not the partition.
+pub(crate) fn rekey_result_set(effective: i64, commit: &str, speed: u64, value: f64) -> Run {
+    let fingerprint = match speed {
+        REKEY_SLOW_SPEED => REKEY_SLOW_LEGACY_KEY,
+        REKEY_FAST_SPEED => REKEY_FAST_LEGACY_KEY,
+        other => panic!("no pinned legacy key for speed {other}"),
+    };
+    let mut set = ir_result_set(effective, commit, value);
+    set.context.machine = Some(MachineInfo {
+        processors: REKEY_PROCESSORS,
+        memory_regions: REKEY_MEMORY_REGIONS,
+        processor_models: vec![REKEY_PROCESSOR_MODEL.to_owned()],
+        processor_speeds: vec![(speed, REKEY_PROCESSORS)],
+        fingerprint: fingerprint.to_owned(),
+    });
+    set
+}
+
 /// A configuration with an explicit project `id` (which may contain characters
 /// that require sanitizing for the storage partition) and no storage section.
 /// Local storage is supplied at run time via the harness's injected `--local`.
@@ -1746,4 +1966,20 @@ fn commit_dated_reuses_the_existing_commit() {
     let first = workspace.commit_dated("2024-01-01", "c1");
     let again = workspace.commit_dated("2024-01-05", "c1");
     assert_eq!(first, again, "the label reuses c1's commit");
+}
+
+/// The fixture sizing constants must track the detector's public defaults; if a
+/// gate default moves, this guard fails so the fixtures are re-derived rather than
+/// silently seeding too little (or needless) history.
+#[test]
+fn fixture_gate_sizes_match_the_detector_defaults() {
+    let config = cbh_detect::AnalysisConfig::default();
+    assert_eq!(
+        MIN_REGIME, config.min_regime,
+        "MIN_REGIME must match the detector's per-regime persistence gate"
+    );
+    assert_eq!(
+        MIN_SERIES_POINTS, config.min_series_points,
+        "MIN_SERIES_POINTS must match the detector's minimum-series-length gate"
+    );
 }

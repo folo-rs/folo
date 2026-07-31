@@ -26,12 +26,14 @@ cbh_git = { workspace = true }
 cbh_model = { workspace = true }
 cbh_probe = { workspace = true }
 cbh_render = { workspace = true }
+cbh_stats = { workspace = true }
 cbh_storage = { workspace = true }
 futures = { workspace = true }
 jiff = { workspace = true, features = ["serde"] }
 nonempty = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 tick = { workspace = true, features = ["tokio"] }
 
 [dev-dependencies]

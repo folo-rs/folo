@@ -41,6 +41,9 @@ async fn collect_callgrind_end_to_end_stores_results() {
 
     assert_eq!(set.schema_version, SCHEMA_VERSION);
     assert_eq!(set.context.tool_version, TOOL_VERSION);
+    // The measurement protocol travels with the run: a default collection runs the
+    // suite once, so the stored values are the minimum of a single sample.
+    assert_eq!(set.context.best_of.unwrap().get(), 1);
 
     assert!(machine.processors >= 1, "{machine:?}");
     assert!(machine.memory_regions >= 1, "{machine:?}");

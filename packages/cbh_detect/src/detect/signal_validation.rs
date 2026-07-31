@@ -27,11 +27,13 @@
 //!   past the split) but not a sustained historical trend to history.
 //!   Branch mode also needs a base side to compare against at all — a case with an empty
 //!   base side leaves it quiet.
-//! * **Absolute scale (dimension 2).** Every case is analysed as a continuous metric,
-//!   both as-is and scaled up by a large constant. The absolute-magnitude floor does
-//!   not apply to continuous metrics, so every scaled verdict must match its as-is
-//!   reference. A separate quantized-metric case pins the intentional exception:
-//!   scaling can promote a move when it carries the absolute delta across that floor.
+//! * **Absolute scale (dimension 2).** Every case is analysed as a wall-time metric,
+//!   both as-is and scaled up by a large constant. Every curated move already stands
+//!   far above wall time's one-nanosecond absolute floor, so scaling cannot carry a
+//!   verdict across it and every scaled verdict must match its as-is reference. A
+//!   separate quantized-metric case pins the opposite: on a small instruction count,
+//!   scaling can promote a move by carrying its absolute delta across the much larger
+//!   count floor.
 //!
 //! Both directions are still exercised without a polarity dimension: every metric is
 //! lower-is-better, so a curated rise is a regression (reported by every mode) and a
@@ -43,15 +45,15 @@
 //! question. Detector internals, confidence, and magnitude are covered by the
 //! finer-grained unit tests in [`findings`](super::findings).
 //!
-//! Most curated series carry no within-regime dispersion (each regime is a run of
-//! identical values) and every step is large and well above the practical-magnitude
-//! floors, so a step between two zero-variance regimes is maximally significant and
-//! detection turns purely on the mode's slice and floor rather than on any noise model.
-//! One case deliberately breaks that mould: a *stationary but very noisy* series whose
-//! value oscillates between two levels throughout. A human reading its chart answers
-//! "noisy, but nothing changed" without hesitation, so it is exactly the kind of
-//! obvious-answer input this suite exists to pin — and it guards the noise gates against
-//! reading structured jitter as a step.
+//! Most curated series carry no meaningful within-regime dispersion (each regime is a
+//! run of one level, wobbling only by [`REGIME_WOBBLE`]) and every step is large and
+//! well above the practical-magnitude floors, so a step between two such regimes is
+//! maximally significant and detection turns purely on the mode's slice and floor
+//! rather than on any noise model. One case deliberately breaks that mould: a
+//! *stationary but very noisy* series whose value oscillates between two levels
+//! throughout. A human reading its chart answers "noisy, but nothing changed" without
+//! hesitation, so it is exactly the kind of obvious-answer input this suite exists to
+//! pin — and it guards the noise gates against reading structured jitter as a step.
 
 #![cfg_attr(coverage_nightly, coverage(off))]
 
@@ -184,9 +186,31 @@ impl SignalCase {
     }
 }
 
-/// `count` copies of `value`, as a run of series points.
+/// The fraction of its own level each curated regime wobbles by, alternating below and
+/// above it from point to point.
+///
+/// A regime of identical values has exactly zero scatter, and branch mode judges a tip
+/// against the base window's scatter. Wall time — the metric this matrix runs on — has
+/// no quantum to floor that scatter at, so a zero-scatter window leaves the prediction
+/// interval with no distribution to place the tip in and yields no verdict at all. Real
+/// timing series never repeat a value, so every curated regime carries this
+/// deterministic wobble instead. At two parts in a thousand it is orders of magnitude
+/// below every curated step and below every practical-magnitude floor, so no verdict
+/// turns on it.
+const REGIME_WOBBLE: f64 = 0.002;
+
+/// `count` points alternating ±[`REGIME_WOBBLE`] around `value`, as a run of series
+/// points. An even-length run has exactly `value` as its mean.
 fn run_of(value: f64, count: usize) -> Vec<f64> {
-    vec![value; count]
+    (0..count)
+        .map(|index| {
+            if index % 2 == 0 {
+                value * (1.0 - REGIME_WOBBLE)
+            } else {
+                value * (1.0 + REGIME_WOBBLE)
+            }
+        })
+        .collect()
 }
 
 /// The hand-curated cases. New "obvious answer" series are added as one row each.
@@ -278,11 +302,12 @@ fn cases() -> Vec<SignalCase> {
 
 /// Builds a curated series carrying `values` in topological order, tagged with `kind`.
 ///
-/// The points carry no explicit confidence intervals. Most curated regimes are runs of
-/// identical values, so the series has zero within-regime dispersion and a step between
-/// two such regimes is unambiguous under the noise-aware gates; the verdict then turns on
-/// the mode and the step magnitude. The stationary-noise case is the exception — its
-/// values genuinely scatter — and it exists precisely to exercise those gates.
+/// The points carry no explicit confidence intervals. Every curated regime is a run of
+/// one level carrying only the small deterministic [`REGIME_WOBBLE`], so within-regime
+/// dispersion is negligible beside every curated step and the verdict turns on the mode
+/// and the step magnitude rather than on any noise model. The stationary-noise case is
+/// the exception — its values genuinely scatter — and it exists precisely to exercise
+/// those gates.
 fn curated_series(values: &[f64], kind: MetricKind) -> Series {
     let points = values
         .iter()
@@ -315,8 +340,8 @@ fn curated_series(values: &[f64], kind: MetricKind) -> Series {
 /// whether it raised any finding.
 fn raises_finding(values: &[f64], kind: MetricKind, context: &AnalysisContext) -> bool {
     let series = curated_series(values, kind);
-    let findings = find_changes(&[series], context);
-    !findings.is_empty()
+    let detection = find_changes(&[series], context);
+    !detection.findings.is_empty()
 }
 
 /// `values`, each multiplied by `scale`.
@@ -327,8 +352,9 @@ fn scaled(values: &[f64], scale: f64) -> Vec<f64> {
 #[test]
 fn curated_signals_match_expected_verdicts() {
     // Scale multiples applied on top of each as-is series; the as-is verdict is the
-    // reference every scaled verdict must match. The matrix uses a continuous metric,
-    // so the absolute floor is inapplicable and no multiple may change the outcome.
+    // reference every scaled verdict must match. The matrix uses wall time, whose
+    // curated moves all stand far above its one-nanosecond absolute floor, so no
+    // multiple may change the outcome.
     let scale_multiples = [1000.0_f64];
 
     for case in cases() {
@@ -337,8 +363,9 @@ fn curated_signals_match_expected_verdicts() {
             let context = mode.context(case.merge_base_index());
             let expected = case.expected_outcome(mode).is_finding(mode);
             // Every metric is lower-is-better; a curated fall only surfaces where the
-            // mode reports improvements. Wall time represents the continuous metrics
-            // for which scale invariance remains part of the contract.
+            // mode reports improvements. Wall time carries the smallest absolute
+            // floor, which every curated move already clears, so scale invariance
+            // holds across the matrix.
             let kind = MetricKind::WallTime;
 
             // Dimension 1: the as-is verdict under this mode matches the hand-picked
@@ -350,13 +377,13 @@ fn curated_signals_match_expected_verdicts() {
                 case.name,
             );
 
-            // Dimension 2: scaling a continuous series leaves the verdict unchanged.
+            // Dimension 2: scaling a series that already clears the absolute floor
+            // leaves the verdict unchanged.
             for scale in scale_multiples {
                 let scaled_verdict = raises_finding(&scaled(&values, scale), kind, &context);
                 assert_eq!(
                     scaled_verdict, reference,
-                    "case '{}' mode={mode:?}: scaling by {scale} changed the verdict \
-                     for a continuous metric",
+                    "case '{}' mode={mode:?}: scaling by {scale} changed the verdict",
                     case.name,
                 );
             }

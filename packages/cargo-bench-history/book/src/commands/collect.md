@@ -28,6 +28,13 @@ hard error.
 Two caveats: a runner that is slow for the *entire* job is not corrected by the minimum, and
 Callgrind's deterministic counts make min-of-N a costly no-op for that engine.
 
+Because the reduction keeps a minimum, `N` is part of the measurement protocol, not just a
+speed/quality knob: the expected minimum of `N` samples falls as `N` rises, so changing `N`
+shifts the recorded level of *every* benchmark at once. Keep `N` fixed for a given machine
+and project if you want the history to stay a like-for-like record. Every stored run records
+the count it was reduced from, so a value's protocol is always recoverable from the stored
+data even if the setting changes.
+
 ## Storage behavior
 
 By default, `collect` persists immediately — there is no separate publish step.

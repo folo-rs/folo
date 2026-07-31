@@ -15,7 +15,8 @@
 //! The `analyze`-family orchestration: resolve which stored runs make up each
 //! benchmark's history from live git topology, reconstruct the series, and report the
 //! notable changes, plus the sibling `list`, `prune`, `examine`, and `bless`/`unbless`
-//! commands that share the same loading and selection machinery.
+//! commands that share the same loading and selection machinery, and the `rekey`
+//! storage-maintenance pass that deliberately does not.
 //!
 //! Unlike a snapshot tool, `analyze` orders a series by *git history* rather than by
 //! ingest time (see the `analyze` command in `DESIGN.md`): it resolves the target ref's
@@ -45,6 +46,7 @@ mod list;
 mod load;
 mod pipeline;
 mod prune;
+mod rekey;
 mod report;
 mod selection;
 mod window;
@@ -61,10 +63,11 @@ pub(crate) use history::{
     DirtyTipPolicy, ResolvedHistory, dirty_base_exception_warning, resolve_history,
 };
 pub use list::execute as list;
-pub(crate) use load::{RunIndex, facet_filtered_candidates};
+pub(crate) use load::{RunIndex, facet_filtered_candidates, load_objects_concurrently};
 pub use pipeline::execute as analyze;
 pub(crate) use pipeline::{resolve_auto_facets, resolve_now};
 pub use prune::execute as prune;
+pub use rekey::execute as rekey;
 pub use report::RenderedReports;
 pub(crate) use report::ReportRequest;
 pub(crate) use selection::Selection;
