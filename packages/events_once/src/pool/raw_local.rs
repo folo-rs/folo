@@ -10,10 +10,8 @@ use std::ptr::NonNull;
 #[cfg(debug_assertions)]
 use std::sync::Arc;
 
-use infinity_pool::RawPinnedPool;
-
 use crate::{
-    LocalEvent, LocalReceiverCore, LocalSenderCore, RawLocalPooledReceiver, RawLocalPooledRef,
+    LocalPoolState, LocalReceiverCore, LocalSenderCore, RawLocalPooledReceiver, RawLocalPooledRef,
     RawLocalPooledSender,
 };
 
@@ -69,14 +67,14 @@ impl<T: 'static> Drop for RawLocalEventPool<T> {
 }
 
 pub(crate) struct RawLocalEventPoolCore<T: 'static> {
-    pub(crate) pool: RefCell<RawPinnedPool<LocalEvent<T>>>,
+    pub(crate) state: RefCell<LocalPoolState<T>>,
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: 'static> fmt::Debug for RawLocalEventPoolCore<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
-            .field("pool", &self.pool)
+            .field("state", &self.state)
             .finish()
     }
 }
@@ -86,7 +84,7 @@ impl<T: 'static> RawLocalEventPool<T> {
     #[must_use]
     pub fn new() -> Self {
         let core = RawLocalEventPoolCore {
-            pool: RefCell::new(RawPinnedPool::new()),
+            state: RefCell::new(LocalPoolState::new()),
         };
 
         let core_ptr = Box::into_raw(Box::new(UnsafeCell::new(core)));
@@ -98,6 +96,16 @@ impl<T: 'static> RawLocalEventPool<T> {
         }
     }
 
+    /// Returns a shared reference to the core.
+    fn core(&self) -> &RawLocalEventPoolCore<T> {
+        // SAFETY: We are the owner of the core, so we know it remains valid.
+        let core_cell = unsafe { self.core.as_ref() };
+
+        // SAFETY: We only ever create shared references to the core, so no conflicting exclusive
+        // references can exist.
+        unsafe { &*core_cell.get() }
+    }
+
     /// Rents an event from the pool, returning its endpoints.
     ///
     /// The event will be returned to the pool when both endpoints are dropped.
@@ -107,30 +115,13 @@ impl<T: 'static> RawLocalEventPool<T> {
     /// The caller must guarantee that the pool outlives the endpoints.
     #[must_use]
     pub unsafe fn rent(self: Pin<&Self>) -> (RawLocalPooledSender<T>, RawLocalPooledReceiver<T>) {
-        let storage = {
-            // SAFETY: We are the owner of the core, so we know it remains valid. We only ever
-            // create shared references to it, so no conflicting exclusive references can exist.
-            let core_cell = unsafe { self.core.as_ref() };
+        let event = self.core().state.borrow_mut().rent();
 
-            // SAFETY: See above.
-            let core_maybe = unsafe { core_cell.get().as_ref() };
-
-            // SAFETY: UnsafeCell pointer is never null.
-            let core = unsafe { core_maybe.unwrap_unchecked() };
-
-            let mut pool = core.pool.borrow_mut();
-
-            // SAFETY: We are required to initialize the storage of the item we store in the pool.
-            // We do - that is what new_in_inner is for.
-            unsafe {
-                pool.insert_with(|place| {
-                    LocalEvent::new_in_inner(place);
-                })
-            }
-        }
-        .into_shared();
-
-        let event_ref = RawLocalPooledRef::new(self.core, storage);
+        let event_ref = RawLocalPooledRef::new(
+            #[cfg(debug_assertions)]
+            self.core,
+            event,
+        );
 
         let inner_sender = LocalSenderCore::new(event_ref.clone());
         let inner_receiver = LocalReceiverCore::new(event_ref);
@@ -144,37 +135,13 @@ impl<T: 'static> RawLocalEventPool<T> {
     /// Returns `true` if no events have currently been rented from the pool.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        // SAFETY: We are the owner of the core, so we know it remains valid. We only ever
-        // create shared references to it, so no conflicting exclusive references can exist.
-        let core_cell = unsafe { self.core.as_ref() };
-
-        // SAFETY: See above.
-        let core_maybe = unsafe { core_cell.get().as_ref() };
-
-        // SAFETY: UnsafeCell pointer is never null.
-        let core = unsafe { core_maybe.unwrap_unchecked() };
-
-        let pool = core.pool.borrow();
-
-        pool.is_empty()
+        self.core().state.borrow().is_empty()
     }
 
     /// Returns the number of events that have currently been rented from the pool.
     #[must_use]
     pub fn len(&self) -> usize {
-        // SAFETY: We are the owner of the core, so we know it remains valid. We only ever
-        // create shared references to it, so no conflicting exclusive references can exist.
-        let core_cell = unsafe { self.core.as_ref() };
-
-        // SAFETY: See above.
-        let core_maybe = unsafe { core_cell.get().as_ref() };
-
-        // SAFETY: UnsafeCell pointer is never null.
-        let core = unsafe { core_maybe.unwrap_unchecked() };
-
-        let pool = core.pool.borrow();
-
-        pool.len()
+        self.core().state.borrow().len()
     }
 
     /// Uses the provided closure to inspect the backtraces of the most recent awaiter of each
@@ -206,33 +173,7 @@ impl<T: 'static> RawLocalEventPool<T> {
     /// backtrace, so it stays valid even if its event is released in the meantime.
     #[cfg(debug_assertions)]
     pub(crate) fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>> {
-        // SAFETY: We are the owner of the core, so we know it remains valid. We only ever
-        // create shared references to it, so no conflicting exclusive references can exist.
-        let core_cell = unsafe { self.core.as_ref() };
-
-        // SAFETY: See above.
-        let core_maybe = unsafe { core_cell.get().as_ref() };
-
-        // SAFETY: UnsafeCell pointer is never null.
-        let core = unsafe { core_maybe.unwrap_unchecked() };
-
-        let pool = core.pool.borrow();
-
-        let mut backtraces = Vec::with_capacity(pool.len());
-
-        for event_ptr in pool.iter() {
-            // SAFETY: The pool remains alive for the duration of this function call, satisfying
-            // the lifetime requirement. The pointer is valid as it comes from the pool's iterator.
-            // We only ever create shared references to the events, so no conflicting exclusive
-            // references can exist.
-            let event = unsafe { event_ptr.as_ref() };
-
-            if let Some(backtrace) = event.awaiter_backtrace() {
-                backtraces.push(backtrace);
-            }
-        }
-
-        backtraces
+        self.core().state.borrow().awaiter_backtraces()
     }
 }
 

@@ -87,6 +87,16 @@ impl RawLocalEventLake {
         }
     }
 
+    /// Returns a shared reference to the core.
+    fn core(&self) -> &Core {
+        // SAFETY: We are the owner of the core, so we know it remains valid.
+        let core_cell = unsafe { self.core.as_ref() };
+
+        // SAFETY: We only ever create shared references to the core, so no conflicting exclusive
+        // references can exist.
+        unsafe { &*core_cell.get() }
+    }
+
     /// Rents an event from the lake, returning its endpoints.
     ///
     /// The event will be returned to the lake when both endpoints are dropped.
@@ -98,17 +108,7 @@ impl RawLocalEventLake {
     pub unsafe fn rent<T: 'static>(&self) -> (RawLocalPooledSender<T>, RawLocalPooledReceiver<T>) {
         let type_id = TypeId::of::<T>();
 
-        // SAFETY: We are the owner of the core, so we know it remains valid. We only ever
-        // create shared references to it, so no conflicting exclusive references can exist.
-        let core_cell = unsafe { self.core.as_ref() };
-
-        // SAFETY: See above.
-        let core_maybe = unsafe { core_cell.get().as_ref() };
-
-        // SAFETY: UnsafeCell pointer is never null.
-        let core = unsafe { core_maybe.unwrap_unchecked() };
-
-        let mut pools = core.pools.borrow_mut();
+        let mut pools = self.core().pools.borrow_mut();
 
         let entry = pools
             .entry(type_id)
@@ -128,17 +128,7 @@ impl RawLocalEventLake {
     /// Returns `true` if no events have currently been rented from the lake.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        // SAFETY: We are the owner of the core, so we know it remains valid. We only ever
-        // create shared references to it, so no conflicting exclusive references can exist.
-        let core_cell = unsafe { self.core.as_ref() };
-
-        // SAFETY: See above.
-        let core_maybe = unsafe { core_cell.get().as_ref() };
-
-        // SAFETY: UnsafeCell pointer is never null.
-        let core = unsafe { core_maybe.unwrap_unchecked() };
-
-        let pools = core.pools.borrow();
+        let pools = self.core().pools.borrow();
 
         pools.values().all(|x| x.is_empty())
     }
@@ -146,17 +136,7 @@ impl RawLocalEventLake {
     /// Returns the number of events that have currently been rented from the lake.
     #[must_use]
     pub fn len(&self) -> usize {
-        // SAFETY: We are the owner of the core, so we know it remains valid. We only ever
-        // create shared references to it, so no conflicting exclusive references can exist.
-        let core_cell = unsafe { self.core.as_ref() };
-
-        // SAFETY: See above.
-        let core_maybe = unsafe { core_cell.get().as_ref() };
-
-        // SAFETY: UnsafeCell pointer is never null.
-        let core = unsafe { core_maybe.unwrap_unchecked() };
-
-        let pools = core.pools.borrow();
+        let pools = self.core().pools.borrow();
 
         pools.values().map(|x| x.len()).sum()
     }
@@ -191,17 +171,7 @@ impl RawLocalEventLake {
     /// event is released in the meantime.
     #[cfg(debug_assertions)]
     fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>> {
-        // SAFETY: We are the owner of the core, so we know it remains valid. We only ever
-        // create shared references to it, so no conflicting exclusive references can exist.
-        let core_cell = unsafe { self.core.as_ref() };
-
-        // SAFETY: See above.
-        let core_maybe = unsafe { core_cell.get().as_ref() };
-
-        // SAFETY: UnsafeCell pointer is never null.
-        let core = unsafe { core_maybe.unwrap_unchecked() };
-
-        let pools = core.pools.borrow();
+        let pools = self.core().pools.borrow();
 
         pools
             .values()

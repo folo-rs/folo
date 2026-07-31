@@ -9,10 +9,8 @@ use std::rc::Rc;
 #[cfg(debug_assertions)]
 use std::sync::Arc;
 
-use infinity_pool::RawPinnedPool;
-
 use crate::{
-    LocalEvent, LocalReceiverCore, LocalSenderCore, PooledLocalReceiver, PooledLocalRef,
+    LocalPoolState, LocalReceiverCore, LocalSenderCore, PooledLocalReceiver, PooledLocalRef,
     PooledLocalSender,
 };
 
@@ -60,7 +58,7 @@ impl<T: 'static> fmt::Debug for LocalEventPool<T> {
 }
 
 pub(crate) struct LocalPoolCore<T: 'static> {
-    pub(crate) pool: RefCell<RawPinnedPool<LocalEvent<T>>>,
+    pub(crate) state: RefCell<LocalPoolState<T>>,
 }
 
 impl<T: 'static> LocalEventPool<T> {
@@ -69,7 +67,7 @@ impl<T: 'static> LocalEventPool<T> {
     pub fn new() -> Self {
         Self {
             core: Rc::new(LocalPoolCore {
-                pool: RefCell::new(RawPinnedPool::new()),
+                state: RefCell::new(LocalPoolState::new()),
             }),
             _owns_some: PhantomData,
         }
@@ -81,20 +79,13 @@ impl<T: 'static> LocalEventPool<T> {
     #[inline]
     #[must_use]
     pub fn rent(&self) -> (PooledLocalSender<T>, PooledLocalReceiver<T>) {
-        let storage = {
-            let mut pool = self.core.pool.borrow_mut();
+        let event = self.core.state.borrow_mut().rent();
 
-            // SAFETY: We are required to initialize the storage of the item we store in the pool.
-            // We do - that is what new_in_inner is for.
-            unsafe {
-                pool.insert_with(|place| {
-                    LocalEvent::new_in_inner(place);
-                })
-            }
-        }
-        .into_shared();
-
-        let event_ref = PooledLocalRef::new(Rc::clone(&self.core), storage);
+        let event_ref = PooledLocalRef::new(
+            #[cfg(debug_assertions)]
+            Rc::clone(&self.core),
+            event,
+        );
 
         let inner_sender = LocalSenderCore::new(event_ref.clone());
         let inner_receiver = LocalReceiverCore::new(event_ref);
@@ -108,17 +99,13 @@ impl<T: 'static> LocalEventPool<T> {
     /// Returns `true` if no events have currently been rented from the pool.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        let pool = self.core.pool.borrow();
-
-        pool.is_empty()
+        self.core.state.borrow().is_empty()
     }
 
     /// Returns the number of events that have currently been rented from the pool.
     #[must_use]
     pub fn len(&self) -> usize {
-        let pool = self.core.pool.borrow();
-
-        pool.len()
+        self.core.state.borrow().len()
     }
 
     /// Uses the provided closure to inspect the backtraces of the most recent awaiter of each
@@ -150,23 +137,7 @@ impl<T: 'static> LocalEventPool<T> {
     /// backtrace, so it stays valid even if its event is released in the meantime.
     #[cfg(debug_assertions)]
     pub(crate) fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>> {
-        let pool = self.core.pool.borrow();
-
-        let mut backtraces = Vec::with_capacity(pool.len());
-
-        for event_ptr in pool.iter() {
-            // SAFETY: The pool remains alive for the duration of this function call, satisfying
-            // the lifetime requirement. The pointer is valid as it comes from the pool's iterator.
-            // We only ever create shared references to the events, so no conflicting exclusive
-            // references can exist.
-            let event = unsafe { event_ptr.as_ref() };
-
-            if let Some(backtrace) = event.awaiter_backtrace() {
-                backtraces.push(backtrace);
-            }
-        }
-
-        backtraces
+        self.core.state.borrow().awaiter_backtraces()
     }
 }
 
@@ -189,7 +160,7 @@ impl<T: 'static> Clone for LocalEventPool<T> {
 impl<T: 'static> fmt::Debug for LocalPoolCore<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
-            .field("pool", &self.pool)
+            .field("state", &self.state)
             .finish()
     }
 }

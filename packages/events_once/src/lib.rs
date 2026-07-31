@@ -303,7 +303,7 @@ pub use core::*;
 
 #[cfg(debug_assertions)]
 pub(crate) use backtrace::*;
-pub(crate) use constants::NEVER_POISONED;
+pub(crate) use constants::{EVENT_COUNT_FITS_IN_USIZE, NEVER_POISONED};
 pub use disconnected::*;
 pub use lake::*;
 pub use pool::*;

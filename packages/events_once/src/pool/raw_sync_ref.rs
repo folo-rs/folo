@@ -1,32 +1,52 @@
 use std::any::type_name;
 use std::cell::UnsafeCell;
-use std::mem::MaybeUninit;
+use std::fmt;
 use std::ops::Deref;
 use std::ptr::NonNull;
-use std::{fmt, mem};
 
-use infinity_pool::RawPooled;
-
-use crate::{Event, EventRef, NEVER_POISONED, RawEventPoolCore};
+use crate::{Event, EventRef, destroy_event};
+#[cfg(debug_assertions)]
+use crate::{NEVER_POISONED, RawEventPoolCore};
 
 pub(crate) struct RawPooledRef<T: 'static> {
+    // Releasing an event does not need the pool, so this only exists in debug builds, where the
+    // event must be removed from the pool's diagnostic registry before it is destroyed.
+    #[cfg(debug_assertions)]
     core: NonNull<UnsafeCell<RawEventPoolCore<T>>>,
-    event: RawPooled<UnsafeCell<MaybeUninit<Event<T>>>>,
+
+    event: NonNull<UnsafeCell<Event<T>>>,
 }
 
 impl<T: Send + 'static> RawPooledRef<T> {
     #[must_use]
     pub(crate) fn new(
-        core: NonNull<UnsafeCell<RawEventPoolCore<T>>>,
-        event: RawPooled<UnsafeCell<MaybeUninit<Event<T>>>>,
+        #[cfg(debug_assertions)] core: NonNull<UnsafeCell<RawEventPoolCore<T>>>,
+        event: NonNull<UnsafeCell<Event<T>>>,
     ) -> Self {
-        Self { core, event }
+        Self {
+            #[cfg(debug_assertions)]
+            core,
+            event,
+        }
+    }
+
+    /// Returns a shared reference to the pool's core.
+    #[cfg(debug_assertions)]
+    fn core(&self) -> &RawEventPoolCore<T> {
+        // SAFETY: Our owner promised the pool that the pool (the owner of the core) stays alive
+        // longer than the event endpoints, so we know it remains valid.
+        let core_cell = unsafe { self.core.as_ref() };
+
+        // SAFETY: We only ever create shared references to the core, so no conflicting exclusive
+        // references can exist.
+        unsafe { &*core_cell.get() }
     }
 }
 
 impl<T: Send + 'static> Clone for RawPooledRef<T> {
     fn clone(&self) -> Self {
         Self {
+            #[cfg(debug_assertions)]
             core: self.core,
             event: self.event,
         }
@@ -35,28 +55,18 @@ impl<T: Send + 'static> Clone for RawPooledRef<T> {
 
 impl<T: Send + 'static> EventRef<T> for RawPooledRef<T> {
     fn release_event(&self) {
-        // Removing the event from the pool does not drop it, so we clear its diagnostic state
-        // before we hand the storage back to the pool.
         #[cfg(debug_assertions)]
-        Event::clear_awaiter_backtrace(self);
+        self.core()
+            .state
+            .lock()
+            .expect(NEVER_POISONED)
+            .unregister(self.event);
 
-        // SAFETY: Our owner promised the pool that the pool (the owner of the core) stays alive
-        // longer than the event endpoints, so we know it remains valid. We only ever
-        // create shared references to it, so no conflicting exclusive references can exist.
-        let core_cell = unsafe { self.core.as_ref() };
-
-        // SAFETY: See above.
-        let core_maybe = unsafe { core_cell.get().as_ref() };
-
-        // SAFETY: UnsafeCell pointer is never null.
-        let core = unsafe { core_maybe.unwrap_unchecked() };
-
-        let mut pool = core.pool.lock().expect(NEVER_POISONED);
-
-        // SAFETY: The event state machine guarantees that nothing references the event
-        // once it signals the "you need to clean me up now". We hold the last reference.
+        // SAFETY: The event state machine guarantees that nothing references the event once it
+        // signals that it needs to be cleaned up now, so we hold the last reference and this is
+        // the only release of this event.
         unsafe {
-            pool.remove(self.event);
+            destroy_event(self.event);
         }
     }
 }
@@ -65,25 +75,21 @@ impl<T: Send + 'static> Deref for RawPooledRef<T> {
     type Target = UnsafeCell<Event<T>>;
 
     fn deref(&self) -> &Self::Target {
-        // SAFETY: The event state machine guarantees that the event remains in the pool.
-        let event_cell = unsafe { self.event.as_ref() };
-
-        // SAFETY: We assert that the event has been initialized. This is always the case
-        // by the time the RawPooledRef is created - the MaybeUninit wrapper is just there because
-        // the items are delay-initialized after renting to avoid spurious memory copies.
-        unsafe {
-            mem::transmute::<&UnsafeCell<MaybeUninit<Event<T>>>, &UnsafeCell<Event<T>>>(event_cell)
-        }
+        // SAFETY: The event state machine guarantees that the event stays alive for as long as
+        // any endpoint references it.
+        unsafe { self.event.as_ref() }
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: Send + 'static> fmt::Debug for RawPooledRef<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct(type_name::<Self>())
-            .field("core", &self.core)
-            .field("event", &self.event)
-            .finish()
+        let mut f = f.debug_struct(type_name::<Self>());
+
+        #[cfg(debug_assertions)]
+        f.field("core", &self.core);
+
+        f.field("event", &self.event).finish()
     }
 }
 
@@ -96,7 +102,7 @@ unsafe impl<T: Send> Send for RawPooledRef<T> {}
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use static_assertions::{assert_impl_all, assert_not_impl_any};
+    use static_assertions::{assert_eq_size, assert_impl_all, assert_not_impl_any};
 
     use super::*;
 
@@ -105,4 +111,11 @@ mod tests {
 
     // Trait object payloads must preserve Send (regression test for #142).
     assert_impl_all!(RawPooledRef<Box<dyn Send>>: Send);
+
+    // Cloning a reference is on the hot path (there is one per endpoint), so in release builds
+    // the reference is a bare pointer to the event and nothing else.
+    #[cfg(debug_assertions)]
+    assert_eq_size!(RawPooledRef<u32>, (NonNull<()>, NonNull<()>));
+    #[cfg(not(debug_assertions))]
+    assert_eq_size!(RawPooledRef<u32>, NonNull<()>);
 }

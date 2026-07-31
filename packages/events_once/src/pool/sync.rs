@@ -1,16 +1,12 @@
 use std::any::type_name;
 #[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
-use std::cell::UnsafeCell;
 use std::fmt;
 use std::marker::PhantomData;
-use std::mem::MaybeUninit;
 use std::sync::{Arc, Mutex};
 
-use infinity_pool::RawPinnedPool;
-
 use crate::{
-    Event, NEVER_POISONED, PooledReceiver, PooledRef, PooledSender, ReceiverCore, SenderCore,
+    NEVER_POISONED, PoolState, PooledReceiver, PooledRef, PooledSender, ReceiverCore, SenderCore,
 };
 
 /// A pool of reusable one-time thread-safe events.
@@ -50,7 +46,7 @@ impl<T: Send + 'static> fmt::Debug for EventPool<T> {
 }
 
 pub(crate) struct EventPoolCore<T: 'static> {
-    pub(crate) pool: Mutex<RawPinnedPool<UnsafeCell<MaybeUninit<Event<T>>>>>,
+    pub(crate) state: Mutex<PoolState<T>>,
 }
 
 impl<T: Send + 'static> EventPool<T> {
@@ -59,7 +55,7 @@ impl<T: Send + 'static> EventPool<T> {
     pub fn new() -> Self {
         Self {
             core: Arc::new(EventPoolCore {
-                pool: Mutex::new(RawPinnedPool::new()),
+                state: Mutex::new(PoolState::new()),
             }),
             _owns_some: PhantomData,
         }
@@ -71,29 +67,13 @@ impl<T: Send + 'static> EventPool<T> {
     #[inline]
     #[must_use]
     pub fn rent(&self) -> (PooledSender<T>, PooledReceiver<T>) {
-        let storage = {
-            let mut pool = self.core.pool.lock().expect(NEVER_POISONED);
+        let event = self.core.state.lock().expect(NEVER_POISONED).rent();
 
-            #[expect(unused_unsafe, reason = "rustc cannot handle the closure")]
-            // SAFETY: We are required to initialize the storage of the item we store in the pool.
-            // We do - that is what new_in_inner is for.
-            unsafe {
-                pool.insert_with(|place| {
-                    // This is a sandwich of MaybeUninit<UnsafeCell<MaybeUninit<Event<T>>>>.
-                    // The outer MaybeUninit is for the pool to manage uninitialized storage.
-                    // It does not know that we are expecting to use the internal MaybeUninit
-                    // instead (which we want to do to preserve the UnsafeCell around everything).
-                    //
-                    // SAFETY: We still treat it as uninitialized due to the inner MaybeUninit.
-                    let place = unsafe { place.assume_init_mut() };
-
-                    Event::new_in_inner(place);
-                })
-            }
-        }
-        .into_shared();
-
-        let event_ref = PooledRef::new(Arc::clone(&self.core), storage);
+        let event_ref = PooledRef::new(
+            #[cfg(debug_assertions)]
+            Arc::clone(&self.core),
+            event,
+        );
 
         let inner_sender = SenderCore::new(event_ref.clone());
         let inner_receiver = ReceiverCore::new(event_ref);
@@ -107,17 +87,13 @@ impl<T: Send + 'static> EventPool<T> {
     /// Returns `true` if no events have currently been rented from the pool.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        let pool = self.core.pool.lock().expect(NEVER_POISONED);
-
-        pool.is_empty()
+        self.core.state.lock().expect(NEVER_POISONED).is_empty()
     }
 
     /// Returns the number of events that have currently been rented from the pool.
     #[must_use]
     pub fn len(&self) -> usize {
-        let pool = self.core.pool.lock().expect(NEVER_POISONED);
-
-        pool.len()
+        self.core.state.lock().expect(NEVER_POISONED).len()
     }
 
     /// Uses the provided closure to inspect the backtraces of the most recent awaiter of each
@@ -149,32 +125,11 @@ impl<T: Send + 'static> EventPool<T> {
     /// backtrace, so it stays valid even if its event is released in the meantime.
     #[cfg(debug_assertions)]
     pub(crate) fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>> {
-        let pool = self.core.pool.lock().expect(NEVER_POISONED);
-
-        let mut backtraces = Vec::with_capacity(pool.len());
-
-        for event_ptr in pool.iter() {
-            // SAFETY: The pool remains alive for the duration of this function call, satisfying
-            // the lifetime requirement. The pointer is valid as it comes from the pool's iterator.
-            // We only ever create shared references to the events, so no conflicting exclusive
-            // references can exist.
-            let event_cell = unsafe { event_ptr.as_ref() };
-
-            // SAFETY: See above.
-            let event_maybe = unsafe { event_cell.get().as_ref() };
-
-            // SAFETY: UnsafeCell pointer is never null.
-            let event = unsafe { event_maybe.unwrap_unchecked() };
-
-            // SAFETY: We only ever create shared references, never exclusive ones.
-            let event = unsafe { event.assume_init_ref() };
-
-            if let Some(backtrace) = event.awaiter_backtrace() {
-                backtraces.push(backtrace);
-            }
-        }
-
-        backtraces
+        self.core
+            .state
+            .lock()
+            .expect(NEVER_POISONED)
+            .awaiter_backtraces()
     }
 }
 
@@ -197,7 +152,7 @@ impl<T: Send + 'static> Clone for EventPool<T> {
 impl<T: Send + 'static> fmt::Debug for EventPoolCore<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
-            .field("pool", &self.pool)
+            .field("state", &self.state)
             .finish()
     }
 }
