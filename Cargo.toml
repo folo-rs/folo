@@ -84,6 +84,10 @@ many_cpus = { version = "2.4.14", path = "packages/many_cpus", default-features 
 many_cpus_impl = { version = "=2.4.14", path = "packages/many_cpus_impl", default-features = false }
 mimalloc = { version = "0.1.52", default-features = false }
 mockall = { version = "0.15.0", default-features = false }
+multitude = { version = "0.7.1", default-features = false, features = [
+    "std",
+    "dst",
+] }
 mutants = { version = "0.0.4", default-features = false }
 negative-impl = { version = "0.1.0", default-features = false }
 new_zealand = { version = "1.0.7", path = "packages/new_zealand", default-features = false }
@@ -104,6 +108,7 @@ opentelemetry-stdout = { version = "0.32.0", default-features = false }
 opentelemetry_sdk = { version = "0.32.1", default-features = false }
 pastey = { version = "0.2.3", default-features = false }
 pin-project = { version = "1.1.0", default-features = false }
+plurality = { version = "0.2.0", default-features = false, features = ["std"] }
 proc-macro2 = { version = "1.0.106", default-features = false }
 quote = { version = "1.0.45", default-features = false }
 rand = { version = "0.10.1", default-features = false, features = ["std"] }

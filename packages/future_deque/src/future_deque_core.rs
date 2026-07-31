@@ -1120,7 +1120,7 @@ mod tests {
         // The slot released its metadata reference when the future completed.
         // The captured waker clone still holds a reference. Dropping it on
         // another thread exercises the cross-thread release_ref path, including
-        // pool.lock().remove() from a foreign thread.
+        // returning the metadata slot to the pool from a foreign thread.
         std::thread::spawn(move || {
             drop(captured_waker);
         })

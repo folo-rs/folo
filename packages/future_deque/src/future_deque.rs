@@ -242,11 +242,11 @@ impl<T> futures_core::Stream for FutureDeque<T> {
 // behind `Arc<Mutex<…>>`) are `Send + Sync`.
 unsafe impl<T: Send> Send for FutureDeque<T> {}
 
-// The internal `dyn ErasedFuture<T>` trait objects and the `UnsafeCell` inside the waker metadata
-// prevent auto-derivation. However, all mutable state is either behind `Arc<Mutex<…>>` (which is
-// unconditionally unwind-safe due to poisoning) or confined to owned pool handles that are not
-// shared through references. A `FutureDeque` that survives a panic is safe to drop or continue
-// using because each slot independently tracks its own lifecycle.
+// The internal `dyn ErasedFuture<T>` trait objects prevent auto-derivation. However, all mutable
+// state is either behind `Arc<Mutex<…>>` (which is unconditionally unwind-safe due to poisoning)
+// or confined to owned pool handles that are not shared through references. A `FutureDeque` that
+// survives a panic is safe to drop or continue using because each slot independently tracks its
+// own lifecycle.
 impl<T> UnwindSafe for FutureDeque<T> {}
 impl<T> RefUnwindSafe for FutureDeque<T> {}
 

@@ -231,11 +231,11 @@ impl<T> futures_core::Stream for LocalFutureDeque<T> {
     }
 }
 
-// The internal `dyn ErasedFuture<T>` trait objects and the `UnsafeCell` inside the waker metadata
-// prevent auto-derivation. However, all mutable state is either behind `Mutex` (unconditionally
-// unwind-safe due to poisoning) or confined to owned pool handles that are not shared through
-// references. A `LocalFutureDeque` that survives a panic is safe to drop or continue using
-// because each slot independently tracks its own lifecycle.
+// The internal `dyn ErasedFuture<T>` trait objects prevent auto-derivation. However, all mutable
+// state is either behind `Mutex` (unconditionally unwind-safe due to poisoning) or confined to
+// owned pool handles that are not shared through references. A `LocalFutureDeque` that survives a
+// panic is safe to drop or continue using because each slot independently tracks its own
+// lifecycle.
 impl<T> UnwindSafe for LocalFutureDeque<T> {}
 impl<T> RefUnwindSafe for LocalFutureDeque<T> {}
 
