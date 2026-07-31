@@ -40,8 +40,8 @@ use cbh_storage::{
 use serde::Serialize;
 
 use crate::rekey::{
-    GroupPair, MeasuredPoint, MergeAnalysis, MetricOffset, PartitionMerge, analyze_merges,
-    legacy_machine_key, merge_offset_tolerance,
+    GroupPair, MeasuredPoint, MergeAnalysis, PartitionMerge, analyze_merges, legacy_machine_key,
+    merge_offset_tolerance,
 };
 use crate::{
     AnalyzeError, RenderedReports, ReportFormat, ReportRequest, format_value,
@@ -52,7 +52,7 @@ use crate::{
 /// is not given.
 const DEFAULT_TARGET_REF: &str = "HEAD";
 
-/// How many blocking level offsets a refusal message names before summarizing the
+/// How many blocking partition pairs a refusal message names before summarizing the
 /// rest. Enough to show the shape of the problem without burying the guidance that
 /// follows it.
 const REFUSAL_DETAIL_LIMIT: usize = 5;
@@ -303,7 +303,7 @@ fn decode_run(key: &str, bytes: Vec<u8>) -> Result<RunFacts, AnalyzeError> {
 
 /// How one stored object's machine-key segment relates to the two hashes of the
 /// hardware the object itself recorded.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum SegmentIdentity {
     /// The segment is the retired-format hash of the recorded hardware, so the object
     /// is a hardware-keyed run of the old format and may move.
@@ -312,8 +312,11 @@ enum SegmentIdentity {
     Current,
     /// The segment is neither hash, so it was chosen by an operator (a `--machine-key`
     /// override such as a CI pool name) rather than derived from the hardware. Its
-    /// partitioning is a deliberate decision and must be left exactly as it is.
-    Override,
+    /// partitioning is a deliberate decision and must be left exactly as it is. It
+    /// carries the retired hash it was compared against, which only exists when the
+    /// recorded hardware renders under the retired format — the sole circumstance in
+    /// which a segment can be told apart from that hash at all.
+    Override { legacy: String },
 }
 
 /// One object the pass would copy.
@@ -354,6 +357,11 @@ pub(crate) struct Plan {
     /// Runs that record no hardware provenance at all, by storage key. Their key
     /// cannot be recomputed, so they are reported rather than silently passed over.
     missing_provenance: Vec<String>,
+    /// Runs whose recorded hardware does not render under the retired machine-key
+    /// format, by storage key. No retired key can be recomputed for them, so nothing
+    /// proves their key segment was an auto-detected hash and they are reported
+    /// rather than moved on a rendering that could name a different machine.
+    unrenderable_provenance: Vec<String>,
     /// Destinations two or more objects would both claim, listing the sources that
     /// competed for each. All of them are left where they are.
     collisions: BTreeMap<String, Vec<String>>,
@@ -392,6 +400,39 @@ impl Plan {
     }
 }
 
+/// Why nothing can be proven about the machine-key segment a stored run sits under.
+///
+/// Both outcomes leave the segment unproven, so neither run moves. The report keeps
+/// them apart because absent provenance is an artifact of the run's age that nothing
+/// can repair, while unrenderable provenance points at a single damaged record an
+/// operator can go and inspect.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UnprovableProvenance {
+    /// The run records no hardware at all, as every run written before host hardware
+    /// entered the schema does.
+    Absent,
+    /// The run records hardware the retired format cannot render, and its segment is
+    /// not the current hash either, so the retired hash is the only thing that could
+    /// have told a hardware key from an operator's own and it does not exist.
+    Unrenderable,
+}
+
+impl UnprovableProvenance {
+    /// Why the run is left alone, phrased to follow `skipping {key}: `.
+    fn explanation(self) -> &'static str {
+        match self {
+            Self::Absent => {
+                "it records no hardware provenance, so neither the retired nor the current \
+                 machine key can be recomputed from it"
+            }
+            Self::Unrenderable => {
+                "the hardware it records does not render under the retired machine-key format, \
+                 so no retired key exists to prove its key segment is an auto-detected hash"
+            }
+        }
+    }
+}
+
 /// Classifies every scanned object and assesses the merges the resulting plan causes.
 ///
 /// # Errors
@@ -425,6 +466,7 @@ fn build_plan(
     let mut already_current: usize = 0;
     let mut key_overrides: BTreeMap<String, usize> = BTreeMap::new();
     let mut missing_provenance: Vec<String> = Vec::new();
+    let mut unrenderable_provenance: Vec<String> = Vec::new();
     // The mapping blessing sidecars follow: a retired-format machine key and the
     // current-format key the runs stored under it hash to.
     let mut mapping: BTreeMap<String, String> = BTreeMap::new();
@@ -434,42 +476,62 @@ fn build_plan(
     let mut staged: Vec<StagedPoints> = Vec::new();
 
     for (key, parsed, facts) in &scan.runs {
-        let Some(machine) = facts.machine.as_ref() else {
-            reporter.note_with(|| {
-                format!(
-                    "skipping {key}: it records no hardware provenance, so neither the retired \
-                     nor the current machine key can be recomputed from it"
-                )
-            });
-            missing_provenance.push(key.clone());
-            continue;
+        let segment = parsed.set.machine_key.as_str();
+        // Every decision about an object rests on recomputing its machine keys from
+        // the hardware it records. A run that records nothing to recompute from, and
+        // a run whose recorded hardware the retired rule cannot render into the one
+        // hash that would place it, are alike unprovable and leave by the same door.
+        let placement = match facts.machine.as_ref() {
+            Some(machine) => {
+                let current = current_machine_key(machine);
+                let legacy = legacy_machine_key(machine);
+                describe_hardware(key, machine, legacy.as_deref(), &current, reporter);
+
+                // A run records the machine key its own capture computed, so the
+                // fingerprint is the retired hash on history captured before the format
+                // changed and the current hash on history captured after it. Either
+                // proves the recomputation reproduces what really keyed the store; a
+                // retired rendering that reproduces neither means the reimplemented
+                // rendering is not the one that wrote this history, and every later
+                // decision would rest on it. Hardware that does not render at all makes
+                // no such claim to contradict, so it indicts only its own object.
+                if let Some(legacy) = legacy.as_deref()
+                    && legacy != machine.fingerprint
+                    && current != machine.fingerprint
+                {
+                    return Err(AnalyzeError::Analyze {
+                        message: format!(
+                            "the machine-key renderings do not reproduce the fingerprint stored \
+                             in {key}: the recorded hardware renders to {legacy} under the \
+                             retired format and {current} under the current one, but the object \
+                             records {stored}. The migration can only prove which objects are \
+                             safe to move by recomputing their keys, so no object is touched.",
+                            stored = machine.fingerprint
+                        ),
+                    });
+                }
+
+                classify_segment(segment, legacy.as_deref(), &current)
+                    .map(|identity| (identity, current))
+                    .ok_or(UnprovableProvenance::Unrenderable)
+            }
+            None => Err(UnprovableProvenance::Absent),
+        };
+        let (identity, current) = match placement {
+            Ok(placement) => placement,
+            Err(reason) => {
+                reporter.note_with(|| format!("skipping {key}: {}", reason.explanation()));
+                match reason {
+                    UnprovableProvenance::Absent => missing_provenance.push(key.clone()),
+                    UnprovableProvenance::Unrenderable => {
+                        unrenderable_provenance.push(key.clone());
+                    }
+                }
+                continue;
+            }
         };
 
-        let legacy = legacy_machine_key(machine);
-        let current = current_machine_key(machine);
-        describe_hardware(key, machine, &legacy, &current, reporter);
-
-        // A run records the machine key its own capture computed, so the fingerprint is
-        // the retired hash on history captured before the format changed and the
-        // current hash on history captured after it. Either proves the recomputation
-        // reproduces what really keyed the store; a fingerprint that is neither means
-        // the reimplemented rendering is not the one that wrote this history, and every
-        // later decision would rest on it.
-        if legacy != machine.fingerprint && current != machine.fingerprint {
-            return Err(AnalyzeError::Analyze {
-                message: format!(
-                    "the machine-key renderings do not reproduce the fingerprint stored in \
-                     {key}: the recorded hardware renders to {legacy} under the retired format \
-                     and {current} under the current one, but the object records {stored}. The \
-                     migration can only prove which objects are safe to move by recomputing \
-                     their keys, so no object is touched.",
-                    stored = machine.fingerprint
-                ),
-            });
-        }
-
-        let segment = parsed.set.machine_key.as_str();
-        match classify_segment(segment, &legacy, &current) {
+        match identity {
             SegmentIdentity::Current => {
                 reporter.note_with(|| {
                     format!(
@@ -517,7 +579,7 @@ fn build_plan(
                     source_machine_key: segment.to_owned(),
                 });
             }
-            SegmentIdentity::Override => {
+            SegmentIdentity::Override { legacy } => {
                 reporter.note_with(|| {
                     format!(
                         "leaving {key}: its key segment {segment} is neither the retired hash \
@@ -616,6 +678,7 @@ fn build_plan(
         key_overrides,
         unmapped_blessings,
         missing_provenance,
+        unrenderable_provenance,
         collisions,
         unrecognized: scan.unrecognized,
         merges: analyze_merges(&groups, tolerance),
@@ -659,14 +722,25 @@ fn withdraw_colliding_copies(
     claimants
 }
 
-/// Whether a machine-key segment is the retired hash, the current hash, or neither.
-fn classify_segment(segment: &str, legacy: &str, current: &str) -> SegmentIdentity {
+/// Whether a machine-key segment is the retired hash, the current hash, or neither, or
+/// `None` when the retired hash is the only thing that could settle the question and
+/// the recorded hardware does not render under the retired format.
+///
+/// The current hash is recomputed by the live probe rather than by a reimplementation,
+/// so a segment equal to it is proven a hardware hash on its own and needs no retired
+/// hash to confirm it. Every other segment could be either the retired hash or an
+/// operator's own constant, and without the retired hash nothing tells the two apart.
+fn classify_segment(segment: &str, legacy: Option<&str>, current: &str) -> Option<SegmentIdentity> {
     if segment == current {
-        SegmentIdentity::Current
-    } else if segment == legacy {
-        SegmentIdentity::Legacy
+        return Some(SegmentIdentity::Current);
+    }
+    let legacy = legacy?;
+    if segment == legacy {
+        Some(SegmentIdentity::Legacy)
     } else {
-        SegmentIdentity::Override
+        Some(SegmentIdentity::Override {
+            legacy: legacy.to_owned(),
+        })
     }
 }
 
@@ -743,12 +817,12 @@ fn stage_points(
     }
 }
 
-/// Emits the hardware facts behind an object's two candidate keys, so a decision the
+/// Emits the hardware facts behind an object's candidate keys, so a decision the
 /// pass makes about it can be reconstructed from the log alone.
 fn describe_hardware(
     key: &str,
     machine: &MachineInfo,
-    legacy: &str,
+    legacy: Option<&str>,
     current: &str,
     reporter: &dyn Reporter,
 ) {
@@ -756,7 +830,7 @@ fn describe_hardware(
         format!(
             "{key} records processors={processors}, memory_regions={regions}, \
              processor_models=[{models}], processor_speeds=[{speeds}]; those factors hash to \
-             {legacy} under the retired key format and {current} under the current one",
+             {current} under the current key format and {retired}",
             processors = machine.processors,
             regions = machine.memory_regions,
             models = machine.processor_models.join(", "),
@@ -766,6 +840,10 @@ fn describe_hardware(
                 .map(|(speed, count)| format!("{speed}x{count}"))
                 .collect::<Vec<_>>()
                 .join(", "),
+            retired = match legacy {
+                Some(legacy) => format!("{legacy} under the retired one"),
+                None => "nothing under the retired one, which cannot render them".to_owned(),
+            },
         )
     });
 }
@@ -789,8 +867,9 @@ fn announce_plan(plan: &Plan, reporter: &dyn Reporter) {
 ///
 /// # Errors
 ///
-/// Returns [`AnalyzeError::Analyze`] when a merge's level offset reaches the tolerance
-/// and `allow_level_shift` is not set.
+/// Returns [`AnalyzeError::Analyze`] when a pair of merging partitions sits
+/// systematically apart by at least the merge tolerance and `allow_level_shift` is not
+/// set.
 fn refuse_unsafe_merges(
     plan: &Plan,
     allow_level_shift: bool,
@@ -800,8 +879,10 @@ fn refuse_unsafe_merges(
     if blocking.is_empty() {
         reporter.note_with(|| {
             format!(
-                "every one of the {} that would merge agrees on level within the merge \
-                 tolerance, so splicing them cannot manufacture a step change",
+                "no pair of the {} that would merge sits systematically apart by the merge \
+                 tolerance, so splicing them cannot manufacture a step change; individual \
+                 benchmarks may still disagree, which becomes ordinary noise within the merged \
+                 series",
                 count_noun(plan.merges.merges.len(), "partition")
             )
         });
@@ -811,9 +892,9 @@ fn refuse_unsafe_merges(
     if allow_level_shift {
         reporter.note_with(|| {
             format!(
-                "--allow-level-shift is set, so proceeding despite {} that reach the merge \
-                 tolerance",
-                count_noun(blocking.len(), "level offset")
+                "--allow-level-shift is set, so proceeding despite {} that sit systematically \
+                 apart by at least the merge tolerance",
+                count_noun(blocking.len(), "partition pair")
             )
         });
         return Ok(());
@@ -822,43 +903,66 @@ fn refuse_unsafe_merges(
     let detail: Vec<String> = blocking
         .iter()
         .take(REFUSAL_DETAIL_LIMIT)
-        .map(|(merge, pair, offset)| describe_offset(merge, pair, offset))
+        .map(|(merge, pair)| describe_pair(merge, pair))
         .collect();
     let remainder = blocking.len().saturating_sub(detail.len());
     let more = if remainder == 0 {
         String::new()
     } else {
-        format!(" (and {} more)", count_noun(remainder, "offset"))
+        format!(" (and {} more)", count_noun(remainder, "pair"))
     };
 
     Err(AnalyzeError::Analyze {
         message: format!(
-            "merging these machine-key partitions would splice measurement levels that disagree \
-             beyond the merge tolerance, manufacturing a step change the next analysis would \
-             report as a regression: {detail}{more}. Inspect the partitions and either keep them \
-             apart or, if the difference is understood and acceptable, re-run with \
-             --allow-level-shift.",
+            "merging these machine-key partitions would splice measurement levels that \
+             systematically disagree beyond the merge tolerance, manufacturing a step change the \
+             next analysis would report as a regression: {detail}{more}. Inspect the partitions \
+             and either keep them apart or, if the difference is understood and acceptable, \
+             re-run with --allow-level-shift.",
             detail = detail.join("; ")
         ),
     })
 }
 
-/// Renders one blocking level offset for a refusal message.
-fn describe_offset(merge: &PartitionMerge, pair: &GroupPair, offset: &MetricOffset) -> String {
+/// Renders one blocking partition pair for a refusal message.
+fn describe_pair(merge: &PartitionMerge, pair: &GroupPair) -> String {
     format!(
-        "{set}: {baseline} -> {incoming} ({interleaving}) moves {benchmark} {metric} from \
-         {baseline_level} to {incoming_level} ({absolute}, {percent})",
+        "{set}: {baseline} -> {incoming} ({interleaving}), {distance}",
         set = merge.set,
         baseline = pair.baseline_key,
         incoming = pair.incoming_key,
         interleaving = pair.interleaving.as_str(),
-        benchmark = offset.benchmark,
-        metric = offset.metric.as_str(),
-        baseline_level = format_value(offset.baseline_level),
-        incoming_level = format_value(offset.incoming_level),
-        absolute = signed(offset.absolute),
-        percent = signed_percent(offset.relative),
+        distance = describe_systematic(pair),
     )
+}
+
+/// Renders the systematic offset that decides a pair's merge verdict, naming how many
+/// shared offsets it was read across so the evidence behind it is visible.
+fn describe_systematic(pair: &GroupPair) -> String {
+    pair.systematic.map_or_else(
+        || {
+            "no shared offset is a large enough move to read, so there is no distance to \
+            judge"
+                .to_owned()
+        },
+        |systematic| {
+            format!(
+                "the two sit {percent} apart across {offsets}",
+                percent = signed_percent(systematic.relative),
+                offsets = count_noun(systematic.offsets, "shared offset")
+            )
+        },
+    )
+}
+
+/// The one-word standing of a pair against the merge tolerance, so a reader never has
+/// to infer the verdict from the numbers beside it.
+fn describe_verdict(pair: &GroupPair) -> &'static str {
+    if pair.manufactures_step {
+        "blocked"
+    } else {
+        "clear"
+    }
 }
 
 /// Copies every planned object, treating an identical destination as a completed copy.
@@ -975,6 +1079,15 @@ fn render_plan_text(plan: &Plan) -> String {
                 pair.interleaving.as_str(),
                 count_noun(pair.blocks, "block")
             ));
+            lines.push(format!(
+                "    merge verdict: {verdict} — {distance}",
+                verdict = describe_verdict(pair),
+                distance = describe_systematic(pair)
+            ));
+            lines.push(format!(
+                "    {} beyond the merge tolerance individually, which is informational only",
+                count_noun(pair.outlying_offsets().count(), "offset")
+            ));
             for offset in &pair.offsets {
                 lines.push(format!(
                     "    {} {}: {} -> {} ({}, {}){}",
@@ -984,8 +1097,8 @@ fn render_plan_text(plan: &Plan) -> String {
                     format_value(offset.incoming_level),
                     signed(offset.absolute),
                     signed_percent(offset.relative),
-                    if offset.exceeds_tolerance {
-                        "  [beyond merge tolerance]"
+                    if offset.beyond_tolerance {
+                        "  [beyond tolerance, informational]"
                     } else {
                         ""
                     }
@@ -1043,19 +1156,30 @@ fn render_plan_markdown(plan: &Plan) -> String {
                 count_noun(pair.blocks, "block")
             ));
             lines.push(String::new());
+            lines.push(format!(
+                "**Merge verdict: {verdict}** — {distance}. {outlying} beyond the merge \
+                 tolerance individually, which is informational only.",
+                verdict = describe_verdict(pair),
+                distance = describe_systematic(pair),
+                outlying = count_noun(pair.outlying_offsets().count(), "offset")
+            ));
+            lines.push(String::new());
             lines.push(
-                "| Benchmark | Metric | Baseline | Incoming | Offset | Relative |".to_owned(),
+                "| Benchmark | Metric | Baseline | Incoming | Offset | Relative | Beyond \
+                 tolerance |"
+                    .to_owned(),
             );
-            lines.push("| --- | --- | --- | --- | --- | --- |".to_owned());
+            lines.push("| --- | --- | --- | --- | --- | --- | --- |".to_owned());
             for offset in &pair.offsets {
                 lines.push(format!(
-                    "| {} | {} | {} | {} | {} | {} |",
+                    "| {} | {} | {} | {} | {} | {} | {} |",
                     offset.benchmark,
                     offset.metric.as_str(),
                     format_value(offset.baseline_level),
                     format_value(offset.incoming_level),
                     signed(offset.absolute),
                     signed_percent(offset.relative),
+                    if offset.beyond_tolerance { "yes" } else { "no" },
                 ));
             }
         }
@@ -1098,6 +1222,14 @@ fn untouched_lines(plan: &Plan) -> Vec<String> {
             "{} left without recorded hardware provenance: {}",
             count_noun(plan.missing_provenance.len(), "run"),
             plan.missing_provenance.join(", ")
+        ));
+    }
+    if !plan.unrenderable_provenance.is_empty() {
+        lines.push(format!(
+            "{} left with hardware provenance that does not render under the retired \
+             machine-key format: {}",
+            count_noun(plan.unrenderable_provenance.len(), "run"),
+            plan.unrenderable_provenance.join(", ")
         ));
     }
     if !plan.collisions.is_empty() {
@@ -1147,7 +1279,7 @@ fn render_plan_json(plan: &Plan) -> String {
         incoming_level: f64,
         absolute: f64,
         relative: f64,
-        exceeds_tolerance: bool,
+        beyond_tolerance: bool,
     }
     #[derive(Serialize)]
     struct JsonPair<'a> {
@@ -1155,6 +1287,10 @@ fn render_plan_json(plan: &Plan) -> String {
         incoming_machine_key: &'a str,
         interleaving: &'a str,
         blocks: usize,
+        systematic_relative: Option<f64>,
+        systematic_offsets: usize,
+        outlying_offsets: usize,
+        manufactures_step: bool,
         offsets: Vec<JsonOffset<'a>>,
     }
     #[derive(Serialize)]
@@ -1180,6 +1316,7 @@ fn render_plan_json(plan: &Plan) -> String {
         key_override: usize,
         unmapped_blessings: usize,
         missing_provenance: usize,
+        unrenderable_provenance: usize,
         collisions: usize,
         unrecognized: usize,
         discriminant_sets: usize,
@@ -1195,6 +1332,7 @@ fn render_plan_json(plan: &Plan) -> String {
         key_overrides: Vec<JsonCountEntry<'a>>,
         unmapped_blessings: Vec<JsonCountEntry<'a>>,
         missing_provenance: &'a [String],
+        unrenderable_provenance: &'a [String],
         collisions: Vec<JsonCollision<'a>>,
     }
 
@@ -1228,6 +1366,10 @@ fn render_plan_json(plan: &Plan) -> String {
                     incoming_machine_key: &pair.incoming_key,
                     interleaving: pair.interleaving.as_str(),
                     blocks: pair.blocks,
+                    systematic_relative: pair.systematic.map(|systematic| systematic.relative),
+                    systematic_offsets: pair.systematic.map_or(0, |systematic| systematic.offsets),
+                    outlying_offsets: pair.outlying_offsets().count(),
+                    manufactures_step: pair.manufactures_step,
                     offsets: pair
                         .offsets
                         .iter()
@@ -1238,7 +1380,7 @@ fn render_plan_json(plan: &Plan) -> String {
                             incoming_level: offset.incoming_level,
                             absolute: offset.absolute,
                             relative: offset.relative,
-                            exceeds_tolerance: offset.exceeds_tolerance,
+                            beyond_tolerance: offset.beyond_tolerance,
                         })
                         .collect(),
                 })
@@ -1259,6 +1401,7 @@ fn render_plan_json(plan: &Plan) -> String {
             key_override: plan.key_override_objects(),
             unmapped_blessings: plan.unmapped_blessing_objects(),
             missing_provenance: plan.missing_provenance.len(),
+            unrenderable_provenance: plan.unrenderable_provenance.len(),
             collisions: plan.collisions.len(),
             unrecognized: plan.unrecognized,
             discriminant_sets: plan.destination_sets().len(),
@@ -1268,6 +1411,7 @@ fn render_plan_json(plan: &Plan) -> String {
         key_overrides: json_counts(&plan.key_overrides),
         unmapped_blessings: json_counts(&plan.unmapped_blessings),
         missing_provenance: &plan.missing_provenance,
+        unrenderable_provenance: &plan.unrenderable_provenance,
         collisions: plan
             .collisions
             .iter()
@@ -1330,13 +1474,31 @@ mod tests {
             processor_speeds: vec![(speed, 8)],
             fingerprint: String::new(),
         };
-        machine.fingerprint = legacy_machine_key(&machine);
+        machine.fingerprint = legacy_machine_key(&machine).unwrap();
         machine
     }
 
     /// The key the retired format stored `machine` under.
     fn legacy_of(machine: &MachineInfo) -> String {
-        legacy_machine_key(machine)
+        legacy_machine_key(machine).unwrap()
+    }
+
+    /// Recorded hardware whose speed counts sum past `usize`, as a damaged stored
+    /// record can. Its fingerprint is [`clamped_key`], so an object stored under that
+    /// key is exactly the object a rendering that clamped the sum would have moved.
+    fn overflowing_machine() -> MachineInfo {
+        let mut machine = wobbly_machine(3141);
+        machine.processor_speeds.push((3141, usize::MAX));
+        machine.fingerprint = clamped_key();
+        machine
+    }
+
+    /// The retired key a rendering that clamped [`overflowing_machine`]'s sum to the
+    /// largest representable count would produce.
+    fn clamped_key() -> String {
+        let mut clamped = wobbly_machine(3141);
+        clamped.processor_speeds = vec![(3141, usize::MAX)];
+        legacy_of(&clamped)
     }
 
     /// The key the current format stores `machine` under.
@@ -1380,24 +1542,25 @@ mod tests {
         )
     }
 
-    /// A run measuring `count` distinct benchmarks, all at `value`, so a single pair of
-    /// partitions produces more level offsets than a refusal message names.
-    fn wide_run(commit: &str, machine: &MachineInfo, value: f64, count: usize) -> Run {
-        let mut wide = run(commit, machine, value);
-        let template = wide.results.first().unwrap().clone();
-        wide.results = (0..count)
-            .map(|index| {
+    /// A run measuring one benchmark per entry of `values`, so a single pair of
+    /// partitions can carry a whole family of level offsets.
+    fn scattered_run(commit: &str, machine: &MachineInfo, values: &[f64]) -> Run {
+        let mut scattered = run(commit, machine, 0.0);
+        scattered.results = values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
                 BenchmarkResult::new(
                     BenchmarkId::new(nonempty![
                         "nm".to_owned(),
                         "nm::observe".to_owned(),
                         format!("pull{index}"),
                     ]),
-                    template.metrics.clone(),
+                    vec![Metric::new(MetricKind::InstructionCount, *value)],
                 )
             })
             .collect();
-        wide
+        scattered
     }
 
     /// The partition prefix every fixture stores under, up to the machine key.
@@ -1862,38 +2025,162 @@ mod tests {
         );
 
         let message = rekey_error(&storage, &linear_git(), &apply_options());
-        assert!(message.contains("beyond the merge tolerance"), "{message}");
+        assert!(
+            message.contains("systematically disagree beyond the merge tolerance"),
+            "{message}"
+        );
         assert!(message.contains("time-blocked"), "{message}");
+        // The refusal names the pair and the systematic distance that decided it,
+        // together with the evidence behind that number.
+        assert!(
+            message.contains(&format!("{} -> {}", legacy_of(&slow), legacy_of(&fast))),
+            "{message}"
+        );
+        assert!(
+            message.contains("the two sit +100% apart across 1 shared offset"),
+            "{message}"
+        );
         assert!(message.contains("--allow-level-shift"), "{message}");
-        // One benchmark and one metric make one blocking offset, which the message
-        // names in full rather than summarizing.
+        // One pair of partitions makes one blocking entry, which the message names in
+        // full rather than summarizing.
         assert!(!message.contains("more"), "{message}");
         assert_eq!(keys(&storage).len(), 4, "no object may be written");
     }
 
     #[test]
-    fn a_refusal_naming_every_blocking_offset_would_bury_its_guidance() {
-        // More blocking offsets than the message names individually, so the tail is
-        // summarized instead of pushing the remedy out of sight.
-        const BENCHMARKS: usize = REFUSAL_DETAIL_LIMIT.saturating_add(1);
+    fn a_refusal_naming_every_blocking_pair_would_bury_its_guidance() {
+        // Four speed buckets of one machine make six merging pairs — more than the
+        // message names individually — so the tail is summarized instead of pushing
+        // the remedy out of sight.
+        assert_eq!(
+            REFUSAL_DETAIL_LIMIT, 5,
+            "the fixture is sized to produce one more pair than the message names"
+        );
+        let storage = MemoryStorage::new();
+        for (speed, commit, level) in [
+            (3141, "c0", 100.0),
+            (3142, "c1", 200.0),
+            (3143, "c2", 400.0),
+            (3144, "c3", 800.0),
+        ] {
+            let machine = wobbly_machine(speed);
+            store(
+                &storage,
+                &clean_key(&legacy_of(&machine), commit),
+                &run(commit, &machine, level),
+            );
+        }
 
+        let message = rekey_error(&storage, &linear_git(), &apply_options());
+        assert!(message.contains("(and 1 pair more)"), "{message}");
+        assert!(message.contains("--allow-level-shift"), "{message}");
+    }
+
+    #[test]
+    fn per_benchmark_scatter_around_zero_does_not_refuse_the_merge() {
+        // Six benchmarks whose individual offsets run from -5% to +5%, symmetric about
+        // zero: the family as a whole did not move, so a merge cannot splice a step in
+        // however far the individual benchmarks wander. A gate reading each benchmark
+        // separately would refuse this, and refusing it is what teaches an operator to
+        // always pass --allow-level-shift.
         let slow = wobbly_machine(3141);
         let fast = wobbly_machine(3142);
         let storage = MemoryStorage::new();
         store(
             &storage,
             &clean_key(&legacy_of(&slow), "c0"),
-            &wide_run("c0", &slow, 100.0, BENCHMARKS),
+            &scattered_run("c0", &slow, &[1_000.0; 6]),
         );
         store(
             &storage,
-            &clean_key(&legacy_of(&fast), "c1"),
-            &wide_run("c1", &fast, 200.0, BENCHMARKS),
+            &clean_key(&legacy_of(&fast), "c3"),
+            &scattered_run(
+                "c3",
+                &fast,
+                &[1_050.0, 950.0, 1_040.0, 960.0, 1_030.0, 970.0],
+            ),
+        );
+
+        let report = rekey(&storage, &linear_git(), &apply_options());
+        assert!(
+            report.contains("merge verdict: clear — the two sit +0% apart across 6 shared offsets"),
+            "{report}"
+        );
+        assert!(
+            report.contains("6 offsets beyond the merge tolerance individually"),
+            "{report}"
+        );
+        assert!(
+            report.contains("1000 -> 1050 (+50, +5%)  [beyond tolerance, informational]"),
+            "{report}"
+        );
+        assert!(report.contains("Copied 2 objects"), "{report}");
+    }
+
+    #[test]
+    fn the_same_scatter_shifted_as_a_family_is_refused() {
+        // The scatter of the previous fixture with a systematic +10% laid over it. The
+        // spread is identical; only the family's common move differs, and that alone
+        // decides.
+        let slow = wobbly_machine(3141);
+        let fast = wobbly_machine(3142);
+        let storage = MemoryStorage::new();
+        store(
+            &storage,
+            &clean_key(&legacy_of(&slow), "c0"),
+            &scattered_run("c0", &slow, &[1_000.0; 6]),
+        );
+        store(
+            &storage,
+            &clean_key(&legacy_of(&fast), "c3"),
+            &scattered_run(
+                "c3",
+                &fast,
+                &[1_150.0, 1_050.0, 1_140.0, 1_060.0, 1_130.0, 1_070.0],
+            ),
         );
 
         let message = rekey_error(&storage, &linear_git(), &apply_options());
-        assert!(message.contains("(and 1 offset more)"), "{message}");
-        assert!(message.contains("--allow-level-shift"), "{message}");
+        assert!(
+            message.contains("the two sit +10% apart across 6 shared offsets"),
+            "{message}"
+        );
+        assert_eq!(keys(&storage).len(), 2, "no object may be written");
+    }
+
+    #[test]
+    fn a_merge_whose_offsets_cannot_be_resolved_reports_no_systematic_distance() {
+        // Every benchmark moved by two instruction counts: beyond the relative
+        // tolerance at this level, but too small a move to mean anything, so there is
+        // nothing a splice could turn into a step and nothing to report a distance
+        // from either.
+        let slow = wobbly_machine(3141);
+        let fast = wobbly_machine(3142);
+        let storage = MemoryStorage::new();
+        store(
+            &storage,
+            &clean_key(&legacy_of(&slow), "c0"),
+            &scattered_run("c0", &slow, &[100.0; 4]),
+        );
+        store(
+            &storage,
+            &clean_key(&legacy_of(&fast), "c3"),
+            &scattered_run("c3", &fast, &[102.0; 4]),
+        );
+
+        let report = rekey(&storage, &linear_git(), &apply_options());
+        assert!(
+            report.contains(
+                "merge verdict: clear — no shared offset is a large enough move to read, so \
+                 there is no distance to judge"
+            ),
+            "{report}"
+        );
+        assert!(
+            report.contains("0 offsets beyond the merge tolerance individually"),
+            "{report}"
+        );
+        assert!(report.contains("Copied 2 objects"), "{report}");
     }
 
     #[test]
@@ -1952,7 +2239,14 @@ mod tests {
             ..apply_options()
         };
         let report = rekey(&storage, &linear_git(), &options);
-        assert!(report.contains("beyond merge tolerance"), "{report}");
+        // The pair still reads as blocked, so a report produced under the override names
+        // exactly what the operator has taken responsibility for.
+        assert!(
+            report.contains(
+                "merge verdict: blocked — the two sit +100% apart across 1 shared offset"
+            ),
+            "{report}"
+        );
         assert_eq!(keys(&storage).len(), 4);
     }
 
@@ -1961,8 +2255,9 @@ mod tests {
         let slow = wobbly_machine(3141);
         let fast = wobbly_machine(3142);
         let storage = MemoryStorage::new();
-        // The earlier group measures 100; the later one 101, a 1% move that stays
-        // under the relative tolerance and so does not block.
+        // The earlier group measures 100; the later one 101. One instruction count is
+        // too small a move to say anything about a level, so the pair reports no
+        // distance and does not block.
         store(
             &storage,
             &clean_key(&legacy_of(&slow), "c0"),
@@ -1977,7 +2272,10 @@ mod tests {
         let report = rekey(&storage, &linear_git(), &dry_run_options());
         assert!(report.contains("100 -> 101 (+1, +1%)"), "{report}");
         assert!(report.contains("time-blocked over 2 blocks"), "{report}");
-        assert!(!report.contains("beyond merge tolerance"), "{report}");
+        assert!(
+            !report.contains("beyond tolerance, informational"),
+            "{report}"
+        );
     }
 
     #[test]
@@ -2048,13 +2346,111 @@ mod tests {
         orphan.context.machine = None;
         store(&storage, &clean_key("m1", "c1"), &orphan);
 
-        let report = rekey(&storage, &linear_git(), &apply_options());
+        let reporter = RecordingReporter::new();
+        let report = rekey_reported(&storage, &linear_git(), &apply_options(), &reporter);
         assert_eq!(keys(&storage), vec![clean_key("m1", "c1")]);
         assert!(
             report.contains("1 run left without recorded hardware provenance"),
             "{report}"
         );
         assert!(report.contains(&clean_key("m1", "c1")), "{report}");
+        let notes = reporter.notes().join("\n");
+        assert!(
+            notes.contains("it records no hardware provenance"),
+            "{notes}"
+        );
+    }
+
+    #[test]
+    fn a_run_whose_hardware_does_not_render_is_reported_and_skipped() {
+        // The speed counts are read back from the object rather than probed, so a
+        // damaged record can carry a histogram that sums past `usize`. This one sits
+        // under the very key a rendering that clamped the sum would produce, so a
+        // clamping renderer would read the segment as a retired hardware hash and copy
+        // the object — into the partition of whatever machine really has that
+        // histogram. Facts that do not render prove nothing, so the run stays put.
+        let storage = MemoryStorage::new();
+        let segment = clamped_key();
+        store(
+            &storage,
+            &clean_key(&segment, "c1"),
+            &run("c1", &overflowing_machine(), 100.0),
+        );
+
+        let (report, json) = (
+            rekey(&storage, &linear_git(), &apply_options()),
+            rekey_json(&storage, &linear_git(), &dry_run_options()),
+        );
+        assert_eq!(keys(&storage), vec![clean_key(&segment, "c1")]);
+        assert!(
+            report.contains(
+                "1 run left with hardware provenance that does not render under the retired \
+                 machine-key format"
+            ),
+            "{report}"
+        );
+        assert!(report.contains(&clean_key(&segment, "c1")), "{report}");
+
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["totals"]["unrenderable_provenance"], 1);
+        assert_eq!(value["totals"]["missing_provenance"], 0);
+        assert_eq!(
+            value["unrenderable_provenance"][0],
+            clean_key(&segment, "c1").as_str()
+        );
+
+        let reporter = RecordingReporter::new();
+        _ = rekey_reported(&storage, &linear_git(), &dry_run_options(), &reporter);
+        let notes = reporter.notes().join("\n");
+        assert!(
+            notes.contains("nothing under the retired one, which cannot render them"),
+            "{notes}"
+        );
+        assert!(
+            notes.contains("does not render under the retired machine-key format"),
+            "{notes}"
+        );
+    }
+
+    #[test]
+    fn unrenderable_hardware_already_under_the_current_key_is_still_compared() {
+        // The current key format does not read the speed histogram, so hardware that
+        // fails to render under the retired one still hashes to a current key, and a
+        // segment equal to that key proves itself without any retired hash. Such a run
+        // needs no migration — but it is the incumbent of the partition another one
+        // merges into, so dropping it would leave the merge with a single source and
+        // no pair to judge, silently disarming the level-shift gate.
+        let mut incumbent = overflowing_machine();
+        incumbent.fingerprint = current_of(&incumbent);
+        let joining = wobbly_machine(3142);
+        let current = current_of(&incumbent);
+        let storage = MemoryStorage::new();
+        store(
+            &storage,
+            &clean_key(&current, "c0"),
+            &run("c0", &incumbent, 100.0),
+        );
+        store(
+            &storage,
+            &clean_key(&legacy_of(&joining), "c3"),
+            &run("c3", &joining, 400.0),
+        );
+
+        let message = rekey_error(&storage, &linear_git(), &dry_run_options());
+        assert!(message.contains("beyond the merge tolerance"), "{message}");
+
+        let report = rekey(
+            &storage,
+            &linear_git(),
+            &RekeyOptions {
+                allow_level_shift: true,
+                ..dry_run_options()
+            },
+        );
+        assert!(
+            report.contains("1 object already stored under the current key format"),
+            "{report}"
+        );
     }
 
     #[test]
@@ -2166,7 +2562,7 @@ mod tests {
         assert!(notes.contains("Test CPU 3000"), "{notes}");
         assert!(notes.contains("3141x8"), "{notes}");
         assert!(
-            notes.contains("under the retired key format and"),
+            notes.contains("under the current key format and"),
             "{notes}"
         );
         assert!(notes.contains("explicit machine-key override"), "{notes}");
@@ -2207,12 +2603,12 @@ mod tests {
         store(
             &storage,
             &clean_key(&legacy_of(&slow), "c0"),
-            &run("c0", &slow, 100.0),
+            &scattered_run("c0", &slow, &[1_000.0; 3]),
         );
         store(
             &storage,
             &clean_key(&legacy_of(&fast), "c3"),
-            &run("c3", &fast, 101.0),
+            &scattered_run("c3", &fast, &[1_010.0; 3]),
         );
         store(
             &storage,
@@ -2228,17 +2624,22 @@ mod tests {
         assert_eq!(value["totals"]["key_override"], 1);
         assert_eq!(value["key_overrides"][0]["machine_key"], "github");
         assert_eq!(value["merges"][0]["machine_key"], current_of(&slow));
-        assert_eq!(
-            value["merges"][0]["pairs"][0]["interleaving"],
-            "time-blocked"
-        );
-        assert_eq!(value["merges"][0]["pairs"][0]["blocks"], 2);
-        let offset = &value["merges"][0]["pairs"][0]["offsets"][0];
+        let pair = &value["merges"][0]["pairs"][0];
+        assert_eq!(pair["interleaving"], "time-blocked");
+        assert_eq!(pair["blocks"], 2);
+        // Every offset is a move of ten counts, well clear of the metric's absolute
+        // floor, so all three carry the systematic reading; none reaches the relative
+        // tolerance, so none is an outlier and the merge stands.
+        assert_eq!(pair["systematic_relative"], 0.01);
+        assert_eq!(pair["systematic_offsets"], 3);
+        assert_eq!(pair["outlying_offsets"], 0);
+        assert_eq!(pair["manufactures_step"], false);
+        let offset = &pair["offsets"][0];
         assert_eq!(offset["metric"], "instruction_count");
-        assert_eq!(offset["baseline_level"], 100.0);
-        assert_eq!(offset["incoming_level"], 101.0);
-        assert_eq!(offset["absolute"], 1.0);
-        assert_eq!(offset["exceeds_tolerance"], false);
+        assert_eq!(offset["baseline_level"], 1000.0);
+        assert_eq!(offset["incoming_level"], 1010.0);
+        assert_eq!(offset["absolute"], 10.0);
+        assert_eq!(offset["beyond_tolerance"], false);
         assert_eq!(
             value["copies"][0]["destination_machine_key"],
             current_of(&slow)
@@ -2246,7 +2647,41 @@ mod tests {
     }
 
     #[test]
-    fn the_markdown_report_carries_the_plan() {
+    fn the_json_report_states_a_pair_that_blocks_the_merge() {
+        let slow = wobbly_machine(3141);
+        let fast = wobbly_machine(3142);
+        let storage = MemoryStorage::new();
+        store(
+            &storage,
+            &clean_key(&legacy_of(&slow), "c0"),
+            &scattered_run("c0", &slow, &[1_000.0; 3]),
+        );
+        store(
+            &storage,
+            &clean_key(&legacy_of(&fast), "c3"),
+            &scattered_run("c3", &fast, &[1_100.0, 1_100.0, 1_000.0]),
+        );
+
+        let options = RekeyOptions {
+            allow_level_shift: true,
+            ..dry_run_options()
+        };
+        let json = rekey_json(&storage, &linear_git(), &options);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let pair = &value["merges"][0]["pairs"][0];
+        // The third benchmark did not move, so it carries no information and stays out
+        // of the median; the two that did agree on +10%.
+        assert_eq!(pair["systematic_relative"], 0.1);
+        assert_eq!(pair["systematic_offsets"], 2);
+        assert_eq!(pair["outlying_offsets"], 2);
+        assert_eq!(pair["manufactures_step"], true);
+    }
+
+    #[test]
+    fn the_json_report_states_an_unreadable_systematic_offset_as_null() {
+        // Two counts apart at a level of a hundred: beyond the relative tolerance but
+        // too small a move to say anything about a level, so there is no distance to
+        // report rather than a measured zero.
         let slow = wobbly_machine(3141);
         let fast = wobbly_machine(3142);
         let storage = MemoryStorage::new();
@@ -2258,16 +2693,51 @@ mod tests {
         store(
             &storage,
             &clean_key(&legacy_of(&fast), "c3"),
-            &run("c3", &fast, 101.0),
+            &run("c3", &fast, 102.0),
+        );
+
+        let json = rekey_json(&storage, &linear_git(), &dry_run_options());
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let pair = &value["merges"][0]["pairs"][0];
+        assert!(pair["systematic_relative"].is_null(), "{json}");
+        assert_eq!(pair["systematic_offsets"], 0);
+        assert_eq!(pair["manufactures_step"], false);
+    }
+
+    #[test]
+    fn the_markdown_report_carries_the_plan() {
+        let slow = wobbly_machine(3141);
+        let fast = wobbly_machine(3142);
+        let storage = MemoryStorage::new();
+        store(
+            &storage,
+            &clean_key(&legacy_of(&slow), "c0"),
+            &scattered_run("c0", &slow, &[1_000.0, 1_000.0, 1_000.0]),
+        );
+        store(
+            &storage,
+            &clean_key(&legacy_of(&fast), "c3"),
+            &scattered_run("c3", &fast, &[1_003.0, 1_003.0, 1_100.0]),
         );
 
         let markdown = rekey_markdown(&storage, &linear_git(), &dry_run_options());
         assert!(markdown.contains("# Rekey plan for folo"), "{markdown}");
         assert!(
-            markdown.contains("| Benchmark | Metric | Baseline | Incoming | Offset | Relative |"),
+            markdown.contains(
+                "| Benchmark | Metric | Baseline | Incoming | Offset | Relative | Beyond \
+                 tolerance |"
+            ),
             "{markdown}"
         );
-        assert!(markdown.contains("| +1 | +1% |"), "{markdown}");
+        assert!(
+            markdown.contains(
+                "**Merge verdict: clear** — the two sit +0.3% apart across 3 shared offsets. 1 \
+                 offset beyond the merge tolerance individually, which is informational only."
+            ),
+            "{markdown}"
+        );
+        assert!(markdown.contains("| +3 | +0.3% | no |"), "{markdown}");
+        assert!(markdown.contains("| +100 | +10% | yes |"), "{markdown}");
         assert!(
             markdown.contains("**Would copy 2 objects into 1 discriminant set**"),
             "{markdown}"

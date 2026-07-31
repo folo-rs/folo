@@ -62,6 +62,12 @@ object itself records. Anything else is reported and left alone:
   they were written under. Read that section of the dry run before applying: those runs keep
   whatever fragmentation they already have, and the remaining history may be too short to judge
   on its own.
+- **Runs whose recorded hardware does not render** under the retired key format — a damaged
+  record can describe a machine that could not exist, and no retired key can be computed from
+  it. Rendering it anyway would produce a key that may belong to some *other* machine, so the
+  run stays put. These are counted and listed under `unrenderable_provenance`. A run already
+  under the current key is the exception: that key does not read the histogram at all, so it
+  is recognized as already migrated like any other.
 
 Blessing sidecars record no hardware of their own, so they follow the mapping their partition's
 runs establish. Clean runs, dirty snapshots, and blessings all migrate together.
@@ -72,7 +78,8 @@ its recorded hardware must reproduce that fingerprint under one of the two: the 
 history captured before the format changed, the current one for history captured after. A
 fingerprint matching neither means the reimplemented rendering is not the one that keyed this
 store, which invalidates every decision the pass would make, so it abandons the whole run rather
-than skipping the object.
+than skipping the object. Hardware that does not render under the retired format produces no
+retired hash to compare, so it contradicts nothing and only its own object is held back.
 
 ## The merge report
 
@@ -89,14 +96,37 @@ The report therefore covers, for every pair of partitions that would merge and e
   history, as one machine rebooting between runs does) or *time-blocked* (disjoint stretches,
   indistinguishable from a real change at the boundary).
 
-The offset alone decides whether the migration proceeds; the interleaving pattern is stated to
-sharpen an operator's reading of an offset, and never blocks on its own.
+It then reduces each pair to a single **systematic offset**: the median of those relative
+offsets, taken over the shared `(benchmark, metric)` series whose move is large enough to say
+anything about a level. That one number decides whether the migration proceeds. The
+interleaving pattern is stated to sharpen an operator's reading of it, and never blocks on its
+own.
 
-A reportable offset **refuses the migration**, in the dry run and under `--apply` alike, so the
-preview can never disagree with what applying would do. The threshold is half of the practical
-significance floors the detector itself uses, so an offset under it sits a comfortable margin
-below what the detector calls practically significant. `--allow-level-shift` proceeds anyway, for
-an operator who has read the report and accepts the step it will introduce.
+The pair is judged rather than the benchmark because only the offset the two partitions share
+*across* benchmarks manufactures a visible step. Scatter that points in both directions is
+measurement noise; after the merge it is simply noise inside one series, which `analyze`'s own
+significance gates already absorb. Judging each benchmark separately would refuse every real
+merge instead: a store holds hundreds of shared benchmarks, run-to-run variation is a few
+percent, and on a family that large *some* benchmark drifts past any tight threshold by chance.
+Taking the median rather than the mean also keeps a handful of benchmarks whose code genuinely
+changed during one partition's stretch of history from deciding the fate of all the others.
+
+Individual offsets past the tolerance are still listed and flagged in the report, and the pair
+line counts them. They mean "this one series may gain a step at the splice", which is worth
+an operator's attention — but they do not block. The pair line also states the verdict itself,
+so a report read under `--allow-level-shift` names which pairs would otherwise have refused.
+Where a pair shares only one offset large enough to read, the median is that offset, so the
+gate is exactly as strict as a per-benchmark rule in the one case where there is no evidence
+to average over. Where no shared series moved enough to read, the pair reports no distance at
+all and cannot block.
+
+A systematic offset at or beyond the tolerance **refuses the migration**, in the dry run and
+under `--apply` alike, so the preview can never disagree with what applying would do. The
+threshold is half of the relative practical significance floor the detector itself uses, so a
+merge under it sits a comfortable margin below what the detector calls practically significant.
+The detector's absolute floors are spent choosing which offsets enter the median rather than
+gating the median itself. `--allow-level-shift` proceeds anyway, for an operator who has read
+the report and accepts the step it will introduce.
 
 `--verbose` adds the per-object reasoning to standard error: the hardware behind each object,
 both keys it hashes to, and why each object was migrated or left.

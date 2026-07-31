@@ -462,4 +462,40 @@ mod tests {
         );
         assert_eq!(fingerprint(&hardware), fingerprint(&recalibrated));
     }
+
+    #[test]
+    fn a_production_arm_runner_keeps_one_key_across_its_calibration_readings() {
+        // Hardware captured from the live `folohistory` benchmark store on 2026-08-01.
+        //
+        // These are the two readings a single GitHub-hosted ARM64 Windows runner produces:
+        // on most boots all four Cobalt 100 processors report a relative-speed calibration
+        // of 10678, and on others one of the four reports 10681 instead — a difference of
+        // three units in 10678, or 0.028%, with nothing about the machine changed. The
+        // key is what a series is accumulated under, so a factor that a reboot can move by
+        // a fraction of a percent cannot be one: the runner would file its history under a
+        // fresh key every time the reading wobbled, leaving no stretch long enough to
+        // judge a regression against.
+        let uniform = profile_with_speeds(4, 1, &["Cobalt 100"], vec![(10678, 4)]);
+        let recalibrated = profile_with_speeds(4, 1, &["Cobalt 100"], vec![(10678, 3), (10681, 1)]);
+
+        assert_eq!(
+            canonical(&uniform),
+            "mk3\nprocessors=4\nmemory_regions=1\nprocessor_models=Cobalt 100",
+        );
+        assert_eq!(
+            canonical(&recalibrated),
+            canonical(&uniform),
+            "the 10681 reading is provenance, so it must leave the factor string alone",
+        );
+        assert_eq!(
+            resolve_machine_key(None, &uniform),
+            "2e3ad42f4e2cd3e1",
+            "this runner's production history is filed under this key",
+        );
+        assert_eq!(
+            resolve_machine_key(None, &recalibrated),
+            resolve_machine_key(None, &uniform),
+            "one machine's two calibration readings are one machine",
+        );
+    }
 }

@@ -19,11 +19,13 @@ key change to the hardware detail that moved.
 The key hashes only **properties of the hardware**: the processor and memory-region counts and
 the distinct processor models present. Readings that the same machine can report differently
 from one boot to the next — per-processor speeds above all, which are boot-time calibration
-figures rather than hardware identity — are deliberately excluded. Hashing them would fork one
-runner's history at every reboot, which is exactly the fragmentation the key exists to prevent,
-and they add no discriminating power the processor models do not already carry. They are
-recorded with every run as provenance instead, so a machine's speed mix is answered from its
-stored runs rather than from its key.
+figures rather than hardware identity — are deliberately excluded. It takes very little drift
+to do damage: a GitHub-hosted ARM64 Windows runner reports all four of its Cobalt 100
+processors calibrated at 10678 on most boots and one of the four at 10681 on others, and
+hashing that reading would fork the runner's history between the two. That is exactly the
+fragmentation the key exists to prevent, and the speeds add no discriminating power the
+processor models do not already carry. They are recorded with every run as provenance instead,
+so a machine's speed mix is answered from its stored runs rather than from its key.
 
 The key is version-tagged, so a change to the factors it hashes forks stored history into a
 new partition rather than silently mixing incomparable data.

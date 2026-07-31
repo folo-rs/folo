@@ -538,8 +538,9 @@ pub struct RekeyOptions {
     /// Perform the copies. Off by default, so a pass reports its plan and writes
     /// nothing.
     pub apply: bool,
-    /// Proceed even when a merge would splice measurement levels that disagree
-    /// beyond the merge tolerance.
+    /// Proceed even when a merging pair's systematic offset — the median relative
+    /// offset across the benchmark and metric series the two partitions share —
+    /// reaches the merge tolerance.
     pub allow_level_shift: bool,
     /// Suppress the default text report on standard output (`--no-text`).
     pub no_text: bool,

@@ -171,10 +171,16 @@ async fn rekey_merges_interleaved_partitions_that_agree_on_level() {
     assert_eq!(merge["machine_key"], REKEY_CURRENT_KEY, "{message}");
     let pair = &merge["pairs"][0];
     assert_eq!(pair["interleaving"], "interleaved", "{message}");
+    // Neither group moved at all, so no shared series carries a reading and the
+    // pair has no systematic distance to report.
+    assert!(pair["systematic_relative"].is_null(), "{message}");
+    assert_eq!(pair["systematic_offsets"], 0, "{message}");
+    assert_eq!(pair["outlying_offsets"], 0, "{message}");
+    assert_eq!(pair["manufactures_step"], false, "{message}");
     let offset = &pair["offsets"][0];
     assert_eq!(offset["benchmark"], BENCHMARK, "{message}");
     assert_eq!(offset["absolute"], 0.0, "{message}");
-    assert_eq!(offset["exceeds_tolerance"], false, "{message}");
+    assert_eq!(offset["beyond_tolerance"], false, "{message}");
 
     // The merged partition now carries one continuous four-point series, which is
     // the whole point of the migration.
@@ -210,9 +216,15 @@ async fn rekey_refuses_a_merge_that_would_manufacture_a_step_change() {
         .await
         .expect_err("the merge is refused");
     let message = error.to_string();
-    assert!(message.contains("beyond the merge tolerance"), "{message}");
+    assert!(
+        message.contains("systematically disagree beyond the merge tolerance"),
+        "{message}"
+    );
     assert!(message.contains("time-blocked"), "{message}");
-    assert!(message.contains(BENCHMARK), "{message}");
+    assert!(
+        message.contains("the two sit +100% apart across 1 shared offset"),
+        "{message}"
+    );
     assert!(message.contains("--allow-level-shift"), "{message}");
     assert_eq!(workspace.stored_keys(), before, "nothing is written");
 
@@ -237,13 +249,13 @@ async fn rekey_refuses_a_merge_that_would_manufacture_a_step_change() {
 }
 
 /// The reported offset and interleaving describe the constructed fixture exactly:
-/// a `+5%` step between two disjoint stretches, under the absolute floor so it does
-/// not block.
+/// a `+1%` step between two disjoint stretches, too small a move to say anything about
+/// a level, so the pair has no systematic distance and does not block.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn rekey_reports_the_offset_and_interleaving_of_a_merge() {
-    /// A level 1% above [`LEVEL`]: below the relative merge tolerance, so the
-    /// merge is reported but permitted.
+    /// A level 1% above [`LEVEL`]: one instruction count, which is too small a move
+    /// to enter the systematic reading, so the merge is reported but permitted.
     const SLIGHTLY_HIGHER: f64 = 101.0;
 
     let workspace = Workspace::repo(&storage_only_config());
@@ -269,12 +281,23 @@ async fn rekey_reports_the_offset_and_interleaving_of_a_merge() {
     assert_eq!(offset["baseline_level"], LEVEL, "{message}");
     assert_eq!(offset["incoming_level"], SLIGHTLY_HIGHER, "{message}");
     assert_eq!(offset["absolute"], 1.0, "{message}");
-    assert_eq!(offset["exceeds_tolerance"], false, "{message}");
+    assert_eq!(offset["beyond_tolerance"], false, "{message}");
+    // One count at a level of a hundred is too small a move to say anything about a
+    // level, so the pair reports no distance rather than a fabricated zero.
+    assert!(pair["systematic_relative"].is_null(), "{message}");
+    assert_eq!(pair["systematic_offsets"], 0, "{message}");
 
     let text = workspace.drive(&["rekey"]).await.unwrap();
     let report = text.stdout_text().unwrap();
     assert!(report.contains("time-blocked over 2 blocks"), "{report}");
     assert!(report.contains("100 -> 101 (+1, +1%)"), "{report}");
+    assert!(
+        report.contains(
+            "merge verdict: clear — no shared offset is a large enough move to read, so \
+             there is no distance to judge"
+        ),
+        "{report}"
+    );
 }
 
 /// A stored run whose recorded fingerprint matches neither the retired nor the

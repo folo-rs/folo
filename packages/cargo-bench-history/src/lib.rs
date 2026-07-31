@@ -159,16 +159,19 @@
 //! its key, so both the retired and the current key are recomputed from the object.
 //! An object moves only when its key's machine segment *is* the retired hash of the
 //! hardware it records; an explicit `--machine-key` override, an already-current
-//! segment, and a run recording no hardware are each reported and left in place.
+//! segment, a run recording no hardware, and a run whose recorded hardware the
+//! retired format cannot render are each reported and left in place.
 //! Migration is a copy: the source object stays, so a second pass finds every
 //! destination present and writes nothing; two objects that would claim one key are
 //! both left in place and reported. `--apply` is required to write — a bare
 //! `rekey` reports the plan, including, for every pair of partitions that would
 //! merge, the level offset between their medians and whether they interleave over
-//! commit order or occupy disjoint stretches of it. A level offset beyond half the
-//! detector's practical-significance floors refuses the migration in both modes;
-//! `--allow-level-shift` accepts the step it would introduce. `--verbose` states the
-//! hardware and both keys behind every per-object decision.
+//! commit order or occupy disjoint stretches of it. A pair whose *systematic* offset
+//! — the median relative offset across the benchmark and metric series the two share —
+//! reaches half the detector's relative practical-significance floor refuses the
+//! migration in both modes; individual series that wander further are reported but
+//! decide nothing. `--allow-level-shift` accepts the step it would introduce.
+//! `--verbose` states the hardware and both keys behind every per-object decision.
 //!
 //! ## `examine`
 //!

@@ -845,15 +845,18 @@ struct RekeyCommand {
     #[arg(long, help_heading = HEADING_ENV)]
     apply: bool,
 
-    /// Merge partitions even when their measurement levels disagree enough to
+    /// Merge partitions even when the two sit systematically far enough apart to
     /// manufacture a step change.
     ///
-    /// Merging splices two sets of measurements into one series. If the two
-    /// partitions really are the same machine, their levels agree and the splice is
-    /// invisible; if they systematically differ, the merged series gains a step at
-    /// the splice point that the next analysis reports as a regression. Passing this
-    /// flag accepts that: you are asserting the level difference is understood, and
-    /// you may see fresh findings on the merged benchmarks.
+    /// Merging splices two sets of measurements into one series. The pass reads how
+    /// far apart a merging pair sits as the median relative offset across the
+    /// benchmark and metric series the two share, and refuses when that median reaches
+    /// the merge tolerance. Individual series that wander past the tolerance are
+    /// reported but decide nothing: scatter in both directions is measurement noise,
+    /// which the merged series absorbs, whereas a median offset is a real level
+    /// difference that the next analysis reports as a regression. Passing this flag
+    /// accepts that: you are asserting the level difference is understood, and you may
+    /// see fresh findings on the merged benchmarks.
     #[arg(long, help_heading = HEADING_ENV)]
     allow_level_shift: bool,
 

@@ -210,11 +210,14 @@ little discriminating value in homogeneous CI pools.
 A factor qualifies only if it is a **property of the hardware**, not a reading the same
 machine can report differently from one boot to the next. Per-processor speed metrics fail
 that test: they are boot-time calibration figures, so an identical runner can produce a
-different value after a reboot, and hashing them fragments one machine's history across
-several keys — the exact failure the key exists to prevent. They add no discriminating
-power either, since the processor model set already says what the processors are, so they
-are recorded as provenance (§5) and never hashed. A machine's speed mix is therefore
-answered from its stored runs rather than from its key.
+different value after a reboot. The margin needed to do damage is tiny — a GitHub-hosted
+ARM64 Windows runner reports all four of its Cobalt 100 processors calibrated at 10678 on
+most boots and one of the four at 10681 on others, three units in 10678 — and hashing that
+reading fragments one machine's history across several keys, the exact failure the key
+exists to prevent. They add no discriminating power either, since the processor model set
+already says what the processors are, so they are recorded as provenance (§5) and never
+hashed. A machine's speed mix is therefore answered from its stored runs rather than from
+its key.
 
 Because the key is persisted and compared across machines and tool versions, it uses a
 **fixed** hash (not a seeded/default hasher) over a version-tagged canonical string,
@@ -814,9 +817,19 @@ captured before the format changed, the current one for history captured after. 
 that matches neither means the reimplemented rendering is not the one that keyed this store,
 which invalidates every subsequent decision, so the pass is abandoned rather than the object
 skipped. Objects that record no hardware at all cannot be placed and are reported, never
-silently dropped. Blessing sidecars record no hardware of their own, so they follow the
-mapping their partition's runs establish; a blessing under a partition holding no runs is
-reported and left.
+silently dropped. So are objects whose recorded hardware the retired rule cannot render at
+all: the facts arrive deserialized from an arbitrarily old object, and one that claims, say,
+more processors at a single speed than the machine word can count describes no machine that
+ever existed. Rendering such facts anyway — by clamping the impossible figure to something
+representable — would hash a histogram the machine never had, and that hash may be a
+*different* machine's key, so the object is left unproven and reported instead. Such an
+object makes no claim the retired rendering could contradict either, so it indicts only
+itself and never abandons the pass. The one segment it can still be placed under is the
+current hash: that rendering is the live probe rather than a reimplementation, and it reads
+none of the factors the retired one dropped, so a segment equal to it proves itself and the
+object simply has nothing to migrate. Blessing sidecars record no hardware of their own, so
+they follow the mapping their partition's runs establish; a blessing under a partition
+holding no runs is reported and left.
 
 **Merging is not always safe, so the default is a dry run.** Writing requires an explicit
 `--apply`; a bare `rekey` reports what would happen. Splicing two key partitions into one
@@ -830,15 +843,43 @@ the **interleaving pattern** over commit order — whether the two occupy overla
 of history (interleaved: one machine rebooting, harmless) or disjoint ones (time-blocked:
 indistinguishable from a real change at the boundary).
 
-An offset large enough to be reportable **refuses the migration**, in the dry run and under
-`--apply` alike, so the preview can never disagree with what applying would do. The
-threshold is half of the detector's own practical-significance floors (§8.2), read from the
-same configuration and composed the same way — relative *and* absolute together. The medians
-compared here estimate a whole group's level, while the detector compares the regimes on either
-side of a change point, so the two need not coincide; halving the floor is the margin that
-covers the difference and keeps a merge below the threshold well clear of what the detector
-calls practically significant. `--allow-level-shift` proceeds anyway, for an operator who has
-read the report and accepts the step.
+**The pair is judged, not the benchmark.** What manufactures a visible step is the offset the
+two partitions share *across* their benchmarks; independent per-benchmark scatter is
+measurement noise that simply becomes within-series noise after the splice, where the
+detector's own significance gates already handle it. Each merging pair is therefore reduced
+to a single **systematic offset**: the median of the relative offsets over those shared
+`(benchmark, metric)` pairs whose move clears the metric's absolute floor. The median, rather
+than the mean, so that a minority of benchmarks whose *code* genuinely changed while one
+partition was active cannot drag the verdict; the absolute floor, so that a move too small to
+mean anything is not mistaken for evidence either way. A pair with no move large enough to
+read has no systematic offset at all and cannot manufacture a step, so it does not block.
+
+Judging each benchmark individually cannot work, and the report says so by demoting that
+reading. A store holds hundreds of shared benchmarks, per-benchmark run-to-run variation is
+a few percent, and the tolerance is tighter than that — so on any real partition pair *some*
+benchmark exceeds it by chance, with probability approaching one as the family grows. The pair
+of partitions a calibration wobble splits off one ARM64 Windows runner shares over a hundred
+readable offsets, more than a third of which exceed the tolerance on their own, while the pair
+as a whole sits under a tenth of a percent apart. A gate that refuses every real input protects
+nothing: it teaches the operator to pass `--allow-level-shift` reflexively, which disables the
+check for the genuinely different machine too. Individual offsets beyond the tolerance are still
+reported, flagged, and counted, because they say "this particular series may gain a step at the
+splice", which is worth seeing — but they decide nothing.
+
+A systematic offset large enough to be reportable **refuses the migration**, in the dry run
+and under `--apply` alike, so the preview can never disagree with what applying would do. The
+threshold is half of the detector's relative practical-significance floor (§8.2), read from the
+same configuration. The absolute floors are spent earlier, on choosing which offsets are large
+enough moves to enter the median; a median of fractions has no units left to compare a
+magnitude against. The medians compared here estimate a whole group's level, while the detector
+compares the regimes on either side of a change point, so the two need not coincide; halving
+the floor is the margin that covers the difference and keeps a merge below the threshold well
+clear of what the detector calls practically significant. Reading the margin off a median
+rather than off a single benchmark is what makes so tight a threshold affordable. Where a pair
+shares exactly one readable offset the median *is* that offset, so the gate stays as
+conservative as a per-benchmark rule in precisely the case where there is nothing to average
+over — a deliberate property, not a degenerate one. `--allow-level-shift` proceeds anyway, for
+an operator who has read the report and accepts the step.
 
 `rekey` takes **no discriminant facets** and is deliberately outside the `analyze` / `list` /
 `prune` selection lockstep. Those commands select a comparable slice of history to reason

@@ -17,15 +17,27 @@
 //! migration must instead see the whole store, since a partition it skipped would stay
 //! fragmented and an operator would have no way to tell which ones were covered.
 //!
-//! # Runs without hardware provenance
+//! # Runs whose provenance cannot be proven
 //!
 //! Host hardware (`context.machine`) is only recorded from schema version 4 onwards, so
 //! a run written before it carries nothing to recompute a machine key from and cannot
 //! be migrated at all. Such runs are counted and listed under `missing_provenance` in
 //! the report and stay on the key they were written under, where they remain readable
-//! but keep whatever fragmentation they already had. The dry run reports them, so an
-//! operator should read that section before applying and decide whether the remaining
-//! history is long enough to judge on its own.
+//! but keep whatever fragmentation they already had.
+//!
+//! A run may also record hardware that the retired key format cannot render — the
+//! facts arrive deserialized from an arbitrarily old object, so nothing guarantees they
+//! describe a machine that could exist. No retired key can be recomputed for such a
+//! run, so nothing proves its key segment was an auto-detected hash rather than an
+//! operator's own, and moving it could file a damaged record under a healthy machine's
+//! partition. These runs are counted and listed under `unrenderable_provenance` and
+//! likewise stay where they are. A segment that already *is* the current hash is the
+//! exception: the current format reads none of the factors the retired one dropped, so
+//! such a run is placed without any retired hash and keeps its ordinary standing,
+//! including its weight in the merge assessment.
+//!
+//! The dry run reports both, so an operator should read that section before applying
+//! and decide whether the remaining history is long enough to judge on its own.
 //!
 //! # Recovering from an aborted apply
 //!
@@ -45,10 +57,15 @@
 mod command;
 mod legacy_key;
 mod merge;
+// Production data captured from the live benchmark store, consumed by the unit tests of
+// the modules above as regression witnesses.
+#[cfg(test)]
+mod production_hardware;
+#[cfg(test)]
+mod production_merges;
 
 pub use command::execute;
 pub(crate) use legacy_key::legacy_machine_key;
 pub(crate) use merge::{
-    GroupPair, MeasuredPoint, MergeAnalysis, MetricOffset, PartitionMerge, analyze_merges,
-    merge_offset_tolerance,
+    GroupPair, MeasuredPoint, MergeAnalysis, PartitionMerge, analyze_merges, merge_offset_tolerance,
 };
