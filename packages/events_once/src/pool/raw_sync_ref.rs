@@ -35,6 +35,11 @@ impl<T: Send + 'static> Clone for RawPooledRef<T> {
 
 impl<T: Send + 'static> EventRef<T> for RawPooledRef<T> {
     fn release_event(&self) {
+        // Removing the event from the pool does not drop it, so we clear its diagnostic state
+        // before we hand the storage back to the pool.
+        #[cfg(debug_assertions)]
+        Event::clear_awaiter_backtrace(self);
+
         // SAFETY: Our owner promised the pool that the pool (the owner of the core) stays alive
         // longer than the event endpoints, so we know it remains valid. We only ever
         // create shared references to it, so no conflicting exclusive references can exist.

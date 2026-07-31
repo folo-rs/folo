@@ -32,7 +32,12 @@ where
     T: Send + 'static,
 {
     #[inline]
-    fn release_event(&self) {}
+    fn release_event(&self) {
+        // The storage is owned by whoever placed the event there and is reused without dropping
+        // the event, so we clear its diagnostic state before we let go of it.
+        #[cfg(debug_assertions)]
+        Event::clear_awaiter_backtrace(self);
+    }
 }
 
 impl<T> Deref for PtrRef<T>
@@ -100,6 +105,10 @@ where
     fn release_event(&self) {
         // The caller tells us that they are the last endpoint, so nothing else can possibly
         // be accessing the event any more. We can safely release the memory.
+
+        // Releasing the memory does not drop the event, so we clear its diagnostic state first.
+        #[cfg(debug_assertions)]
+        Event::clear_awaiter_backtrace(self);
 
         // SAFETY: Still the same type - all is well. We rely on the event state machine
         // to ensure that there is no double-release happening.

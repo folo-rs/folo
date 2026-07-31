@@ -296,6 +296,8 @@ mod core;
 mod disconnected;
 mod lake;
 mod pool;
+#[cfg(all(test, debug_assertions))]
+mod reentrancy;
 
 pub use core::*;
 
@@ -305,3 +307,5 @@ pub(crate) use constants::NEVER_POISONED;
 pub use disconnected::*;
 pub use lake::*;
 pub use pool::*;
+#[cfg(all(test, debug_assertions))]
+pub(crate) use reentrancy::*;

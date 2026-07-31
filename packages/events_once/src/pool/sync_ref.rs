@@ -36,6 +36,11 @@ impl<T: Send + 'static> Clone for PooledRef<T> {
 impl<T: Send + 'static> EventRef<T> for PooledRef<T> {
     #[inline]
     fn release_event(&self) {
+        // Removing the event from the pool does not drop it, so we clear its diagnostic state
+        // before we hand the storage back to the pool.
+        #[cfg(debug_assertions)]
+        Event::clear_awaiter_backtrace(self);
+
         let mut pool = self.core.pool.lock().expect(NEVER_POISONED);
 
         // SAFETY: The event state machine guarantees that nothing references the event

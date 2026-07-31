@@ -5,11 +5,11 @@ use std::cell::UnsafeCell;
 use std::fmt;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
-#[cfg(debug_assertions)]
-use std::panic::{self, AssertUnwindSafe};
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
+#[cfg(debug_assertions)]
+use std::sync::Arc;
 use std::sync::Mutex;
 
 use infinity_pool::RawPinnedPool;
@@ -196,8 +196,27 @@ impl<T: Send + 'static> RawEventPool<T> {
     ///
     /// The closure is called once for each event in the pool that has been awaited at some point
     /// in the past.
+    ///
+    /// # Reentrancy
+    ///
+    /// The closure may freely use this pool: it may rent events, drop endpoints of events it
+    /// obtained earlier and call [`inspect_awaiters()`][Self::inspect_awaiters] again. The
+    /// backtraces are snapshotted before the first call to the closure, so the sequence of
+    /// backtraces the closure receives is unaffected by what the closure does to the pool.
     #[cfg(debug_assertions)]
     pub fn inspect_awaiters(&self, mut f: impl FnMut(&Backtrace)) {
+        for backtrace in self.awaiter_backtraces() {
+            f(&backtrace);
+        }
+    }
+
+    /// Snapshots the backtrace of the most recent awaiter of each awaited event in the pool.
+    ///
+    /// The pool lock is released before this returns, so the caller may pass the snapshots to
+    /// user-supplied code without holding any lock. Each snapshot is a shared owner of the
+    /// backtrace, so it stays valid even if its event is released in the meantime.
+    #[cfg(debug_assertions)]
+    pub(crate) fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>> {
         // SAFETY: We are the owner of the core, so we know it remains valid. We only ever
         // create shared references to it, so no conflicting exclusive references can exist.
         let core_cell = unsafe { self.core.as_ref() };
@@ -210,7 +229,8 @@ impl<T: Send + 'static> RawEventPool<T> {
 
         let pool = core.pool.lock().expect(NEVER_POISONED);
 
-        let mut panic_payload = None;
+        let mut backtraces = Vec::with_capacity(pool.len());
+
         for event_ptr in pool.iter() {
             // SAFETY: The pool remains alive for the duration of this function call, satisfying
             // the lifetime requirement. The pointer is valid as it comes from the pool's iterator.
@@ -227,28 +247,12 @@ impl<T: Send + 'static> RawEventPool<T> {
             // SAFETY: We only ever create shared references, never exclusive ones.
             let event = unsafe { event.assume_init_ref() };
 
-            // We catch panics from the user closure to drop the pool guard cleanly,
-            // preventing mutex poisoning.
-            // AssertUnwindSafe: only covers `&mut f` (inherently !UnwindSafe due to
-            // &mut). The user closure itself determines unwind safety of captured state.
-            let result = panic::catch_unwind(AssertUnwindSafe(|| {
-                event.inspect_awaiter(|bt| {
-                    if let Some(bt) = bt {
-                        f(bt);
-                    }
-                });
-            }));
-            if let Err(payload) = result {
-                panic_payload = Some(payload);
-                break;
+            if let Some(backtrace) = event.awaiter_backtrace() {
+                backtraces.push(backtrace);
             }
         }
 
-        drop(pool);
-
-        if let Some(payload) = panic_payload {
-            panic::resume_unwind(payload);
-        }
+        backtraces
     }
 }
 
@@ -279,6 +283,8 @@ impl<T: Send + 'static> RefUnwindSafe for RawEventPool<T> {}
 #[allow(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    #[cfg(debug_assertions)]
+    use std::cell::RefCell;
     use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::sync::{Arc, Barrier};
     use std::task::{self, Poll, Waker};
@@ -286,10 +292,14 @@ mod tests {
 
     use futures::executor::block_on;
     use static_assertions::assert_impl_all;
+    #[cfg(debug_assertions)]
+    use testing::assert_panics_with;
     use testing::with_watchdog;
 
     use super::*;
     use crate::Disconnected;
+    #[cfg(debug_assertions)]
+    use crate::assert_inspect_awaiters_is_reentrant;
 
     assert_impl_all!(RawEventPool<u32>: Send, Sync);
 
@@ -778,7 +788,6 @@ mod tests {
 
     #[cfg(debug_assertions)]
     #[test]
-    #[should_panic(expected = "intentional panic to verify pass-through")]
     fn inspect_awaiters_propagates_panic_from_closure() {
         let pool = Box::pin(RawEventPool::<i32>::new());
 
@@ -789,8 +798,104 @@ mod tests {
         let mut cx = task::Context::from_waker(Waker::noop());
         _ = receiver.as_mut().poll(&mut cx);
 
-        pool.as_ref().inspect_awaiters(|_bt| {
-            panic!("intentional panic to verify pass-through");
+        assert_panics_with(
+            || {
+                pool.as_ref().inspect_awaiters(|_bt| {
+                    panic!("intentional panic to verify pass-through");
+                });
+            },
+            |message| assert!(message.contains("pass-through")),
+        );
+
+        // The pool is still usable, which proves that the panic did not leave any lock behind.
+        assert_eq!(pool.len(), 1);
+
+        let mut inspected_count = 0;
+
+        pool.inspect_awaiters(|_bt| {
+            inspected_count += 1;
         });
+
+        assert_eq!(inspected_count, 1);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn inspect_awaiters_closure_may_reenter_pool() {
+        let pool = Box::pin(RawEventPool::<i32>::new());
+
+        // SAFETY: The pool outlives both endpoints.
+        let (_sender, receiver) = unsafe { pool.as_ref().rent() };
+        let mut receiver = Box::pin(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        _ = receiver.as_mut().poll(&mut cx);
+
+        assert_inspect_awaiters_is_reentrant(&|f| pool.inspect_awaiters(f), &|| {
+            // SAFETY: The pool outlives both endpoints.
+            let (sender, receiver) = unsafe { pool.as_ref().rent() };
+            drop(sender);
+            drop(receiver);
+        });
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn inspect_awaiters_tolerates_endpoint_drop_from_closure() {
+        const EVENT_COUNT: usize = 3;
+
+        let pool = Box::pin(RawEventPool::<i32>::new());
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let mut endpoints = Vec::with_capacity(EVENT_COUNT);
+
+        for _ in 0..EVENT_COUNT {
+            // SAFETY: The pool outlives both endpoints.
+            let (sender, receiver) = unsafe { pool.as_ref().rent() };
+            let mut receiver = Box::pin(receiver);
+            _ = receiver.as_mut().poll(&mut cx);
+            endpoints.push((sender, receiver));
+        }
+
+        // The closure releases the events it is inspecting. The backtraces it receives are
+        // snapshots, so they remain valid and each event is still visited exactly once.
+        let endpoints = RefCell::new(endpoints);
+        let mut inspected_count = 0;
+
+        pool.inspect_awaiters(|_bt| {
+            inspected_count += 1;
+            drop(endpoints.borrow_mut().pop());
+        });
+
+        assert_eq!(inspected_count, EVENT_COUNT);
+        assert!(pool.is_empty());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn released_event_releases_backtrace() {
+        let pool = Box::pin(RawEventPool::<i32>::new());
+
+        // SAFETY: The pool outlives both endpoints.
+        let (sender, receiver) = unsafe { pool.as_ref().rent() };
+        let mut receiver = Box::pin(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        _ = receiver.as_mut().poll(&mut cx);
+
+        // The receiver leaves the event behind for the sender to release.
+        drop(receiver);
+
+        let mut backtraces = pool.awaiter_backtraces();
+        assert_eq!(backtraces.len(), 1);
+
+        let backtrace = backtraces.pop().expect("the event has been awaited");
+        assert_eq!(Arc::strong_count(&backtrace), 2);
+
+        drop(sender);
+
+        // Releasing the event releases its backtrace, leaving the snapshot as the only owner.
+        assert_eq!(Arc::strong_count(&backtrace), 1);
     }
 }
