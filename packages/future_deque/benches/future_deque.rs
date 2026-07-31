@@ -5,7 +5,7 @@
 //! long-lived population.
 //!
 //! The churn scenarios (`*_transient_churn`) exist to guard allocation behaviour rather
-//! than wall-clock time. The pooled allocator behind both deques reclaims backing memory a
+//! than wall-clock time. The arena allocator behind both deques reclaims backing memory a
 //! whole chunk at a time rather than a slot at a time, so a single long-lived value is
 //! enough to pin an entire chunk. These scenarios hold a population of futures that never
 //! complete while repeatedly pushing, polling and popping a transient future, and the
@@ -63,10 +63,11 @@ impl Future for CountdownFuture {
 /// A future that never completes and never wakes itself.
 ///
 /// The churn scenarios use it for the long-lived population: because it never signals
-/// activation, it is polled exactly once and then merely occupies its pool slot, which is
+/// activation, it is polled exactly once and then merely occupies its arena slot, which is
 /// precisely the state that pins backing storage for the whole run.
 ///
-/// It carries a payload because the pool backing the deque cannot store zero-sized values.
+/// It carries a payload so that it occupies real storage; a zero-sized future would pin
+/// nothing and the scenario would lose its point.
 struct NeverReadyFuture {
     value: u64,
 }

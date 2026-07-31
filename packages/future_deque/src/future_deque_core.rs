@@ -1,24 +1,19 @@
 use std::collections::VecDeque;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
-use crate::erased_future::ErasedFuture;
+use crate::erased_future::ErasedFutureHandle;
 use crate::waker_meta::{self, MetaPtr};
-
-/// Abstracts over managed ([`BlindPooledMut`][infinity_pool::BlindPooledMut]) and raw
-/// pool handles, allowing [`FutureDequeCore`] to work with both Send and !Send variants.
-pub(crate) trait FutureHandle<T> {
-    fn as_pin_mut(&mut self) -> Pin<&mut dyn ErasedFuture<T>>;
-}
 
 /// Shared core implementation for both [`FutureDeque`][crate::FutureDeque]
 /// and [`LocalFutureDeque`][crate::LocalFutureDeque].
 ///
-/// Generic over `H`, the pool handle type. The Send variant uses managed handles
-/// (auto-remove on drop), while the Local variant uses local handles
-/// (auto-remove on drop via Rc-based pool reference).
-pub(crate) struct FutureDequeCore<T, H> {
+/// Both variants store the same erased handle type, so their behaviour is identical; they
+/// differ only in the thread-safety they advertise and in which thread-local arena their
+/// handles come from. The `Send` variant asserts thread-safety manually on the strength of
+/// the `Send` bound its push methods require, while the local variant inherits the handle's
+/// `!Send`ness.
+pub(crate) struct FutureDequeCore<T> {
     // Shared parent waker, read by every slot's waker. This stays `Arc<Mutex<Waker>>`
     // even for the `!Send` `LocalFutureDeque` variant — do not "optimize" it to a
     // non-atomic `Rc<Cell<Option<Waker>>>` (or make `WakerMeta`'s `ref_count`/`activated`
@@ -28,12 +23,12 @@ pub(crate) struct FutureDequeCore<T, H> {
     // `concurrent_signals_during_active_poll` tests). That wake path reads this field and
     // the `WakerMeta` atomics off-thread, so any non-atomic variant would be a data race.
     pub(crate) shared_parent: Arc<Mutex<Waker>>,
-    slots: VecDeque<Slot<T, H>>,
+    slots: VecDeque<Slot<T>>,
 }
 
-enum Slot<T, H> {
+enum Slot<T> {
     Pending {
-        handle: H,
+        handle: ErasedFutureHandle<T>,
         meta: MetaPtr,
         waker: Waker,
     },
@@ -42,7 +37,7 @@ enum Slot<T, H> {
     },
 }
 
-impl<T, H> Slot<T, H> {
+impl<T> Slot<T> {
     // Mutations to is_ready (returning false) and take_value (returning None) cause
     // pop_front/pop_back to never return results, making blocking tests (block_on +
     // Stream::next) hang indefinitely. Non-blocking tests catch both mutations, but
@@ -66,7 +61,7 @@ impl<T, H> Slot<T, H> {
     }
 }
 
-impl<T, H> FutureDequeCore<T, H> {
+impl<T> FutureDequeCore<T> {
     pub(crate) fn new() -> Self {
         Self {
             shared_parent: Arc::new(Mutex::new(Waker::noop().clone())),
@@ -74,8 +69,8 @@ impl<T, H> FutureDequeCore<T, H> {
         }
     }
 
-    /// Adds a pre-inserted pool handle to the back of the deque.
-    pub(crate) fn push_back_handle(&mut self, handle: H) {
+    /// Adds a pre-erased future handle to the back of the deque.
+    pub(crate) fn push_back_handle(&mut self, handle: ErasedFutureHandle<T>) {
         let meta = waker_meta::create_waker_meta(&self.shared_parent);
         let waker = waker_meta::make_waker(meta);
         self.slots.push_back(Slot::Pending {
@@ -85,8 +80,8 @@ impl<T, H> FutureDequeCore<T, H> {
         });
     }
 
-    /// Adds a pre-inserted pool handle to the front of the deque.
-    pub(crate) fn push_front_handle(&mut self, handle: H) {
+    /// Adds a pre-erased future handle to the front of the deque.
+    pub(crate) fn push_front_handle(&mut self, handle: ErasedFutureHandle<T>) {
         let meta = waker_meta::create_waker_meta(&self.shared_parent);
         let waker = waker_meta::make_waker(meta);
         self.slots.push_front(Slot::Pending {
@@ -125,9 +120,7 @@ impl<T, H> FutureDequeCore<T, H> {
             .pop_back_if(|slot| slot.is_ready())
             .and_then(Slot::take_value)
     }
-}
 
-impl<T, H: FutureHandle<T>> FutureDequeCore<T, H> {
     /// Polls all activated futures front-to-back, transitioning completed ones to ready.
     ///
     /// Returns `Poll::Ready(())` when no pending futures remain (all have completed or the
@@ -172,12 +165,12 @@ impl<T, H: FutureHandle<T>> FutureDequeCore<T, H> {
 
                 let sub_cx = &mut Context::from_waker(waker);
 
-                handle.as_pin_mut().poll_erased(sub_cx)
+                handle.as_mut().poll_erased(sub_cx)
             };
 
             if let Poll::Ready(value) = poll_result {
                 // Replace the slot atomically before dropping the old `Slot::Pending`. The
-                // pool handle inside the old slot may invoke a user-supplied `Drop` impl on
+                // future handle inside the old slot may invoke a user-supplied `Drop` impl on
                 // the wrapped future when `old` is dropped below (after `release_ref(meta)`).
                 // By the time that user code runs, the slot is already fully `Ready { value }`,
                 // so a reentrant observer (if one were possible) would see consistent state.
@@ -189,8 +182,8 @@ impl<T, H: FutureHandle<T>> FutureDequeCore<T, H> {
                 let old = std::mem::replace(slot, Slot::Ready { value });
 
                 // Release the Slot's metadata reference. The handle is dropped as
-                // part of the old Slot destruction, which auto-removes the future
-                // from the futures pool.
+                // part of the old Slot destruction, which returns the future's arena
+                // storage.
                 if let Slot::Pending { meta, .. } = old {
                     waker_meta::release_ref(meta);
                 }
@@ -235,14 +228,14 @@ impl<T, H: FutureHandle<T>> FutureDequeCore<T, H> {
     }
 }
 
-impl<T, H> Drop for FutureDequeCore<T, H> {
+impl<T> Drop for FutureDequeCore<T> {
     // When a pending slot is dropped normally (e.g. via mem::replace in poll()), its
     // waker metadata reference is released explicitly. This Drop impl handles the case
     // where the entire deque is dropped with pending slots still present — it ensures
     // metadata references are released so the waker metadata pool entries can be freed.
     //
-    // The pool handles in each slot are dropped as part of normal Slot destruction,
-    // which auto-removes futures from their object pools.
+    // The future handles in each slot are dropped as part of normal Slot destruction,
+    // which returns their arena storage.
     #[cfg_attr(coverage_nightly, coverage(off))]
     // Only runs when deque is dropped with
     // pending slots, which is a cleanup path.
@@ -258,10 +251,10 @@ impl<T, H> Drop for FutureDequeCore<T, H> {
     }
 }
 
-// The futures stored in the deque are pinned by pool slabs (heap-allocated, stable
-// addresses), not by FutureDequeCore's own fields. The struct only holds handles
-// (pointers + metadata) and result values, none of which require pinning guarantees.
-impl<T, H> Unpin for FutureDequeCore<T, H> {}
+// The futures stored in the deque are pinned by their arena allocations (stable addresses
+// that outlive the handle's owner), not by FutureDequeCore's own fields. The struct only
+// holds handles and result values, none of which require pinning guarantees.
+impl<T> Unpin for FutureDequeCore<T> {}
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -1128,12 +1121,12 @@ mod tests {
         .unwrap();
     }
 
-    // A deque draws its future storage from the pool of the thread that constructed it and
-    // its per-slot waker metadata from the pool of the thread that pushed each future.
-    // Because `FutureDeque` is `Send` and the wakers it hands out are `Send + Sync`, both
-    // kinds of handle must stay valid after the originating thread — and therefore its
-    // thread-locals — are gone. This test drives polling, pushing, slot release and pool
-    // teardown from a thread that never touched the originating thread-locals.
+    // A deque draws both its future storage and its per-slot waker metadata from the
+    // thread-locals of the thread that pushed each future. Because `FutureDeque` is `Send`
+    // and the wakers it hands out are `Send + Sync`, both kinds of handle must stay valid
+    // after the originating thread — and therefore its thread-locals — are gone. This test
+    // drives polling, pushing, slot release and storage teardown from a thread that never
+    // touched the originating thread-locals.
     #[test]
     fn deque_and_waker_outlive_originating_thread() {
         testing::with_watchdog(|| {
@@ -1145,7 +1138,7 @@ mod tests {
                 move || {
                     let mut deque = FutureDeque::new();
 
-                    // Pushing allocates the future in this thread's futures pool and the
+                    // Pushing allocates the future in this thread's futures arena and the
                     // per-slot waker metadata in this thread's metadata pool.
                     deque.push_back(WakerCaptureFuture {
                         waker_tx: Some(waker_tx),
@@ -1162,8 +1155,8 @@ mod tests {
                 }
             });
 
-            // Joining guarantees the originating thread ran its thread-local destructors,
-            // so from here on both pools are kept alive only by the handles we hold.
+            // Joining guarantees the originating thread ran its thread-local destructors, so
+            // from here on both storages are kept alive only by the handles we hold.
             let mut deque = originator.join().unwrap();
             let captured_waker = waker_rx.recv().unwrap();
 
@@ -1175,9 +1168,8 @@ mod tests {
             assert_eq!(deque.poll_front(cx), Poll::Ready(Some(42)));
             assert!(deque.is_empty());
 
-            // A push from here produces a mixed-origin slot: the future lands in the
-            // departed thread's futures pool while its metadata is allocated in this
-            // thread's metadata pool. Draining it exercises both pools from this side.
+            // The deque remains fully usable after its origin thread is gone: a push from
+            // here allocates in this thread's arena and metadata pool and drains normally.
             deque.push_back(std::future::ready(7));
             assert_eq!(deque.poll_front(cx), Poll::Ready(Some(7)));
             assert!(deque.is_empty());
@@ -1613,6 +1605,54 @@ mod tests {
 
         assert_eq!(deque.poll_front(cx), Poll::Ready(Some(())));
         assert_eq!(deque.poll_front(cx), Poll::Ready(Some(())));
+        assert_eq!(deque.poll_front(cx), Poll::Ready(None));
+    }
+
+    // --- Zero-sized futures ---
+
+    /// A future that occupies no storage at all, used to prove that the futures arena
+    /// accepts zero-sized payloads.
+    struct ZeroSizedFuture;
+
+    impl Future for ZeroSizedFuture {
+        type Output = u32;
+
+        fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<u32> {
+            Poll::Ready(9)
+        }
+    }
+
+    #[test]
+    fn zero_sized_future_is_stored_and_drained() {
+        // Keeps the test honest: a future with any payload at all would exercise the
+        // ordinary allocation path and prove nothing about zero-sized storage.
+        assert_eq!(size_of::<ZeroSizedFuture>(), 0);
+
+        let mut deque = LocalFutureDeque::new();
+        deque.push_back(ZeroSizedFuture);
+        deque.push_front(ZeroSizedFuture);
+
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
+
+        assert_eq!(deque.poll_front(cx), Poll::Ready(Some(9)));
+        assert_eq!(deque.poll_front(cx), Poll::Ready(Some(9)));
+        assert_eq!(deque.poll_front(cx), Poll::Ready(None));
+    }
+
+    #[test]
+    fn send_zero_sized_future_is_stored_and_drained() {
+        assert_eq!(size_of::<ZeroSizedFuture>(), 0);
+
+        let mut deque = FutureDeque::new();
+        deque.push_back(ZeroSizedFuture);
+        deque.push_front(ZeroSizedFuture);
+
+        let waker = Waker::noop();
+        let cx = &mut Context::from_waker(waker);
+
+        assert_eq!(deque.poll_front(cx), Poll::Ready(Some(9)));
+        assert_eq!(deque.poll_front(cx), Poll::Ready(Some(9)));
         assert_eq!(deque.poll_front(cx), Poll::Ready(None));
     }
 
