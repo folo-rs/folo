@@ -21,6 +21,8 @@ futures-core = { workspace = true, optional = true }
 infinity_pool = { workspace = true }
 
 [dev-dependencies]
+all_the_time = { path = "../all_the_time" }
+alloc_tracker = { path = "../alloc_tracker" }
 criterion = { workspace = true }
 events_once = { path = "../events_once" }
 futures = { workspace = true, features = ["executor"] }

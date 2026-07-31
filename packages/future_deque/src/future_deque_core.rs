@@ -1128,6 +1128,109 @@ mod tests {
         .unwrap();
     }
 
+    // A deque draws its future storage from the pool of the thread that constructed it and
+    // its per-slot waker metadata from the pool of the thread that pushed each future.
+    // Because `FutureDeque` is `Send` and the wakers it hands out are `Send + Sync`, both
+    // kinds of handle must stay valid after the originating thread — and therefore its
+    // thread-locals — are gone. This test drives polling, pushing, slot release and pool
+    // teardown from a thread that never touched the originating thread-locals.
+    #[test]
+    fn deque_and_waker_outlive_originating_thread() {
+        testing::with_watchdog(|| {
+            let (waker_tx, waker_rx) = mpsc::channel();
+            let value_ready = Arc::new(AtomicBool::new(false));
+
+            let originator = std::thread::spawn({
+                let value_ready = Arc::clone(&value_ready);
+                move || {
+                    let mut deque = FutureDeque::new();
+
+                    // Pushing allocates the future in this thread's futures pool and the
+                    // per-slot waker metadata in this thread's metadata pool.
+                    deque.push_back(WakerCaptureFuture {
+                        waker_tx: Some(waker_tx),
+                        value_ready,
+                    });
+
+                    // Polling hands the future the waker built from that metadata, which
+                    // the future clones and sends back to us.
+                    let waker = Waker::noop();
+                    let cx = &mut Context::from_waker(waker);
+                    assert!(deque.poll_front(cx).is_pending());
+
+                    deque
+                }
+            });
+
+            // Joining guarantees the originating thread ran its thread-local destructors,
+            // so from here on both pools are kept alive only by the handles we hold.
+            let mut deque = originator.join().unwrap();
+            let captured_waker = waker_rx.recv().unwrap();
+
+            value_ready.store(true, Ordering::Release);
+            captured_waker.wake();
+
+            let waker = Waker::noop();
+            let cx = &mut Context::from_waker(waker);
+            assert_eq!(deque.poll_front(cx), Poll::Ready(Some(42)));
+            assert!(deque.is_empty());
+
+            // A push from here produces a mixed-origin slot: the future lands in the
+            // departed thread's futures pool while its metadata is allocated in this
+            // thread's metadata pool. Draining it exercises both pools from this side.
+            deque.push_back(std::future::ready(7));
+            assert_eq!(deque.poll_front(cx), Poll::Ready(Some(7)));
+            assert!(deque.is_empty());
+        });
+    }
+
+    // `LocalFutureDeque` is `!Send`, so the deque itself never leaves its originating
+    // thread — but the `Waker` a polled future receives is `Send + Sync` and may outlive
+    // both the deque and that thread. Such a waker keeps the per-slot metadata (and the
+    // shared parent waker behind it) alive in the originating thread's now-orphaned
+    // metadata pool, so waking through it still has to reach the parent, and dropping it
+    // still has to return the slot to that pool.
+    #[test]
+    fn local_waker_outlives_originating_thread() {
+        testing::with_watchdog(|| {
+            let (waker_tx, waker_rx) = mpsc::channel();
+            let value_ready = Arc::new(AtomicBool::new(false));
+            let parent_woken = Arc::new(AtomicBool::new(false));
+
+            std::thread::spawn({
+                let value_ready = Arc::clone(&value_ready);
+                let parent_woken = Arc::clone(&parent_woken);
+                move || {
+                    let mut deque = LocalFutureDeque::new();
+                    deque.push_back(WakerCaptureFuture {
+                        waker_tx: Some(waker_tx),
+                        value_ready,
+                    });
+
+                    let parent = waker_from_flag(parent_woken);
+                    let cx = &mut Context::from_waker(&parent);
+                    assert!(deque.poll_front(cx).is_pending());
+
+                    // The deque is dropped here, on its originating thread, while the
+                    // captured waker clone still references the slot metadata.
+                }
+            })
+            .join()
+            .unwrap();
+
+            let captured_waker = waker_rx.recv().unwrap();
+
+            // Nothing has woken the parent yet, so the assertion below cannot pass vacuously.
+            assert!(!parent_woken.load(Ordering::Acquire));
+
+            // Waking reaches the parent waker that was created on the departed thread, and
+            // the owned wake then drops the final metadata reference.
+            captured_waker.wake();
+
+            assert!(parent_woken.load(Ordering::Acquire));
+        });
+    }
+
     #[test]
     fn owned_wake_activates_future() {
         let (waker_tx, waker_rx) = mpsc::channel();
