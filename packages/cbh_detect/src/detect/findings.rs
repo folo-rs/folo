@@ -1989,6 +1989,7 @@ mod tests {
     use crate::detect::recorded::{
         STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_HIGH, STATIONARY_BIMODAL_NOISE,
     };
+    use crate::detect::scatter::{scattered, seed_of};
     use crate::detect::{Blessing, SeriesPoint};
 
     /// Builds a Callgrind-style series carrying `values` in topological order, with
@@ -4607,34 +4608,169 @@ mod tests {
 
     #[test]
     fn branch_mode_pure_noise_batch_produces_no_findings() {
-        // Forty independent branch-mode series with realistic 2-3% wobble in their base
-        // windows and tips that stay inside that same wobble. Every series is judged,
-        // and none may turn into a finding through a noise-driven base split.
+        // Forty independently seeded branch-mode series: a stationary wall-time level with
+        // realistic scatter in the base window, and a tip drawn from that same distribution.
+        // Nothing changed in any of them, so none may become a finding — and in particular
+        // none may become one through a base split drawn across noise.
+        //
+        // The scatter is wide enough, relative to the branch floors, that a base split can
+        // clear them: the controls below manufacture findings out of this very data by
+        // narrowing where the gate declines to. The silence is therefore the split gate's
+        // doing and not the magnitude floors rejecting everything before the split logic is
+        // ever consulted.
+        let batch = pure_noise_branch_batch();
+        let context = branch_context(&batch, Some(NOISE_MERGE_BASE));
+        let config = AnalysisConfig::default();
+
+        let detection = find_changes(&batch, &context);
+        assert_eq!(detection.census.judged(), batch.len());
+        assert_eq!(detection.findings.len(), 0);
+
+        // Stationary noise now and then throws a trailing run that is rank-separated from
+        // everything before it, and such a run is not distinguishable from a level shift, so
+        // the gate is entitled to narrow there. What it may not do is narrow as a rule.
+        let narrowed = batch
+            .iter()
+            .filter(|series| noise_regime_start(series, &config) != 0)
+            .count();
+        assert!(
+            narrowed * NOISE_SPLIT_SHARE <= batch.len(),
+            "narrowing fired on {narrowed} of {} pure-noise windows",
+            batch.len()
+        );
+
+        // Nor may it narrow on a window where narrowing manufactures a report. Those are the
+        // windows this fixture exists to guard, so there must be some.
+        let weaponisable: Vec<usize> = (0..batch.len())
+            .filter(|&index| a_narrowed_split_would_report(batch.get(index).unwrap(), &config))
+            .collect();
+        assert!(
+            !weaponisable.is_empty(),
+            "no window in this fixture can be turned into a finding by narrowing, so the \
+             magnitude floors rather than the split gate would be producing the silence"
+        );
+        for index in weaponisable {
+            let series = batch.get(index).unwrap();
+            assert_eq!(
+                noise_regime_start(series, &config),
+                0,
+                "narrowing fired on pure-noise window {index}, where a narrowed base sample \
+                 clears the branch floors and turns the tip into a finding"
+            );
+        }
+
+        // And the silence is not an artefact of the false discovery rate control: no series
+        // raises a candidate in the first place. Relaxing only the base-split separation
+        // floor narrows more windows and turns some of them into candidates, which is the
+        // failure this fixture stands guard over.
+        let candidates = batch
+            .iter()
+            .filter(|series| evaluate_branch(series, &config, Some(NOISE_MERGE_BASE)).is_some())
+            .count();
+        assert_eq!(candidates, 0);
+
+        let permissive = AnalysisConfig {
+            min_base_split_separation: 0.0,
+            ..AnalysisConfig::default()
+        };
+        let relaxed = batch
+            .iter()
+            .filter(|series| noise_regime_start(series, &permissive) != 0)
+            .count();
+        let manufactured = batch
+            .iter()
+            .filter(|series| evaluate_branch(series, &permissive, Some(NOISE_MERGE_BASE)).is_some())
+            .count();
+        assert!(
+            relaxed > narrowed,
+            "the fixture cannot expose a noise-driven split"
+        );
+        assert!(
+            manufactured > 0,
+            "a noise-driven split on this fixture cannot clear the branch floors, so the \
+             floors rather than the split gate would be producing the silence"
+        );
+    }
+
+    /// The level [`pure_noise_branch_batch`] wobbles around, in nanoseconds.
+    ///
+    /// High enough that the 5% branch relative floor sits above the 1ns wall-time absolute
+    /// floor, so the relative floor is the binding one and the fixture exercises the same
+    /// gate ordering a real wall-time benchmark does.
+    const NOISE_LEVEL: f64 = 40.0;
+
+    /// The coefficient of variation [`pure_noise_branch_batch`] carries: the upper end of
+    /// the band this project's own wall-time benchmarks occupy.
+    ///
+    /// Wide enough that a value drawn from the band can sit more than 5% away from the mean
+    /// of a trailing slice of that same band, which is what lets a base split drawn across
+    /// noise clear the branch floors and reach a finding.
+    const NOISE_CV: f64 = 0.03;
+
+    /// The merge base of a [`pure_noise_branch_batch`] series: its last base-side commit.
+    const NOISE_MERGE_BASE: usize = COMPARE_WINDOW - 1;
+
+    /// The reciprocal of the share of [`pure_noise_branch_batch`] windows on which the base
+    /// split gate may narrow.
+    ///
+    /// Stationary noise throws the occasional trailing run that is rank-separated from the
+    /// values before it, and such a run carries the same evidence a genuine level shift
+    /// would, so narrowing there is correct behaviour rather than a defect. It must stay the
+    /// exception: an implementation that narrows on a large share of stationary windows is
+    /// reading structure into noise.
+    const NOISE_SPLIT_SHARE: usize = 8;
+
+    /// Forty stationary wall-time series, each with its own scatter sequence, laid out as
+    /// a full base window followed by a single branch tip.
+    fn pure_noise_branch_batch() -> Vec<Series> {
         const BATCH: usize = 40;
-        const WOBBLE: [f64; 16] = [
-            -2.4, 1.8, -0.7, 2.6, -1.9, 0.5, 2.2, -2.8, 1.1, -1.4, 2.9, -0.3, -2.1, 0.9, 1.7, -2.6,
-        ];
-        let series: Vec<Series> = (0..BATCH)
-            .map(|seed| {
-                let mut points: Vec<(usize, f64, bool)> = (0..COMPARE_WINDOW)
-                    .map(|index| {
-                        let wobble = WOBBLE[(index + seed) % WOBBLE.len()];
-                        (index, 100.0 + wobble, false)
-                    })
+
+        (0..BATCH)
+            .map(|index| {
+                let name = format!("noise{index}");
+                let values =
+                    scattered(&[NOISE_LEVEL; COMPARE_WINDOW + 1], NOISE_CV, seed_of(&name));
+                let points: Vec<(usize, f64, bool)> = values
+                    .iter()
+                    .enumerate()
+                    .map(|(offset, &value)| (offset, value, false))
                     .collect();
-                points.push((COMPARE_WINDOW, 100.0 + WOBBLE[seed % WOBBLE.len()], false));
-                let mut series = placed_series(&points);
-                series.id = BenchmarkId::new(nonempty![format!("noise{seed}"), "case".to_owned()]);
+                let mut series = placed_series_of_kind(&points, MetricKind::WallTime);
+                series.id = BenchmarkId::new(nonempty![name, "case".to_owned()]);
                 series
             })
-            .collect();
+            .collect()
+    }
 
-        let detection = find_changes(
-            &series,
-            &branch_context(&series, Some(shifted_base_merge_base())),
-        );
-        assert_eq!(detection.census.judged(), BATCH);
-        assert_eq!(detection.findings.len(), 0);
+    /// Where branch mode starts comparing a [`pure_noise_branch_batch`] series.
+    fn noise_regime_start(series: &Series, config: &AnalysisConfig) -> usize {
+        let borrowed: Vec<&SeriesPoint> = series.points.iter().collect();
+        let base = recent_commits(borrowed.get(..COMPARE_WINDOW).unwrap(), COMPARE_WINDOW);
+        let spans = commit_level_spans(&base);
+        current_base_regime_start(series, &spans, config, config.branch_practical_relative)
+    }
+
+    /// Whether some trailing slice of a [`pure_noise_branch_batch`] base window, short of the
+    /// whole window, turns the tip into a reported move.
+    ///
+    /// This is what an implementation that split at an arbitrary index would be doing, so a
+    /// window for which this holds is one the split gate has to decline.
+    fn a_narrowed_split_would_report(series: &Series, config: &AnalysisConfig) -> bool {
+        let borrowed: Vec<&SeriesPoint> = series.points.iter().collect();
+        let base = recent_commits(borrowed.get(..COMPARE_WINDOW).unwrap(), COMPARE_WINDOW);
+        let tip = borrowed.get(COMPARE_WINDOW..).unwrap().to_vec();
+        (1..=base.len().saturating_sub(MIN_REGIME)).any(|start| {
+            let narrowed = base.get(start..).unwrap().to_vec();
+            compare_samples(
+                series,
+                &narrowed,
+                &tip,
+                config,
+                config.branch_practical_relative,
+                None,
+            )
+            .is_some()
+        })
     }
 
     #[test]

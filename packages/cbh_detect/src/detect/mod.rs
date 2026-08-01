@@ -15,6 +15,8 @@ pub(crate) mod parallel;
 #[cfg(test)]
 mod recorded;
 pub(crate) mod run_points;
+#[cfg(test)]
+mod scatter;
 pub(crate) mod selection;
 pub(crate) mod series;
 #[cfg(test)]
