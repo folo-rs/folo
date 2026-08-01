@@ -127,8 +127,9 @@ pub struct AnalysisConfig {
     /// Code that allocated nothing gives a base window of zeroes, whose scatter is
     /// exactly zero, and this is what keeps that (real and important) move judgeable.
     pub scatter_floor_alloc: f64,
-    /// How many recent base-side points form the level a branch's latest state is
-    /// compared against (branch mode).
+    /// How many recent base-side commit levels branch mode inspects before comparing
+    /// the branch's latest state. A genuine level shift inside this window narrows the
+    /// comparison to the trailing regime; otherwise the whole window is used.
     pub compare_window: usize,
     /// Minimum relative magnitude a noisy *branch* move must reach. Raised above the
     /// history floor: a feature-branch signal must be high-confidence, since we
@@ -285,9 +286,11 @@ pub enum UnjudgedReason {
     /// Branch mode: the branch measured nothing for this series, so there is no
     /// branch state to compare against the base.
     NotMeasuredOnBranch,
-    /// Branch mode: the comparison window holds fewer than
-    /// [`min_series_points`](AnalysisConfig::min_series_points) base-side commits, so
-    /// there is no base level to judge the branch against.
+    /// Branch mode: the recent base window holds fewer than
+    /// [`min_series_points`](AnalysisConfig::min_series_points) base-side commit
+    /// levels, so there is not enough base evidence to judge the branch. A later
+    /// regime split may compare against a shorter trailing regime, but only after
+    /// this full-window evidence floor is met.
     TooFewBaseCommits,
 }
 
@@ -522,12 +525,14 @@ pub struct Finding {
     /// Markdown reports can draw a chart; it is not part of the machine-readable JSON
     /// contract.
     pub series: Vec<SeriesValue>,
-    /// First-parent topological index of the newest base-side point this finding was
-    /// actually compared against — the series' *comparison base*. Set only in branch
-    /// mode (`None` in history mode, where there is no single comparison base). Internal
-    /// cross-crate analysis metadata that lets the analysis measure how far the
-    /// comparison base sits behind the merge-base; it is not part of the JSON finding
-    /// contract.
+    /// First-parent topological index of the newest base-side point in the comparison
+    /// sample — the series' *comparison base*. Set only in branch mode (`None` in history
+    /// mode, where there is no single comparison base). When branch mode discards stale
+    /// levels before an accepted base-side step, this remains the newest point of the
+    /// trailing regime, because lag classification answers how current the compared base
+    /// state is. Internal cross-crate analysis metadata that lets the analysis measure
+    /// how far the comparison base sits behind the merge-base; it is not part of the JSON
+    /// finding contract.
     pub comparison_base_index: Option<usize>,
     /// Trailing-fill target for the chart: the first-parent index the charted series
     /// extends to when its last observation stops short of it. `Some(tip_index)` in
@@ -615,12 +620,15 @@ fn build_chart_series(
 /// The branch-collapsed chart series and its (absent) trailing-fill target.
 ///
 /// Branch mode judges the branch's tip commit alone, so the chart keeps the base-side
-/// points at their real `topo_index`, drops every interior branch commit, and
-/// represents the tip by a single point carrying the finding's judged `latest` value at
-/// `merge_base_index + 1`. The trailing-fill target is `None` — the tip is the
-/// always-present last column. The gap between the last base point (at the comparison
-/// base) and the tip therefore spans exactly `merge_base - comparison_base` (==
-/// `commits_behind`) columns.
+/// points at their real `topo_index`, including any stale pre-step base levels that
+/// detection deliberately ignored, drops every interior branch commit, and represents
+/// the tip by a single point carrying the finding's judged `latest` value at
+/// `merge_base_index + 1`. The chart is context rather than the comparison sample; when
+/// the detector narrows to a trailing base regime, the older base points remain visible
+/// so the base-side shift is understandable. The trailing-fill target is `None` — the
+/// tip is the always-present last column. The gap between the last base point (at the
+/// comparison base) and the tip therefore spans exactly
+/// `merge_base - comparison_base` (`commits_behind`) columns.
 ///
 /// A real branch finding always carries a known merge-base and comparison base; the
 /// fallback to a plain whole-series chart is defensive (never a panic) for a finding
@@ -1143,6 +1151,41 @@ fn latest_commit_points<'a>(branch: &[&'a SeriesPoint]) -> Vec<&'a SeriesPoint> 
         .collect()
 }
 
+/// A commit group's level and where that group starts in the source point slice.
+struct CommitLevel {
+    start: usize,
+    level: f64,
+}
+
+/// The per-commit levels of `points`, with their source-slice boundaries.
+///
+/// The boundaries let branch mode discard whole stale commit groups when it narrows a
+/// base window to its trailing regime. The grouping is identical to [`commit_levels`]:
+/// clean and dirty measurements at the same topological commit are different states,
+/// while repeated runs of the same state collapse to their median.
+fn commit_level_spans(points: &[&SeriesPoint]) -> Vec<CommitLevel> {
+    let mut spans = Vec::new();
+    let mut group: Vec<f64> = Vec::new();
+    let mut current: Option<(usize, bool)> = None;
+    let mut start = 0_usize;
+    for (index, point) in points.iter().enumerate() {
+        let key = (point.topo_index, point.dirty);
+        if current != Some(key) {
+            if let Some(level) = stats::median_in_place(&mut group) {
+                spans.push(CommitLevel { start, level });
+            }
+            group.clear();
+            current = Some(key);
+            start = index;
+        }
+        group.push(point.value);
+    }
+    if let Some(level) = stats::median_in_place(&mut group) {
+        spans.push(CommitLevel { start, level });
+    }
+    spans
+}
+
 /// The per-commit levels of `points`, oldest first.
 ///
 /// Several stored runs can share one commit — repeated dirty snapshots re-measure
@@ -1156,24 +1199,97 @@ fn latest_commit_points<'a>(branch: &[&'a SeriesPoint]) -> Vec<&'a SeriesPoint> 
 /// each other. `points` is sorted by `(topo_index, dirty, object_ordinal)`, so every
 /// group is contiguous.
 fn commit_levels(points: &[&SeriesPoint]) -> Vec<f64> {
-    let mut levels = Vec::new();
-    let mut group: Vec<f64> = Vec::new();
-    let mut current: Option<(usize, bool)> = None;
-    for point in points {
-        let key = (point.topo_index, point.dirty);
-        if current != Some(key) {
-            if let Some(level) = stats::median_in_place(&mut group) {
-                levels.push(level);
-            }
-            group.clear();
-            current = Some(key);
+    commit_level_spans(points)
+        .into_iter()
+        .map(|span| span.level)
+        .collect()
+}
+
+/// The point-slice index where the current base regime starts.
+///
+/// Branch mode first asks whether the whole recent base window has enough levels to be
+/// evidence. Only then may it narrow the comparison sample to a shorter trailing regime:
+/// a base-side step is accepted as a regime boundary only when Pettitt locates it, the two
+/// sides each satisfy `min_regime`, Mann–Whitney significance and separation both pass,
+/// and the step clears the same relative and absolute floors that make a branch move
+/// reportable. If several suffixes expose qualifying steps, the newest split is used,
+/// because the comparison should describe the regime the branch would merge into.
+fn current_base_regime_start(
+    series: &Series,
+    spans: &[CommitLevel],
+    config: &AnalysisConfig,
+    practical_floor: f64,
+) -> usize {
+    let levels: Vec<f64> = spans.iter().map(|span| span.level).collect();
+    let min_regime = config.min_regime.max(1);
+    let Some(min_window) = min_regime.checked_mul(2) else {
+        return 0;
+    };
+    let Some(last_start) = levels.len().checked_sub(min_window) else {
+        return 0;
+    };
+
+    let mut latest_split: Option<usize> = None;
+    for start in 0..=last_start {
+        let Some(suffix) = levels.get(start..) else {
+            continue;
+        };
+        let Some(change) = stats::pettitt(suffix) else {
+            continue;
+        };
+        let Some(split) = start.checked_add(change.index) else {
+            continue;
+        };
+        if base_regime_split_qualifies(series, suffix, change.index, config, practical_floor) {
+            latest_split = Some(latest_split.map_or(split, |latest| latest.max(split)));
         }
-        group.push(point.value);
     }
-    if let Some(level) = stats::median_in_place(&mut group) {
-        levels.push(level);
+
+    latest_split
+        .and_then(|split| spans.get(split))
+        .map_or(0, |span| span.start)
+}
+
+/// Whether `split` is a genuine base-side regime boundary.
+fn base_regime_split_qualifies(
+    series: &Series,
+    levels: &[f64],
+    split: usize,
+    config: &AnalysisConfig,
+    practical_floor: f64,
+) -> bool {
+    let Some(before) = levels.get(..split) else {
+        return false;
+    };
+    let Some(after) = levels.get(split..) else {
+        return false;
+    };
+    let min_regime = config.min_regime.max(1);
+    if before.len() < min_regime || after.len() < min_regime {
+        return false;
     }
-    levels
+    let Some(baseline) = stats::median(before) else {
+        return false;
+    };
+    let Some(current) = stats::median(after) else {
+        return false;
+    };
+    let delta = current - baseline;
+    if delta.abs() <= 0.0 {
+        return false;
+    }
+    if relative_delta_of(delta, baseline).abs() < practical_floor {
+        return false;
+    }
+    if !clears_absolute_floor(series, delta, config) {
+        return false;
+    }
+    let mann_whitney_u = stats::MannWhitneyU::new(before, after);
+    let mann_whitney = mann_whitney_u.map_or(1.0, |ranked| ranked.two_sided_p_value());
+    if mann_whitney >= config.change_alpha {
+        return false;
+    }
+    regimes_are_separated(mann_whitney_u, delta, config)
 }
 
 /// The two-sided p-value for `latest` being drawn from the same distribution as the
@@ -1192,14 +1308,12 @@ fn commit_levels(points: &[&SeriesPoint]) -> Vec<f64> {
 /// into a test that fires far more often than its nominal rate. Base-side outliers
 /// inflate the sample standard deviation, which errs toward silence.
 ///
-/// Both the centre and the scale are deliberately non-robust *together*. A level
-/// shift that landed on the base branch inside the window raises the sample standard
-/// deviation, so the window it sits in demands a larger move before anything is
-/// reported and the detector goes quiet until the step ages out. That is the correct
-/// trade: making the scale robust to such a step while the centre stays the window
-/// mean is strictly worse, because the mean then sits between the two levels and a
-/// tip agreeing exactly with the newer level reads as displaced from it — the
-/// unsettled window would manufacture findings on branches that changed nothing.
+/// Both the centre and the scale are deliberately non-robust *together*. Branch mode
+/// handles a settled base-side step by moving both onto the trailing regime before this
+/// function is called. That keeps the prediction interval coherent: making only the
+/// scale robust while the centre stayed the mixed-window mean would put the centre
+/// between two levels and make a tip agreeing exactly with the newer level read as
+/// displaced from it.
 ///
 /// `scatter_floor` is a lower bound on the standard deviation, in the metric's own
 /// units: the smallest scatter the metric can express (see
@@ -1229,19 +1343,28 @@ fn prediction_interval_p(base: &[f64], latest: f64, scatter_floor: f64) -> Optio
 /// Compares a `before` sample against an `after` sample on the same series and, if
 /// the noise-aware gates pass, returns a change-point [`Candidate`].
 ///
-/// `before` is the recent base-side window and `after` the branch tip's runs. Both
-/// collapse to per-commit levels first (see [`commit_levels`]), so the comparison is
-/// one new commit's level against the base's commit-to-commit distribution; the
-/// tip's repeated runs share a build and a runner and so cannot count as independent
-/// evidence.
+/// `before` is the selected base-side comparison sample and `after` the branch tip's
+/// runs. Both collapse to per-commit levels first (see [`commit_levels`]), so the
+/// comparison is one new commit's level against the base's commit-to-commit
+/// distribution; the tip's repeated runs share a build and a runner and so cannot
+/// count as independent evidence.
 ///
-/// The base level is the window's **mean**, which is the centre
+/// The caller verifies that the full recent base window contains at least
+/// `min_series_points` levels before this function runs. The comparison sample may be
+/// shorter when that window holds a genuine base-side level shift: then branch mode
+/// discards the stale prefix and compares against the trailing regime, whose
+/// `min_regime` floor is the evidence needed for the prediction interval. The two
+/// thresholds differ deliberately: `min_series_points` decides whether branch mode has
+/// enough base evidence to test this series at all, while `min_regime` decides whether
+/// an accepted current regime is large enough to serve as the comparison sample.
+///
+/// The base level is the comparison sample's **mean**, which is the centre
 /// [`prediction_interval_p`] measures against, so the magnitude the finding reports
 /// is the one its p-value describes.
 ///
 /// The relative move must clear `practical_floor` and the metric's absolute floor,
-/// stand above the base window's own residual scatter, and then be significant as a
-/// Student-t prediction interval. Where the engine reports per-point confidence
+/// stand above the comparison sample's own residual scatter, and then be significant as
+/// a Student-t prediction interval. Where the engine reports per-point confidence
 /// intervals the two samples' intervals must also be disjoint and the move must
 /// clear the measurement noise band; both are extra vetoes that can only *suppress*
 /// a candidate the other gates would have reported — they never turn a non-finding
@@ -1264,7 +1387,7 @@ fn compare_samples(
     }
     let relative_delta = relative_delta_of(delta, baseline);
 
-    if before_values.len() < config.min_series_points {
+    if before_values.len() < config.min_regime.max(1) {
         return None;
     }
     if relative_delta.abs() < practical_floor {
@@ -1338,6 +1461,14 @@ fn compare_samples(
 /// matter (see [`latest_commit_points`]), since that is the state a merge lands in
 /// the base. A new benchmark introduced on the branch (no base-side points) or an
 /// empty branch yields nothing, since there is no baseline to compare.
+///
+/// The recent base window is first collapsed to per-commit levels and checked for
+/// enough evidence as a whole. If that window contains a genuine level shift, located
+/// with Pettitt and accepted only by the same Mann–Whitney significance, separation,
+/// relative-floor, and absolute-floor gates that make such a split trustworthy, the
+/// stale prefix before the newest accepted split is discarded. The prediction interval
+/// then compares the branch tip against the trailing regime, moving its centre and
+/// scatter together onto the base level the branch would merge into.
 fn evaluate_branch(
     series: &Series,
     config: &AnalysisConfig,
@@ -1347,15 +1478,30 @@ fn evaluate_branch(
     // An empty base or branch yields nothing: `compare_samples` returns `None` once
     // either sample's median is absent, so no explicit emptiness guard is needed.
     let base_window = recent_commits(&base, config.compare_window);
+    let base_spans = commit_level_spans(&base_window);
+    if base_spans.len() < config.min_series_points {
+        return None;
+    }
+    let comparison_start = current_base_regime_start(
+        series,
+        &base_spans,
+        config,
+        config.branch_practical_relative,
+    );
+    let comparison_base: Vec<&SeriesPoint> = base_window
+        .get(comparison_start..)
+        .map(<[&SeriesPoint]>::to_vec)
+        .unwrap_or_default();
     let latest_points = latest_commit_points(&branch);
     let commit = branch.last().and_then(|&point| owned_commit(point));
-    // The newest base-side point actually fed to the comparison is this series' comparison
-    // base. Record its first-parent position so the analysis can measure how far it sits
-    // behind the merge-base.
-    let comparison_base_index = base_window.last().map(|point| point.topo_index);
+    // The newest base-side point in the selected comparison sample is this series'
+    // comparison base. Truncating stale levels changes the sample's start, not this
+    // newest point, so lag classification still measures freshness against the state
+    // the branch would merge into.
+    let comparison_base_index = comparison_base.last().map(|point| point.topo_index);
     let mut candidate = compare_samples(
         series,
-        &base_window,
+        &comparison_base,
         &latest_points,
         config,
         config.branch_practical_relative,
@@ -1592,14 +1738,19 @@ pub fn testability(series: &Series, context: &AnalysisContext) -> Testability {
         AnalysisMode::Branch => {
             let (base, branch) = split_at_merge_base(&series.points, context.merge_base_index);
             if latest_commit_points(&branch).is_empty() {
-                Testability::Unjudged(UnjudgedReason::NotMeasuredOnBranch)
-            } else if commit_levels(&recent_commits(&base, config.compare_window)).len()
+                return Testability::Unjudged(UnjudgedReason::NotMeasuredOnBranch);
+            }
+            // Testability asks whether the full recent base window contains enough
+            // evidence to run a branch comparison at all. Detection may then narrow to
+            // a `min_regime`-sized trailing regime after an accepted base-side shift;
+            // that does not make this census reason untruthful, because the evidence
+            // floor was met before any history was discarded.
+            if commit_levels(&recent_commits(&base, config.compare_window)).len()
                 < config.min_series_points
             {
-                Testability::Unjudged(UnjudgedReason::TooFewBaseCommits)
-            } else {
-                Testability::Judged
+                return Testability::Unjudged(UnjudgedReason::TooFewBaseCommits);
             }
+            Testability::Judged
         }
     }
 }
@@ -2278,7 +2429,7 @@ mod tests {
         // wobble by 2. Under the default residual multiple the move stands clear of
         // that scatter and is flagged; a deliberately high multiple pushes the noise
         // band above the move, so only the residual gate rejects it (every earlier
-        // gate — persistence, Mann-Whitney, practical floor — still passes).
+        // gate — persistence, Mann–Whitney, practical floor — still passes).
         let series = series_of(&[
             100.0, 104.0, 100.0, 104.0, 102.0, 130.0, 134.0, 130.0, 134.0, 132.0,
         ]);
@@ -2797,6 +2948,33 @@ mod tests {
         branch_over_base_of_kind(base, branch, branch_points, MetricKind::InstructionCount)
     }
 
+    /// A branch fixture whose base window contains an old level followed by the
+    /// current one, then one branch tip point.
+    fn branch_after_base_shift(old: f64, current: f64, current_len: usize, tip: f64) -> Series {
+        let old_len = COMPARE_WINDOW.checked_sub(current_len).unwrap();
+        let mut points: Vec<(usize, f64, bool)> =
+            (0..old_len).map(|index| (index, old, false)).collect();
+        points.extend(
+            (0..current_len).map(|offset| (old_len.checked_add(offset).unwrap(), current, false)),
+        );
+        points.push((COMPARE_WINDOW, tip, false));
+        placed_series(&points)
+    }
+
+    /// The merge-base for [`branch_after_base_shift`].
+    fn shifted_base_merge_base() -> usize {
+        COMPARE_WINDOW - 1
+    }
+
+    /// Where the branch detector starts comparing a shifted base fixture.
+    fn shifted_base_regime_start(series: &Series) -> usize {
+        let borrowed: Vec<&SeriesPoint> = series.points.iter().collect();
+        let base = recent_commits(&borrowed[..COMPARE_WINDOW], COMPARE_WINDOW);
+        let spans = commit_level_spans(&base);
+        let config = AnalysisConfig::default();
+        current_base_regime_start(series, &spans, &config, config.branch_practical_relative)
+    }
+
     /// A base-branch run of [`MIN_SERIES_POINTS`] commits whose levels alternate
     /// ±`wobble` around `value`, so the window carries genuine between-commit scatter
     /// while its mean stays exactly `value`.
@@ -3216,6 +3394,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn branch_chart_series_keeps_stale_base_context_after_regime_narrowing() {
+        // Detection compares against only the current base regime after the split, but
+        // the chart remains historical context: the stale 200-level base commits are
+        // still present before the current 100-level regime and the branch tip.
+        let series = branch_after_base_shift(200.0, 100.0, MIN_REGIME, 130.0);
+        let finding = only(branch_changes(&[series], Some(shifted_base_merge_base())));
+        let mut expected: Vec<(usize, f64)> = (0..(COMPARE_WINDOW - MIN_REGIME))
+            .map(|index| (index, 200.0))
+            .collect();
+        expected.extend((COMPARE_WINDOW - MIN_REGIME..COMPARE_WINDOW).map(|index| (index, 100.0)));
+        expected.push((COMPARE_WINDOW, 130.0));
+        assert_eq!(chart_pairs(&finding), expected);
+        assert_eq!(finding.baseline, 100.0);
+    }
+
     /// Runs the history-mode detector reporting both directions *and* inactive
     /// findings, so a recovered spike surfaces.
     fn changes_with_inactive(series: &[Series]) -> Vec<Finding> {
@@ -3284,7 +3478,7 @@ mod tests {
     fn resolved_spike_is_detected_and_marked_inactive() {
         // A plateau at 20 between baseline regimes at 10 that has since recovered.
         // Every engine is treated as noisy, so the elevated span must clear a
-        // Mann-Whitney gate on both sides; three full-size regimes make the rise and
+        // Mann–Whitney gate on both sides; three full-size regimes make the rise and
         // the fall significant.
         let spike = recovered_spike(10.0, 20.0);
         let candidate =
@@ -3408,15 +3602,20 @@ mod tests {
     }
 
     #[test]
-    fn compare_samples_needs_the_minimum_base_commit_levels() {
-        // The base sample is one *commit level* per commit, and the prediction
-        // interval needs `min_series_points` of them to say anything about the base's
-        // commit-to-commit scatter. One level short is refused outright; adding the
-        // missing level reports the same unmistakable move.
+    fn compare_samples_accepts_a_minimal_trailing_regime() {
+        // Once branch mode has established that the full base window has enough
+        // evidence, an accepted current regime of `min_regime` levels is a valid
+        // comparison sample. Keeping the old `min_series_points` threshold here would
+        // make the base-regime truncation ineffective.
+        let before = pts(&[
+            (99.8, 0.5),
+            (100.2, 0.5),
+            (99.8, 0.5),
+            (100.2, 0.5),
+            (100.0, 0.5),
+        ]);
         let after = pts(&[(130.0, 0.5)]);
-        let too_short = pts(&[(100.0, 0.5); MIN_SERIES_POINTS - 1]);
-        assert!(compare(&too_short, &after, 0.05).is_none());
-        assert!(compare(&base_window(100.0, 0.5), &after, 0.05).is_some());
+        assert!(compare(&before, &after, 0.05).is_some());
     }
 
     #[test]
@@ -3778,7 +3977,7 @@ mod tests {
     #[test]
     fn noisy_resolved_spike_with_significant_rise_and_recovery_is_flagged() {
         // A noisy plateau (200) between baseline/recovery regimes (100): both the
-        // rise and the recovery are Mann-Whitney significant, so the recovered spike
+        // rise and the recovery are Mann–Whitney significant, so the recovered spike
         // is flagged, with confidence below 1.
         let series = wall_series(&three_regimes(100.0, 200.0, 100.0), 1.0);
         let candidate =
@@ -3789,7 +3988,7 @@ mod tests {
 
     #[test]
     fn noisy_resolved_spike_needs_both_gates_significant() {
-        // The rise is Mann-Whitney significant, but the tail keeps falling back to the
+        // The rise is Mann–Whitney significant, but the tail keeps falling back to the
         // plateau level, so the recovery is not: `rise_p >= alpha || recovery_p >=
         // alpha` rejects it. An `&&` mutant (needing both insignificant to reject)
         // would wrongly flag it. The tail's median is still the baseline, so the
@@ -4115,6 +4314,229 @@ mod tests {
         let finding = only(branch_changes(&[placed_series(&points)], Some(merge_base)));
         assert_eq!(finding.baseline, 100.0);
         assert_eq!(finding.direction, Direction::Regression);
+    }
+
+    #[test]
+    fn branch_mode_compares_against_the_current_base_regime_after_a_shift() {
+        // The recent base window itself spans a real 200 -> 100 level shift. The branch
+        // tip is a clear regression against the current 100 level; judging the mixed
+        // window as one population would inflate the scatter and hide it.
+        let series = branch_after_base_shift(200.0, 100.0, MIN_REGIME, 130.0);
+        assert_eq!(
+            shifted_base_regime_start(&series),
+            COMPARE_WINDOW - MIN_REGIME
+        );
+        let finding = only(branch_changes(&[series], Some(shifted_base_merge_base())));
+        assert_eq!(finding.direction, Direction::Regression);
+        assert_eq!(finding.baseline, 100.0);
+        assert_eq!(finding.latest, 130.0);
+    }
+
+    #[test]
+    fn branch_mode_uses_the_most_recent_qualifying_base_split() {
+        // The base window contains two real shifts, 100 -> 200 -> 100. The current
+        // regime is the final 100-level tail, so a tip at 130 is a regression against
+        // that tail rather than an improvement against the older 200-level regime.
+        let mut points: Vec<(usize, f64, bool)> =
+            (0..MIN_REGIME).map(|index| (index, 100.0, false)).collect();
+        points.extend(
+            (0..(COMPARE_WINDOW - 2 * MIN_REGIME))
+                .map(|offset| (MIN_REGIME + offset, 200.0, false)),
+        );
+        points.extend(
+            (0..MIN_REGIME).map(|offset| (COMPARE_WINDOW - MIN_REGIME + offset, 100.0, false)),
+        );
+        points.push((COMPARE_WINDOW, 130.0, false));
+        let series = placed_series(&points);
+        assert_eq!(
+            shifted_base_regime_start(&series),
+            COMPARE_WINDOW - MIN_REGIME
+        );
+        let finding = only(branch_changes(&[series], Some(shifted_base_merge_base())));
+        assert_eq!(finding.direction, Direction::Regression);
+        assert_eq!(finding.baseline, 100.0);
+    }
+
+    fn base_split_qualifies(before: f64, after: f64, before_len: usize, after_len: usize) -> bool {
+        let mut levels = vec![before; before_len];
+        levels.extend(std::iter::repeat_n(after, after_len));
+        base_regime_split_qualifies(
+            &series_of(&[]),
+            &levels,
+            before_len,
+            &AnalysisConfig::default(),
+            AnalysisConfig::default().branch_practical_relative,
+        )
+    }
+
+    #[test]
+    fn base_regime_split_accepts_a_minimal_before_regime() {
+        // The pre-split side may hold exactly `min_regime` levels; rejecting equality
+        // would prevent branch mode from recovering as soon as enough current base
+        // commits exist.
+        assert!(base_split_qualifies(
+            100.0,
+            130.0,
+            MIN_REGIME,
+            MIN_REGIME + 1
+        ));
+    }
+
+    #[test]
+    fn base_regime_split_rejects_a_short_before_regime() {
+        assert!(!base_split_qualifies(
+            100.0,
+            130.0,
+            MIN_REGIME - 1,
+            MIN_REGIME + 1
+        ));
+    }
+
+    #[test]
+    fn base_regime_split_rejects_a_short_after_regime() {
+        assert!(!base_split_qualifies(
+            100.0,
+            130.0,
+            MIN_REGIME + 1,
+            MIN_REGIME - 1
+        ));
+    }
+
+    #[test]
+    fn base_regime_split_accepts_the_relative_floor_boundary() {
+        // A base-side step exactly at the branch practical floor is large enough to
+        // define the current regime, matching the reporting floor's strictness.
+        assert!(base_split_qualifies(100.0, 105.0, MIN_REGIME, MIN_REGIME));
+    }
+
+    #[test]
+    fn base_regime_split_rejects_below_the_relative_floor() {
+        // This step clears the absolute floor but not the branch relative floor, so it
+        // is too small to justify discarding history.
+        assert!(!base_split_qualifies(200.0, 209.0, MIN_REGIME, MIN_REGIME));
+    }
+
+    #[test]
+    fn branch_mode_recovers_at_the_minimum_trailing_regime() {
+        // With `min_regime = 5`, five current-level base commits are enough to form the
+        // comparison regime, while four are not enough to accept the split and still
+        // leave the mixed window too unsettled to report the same tip.
+        let exactly_enough = branch_after_base_shift(200.0, 100.0, MIN_REGIME, 130.0);
+        assert_eq!(
+            shifted_base_regime_start(&exactly_enough),
+            COMPARE_WINDOW - MIN_REGIME
+        );
+        assert_eq!(
+            only(branch_changes(
+                &[exactly_enough],
+                Some(shifted_base_merge_base())
+            ))
+            .baseline,
+            100.0
+        );
+
+        let one_short = branch_after_base_shift(200.0, 100.0, MIN_REGIME - 1, 130.0);
+        assert_eq!(shifted_base_regime_start(&one_short), 0);
+        assert!(branch_changes(&[one_short], Some(shifted_base_merge_base())).is_empty());
+    }
+
+    #[test]
+    fn branch_mode_does_not_split_a_noise_only_base_window() {
+        // A realistic 2-3% deterministic wobble is not a regime boundary. The helper
+        // returning zero proves no suffix was accepted as a current-regime split, and a
+        // tip that stays inside the same wobble remains silent.
+        let mut points = vec![
+            (0, 100.0, false),
+            (1, 102.0, false),
+            (2, 98.0, false),
+            (3, 101.0, false),
+            (4, 99.0, false),
+            (5, 103.0, false),
+            (6, 97.0, false),
+            (7, 100.0, false),
+            (8, 102.0, false),
+            (9, 98.0, false),
+            (10, 101.0, false),
+            (11, 99.0, false),
+            (12, 103.0, false),
+            (13, 97.0, false),
+            (14, 100.0, false),
+            (15, 102.0, false),
+        ];
+        points.push((COMPARE_WINDOW, 101.0, false));
+        let series = placed_series(&points);
+        assert_eq!(shifted_base_regime_start(&series), 0);
+        assert!(branch_changes(&[series], Some(shifted_base_merge_base())).is_empty());
+    }
+
+    #[test]
+    fn branch_mode_pure_noise_batch_produces_no_findings() {
+        // Forty independent branch-mode series with realistic 2-3% wobble in their base
+        // windows and tips that stay inside that same wobble. Every series is judged,
+        // and none may turn into a finding through a noise-driven base split.
+        const BATCH: usize = 40;
+        const WOBBLE: [f64; 16] = [
+            -2.4, 1.8, -0.7, 2.6, -1.9, 0.5, 2.2, -2.8, 1.1, -1.4, 2.9, -0.3, -2.1, 0.9, 1.7, -2.6,
+        ];
+        let series: Vec<Series> = (0..BATCH)
+            .map(|seed| {
+                let mut points: Vec<(usize, f64, bool)> = (0..COMPARE_WINDOW)
+                    .map(|index| {
+                        let wobble = WOBBLE[(index + seed) % WOBBLE.len()];
+                        (index, 100.0 + wobble, false)
+                    })
+                    .collect();
+                points.push((COMPARE_WINDOW, 100.0 + WOBBLE[seed % WOBBLE.len()], false));
+                let mut series = placed_series(&points);
+                series.id = BenchmarkId::new(nonempty![format!("noise{seed}"), "case".to_owned()]);
+                series
+            })
+            .collect();
+
+        let detection = find_changes(
+            &series,
+            &branch_context(&series, Some(shifted_base_merge_base())),
+        );
+        assert_eq!(detection.census.judged(), BATCH);
+        assert_eq!(detection.findings.len(), 0);
+    }
+
+    #[test]
+    fn branch_mode_does_not_split_a_base_step_below_the_floor() {
+        // The base step is rank-significant and well-separated, but it moves only four
+        // instruction counts. A move below the metric's absolute floor is too small to
+        // justify discarding earlier base history.
+        let series = branch_after_base_shift(60.0, 64.0, MIN_REGIME, 64.0);
+        assert_eq!(shifted_base_regime_start(&series), 0);
+        assert!(branch_changes(&[series], Some(shifted_base_merge_base())).is_empty());
+    }
+
+    #[test]
+    fn branch_mode_is_silent_when_the_tip_matches_the_current_base_regime() {
+        // The detector narrows the base to the current 100-level regime, but a branch
+        // tip that agrees with it has no move to report. The unsettled mixed window must
+        // not manufacture a finding.
+        let series = branch_after_base_shift(200.0, 100.0, MIN_REGIME, 100.0);
+        assert_eq!(
+            shifted_base_regime_start(&series),
+            COMPARE_WINDOW - MIN_REGIME
+        );
+        assert!(branch_changes(&[series], Some(shifted_base_merge_base())).is_empty());
+    }
+
+    #[test]
+    fn branch_mode_reports_an_improvement_against_the_current_base_regime() {
+        // The same base-regime narrowing works in the improvement direction: the recent
+        // base has moved up to 200 and the branch tip improves it to 150.
+        let series = branch_after_base_shift(100.0, 200.0, MIN_REGIME, 150.0);
+        assert_eq!(
+            shifted_base_regime_start(&series),
+            COMPARE_WINDOW - MIN_REGIME
+        );
+        let finding = only(branch_changes(&[series], Some(shifted_base_merge_base())));
+        assert_eq!(finding.direction, Direction::Improvement);
+        assert_eq!(finding.baseline, 200.0);
+        assert_eq!(finding.latest, 150.0);
     }
 
     #[test]

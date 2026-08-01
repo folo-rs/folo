@@ -107,14 +107,17 @@ pub(crate) const SCATTER_FLOOR_TIME: f64 = 0.0;
 /// the underlying count can distinguish.
 pub(crate) const SCATTER_FLOOR_ALLOC: f64 = 1.0;
 
-/// Default `compare_window`: how many recent base-side **commits** form the level a
-/// branch tip is compared against.
+/// Default `compare_window`: how many recent base-side **commits** branch mode
+/// inspects.
 ///
-/// The window is the sample the tip's prediction interval is built from, so its
-/// size sets how small a move branch mode can resolve. The detectable move shrinks
-/// steeply up to about this many commits and only marginally beyond, while a longer
-/// window reaches further back into history that may no longer describe the current
-/// base level.
+/// The window is the evidence branch mode inspects to understand the current base
+/// level. When it contains a genuine level shift, branch mode narrows the prediction
+/// interval to the trailing regime after that shift; otherwise the whole window is
+/// the comparison sample. Its size sets how small a move branch mode can resolve and
+/// how far back it can look for a current-regime boundary. The detectable move
+/// shrinks steeply up to about this many commits and only marginally beyond, while a
+/// longer window reaches further back into history that may no longer describe the
+/// current base level.
 ///
 /// It counts commits rather than stored runs because several runs can share one
 /// commit and collapse to a single level before the comparison: a point-counted

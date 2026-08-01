@@ -131,8 +131,9 @@ Detection has no cross-series state, so the series split into one balanced chunk
 identical to a sequential pass. A single available CPU (as Miri reports) yields a single
 worker over the whole input. Per series the mode selects the detector: history runs both a
 change-point and a drift detector and keeps the better fit (plus an optional recovered-spike
-pass); branch collapses each commit's runs to one level and judges the tip against a
-prediction interval over the recent base commits.
+pass); branch collapses each commit's runs to one level, narrows the recent base window to
+its current regime when that window contains a genuine level shift, and judges the tip
+against that regime's prediction interval.
 
 The false-discovery filter's family is every series that was **testable**, including those that
 raised no candidate (DESIGN.md §8.3). The detect workers already evaluate that predicate to

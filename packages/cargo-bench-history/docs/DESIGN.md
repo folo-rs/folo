@@ -989,10 +989,12 @@ spurious step while leaving every genuine level shift — where it sits near 1.0
 Where the points carry confidence intervals, non-overlap of the regime intervals is an
 *additional* veto — it can only *suppress* a candidate the other gates would report (declaring
 the move noise when the intervals overlap), never manufacture a finding; where they do not,
-the residual and separation gates stand alone. The separation gate belongs to this detector
-alone, because Pettitt is free to place its split anywhere inside one series: the
-resolved-spike detector's recover-to-baseline shape does not arise from a stationary
-oscillation in the first place, and the branch comparison has no interior split to misplace.
+the residual and separation gates stand alone. The separation gate is required wherever
+Pettitt is trusted to identify a regime boundary: the history change-point detector uses it
+for reported findings, and branch mode uses the same effect-size gate when deciding whether a
+base-side split is strong enough to define the current comparison regime. The resolved-spike
+detector's recover-to-baseline shape does not arise from a stationary oscillation in the first
+place.
 
 Drift mirrors this: Mann–Kendall establishes the trend, Theil–Sen sizes it, and the total
 movement must clear the practical floor and exceed the residual scatter about the fitted
@@ -1020,18 +1022,26 @@ moves from commit to commit?" — so it needs its own statistic. Two properties 
   continuous integration produces, the two modes see the same data and the asymmetry does not
   arise.
 * **One new observation, not a second sample.** The tip's level is judged against a
-  **Student-t prediction interval** for a single future observation drawn from the recent base
-  commits, so the interval carries the scatter of the base levels *plus* the uncertainty in
-  their mean and widens correctly when the window is short. The centre it measures from is that
-  window's **mean**, and the magnitude the finding reports is measured from the same centre, so
+  **Student-t prediction interval** for a single future observation drawn from the current base
+  regime, so the interval carries the scatter of that regime's levels *plus* the uncertainty in
+  their mean and widens correctly when the regime is short. The centre it measures from is that
+  regime's **mean**, and the magnitude the finding reports is measured from the same centre, so
   the move a report states is the move its p-value tested.
 
-  Both the centre and the scale are deliberately non-robust. A real step that landed on the base
-  branch inside the window inflates the scatter and can silence a genuine finding, but making
-  the scale robust while the centre is not is strictly worse: the mean then sits between the two
-  levels and a tip at either of them reads as displaced, so a branch that changed nothing is
-  flagged. Being conservative exactly while the base is unsettled is the intended trade, and it
-  self-heals once the step ages out of the window.
+  The recent base window is still the evidence window. If its collapsed commit levels contain a
+  genuine interior step, branch mode discards the stale prefix and compares against only the
+  trailing regime. A split is trusted only when the trailing and preceding sides each hold the
+  minimum regime size, the Pettitt-located boundary is confirmed by a Mann–Whitney significance
+  test, the Mann–Whitney probability of superiority reaches the regime-separation floor, and the
+  step clears both the branch practical relative floor and the metric's absolute floor. If
+  several such boundaries qualify, the newest one defines the current regime. If none does, the
+  whole recent window is the regime.
+
+  Within whichever regime is selected, both the centre and the scale are deliberately
+  non-robust. A settled base-side step moves them together onto one regime. Making only the scale
+  robust while the centre stayed a mixed-window mean would be strictly worse: the mean would sit
+  between two levels and a tip agreeing exactly with the current level would read as displaced
+  from it.
 
   The scatter estimate is bounded below by the metric's **quantum** — the smallest difference a
   stored value can express. A counted metric moves in whole units, so a base window can repeat
@@ -1049,10 +1059,11 @@ moves from commit to commit?" — so it needs its own statistic. Two properties 
 
 Branch mode holds its **relative** floor above history's — a pull-request comment is read by
 everyone who touches the branch, so a false alarm there costs more than a missed marginal
-move. Where the engine reports per-point dispersion, two further vetoes apply: the base and tip
-intervals must not overlap, and the move must clear a multiple of the measurement noise band.
-Like every interval-derived check, both can only *suppress* a candidate the other gates would
-report.
+move. That same relative floor applies to base-window regime splits: a base-side step too small
+to justify a branch finding is too small to justify discarding history. Where the engine reports
+per-point dispersion, two further vetoes apply: the base and tip intervals must not overlap, and
+the move must clear a multiple of the measurement noise band. Like every interval-derived check,
+both can only *suppress* a candidate the other gates would report.
 
 Whichever test produces a finding also fixes its reported **confidence**, in both modes: the
 complement of that test's p-value. Confidence therefore states the strength of the evidence,
