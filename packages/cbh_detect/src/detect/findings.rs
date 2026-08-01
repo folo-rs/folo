@@ -827,15 +827,30 @@ fn line_model_residual(values: &[f64], slope: f64, intercept: f64) -> Option<f64
 
 /// The median absolute residual of a two-sample step model: each sample's points'
 /// distance from their own sample median.
+///
+/// A sample of a single point is its own median, so it contributes one residual of
+/// exactly zero and nothing at all about the scatter it was drawn from. Pooling that zero
+/// with a real sample's residuals only pulls the median down and weakens the gate, so a
+/// single-point sample is left out. Branch mode compares against a single tip commit, and
+/// its comparison sample can be as short as `min_regime`, which is exactly where a diluted
+/// residual would be least affordable.
 fn sample_step_residual(before: &[f64], after: &[f64]) -> Option<f64> {
-    let before_median = stats::median(before)?;
-    let after_median = stats::median(after)?;
-    let mut residuals: Vec<f64> = before
-        .iter()
-        .map(|value| (value - before_median).abs())
-        .chain(after.iter().map(|value| (value - after_median).abs()))
-        .collect();
+    let mut residuals: Vec<f64> = Vec::new();
+    collect_scatter_residuals(before, &mut residuals);
+    collect_scatter_residuals(after, &mut residuals);
     stats::median_in_place(&mut residuals)
+}
+
+/// Appends each point of `sample` distance from the sample's median to `residuals`,
+/// unless the sample is too short to say anything about scatter.
+fn collect_scatter_residuals(sample: &[f64], residuals: &mut Vec<f64>) {
+    if sample.len() < 2 {
+        return;
+    }
+    let Some(median) = stats::median(sample) else {
+        return;
+    };
+    residuals.extend(sample.iter().map(|value| (value - median).abs()));
 }
 
 /// Whether `delta` stands clear of a series' own between-commit scatter: it must
@@ -2358,8 +2373,19 @@ mod tests {
     }
 
     #[test]
-    fn sample_step_residual_of_an_empty_sample_is_none() {
-        assert_eq!(sample_step_residual(&[], &[1.0, 2.0]), None);
+    fn sample_step_residual_ignores_samples_too_short_to_show_scatter() {
+        // A single point is its own median, so it says nothing about scatter and is left
+        // out: only [10,12,20] contributes, whose residuals about 12 are 2,0,8.
+        assert_eq!(
+            sample_step_residual(&[10.0, 12.0, 20.0], &[30.0]),
+            Some(2.0)
+        );
+        assert_eq!(sample_step_residual(&[], &[1.0, 2.0]), Some(0.5));
+    }
+
+    #[test]
+    fn sample_step_residual_of_two_short_samples_is_none() {
+        assert_eq!(sample_step_residual(&[], &[1.0]), None);
     }
 
     #[test]

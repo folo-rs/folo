@@ -996,6 +996,12 @@ for the reasons below — when deciding whether a base-side split is strong enou
 current comparison regime. The resolved-spike detector's recover-to-baseline shape does not
 arise from a stationary oscillation in the first place.
 
+The residual pool draws only from samples long enough to describe scatter. A sample of a single
+point is its own median, so it contributes a residual of exactly zero that says nothing about the
+dispersion the point was drawn from and only pulls the pooled median down. Leaving it out keeps
+the gate at full strength where it is otherwise weakest: branch mode compares one tip commit
+against a trailing regime that may be as short as the minimum regime size.
+
 Drift mirrors this: Mann–Kendall establishes the trend, Theil–Sen sizes it, and the total
 movement must clear the practical floor and exceed the residual scatter about the fitted
 line; the confidence-interval-width gate is applied additionally when intervals are present,
