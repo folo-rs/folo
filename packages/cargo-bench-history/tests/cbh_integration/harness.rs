@@ -13,7 +13,10 @@ pub(crate) use cargo_bench_history::{
     default_template, run, run_with_overrides,
 };
 use cbh_codec as codec;
-use cbh_model::{DiscriminantSet, Engine, MachineInfo, MachineKey, TargetTriple};
+use cbh_model::{
+    BenchmarkIdPrefix, BlessingRecord, DiscriminantSet, Engine, MachineInfo, MachineKey,
+    TargetTriple,
+};
 pub(crate) use jiff::Timestamp;
 use nonempty::nonempty;
 pub(crate) use serial_test::serial;
@@ -1154,14 +1157,13 @@ impl Workspace {
             &MachineKey::from(machine_key),
         )
         .bless_key(SEED_PROJECT, &commit_id, issued_at.as_second());
-        let record = serde_json::json!({
-            "schema_version": SCHEMA_VERSION,
-            "commit": commit_id,
-            "issued_at": issued_at.to_string(),
-            "prefixes": ["nm"],
-            "tool_version": TOOL_VERSION,
-        });
-        self.seed_raw_json(&key, &serde_json::to_string(&record).unwrap());
+        let record = BlessingRecord::new(
+            commit_id,
+            issued_at,
+            vec![BenchmarkIdPrefix::new("nm").unwrap()],
+            TOOL_VERSION.to_owned(),
+        );
+        self.seed_raw_json(&key, &record.to_json().unwrap());
     }
 
     /// Writes `set` to `key` (a `/`-separated object key) under the local store,
