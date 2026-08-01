@@ -1251,6 +1251,9 @@ fn commit_levels(points: &[&SeriesPoint]) -> Vec<f64> {
 /// and the step clears the same relative and absolute floors that make a branch move
 /// reportable. If several suffixes expose qualifying steps, the newest split is used,
 /// because the comparison should describe the regime the branch would merge into.
+///
+/// A split whose trailing regime the prediction interval cannot characterise is not
+/// taken, so the window stays whole rather than becoming unjudgeable.
 fn current_base_regime_start(
     series: &Series,
     spans: &[CommitLevel],
@@ -1294,6 +1297,10 @@ fn current_base_regime_start(
 /// boundary discards the levels before it, and a boundary drawn through noise both
 /// shrinks the comparison sample and collapses the scatter estimate it is rebuilt
 /// from, so it must be unambiguous rather than merely reportable.
+///
+/// The trailing regime must also be one the prediction interval can characterise (see
+/// [`regime_supports_prediction`]), since narrowing exists to sharpen the comparison
+/// and a regime that yields no verdict would instead silence it.
 fn base_regime_split_qualifies(
     series: &Series,
     levels: &[f64],
@@ -1309,6 +1316,9 @@ fn base_regime_split_qualifies(
     };
     let min_regime = config.min_regime.max(1);
     if before.len() < min_regime || after.len() < min_regime {
+        return false;
+    }
+    if !regime_supports_prediction(series, after, config) {
         return false;
     }
     let Some(baseline) = stats::median(before) else {
@@ -1333,6 +1343,21 @@ fn base_regime_split_qualifies(
         return false;
     }
     regimes_are_separated(mann_whitney_u, delta, config.min_base_split_separation)
+}
+
+/// Whether `levels` can serve as a branch-mode comparison sample.
+///
+/// The prediction interval needs a positive standard error, which comes from the
+/// sample's own scatter or, where the sample carries none, from the metric's quantum
+/// (see [`scatter_floor`](fn@scatter_floor)). A regime that offers neither yields no
+/// verdict at all, so narrowing onto it would trade a comparison the full window can
+/// still make for silence. Narrowing exists to move the comparison onto the current
+/// level, not to withdraw it.
+fn regime_supports_prediction(series: &Series, levels: &[f64], config: &AnalysisConfig) -> bool {
+    if scatter_floor(series.kind, config) > 0.0 {
+        return true;
+    }
+    stats::sample_std_dev(levels).is_some_and(|scatter| scatter > 0.0)
 }
 
 /// The two-sided p-value for `latest` being drawn from the same distribution as the
@@ -4516,6 +4541,52 @@ mod tests {
             &AnalysisConfig::default(),
             AnalysisConfig::default().branch_practical_relative,
         )
+    }
+
+    /// Whether a split onto a perfectly flat trailing regime qualifies for `kind`.
+    fn flat_regime_split_qualifies(kind: MetricKind) -> bool {
+        let mut levels = vec![100.0; MIN_REGIME];
+        levels.extend(std::iter::repeat_n(130.0, MIN_REGIME));
+        let config = AnalysisConfig::default();
+        base_regime_split_qualifies(
+            &series_with(&[], kind, &[]),
+            &levels,
+            MIN_REGIME,
+            &config,
+            config.branch_practical_relative,
+        )
+    }
+
+    #[test]
+    fn a_split_onto_a_flat_regime_needs_a_metric_quantum() {
+        // A trailing regime with no scatter of its own leaves the prediction interval
+        // nothing but the metric's quantum to work from. A counted metric has one, so the
+        // narrowed sample still yields a verdict and the split stands. A timing metric has
+        // none, so narrowing would replace a comparison the whole window can still make
+        // with silence, and the split is refused.
+        assert!(flat_regime_split_qualifies(MetricKind::InstructionCount));
+        assert!(!flat_regime_split_qualifies(MetricKind::WallTime));
+    }
+
+    #[test]
+    fn branch_mode_reports_a_timing_move_over_a_flat_base_step() {
+        // A timing series whose base window steps up partway and then holds exactly
+        // flat. Narrowing onto that trailing regime would leave the prediction interval
+        // without scatter or quantum and silence the series entirely, so the window stays
+        // whole and the elevated tip is still reported.
+        let mut points: Vec<(usize, f64, bool)> = (0..(COMPARE_WINDOW - MIN_REGIME - 2))
+            .map(|i| (i, 100.0, false))
+            .collect();
+        points
+            .extend(((COMPARE_WINDOW - MIN_REGIME - 2)..COMPARE_WINDOW).map(|i| (i, 118.0, false)));
+        points.push((COMPARE_WINDOW, 139.0, false));
+        let series = placed_series_of_kind(&points, MetricKind::WallTime);
+        assert_eq!(shifted_base_regime_start(&series), 0);
+        let finding = only(branch_changes(
+            slice::from_ref(&series),
+            Some(shifted_base_merge_base()),
+        ));
+        assert_eq!(finding.direction, Direction::Regression);
     }
 
     #[test]

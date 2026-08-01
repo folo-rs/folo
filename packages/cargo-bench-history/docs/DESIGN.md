@@ -1043,6 +1043,12 @@ moves from commit to commit?" — so it needs its own statistic. Two properties 
   several such boundaries qualify, the newest one defines the current regime. If none does, the
   whole recent window is the regime.
 
+  A boundary is also refused when the trailing regime it would select cannot support a prediction
+  interval at all — a timing regime that repeats one level exactly, so it carries neither observed
+  scatter nor a quantum to stand in for one. Narrowing exists to move the comparison onto the
+  level the branch merges into, not to withdraw it, so where the narrowed sample would be
+  unjudgeable the whole window stands and the tip is still compared.
+
   That separation floor is held **above** the one a reported change point must clear, because the
   two decisions carry asymmetric costs. Reporting a move makes a claim a human then checks;
   accepting a boundary *discards evidence*, shrinking the comparison sample and rebuilding the
