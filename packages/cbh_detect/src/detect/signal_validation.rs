@@ -874,6 +874,13 @@ fn a_batch_of_flat_noisy_series_raises_nothing() {
     // series on its own. A judged family of forty puts the rank-one threshold at 0.0025
     // and rejects them. Shrink the family and this test reports two regressions that
     // never happened.
+    //
+    // Silence here is a property of this fixture rather than a universal guarantee: the
+    // correction bounds the false-discovery rate at `fdr_q` instead of driving it to
+    // zero, so a stationary batch may legitimately surface a discovery, and varying this
+    // fixture's series length finds lengths where one does. What this test pins is that
+    // the correction is what suppresses the candidates above — not that noise can never
+    // produce a finding.
     const FLAT_SERIES: usize = 40;
     const POINTS: usize = 20;
     const MERGE_BASE: usize = 15;
