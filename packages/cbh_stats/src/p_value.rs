@@ -21,11 +21,20 @@ pub(crate) const MIN_P_VALUE: f64 = 1e-15;
 
 /// Clamps a computed tail probability into the reportable p-value range.
 ///
-/// A statistic that is not a number cannot support any conclusion, so it maps
-/// to [`NO_EVIDENCE`] rather than propagating as a `NaN` p-value that would
-/// silently compare false against every threshold.
+/// A tail probability that is not finite cannot support any conclusion, so it
+/// maps to [`NO_EVIDENCE`]. That covers `NaN`, which would otherwise propagate
+/// and silently compare false against every threshold, and it covers an
+/// infinite input, which no arithmetic on probabilities can produce and so only
+/// arises when a computation has broken down. Reporting the broken case as
+/// certainty would invent a finding out of a defect, and this crate's callers
+/// act on small p-values.
+///
+/// A *finite* negative input is treated differently, and deliberately: it is
+/// how a vanishing probability arrives once rounding carries it past zero, so
+/// it floors to [`MIN_P_VALUE`] alongside an exact zero rather than being
+/// discarded as evidence.
 pub(crate) fn clamp_p_value(p: f64) -> f64 {
-    if p.is_nan() {
+    if !p.is_finite() {
         return NO_EVIDENCE;
     }
     p.clamp(MIN_P_VALUE, NO_EVIDENCE)
@@ -68,5 +77,22 @@ mod tests {
     #[test]
     fn clamp_p_value_reports_no_evidence_for_a_degenerate_statistic() {
         assert_eq!(clamp_p_value(f64::NAN), NO_EVIDENCE);
+    }
+
+    #[test]
+    fn clamp_p_value_reports_no_evidence_for_a_negatively_infinite_statistic() {
+        // No arithmetic on probabilities yields negative infinity, so it means the
+        // computation behind it broke down. Flooring it would read as the most
+        // significant result this crate can express, manufacturing a finding out of
+        // a defect; the answer is that there is nothing to conclude.
+        assert_eq!(clamp_p_value(f64::NEG_INFINITY), NO_EVIDENCE);
+    }
+
+    #[test]
+    fn clamp_p_value_floors_a_finite_probability_rounded_past_zero() {
+        // Unlike an infinity, a small negative is how a vanishing probability
+        // arrives when rounding carries it just past zero, so it stays evidence.
+        assert_eq!(clamp_p_value(-1e-300), MIN_P_VALUE);
+        assert_eq!(clamp_p_value(-0.0), MIN_P_VALUE);
     }
 }
