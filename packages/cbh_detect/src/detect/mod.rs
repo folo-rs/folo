@@ -12,6 +12,8 @@ pub(crate) mod discriminant;
 pub(crate) mod findings;
 mod noise_gates;
 pub(crate) mod parallel;
+#[cfg(test)]
+mod recorded;
 pub(crate) mod run_points;
 pub(crate) mod selection;
 pub(crate) mod series;

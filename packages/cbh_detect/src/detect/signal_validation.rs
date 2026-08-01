@@ -79,11 +79,13 @@
 //! identical data while a batch of companions stays independent of one another rather
 //! than carrying copies of one sequence.
 //!
-//! One case is exempt from the model: `stationary_bimodal_noise` is a verbatim
-//! recording of a real series and carries the dispersion it was measured with. A human
+//! Two cases are exempt from the model: the `stationary_bimodal_noise` rows are verbatim
+//! recordings of one real series and carry the dispersion it was measured with. A human
 //! reading its chart answers "noisy, but nothing changed" without hesitation, so it is
 //! exactly the kind of obvious-answer input this suite exists to pin — and it guards the
-//! noise gates against reading structured jitter as a step.
+//! noise gates against reading structured jitter as a step. The pair puts it in front of
+//! both detectors: one row hands the whole recording to history mode, the other cuts it
+//! into a base window and a tip so branch mode judges it too.
 
 #![cfg_attr(coverage_nightly, coverage(off))]
 
@@ -95,6 +97,9 @@ use nonempty::nonempty;
 
 use crate::detect::findings::find_changes;
 use crate::detect::noise_gates::{MIN_REGIME, MIN_SERIES_POINTS};
+use crate::detect::recorded::{
+    STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_HIGH, STATIONARY_BIMODAL_NOISE,
+};
 use crate::detect::{
     AnalysisConfig, AnalysisContext, AnalysisMode, Series, SeriesPoint, UnjudgedReason,
 };
@@ -509,12 +514,25 @@ fn cases() -> Vec<SignalCase> {
         // two levels overlap far too much to be distinct populations. History sees the
         // whole series and must stay quiet; branch has no branch side.
         SignalCase::new("stationary_bimodal_noise", MetricKind::WallTime)
-            .base(vec![
-                13.26, 14.33, 13.14, 24.97, 13.2, 24.97, 13.17, 25.39, 25.54, 13.18, 13.83, 25.45,
-                25.02, 25.0, 13.2, 13.22, 13.24, 13.21, 13.15, 24.97, 26.78, 13.24, 28.98, 10.5,
-                10.53, 26.76, 26.74, 13.58, 13.54, 28.86, 14.15, 13.5, 26.77, 25.38, 25.0, 13.97,
-                26.81, 25.54, 13.62, 13.57,
-            ])
+            .base(STATIONARY_BIMODAL_NOISE.to_vec())
+            .recorded(),
+        // The same recording judged by branch mode, which reads only the recent base
+        // window and one tip commit. The window is cut where the recording happens to
+        // end on five consecutive low-mode commits, and the tip sits at the high mode the
+        // series reaches on roughly half of its commits — an entirely ordinary value.
+        // Accepting that trailing run as the current base regime would discard the rest
+        // of the window and collapse the scatter estimate, turning the ordinary tip into
+        // a large and near-certain regression, so branch mode must decline the split and
+        // stay quiet. History reads twenty points of the same oscillation and is quiet
+        // for the reason the row above is.
+        SignalCase::new("stationary_bimodal_noise_branch_tip", MetricKind::WallTime)
+            .base(
+                STATIONARY_BIMODAL_NOISE
+                    .get(..STATIONARY_BIMODAL_BASE)
+                    .unwrap()
+                    .to_vec(),
+            )
+            .branch(vec![STATIONARY_BIMODAL_HIGH])
             .recorded(),
         // A branch that got slower but was fixed in the last commit.
         // History sees the regression, but branch sees only the final commit and must stay quiet.

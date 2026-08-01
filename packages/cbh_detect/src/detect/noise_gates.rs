@@ -144,6 +144,28 @@ pub(crate) const RESIDUAL_NOISE_MULTIPLE: f64 = 3.0;
 /// level shift's two regimes must reach to be trusted.
 pub(crate) const MIN_REGIME_SEPARATION: f64 = 0.85;
 
+/// Default `min_base_split_separation`: the probability of superiority a base-window
+/// split must reach before branch mode accepts it as a regime boundary and discards
+/// the levels before it.
+///
+/// Held above [`MIN_REGIME_SEPARATION`] because the two decisions carry asymmetric
+/// costs. Reporting a move makes a claim that a human then checks. Accepting a
+/// boundary *discards evidence*: the comparison sample shrinks to the trailing
+/// regime and the scatter estimate is rebuilt from it alone, so a wrong boundary can
+/// collapse a noisy window's dispersion to near zero and make any subsequent tip
+/// read as certain. A boundary that throws data away must therefore be unambiguous,
+/// which is a higher standard than merely reporting a move.
+///
+/// The statistic is coarse at these sample sizes — the smallest regimes hold
+/// [`MIN_REGIME`] levels each, and the superiority of a 5-against-5 split moves in
+/// steps of 1/25 — so this floor is read as "essentially no crossing pair may
+/// contradict the boundary" rather than as a precise probability: at 5 against 5 it
+/// admits one contradicting pair in twenty-five and no more, and a wider split
+/// tolerates correspondingly few. A stationary series that oscillates between two
+/// levels leaves several contradicting pairs in every candidate split and is rejected
+/// on that basis.
+pub(crate) const MIN_BASE_SPLIT_SEPARATION: f64 = 0.95;
+
 /// Largest interior window size resolved-spike search will scan; longer histories
 /// skip the quadratic search rather than stall.
 pub(crate) const RESOLVED_SPIKE_MAX_POINTS: usize = 200;

@@ -159,6 +159,22 @@ pub struct AnalysisConfig {
     /// gate is well-separated in practice, this only ever *suppresses* a candidate the
     /// median-based gates were fooled by, never creates one.
     pub min_regime_separation: f64,
+    /// Minimum probability of superiority a base-window split must reach before branch
+    /// mode accepts it as a regime boundary and discards the levels before it.
+    ///
+    /// Held above [`min_regime_separation`](Self::min_regime_separation) because the two
+    /// decisions carry asymmetric costs. Reporting a move makes a claim a human then
+    /// checks; accepting a boundary *discards evidence*, shrinking the comparison sample
+    /// to the trailing regime and rebuilding the scatter estimate from it alone — so a
+    /// wrong boundary can collapse a noisy window's dispersion to near zero and make any
+    /// subsequent tip read as certain. A boundary that throws data away must be
+    /// unambiguous.
+    ///
+    /// The statistic is coarse at these sample sizes, so this reads as "essentially no
+    /// crossing pair may contradict the boundary" rather than as a precise probability:
+    /// with the smallest regimes on both sides it admits one contradicting pair in
+    /// twenty-five and no more.
+    pub min_base_split_separation: f64,
 }
 
 impl Default for AnalysisConfig {
@@ -182,6 +198,7 @@ impl Default for AnalysisConfig {
             branch_noise_multiple: noise_gates::BRANCH_NOISE_MULTIPLE,
             residual_noise_multiple: noise_gates::RESIDUAL_NOISE_MULTIPLE,
             min_regime_separation: noise_gates::MIN_REGIME_SEPARATION,
+            min_base_split_separation: noise_gates::MIN_BASE_SPLIT_SEPARATION,
         }
     }
 }
@@ -843,13 +860,18 @@ fn exceeds_residual_noise(delta: f64, residual: Option<f64>, config: &AnalysisCo
 /// the significance gate. This gate adds the effect-size the significance test
 /// lacks: the Mann–Whitney probability of superiority (the chance a random `after`
 /// point exceeds a random `before` one), oriented in the move's direction, must
-/// reach `config.min_regime_separation`. A genuine step scores ~1; bimodal jitter
-/// scores near ½ and is rejected. Missing statistics (`None`, from an empty sample)
-/// are treated as no evidence of overlap, so the move is trusted.
+/// reach `floor`. A genuine step scores ~1; bimodal jitter scores near ½ and is
+/// rejected. Missing statistics (`None`, from an empty sample) are treated as no
+/// evidence of overlap, so the move is trusted.
+///
+/// The `floor` is the caller's, because what the separation buys differs by caller:
+/// reporting a move is held to `min_regime_separation`, while accepting a base-window
+/// regime boundary — which discards the levels before it — is held to the stricter
+/// `min_base_split_separation`.
 fn regimes_are_separated(
     mann_whitney: Option<stats::MannWhitneyU>,
     delta: f64,
-    config: &AnalysisConfig,
+    floor: f64,
 ) -> bool {
     match mann_whitney {
         // `superiority` is P(after > before); a fall is judged by the complementary
@@ -861,7 +883,7 @@ fn regimes_are_separated(
             } else {
                 1.0 - superiority
             };
-            directional >= config.min_regime_separation
+            directional >= floor
         }
         None => true,
     }
@@ -950,7 +972,7 @@ fn evaluate_change_point(
     if !exceeds_residual_noise(delta, step_model_residual(values, tau), config) {
         return None;
     }
-    if !regimes_are_separated(mann_whitney_u, delta, config) {
+    if !regimes_are_separated(mann_whitney_u, delta, config.min_regime_separation) {
         return None;
     }
     let before_points: Vec<&SeriesPoint> = points.iter().take(tau).collect();
@@ -1251,6 +1273,12 @@ fn current_base_regime_start(
 }
 
 /// Whether `split` is a genuine base-side regime boundary.
+///
+/// Every gate a reportable branch move must clear applies here, and the separation
+/// gate applies at the stricter `min_base_split_separation` floor: accepting a
+/// boundary discards the levels before it, and a boundary drawn through noise both
+/// shrinks the comparison sample and collapses the scatter estimate it is rebuilt
+/// from, so it must be unambiguous rather than merely reportable.
 fn base_regime_split_qualifies(
     series: &Series,
     levels: &[f64],
@@ -1289,7 +1317,7 @@ fn base_regime_split_qualifies(
     if mann_whitney >= config.change_alpha {
         return false;
     }
-    regimes_are_separated(mann_whitney_u, delta, config)
+    regimes_are_separated(mann_whitney_u, delta, config.min_base_split_separation)
 }
 
 /// The two-sided p-value for `latest` being drawn from the same distribution as the
@@ -1958,6 +1986,9 @@ mod tests {
     use crate::detect::noise_gates::{
         COMPARE_WINDOW, DRIFT_MIN_POINTS, MIN_REGIME, MIN_SERIES_POINTS,
     };
+    use crate::detect::recorded::{
+        STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_HIGH, STATIONARY_BIMODAL_NOISE,
+    };
     use crate::detect::{Blessing, SeriesPoint};
 
     /// Builds a Callgrind-style series carrying `values` in topological order, with
@@ -2446,25 +2477,25 @@ mod tests {
 
     #[test]
     fn regimes_are_separated_rejects_interleaved_levels() {
-        let config = AnalysisConfig::default();
+        let floor = AnalysisConfig::default().min_regime_separation;
         // A clean rise: every after-point exceeds every before-point (superiority 1).
         assert!(regimes_are_separated(
             stats::MannWhitneyU::new(&[10.0, 11.0, 12.0], &[20.0, 21.0, 22.0]),
             10.0,
-            &config,
+            floor,
         ));
         // A clean fall: judged by the complementary direction, still fully separated.
         assert!(regimes_are_separated(
             stats::MannWhitneyU::new(&[20.0, 21.0, 22.0], &[10.0, 11.0, 12.0]),
             -10.0,
-            &config,
+            floor,
         ));
         // Two levels that recur on both sides: only 0.75 of the after-vs-before pairs
         // move in the rise's direction, below the 0.85 floor, so it is not separated.
         assert!(!regimes_are_separated(
             stats::MannWhitneyU::new(&[10.0, 10.0, 10.0, 30.0], &[30.0, 30.0, 30.0, 10.0]),
             20.0,
-            &config,
+            floor,
         ));
         // The falling mirror of that overlap: the same two levels recur on both sides,
         // so only 0.75 of the pairs move in the fall's (complementary) direction and it
@@ -2475,11 +2506,50 @@ mod tests {
         assert!(!regimes_are_separated(
             stats::MannWhitneyU::new(&[30.0, 30.0, 30.0, 10.0], &[10.0, 10.0, 10.0, 30.0]),
             -20.0,
-            &config,
+            floor,
         ));
         // No statistics at all (an empty regime): the gate has nothing to veto on, so
         // it trusts the move rather than suppressing it.
-        assert!(regimes_are_separated(None, 10.0, &config));
+        assert!(regimes_are_separated(None, 10.0, floor));
+    }
+
+    #[test]
+    fn the_floor_a_caller_passes_is_the_one_the_separation_gate_applies() {
+        // One overlapping split, judged against both floors: the reporting floor admits
+        // it and the stricter base-split floor rejects it. This is what makes the two
+        // floors distinct policies rather than one constant read from two places.
+        let config = AnalysisConfig::default();
+        // Seven before-levels against five after-levels, with one before-level lying
+        // inside the after regime but under only its topmost value: 34 of 35 crossing
+        // pairs fall, a superiority of ~0.971.
+        let after = [10.0, 11.0, 12.0, 13.0, 14.0];
+        let before = [30.0, 31.0, 32.0, 33.0, 34.0, 35.0, 13.5];
+        let ranked = stats::MannWhitneyU::new(&before, &after);
+        assert!(regimes_are_separated(
+            ranked,
+            -20.0,
+            config.min_regime_separation
+        ));
+        assert!(regimes_are_separated(
+            ranked,
+            -20.0,
+            config.min_base_split_separation
+        ));
+
+        // The same shape with that stray level one step lower, so it sits under two of
+        // the after-levels: 33 of 35 pairs fall, ~0.943.
+        let before = [30.0, 31.0, 32.0, 33.0, 34.0, 35.0, 12.5];
+        let ranked = stats::MannWhitneyU::new(&before, &after);
+        assert!(regimes_are_separated(
+            ranked,
+            -20.0,
+            config.min_regime_separation
+        ));
+        assert!(!regimes_are_separated(
+            ranked,
+            -20.0,
+            config.min_base_split_separation
+        ));
     }
 
     #[test]
@@ -2492,12 +2562,7 @@ mod tests {
         // was emitted. The regimes overlap heavily (probability of superiority ~0.72),
         // so the separation gate rejects it. Dropping the separation floor to zero
         // admits the split again, proving that gate is the sole reason it is silent.
-        let values = vec![
-            13.26, 14.33, 13.14, 24.97, 13.2, 24.97, 13.17, 25.39, 25.54, 13.18, 13.83, 25.45,
-            25.02, 25.0, 13.2, 13.22, 13.24, 13.21, 13.15, 24.97, 26.78, 13.24, 28.98, 10.5, 10.53,
-            26.76, 26.74, 13.58, 13.54, 28.86, 14.15, 13.5, 26.77, 25.38, 25.0, 13.97, 26.81,
-            25.54, 13.62, 13.57,
-        ];
+        let values = STATIONARY_BIMODAL_NOISE.to_vec();
         let series = series_of(&values);
         let permissive = AnalysisConfig {
             min_regime_separation: 0.0,
@@ -4357,6 +4422,63 @@ mod tests {
         assert_eq!(finding.baseline, 100.0);
     }
 
+    #[test]
+    fn branch_mode_does_not_split_a_stationary_bimodal_base_window() {
+        // The recorded bimodal series, cut where its recent base window happens to end
+        // on five consecutive low-mode commits, with a branch tip at the high mode the
+        // series reaches on roughly half of its commits. A change-point search over that
+        // window proposes the split at the start of those five, and the trailing regime's
+        // standard deviation is a fraction of the mixed window's — so accepting the split
+        // turns an ordinary value into a large, near-certain regression.
+        //
+        // The stricter base-split separation floor is the sole reason for the silence:
+        // relaxing it to the reporting floor accepts the split and manufactures the
+        // finding, which is what makes the two floors different policies rather than one
+        // value written twice.
+        let series = bimodal_branch_probe();
+        let merge_base = STATIONARY_BIMODAL_BASE.checked_sub(1).unwrap();
+        assert_eq!(bimodal_branch_regime_start(&series), 0);
+        assert!(branch_changes(slice::from_ref(&series), Some(merge_base)).is_empty());
+
+        let permissive = AnalysisConfig {
+            min_base_split_separation: AnalysisConfig::default().min_regime_separation,
+            ..AnalysisConfig::default()
+        };
+        let manufactured = evaluate_branch(&series, &permissive, Some(merge_base)).unwrap();
+        assert_eq!(manufactured.finding.direction, Direction::Regression);
+        assert!(
+            manufactured.finding.relative_delta > 0.5,
+            "{:?}",
+            manufactured.finding
+        );
+    }
+
+    /// The recorded bimodal series cut to the base window that exposes a spurious
+    /// trailing regime, followed by one branch commit at the recording's high mode.
+    fn bimodal_branch_probe() -> Series {
+        let mut points: Vec<(usize, f64, bool)> = STATIONARY_BIMODAL_NOISE
+            .get(..STATIONARY_BIMODAL_BASE)
+            .unwrap()
+            .iter()
+            .enumerate()
+            .map(|(index, &value)| (index, value, false))
+            .collect();
+        points.push((STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_HIGH, false));
+        placed_series_of_kind(&points, MetricKind::WallTime)
+    }
+
+    /// Where the branch detector starts comparing [`bimodal_branch_probe`].
+    fn bimodal_branch_regime_start(series: &Series) -> usize {
+        let borrowed: Vec<&SeriesPoint> = series.points.iter().collect();
+        let base = recent_commits(
+            borrowed.get(..STATIONARY_BIMODAL_BASE).unwrap(),
+            COMPARE_WINDOW,
+        );
+        let spans = commit_level_spans(&base);
+        let config = AnalysisConfig::default();
+        current_base_regime_start(series, &spans, &config, config.branch_practical_relative)
+    }
+
     fn base_split_qualifies(before: f64, after: f64, before_len: usize, after_len: usize) -> bool {
         let mut levels = vec![before; before_len];
         levels.extend(std::iter::repeat_n(after, after_len));
@@ -4420,24 +4542,38 @@ mod tests {
     fn branch_mode_recovers_at_the_minimum_trailing_regime() {
         // With `min_regime = 5`, five current-level base commits are enough to form the
         // comparison regime, while four are not enough to accept the split and still
-        // leave the mixed window too unsettled to report the same tip.
-        let exactly_enough = branch_after_base_shift(200.0, 100.0, MIN_REGIME, 130.0);
-        assert_eq!(
-            shifted_base_regime_start(&exactly_enough),
-            COMPARE_WINDOW - MIN_REGIME
-        );
-        assert_eq!(
-            only(branch_changes(
-                &[exactly_enough],
-                Some(shifted_base_merge_base())
-            ))
-            .baseline,
-            100.0
-        );
+        // leave the mixed window too unsettled to report the same tip. Both a halving of
+        // the base level and a much shallower step recover at the same commit, so the
+        // recovery lag is set by the regime floor rather than by the size of the base
+        // step.
+        for (old, current, tip) in [(200.0, 100.0, 130.0), (120.0, 100.0, 115.0)] {
+            let exactly_enough = branch_after_base_shift(old, current, MIN_REGIME, tip);
+            assert_eq!(
+                shifted_base_regime_start(&exactly_enough),
+                COMPARE_WINDOW - MIN_REGIME,
+                "old={old} current={current}"
+            );
+            assert_eq!(
+                only(branch_changes(
+                    &[exactly_enough],
+                    Some(shifted_base_merge_base())
+                ))
+                .baseline,
+                current,
+                "old={old} current={current}"
+            );
 
-        let one_short = branch_after_base_shift(200.0, 100.0, MIN_REGIME - 1, 130.0);
-        assert_eq!(shifted_base_regime_start(&one_short), 0);
-        assert!(branch_changes(&[one_short], Some(shifted_base_merge_base())).is_empty());
+            let one_short = branch_after_base_shift(old, current, MIN_REGIME - 1, tip);
+            assert_eq!(
+                shifted_base_regime_start(&one_short),
+                0,
+                "old={old} current={current}"
+            );
+            assert!(
+                branch_changes(&[one_short], Some(shifted_base_merge_base())).is_empty(),
+                "old={old} current={current}"
+            );
+        }
     }
 
     #[test]

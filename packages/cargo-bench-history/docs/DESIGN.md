@@ -991,10 +991,10 @@ Where the points carry confidence intervals, non-overlap of the regime intervals
 the move noise when the intervals overlap), never manufacture a finding; where they do not,
 the residual and separation gates stand alone. The separation gate is required wherever
 Pettitt is trusted to identify a regime boundary: the history change-point detector uses it
-for reported findings, and branch mode uses the same effect-size gate when deciding whether a
-base-side split is strong enough to define the current comparison regime. The resolved-spike
-detector's recover-to-baseline shape does not arise from a stationary oscillation in the first
-place.
+for reported findings, and branch mode uses the same effect-size gate — at a stricter floor,
+for the reasons below — when deciding whether a base-side split is strong enough to define the
+current comparison regime. The resolved-spike detector's recover-to-baseline shape does not
+arise from a stationary oscillation in the first place.
 
 Drift mirrors this: Mann–Kendall establishes the trend, Theil–Sen sizes it, and the total
 movement must clear the practical floor and exceed the residual scatter about the fitted
@@ -1032,10 +1032,32 @@ moves from commit to commit?" — so it needs its own statistic. Two properties 
   genuine interior step, branch mode discards the stale prefix and compares against only the
   trailing regime. A split is trusted only when the trailing and preceding sides each hold the
   minimum regime size, the Pettitt-located boundary is confirmed by a Mann–Whitney significance
-  test, the Mann–Whitney probability of superiority reaches the regime-separation floor, and the
-  step clears both the branch practical relative floor and the metric's absolute floor. If
+  test, the Mann–Whitney probability of superiority reaches the **base-split separation floor**,
+  and the step clears both the branch practical relative floor and the metric's absolute floor. If
   several such boundaries qualify, the newest one defines the current regime. If none does, the
   whole recent window is the regime.
+
+  That separation floor is held **above** the one a reported change point must clear, because the
+  two decisions carry asymmetric costs. Reporting a move makes a claim a human then checks;
+  accepting a boundary *discards evidence*, shrinking the comparison sample and rebuilding the
+  scatter estimate from the trailing regime alone. A boundary drawn through a stationary
+  oscillation can therefore collapse that estimate to a fraction of the window's true dispersion
+  and make the next ordinary tip read as a large, near-certain move — a far more damaging error
+  than a single over-eager report. A boundary that throws data away must be unambiguous. The
+  statistic is coarse at these sample sizes (with the minimum regime on both sides its
+  probability of superiority moves in steps of one twenty-fifth), so the floor is read as
+  "essentially no pair of levels across the boundary may contradict it" rather than as a precise
+  probability. A stationary series that oscillates between two levels leaves several contradicting
+  pairs in every candidate boundary and is rejected on that basis, while a genuine level shift
+  leaves none.
+
+  The window is also scanned at every admissible starting offset, so several correlated
+  candidate boundaries are examined and any one of them may be accepted. A per-candidate
+  significance correction cannot discipline that scan: at the minimum regime size the smallest
+  attainable rank-test p-value for a perfectly separated split already exceeds what dividing the
+  significance level across the candidates would allow, so such a correction would reject the
+  genuine shifts the narrowing exists to follow. The effect-size floor is what disciplines the
+  scan instead, because it does not weaken as candidates multiply.
 
   Within whichever regime is selected, both the centre and the scale are deliberately
   non-robust. A settled base-side step moves them together onto one regime. Making only the scale
