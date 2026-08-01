@@ -35,20 +35,23 @@
 //!   opposite: on a small instruction count and on a sub-nanosecond timing move,
 //!   scaling promotes a move by carrying its absolute delta across the floor.
 //! * **Family size (dimension 3).** Every case is analysed alone and again embedded in
-//!   a crowd of silent companion series. The Benjamini–Hochberg false-discovery
+//!   a crowd of companion series. The Benjamini–Hochberg false-discovery
 //!   filter sizes its family from the number of series the pass judged, and its
 //!   rank-one threshold is `(1/m)·fdr_q`. At a family of one that threshold *is*
 //!   `fdr_q`, which every candidate reaching the filter has already cleared by passing
 //!   the stricter `change_alpha` — so a single-series batch leaves the multiplicity
 //!   stage mathematically inert, and a suite built only of those would pin the detectors
 //!   rather than the analysis. The crowd supplies the family the correction needs.
-//!   Silent companions raise `m` without contributing p-values, so they can only
-//!   *tighten* the threshold: per mode a crowd verdict is either the alone verdict or
-//!   silence, never a finding the case did not already raise, which is why a case
-//!   declares one [`survives_crowd`](SignalCase::survives_crowd) flag rather than a
-//!   second full set of per-mode outcomes. For an obvious-answer case the two verdicts
-//!   agree, and that invariance is itself the contract — a doubling is still a doubling
-//!   in a crowd.
+//!   A crowd raises `m`, and
+//!   [`companion_crowds_report_nothing_of_their_own`] holds it to reporting nothing in
+//!   the direction the mode surfaces, so the only finding a crowded run can carry is the
+//!   case's own. Whether it carries it is stated per case as one
+//!   [`survives_crowd`](SignalCase::survives_crowd) flag rather than a second full set of
+//!   per-mode outcomes, and the matrix pins that flag against the alone verdict in both
+//!   directions: a crowd may take a finding away, never add one. For an obvious-answer
+//!   case the two verdicts agree, and that invariance is itself the contract — a doubling
+//!   is still a doubling in a crowd.
+
 //!
 //! Each case also declares its **metric kind**, because the practical-magnitude and
 //! scatter floors are per kind: a count must move by whole instructions, a time by a
@@ -71,16 +74,22 @@
 //! benchmarks in this project's own stored history occupy; Callgrind counters and
 //! allocation counters carry none at all, because those engines re-measure identical
 //! code to the same value and their scatter floors keep a zero-scatter window from
-//! collapsing the prediction interval. Detection has to be judged against data as noisy
-//! as the real thing: on near-perfect series every "stays quiet" case is trivial, and
-//! the false positives those noise gates exist to reject come from series at this
-//! scatter level rather than from ones an order of magnitude cleaner. The scatter is
-//! drawn from a fixed-seed generator keyed by each series' own name, so every run sees
-//! identical data while a batch of companions stays independent of one another rather
-//! than carrying copies of one sequence.
+//! collapsing the prediction interval. Detection has to be judged against data with as
+//! much spread as the real thing, because on near-perfect series every "stays quiet" case
+//! is trivial: the prediction interval collapses onto the scatter floor and the rank tests
+//! see an unambiguous ordering. The scatter is drawn from a fixed-seed generator keyed by
+//! each series' own name, so every run sees identical data while a batch of companions
+//! stays independent of one another rather than carrying copies of one sequence.
+//!
+//! What the generator supplies is realistic *spread*, not realistic *shape*: its deviates
+//! are bounded, symmetric, and light-tailed (see [`scattered`]), while real timing noise
+//! is right-skewed with occasional large excursions and can settle into distinct modes.
+//! Shapes like that reach this suite through recorded series instead.
 //!
 //! Two cases are exempt from the model: the `stationary_bimodal_noise` rows are verbatim
-//! recordings of one real series and carry the dispersion it was measured with. A human
+//! recordings of one real series and carry the dispersion it was measured with — flatly
+//! bimodal, oscillating between two levels, which is the pathological shape the generator
+//! cannot produce and the one the noise gates are most easily fooled by. A human
 //! reading its chart answers "noisy, but nothing changed" without hesitation, so it is
 //! exactly the kind of obvious-answer input this suite exists to pin — and it guards the
 //! noise gates against reading structured jitter as a step. The pair puts it in front of
@@ -102,7 +111,7 @@ use crate::detect::recorded::{
 };
 use crate::detect::scatter::{scattered, seed_of};
 use crate::detect::{
-    AnalysisConfig, AnalysisContext, AnalysisMode, Series, SeriesPoint, UnjudgedReason,
+    AnalysisConfig, AnalysisContext, AnalysisMode, Direction, Series, SeriesPoint, UnjudgedReason,
 };
 
 /// The analysis mode a case is evaluated under — the suite's dimension-1 lever.
@@ -219,12 +228,13 @@ struct SignalCase {
     /// The outcome branch mode is expected to see.
     expected_branch: Outcome,
     /// Whether the case's finding still stands once the false-discovery family grows to
-    /// [`CROWD_COMPANIONS`] silent companions.
+    /// [`CROWD_COMPANIONS`] companions.
     ///
-    /// A crowd only tightens the Benjamini–Hochberg threshold, so per mode the crowd
-    /// verdict is either the alone verdict or silence — never a finding the case did not
-    /// already raise. That is what reduces the crowd outcome to a boolean rather than a
-    /// second [`Outcome`]. The boolean is shared across modes because every curated case
+    /// A crowd reports nothing of its own — [`companion_crowds_report_nothing_of_their_own`]
+    /// enforces that — and the matrix asserts that a crowded verdict never exceeds the
+    /// alone verdict, so per mode the crowd verdict is either the alone verdict or
+    /// silence. That is what reduces the crowd outcome to a boolean rather than a second
+    /// [`Outcome`]. The boolean is shared across modes because every curated case
     /// answers the crowd the same way in both; a case that survived in one mode and was
     /// crowded out in the other would be stated as two rows, one per mode. Every
     /// obvious-answer case keeps its verdict, and that invariance is the contract; the
@@ -360,7 +370,7 @@ fn run_of(value: f64, count: usize) -> Vec<f64> {
     vec![value; count]
 }
 
-/// How many silent companion series join a case in the crowd of dimension 3.
+/// How many companion series join a case in the crowd of dimension 3.
 ///
 /// The count is bounded on both sides by the cases themselves, and both bounds are
 /// measured rather than predicted. The deliberately marginal case survives up to seven
@@ -646,10 +656,10 @@ fn mean_of(values: &[f64]) -> f64 {
 /// is asserted rather than assumed: a companion that started reporting moves of its own
 /// would silently change what this suite measures.
 ///
-/// History mode judges every series in the batch, so the family the false-discovery
-/// filter divides by is exactly the batch size. That too is asserted, because a crowd
-/// that failed to enlarge the family would leave dimension 3 inert without failing
-/// anything — the precise blind spot the dimension exists to close.
+/// The size of the family the false-discovery filter divides by is asserted too, in both
+/// modes, because a crowd that failed to enlarge the family would leave dimension 3 inert
+/// without failing anything — the precise blind spot the dimension exists to close. See
+/// [`expected_judged`] for what each mode is entitled to judge.
 fn raises_finding(
     values: &[f64],
     kind: MetricKind,
@@ -667,13 +677,12 @@ fn raises_finding(
     ));
 
     let detection = find_changes(&batch, context);
-    if context.mode == AnalysisMode::History {
-        assert_eq!(
-            detection.census.judged(),
-            batch.len(),
-            "the crowd did not enlarge the false-discovery family"
-        );
-    }
+    assert_eq!(
+        detection.census.judged(),
+        expected_judged(values, context, batch.len()),
+        "the family the false-discovery correction divides by is not the one the batch \
+         and the merge base imply"
+    );
     for finding in &detection.findings {
         assert_eq!(
             finding.id.qualified(),
@@ -682,6 +691,33 @@ fn raises_finding(
         );
     }
     !detection.findings.is_empty()
+}
+
+/// How many series of a [`raises_finding`] batch of `batch` series the pass is expected to
+/// judge — the family the false-discovery correction divides by.
+///
+/// History mode judges all of them: every curated series and every companion carries at
+/// least [`MIN_SERIES_POINTS`] points. Branch mode judges a series only when the shared
+/// merge base leaves it a base window of at least that many commits and at least one
+/// commit past the split. Companions are built to that floor, so one merge base decides
+/// them all at once — and it decides the curated series' base side with them, since that
+/// side is the case's own leading `merge_base + 1` points. Below the floor the family is
+/// therefore empty rather than merely smaller.
+fn expected_judged(values: &[f64], context: &AnalysisContext, batch: usize) -> usize {
+    if context.mode == AnalysisMode::History {
+        return batch;
+    }
+    let Some(merge_base) = context.merge_base_index else {
+        return 0;
+    };
+    let base_points = merge_base.checked_add(1).unwrap();
+    if base_points < MIN_SERIES_POINTS {
+        return 0;
+    }
+    // Companions always carry a commit past the merge base; the curated series carries one
+    // only when the case declares a branch side.
+    let curated = usize::from(values.len() > base_points);
+    batch.checked_sub(1).unwrap().checked_add(curated).unwrap()
 }
 
 /// `values`, each multiplied by `scale`.
@@ -717,11 +753,17 @@ fn curated_signals_match_expected_verdicts() {
                 case.name,
             );
 
-            // Dimension 3: a crowd of judged, silent companions can only tighten the
-            // false-discovery threshold, so it keeps every genuine verdict and rejects
-            // only what the case declares marginal.
+            // Dimension 3: a crowd of judged companions that report nothing of their own
+            // keeps every genuine verdict and rejects only what the case declares
+            // marginal.
             let expected_in_crowd = expected && case.survives_crowd;
             let crowded = raises_finding(&values, kind, &context, CROWD_COMPANIONS);
+            assert!(
+                !crowded || alone,
+                "case '{}' mode={mode:?}: a crowd manufactured a finding the case does not \
+                 raise on its own",
+                case.name,
+            );
             assert_eq!(
                 crowded, expected_in_crowd,
                 "case '{}' mode={mode:?}: in a crowd expected finding={expected_in_crowd}, \
@@ -799,6 +841,54 @@ fn scaling_a_sub_nanosecond_move_can_clear_the_absolute_floor() {
 }
 
 #[test]
+fn companion_crowds_report_nothing_of_their_own() {
+    // Dimension 3 collapses the crowd outcome to a single boolean per case, which is only
+    // meaningful if a crowd contributes no finding of its own. That is enforced here
+    // rather than assumed: every crowd the matrix builds is analysed as its own batch,
+    // under both modes and both scales, and must come back empty.
+    //
+    // The stricter reading — that companions raise no *candidate* at all — is not a
+    // property flat noisy series can have. Fifty of them tested at `change_alpha` will now
+    // and then throw one that clears it, which is what that threshold means. What they may
+    // not do is throw one in the direction the mode reports, so the second assertion pins
+    // the crowd's whole contribution to the improvement side, where a regressions-only
+    // drift watch discards it.
+    for case in cases() {
+        let values = case.values();
+        for scale in [1.0, SCALE_MULTIPLE] {
+            let level = mean_of(&scaled(&values, scale));
+            let crowd = companions(CROWD_COMPANIONS, case.kind, level, case.merge_base_index());
+            for mode in Mode::ALL {
+                let context = mode.context(case.merge_base_index());
+                let detection = find_changes(&crowd, &context);
+                assert!(
+                    detection.findings.is_empty(),
+                    "case '{}' mode={mode:?} scale={scale}: the crowd reported {} findings \
+                     of its own",
+                    case.name,
+                    detection.findings.len(),
+                );
+
+                let both_directions = AnalysisContext {
+                    include_improvements: true,
+                    ..mode.context(case.merge_base_index())
+                };
+                for finding in find_changes(&crowd, &both_directions).findings {
+                    assert_eq!(
+                        finding.direction,
+                        Direction::Improvement,
+                        "case '{}' mode={mode:?} scale={scale}: companion '{}' raised a \
+                         regression of its own",
+                        case.name,
+                        finding.id.qualified(),
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn a_batch_of_flat_noisy_series_raises_nothing() {
     // The direct analogue of issue #428: a batch of roughly 300 real series reported 17
     // "regressions" and — every single time — exactly zero improvements, a rotating cast
@@ -814,11 +904,10 @@ fn a_batch_of_flat_noisy_series_raises_nothing() {
     //
     // The batch is sized so that the false-discovery correction is what produces the
     // silence. Two of these series wander far enough for the per-series gates to raise a
-    // candidate — a drift and a change point, at p of roughly 0.007 and 0.025 — and both
-    // sit below `change_alpha`, so both would be reported by a detector judging each
-    // series on its own. A judged family of forty puts the rank-one threshold at 0.0025
-    // and rejects them. Shrink the family and this test reports two regressions that
-    // never happened.
+    // candidate — a drift and a change point, both below `change_alpha` — so both are
+    // reported by a detector judging each series on its own. A judged family of forty puts
+    // the rank-one threshold at 0.0025 and rejects them. The positive control below pins
+    // that: shrink the family and this fixture reports two regressions that never happened.
     //
     // Silence here is a property of this fixture rather than a universal guarantee: the
     // correction bounds the false-discovery rate at `fdr_q` instead of driving it to
@@ -853,6 +942,32 @@ fn a_batch_of_flat_noisy_series_raises_nothing() {
             "mode={mode:?}: a stationary batch reported {} findings",
             detection.findings.len(),
         );
+
+        // The positive control: the same series judged one at a time, where the family is
+        // one and the correction is inert. Two of them then report a regression that never
+        // happened, which is what makes the silence above a property of the correction
+        // rather than of series that never reached it.
+        let solo: Vec<(Direction, String)> = batch
+            .iter()
+            .flat_map(|series| find_changes(slice::from_ref(series), &context).findings)
+            .map(|finding| (finding.direction, finding.id.qualified()))
+            .collect();
+        let expected: &[(Direction, &str)] = match mode {
+            Mode::History => &[
+                (Direction::Regression, "flat3/case"),
+                (Direction::Regression, "flat25/case"),
+            ],
+            Mode::Branch => &[],
+        };
+        assert_eq!(
+            solo.len(),
+            expected.len(),
+            "mode={mode:?}: judged one at a time these series reported {solo:?}",
+        );
+        for (found, want) in solo.iter().zip(expected) {
+            assert_eq!(found.0, want.0, "mode={mode:?}");
+            assert_eq!(found.1, want.1, "mode={mode:?}");
+        }
     }
 }
 
