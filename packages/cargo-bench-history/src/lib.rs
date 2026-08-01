@@ -153,8 +153,8 @@
 //!
 //! ## `rekey`
 //!
-//! Migrates stored objects onto the current machine-key format, merging history an
-//! earlier key format split across several partitions back into continuous series.
+//! Migrates stored objects onto the current machine-key format, merging history that
+//! an earlier key format split across several partitions back into continuous series.
 //! Nothing is re-benchmarked: every stored run records the hardware profile behind
 //! its key, so both the retired and the current key are recomputed from the object.
 //! An object moves only when its key's machine segment *is* the retired hash of the
