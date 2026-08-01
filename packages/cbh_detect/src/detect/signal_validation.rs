@@ -14,7 +14,7 @@
 //! findings the spawner-distributed production path
 //! ([`find_changes_spawned`](super::find_changes_spawned)) does.
 //!
-//! Every case is run through a 2 × 2 matrix:
+//! Every case is run through a 2 × 2 × 2 matrix:
 //!
 //! * **Analysis mode (dimension 1).** The two modes are *different detectors*, not
 //!   one detector with a flag: [`History`](AnalysisMode::History) locates a change-point
@@ -26,14 +26,35 @@
 //!   and branch; a lone final-point jump is a rise to branch (a single elevated regime
 //!   past the split) but not a sustained historical trend to history.
 //!   Branch mode also needs a base side to compare against at all — a case with an empty
-//!   base side leaves it quiet.
-//! * **Absolute scale (dimension 2).** Every case is analysed as a wall-time metric,
-//!   both as-is and scaled up by a large constant. Every curated move already stands
-//!   far above wall time's one-nanosecond absolute floor, so scaling cannot carry a
-//!   verdict across it and every scaled verdict must match its as-is reference. A
-//!   separate quantized-metric case pins the opposite: on a small instruction count,
-//!   scaling can promote a move by carrying its absolute delta across the much larger
-//!   count floor.
+//!   base side, or with fewer base-side commits than the evidence floor, leaves it
+//!   quiet.
+//! * **Absolute scale (dimension 2).** Every case is analysed as-is and scaled up by a
+//!   large constant. Every curated move already stands far above its metric kind's
+//!   absolute floor, so scaling cannot carry a verdict across that floor and every
+//!   scaled verdict must match its as-is reference. Two dedicated tests pin the
+//!   opposite: on a small instruction count and on a sub-nanosecond timing move,
+//!   scaling promotes a move by carrying its absolute delta across the floor.
+//! * **Family size (dimension 3).** Every case is analysed alone and again embedded in
+//!   a crowd of silent companion series. The Benjamini–Hochberg false-discovery
+//!   filter sizes its family from the number of series the pass judged, and its
+//!   rank-one threshold is `(1/m)·fdr_q`. At a family of one that threshold *is*
+//!   `fdr_q`, which every candidate reaching the filter has already cleared by passing
+//!   the stricter `change_alpha` — so a single-series batch leaves the multiplicity
+//!   stage mathematically inert, and a suite built only of those would pin the detectors
+//!   rather than the analysis. The crowd supplies the family the correction needs.
+//!   Silent companions raise `m` without contributing p-values, so they can only
+//!   *tighten* the threshold: per mode a crowd verdict is either the alone verdict or
+//!   silence, never a finding the case did not already raise, which is why a case
+//!   declares one [`survives_crowd`](SignalCase::survives_crowd) flag rather than a
+//!   second full set of per-mode outcomes. For an obvious-answer case the two verdicts
+//!   agree, and that invariance is itself the contract — a doubling is still a doubling
+//!   in a crowd.
+//!
+//! Each case also declares its **metric kind**, because the practical-magnitude and
+//! scatter floors are per kind: a count must move by whole instructions, a time by a
+//! whole nanosecond, an allocation by a whole byte. The matrix therefore carries
+//! timing, counter, and allocation cases, each with a move far above its own kind's
+//! floors so the scale-invariance dimension holds for all of them.
 //!
 //! Both directions are still exercised without a polarity dimension: every metric is
 //! lower-is-better, so a curated rise is a regression (reported by every mode) and a
@@ -45,25 +66,38 @@
 //! question. Detector internals, confidence, and magnitude are covered by the
 //! finer-grained unit tests in [`findings`](super::findings).
 //!
-//! Most curated series carry no meaningful within-regime dispersion (each regime is a
-//! run of one level, wobbling only by [`REGIME_WOBBLE`]) and every step is large and
-//! well above the practical-magnitude floors, so a step between two such regimes is
-//! maximally significant and detection turns purely on the mode's slice and floor
-//! rather than on any noise model. One case deliberately breaks that mould: a
-//! *stationary but very noisy* series whose value oscillates between two levels
-//! throughout. A human reading its chart answers "noisy, but nothing changed" without
-//! hesitation, so it is exactly the kind of obvious-answer input this suite exists to
-//! pin — and it guards the noise gates against reading structured jitter as a step.
+//! Curated series carry the measurement scatter their metric kind actually shows.
+//! Timing metrics run at [`TIMING_NOISE_CV`], the middle of the band the wall-time
+//! benchmarks in this project's own stored history occupy; Callgrind counters and
+//! allocation counters carry none at all, because those engines re-measure identical
+//! code to the same value and their scatter floors keep a zero-scatter window from
+//! collapsing the prediction interval. Detection has to be judged against data as noisy
+//! as the real thing: on near-perfect series every "stays quiet" case is trivial, and
+//! the false positives those noise gates exist to reject come from series at this
+//! scatter level rather than from ones an order of magnitude cleaner. The scatter is
+//! drawn from a fixed-seed generator keyed by each series' own name, so every run sees
+//! identical data while a batch of companions stays independent of one another rather
+//! than carrying copies of one sequence.
+//!
+//! One case is exempt from the model: `stationary_bimodal_noise` is a verbatim
+//! recording of a real series and carries the dispersion it was measured with. A human
+//! reading its chart answers "noisy, but nothing changed" without hesitation, so it is
+//! exactly the kind of obvious-answer input this suite exists to pin — and it guards the
+//! noise gates against reading structured jitter as a step.
 
 #![cfg_attr(coverage_nightly, coverage(off))]
 
+use std::slice;
 use std::sync::Arc;
 
 use cbh_model::{BenchmarkId, DiscriminantSet, Engine, MetricKind};
 use nonempty::nonempty;
 
 use crate::detect::findings::find_changes;
-use crate::detect::{AnalysisConfig, AnalysisContext, AnalysisMode, Series, SeriesPoint};
+use crate::detect::noise_gates::{MIN_REGIME, MIN_SERIES_POINTS};
+use crate::detect::{
+    AnalysisConfig, AnalysisContext, AnalysisMode, Series, SeriesPoint, UnjudgedReason,
+};
 
 /// The analysis mode a case is evaluated under — the suite's dimension-1 lever.
 ///
@@ -144,30 +178,114 @@ impl Outcome {
     }
 }
 
+/// Where a case's dispersion comes from.
+#[derive(Clone, Copy, Debug)]
+enum Scatter {
+    /// The declared values are flat regime levels, and the suite adds the measurement
+    /// scatter the case's metric kind actually shows (see [`with_noise`]).
+    Modelled,
+    /// The declared values were recorded from a real series and already carry their own
+    /// dispersion, so they are analysed exactly as given.
+    Recorded,
+}
+
 /// One curated series — its base and branch sides — and the outcome each mode is
 /// expected to see in it.
 struct SignalCase {
-    /// Human-readable case name, surfaced in assertion failures.
+    /// Human-readable case name, surfaced in assertion failures. It also seeds the
+    /// case's scatter, so each case draws its own sequence.
     name: &'static str,
-    /// The base-side (unscaled) series values, oldest-first: the commits at or before
+    /// The metric kind the case is analysed as. It selects both the practical-magnitude
+    /// and scatter floors the verdict turns on and the measurement scatter the values
+    /// carry.
+    kind: MetricKind,
+    /// The base-side (unscaled) regime levels, oldest-first: the commits at or before
     /// the merge-base. May be empty, which leaves branch mode without a base side to
     /// compare against, so it stays quiet. The base/branch split matters only to branch
     /// mode; history sees the whole concatenated series and reads these values as
     /// ordinary leading points, indifferent to which side they came from.
     base: Vec<f64>,
-    /// The branch-side (unscaled) series values, oldest-first: the commits past the
+    /// The branch-side (unscaled) regime levels, oldest-first: the commits past the
     /// merge-base. May be empty.
     branch: Vec<f64>,
     /// The outcome history mode's change-point detector is expected to see.
     expected_history: Outcome,
     /// The outcome branch mode is expected to see.
     expected_branch: Outcome,
+    /// Whether the case's finding still stands once the false-discovery family grows to
+    /// [`CROWD_COMPANIONS`] silent companions.
+    ///
+    /// A crowd only tightens the Benjamini–Hochberg threshold, so per mode the crowd
+    /// verdict is either the alone verdict or silence — never a finding the case did not
+    /// already raise. That is what reduces the crowd outcome to a boolean rather than a
+    /// second [`Outcome`]. The boolean is shared across modes because every curated case
+    /// answers the crowd the same way in both; a case that survived in one mode and was
+    /// crowded out in the other would be stated as two rows, one per mode. Every
+    /// obvious-answer case keeps its verdict, and that invariance is the contract; the
+    /// deliberately marginal case does not, which is what proves the dimension is
+    /// load-bearing.
+    survives_crowd: bool,
+    /// Where the case's dispersion comes from.
+    scatter: Scatter,
 }
 
 impl SignalCase {
-    /// The whole series, the base side followed by the branch side, oldest-first.
+    /// A case on `kind` that both modes are expected to stay quiet on, whose declared
+    /// levels carry modelled scatter, and whose verdict survives the crowd — the common
+    /// shape every case is stated as a deviation from.
+    fn new(name: &'static str, kind: MetricKind) -> Self {
+        Self {
+            name,
+            kind,
+            base: Vec::new(),
+            branch: Vec::new(),
+            expected_history: Outcome::Quiet,
+            expected_branch: Outcome::Quiet,
+            survives_crowd: true,
+            scatter: Scatter::Modelled,
+        }
+    }
+
+    /// The base-side levels, oldest-first.
+    fn base(mut self, values: Vec<f64>) -> Self {
+        self.base = values;
+        self
+    }
+
+    /// The branch-side levels, oldest-first.
+    fn branch(mut self, values: Vec<f64>) -> Self {
+        self.branch = values;
+        self
+    }
+
+    /// The outcomes history mode and branch mode are respectively expected to see.
+    fn expects(mut self, history: Outcome, branch: Outcome) -> Self {
+        self.expected_history = history;
+        self.expected_branch = branch;
+        self
+    }
+
+    /// Declares that the crowd's tighter false-discovery threshold rejects this case's
+    /// finding.
+    fn crowded_out(mut self) -> Self {
+        self.survives_crowd = false;
+        self
+    }
+
+    /// Declares the values a verbatim recording, to be analysed without added scatter.
+    fn recorded(mut self) -> Self {
+        self.scatter = Scatter::Recorded;
+        self
+    }
+
+    /// The whole series as the analysis receives it: the base side followed by the
+    /// branch side, oldest-first, carrying the dispersion the case declares.
     fn values(&self) -> Vec<f64> {
-        [self.base.as_slice(), self.branch.as_slice()].concat()
+        let levels = [self.base.as_slice(), self.branch.as_slice()].concat();
+        match self.scatter {
+            Scatter::Modelled => with_noise(&levels, self.kind, seed_of(self.name)),
+            Scatter::Recorded => levels,
+        }
     }
 
     /// The first-parent merge-base split index handed to branch mode: the last base-side
@@ -186,140 +304,330 @@ impl SignalCase {
     }
 }
 
-/// The fraction of its own level each curated regime wobbles by, alternating below and
-/// above it from point to point.
+/// The coefficient of variation a curated timing series carries.
 ///
-/// A regime of identical values has exactly zero scatter, and branch mode judges a tip
-/// against the base window's scatter. Wall time — the metric this matrix runs on — has
-/// no quantum to floor that scatter at, so a zero-scatter window leaves the prediction
-/// interval with no distribution to place the tip in and yields no verdict at all. Real
-/// timing series never repeat a value, so every curated regime carries this
-/// deterministic wobble instead. At two parts in a thousand it is orders of magnitude
-/// below every curated step and below every practical-magnitude floor, so no verdict
-/// turns on it.
-const REGIME_WOBBLE: f64 = 0.002;
+/// Wall-time benchmarks in this project's own stored history run at two to three
+/// percent between-commit scatter, and 2.5% is the middle of that band. The figure
+/// matters because it is what the noise gates are up against in production: a curated
+/// series an order of magnitude cleaner makes every "stays quiet" case trivially easy
+/// and never reproduces the false positives those gates exist to reject.
+const TIMING_NOISE_CV: f64 = 0.025;
 
-/// `count` points alternating ±[`REGIME_WOBBLE`] around `value`, as a run of series
-/// points. An even-length run has exactly `value` as its mean.
-fn run_of(value: f64, count: usize) -> Vec<f64> {
-    (0..count)
-        .map(|index| {
-            if index % 2 == 0 {
-                value * (1.0 - REGIME_WOBBLE)
-            } else {
-                value * (1.0 + REGIME_WOBBLE)
-            }
-        })
+/// The coefficient of variation of a metric that re-measures identical code to
+/// identical values.
+const EXACT: f64 = 0.0;
+
+/// The coefficient of variation a curated series of `kind` carries.
+///
+/// Callgrind simulates the processor rather than timing it, and the allocation tracker
+/// counts whole events, so both reproduce a value exactly across runs of unchanged
+/// code — zero scatter *is* the realistic model for them. That costs the branch-mode
+/// prediction interval nothing, because both kinds carry a scatter floor
+/// (`SCATTER_FLOOR_COUNT`, `SCATTER_FLOOR_ALLOC`) that bounds the standard error from
+/// below when a window repeats one value. Timing metrics have no such floor, and no
+/// quantum to justify one, so their realistic scatter is what keeps the interval
+/// usable.
+fn noise_cv(kind: MetricKind) -> f64 {
+    match kind {
+        MetricKind::WallTime | MetricKind::ProcessorTime => TIMING_NOISE_CV,
+        MetricKind::InstructionCount
+        | MetricKind::ConditionalBranches
+        | MetricKind::IndirectBranches
+        | MetricKind::AllocatedBytes
+        | MetricKind::AllocationCount => EXACT,
+    }
+}
+
+/// The increment [`NoiseSource`] advances its counter by, from the published
+/// `splitmix64` generator.
+const SPLITMIX_GAMMA: u64 = 0x9e37_79b9_7f4a_7c15;
+
+/// The first multiplier of the `splitmix64` finalizer.
+const SPLITMIX_MIX_A: u64 = 0xbf58_476d_1ce4_e5b9;
+
+/// The second multiplier of the `splitmix64` finalizer.
+const SPLITMIX_MIX_B: u64 = 0x94d0_49bb_1331_11eb;
+
+/// A `splitmix64` pseudo-random generator: the source of every curated series'
+/// measurement scatter.
+///
+/// What this suite needs is *reproducibility*, not statistical excellence. A test whose
+/// data differs between runs fails at random and proves nothing, so the scatter is a
+/// pure function of a seed and identical on every platform and every invocation.
+/// `splitmix64` is a handful of arithmetic operations, needs no dependency, and — being
+/// counter-based behind a strong finalizer — yields unrelated streams for adjacent
+/// seeds, which is what lets a batch of companion series be independent of one another
+/// rather than copies of one sequence.
+#[derive(Debug)]
+struct NoiseSource {
+    /// The counter the finalizer is applied to; the seed is simply its starting value.
+    state: u64,
+}
+
+impl NoiseSource {
+    /// A generator whose stream is determined entirely by `seed`.
+    fn new(seed: u64) -> Self {
+        Self { state: seed }
+    }
+
+    /// The next deviate, uniform on `[-1, 1]`.
+    fn next_deviate(&mut self) -> f64 {
+        self.state = self.state.wrapping_add(SPLITMIX_GAMMA);
+        let mut mixed = self.state;
+        mixed = (mixed ^ (mixed >> 30)).wrapping_mul(SPLITMIX_MIX_A);
+        mixed = (mixed ^ (mixed >> 27)).wrapping_mul(SPLITMIX_MIX_B);
+        mixed ^= mixed >> 31;
+        // The top half is the best-mixed one and lands in a `u32` exactly, which keeps
+        // the conversion to `f64` lossless.
+        let bits = u32::try_from(mixed >> 32).unwrap();
+        f64::from(bits) / f64::from(u32::MAX) * 2.0 - 1.0
+    }
+}
+
+/// The offset basis of the 64-bit FNV-1a hash, which turns a series name into a seed.
+const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// The prime of the 64-bit FNV-1a hash.
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+/// The scatter seed a series called `name` draws from.
+///
+/// Keying the seed to the name is what makes every series in a batch independent: the
+/// case and each of its companions hash to different seeds, so a crowd is a crowd of
+/// distinct series rather than one series repeated.
+fn seed_of(name: &str) -> u64 {
+    name.bytes().fold(FNV_OFFSET_BASIS, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(FNV_PRIME)
+    })
+}
+
+/// `values` carrying `kind`'s realistic measurement scatter, drawn from `seed`.
+///
+/// The deviates are uniform on `[-h, h]`. A uniform deviate's standard deviation is
+/// `h/√3`, so the half-width is the requested coefficient of variation scaled by `√3` —
+/// which makes [`noise_cv`] the series' actual coefficient of variation rather than its
+/// peak excursion.
+///
+/// The scatter is relative to each point's own level, so scaling a whole series scales
+/// its scatter with it and the suite's scale-invariance dimension stays exact. A kind
+/// whose coefficient of variation is [`EXACT`] comes back untouched.
+fn with_noise(values: &[f64], kind: MetricKind, seed: u64) -> Vec<f64> {
+    let half_width = noise_cv(kind) * 3.0_f64.sqrt();
+    let mut noise = NoiseSource::new(seed);
+    values
+        .iter()
+        .map(|&value| value.mul_add(half_width * noise.next_deviate(), value))
         .collect()
 }
+
+/// A regime of `count` points at exactly `value`.
+///
+/// Measurement scatter is added when the case's values are assembled (see
+/// [`SignalCase::values`]), so a case declares the levels it means and nothing else.
+fn run_of(value: f64, count: usize) -> Vec<f64> {
+    vec![value; count]
+}
+
+/// How many silent companion series join a case in the crowd of dimension 3.
+///
+/// The count is bounded on both sides by the cases themselves, and both bounds are
+/// measured rather than predicted. The deliberately marginal case survives up to seven
+/// companions and falls silent at eight, so eight is the floor below which dimension 3
+/// stops discriminating anything. The weakest genuine case — the branch tip above a
+/// freshly shifted base, whose branch-side evidence is a single point — survives up to
+/// 309 companions and falls silent at 310, so 309 is the ceiling above which the suite
+/// starts denying real signals. Neither edge is a place to sit, so the crowd is the
+/// geometric midpoint of the admissible window, `floor(sqrt(8 * 309))`, which leaves a
+/// factor of roughly six of margin on each side.
+const CROWD_COMPANIONS: usize = 49;
+
+/// The crowd size of a case analysed on its own, with no companions at all.
+const ALONE: usize = 0;
+
+/// The benchmark name the curated series of every case is stored under.
+const CURATED_NAME: &str = "curated";
+
+/// The scale multiple dimension 2 applies on top of each as-is series.
+///
+/// Large enough to carry a move sitting just under an absolute floor well across it,
+/// which is what the two dedicated absolute-floor tests need. Every matrix case already
+/// clears its floor, so there the multiple only has to leave the verdict alone.
+const SCALE_MULTIPLE: f64 = 1000.0;
+
+/// The length of each of the two regimes the dedicated absolute-floor tests are built
+/// from.
+///
+/// Long enough that the step between them is statistically unmistakable in both modes,
+/// so the verdict turns on the absolute floor and on nothing else.
+const FLOOR_REGIME_POINTS: usize = 50;
+
+/// The merge base the dedicated absolute-floor tests split at: the last commit of the
+/// first regime, so branch mode sees the whole second regime as the branch side.
+const FLOOR_MERGE_BASE: usize = FLOOR_REGIME_POINTS - 1;
 
 /// The hand-curated cases. New "obvious answer" series are added as one row each.
 fn cases() -> Vec<SignalCase> {
     vec![
         // An unmistakable sustained doubling halfway through. History and branch (split
         // at the step) both see a rise.
-        SignalCase {
-            name: "doubling_step",
-            base: run_of(100.0, 50),
-            branch: run_of(200.0, 50),
-            expected_history: Outcome::Rise,
-            expected_branch: Outcome::Rise,
-        },
+        SignalCase::new("doubling_step", MetricKind::WallTime)
+            .base(run_of(100.0, 50))
+            .branch(run_of(200.0, 50))
+            .expects(Outcome::Rise, Outcome::Rise),
         // The same obvious doubling as the first case, but with no base side. Branch
         // mode has nothing to compare the branch against, so it must stay quiet even
         // though history still sees the rise over the whole series.
-        SignalCase {
-            name: "doubling_without_base",
-            base: Vec::new(),
-            branch: [run_of(100.0, 50), run_of(200.0, 50)].concat(),
-            expected_history: Outcome::Rise,
-            expected_branch: Outcome::Quiet,
-        },
+        SignalCase::new("doubling_without_base", MetricKind::WallTime)
+            .branch([run_of(100.0, 50), run_of(200.0, 50)].concat())
+            .expects(Outcome::Rise, Outcome::Quiet),
         // The mirror image: a sustained halving. Same mode geometry, opposite direction,
         // so it exercises the improvement-reporting path (surfaced only by branch mode).
-        SignalCase {
-            name: "halving_step",
-            base: run_of(200.0, 50),
-            branch: run_of(100.0, 50),
-            expected_history: Outcome::Fall,
-            expected_branch: Outcome::Fall,
-        },
+        SignalCase::new("halving_step", MetricKind::WallTime)
+            .base(run_of(200.0, 50))
+            .branch(run_of(100.0, 50))
+            .expects(Outcome::Fall, Outcome::Fall),
         // A jump confined to the final commit. Branch (split just before the jump) sees
         // the rise; history does not, since one trailing point is not a sustained trend.
-        SignalCase {
-            name: "tip_spike",
-            base: run_of(100.0, 99),
-            branch: run_of(200.0, 1),
-            expected_history: Outcome::Quiet,
-            expected_branch: Outcome::Rise,
-        },
+        SignalCase::new("tip_spike", MetricKind::WallTime)
+            .base(run_of(100.0, 99))
+            .branch(run_of(200.0, 1))
+            .expects(Outcome::Quiet, Outcome::Rise),
         // The mirror image at the tip: the final commit drops.
-        SignalCase {
-            name: "tip_drop",
-            base: run_of(200.0, 99),
-            branch: run_of(100.0, 1),
-            expected_history: Outcome::Quiet,
-            expected_branch: Outcome::Fall,
-        },
+        SignalCase::new("tip_drop", MetricKind::WallTime)
+            .base(run_of(200.0, 99))
+            .branch(run_of(100.0, 1))
+            .expects(Outcome::Quiet, Outcome::Fall),
         // A dead-flat line: nothing moved, so no mode should ever flag it.
-        SignalCase {
-            name: "flat_line",
-            base: run_of(100.0, 50),
-            branch: run_of(100.0, 50),
-            expected_history: Outcome::Quiet,
-            expected_branch: Outcome::Quiet,
-        },
+        SignalCase::new("flat_line", MetricKind::WallTime)
+            .base(run_of(100.0, 50))
+            .branch(run_of(100.0, 50)),
         // A stationary but very noisy real-world series (a wall-time metric whose value
         // oscillates between ~13 and ~25-29 across its whole history). A human reads the
         // chart as "noisy, nothing changed", yet a naive change-point split lands on the
         // dominant mode of each side and — because the median-absolute residual then
-        // collapses — used to be reported as a regression. The regime-separation gate
-        // rejects it: the two levels overlap far too much to be distinct populations.
-        // History sees the whole series and must stay quiet; branch has no branch side.
-        SignalCase {
-            name: "stationary_bimodal_noise",
-            base: vec![
+        // collapses — reads as a regression. The regime-separation gate rejects it: the
+        // two levels overlap far too much to be distinct populations. History sees the
+        // whole series and must stay quiet; branch has no branch side.
+        SignalCase::new("stationary_bimodal_noise", MetricKind::WallTime)
+            .base(vec![
                 13.26, 14.33, 13.14, 24.97, 13.2, 24.97, 13.17, 25.39, 25.54, 13.18, 13.83, 25.45,
                 25.02, 25.0, 13.2, 13.22, 13.24, 13.21, 13.15, 24.97, 26.78, 13.24, 28.98, 10.5,
                 10.53, 26.76, 26.74, 13.58, 13.54, 28.86, 14.15, 13.5, 26.77, 25.38, 25.0, 13.97,
                 26.81, 25.54, 13.62, 13.57,
-            ],
-            branch: Vec::new(),
-            expected_history: Outcome::Quiet,
-            expected_branch: Outcome::Quiet,
-        },
+            ])
+            .recorded(),
         // A branch that got slower but was fixed in the last commit.
         // History sees the regression, but branch sees only the final commit and must stay quiet.
-        SignalCase {
-            name: "branch_with_regression_then_fix",
-            base: run_of(100.0, 50),
-            branch: [run_of(200.0, 49), run_of(100.0, 1)].concat(),
-            expected_history: Outcome::Rise,
-            expected_branch: Outcome::Quiet,
-        },
+        SignalCase::new("branch_with_regression_then_fix", MetricKind::WallTime)
+            .base(run_of(100.0, 50))
+            .branch([run_of(200.0, 49), run_of(100.0, 1)].concat())
+            .expects(Outcome::Rise, Outcome::Quiet),
+        // A short history whose final commit sits a little high — the shape the batch
+        // false positives of issue #428 take. Both modes stay quiet, for two unrelated
+        // reasons worth having pinned together: history rejects a one-point regime
+        // (`MIN_REGIME` demands five), and branch mode sees only nine base-side commit
+        // levels, under the `MIN_SERIES_POINTS` evidence floor, so it declines to test
+        // the series at all. This is deliberately distinct from `tip_spike`, which has a
+        // long base and where branch mode legitimately does report.
+        SignalCase::new(
+            "a_lone_elevated_final_point_is_not_a_step",
+            MetricKind::WallTime,
+        )
+        .base(run_of(100.0, MIN_SERIES_POINTS - 1))
+        .branch(run_of(110.0, 1)),
+        // A clean 30% step over the shortest regimes both modes will judge. Far more
+        // marginal than the doubling above, so it is a genuine test of crowd survival
+        // rather than a formality: it must keep its verdict in a crowd.
+        SignalCase::new("a_clean_step_survives_a_crowd", MetricKind::WallTime)
+            .base(run_of(100.0, MIN_SERIES_POINTS))
+            .branch(run_of(130.0, MIN_SERIES_POINTS))
+            .expects(Outcome::Rise, Outcome::Rise),
+        // A real but small step over the shortest regimes a change-point can be built
+        // from. This case exists to prove the family dimension is load-bearing: without
+        // at least one case whose verdict flips, a regression that ignored family size
+        // entirely would still satisfy the whole dimension. History is the discriminating
+        // mode — it reports the step alone and is talked out of it by the crowd's tighter
+        // threshold — while branch mode stays quiet either way, since five base-side
+        // commit levels are under its evidence floor.
+        SignalCase::new(
+            "a_marginal_step_does_not_survive_a_crowd",
+            MetricKind::WallTime,
+        )
+        .base(run_of(100.0, MIN_REGIME))
+        .branch(run_of(108.0, MIN_REGIME))
+        .expects(Outcome::Rise, Outcome::Quiet)
+        .crowded_out(),
+        // Matched pair, part one. The base branch itself stepped down recently, and the
+        // branch tip sits above the level it stepped down to. Branch mode narrows its
+        // comparison to the current base regime and reports the rise; measured against
+        // the whole stale window the tip would be lost under the old high level. History
+        // reads the series as one large fall — an improvement it does not report.
+        SignalCase::new(
+            "a_branch_tip_above_a_freshly_shifted_base_is_reported",
+            MetricKind::WallTime,
+        )
+        .base([run_of(200.0, 11), run_of(100.0, MIN_REGIME)].concat())
+        .branch(run_of(130.0, 1))
+        .expects(Outcome::Fall, Outcome::Rise),
+        // Matched pair, part two: the same freshly shifted base, with a branch tip that
+        // agrees with the current base regime. Branch mode must stay quiet. Together the
+        // pair states that narrowing the comparison to the current base regime restores
+        // sensitivity without manufacturing findings on branches that changed nothing —
+        // either half alone would be satisfied by a detector that had lost one of those
+        // two properties.
+        SignalCase::new(
+            "a_branch_tip_matching_a_freshly_shifted_base_is_quiet",
+            MetricKind::WallTime,
+        )
+        .base([run_of(200.0, 11), run_of(100.0, MIN_REGIME)].concat())
+        .branch(run_of(100.0, 1))
+        .expects(Outcome::Fall, Outcome::Quiet),
+        // A counter metric stepping by 200 instructions, forty times the five-count
+        // absolute floor and far above the relative floors. Callgrind
+        // reproduces identical code exactly, so the series carries no scatter and the
+        // count scatter floor is what keeps the branch-mode prediction interval usable.
+        SignalCase::new(
+            "a_counter_step_far_above_the_count_floors_is_reported",
+            MetricKind::InstructionCount,
+        )
+        .base(run_of(1000.0, MIN_SERIES_POINTS))
+        .branch(run_of(1200.0, MIN_SERIES_POINTS))
+        .expects(Outcome::Rise, Outcome::Rise),
+        // An allocation metric stepping by a kilobyte, three orders of magnitude above
+        // the one-byte absolute floor. An allocator hands out whole bytes and repeats
+        // the same requests run after run, so this series is exact too and leans on the
+        // allocation scatter floor in branch mode.
+        SignalCase::new(
+            "an_allocation_step_far_above_the_allocation_floors_is_reported",
+            MetricKind::AllocatedBytes,
+        )
+        .base(run_of(4096.0, MIN_SERIES_POINTS))
+        .branch(run_of(5120.0, MIN_SERIES_POINTS))
+        .expects(Outcome::Rise, Outcome::Rise),
     ]
 }
 
-/// Builds a curated series carrying `values` in topological order, tagged with `kind`.
+/// Builds a series called `name` carrying `values` at topological indices starting at
+/// `topo_start`, tagged with `kind`.
 ///
-/// The points carry no explicit confidence intervals. Every curated regime is a run of
-/// one level carrying only the small deterministic [`REGIME_WOBBLE`], so within-regime
-/// dispersion is negligible beside every curated step and the verdict turns on the mode
-/// and the step magnitude rather than on any noise model. The stationary-noise case is
-/// the exception — its values genuinely scatter — and it exists precisely to exercise
-/// those gates.
-fn curated_series(values: &[f64], kind: MetricKind) -> Series {
+/// The points carry no explicit confidence intervals: the engines these cases model
+/// report a single figure per run, so the dispersion the analysis judges is the
+/// between-commit scatter the values already carry.
+fn curated_series(name: &str, values: &[f64], kind: MetricKind, topo_start: usize) -> Series {
     let points = values
         .iter()
         .enumerate()
-        .map(|(index, &value)| SeriesPoint {
-            topo_index: index,
-            dirty: false,
-            object_ordinal: u32::try_from(index).unwrap(),
-            commit: Some(Arc::from(format!("commit{index}"))),
-            value,
-            interval_low: None,
-            interval_high: None,
+        .map(|(offset, &value)| {
+            let topo_index = topo_start.checked_add(offset).unwrap();
+            SeriesPoint {
+                topo_index,
+                dirty: false,
+                object_ordinal: u32::try_from(topo_index).unwrap(),
+                commit: Some(Arc::from(format!("commit{topo_index}"))),
+                value,
+                interval_low: None,
+                interval_high: None,
+            }
         })
         .collect();
     Series {
@@ -328,7 +636,7 @@ fn curated_series(values: &[f64], kind: MetricKind) -> Series {
             target_triple: "t".into(),
             machine_key: "m1".into(),
         },
-        id: BenchmarkId::new(nonempty!["signal".to_owned(), "case".to_owned()]),
+        id: BenchmarkId::new(nonempty![name.to_owned(), "case".to_owned()]),
         kind,
         points,
         active_start: 0,
@@ -336,11 +644,98 @@ fn curated_series(values: &[f64], kind: MetricKind) -> Series {
     }
 }
 
-/// Runs the serial detection oracle on a single series under `context` and reports
-/// whether it raised any finding.
-fn raises_finding(values: &[f64], kind: MetricKind, context: &AnalysisContext) -> bool {
-    let series = curated_series(values, kind);
-    let detection = find_changes(&[series], context);
+/// `count` flat companion series at `level`, laid out to enlarge the false-discovery
+/// family of a case whose merge base sits at `merge_base`.
+///
+/// A companion counts towards the family only if it is *judged*, which is why each
+/// carries as much evidence as its position allows: the base-side commits ending at the
+/// merge base, capped at `MIN_SERIES_POINTS`, plus a branch-side tip that pads the
+/// series out whenever the base side alone falls short of that floor. History mode
+/// therefore always judges a companion. Branch mode judges one exactly when the merge
+/// base sits at least `MIN_SERIES_POINTS` commits in, since a companion cannot reach
+/// further back than the shared merge-base split allows — so for a case whose own base
+/// side is under that floor, and which branch mode consequently declines to test, the
+/// crowd is a history-mode family only.
+///
+/// Holding them at the floor is deliberate rather than incidental: the crowd is rebuilt
+/// for every case, mode, and scale, so its cost must not grow with the case's own
+/// length. Each draws its metric kind's realistic scatter from its own seed, so the
+/// crowd is a set of independent noisy series rather than an artificially clean backdrop.
+fn companions(
+    count: usize,
+    kind: MetricKind,
+    level: f64,
+    merge_base: Option<usize>,
+) -> Vec<Series> {
+    let branch_start = merge_base.map_or(0, |index| index.checked_add(1).unwrap());
+    let base_points = branch_start.min(MIN_SERIES_POINTS);
+    let topo_start = branch_start.checked_sub(base_points).unwrap();
+    let branch_points = MIN_SERIES_POINTS.saturating_sub(base_points).max(1);
+    let points = base_points.checked_add(branch_points).unwrap();
+
+    (0..count)
+        .map(|index| {
+            let name = format!("companion{index}");
+            let values = with_noise(&run_of(level, points), kind, seed_of(&name));
+            curated_series(&name, &values, kind, topo_start)
+        })
+        .collect()
+}
+
+/// The arithmetic mean of `values` — the level companions sit at, so a crowd shares the
+/// order of magnitude of the case it accompanies and scales along with it.
+fn mean_of(values: &[f64]) -> f64 {
+    let count = u32::try_from(values.len()).unwrap();
+    if count == 0 {
+        return 0.0;
+    }
+    let total: f64 = values.iter().sum();
+    total / f64::from(count)
+}
+
+/// Runs the serial detection oracle on the curated series — alone when `crowd` is
+/// [`ALONE`], otherwise joined by that many flat companions — and reports whether the
+/// curated series raised a finding.
+///
+/// Every companion is flat, so any surviving finding belongs to the curated series. That
+/// is asserted rather than assumed: a companion that started reporting moves of its own
+/// would silently change what this suite measures.
+///
+/// History mode judges every series in the batch, so the family the false-discovery
+/// filter divides by is exactly the batch size. That too is asserted, because a crowd
+/// that failed to enlarge the family would leave dimension 3 inert without failing
+/// anything — the precise blind spot the dimension exists to close.
+fn raises_finding(
+    values: &[f64],
+    kind: MetricKind,
+    context: &AnalysisContext,
+    crowd: usize,
+) -> bool {
+    let curated = curated_series(CURATED_NAME, values, kind, 0);
+    let curated_id = curated.id.qualified();
+    let mut batch = vec![curated];
+    batch.extend(companions(
+        crowd,
+        kind,
+        mean_of(values),
+        context.merge_base_index,
+    ));
+
+    let detection = find_changes(&batch, context);
+    if context.mode == AnalysisMode::History {
+        assert_eq!(
+            detection.census.judged(),
+            batch.len(),
+            "the crowd did not enlarge the false-discovery family"
+        );
+    }
+    for finding in &detection.findings {
+        assert_eq!(
+            finding.id.qualified(),
+            curated_id,
+            "a companion series raised a finding of its own"
+        );
+    }
     !detection.findings.is_empty()
 }
 
@@ -351,42 +746,57 @@ fn scaled(values: &[f64], scale: f64) -> Vec<f64> {
 
 #[test]
 fn curated_signals_match_expected_verdicts() {
-    // Scale multiples applied on top of each as-is series; the as-is verdict is the
-    // reference every scaled verdict must match. The matrix uses wall time, whose
-    // curated moves all stand far above its one-nanosecond absolute floor, so no
-    // multiple may change the outcome.
-    let scale_multiples = [1000.0_f64];
-
     for case in cases() {
         let values = case.values();
+        let kind = case.kind;
         for mode in Mode::ALL {
             let context = mode.context(case.merge_base_index());
             let expected = case.expected_outcome(mode).is_finding(mode);
-            // Every metric is lower-is-better; a curated fall only surfaces where the
-            // mode reports improvements. Wall time carries the smallest absolute
-            // floor, which every curated move already clears, so scale invariance
-            // holds across the matrix.
-            let kind = MetricKind::WallTime;
 
             // Dimension 1: the as-is verdict under this mode matches the hand-picked
             // expectation.
-            let reference = raises_finding(&values, kind, &context);
+            let alone = raises_finding(&values, kind, &context, ALONE);
             assert_eq!(
-                reference, expected,
-                "case '{}' mode={mode:?}: expected finding={expected}, got {reference}",
+                alone, expected,
+                "case '{}' mode={mode:?}: expected finding={expected}, got {alone}",
                 case.name,
             );
 
-            // Dimension 2: scaling a series that already clears the absolute floor
-            // leaves the verdict unchanged.
-            for scale in scale_multiples {
-                let scaled_verdict = raises_finding(&scaled(&values, scale), kind, &context);
-                assert_eq!(
-                    scaled_verdict, reference,
-                    "case '{}' mode={mode:?}: scaling by {scale} changed the verdict",
-                    case.name,
-                );
-            }
+            // Dimension 2: scaling a series that already clears its kind's absolute
+            // floor leaves the verdict unchanged.
+            let scaled_alone =
+                raises_finding(&scaled(&values, SCALE_MULTIPLE), kind, &context, ALONE);
+            assert_eq!(
+                scaled_alone, alone,
+                "case '{}' mode={mode:?}: scaling by {SCALE_MULTIPLE} changed the verdict",
+                case.name,
+            );
+
+            // Dimension 3: a crowd of judged, silent companions can only tighten the
+            // false-discovery threshold, so it keeps every genuine verdict and rejects
+            // only what the case declares marginal.
+            let expected_in_crowd = expected && case.survives_crowd;
+            let crowded = raises_finding(&values, kind, &context, CROWD_COMPANIONS);
+            assert_eq!(
+                crowded, expected_in_crowd,
+                "case '{}' mode={mode:?}: in a crowd expected finding={expected_in_crowd}, \
+                 got {crowded}",
+                case.name,
+            );
+
+            // The scale and family dimensions are independent: scale invariance holds in
+            // a crowd too.
+            let scaled_crowded = raises_finding(
+                &scaled(&values, SCALE_MULTIPLE),
+                kind,
+                &context,
+                CROWD_COMPANIONS,
+            );
+            assert_eq!(
+                scaled_crowded, crowded,
+                "case '{}' mode={mode:?}: scaling by {SCALE_MULTIPLE} changed the crowd verdict",
+                case.name,
+            );
         }
     }
 }
@@ -397,20 +807,125 @@ fn scaling_a_quantized_move_can_clear_the_absolute_floor() {
     // five-count absolute floor. Scaling preserves its shape and relative magnitude
     // while lifting the absolute delta above the floor, so both analysis modes may
     // legitimately change from quiet to finding.
-    let values = [run_of(60.0, 50), run_of(64.0, 50)].concat();
-    let scaled_values = scaled(&values, 1000.0);
+    let kind = MetricKind::InstructionCount;
+    let values = [
+        run_of(60.0, FLOOR_REGIME_POINTS),
+        run_of(64.0, FLOOR_REGIME_POINTS),
+    ]
+    .concat();
+    let scaled_values = scaled(&values, SCALE_MULTIPLE);
 
     for mode in Mode::ALL {
-        let context = mode.context(Some(49));
-        assert!(!raises_finding(
-            &values,
-            MetricKind::InstructionCount,
-            &context
-        ));
-        assert!(raises_finding(
-            &scaled_values,
-            MetricKind::InstructionCount,
-            &context
-        ));
+        let context = mode.context(Some(FLOOR_MERGE_BASE));
+        assert!(!raises_finding(&values, kind, &context, ALONE));
+        assert!(raises_finding(&scaled_values, kind, &context, ALONE));
     }
+}
+
+#[test]
+fn scaling_a_sub_nanosecond_move_can_clear_the_absolute_floor() {
+    // A 2.0 -> 2.4 ns step is a 20% move, clearing every relative floor comfortably, but
+    // spans only 0.4 ns and so falls under `PRACTICAL_ABSOLUTE_TIME`. Timing metrics are
+    // floored on absolute magnitude exactly as counted ones are: a move of well under a
+    // nanosecond an iteration is not worth acting on whatever percentage it works out
+    // to. Scaling preserves the shape and the relative magnitude while carrying the
+    // absolute delta over the floor, so both modes legitimately change from quiet to
+    // finding.
+    //
+    // This deliberately breaks the matrix's scale-invariance assertion, which is why it
+    // is a dedicated test rather than a matrix row.
+    let kind = MetricKind::WallTime;
+    let values = with_noise(
+        &[
+            run_of(2.0, FLOOR_REGIME_POINTS),
+            run_of(2.4, FLOOR_REGIME_POINTS),
+        ]
+        .concat(),
+        kind,
+        seed_of("sub_nanosecond_move"),
+    );
+    let scaled_values = scaled(&values, SCALE_MULTIPLE);
+
+    for mode in Mode::ALL {
+        let context = mode.context(Some(FLOOR_MERGE_BASE));
+        assert!(!raises_finding(&values, kind, &context, ALONE));
+        assert!(raises_finding(&scaled_values, kind, &context, ALONE));
+    }
+}
+
+#[test]
+fn a_batch_of_flat_noisy_series_raises_nothing() {
+    // The direct analogue of issue #428: a batch of roughly 300 real series reported 17
+    // "regressions" and — every single time — exactly zero improvements, a rotating cast
+    // of benchmarks that had not changed. A one-sided finding list over a stationary
+    // suite is the signature of a multiplicity failure rather than of real regressions,
+    // so a whole batch of flat series at production scatter must come back empty in both
+    // directions and in both modes.
+    //
+    // Each series is independently seeded, so this is a batch of unrelated noisy
+    // benchmarks rather than one series repeated. The census assertion matters as much as
+    // the finding assertion: silence proves something about the gates only when the
+    // series reached them.
+    //
+    // The batch is sized so that the false-discovery correction is what produces the
+    // silence. Two of these series wander far enough for the per-series gates to raise a
+    // candidate — a drift and a change point, at p of roughly 0.007 and 0.025 — and both
+    // sit below `change_alpha`, so both would be reported by a detector judging each
+    // series on its own. A judged family of forty puts the rank-one threshold at 0.0025
+    // and rejects them. Shrink the family and this test reports two regressions that
+    // never happened.
+    const FLAT_SERIES: usize = 40;
+    const POINTS: usize = 20;
+    const MERGE_BASE: usize = 15;
+    const LEVEL: f64 = 100.0;
+
+    let kind = MetricKind::WallTime;
+    let batch: Vec<Series> = (0..FLAT_SERIES)
+        .map(|index| {
+            let name = format!("flat{index}");
+            let values = with_noise(&run_of(LEVEL, POINTS), kind, seed_of(&name));
+            curated_series(&name, &values, kind, 0)
+        })
+        .collect();
+
+    for mode in Mode::ALL {
+        let context = mode.context(Some(MERGE_BASE));
+        let detection = find_changes(&batch, &context);
+        assert_eq!(
+            detection.census.judged(),
+            FLAT_SERIES,
+            "mode={mode:?}: every flat series must be judged, or the silence proves nothing",
+        );
+        assert!(
+            detection.findings.is_empty(),
+            "mode={mode:?}: a stationary batch reported {} findings",
+            detection.findings.len(),
+        );
+    }
+}
+
+#[test]
+fn evidence_below_the_minimum_is_not_judged() {
+    // Two regimes, each one point short of `MIN_REGIME`, stepping by an unmistakable
+    // 30%. The step is as obvious as any in the matrix and the analysis still says
+    // nothing about it — because it never tested it. "We have no evidence" and "we
+    // looked and nothing moved" are very different statements to someone reading a
+    // report, so the census is asserted alongside the empty finding list: silence on this
+    // series is accounted for as missing evidence rather than as a verdict.
+    let kind = MetricKind::WallTime;
+    let values = with_noise(
+        &[run_of(100.0, MIN_REGIME - 1), run_of(130.0, MIN_REGIME - 1)].concat(),
+        kind,
+        seed_of("below_minimum_evidence"),
+    );
+    let series = curated_series(CURATED_NAME, &values, kind, 0);
+
+    let detection = find_changes(slice::from_ref(&series), &Mode::History.context(None));
+
+    assert!(detection.findings.is_empty());
+    assert_eq!(detection.census.judged(), 0);
+    assert_eq!(
+        detection.census.reasons().collect::<Vec<_>>(),
+        vec![(UnjudgedReason::TooFewPoints, 1)],
+    );
 }
