@@ -153,7 +153,7 @@ where
     // qualified id); the exact `id == benchmark` narrowing happens after series
     // reconstruction. An unmatched id is not an error — it yields an empty pivot.
     let prefix = BenchmarkIdPrefix::new(options.benchmark.clone())
-        .map_err(|_empty| AnalysisFailedError::new("--benchmark must not be empty"))?;
+        .map_err(|error| AnalysisFailedError::caused_by("--benchmark must not be empty", error))?;
     let prefixes = [prefix];
     let filter = SeriesFilter {
         prefixes: &prefixes,
@@ -1866,6 +1866,35 @@ mod tests {
         ))
         .unwrap_err();
         assert!(error.find_source::<AnalysisFailedError>().is_some());
+    }
+
+    #[test]
+    fn empty_benchmark_preserves_the_typed_source() {
+        let storage = MemoryStorage::new();
+        let git = linear_git();
+        let opts = ExamineOptions {
+            benchmark: String::new(),
+            ..options()
+        };
+
+        let error = block_on(examine_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &opts,
+            &auto(),
+            Timestamp::from_second(0).unwrap(),
+            &RecordingReporter::new(),
+            &spawner(),
+        ))
+        .unwrap_err();
+
+        assert!(
+            error
+                .find_source::<cbh_model::EmptyBenchmarkIdPrefix>()
+                .is_some()
+        );
     }
 
     #[test]
