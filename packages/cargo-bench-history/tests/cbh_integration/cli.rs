@@ -89,7 +89,7 @@ fn binary_bare_local_reads_the_storage_path_from_the_environment() {
     // the temp directory is not a git repository, not on storage selection.
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "{stderr}");
-    assert!(stderr.contains("requires a git repository"), "{stderr}");
+    assert!(stderr.contains("could not resolve \"HEAD\""), "{stderr}");
     assert!(
         !stderr.contains("CARGO_BENCH_HISTORY_STORAGE"),
         "storage must have resolved from the environment: {stderr}"
