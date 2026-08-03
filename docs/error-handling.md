@@ -58,8 +58,9 @@ in both private APIs/logic and public APIs. Prefer `NonZero<usize>` over
 
 ## Defining error types
 
-Error types are built with `ohno`. Binaries aggregate with `ohno::AppError` (enable
-the `app-err` feature); libraries expose their own error type.
+Error types are built with `ohno`. Applications return `ohno::AppError` (enable the
+`app-err` feature) at their public entry points. Libraries expose a public aggregate
+for each behavioral family of operations.
 
 Place an error type next to the API that produces it when it belongs to exactly one
 module — `cbh_config`'s `ConfigError` lives in `config.rs`, `cbh_engines`'
@@ -68,8 +69,9 @@ module — `cbh_config`'s `ConfigError` lives in `config.rs`, `cbh_engines`'
 uses) once they span several modules or grow past a handful, as in `cbh_analyze`,
 `cbh_storage`, and the three CLI binaries.
 
-`ohno` rejects enums, so define **one type per distinct failure condition** and
-group them under a wrapper the API returns. The wrapper is transparent by default:
+`ohno` rejects enums, so define **one private leaf type per distinct failure
+condition**. A library groups those leaves under the public aggregate returned by
+the relevant API. The aggregate is transparent by default:
 
 ```rust
 #[ohno::error]
@@ -78,40 +80,46 @@ group them under a wrapper the API returns. The wrapper is transparent by defaul
 pub struct ManifestError;
 ```
 
+Application-owned leaves remain private and convert directly into `AppError`.
+Application integration tests assert the `AppError` boundary and observable
+behavior; exact leaf and field mappings belong in same-crate unit tests. Test
+placement never justifies making a leaf, constructor, field, or accessor public.
+
 Omitting `#[display]` on a type that carries a source makes it render the source's
 message verbatim with no `caused by:` line, so wrapping adds nothing a user sees.
 `#[no_constructors]` is what stops such a wrapper from being constructed without a
 source, which would render the literal type name.
 
-Callers discriminate with `find_source::<T>()` (needs `use ohno::ErrorExt;`; on
-`AppError` it is inherent). Add a `kind` field, a `#[display("{kind}")]` and a
-`kind()` accessor **only** where a production caller actually branches on the
-condition — not speculatively, and not merely because tests could use it.
+Same-crate implementation and unit-test code can discriminate private leaves with
+`find_source::<T>()` (needs `use ohno::ErrorExt;`; on `AppError` it is inherent).
+When an external production caller has a documented need to branch, the public
+aggregate owns the smallest decision state that supports that behavior and exposes
+narrow query methods. Populate the decision state through explicit leaf-to-aggregate
+conversions. Do not expose the private leaf or mirror the complete private taxonomy
+in a public kind merely because tests could inspect it.
 
 Further rules:
 
 * Generated `new`/`caused_by` are always `pub(crate)` regardless of the type's
-  visibility, and cannot be overloaded — a hand-written `pub fn new` beside them is a
-  duplicate definition. When another crate must construct the error — including the
-  defining crate's own `tests/` directory — add `#[no_constructors]` and write the
-  constructors by hand. Under `#[derive(ohno::Error)]` that also means declaring the
-  `#[error] core: OhnoCore` field, as `cbh_config`'s `ConfigError` and `cbh_storage`'s
-  `StorageError` do. The `#[ohno::error]` attribute form injects that field itself, so
-  there a hand-written constructor only has to initialize `ohno_core`.
+  visibility, and cannot be overloaded — a hand-written constructor beside them is
+  a duplicate definition. Public aggregates normally use `#[no_constructors]` and
+  are created only by conversions from private leaves. Under
+  `#[derive(ohno::Error)]`, a hand-written conversion initializes the declared
+  `#[error] core: OhnoCore` field. The `#[ohno::error]` attribute form injects that
+  field itself.
 * `#[display]` arguments are implicitly rewritten as `&self.<expr>`, so write
   `path.display()`, never `self.path.display()`. Literals and constants are not
   accepted. On a tuple struct, `{0}` fails — write `#[display("{}", 0)]`.
 * No `Clone` is generated; derive it explicitly when needed and pin it with
   `static_assertions`. `PartialEq`, `Eq` and `Copy` cannot be recovered at all,
   because the type carries a `Backtrace` and an `Arc`.
-* A `From` impl for a foreign error type is safe only when the source draws no
-  distinction the destination also draws. `io::Error` carries its own `kind()` and
-  `StorageErrorKind` separately distinguishes `NotFound`, so no `From<io::Error>` can
-  be correct: `cbh_storage`'s `local.rs` maps `io::ErrorKind::NotFound` to `NotFound`
-  in `get`/`delete`, to a skipped directory in `list`, and to `Io` in `put`. The right
-  category is a function of the call site, which `From::from` never sees. Without the
-  impl, `?` on a foreign error is a compile error that forces the author to choose;
-  adding one turns that question into a silent default.
+* Foreign failures enter through a private semantic leaf that names the operation
+  or condition and owns the foreign error as its source. A direct `From` for a
+  foreign error is safe only when the source draws no distinction the destination
+  also draws. `io::Error` carries its own `kind()`, and a storage caller may treat
+  `NotFound` as a cache miss, a skipped directory, or an operation failure depending
+  on the call site. Without a blanket conversion, `?` forces the producer to choose
+  the correct semantic leaf.
 * Never fold another error's `to_string()` or `message()` into a `String` field.
   Attach it as a source with `caused_by` instead. A folded string bakes in that
   error's backtrace, which then reappears wherever the field is rendered — including
@@ -121,9 +129,9 @@ Further rules:
   through is transparent, so the prefix only adds noise.
 * Prefer a type that names the operation over one that just wraps `io::Error`: a
   bare `io::Error` says what went wrong but never what was being attempted.
-* Add a field accessor only when a caller outside the defining module reads it.
-  In-module tests read private fields directly; a sibling module means widening
-  the field to `pub(crate)`, not adding a `pub fn`.
+* Leaf fields and their accessors remain private unless same-crate production code
+  needs wider access. In-module tests read private fields directly; a sibling module
+  means widening the field or accessor to `pub(crate)`, not adding public API.
 
 Each error carries its own backtrace, so a wrapper chain prints one backtrace block
 per level under `RUST_BACKTRACE=1`. Never assert on a full `to_string()`. See the
