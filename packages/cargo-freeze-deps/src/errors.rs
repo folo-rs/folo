@@ -37,11 +37,13 @@ pub struct WriteFileError {
 impl UnwindSafe for WriteFileError {}
 impl RefUnwindSafe for WriteFileError {}
 
-/// The input file is not valid TOML.
+/// The input Cargo.toml file is not valid TOML.
 #[doc(hidden)]
 #[ohno::error]
-#[display("Failed to parse Cargo.toml")]
-pub struct ParseError;
+#[display("Failed to parse '{}'", path.display())]
+pub struct ParseError {
+    pub(crate) path: PathBuf,
+}
 
 // The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
 // which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
@@ -187,9 +189,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_error_carries_the_underlying_failure() {
-        let error = ParseError::caused_by(io::Error::new(io::ErrorKind::InvalidData, "bad toml"));
+    fn parse_error_carries_path_and_source() {
+        let error = ParseError::caused_by(
+            Path::new("some/Cargo.toml"),
+            io::Error::new(io::ErrorKind::InvalidData, "bad toml"),
+        );
 
+        assert_eq!(error.path, Path::new("some/Cargo.toml"));
         assert!(error.find_source::<io::Error>().is_some());
     }
 

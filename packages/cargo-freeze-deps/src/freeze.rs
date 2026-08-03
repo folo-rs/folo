@@ -4,6 +4,8 @@
 // round-trip), walks every standard dependency table, and rewrites each entry's `version`
 // string to its frozen form.
 
+use std::path::Path;
+
 use ohno::AppError;
 use toml_edit::{DocumentMut, Formatted, Item, TableLike, Value};
 
@@ -18,8 +20,13 @@ const PACKAGE_DEP_TABLES: &[&str] = &["dependencies", "dev-dependencies", "build
 ///
 /// The returned string has the same comments and overall layout as the input — only the
 /// rewritten version literals differ.
-pub(crate) fn freeze_document(content: &str) -> Result<(String, RunOutcome), AppError> {
-    let mut doc: DocumentMut = content.parse().map_err(ParseError::caused_by)?;
+pub(crate) fn freeze_document(
+    content: &str,
+    input_path: &Path,
+) -> Result<(String, RunOutcome), AppError> {
+    let mut doc: DocumentMut = content
+        .parse()
+        .map_err(|error| ParseError::caused_by(input_path, error))?;
 
     let mut outcome = RunOutcome {
         frozen_count: 0,
@@ -217,7 +224,8 @@ mod tests {
     use super::*;
 
     fn freeze(content: &str) -> (String, RunOutcome) {
-        freeze_document(content).expect("test inputs are expected to be well-formed")
+        freeze_document(content, Path::new("Cargo.toml"))
+            .expect("test inputs are expected to be well-formed")
     }
 
     // -- Dependency entry forms -----------------------------------------------------------
@@ -593,9 +601,11 @@ serde = "=1.2.3"
     #[test]
     fn invalid_toml_returns_parse_error() {
         let input = "this is = not [valid toml";
-        let error = freeze_document(input).unwrap_err();
+        let input_path = Path::new("some/Cargo.toml");
+        let error = freeze_document(input, input_path).unwrap_err();
+        let parse_error = error.find_source::<ParseError>().unwrap();
 
-        assert!(error.find_source::<ParseError>().is_some());
+        assert_eq!(parse_error.path, input_path);
         assert!(error.find_source::<toml_edit::TomlError>().is_some());
     }
 
@@ -605,7 +615,7 @@ serde = "=1.2.3"
 [dependencies]
 serde = "garbage"
 "#;
-        let error = freeze_document(input).unwrap_err();
+        let error = freeze_document(input, Path::new("Cargo.toml")).unwrap_err();
         let invalid = error.find_source::<InvalidVersionError>().unwrap();
 
         assert_eq!(invalid.dep(), "serde");
@@ -619,7 +629,7 @@ serde = "garbage"
 [dependencies]
 serde = { version = 123 }
 ";
-        let error = freeze_document(input).unwrap_err();
+        let error = freeze_document(input, Path::new("Cargo.toml")).unwrap_err();
         let unexpected = error.find_source::<UnexpectedVersionTypeError>().unwrap();
 
         assert_eq!(unexpected.dep(), "serde");
@@ -632,7 +642,7 @@ serde = { version = 123 }
 [dependencies.serde]
 version = 123
 ";
-        let error = freeze_document(input).unwrap_err();
+        let error = freeze_document(input, Path::new("Cargo.toml")).unwrap_err();
         let unexpected = error.find_source::<UnexpectedVersionTypeError>().unwrap();
 
         assert_eq!(unexpected.dep(), "serde");

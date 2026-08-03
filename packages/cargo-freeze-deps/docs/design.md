@@ -24,8 +24,9 @@ replaces the input or is written elsewhere.
 
 Success reports how many dependency requirements were frozen and how many were skipped because
 their forms are unsupported. Requirements already in the target exact form contribute to
-neither count. Failures identify the operation or dependency involved, are emitted on stderr
-by the CLI, and produce a failure status.
+neither count. Failures identify the operation or dependency involved; file access and parsing
+failures also identify the relevant path. The CLI emits diagnostics on stderr and produces a
+failure status.
 
 Operational failures are distinct typed conditions with parser, semantic-version, and
 filesystem errors retained as sources. The application boundary carries them through

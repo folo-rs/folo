@@ -24,7 +24,7 @@ pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
     let content = fs::read_to_string(&input.path)
         .map_err(|error| ReadFileError::caused_by(input.path.as_path(), error))?;
 
-    let (rewritten, outcome) = freeze_document(&content)?;
+    let (rewritten, outcome) = freeze_document(&content, &input.path)?;
 
     let output_path = input.output.as_ref().unwrap_or(&input.path);
     fs::write(output_path, rewritten)
