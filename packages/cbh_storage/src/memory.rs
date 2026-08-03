@@ -88,8 +88,11 @@ impl Storage for MemoryStorage {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use futures::executor::block_on;
+    use ohno::ErrorExt as _;
 
     use super::*;
+    use crate::error::InvalidStorageKeyError;
+
     #[test]
     fn memory_storage_put_get_keys_and_list() {
         let storage = MemoryStorage::new();
@@ -148,7 +151,7 @@ mod tests {
     fn memory_storage_put_overwrite_rejects_malformed_keys() {
         let storage = MemoryStorage::new();
         let error = block_on(storage.put_overwrite("v1/../escape", b"x")).unwrap_err();
-        assert!(!error.is_not_found(), "{error:?}");
+        assert!(error.find_source::<InvalidStorageKeyError>().is_some());
     }
 
     #[test]
@@ -176,7 +179,7 @@ mod tests {
     fn memory_storage_delete_rejects_malformed_keys() {
         let storage = MemoryStorage::new();
         let error = block_on(storage.delete("v1/../escape")).unwrap_err();
-        assert!(!error.is_not_found(), "{error:?}");
+        assert!(error.find_source::<InvalidStorageKeyError>().is_some());
     }
 
     #[test]
@@ -186,9 +189,15 @@ mod tests {
         // so the fake must reject them exactly as `LocalStorage` does.
         for bad in ["v1/../escape", "v1//gap", "v1/./here", "", "/v1/abs"] {
             let put = block_on(storage.put(bad, b"x")).unwrap_err();
-            assert!(!put.is_not_found(), "put {bad:?}: {put:?}");
+            assert!(
+                put.find_source::<InvalidStorageKeyError>().is_some(),
+                "put {bad:?}: {put:?}"
+            );
             let get = block_on(storage.get(bad)).unwrap_err();
-            assert!(!get.is_not_found(), "get {bad:?}: {get:?}");
+            assert!(
+                get.find_source::<InvalidStorageKeyError>().is_some(),
+                "get {bad:?}: {get:?}"
+            );
         }
     }
 }
