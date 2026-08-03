@@ -23,6 +23,7 @@ bin-dir = "{ bin }{ binary-ext }"
 pkg-fmt = "zip"
 
 [dependencies]
+# Types the hidden Azure test-support API; backend implementation remains in cbh_storage.
 azure_core = { workspace = true }
 cbh_analyze = { workspace = true }
 cbh_cli = { workspace = true }
@@ -52,9 +53,9 @@ async-trait = { workspace = true }
 # and neither `cargo check` nor the emulator-less test runs catch that. This is
 # the same "defaults pick a backend" situation that keeps `clap` on its
 # defaults. The workspace declarations keep `default-features = false`, so the
-# defaults are scoped to this package alone. The Azure SDK is only a
-# dev-dependency now (the `cbh_azure` end-to-end test builds a backend directly
-# via `azure_backend_from_parts`); production storage lives in `cbh_storage`.
+# defaults are scoped to this package alone. `azure_identity` and
+# `azure_storage_blob` are used by the shell's `cbh_azure` test; production
+# storage lives in `cbh_storage`.
 azure_identity = { workspace = true, features = ["default"] }
 azure_storage_blob = { workspace = true, features = ["default"] }
 base64 = { workspace = true }

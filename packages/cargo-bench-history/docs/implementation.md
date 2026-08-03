@@ -5,8 +5,8 @@ application failures and component aggregates into `ohno::AppError`. Command han
 application-owned conditions privately; integration tests exercise the `AppError` boundary and
 observable output, while same-crate unit tests verify exact producer mappings.
 
-The shell directly coordinates ten focused private crates and support packages. Six component
-guides describe the principal stateful and behavioral boundaries:
+The shell directly coordinates focused private crates and support packages. Component guides
+describe the principal stateful and behavioral boundaries:
 
 * [`cbh_analyze`](../../cbh_analyze/docs/implementation.md) owns selection, topology-based history
   reconstruction, analysis, blessing, pruning, and report production.
@@ -21,7 +21,7 @@ guides describe the principal stateful and behavioral boundaries:
 * [`cbh_storage`](../../cbh_storage/docs/implementation.md) owns object keys, storage ports,
   filesystem and Azure backends, and cloud read-through caching.
 
-Four direct support packages complete the shell-facing architecture:
+Direct support packages complete the shell-facing architecture:
 
 * [`cbh_cli`](../../cbh_cli/src/lib.rs) parses argv into the command model and represents help or
   parse exits.
