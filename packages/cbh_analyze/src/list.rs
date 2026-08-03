@@ -35,8 +35,8 @@ use super::{
     resolve_auto_facets, resolve_facets, resolve_now, select_dataset,
 };
 use crate::{
-    AnalysisFailedError, AnalyzeError, CommitterTimeFailedError, RenderedReports, ReportRequest,
-    RepositoryRequiredError, ResolveRefFailedError,
+    AnalyzeError, CommitterTimeFailedError, InvalidBlessingError, InvalidListWideningError,
+    RefNotFoundError, RenderedReports, ReportRequest, ResolveRefFailedError, StoredObjectUtf8Error,
 };
 
 /// The real `list`: load configuration, wire the configured storage and git
@@ -127,12 +127,7 @@ where
         options.json.as_deref(),
     )?;
     if options.all && options.subject != ListSubject::Blessings {
-        return Err(AnalysisFailedError::new(
-            "--all applies only to `list blessings`, where it widens the view from \
-             the current commit to the most recent blessing of every benchmark in \
-             the window; it has no meaning for `list runs` or `list discriminants`",
-        )
-        .into());
+        return Err(InvalidListWideningError::new().into());
     }
     let selection = Selection::from_list(options);
 
@@ -599,7 +594,10 @@ where
         .await
         .map_err(|error| ResolveRefFailedError::caused_by("HEAD", error))?
         .ok_or_else(|| {
-            RepositoryRequiredError::new("HEAD", "Run inside a repository (or pass --repo).")
+            RefNotFoundError::new(
+                "HEAD",
+                "Check or fetch the ref, and run inside the intended repository or pass --repo.",
+            )
         })?;
     let facets = resolve_facets(selection, Some(auto))?;
     let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
@@ -618,15 +616,10 @@ where
             continue;
         }
         let bytes = storage.get(&key).await?;
-        let text = String::from_utf8(bytes).map_err(|error| {
-            AnalysisFailedError::caused_by(format!("stored object {key} is not valid UTF-8"), error)
-        })?;
-        let record = BlessingRecord::from_json(&text).map_err(|error| {
-            AnalysisFailedError::caused_by(
-                format!("stored object {key} is not a valid blessing"),
-                error,
-            )
-        })?;
+        let text = String::from_utf8(bytes)
+            .map_err(|error| StoredObjectUtf8Error::caused_by("blessing", key.clone(), error))?;
+        let record = BlessingRecord::from_json(&text)
+            .map_err(|error| InvalidBlessingError::caused_by(key.clone(), error))?;
         reporter.note_with(|| format!("blessing {key}"));
         entries.push(BlessingEntry {
             set: parsed.set,
@@ -902,7 +895,7 @@ mod tests {
     use ohno::ErrorExt as _;
 
     use super::*;
-    use crate::{NoOutputSelectedError, RepositoryRequiredError};
+    use crate::{NoOutputSelectedError, RefNotFoundError};
 
     fn config() -> Config {
         Config::default()
@@ -1393,7 +1386,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<RepositoryRequiredError>().is_some());
+        assert!(error.find_source::<RefNotFoundError>().is_some());
     }
 
     #[test]
@@ -1529,7 +1522,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<InvalidListWideningError>().is_some());
     }
 
     #[test]
@@ -1735,7 +1728,7 @@ mod tests {
         let storage = MemoryStorage::new();
         // No commits: HEAD does not resolve.
         let error = list_blessings_error(&storage, &FakeGitHistory::new());
-        assert!(error.find_source::<RepositoryRequiredError>().is_some());
+        assert!(error.find_source::<RefNotFoundError>().is_some());
     }
 
     #[test]
@@ -1766,7 +1759,7 @@ mod tests {
         // HEAD is c3 in `linear_git`; a sidecar there with corrupt bytes.
         block_on(storage.put(&bless_key("c3", 100), &[0xff, 0xfe, 0x00])).unwrap();
         let error = list_blessings_error(&storage, &linear_git());
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<StoredObjectUtf8Error>().is_some());
         assert!(error.find_source::<std::string::FromUtf8Error>().is_some());
     }
 
@@ -1775,7 +1768,7 @@ mod tests {
         let storage = MemoryStorage::new();
         block_on(storage.put(&bless_key("c3", 100), b"{ not a blessing record")).unwrap();
         let error = list_blessings_error(&storage, &linear_git());
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<InvalidBlessingError>().is_some());
         assert!(error.find_source::<serde_json::Error>().is_some());
     }
 

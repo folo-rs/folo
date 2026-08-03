@@ -18,7 +18,7 @@ use cbh_storage::{Storage, project_objects_prefix};
 use futures::{StreamExt as _, TryStreamExt as _};
 
 use super::facets::describe_facets;
-use crate::{AnalysisFailedError, AnalyzeError};
+use crate::{AnalyzeError, InvalidResultSetError, StoredObjectUtf8Error};
 
 /// One commit's run tally within a discriminant set, the granularity the report
 /// summaries and the `list runs` breakdown need.
@@ -431,17 +431,10 @@ where
             for (rank, key, parsed) in chunk {
                 let bytes = storage.get(&key).await?;
                 let text = str::from_utf8(&bytes).map_err(|error| {
-                    AnalysisFailedError::caused_by(
-                        format!("stored object {key} is not valid UTF-8"),
-                        error,
-                    )
+                    StoredObjectUtf8Error::caused_by("object", key.clone(), error)
                 })?;
-                let run = RunPoints::from_json(text).map_err(|error| {
-                    AnalysisFailedError::caused_by(
-                        format!("stored object {key} is not a valid result set"),
-                        error,
-                    )
-                })?;
+                let run = RunPoints::from_json(text)
+                    .map_err(|error| InvalidResultSetError::caused_by(key.clone(), error))?;
                 let topo_index = order
                     .get(&parsed.commit)
                     .copied()

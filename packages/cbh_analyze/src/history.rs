@@ -12,9 +12,9 @@ use jiff::Timestamp;
 
 use super::selection::Selection;
 use crate::{
-    AnalysisFailedError, AnalyzeError, DefaultBranchProbeFailedError, FirstParentWalkFailedError,
-    MergeBaseFailedError, RepositoryRequiredError, ResolveRefFailedError,
-    WorkingTreeProbeFailedError,
+    AnalyzeError, BaseBranchUnavailableError, DefaultBranchProbeFailedError,
+    FirstParentWalkFailedError, MergeBaseFailedError, MergeBaseUnavailableError, RefNotFoundError,
+    ResolveRefFailedError, WorkingTreeProbeFailedError,
 };
 
 /// How the base-branch dirty-tip exception is gated.
@@ -109,9 +109,9 @@ where
         .await
         .map_err(|error| ResolveRefFailedError::caused_by(target_ref, error))?
     else {
-        return Err(RepositoryRequiredError::new(
+        return Err(RefNotFoundError::new(
             target_ref,
-            "Run inside a repository (or pass --repo / --context).",
+            "Check or fetch the ref, and select the intended repository with --repo if needed.",
         )
         .into());
     };
@@ -126,14 +126,7 @@ where
         commit: base_commit_id,
     }) = resolve_base(git, config, selection.base).await?
     else {
-        return Err(AnalysisFailedError::new(format!(
-            "could not determine the base branch to compare {target_ref} against: no \
-             --base was given and no default branch could be resolved. Pass an explicit \
-             --base, set project.default_branch, or make the default branch available \
-             (a shallow clone or a checkout that never fetched the base branch is the \
-             usual cause)."
-        ))
-        .into());
+        return Err(BaseBranchUnavailableError::new(target_ref).into());
     };
     let first_parent_started = Instant::now();
     let first_parent = git
@@ -201,14 +194,16 @@ where
                      project.default_branch."
                 .to_owned(),
         };
-        return Err(AnalysisFailedError::new(format!(
-            "could not determine the merge-base of the target {target_ref} \
-             ({target_commit_id}) and the base commit {base_commit_id}: they share no \
-             common ancestor in the available history. This is almost always a shallow \
-             clone whose depth stops short of the branch point — fetch the full history \
-             (`git fetch --unshallow`, or set fetch-depth: 0 on actions/checkout) so the \
-             branch point is present.{remedy}"
-        ))
+        let guidance = format!(
+            "This is almost always a shallow clone whose depth stops short of the branch point — \
+             fetch the full history so the branch point is present.{remedy}"
+        );
+        return Err(MergeBaseUnavailableError::new(
+            target_ref,
+            target_commit_id,
+            base_commit_id,
+            guidance,
+        )
         .into());
     };
 
@@ -320,7 +315,7 @@ pub(crate) async fn resolve_base<G: GitHistory>(
             .map_err(|error| ResolveRefFailedError::caused_by(base, error))?
         else {
             return Err(
-                AnalysisFailedError::new(format!("could not resolve --base {base:?}")).into(),
+                RefNotFoundError::new(base, "Check or fetch the ref selected by --base.").into(),
             );
         };
         return Ok(Some(ResolvedBase {

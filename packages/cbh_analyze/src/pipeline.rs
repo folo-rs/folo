@@ -415,8 +415,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        AnalysisFailedError, FirstParentWalkFailedError, NoOutputSelectedError,
-        RepositoryRequiredError,
+        BaseBranchUnavailableError, FirstParentWalkFailedError, InvalidBlessingError,
+        InvalidResultSetError, MergeBaseUnavailableError, NoOutputSelectedError, RefNotFoundError,
+        StoredObjectUtf8Error, UnknownEngineError,
     };
 
     fn ts(seconds: i64) -> Timestamp {
@@ -830,7 +831,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<RepositoryRequiredError>().is_some());
+        assert!(error.find_source::<RefNotFoundError>().is_some());
     }
 
     #[test]
@@ -1036,7 +1037,7 @@ mod tests {
             "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json".to_owned();
         block_on(storage.put(&bless_key, &[0xff, 0xfe, 0x00])).unwrap();
         let error = analyze_blessing_error(&storage);
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<StoredObjectUtf8Error>().is_some());
         assert!(error.find_source::<std::string::FromUtf8Error>().is_some());
     }
 
@@ -1048,7 +1049,7 @@ mod tests {
             "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json".to_owned();
         block_on(storage.put(&bless_key, b"{ not a blessing record")).unwrap();
         let error = analyze_blessing_error(&storage);
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<InvalidBlessingError>().is_some());
         assert!(error.find_source::<serde_json::Error>().is_some());
     }
 
@@ -1893,7 +1894,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<BaseBranchUnavailableError>().is_some());
     }
 
     #[test]
@@ -1930,7 +1931,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<MergeBaseUnavailableError>().is_some());
     }
 
     #[test]
@@ -1966,7 +1967,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<MergeBaseUnavailableError>().is_some());
     }
 
     #[test]
@@ -2065,7 +2066,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<InvalidResultSetError>().is_some());
     }
 
     #[test]
@@ -2087,7 +2088,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<StoredObjectUtf8Error>().is_some());
     }
 
     #[test]
@@ -2137,7 +2138,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<UnknownEngineError>().is_some());
     }
 
     #[test]
@@ -2162,7 +2163,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<RefNotFoundError>().is_some());
     }
 
     #[test]

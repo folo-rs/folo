@@ -54,9 +54,9 @@ use super::{
     resolve_now,
 };
 use crate::{
-    AnalyzeError, BlessBaseRequiredError, BlessDiscriminantsRequiredError, BlessRefNotFoundError,
-    BlessSelectionRequiredError, FirstParentWalkFailedError, ResolveRefFailedError,
-    WorkingTreeProbeFailedError,
+    AnalyzeError, BlessBaseRequiredError, BlessDiscriminantsRequiredError,
+    BlessSelectionRequiredError, FirstParentWalkFailedError, RefNotFoundError,
+    ResolveRefFailedError, WorkingTreeProbeFailedError,
 };
 
 /// The real `bless`: load configuration, wire the configured storage and git
@@ -404,7 +404,12 @@ async fn resolve_commit<G: GitHistory>(git: &G, reference: &str) -> Result<Strin
         .await
         .map_err(|error| ResolveRefFailedError::caused_by(reference, error))?;
     resolved
-        .ok_or_else(|| BlessRefNotFoundError::new(reference))
+        .ok_or_else(|| {
+            RefNotFoundError::new(
+                reference,
+                "Check or fetch the ref, and select the intended repository with --repo if needed.",
+            )
+        })
         .map_err(Into::into)
 }
 
@@ -972,7 +977,7 @@ mod tests {
         let git = FakeGitHistory::new();
         let error =
             drive_bless(&storage, &git, &bless_options(&["all_the_time/read_cell"])).unwrap_err();
-        assert!(error.find_source::<BlessRefNotFoundError>().is_some());
+        assert!(error.find_source::<RefNotFoundError>().is_some());
     }
 
     #[test]

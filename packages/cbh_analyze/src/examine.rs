@@ -46,7 +46,9 @@ use super::{
     dirty_base_exception_warning, empty_history_hint, format_value, resolve_auto_facets,
     resolve_now, select_dataset,
 };
-use crate::{AnalysisFailedError, AnalyzeError, RenderedReports, ReportRequest};
+use crate::{
+    AnalyzeError, EmptyBenchmarkSelectionError, RenderedReports, ReportRequest, UnknownMetricError,
+};
 
 /// How many leading characters of a commit title the text and Markdown tables
 /// keep. The truncation is a readability convenience of those renderings; the JSON
@@ -153,7 +155,7 @@ where
     // qualified id); the exact `id == benchmark` narrowing happens after series
     // reconstruction. An unmatched id is not an error — it yields an empty pivot.
     let prefix = BenchmarkIdPrefix::new(options.benchmark.clone())
-        .map_err(|error| AnalysisFailedError::caused_by("--benchmark must not be empty", error))?;
+        .map_err(EmptyBenchmarkSelectionError::from)?;
     let prefixes = [prefix];
     let filter = SeriesFilter {
         prefixes: &prefixes,
@@ -220,8 +222,7 @@ fn parse_metric(name: &str) -> Result<MetricKind, AnalyzeError> {
             .map(|kind| kind.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        AnalysisFailedError::new(format!("unknown metric {name:?}; expected one of: {valid}"))
-            .into()
+        UnknownMetricError::new(name, valid).into()
     })
 }
 
@@ -731,7 +732,7 @@ mod tests {
     use ohno::ErrorExt as _;
 
     use super::*;
-    use crate::RepositoryRequiredError;
+    use crate::RefNotFoundError;
 
     fn config() -> Config {
         Config::default()
@@ -1865,7 +1866,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<UnknownMetricError>().is_some());
     }
 
     #[test]
@@ -1942,7 +1943,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<RepositoryRequiredError>().is_some());
+        assert!(error.find_source::<RefNotFoundError>().is_some());
     }
 
     #[test]
@@ -1974,7 +1975,7 @@ mod tests {
     #[test]
     fn parse_metric_rejects_an_unknown_name() {
         let error = parse_metric("bogus").unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<UnknownMetricError>().is_some());
     }
 
     #[test]

@@ -43,7 +43,10 @@ use super::{
     facet_filtered_candidates, parse_since, resolve_auto_facets, resolve_facets, resolve_history,
     resolve_now,
 };
-use crate::{AnalysisFailedError, AnalyzeError, RenderedReports, ReportRequest};
+use crate::{
+    AnalyzeError, PruneBaseConfirmationRequiredError, PruneSelectionRequiredError, RenderedReports,
+    ReportRequest,
+};
 
 /// Which runs a prune pass deletes.
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -70,12 +73,7 @@ impl Scope {
             (false, false) => None,
         };
         if scope.is_none() && !options.include_blessings {
-            return Err(AnalysisFailedError::new(
-                "specify what to delete: --clean (clean runs), --dirty (dirty \
-                 snapshots), --all (both), and/or --include-blessings (blessing \
-                 sidecars)",
-            )
-            .into());
+            return Err(PruneSelectionRequiredError::new().into());
         }
         Ok(scope)
     }
@@ -234,11 +232,7 @@ where
     // itself (`context == base`), the whole selection is base-branch history.
     // Refuse to delete it without explicit confirmation.
     if tip_is_merge_base && !options.prune_base {
-        return Err(AnalysisFailedError::new(format!(
-            "this will delete benchmark history of the {base_name} branch, which is the \
-             base branch. Confirm with --prune-base if this is correct."
-        ))
-        .into());
+        return Err(PruneBaseConfirmationRequiredError::new(base_name).into());
     }
 
     // Runs and blessing sidecars are pruned independently: `--clean`/`--dirty`/`--all`
@@ -777,7 +771,7 @@ mod tests {
     use ohno::ErrorExt as _;
 
     use super::*;
-    use crate::{NoOutputSelectedError, RepositoryRequiredError};
+    use crate::{NoOutputSelectedError, RefNotFoundError};
 
     fn config() -> Config {
         Config::default()
@@ -1317,7 +1311,7 @@ mod tests {
             &RecordingReporter::new(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<PruneSelectionRequiredError>().is_some());
     }
 
     #[test]
@@ -1361,7 +1355,7 @@ mod tests {
             &RecordingReporter::new(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<PruneSelectionRequiredError>().is_some());
         // Nothing was deleted.
         assert!(keys(&storage).contains(&clean_key("f1")));
     }
@@ -1447,7 +1441,11 @@ mod tests {
             &RecordingReporter::new(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(
+            error
+                .find_source::<PruneBaseConfirmationRequiredError>()
+                .is_some()
+        );
         // Nothing was deleted without confirmation.
         assert!(keys(&storage).contains(&clean_key("c3")));
     }
@@ -1541,7 +1539,7 @@ mod tests {
             &RecordingReporter::new(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<RepositoryRequiredError>().is_some());
+        assert!(error.find_source::<RefNotFoundError>().is_some());
     }
 
     #[test]

@@ -5,26 +5,29 @@ use std::error::Error;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use cbh_config::ConfigError;
+use cbh_model::EmptyBenchmarkIdPrefix;
 use cbh_storage::StorageError;
 use ohno::OhnoCore;
 
 /// An error from an `analyze`-family command (`analyze`, `list`, `prune`,
 /// `examine`, `bless`, `unbless`).
 ///
-/// It is transparent: it renders exactly the message of the concrete failure it
-/// carries and adds nothing of its own, so converting one into the binary's
-/// [`AppError`](ohno::AppError) leaves the message a user sees unchanged. A caller
-/// that must tell the failures apart reaches for the concrete type with
-/// [`find_source`](ohno::ErrorExt::find_source).
+/// It is transparent: it renders exactly the diagnostic of the failed operation
+/// and adds nothing when converted into the application's
+/// [`AppError`](ohno::AppError).
 #[ohno::error]
 #[no_constructors]
-#[from(ConfigError, StorageError, AnalysisFailedError, NoOutputSelectedError)]
-#[from(RepositoryRequiredError)]
+#[from(ConfigError, StorageError, NoOutputSelectedError)]
+#[from(UnknownEngineError, EmptyBenchmarkSelectionError, UnknownMetricError)]
+#[from(InvalidListWideningError, PruneSelectionRequiredError)]
+#[from(PruneBaseConfirmationRequiredError, BaseBranchUnavailableError)]
+#[from(MergeBaseUnavailableError, RefNotFoundError)]
+#[from(StoredObjectUtf8Error, InvalidResultSetError, InvalidBlessingError)]
+#[from(InvalidWindowValueError, WindowOutOfRangeError)]
 #[from(
     BlessSelectionRequiredError,
     BlessBaseRequiredError,
-    BlessDiscriminantsRequiredError,
-    BlessRefNotFoundError
+    BlessDiscriminantsRequiredError
 )]
 #[from(
     ResolveRefFailedError,
@@ -44,48 +47,169 @@ pub struct AnalyzeError;
 impl UnwindSafe for AnalyzeError {}
 impl RefUnwindSafe for AnalyzeError {}
 
-/// An analysis operation could not be completed.
-///
-/// This includes invalid selections, malformed stored objects, and invalid time
-/// windows.
-#[ohno::error]
-#[display("failed to analyze history: {message}")]
-pub struct AnalysisFailedError {
-    message: String,
-}
-
-impl UnwindSafe for AnalysisFailedError {}
-impl RefUnwindSafe for AnalysisFailedError {}
-
 /// A reporting command was configured to produce no output.
 #[ohno::error]
-#[display("failed to analyze history: no output selected: {guidance}")]
-pub struct NoOutputSelectedError {
+#[display("no output selected: {guidance}")]
+pub(crate) struct NoOutputSelectedError {
     guidance: String,
 }
 
 impl UnwindSafe for NoOutputSelectedError {}
 impl RefUnwindSafe for NoOutputSelectedError {}
 
-/// Repository history required by a command was unavailable.
+/// A requested benchmark engine name is not supported.
 #[ohno::error]
 #[display(
-    "failed to analyze history: this command requires a git repository: could not resolve \
-     {reference:?}. {guidance}"
+    "unknown engine {name:?}; expected one of: criterion, callgrind, alloc_tracker, all_the_time"
 )]
-pub struct RepositoryRequiredError {
+pub(crate) struct UnknownEngineError {
+    name: String,
+}
+
+/// `examine` received an empty benchmark selection.
+#[ohno::error]
+#[display("--benchmark must not be empty")]
+#[from(EmptyBenchmarkIdPrefix)]
+pub(crate) struct EmptyBenchmarkSelectionError;
+
+/// A requested metric name is not supported.
+#[ohno::error]
+#[display("unknown metric {name:?}; expected one of: {valid}")]
+pub(crate) struct UnknownMetricError {
+    name: String,
+    valid: String,
+}
+
+/// `--all` was applied to a list subject that cannot be widened.
+#[ohno::error]
+#[display(
+    "--all applies only to `list blessings`, where it widens the view from the current commit to \
+     the most recent blessing of every benchmark in the window; it has no meaning for `list runs` \
+     or `list discriminants`"
+)]
+pub(crate) struct InvalidListWideningError;
+
+/// A prune command did not select any object category.
+#[ohno::error]
+#[display(
+    "specify what to delete: --clean (clean runs), --dirty (dirty snapshots), --all (both), and/or \
+     --include-blessings (blessing sidecars)"
+)]
+pub(crate) struct PruneSelectionRequiredError;
+
+/// Pruning base-branch history requires explicit confirmation.
+#[ohno::error]
+#[display(
+    "this will delete benchmark history of the {base_name} branch, which is the base branch. \
+     Confirm with --prune-base if this is correct."
+)]
+pub(crate) struct PruneBaseConfirmationRequiredError {
+    base_name: String,
+}
+
+/// No default base branch was available for a comparison.
+#[ohno::error]
+#[display(
+    "could not determine the base branch to compare {target_ref} against: no --base was given and \
+     no default branch could be resolved. Pass an explicit --base, set project.default_branch, or \
+     make the default branch available as origin/HEAD."
+)]
+pub(crate) struct BaseBranchUnavailableError {
+    target_ref: String,
+}
+
+/// The target and base commits have no available common ancestor.
+#[ohno::error]
+#[display(
+    "could not determine the merge-base of the target {target_ref} ({target_commit}) and the base \
+     commit {base_commit}: they share no common ancestor in the available history. {guidance}"
+)]
+pub(crate) struct MergeBaseUnavailableError {
+    target_ref: String,
+    target_commit: String,
+    base_commit: String,
+    guidance: String,
+}
+
+/// A requested git reference could not be resolved.
+#[ohno::error]
+#[display("could not resolve {reference:?}. {guidance}")]
+pub(crate) struct RefNotFoundError {
     reference: String,
     guidance: String,
 }
 
-impl UnwindSafe for RepositoryRequiredError {}
-impl RefUnwindSafe for RepositoryRequiredError {}
+/// A stored object contains bytes that are not valid UTF-8.
+#[ohno::error]
+#[display("stored {object_kind} {key} is not valid UTF-8")]
+pub(crate) struct StoredObjectUtf8Error {
+    object_kind: &'static str,
+    key: String,
+}
+
+/// A stored result object does not match the result-set schema.
+#[ohno::error]
+#[display("stored object {key} is not a valid result set")]
+pub(crate) struct InvalidResultSetError {
+    key: String,
+}
+
+/// A stored blessing object does not match the blessing schema.
+#[ohno::error]
+#[display("stored blessing {key} is not a valid blessing record")]
+pub(crate) struct InvalidBlessingError {
+    key: String,
+}
+
+/// A time-window option has no supported timestamp, date, or duration syntax.
+#[ohno::error]
+#[display(
+    "invalid {flag} value {value:?}; expected an RFC 3339 timestamp, a YYYY-MM-DD date, or a \
+     relative duration such as \"6 months\" or \"30 days ago\""
+)]
+pub(crate) struct InvalidWindowValueError {
+    flag: String,
+    value: String,
+}
+
+/// Time-window arithmetic exceeded the representable timestamp range.
+#[ohno::error]
+#[display("{context} is out of the representable range")]
+pub(crate) struct WindowOutOfRangeError {
+    context: String,
+}
+
+macro_rules! impl_error_unwind {
+    ($($error:ty),+ $(,)?) => {
+        $(
+            impl UnwindSafe for $error {}
+            impl RefUnwindSafe for $error {}
+        )+
+    };
+}
+
+impl_error_unwind!(
+    UnknownEngineError,
+    EmptyBenchmarkSelectionError,
+    UnknownMetricError,
+    InvalidListWideningError,
+    PruneSelectionRequiredError,
+    PruneBaseConfirmationRequiredError,
+    BaseBranchUnavailableError,
+    MergeBaseUnavailableError,
+    RefNotFoundError,
+    StoredObjectUtf8Error,
+    InvalidResultSetError,
+    InvalidBlessingError,
+    InvalidWindowValueError,
+    WindowOutOfRangeError,
+);
 
 /// No benchmark selection was provided for `bless`.
 #[ohno::error]
 #[display(
-    "blessing failed: at least one benchmark-id prefix is required (or pass --all); for example \
-     `bless all_the_time/read_cell`"
+    "at least one benchmark-id prefix is required (or pass --all); for example `bless \
+     all_the_time/read_cell`"
 )]
 pub(crate) struct BlessSelectionRequiredError;
 
@@ -94,7 +218,7 @@ impl RefUnwindSafe for BlessSelectionRequiredError {}
 
 /// The base branch for a blessing could not be determined.
 #[ohno::error]
-#[display("blessing failed: could not determine the base branch; specify it with --base")]
+#[display("could not determine the base branch; specify it with --base")]
 pub(crate) struct BlessBaseRequiredError;
 
 impl UnwindSafe for BlessBaseRequiredError {}
@@ -103,9 +227,9 @@ impl RefUnwindSafe for BlessBaseRequiredError {}
 /// A blessing could not identify a concrete discriminant set.
 #[ohno::error]
 #[display(
-    "blessing failed: no stored result at the context commit {commit} and the target-triple or \
-     machine-key facet is unconstrained, so no discriminant set can be targeted; pass \
-     --target-triple and --machine-key (or record a run at the commit first)"
+    "no stored result at the context commit {commit} and the target-triple or machine-key facet is \
+     unconstrained, so no discriminant set can be targeted; pass --target-triple and --machine-key \
+     (or record a run at the commit first)"
 )]
 pub(crate) struct BlessDiscriminantsRequiredError {
     commit: String,
@@ -113,19 +237,6 @@ pub(crate) struct BlessDiscriminantsRequiredError {
 
 impl UnwindSafe for BlessDiscriminantsRequiredError {}
 impl RefUnwindSafe for BlessDiscriminantsRequiredError {}
-
-/// The commit to bless could not be resolved.
-#[ohno::error]
-#[display(
-    "blessing failed: could not resolve {reference}; run this inside a git repository (or pass \
-     --repo) and check the ref exists"
-)]
-pub(crate) struct BlessRefNotFoundError {
-    reference: String,
-}
-
-impl UnwindSafe for BlessRefNotFoundError {}
-impl RefUnwindSafe for BlessRefNotFoundError {}
 
 /// Asking git what commit a ref names failed.
 #[derive(ohno::Error)]
@@ -316,15 +427,17 @@ mod tests {
     use std::fmt::Debug;
     use std::io;
 
+    use cbh_storage::{MemoryStorage, Storage as _};
+    use futures::executor::block_on;
     use ohno::ErrorExt as _;
     use static_assertions::assert_impl_all;
 
     use super::*;
 
     assert_impl_all!(AnalyzeError: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe);
-    assert_impl_all!(AnalysisFailedError: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(NoOutputSelectedError: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe);
-    assert_impl_all!(RepositoryRequiredError: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(RefNotFoundError: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(StoredObjectUtf8Error: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe);
     assert_impl_all!(
         BlessSelectionRequiredError: Send,
         Sync,
@@ -343,14 +456,6 @@ mod tests {
     );
     assert_impl_all!(
         BlessDiscriminantsRequiredError: Send,
-        Sync,
-        Debug,
-        Error,
-        UnwindSafe,
-        RefUnwindSafe
-    );
-    assert_impl_all!(
-        BlessRefNotFoundError: Send,
         Sync,
         Debug,
         Error,
@@ -404,9 +509,11 @@ mod tests {
     fn config_error_passes_through_unchanged() {
         // The wrapper adds no wording of its own, so a configuration failure reads
         // exactly as the configuration layer worded it, with no category prefix.
-        let error = AnalyzeError::from(ConfigError::new("bad configuration"));
+        let configuration = cbh_config::parse_config("[").unwrap_err();
+        let expected = configuration.message();
+        let error = AnalyzeError::from(configuration);
 
-        assert!(error.message().starts_with("bad configuration"));
+        assert!(error.message().starts_with(&expected));
         assert!(error.find_source::<ConfigError>().is_some());
     }
 
@@ -415,32 +522,32 @@ mod tests {
         // Anchored at the start because the contract under test is that the wrapper
         // prepends nothing; the expected text comes from the storage layer itself
         // rather than being restated here.
-        let error = AnalyzeError::from(StorageError::not_found("k"));
+        let storage = MemoryStorage::new();
+        let storage_error = block_on(storage.get("k")).unwrap_err();
+        let expected = storage_error.message();
+        let error = AnalyzeError::from(storage_error);
 
-        assert!(
-            error
-                .message()
-                .starts_with(&StorageError::not_found("k").message())
-        );
+        assert!(error.message().starts_with(&expected));
         assert!(error.find_source::<StorageError>().is_some());
     }
 
     #[test]
-    fn analysis_failure_is_found_by_type() {
-        let error = AnalyzeError::from(AnalysisFailedError::new("unknown report format"));
+    fn unresolved_ref_is_found_by_private_type() {
+        let error = AnalyzeError::from(RefNotFoundError::new("HEAD", "check the ref"));
 
-        let found = error.find_source::<AnalysisFailedError>().unwrap();
+        let found = error.find_source::<RefNotFoundError>().unwrap();
         assert!(found.source().is_none());
     }
 
     #[test]
-    fn analysis_failure_keeps_its_cause() {
-        let error = AnalyzeError::from(AnalysisFailedError::caused_by(
-            "bad object",
+    fn stored_utf8_failure_keeps_its_cause() {
+        let error = AnalyzeError::from(StoredObjectUtf8Error::caused_by(
+            "object",
+            "v1/result.json",
             io::Error::other("not valid UTF-8"),
         ));
 
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<StoredObjectUtf8Error>().is_some());
         assert!(error.find_source::<io::Error>().is_some());
     }
 

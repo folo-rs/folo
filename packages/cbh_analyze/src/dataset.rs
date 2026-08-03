@@ -25,7 +25,7 @@ use super::load::{
 };
 use super::selection::Selection;
 use super::window::{auto_mode, before_since_cutoff, resolve_since, since_cutoff_reason};
-use crate::{AnalysisFailedError, AnalyzeError};
+use crate::{AnalyzeError, InvalidBlessingError, StoredObjectUtf8Error};
 
 /// The data an analysis (or listing) draws on, plus the bookkeeping needed to
 /// explain an empty outcome and warn about ephemeral data.
@@ -418,18 +418,10 @@ where
         // order (`buffer_unordered` completes out of order).
         let mut fetched = load_objects_concurrently(storage, to_fetch, |key, bytes| {
             let text = String::from_utf8(bytes).map_err(|error| {
-                AnalysisFailedError::caused_by(
-                    format!("stored blessing {key} is not valid UTF-8"),
-                    error,
-                )
+                StoredObjectUtf8Error::caused_by("blessing", key.to_owned(), error)
             })?;
-            BlessingRecord::from_json(&text).map_err(|error| {
-                AnalysisFailedError::caused_by(
-                    format!("stored blessing {key} is not a valid blessing record"),
-                    error,
-                )
-                .into()
-            })
+            BlessingRecord::from_json(&text)
+                .map_err(|error| InvalidBlessingError::caused_by(key.to_owned(), error).into())
         })
         .await?;
         fetched.sort_by(|left, right| left.0.cmp(&right.0));

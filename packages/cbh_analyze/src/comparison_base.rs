@@ -35,7 +35,7 @@ use cbh_storage::Storage;
 
 use super::dataset::SiblingObservation;
 use super::load::load_objects_concurrently;
-use crate::{AnalysisFailedError, AnalyzeError};
+use crate::{AnalyzeError, InvalidResultSetError, StoredObjectUtf8Error};
 
 /// A surviving branch finding whose comparison base sits behind the merge-base.
 struct LaggingFinding<'a> {
@@ -258,16 +258,10 @@ where
     });
 
     let loaded = load_objects_concurrently(storage, needed, |key, bytes| {
-        let text = str::from_utf8(&bytes).map_err(|error| {
-            AnalysisFailedError::caused_by(format!("stored object {key} is not valid UTF-8"), error)
-        })?;
-        RunPoints::from_json(text).map_err(|error| {
-            AnalysisFailedError::caused_by(
-                format!("stored object {key} is not a valid result set"),
-                error,
-            )
-            .into()
-        })
+        let text = str::from_utf8(&bytes)
+            .map_err(|error| StoredObjectUtf8Error::caused_by("object", key, error))?;
+        RunPoints::from_json(text)
+            .map_err(|error| InvalidResultSetError::caused_by(key, error).into())
     })
     .await?;
 
@@ -683,7 +677,7 @@ mod tests {
         let storage = MemoryStorage::new();
         let sibling = store_sibling_bytes(&storage, "m2", "c3", 3, &[0xff, 0xfe, 0x00]);
         let error = sibling_evidence_error(&storage, &[sibling]);
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<StoredObjectUtf8Error>().is_some());
         assert!(error.find_source::<std::str::Utf8Error>().is_some());
     }
 
@@ -694,7 +688,7 @@ mod tests {
         let storage = MemoryStorage::new();
         let sibling = store_sibling_bytes(&storage, "m2", "c3", 3, b"{}");
         let error = sibling_evidence_error(&storage, &[sibling]);
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        assert!(error.find_source::<InvalidResultSetError>().is_some());
         assert!(error.find_source::<serde_json::Error>().is_some());
     }
 
