@@ -220,6 +220,21 @@ fn azurite_storage_override(account: &str, container: &str) -> StorageOverride {
     .expect("building the Azurite storage override")
 }
 
+#[test]
+fn azure_override_constructor_uses_the_app_error_boundary() {
+    let credential: Arc<dyn TokenCredential> = Arc::new(FakeEntraCredential);
+    let error: AppError = azure_backend_from_parts(
+        "devstoreaccount1",
+        "history",
+        Some("http://insecure.example".to_owned()),
+        credential,
+        azurite_http_client(),
+    )
+    .unwrap_err();
+
+    assert!(error.message().contains("requires an https endpoint"));
+}
+
 /// A container client that reads blobs Azurite stored directly, bypassing the
 /// production backend (which would transparently inflate them). It authenticates
 /// with the same fake Entra token and trusts the same self-signed certificate as

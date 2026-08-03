@@ -23,6 +23,7 @@ bin-dir = "{ bin }{ binary-ext }"
 pkg-fmt = "zip"
 
 [dependencies]
+azure_core = { workspace = true }
 cbh_analyze = { workspace = true }
 cbh_cli = { workspace = true }
 cbh_command = { workspace = true }
@@ -44,7 +45,6 @@ tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thr
 
 [dev-dependencies]
 async-trait = { workspace = true }
-azure_core = { workspace = true }
 # The `default` feature on these two crates is load-bearing, not gratuitous: it
 # transitively enables `azure_core/default`, which selects the reqwest + rustls
 # HTTP transport. Without it the SDK still compiles, but `new_http_client()`

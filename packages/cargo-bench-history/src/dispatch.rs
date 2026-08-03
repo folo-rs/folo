@@ -2,9 +2,12 @@
 //! executes it.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use azure_core::credentials::TokenCredential;
+use azure_core::http::HttpClient;
 use cbh_analyze::AutoFacets;
-use cbh_storage::StorageOverride;
+use cbh_storage::{StorageOverride, azure_backend_from_parts as storage_azure_backend_from_parts};
 use ohno::AppError;
 use tick::Clock;
 
@@ -46,6 +49,31 @@ pub struct Overrides {
     /// integration tests inject fixed values so the suite is independent of the host
     /// it runs on.
     pub auto_facets: Option<AutoFacets>,
+}
+
+/// Builds an Azure test override from preconstructed adapters.
+///
+/// This hidden test-support API keeps the application boundary in `AppError`
+/// while delegating backend construction to `cbh_storage`.
+///
+/// # Errors
+///
+/// Returns an error if the endpoint is not a valid HTTPS base URL.
+#[doc(hidden)]
+pub fn azure_backend_from_parts(
+    account: &str,
+    container: &str,
+    endpoint: Option<String>,
+    credential: Arc<dyn TokenCredential>,
+    http_client: Arc<dyn HttpClient>,
+) -> Result<StorageOverride, AppError> {
+    Ok(storage_azure_backend_from_parts(
+        account,
+        container,
+        endpoint,
+        credential,
+        http_client,
+    )?)
 }
 
 /// Executes a parsed command.

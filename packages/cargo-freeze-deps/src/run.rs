@@ -13,12 +13,9 @@ use crate::{ReadFileError, RunInput, RunOutcome, WriteFileError};
 ///
 /// # Errors
 ///
-/// Returns an error whose source chain carries the condition that failed: a
-/// [`ReadFileError`] or [`WriteFileError`] when the filesystem access fails, a
-/// [`ParseError`](crate::ParseError) when the input is not valid TOML, and an
-/// [`UnexpectedVersionTypeError`](crate::UnexpectedVersionTypeError) or
-/// [`InvalidVersionError`](crate::InvalidVersionError) when a dependency's version field
-/// is malformed.
+/// Returns an [`AppError`] whose diagnostic identifies the failed filesystem
+/// operation, manifest path, or malformed dependency version. Filesystem, TOML,
+/// and semantic-version failures remain available in its source chain.
 #[doc(hidden)]
 pub fn run(input: &RunInput) -> Result<RunOutcome, AppError> {
     let content = fs::read_to_string(&input.path)
