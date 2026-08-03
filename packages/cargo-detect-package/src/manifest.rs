@@ -15,10 +15,10 @@ use crate::{ParseManifestError, ReadManifestError};
 pub(crate) fn read_manifest(directory: &Path, fs: &impl Filesystem) -> Result<Value, AppError> {
     let contents = fs
         .read_cargo_toml(directory)
-        .map_err(|error| ReadManifestError::caused_by(directory, error))?;
+        .map_err(|error| ReadManifestError::caused_by(directory.join("Cargo.toml"), error))?;
 
     let manifest = toml::from_str(&contents)
-        .map_err(|error| ParseManifestError::caused_by(directory, error))?;
+        .map_err(|error| ParseManifestError::caused_by(directory.join("Cargo.toml"), error))?;
 
     Ok(manifest)
 }

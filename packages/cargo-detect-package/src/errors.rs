@@ -76,9 +76,9 @@ impl RefUnwindSafe for WorkspaceMismatchError {}
 
 /// A `Cargo.toml` manifest could not be read.
 #[ohno::error]
-#[display("Failed to read '{}'", directory.join("Cargo.toml").display())]
+#[display("Failed to read '{}'", manifest_path.display())]
 pub(crate) struct ReadManifestError {
-    directory: PathBuf,
+    manifest_path: PathBuf,
 }
 
 // The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
@@ -90,9 +90,9 @@ impl RefUnwindSafe for ReadManifestError {}
 
 /// A `Cargo.toml` manifest could not be parsed as TOML.
 #[ohno::error]
-#[display("Failed to parse '{}'", directory.join("Cargo.toml").display())]
+#[display("Failed to parse '{}'", manifest_path.display())]
 pub(crate) struct ParseManifestError {
-    directory: PathBuf,
+    manifest_path: PathBuf,
 }
 
 // The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
@@ -104,12 +104,9 @@ impl RefUnwindSafe for ParseManifestError {}
 
 /// A `Cargo.toml` manifest does not declare a package name.
 #[ohno::error]
-#[display(
-    "Could not find package name in {}",
-    directory.join("Cargo.toml").display()
-)]
+#[display("Could not find package name in {}", manifest_path.display())]
 pub(crate) struct PackageNameMissingError {
-    directory: PathBuf,
+    manifest_path: PathBuf,
 }
 
 // The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,

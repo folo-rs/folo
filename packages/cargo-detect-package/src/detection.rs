@@ -81,7 +81,7 @@ pub(crate) fn extract_package_name(
         return Ok(DetectedPackage::Package(name_str.to_string()));
     }
 
-    Err(PackageNameMissingError::new(dir).into())
+    Err(PackageNameMissingError::new(dir.join("Cargo.toml")).into())
 }
 
 #[cfg(all(test, not(miri)))]
