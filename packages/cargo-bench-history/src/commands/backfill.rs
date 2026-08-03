@@ -761,13 +761,12 @@ mod tests {
 
     use cbh_diag::RecordingReporter;
     use cbh_git::FakeGitHistory;
-    use cbh_storage::MemoryStorage;
+    use cbh_storage::{MemoryStorage, StorageError};
     use futures::executor::block_on;
 
     use super::*;
     use crate::errors::{EngineFailedError, InvalidCommandError, ParseOutputError};
     use crate::model::{MachineKey, TargetTriple};
-    use cbh_storage::StorageError;
 
     /// A canned per-commit result the fake [`CommitRunner`] returns.
     #[derive(Clone)]
