@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::io::AsyncWriteExt;
 
+use crate::error::{InvalidStorageKeyError, ObjectAlreadyExistsError, ObjectNotFoundError};
 use crate::{Storage, StorageError, is_plain_segment};
 
 /// Filename prefix for the transient files an atomic write renames into place.
@@ -21,6 +22,93 @@ const TEMP_PREFIX: &str = ".cbh-tmp-";
 /// Distinguishes concurrent atomic writes within a single process; combined with
 /// the process id it keeps every temp filename unique.
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Creating the parent directory for a local object failed.
+#[ohno::error]
+#[display("could not create storage directory {}", path.display())]
+struct CreateObjectDirectoryError {
+    path: PathBuf,
+}
+
+/// Inspecting whether a local object path exists failed.
+#[ohno::error]
+#[display("could not inspect storage object {}", path.display())]
+struct InspectObjectPathError {
+    path: PathBuf,
+}
+
+/// Publishing a local object with an atomic write failed.
+#[ohno::error]
+#[display("could not write storage object {}", path.display())]
+struct WriteObjectError {
+    path: PathBuf,
+}
+
+/// Reading a local object failed.
+#[ohno::error]
+#[display("could not read storage object {}", path.display())]
+struct ReadObjectError {
+    path: PathBuf,
+}
+
+/// Decompressing a local object's stored bytes failed.
+#[ohno::error]
+#[display("could not decompress storage object {}", path.display())]
+struct DecompressObjectError {
+    path: PathBuf,
+}
+
+/// Opening a local directory for object listing failed.
+#[ohno::error]
+#[display("could not open storage listing directory {}", path.display())]
+struct OpenListingDirectoryError {
+    path: PathBuf,
+}
+
+/// Advancing a local directory listing failed.
+#[ohno::error]
+#[display("could not advance storage listing in {}", path.display())]
+struct AdvanceListingDirectoryError {
+    path: PathBuf,
+}
+
+/// Inspecting a local listing entry's file type failed.
+#[ohno::error]
+#[display("could not inspect storage listing entry {}", path.display())]
+struct InspectListingEntryError {
+    path: PathBuf,
+}
+
+/// Removing a local object failed.
+#[ohno::error]
+#[display("could not remove storage object {}", path.display())]
+struct RemoveObjectError {
+    path: PathBuf,
+}
+
+macro_rules! impl_other_storage_error {
+    ($($error:ty),+ $(,)?) => {
+        $(
+            impl From<$error> for StorageError {
+                fn from(error: $error) -> Self {
+                    Self::other(error)
+                }
+            }
+        )+
+    };
+}
+
+impl_other_storage_error!(
+    CreateObjectDirectoryError,
+    InspectObjectPathError,
+    WriteObjectError,
+    ReadObjectError,
+    DecompressObjectError,
+    OpenListingDirectoryError,
+    AdvanceListingDirectoryError,
+    InspectListingEntryError,
+    RemoveObjectError,
+);
 
 /// A [`Storage`] that persists objects as files under a root directory.
 #[derive(Clone, Debug)]
@@ -44,7 +132,7 @@ impl LocalStorage {
         let mut path = self.root.clone();
         for segment in key.split('/') {
             if !is_plain_segment(segment) {
-                return Err(StorageError::invalid_key(key));
+                return Err(InvalidStorageKeyError::new(key).into());
             }
             path.push(segment);
         }
@@ -56,9 +144,9 @@ impl Storage for LocalStorage {
     async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
         let path = self.key_path(key)?;
         if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(StorageError::io)?;
+            tokio::fs::create_dir_all(parent).await.map_err(|error| {
+                CreateObjectDirectoryError::caused_by(parent.to_path_buf(), error)
+            })?;
         }
         // Write-once: refuse to replace an existing object. This existence check
         // races with a concurrent writer of the same key, but the atomic rename
@@ -69,40 +157,43 @@ impl Storage for LocalStorage {
         // and duplicate commits are rejected a layer above.
         match tokio::fs::try_exists(&path).await {
             Ok(true) => {
-                return Err(StorageError::already_exists(key));
+                return Err(ObjectAlreadyExistsError::new(key).into());
             }
             Ok(false) => {}
-            Err(error) => return Err(StorageError::io(error)),
+            Err(error) => {
+                return Err(InspectObjectPathError::caused_by(path.clone(), error).into());
+            }
         }
         let compressed = cbh_codec::compress(bytes);
         write_atomic(&path, &compressed)
             .await
-            .map_err(StorageError::io)
+            .map_err(|error| WriteObjectError::caused_by(path, error).into())
     }
 
     async fn put_overwrite(&self, key: &str, bytes: &[u8]) -> Result<(), StorageError> {
         let path = self.key_path(key)?;
         if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(StorageError::io)?;
+            tokio::fs::create_dir_all(parent).await.map_err(|error| {
+                CreateObjectDirectoryError::caused_by(parent.to_path_buf(), error)
+            })?;
         }
         // The atomic rename replaces any existing object in full, the deliberate
         // escape hatch from the write-once contract.
         let compressed = cbh_codec::compress(bytes);
         write_atomic(&path, &compressed)
             .await
-            .map_err(StorageError::io)
+            .map_err(|error| WriteObjectError::caused_by(path, error).into())
     }
 
     async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
         let path = self.key_path(key)?;
         match tokio::fs::read(&path).await {
-            Ok(bytes) => cbh_codec::decompress(&bytes).map_err(StorageError::io),
+            Ok(bytes) => cbh_codec::decompress(&bytes)
+                .map_err(|error| DecompressObjectError::caused_by(path, error).into()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                Err(StorageError::not_found(key))
+                Err(ObjectNotFoundError::caused_by(key, error).into())
             }
-            Err(error) => Err(StorageError::io(error)),
+            Err(error) => Err(ReadObjectError::caused_by(path, error).into()),
         }
     }
 
@@ -118,12 +209,21 @@ impl Storage for LocalStorage {
             let mut entries = match tokio::fs::read_dir(&dir).await {
                 Ok(entries) => entries,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(StorageError::io(error)),
+                Err(error) => {
+                    return Err(OpenListingDirectoryError::caused_by(dir, error).into());
+                }
             };
 
-            while let Some(entry) = entries.next_entry().await.map_err(StorageError::io)? {
-                let file_type = entry.file_type().await.map_err(StorageError::io)?;
+            while let Some(entry) = entries
+                .next_entry()
+                .await
+                .map_err(|error| AdvanceListingDirectoryError::caused_by(dir.clone(), error))?
+            {
                 let path = entry.path();
+                let file_type = entry
+                    .file_type()
+                    .await
+                    .map_err(|error| InspectListingEntryError::caused_by(path.clone(), error))?;
                 if file_type.is_dir() {
                     stack.push(path);
                 } else if is_temp_file_name(&entry.file_name()) {
@@ -146,9 +246,9 @@ impl Storage for LocalStorage {
         match tokio::fs::remove_file(&path).await {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                Err(StorageError::not_found(key))
+                Err(ObjectNotFoundError::caused_by(key, error).into())
             }
-            Err(error) => Err(StorageError::io(error)),
+            Err(error) => Err(RemoveObjectError::caused_by(path, error).into()),
         }
     }
 }
@@ -239,10 +339,11 @@ async fn write_atomic(target: &Path, bytes: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use ohno::ErrorExt as _;
     use tempfile::tempdir;
 
     use super::*;
-    use crate::StorageErrorKind;
+    use crate::error::InvalidStorageKeyError;
 
     #[tokio::test]
     #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
@@ -291,7 +392,7 @@ mod tests {
 
         let error = storage.get("v1/folo/run.json").await.unwrap_err();
 
-        assert!(matches!(error.kind(), StorageErrorKind::Io));
+        assert!(error.find_source::<DecompressObjectError>().is_some());
     }
 
     #[tokio::test]
@@ -347,10 +448,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(
-            matches!(error.kind(), StorageErrorKind::AlreadyExists { .. }),
-            "{error:?}"
-        );
+        assert_eq!(error.already_existing_key(), Some("v1/folo/run.json"));
         // The original object is left untouched.
         assert_eq!(storage.get("v1/folo/run.json").await.unwrap(), b"first");
     }
@@ -396,10 +494,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(
-            matches!(error.kind(), StorageErrorKind::InvalidKey { .. }),
-            "{error:?}"
-        );
+        assert!(error.find_source::<InvalidStorageKeyError>().is_some());
     }
 
     #[tokio::test]
@@ -413,7 +508,7 @@ mod tests {
         // through the generic IO arm rather than the write-once arm.
         let error = storage.put("bad\0name", b"x").await.unwrap_err();
 
-        assert!(matches!(error.kind(), StorageErrorKind::Io));
+        assert!(error.find_source::<InspectObjectPathError>().is_some());
     }
 
     #[cfg(windows)]
@@ -429,10 +524,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(
-            matches!(error.kind(), StorageErrorKind::InvalidKey { .. }),
-            "{error:?}"
-        );
+        assert!(error.find_source::<InvalidStorageKeyError>().is_some());
     }
 
     #[tokio::test]
@@ -443,9 +535,9 @@ mod tests {
 
         let error = storage.get("v1/missing.json").await.unwrap_err();
 
-        assert!(
-            matches!(error.kind(), StorageErrorKind::NotFound { key } if key == "v1/missing.json")
-        );
+        assert!(error.is_not_found());
+        assert!(error.find_source::<ObjectNotFoundError>().is_some());
+        assert!(error.find_source::<io::Error>().is_some());
     }
 
     #[tokio::test]
@@ -519,10 +611,7 @@ mod tests {
 
         let error = storage.put("v1/../escape.json", b"x").await.unwrap_err();
 
-        assert!(
-            matches!(error.kind(), StorageErrorKind::InvalidKey { .. }),
-            "{error:?}"
-        );
+        assert!(error.find_source::<InvalidStorageKeyError>().is_some());
     }
 
     #[tokio::test]
@@ -533,10 +622,7 @@ mod tests {
 
         let error = storage.get("../secret").await.unwrap_err();
 
-        assert!(
-            matches!(error.kind(), StorageErrorKind::InvalidKey { .. }),
-            "{error:?}"
-        );
+        assert!(error.find_source::<InvalidStorageKeyError>().is_some());
     }
 
     #[tokio::test]
@@ -549,7 +635,7 @@ mod tests {
         // Reading the directory "v1/a" as a file is a non-NotFound I/O error.
         let error = storage.get("v1/a").await.unwrap_err();
 
-        assert!(matches!(error.kind(), StorageErrorKind::Io));
+        assert!(error.find_source::<ReadObjectError>().is_some());
     }
 
     #[tokio::test]
@@ -564,7 +650,7 @@ mod tests {
         // "not a directory" error rather than a benign "missing partition".
         let error = storage.list("").await.unwrap_err();
 
-        assert!(matches!(error.kind(), StorageErrorKind::Io));
+        assert!(error.find_source::<OpenListingDirectoryError>().is_some());
     }
 
     #[tokio::test]
@@ -577,7 +663,7 @@ mod tests {
         // "v1/a" is a file, so creating it as a parent directory fails.
         let error = storage.put("v1/a/b.json", b"x").await.unwrap_err();
 
-        assert!(matches!(error.kind(), StorageErrorKind::Io));
+        assert!(error.find_source::<CreateObjectDirectoryError>().is_some());
     }
 
     #[tokio::test]
@@ -596,7 +682,7 @@ mod tests {
             vec!["v1/a/clean.json".to_owned()]
         );
         let error = storage.get("v1/a/dirty.json").await.unwrap_err();
-        assert!(matches!(error.kind(), StorageErrorKind::NotFound { .. }));
+        assert!(error.is_not_found());
     }
 
     #[tokio::test]
@@ -607,9 +693,9 @@ mod tests {
 
         let error = storage.delete("v1/missing.json").await.unwrap_err();
 
-        assert!(
-            matches!(error.kind(), StorageErrorKind::NotFound { key } if key == "v1/missing.json")
-        );
+        assert!(error.is_not_found());
+        assert!(error.find_source::<ObjectNotFoundError>().is_some());
+        assert!(error.find_source::<io::Error>().is_some());
     }
 
     #[tokio::test]
@@ -620,10 +706,7 @@ mod tests {
 
         let error = storage.delete("v1/../escape.json").await.unwrap_err();
 
-        assert!(
-            matches!(error.kind(), StorageErrorKind::InvalidKey { .. }),
-            "{error:?}"
-        );
+        assert!(error.find_source::<InvalidStorageKeyError>().is_some());
     }
 
     #[tokio::test]
@@ -636,6 +719,6 @@ mod tests {
         // Removing the directory "v1/a" as a file is a non-NotFound I/O error.
         let error = storage.delete("v1/a").await.unwrap_err();
 
-        assert!(matches!(error.kind(), StorageErrorKind::Io));
+        assert!(error.find_source::<RemoveObjectError>().is_some());
     }
 }

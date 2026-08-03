@@ -34,6 +34,7 @@ use azure_identity::{ClientAssertion, ClientAssertionCredential};
 use serde::Deserialize;
 
 use crate::StorageError;
+use crate::error::StorageConfigurationError;
 
 /// The audience every GitHub OIDC token minted for Azure federation must carry. It
 /// is the fixed value Entra assigns to its token-exchange endpoint and must match
@@ -112,7 +113,10 @@ fn build_credential(
     let credential: Arc<dyn TokenCredential> =
         ClientAssertionCredential::new(params.tenant_id, params.client_id, assertion, None)
             .map_err(|error| {
-                StorageError::config_caused_by("could not initialize GitHub OIDC credential", error)
+                StorageConfigurationError::caused_by(
+                    "could not initialize GitHub OIDC credential",
+                    error,
+                )
             })?;
     Ok(credential)
 }
@@ -208,7 +212,6 @@ mod tests {
     use ohno::ErrorExt as _;
 
     use super::*;
-    use crate::StorageErrorKind;
 
     /// Records the request a [`StubHttpClient`] saw, so a test can assert on the URL
     /// and bearer header the assertion built.
@@ -463,7 +466,7 @@ mod tests {
             tenant_id: "not a valid tenant".to_owned(),
         };
         let error = build_credential(params, http_client).expect_err("error");
-        assert!(matches!(error.kind(), StorageErrorKind::Config { .. }));
+        assert!(error.find_source::<StorageConfigurationError>().is_some());
         assert!(error.find_source::<Error>().is_some());
     }
 

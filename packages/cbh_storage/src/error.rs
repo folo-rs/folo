@@ -1,163 +1,135 @@
 use std::error::Error;
 use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::{fmt, io};
 
 use ohno::OhnoCore;
 
 /// An error from a storage operation.
 ///
-/// The [`kind`](Self::kind) carries the category (and its key or message), which callers
-/// branch on to drive fallbacks such as treating a missing object as a cache miss or
-/// treating an occupied key as "already written".
+/// Callers may distinguish a missing object and retrieve the key of an
+/// already-existing object. Every other condition remains an implementation detail
+/// represented by the diagnostic and source chain.
 #[derive(ohno::Error)]
 #[no_constructors]
-#[display("{kind}")]
 pub struct StorageError {
-    kind: StorageErrorKind,
+    decision: StorageDecision,
 
     #[error]
     core: OhnoCore,
 }
 
-// The OhnoCore field holds an Arc<dyn Error + Send + Sync>, which is !UnwindSafe because Arc
-// requires T: RefUnwindSafe and trait objects are !RefUnwindSafe. However, ohno error types are
-// immutable after construction — no &self method mutates internal state — so observing them
-// through a shared reference during unwind is harmless.
-impl UnwindSafe for StorageError {}
-impl RefUnwindSafe for StorageError {}
+/// The complete internal decision state carried by [`StorageError`].
+#[derive(Debug)]
+enum StorageDecision {
+    Other,
+    NotFound,
+    AlreadyExists { key: String },
+}
+
+/// No object exists at the requested storage key.
+#[ohno::error]
+#[display("object not found: {key}")]
+pub(crate) struct ObjectNotFoundError {
+    key: String,
+}
+
+/// An object already exists at a write-once storage key.
+#[ohno::error]
+#[display("object already exists: {key}")]
+pub(crate) struct ObjectAlreadyExistsError {
+    key: String,
+}
+
+/// A storage key is not a sequence of ordinary relative path segments.
+#[ohno::error]
+#[display("invalid storage key: {key}")]
+pub(crate) struct InvalidStorageKeyError {
+    key: String,
+}
+
+/// Storage configuration is absent or invalid.
+#[ohno::error]
+#[display("{message}")]
+pub(crate) struct StorageConfigurationError {
+    message: String,
+}
 
 impl StorageError {
-    /// No object exists at `key`.
+    /// Whether the requested object does not exist.
+    ///
+    /// Cache implementations use this result to select their cache-miss path.
     #[must_use]
-    pub fn not_found(key: impl Into<String>) -> Self {
-        Self::of_kind(StorageErrorKind::NotFound { key: key.into() })
+    pub fn is_not_found(&self) -> bool {
+        matches!(self.decision, StorageDecision::NotFound)
     }
 
-    /// `key` is not a well-formed storage key.
+    /// The occupied key when a write-once operation found an existing object.
+    ///
+    /// Collection uses the key to report or skip duplicate result objects.
     #[must_use]
-    pub fn invalid_key(key: impl Into<String>) -> Self {
-        Self::of_kind(StorageErrorKind::InvalidKey { key: key.into() })
-    }
-
-    /// An object is already stored at `key`.
-    #[must_use]
-    pub fn already_exists(key: impl Into<String>) -> Self {
-        Self::of_kind(StorageErrorKind::AlreadyExists { key: key.into() })
-    }
-
-    /// The storage backend is misconfigured, as described by `message`.
-    #[must_use]
-    pub fn config(message: impl Into<String>) -> Self {
-        Self::of_kind(StorageErrorKind::Config {
-            message: message.into(),
-        })
-    }
-
-    pub(crate) fn config_caused_by(
-        message: impl Into<String>,
-        error: impl Into<Box<dyn Error + Send + Sync>>,
-    ) -> Self {
-        Self::of_kind_caused_by(
-            StorageErrorKind::Config {
-                message: message.into(),
-            },
-            error,
-        )
-    }
-
-    /// An I/O operation failed; `error` becomes the source of the returned error.
-    #[must_use]
-    pub fn io(error: io::Error) -> Self {
-        Self::of_kind_caused_by(StorageErrorKind::Io, error)
-    }
-
-    /// The category of the failure, carrying the key or message it concerns.
-    #[must_use]
-    pub fn kind(&self) -> &StorageErrorKind {
-        &self.kind
-    }
-
-    fn of_kind(kind: StorageErrorKind) -> Self {
-        Self {
-            kind,
-            core: OhnoCore::default(),
+    pub fn already_existing_key(&self) -> Option<&str> {
+        match &self.decision {
+            StorageDecision::AlreadyExists { key } => Some(key),
+            StorageDecision::Other | StorageDecision::NotFound => None,
         }
     }
 
-    pub(crate) fn not_found_caused_by(
-        key: impl Into<String>,
-        error: impl Into<Box<dyn Error + Send + Sync>>,
-    ) -> Self {
-        Self::of_kind_caused_by(StorageErrorKind::NotFound { key: key.into() }, error)
-    }
-
-    pub(crate) fn already_exists_caused_by(
-        key: impl Into<String>,
-        error: impl Into<Box<dyn Error + Send + Sync>>,
-    ) -> Self {
-        Self::of_kind_caused_by(StorageErrorKind::AlreadyExists { key: key.into() }, error)
-    }
-
-    fn of_kind_caused_by(
-        kind: StorageErrorKind,
-        error: impl Into<Box<dyn Error + Send + Sync>>,
-    ) -> Self {
+    pub(crate) fn other(error: impl Into<Box<dyn Error + Send + Sync>>) -> Self {
         Self {
-            kind,
+            decision: StorageDecision::Other,
             core: OhnoCore::from(error),
         }
     }
 }
 
-/// The category of a [`StorageError`].
-#[derive(Debug)]
-pub enum StorageErrorKind {
-    /// No object exists at the requested key.
-    NotFound {
-        /// The key that was not found.
-        key: String,
-    },
-    /// The key was not a valid storage key (it contained an empty, `.`, or `..`
-    /// segment, or a platform-absolute segment, that could escape the storage
-    /// root).
-    InvalidKey {
-        /// The rejected key.
-        key: String,
-    },
-    /// An object already exists at the requested key. Storage is write-once, so
-    /// an existing object is never overwritten.
-    AlreadyExists {
-        /// The key that was already occupied.
-        key: String,
-    },
-    /// The storage backend is misconfigured (e.g. an Azure endpoint that is not a
-    /// valid HTTPS URL).
-    Config {
-        /// Human-readable description of the misconfiguration.
-        message: String,
-    },
-    /// An underlying I/O error occurred. The offending [`io::Error`] is the
-    /// [`source`](std::error::Error::source) of the [`StorageError`], so the
-    /// kind itself carries no data.
-    Io,
-}
-
-impl fmt::Display for StorageErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NotFound { key } => write!(f, "object not found: {key}"),
-            Self::InvalidKey { key } => write!(f, "invalid storage key: {key}"),
-            Self::AlreadyExists { key } => write!(f, "object already exists: {key}"),
-            Self::Config { message } => write!(f, "storage configuration error: {message}"),
-            Self::Io => write!(f, "storage I/O error"),
+impl From<ObjectNotFoundError> for StorageError {
+    fn from(error: ObjectNotFoundError) -> Self {
+        Self {
+            decision: StorageDecision::NotFound,
+            core: OhnoCore::from(error),
         }
     }
 }
+
+impl From<ObjectAlreadyExistsError> for StorageError {
+    fn from(error: ObjectAlreadyExistsError) -> Self {
+        let key = error.key.clone();
+        Self {
+            decision: StorageDecision::AlreadyExists { key },
+            core: OhnoCore::from(error),
+        }
+    }
+}
+
+impl From<InvalidStorageKeyError> for StorageError {
+    fn from(error: InvalidStorageKeyError) -> Self {
+        Self::other(error)
+    }
+}
+
+impl From<StorageConfigurationError> for StorageError {
+    fn from(error: StorageConfigurationError) -> Self {
+        Self::other(error)
+    }
+}
+
+// Every error type in this file is immutable after construction, so observing it
+// through a shared reference while unwinding is harmless.
+impl UnwindSafe for StorageError {}
+impl RefUnwindSafe for StorageError {}
+impl UnwindSafe for ObjectNotFoundError {}
+impl RefUnwindSafe for ObjectNotFoundError {}
+impl UnwindSafe for ObjectAlreadyExistsError {}
+impl RefUnwindSafe for ObjectAlreadyExistsError {}
+impl UnwindSafe for InvalidStorageKeyError {}
+impl RefUnwindSafe for InvalidStorageKeyError {}
+impl UnwindSafe for StorageConfigurationError {}
+impl RefUnwindSafe for StorageConfigurationError {}
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::fmt::Debug;
+    use std::io;
 
     use ohno::ErrorExt as _;
     use static_assertions::assert_impl_all;
@@ -165,60 +137,40 @@ mod tests {
     use super::*;
 
     assert_impl_all!(StorageError: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe);
-    assert_impl_all!(StorageErrorKind: Send, Sync, Debug, UnwindSafe, RefUnwindSafe);
 
     #[test]
-    fn storage_error_kind_display_is_non_empty() {
-        assert!(!StorageErrorKind::Io.to_string().is_empty());
+    fn not_found_exposes_only_the_required_decision() {
+        let error = StorageError::from(ObjectNotFoundError::new("v1/x"));
+
+        assert!(error.is_not_found());
+        assert_eq!(error.already_existing_key(), None);
     }
 
     #[test]
-    fn not_found_retains_key() {
-        let error = StorageError::not_found("v1/x");
+    fn already_exists_retains_the_decision_key() {
+        let error = StorageError::from(ObjectAlreadyExistsError::new("v1/dup"));
 
-        assert!(matches!(error.kind(), StorageErrorKind::NotFound { key } if key == "v1/x"));
+        assert!(!error.is_not_found());
+        assert_eq!(error.already_existing_key(), Some("v1/dup"));
     }
 
     #[test]
-    fn io_retains_source() {
-        let error = StorageError::io(io::Error::other("disk gone"));
+    fn private_leaf_sources_preserve_exact_mappings() {
+        let error = StorageError::from(ObjectNotFoundError::caused_by(
+            "v1/x",
+            io::Error::other("disk gone"),
+        ));
 
-        assert!(matches!(error.kind(), StorageErrorKind::Io));
+        assert!(error.find_source::<ObjectNotFoundError>().is_some());
         assert!(error.find_source::<io::Error>().is_some());
     }
 
     #[test]
-    fn not_found_has_no_source() {
-        let error = StorageError::not_found("k");
+    fn other_conditions_expose_no_decision() {
+        let error = StorageError::from(InvalidStorageKeyError::new("v1/../escape"));
 
-        assert!(error.source().is_none());
-    }
-
-    #[test]
-    fn invalid_key_retains_key_and_has_no_source() {
-        let error = StorageError::invalid_key("v1/../escape");
-
-        assert!(
-            matches!(error.kind(), StorageErrorKind::InvalidKey { key } if key == "v1/../escape")
-        );
-        assert!(error.source().is_none());
-    }
-
-    #[test]
-    fn already_exists_retains_key_and_has_no_source() {
-        let error = StorageError::already_exists("v1/dup");
-
-        assert!(matches!(error.kind(), StorageErrorKind::AlreadyExists { key } if key == "v1/dup"));
-        assert!(error.source().is_none());
-    }
-
-    #[test]
-    fn config_retains_message_and_has_no_source() {
-        let error = StorageError::config("both keys set");
-
-        assert!(
-            matches!(error.kind(), StorageErrorKind::Config { message } if message == "both keys set")
-        );
-        assert!(error.source().is_none());
+        assert!(!error.is_not_found());
+        assert_eq!(error.already_existing_key(), None);
+        assert!(error.find_source::<InvalidStorageKeyError>().is_some());
     }
 }

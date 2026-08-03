@@ -1,3 +1,4 @@
+use crate::error::{ObjectAlreadyExistsError, ObjectNotFoundError};
 use crate::{Storage, StorageError, validate_key};
 
 /// An in-memory [`Storage`] for tests: write-once keys held in a sorted map.
@@ -36,7 +37,7 @@ impl Storage for MemoryStorage {
         validate_key(key)?;
         let mut objects = self.objects.lock().unwrap();
         if objects.contains_key(key) {
-            return Err(StorageError::already_exists(key));
+            return Err(ObjectAlreadyExistsError::new(key).into());
         }
         objects.insert(key.to_owned(), bytes.to_vec());
         Ok(())
@@ -58,7 +59,7 @@ impl Storage for MemoryStorage {
             .unwrap()
             .get(key)
             .cloned()
-            .ok_or_else(|| StorageError::not_found(key))
+            .ok_or_else(|| ObjectNotFoundError::new(key).into())
     }
 
     async fn list(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
@@ -79,7 +80,7 @@ impl Storage for MemoryStorage {
             .unwrap()
             .remove(key)
             .map(|_| ())
-            .ok_or_else(|| StorageError::not_found(key))
+            .ok_or_else(|| ObjectNotFoundError::new(key).into())
     }
 }
 
@@ -89,8 +90,6 @@ mod tests {
     use futures::executor::block_on;
 
     use super::*;
-    use crate::StorageErrorKind;
-
     #[test]
     fn memory_storage_put_get_keys_and_list() {
         let storage = MemoryStorage::new();
@@ -117,7 +116,7 @@ mod tests {
     fn memory_storage_get_missing_is_not_found() {
         let storage = MemoryStorage::new();
         let error = block_on(storage.get("absent")).unwrap_err();
-        assert!(matches!(error.kind(), StorageErrorKind::NotFound { .. }));
+        assert!(error.is_not_found());
     }
 
     #[test]
@@ -125,10 +124,7 @@ mod tests {
         let storage = MemoryStorage::new();
         block_on(storage.put("dup", b"1")).unwrap();
         let error = block_on(storage.put("dup", b"2")).unwrap_err();
-        assert!(
-            matches!(error.kind(), StorageErrorKind::AlreadyExists { .. }),
-            "{error:?}"
-        );
+        assert_eq!(error.already_existing_key(), Some("dup"));
         // The original value is preserved (write-once).
         assert_eq!(block_on(storage.get("dup")).unwrap(), b"1");
     }
@@ -152,10 +148,7 @@ mod tests {
     fn memory_storage_put_overwrite_rejects_malformed_keys() {
         let storage = MemoryStorage::new();
         let error = block_on(storage.put_overwrite("v1/../escape", b"x")).unwrap_err();
-        assert!(
-            matches!(error.kind(), StorageErrorKind::InvalidKey { .. }),
-            "{error:?}"
-        );
+        assert!(!error.is_not_found(), "{error:?}");
     }
 
     #[test]
@@ -169,24 +162,21 @@ mod tests {
         // Only the targeted key is gone; the sibling object is untouched.
         assert_eq!(storage.keys(), vec!["v1/a/2.json".to_owned()]);
         let error = block_on(storage.get("v1/a/1.json")).unwrap_err();
-        assert!(matches!(error.kind(), StorageErrorKind::NotFound { .. }));
+        assert!(error.is_not_found());
     }
 
     #[test]
     fn memory_storage_delete_missing_key_is_not_found() {
         let storage = MemoryStorage::new();
         let error = block_on(storage.delete("v1/absent.json")).unwrap_err();
-        assert!(matches!(error.kind(), StorageErrorKind::NotFound { .. }));
+        assert!(error.is_not_found());
     }
 
     #[test]
     fn memory_storage_delete_rejects_malformed_keys() {
         let storage = MemoryStorage::new();
         let error = block_on(storage.delete("v1/../escape")).unwrap_err();
-        assert!(
-            matches!(error.kind(), StorageErrorKind::InvalidKey { .. }),
-            "{error:?}"
-        );
+        assert!(!error.is_not_found(), "{error:?}");
     }
 
     #[test]
@@ -196,15 +186,9 @@ mod tests {
         // so the fake must reject them exactly as `LocalStorage` does.
         for bad in ["v1/../escape", "v1//gap", "v1/./here", "", "/v1/abs"] {
             let put = block_on(storage.put(bad, b"x")).unwrap_err();
-            assert!(
-                matches!(put.kind(), StorageErrorKind::InvalidKey { .. }),
-                "put {bad:?}: {put:?}"
-            );
+            assert!(!put.is_not_found(), "put {bad:?}: {put:?}");
             let get = block_on(storage.get(bad)).unwrap_err();
-            assert!(
-                matches!(get.kind(), StorageErrorKind::InvalidKey { .. }),
-                "get {bad:?}: {get:?}"
-            );
+            assert!(!get.is_not_found(), "get {bad:?}: {get:?}");
         }
     }
 }

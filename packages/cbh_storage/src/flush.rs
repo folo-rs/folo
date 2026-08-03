@@ -41,7 +41,7 @@ where
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use crate::StorageErrorKind;
+    use crate::error::ObjectNotFoundError;
 
     // A stand-in command error type, so the tests exercise `finish_with_flush`
     // without depending on any consumer's aggregate error type. It carries a flush
@@ -62,7 +62,7 @@ mod tests {
     // A distinct flush failure, so it is unambiguously different from a command
     // failure once both are folded into `StandInError`.
     fn flush_failure() -> StorageError {
-        StorageError::not_found("cache-epoch")
+        ObjectNotFoundError::new("cache-epoch").into()
     }
 
     // Recognizes the failure `flush_failure` produces once it has been folded into
@@ -71,7 +71,7 @@ mod tests {
         let StandInError::Storage(storage) = error else {
             return false;
         };
-        matches!(storage.kind(), StorageErrorKind::NotFound { .. })
+        storage.is_not_found()
     }
 
     #[test]
