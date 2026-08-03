@@ -35,14 +35,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use azure_core::credentials::{AccessToken, TokenCredential, TokenRequestOptions};
-use azure_core::http::{ClientOptions, HttpClient, Transport, Url};
+use azure_core::http::{AsyncRawResponse, ClientOptions, HttpClient, Request, Transport, Url};
 use azure_core::time::{Duration as TokenDuration, OffsetDateTime};
 use azure_identity::DeveloperToolsCredential;
 use azure_storage_blob::{BlobContainerClient, BlobContainerClientOptions};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use cargo_bench_history::{Cli, Command, Overrides, RunOutcome, run_with_overrides};
-use cbh_storage::{StorageOverride, azure_backend_from_parts};
+use cargo_bench_history::{
+    Cli, Command, Overrides, RunOutcome, StorageOverride, azure_backend_from_parts,
+    run_with_overrides,
+};
 use futures::FutureExt as _;
 use ohno::AppError;
 use serial_test::serial;
@@ -204,6 +206,17 @@ fn azurite_http_client() -> Arc<dyn HttpClient> {
     Arc::new(client)
 }
 
+/// An HTTP client that must remain unused during local constructor validation.
+#[derive(Debug)]
+struct UnusedHttpClient;
+
+#[async_trait::async_trait]
+impl HttpClient for UnusedHttpClient {
+    async fn execute_request(&self, _request: &Request) -> azure_core::Result<AsyncRawResponse> {
+        panic!("constructor validation must complete before transport use")
+    }
+}
+
 /// A pre-built Azure backend wired to Azurite via a fake token and a cert-trusting
 /// transport, ready to inject through [`Overrides::storage_override`].
 fn azurite_storage_override(account: &str, container: &str) -> StorageOverride {
@@ -216,6 +229,21 @@ fn azurite_storage_override(account: &str, container: &str) -> StorageOverride {
         azurite_http_client(),
     )
     .expect("building the Azurite storage override")
+}
+
+#[test]
+fn azure_override_constructor_uses_the_app_error_boundary() {
+    let credential: Arc<dyn TokenCredential> = Arc::new(FakeEntraCredential);
+    let error: AppError = azure_backend_from_parts(
+        "devstoreaccount1",
+        "history",
+        Some("http://insecure.example".to_owned()),
+        credential,
+        Arc::new(UnusedHttpClient),
+    )
+    .unwrap_err();
+
+    assert!(error.find_source::<cbh_storage::StorageError>().is_some());
 }
 
 /// A container client that reads blobs Azurite stored directly, bypassing the

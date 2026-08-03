@@ -1053,8 +1053,9 @@ data to stdout, while progress, effective-selection and effective-partition summ
 reasoning, timings, and failures go to stderr. Benchmark child processes inherit the parent
 process's standard streams and may write directly to either one.
 
-Failures render their causal diagnostics once on stderr and return a failure status. Internal
-package ownership and execution boundaries are documented in the
+Failures identify the attempted operation, retain relevant underlying causes, render their causal
+diagnostics once without redundant category prefixes on stderr, and return a failure status.
+Internal package ownership and execution boundaries are documented in the
 [implementation guide](implementation.md); analysis data flow and parallelism are documented in
 the [analysis implementation guide](analyze.md).
 

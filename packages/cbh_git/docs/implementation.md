@@ -14,4 +14,6 @@ captured command output remains pure and separate from process execution.
 Production adapters use Tokio processes, while private test support provides deterministic
 repository substitutes for component tests. Unexpected invocation failures remain `io::Error`
 values so the calling layer can add operation-specific context under the workspace
-[error-handling guide](../../../docs/error-handling.md).
+[error-handling guide](../../../docs/error-handling.md). A successful repository command that
+does not resolve a ref remains a neutral unresolved result for its caller to contextualize rather
+than being reclassified as an invocation failure.

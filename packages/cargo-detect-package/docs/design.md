@@ -23,7 +23,9 @@ cannot launch a command with guessed or partial scope.
 
 Successful scope decisions are reported separately from failures. The CLI reports failures on
 stderr and returns a failure status; a child command's status remains the outcome of that child
-rather than being reclassified as a discovery failure.
+rather than being reclassified as a discovery failure. Diagnostics identify the attempted
+workspace, manifest, path, or process operation, retain available underlying causes, and avoid
+redundant category prefixes.
 
 Internal ownership and error propagation are documented in the
 [implementation guide](implementation.md).

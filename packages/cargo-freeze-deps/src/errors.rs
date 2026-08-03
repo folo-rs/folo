@@ -187,13 +187,13 @@ mod tests {
 
     #[test]
     fn parse_error_carries_path_and_source() {
-        let error = ParseError::caused_by(
-            Path::new("some/Cargo.toml"),
-            io::Error::new(io::ErrorKind::InvalidData, "bad toml"),
-        );
+        let source = "this is = not [valid toml"
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap_err();
+        let error = ParseError::caused_by(Path::new("some/Cargo.toml"), source);
 
         assert_eq!(error.path, Path::new("some/Cargo.toml"));
-        assert!(error.find_source::<io::Error>().is_some());
+        assert!(error.find_source::<toml_edit::TomlError>().is_some());
     }
 
     #[test]

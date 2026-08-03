@@ -26,7 +26,8 @@ Success reports how many dependency requirements were frozen and how many were s
 their forms are unsupported. Requirements already in the target exact form contribute to
 neither count. Failures identify the operation or dependency involved; file access and parsing
 failures also identify the relevant path. The CLI emits diagnostics on stderr and produces a
-failure status.
+failure status. Relevant parser, semantic-version, and filesystem causes remain available without
+generic category prefixes.
 
 Internal ownership and error propagation are documented in the
 [implementation guide](implementation.md).

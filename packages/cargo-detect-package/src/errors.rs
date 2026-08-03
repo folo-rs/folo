@@ -29,9 +29,9 @@ pub(crate) struct CurrentDirectoryOutsideWorkspaceError;
 impl UnwindSafe for CurrentDirectoryOutsideWorkspaceError {}
 impl RefUnwindSafe for CurrentDirectoryOutsideWorkspaceError {}
 
-/// The target path could not be canonicalized.
+/// Canonicalizing the target path failed.
 #[ohno::error]
-#[display("Could not canonicalize target path {:?}", path)]
+#[display("Could not canonicalize target path '{}'", path.display())]
 pub(crate) struct CanonicalizeTargetPathError {
     path: PathBuf,
 }

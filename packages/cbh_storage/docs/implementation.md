@@ -18,3 +18,7 @@ context while retaining filesystem, codec, configuration, or service causes. The
 only the narrow decisions required across the crate boundary: object absence and write-once
 collision. Other distinctions remain private under the workspace
 [error-handling guide](../../../docs/error-handling.md).
+
+Local writes compress data and publish it atomically. Azure operations retain SDK diagnostics,
+while read-through caching uses per-project invalidation markers after remote overwrites and
+deletions.

@@ -58,7 +58,8 @@ failure reaches the shell.
 Shell-owned conditions and contextualized component failures enter `ohno::AppError`. Concrete
 conditions remain private to the layer that owns their context, and lower-level causes remain
 attached rather than being flattened. The shared conventions are defined by the workspace
-[error-handling guide](../../../docs/error-handling.md).
+[error-handling guide](../../../docs/error-handling.md). Hidden test-support constructors exposed
+by the shell use the same application boundary as command execution.
 
 Integration-only benchmark engines and stress tools remain outside the production dependency
 boundary. They drive the same public shell or persisted format without adding test-only behavior

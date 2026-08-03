@@ -338,7 +338,7 @@ pub use cbh_config::default_template;
 pub(crate) use cbh_model as model;
 pub use cbh_storage::StorageOverride;
 pub(crate) use cbh_storage::finish_with_flush;
-pub use dispatch::{Overrides, run, run_with_overrides};
+pub use dispatch::{Overrides, azure_backend_from_parts, run, run_with_overrides};
 pub(crate) use errors::*;
 pub use model::{
     BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, EnvironmentProvider, GitInfo,
