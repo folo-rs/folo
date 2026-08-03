@@ -54,6 +54,10 @@ pub(crate) struct SelectedDataSet {
     /// each data point with what its commit changed. A commit absent here has an
     /// empty subject; only `examine` reads this.
     pub(crate) commit_subjects: HashMap<String, String>,
+    /// The analyzed commits in first-parent order, oldest first, indexed by
+    /// topological position. It lets `examine` name every commit in a range,
+    /// including the ones that carry no observation; only `examine` reads this.
+    pub(crate) ordered_commits: Vec<String>,
     /// The full commit ID of the analyzed tip commit (the resolved `--context`/HEAD),
     /// carried into the report so it names the exact commit the findings describe.
     pub(crate) tip_commit: String,
@@ -155,6 +159,7 @@ where
         tip_commit,
         tip_dirty,
         order,
+        ordered_commits,
         commit_times,
         commit_subjects,
         admit_dirty,
@@ -476,6 +481,7 @@ where
         target_ref,
         facets,
         commit_subjects,
+        ordered_commits,
         tip_commit,
         tip_index,
         tip_dirty,

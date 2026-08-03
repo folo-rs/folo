@@ -31,15 +31,15 @@ directly:
 * **Check for a package-local `AGENTS.md`** before doing nontrivial work in a
   specific crate (e.g. `packages/events_once/AGENTS.md`). Package-local
   guidance refines and sometimes overrides the workspace-wide rules.
-* **`AGENTS.md` files are agent instructions, not design docs.** A package-local
-  `AGENTS.md` holds only actionable guidance for working in that package —
-  conventions to follow, gotchas, invariants to preserve, how to run and test.
-  It must **not** duplicate design documentation (that lives in the
-  `docs/design.md`-style files), restate implementation detail, or keep a
-  decision/change history. If a fact explains *what* the code is or *why* it is
-  shaped that way, it belongs in a design doc; if it is trivia that does not
-  change how an agent works, leave it out. Point at the design doc instead of
-  repeating it.
+* **`AGENTS.md` files are agent instructions, not design or implementation
+  docs.** A package-local `AGENTS.md` holds only actionable guidance for working
+  in that package — conventions to follow, gotchas, invariants to preserve, how
+  to run and test. It must **not** duplicate design or implementation
+  documentation or keep a decision/change history. User-visible behavior and its
+  tenets belong in the owning package's `docs/design.md`; internal architecture,
+  ownership boundaries, and implementation tenets belong in the package's
+  `docs/implementation.md`. If a fact is trivia that does not change how an agent
+  works, leave it out. Point at the appropriate document instead of repeating it.
 
 ## Chapters
 
@@ -77,14 +77,23 @@ builder method, or variable.
 
 ### [docs/design.md](docs/design.md)
 
-Where design documentation lives (inline `//` comments, package-level
-`docs/design.md`, per-component files), what it should contain (high-level
-patterns, tenets, and relationships — *what* and *why*, never *how*), and what to
-keep out of it (implementation detail, listings/catalogues, changelogs, decision
-logs).
+Which packages own design documentation, where it lives (package-level
+`docs/design.md` and optional component files), what it should contain
+(user-visible behavior and design tenets), and what to keep out of it
+(implementation detail, listings/catalogues, changelogs, decision logs).
 
-**Open this when**: writing or maintaining design documentation, and keeping it up
-to date with every commit.
+**Open this when**: writing or maintaining design documentation; changing
+user-visible behavior or its design tenets.
+
+### [docs/implementation.md](docs/implementation.md)
+
+The implementation-guide requirement for every package, including private
+implementation crates; how owning packages link their component guides into one
+architecture; and what belongs in implementation documentation rather than
+behavioral design documentation.
+
+**Open this when**: writing or maintaining implementation documentation; changing
+internal architecture, package ownership boundaries, or implementation tenets.
 
 ### [docs/file-organization.md](docs/file-organization.md)
 

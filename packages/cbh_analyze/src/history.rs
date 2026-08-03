@@ -55,6 +55,11 @@ pub(crate) struct ResolvedHistory {
     /// First-parent position of each selected commit, for series ordering. An
     /// object whose commit is absent is outside the analyzed history.
     pub(crate) order: HashMap<String, usize>,
+    /// The selected commits in first-parent order, oldest first — the reverse of
+    /// [`order`](Self::order), so `ordered_commits[order[c]] == c`. It lets a
+    /// consumer name the commit at a topological index, including one that carries
+    /// no data; only `examine` reads it.
+    pub(crate) ordered_commits: Vec<String>,
     /// Committer timestamp of each first-parent commit, for deciding the
     /// `--since` cutoff from topology before any object is fetched. A
     /// commit absent here has an unknown time and is treated as in-window.
@@ -266,6 +271,7 @@ where
         tip_commit: target_commit_id,
         tip_dirty: working_tree_dirty,
         order,
+        ordered_commits: ancestry,
         commit_times,
         commit_subjects,
         admit_dirty,
