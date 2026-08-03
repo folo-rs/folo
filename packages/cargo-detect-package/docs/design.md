@@ -26,8 +26,6 @@ Successful scope decisions are reported separately from failures. The CLI report
 stderr and returns a failure status; a child command's status remains the outcome of that child
 rather than being reclassified as a discovery failure.
 
-Operational failures are distinct typed conditions with their original filesystem, manifest,
-or process errors retained as sources. The application boundary carries them through
-`ohno::AppError`, which preserves causal diagnostics and allows callers to identify a specific
-condition without imposing a closed error taxonomy. Context is added at the boundary that
-knows it, while source messages are not flattened into strings or redundantly prefixed.
+Failure diagnostics identify the attempted workspace, manifest, path, or process operation and
+include the underlying cause when available. Source messages are not flattened into strings or
+redundantly prefixed.

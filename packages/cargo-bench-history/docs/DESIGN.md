@@ -1064,12 +1064,9 @@ data to stdout, while progress, effective-selection and effective-partition summ
 reasoning, timings, and failures go to stderr. Benchmark child processes inherit the parent
 process's standard streams and may write directly to either one.
 
-Operational failures remain typed and retain their underlying sources across package
-boundaries. The shell's application boundary aggregates them with `ohno::AppError`, preserving
-condition-specific inspection, causal context, and optional backtraces without forcing all
-packages into one closed error taxonomy or flattening causes into strings. Each layer adds only
-the context it owns, transparent boundaries avoid repeating a source's message, and the CLI
-renders the resulting chain once before returning a failure status.
+Failure diagnostics identify the attempted operation and retain relevant underlying causes.
+The CLI renders each diagnostic chain once without redundant category prefixes and returns a
+failure status.
 
 **Async ports and adapters.** The app is async by default on the Tokio runtime, but pure
 logic stays synchronous — parse, map, comparability, series, findings, format — and is the

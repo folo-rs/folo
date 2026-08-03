@@ -11,7 +11,7 @@ in-memory implementations so selection and rendering behavior can be exercised d
 Shared selection and data-set reconstruction paths keep `analyze`, `list`, `prune`, and `examine`
 aligned where the design requires lockstep behavior.
 
-Operational failures cross the crate boundary through a transparent aggregate error. Each layer
-adds only the context it owns and retains lower-level typed errors as sources, including failures
-that arise while validating command selections. This preserves condition-specific inspection and
-causal diagnostics when the binary converts the result into `ohno::AppError`.
+Operational failures cross the crate boundary through a transparent aggregate error over private
+condition types. Each layer adds only the context it owns and retains lower-level errors as
+sources, including failures that arise while validating command selections. The application shell
+converts the aggregate into `ohno::AppError`.

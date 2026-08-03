@@ -8,6 +8,7 @@ Version requirements are parsed with `semver`. A requirement is frozen only when
 provides a concrete matching version; missing minor or patch components are zero-filled.
 Unsupported constraint shapes remain unchanged.
 
-Distinct failure conditions use `ohno` error types and flow through `AppError`. File and parse
-errors carry the relevant path, and wrapped source errors remain discoverable through the source
-chain.
+Private condition types retain paths, dependency details, and foreign parser or filesystem
+errors. The public application entry point converts those conditions into `ohno::AppError`;
+integration coverage asserts that boundary and observable command behavior, while same-crate
+unit tests verify exact condition mappings.
