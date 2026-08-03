@@ -1097,7 +1097,7 @@ mod tests {
                 .eq(std::iter::once(&("c0".to_owned(), 1)))
         );
         assert_eq!(report.failures.len(), 1);
-        assert_eq!(report.failures[0].commit, "c1");
+        assert_eq!(report.failures.first().unwrap().commit, "c1");
         assert!(report.render(3).contains("boom"));
         assert_eq!(report.stopped_failure, Some(0));
         // f1 was never reached.
@@ -1121,7 +1121,7 @@ mod tests {
                 .eq([("c0".to_owned(), 1), ("f1".to_owned(), 1)].iter())
         );
         assert_eq!(report.failures.len(), 1);
-        assert_eq!(report.failures[0].commit, "c1");
+        assert_eq!(report.failures.first().unwrap().commit, "c1");
         assert!(report.render(3).contains("boom"));
         assert!(report.stopped_failure.is_none());
         assert!(runner.ran.borrow().iter().eq(["c0", "c1", "f1"].iter()));
