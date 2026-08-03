@@ -820,6 +820,14 @@ mod tests {
     }
 
     #[test]
+    fn working_directory_failure_carries_its_source() {
+        let error =
+            WorkingDirectoryFailedError::caused_by(io::Error::other("working directory missing"));
+
+        assert!(error.find_source::<io::Error>().is_some());
+    }
+
+    #[test]
     fn bench_failures_are_the_four_per_commit_failures() {
         let bench: [AppError; 4] = [
             EngineFailedError::new("cargo bench", 101).into(),

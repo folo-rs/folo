@@ -795,9 +795,9 @@ mod tests {
     /// token, but must construct one that would look fresh).
     const FAR_FUTURE_UNIX: i64 = 4_102_444_800; // 2100-01-01T00:00:00Z
 
-    /// A fake token credential for the pure `from_parts` tests. The code paths
-    /// under test assemble a URL or reject a key before any request is issued, so
-    /// this credential is never asked for a token.
+    /// A fake token credential for the `from_parts` tests. It either remains
+    /// unused for pre-request checks or supplies a fresh token to the fake HTTP
+    /// transport.
     fn fake_credential() -> Arc<dyn TokenCredential> {
         Arc::new(CountingCredential::new(FAR_FUTURE_UNIX, false))
     }
@@ -1660,6 +1660,49 @@ mod tests {
             !storage.invalidation.take(),
             "a failed write-once probe must not arm invalidation"
         );
+    }
+
+    #[tokio::test]
+    #[cfg_attr(
+        miri,
+        ignore = "drives the Azure SDK request pipeline, which Miri cannot run"
+    )]
+    async fn operations_forward_non_not_found_responses_as_io_errors() {
+        let storage = AzureBlobStorage::from_parts(
+            "acct",
+            "history",
+            None,
+            fake_credential(),
+            Arc::new(ForbiddenHttpClient),
+        )
+        .unwrap();
+
+        let create = storage.ensure_container().await.unwrap_err();
+        let get = storage.get("v1/proj/object.json").await.unwrap_err();
+        let list = storage.list("v1/proj").await.unwrap_err();
+        let delete = storage.delete("v1/proj/object.json").await.unwrap_err();
+
+        for (error, operation) in [
+            (create, "could not create Azure blob container"),
+            (get, "could not download Azure blob \"v1/proj/object.json\""),
+            (list, "could not list Azure blobs with prefix \"v1/proj\""),
+            (
+                delete,
+                "could not delete Azure blob \"v1/proj/object.json\"",
+            ),
+        ] {
+            assert!(matches!(error.kind(), StorageErrorKind::Io));
+            let source = error.find_source::<io::Error>().unwrap();
+            let source = source
+                .get_ref()
+                .unwrap()
+                .downcast_ref::<AzureBlobOperationError>()
+                .unwrap();
+            assert_eq!(source.operation, operation);
+            let source = error.find_source::<azure_core::Error>().unwrap();
+            assert_eq!(source.http_status(), Some(StatusCode::Forbidden));
+        }
+        assert!(!storage.invalidation.take());
     }
 
     #[tokio::test]
