@@ -76,7 +76,7 @@ impl RefUnwindSafe for WorkspaceMismatchError {}
 
 /// A `Cargo.toml` manifest could not be read.
 #[ohno::error]
-#[display("Failed to read '{}/Cargo.toml'", directory.display())]
+#[display("Failed to read '{}'", directory.join("Cargo.toml").display())]
 pub(crate) struct ReadManifestError {
     directory: PathBuf,
 }
@@ -90,7 +90,7 @@ impl RefUnwindSafe for ReadManifestError {}
 
 /// A `Cargo.toml` manifest could not be parsed as TOML.
 #[ohno::error]
-#[display("Failed to parse '{}/Cargo.toml'", directory.display())]
+#[display("Failed to parse '{}'", directory.join("Cargo.toml").display())]
 pub(crate) struct ParseManifestError {
     directory: PathBuf,
 }
@@ -104,7 +104,10 @@ impl RefUnwindSafe for ParseManifestError {}
 
 /// A `Cargo.toml` manifest does not declare a package name.
 #[ohno::error]
-#[display("Could not find package name in {}/Cargo.toml", directory.display())]
+#[display(
+    "Could not find package name in {}",
+    directory.join("Cargo.toml").display()
+)]
 pub(crate) struct PackageNameMissingError {
     directory: PathBuf,
 }
