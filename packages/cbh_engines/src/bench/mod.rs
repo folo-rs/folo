@@ -17,13 +17,8 @@ mod schema_roundtrip;
 
 pub use all_the_time::{AllTheTimeParseError, parse_all_the_time_operation};
 pub use alloc_tracker::{AllocTrackerParseError, parse_alloc_tracker_operation};
-pub use callgrind::{
-    CallgrindJsonError, CallgrindParseError, UnsupportedCallgrindVersionError,
-    parse_callgrind_summary,
-};
-pub use criterion::{
-    BenchmarkParseError, CriterionParseError, EstimatesParseError, parse_criterion_case,
-};
+pub use callgrind::{CallgrindParseError, parse_callgrind_summary};
+pub use criterion::{CriterionParseError, parse_criterion_case};
 pub use env::injected_bench_env;
 pub(crate) use env::usable_slope;
 pub(crate) use paths::*;

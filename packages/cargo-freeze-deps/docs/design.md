@@ -28,8 +28,5 @@ neither count. Failures identify the operation or dependency involved; file acce
 failures also identify the relevant path. The CLI emits diagnostics on stderr and produces a
 failure status.
 
-Operational failures are distinct typed conditions with parser, semantic-version, and
-filesystem errors retained as sources. The application boundary carries them through
-`ohno::AppError`, preserving the causal chain for both human diagnostics and callers that need
-to identify a condition. Each layer contributes only the context it owns; underlying errors
-are not reduced to strings or obscured by a closed catch-all category.
+Internal ownership and error propagation are documented in the
+[implementation guide](implementation.md).

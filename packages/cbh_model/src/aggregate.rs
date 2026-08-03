@@ -43,80 +43,6 @@ pub struct Selection {
     pub chosen_run: usize,
 }
 
-/// A benchmark case is present in some runs but absent from another.
-#[ohno::error]
-#[display(
-    "benchmark case '{id}' is missing from run {}; every best-of run must \
-     measure the same set of cases",
-    run_index.saturating_add(1)
-)]
-pub struct MissingCaseError {
-    id: BenchmarkId,
-    run_index: usize,
-}
-
-// The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
-// which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
-// However, ohno error types are immutable after construction — no &self method mutates internal
-// state — so observing them through a shared reference during unwind is harmless.
-impl UnwindSafe for MissingCaseError {}
-impl RefUnwindSafe for MissingCaseError {}
-
-impl MissingCaseError {
-    /// The benchmark case that is absent from one of the runs.
-    #[must_use]
-    pub fn id(&self) -> &BenchmarkId {
-        &self.id
-    }
-
-    /// Zero-based index of the run the case is absent from.
-    #[must_use]
-    pub fn run_index(&self) -> usize {
-        self.run_index
-    }
-}
-
-/// A metric is present for a case in some runs but absent from another.
-#[ohno::error]
-#[display(
-    "metric '{}' for benchmark case '{id}' is missing from run {}; every \
-     best-of run must report the same metrics per case",
-    kind.as_str(),
-    run_index.saturating_add(1)
-)]
-pub struct MissingMetricError {
-    id: BenchmarkId,
-    kind: MetricKind,
-    run_index: usize,
-}
-
-// The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
-// which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
-// However, ohno error types are immutable after construction — no &self method mutates internal
-// state — so observing them through a shared reference during unwind is harmless.
-impl UnwindSafe for MissingMetricError {}
-impl RefUnwindSafe for MissingMetricError {}
-
-impl MissingMetricError {
-    /// The benchmark case whose metric is absent from one of the runs.
-    #[must_use]
-    pub fn id(&self) -> &BenchmarkId {
-        &self.id
-    }
-
-    /// The kind of metric that is absent.
-    #[must_use]
-    pub fn kind(&self) -> MetricKind {
-        self.kind
-    }
-
-    /// Zero-based index of the run the metric is absent from.
-    #[must_use]
-    pub fn run_index(&self) -> usize {
-        self.run_index
-    }
-}
-
 /// A cross-run inconsistency that makes a best-of-N reduction ill-defined.
 ///
 /// Every run must measure the same set of cases and the same metrics per case, so
@@ -124,13 +50,8 @@ impl MissingMetricError {
 /// extra case or metric in any run is a hard error rather than something to paper
 /// over, because it means the runs did not exercise the same work.
 ///
-/// The specific inconsistency is the error's source — a [`MissingCaseError`] or a
-/// [`MissingMetricError`] — reachable via `ohno::ErrorExt::find_source`. This type
-/// contributes no wording of its own, so it displays as the underlying
-/// inconsistency.
-///
-/// The error is [`Clone`] but not comparable by equality; identify a specific
-/// inconsistency through its source instead.
+/// The error retains and displays the concrete inconsistency without adding
+/// aggregate-level wording. It is [`Clone`] but not comparable by equality.
 #[ohno::error]
 #[derive(Clone)]
 #[no_constructors]
@@ -143,6 +64,42 @@ pub struct AggregateError;
 // state — so observing them through a shared reference during unwind is harmless.
 impl UnwindSafe for AggregateError {}
 impl RefUnwindSafe for AggregateError {}
+
+/// A benchmark case is present in some runs but absent from another.
+#[ohno::error]
+#[display(
+    "benchmark case '{id}' is missing from run {}; every best-of run must \
+     measure the same set of cases",
+    run_index.saturating_add(1)
+)]
+struct MissingCaseError {
+    id: BenchmarkId,
+    run_index: usize,
+}
+
+// The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
+// which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
+// However, ohno error types are immutable after construction — no &self method mutates internal
+// state — so observing them through a shared reference during unwind is harmless.
+impl UnwindSafe for MissingCaseError {}
+impl RefUnwindSafe for MissingCaseError {}
+
+/// A metric is present for a case in some runs but absent from another.
+#[ohno::error]
+#[display(
+    "metric '{}' for benchmark case '{id}' is missing from run {}; every \
+     best-of run must report the same metrics per case",
+    kind.as_str(),
+    run_index.saturating_add(1)
+)]
+struct MissingMetricError {
+    id: BenchmarkId,
+    kind: MetricKind,
+    run_index: usize,
+}
+
+impl UnwindSafe for MissingMetricError {}
+impl RefUnwindSafe for MissingMetricError {}
 
 /// Reduces `runs` to a single result set, keeping the minimum value per metric.
 ///
@@ -470,8 +427,8 @@ mod tests {
         let error = min_per_metric(&runs).unwrap_err();
 
         let missing = error.find_source::<MissingCaseError>().unwrap();
-        assert_eq!(missing.id().qualified(), "b");
-        assert_eq!(missing.run_index(), 1);
+        assert_eq!(missing.id.qualified(), "b");
+        assert_eq!(missing.run_index, 1);
     }
 
     #[test]
@@ -485,8 +442,8 @@ mod tests {
         let error = min_per_metric(&runs).unwrap_err();
 
         let missing = error.find_source::<MissingCaseError>().unwrap();
-        assert_eq!(missing.id().qualified(), "b");
-        assert_eq!(missing.run_index(), 0);
+        assert_eq!(missing.id.qualified(), "b");
+        assert_eq!(missing.run_index, 0);
     }
 
     #[test]
@@ -502,9 +459,9 @@ mod tests {
         let error = min_per_metric(&runs).unwrap_err();
 
         let missing = error.find_source::<MissingMetricError>().unwrap();
-        assert_eq!(missing.id().qualified(), "case");
-        assert_eq!(missing.kind(), MetricKind::ProcessorTime);
-        assert_eq!(missing.run_index(), 1);
+        assert_eq!(missing.id.qualified(), "case");
+        assert_eq!(missing.kind, MetricKind::ProcessorTime);
+        assert_eq!(missing.run_index, 1);
     }
 
     #[test]
@@ -520,21 +477,21 @@ mod tests {
         let error = min_per_metric(&runs).unwrap_err();
 
         let missing = error.find_source::<MissingMetricError>().unwrap();
-        assert_eq!(missing.kind(), MetricKind::ProcessorTime);
-        assert_eq!(missing.run_index(), 0);
+        assert_eq!(missing.kind, MetricKind::ProcessorTime);
+        assert_eq!(missing.run_index, 0);
     }
 
     #[test]
     fn errors_carry_the_missing_case_metric_and_run() {
         let missing_case = MissingCaseError::new(id("some/case"), 2_usize);
-        assert_eq!(missing_case.id().qualified(), "some/case");
-        assert_eq!(missing_case.run_index(), 2);
+        assert_eq!(missing_case.id.qualified(), "some/case");
+        assert_eq!(missing_case.run_index, 2);
 
         let missing_metric =
             MissingMetricError::new(id("some/case"), MetricKind::WallTime, 0_usize);
-        assert_eq!(missing_metric.id().qualified(), "some/case");
-        assert_eq!(missing_metric.kind(), MetricKind::WallTime);
-        assert_eq!(missing_metric.run_index(), 0);
+        assert_eq!(missing_metric.id.qualified(), "some/case");
+        assert_eq!(missing_metric.kind, MetricKind::WallTime);
+        assert_eq!(missing_metric.run_index, 0);
     }
 
     #[test]

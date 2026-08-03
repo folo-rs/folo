@@ -8,11 +8,9 @@ use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) use cargo_bench_history::{
-    AnalysisFailedError, AutoFacets, BackfillError, BenchmarkId, BenchmarkResult, Cli, Command,
-    DuplicateResultError, EngineFailedError, EnvironmentInfo, GitInfo, Metric, MetricKind,
-    NoOutputSelectedError, Overrides, RepositoryRequiredError, Run, RunContext, RunOutcome,
-    SCHEMA_VERSION, StorageError, StorageErrorKind, ToolchainInfo, default_template, run,
-    run_with_overrides,
+    AutoFacets, BenchmarkId, BenchmarkResult, Cli, Command, EnvironmentInfo, GitInfo, Metric,
+    MetricKind, Overrides, Run, RunContext, RunOutcome, SCHEMA_VERSION, ToolchainInfo,
+    default_template, run, run_with_overrides,
 };
 use cbh_codec as codec;
 use cbh_model::{DiscriminantSet, Engine, MachineKey, TargetTriple};
@@ -22,26 +20,6 @@ pub(crate) use ohno::AppError;
 pub(crate) use serial_test::serial;
 pub(crate) use testing::CwdGuard;
 use tick::Clock;
-
-#[test]
-fn public_error_conditions_are_exported_from_the_shell_crate() {
-    fn assert_error<T: std::error::Error>() {}
-
-    assert_error::<AnalysisFailedError>();
-    assert_error::<NoOutputSelectedError>();
-    assert_error::<RepositoryRequiredError>();
-    assert_error::<cargo_bench_history::AggregateError>();
-    assert_error::<cargo_bench_history::MissingCaseError>();
-    assert_error::<cargo_bench_history::MissingMetricError>();
-    assert_error::<EngineFailedError>();
-    assert_error::<cargo_bench_history::EngineTerminatedError>();
-    assert_error::<cargo_bench_history::InvalidCommandError>();
-    assert_error::<cargo_bench_history::ParseOutputError>();
-    assert_error::<cargo_bench_history::InconsistentRunsError>();
-    assert_error::<DuplicateResultError>();
-    assert_error::<BackfillError>();
-    assert_error::<cargo_bench_history::ImportError>();
-}
 
 /// The tool version recorded with each run. The integration test compiles within
 /// the package, so its `CARGO_PKG_VERSION` matches the version `collect` records.

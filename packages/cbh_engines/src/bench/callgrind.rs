@@ -18,22 +18,20 @@ const SUPPORTED_VERSION: &str = "6";
 
 /// An error encountered while parsing a Callgrind `summary.json`.
 ///
-/// Which condition was hit is the error's source — a [`CallgrindJsonError`] or an
-/// [`UnsupportedCallgrindVersionError`] — reachable via
-/// `ohno::ErrorExt::find_source`. This type contributes no wording of its own, so
-/// it displays as the underlying failure.
+/// The error retains the concrete parsing failure in its source chain and
+/// displays that failure without adding aggregate-level wording.
 #[ohno::error]
 #[no_constructors]
 #[from(CallgrindJsonError, UnsupportedCallgrindVersionError)]
 pub struct CallgrindParseError;
 
-/// A Callgrind `summary.json` was malformed.
+/// A Callgrind `summary.json` document was malformed.
 ///
 /// The text was not valid JSON or did not match the expected shape.
 #[ohno::error]
 #[display("failed to parse Callgrind summary")]
 #[from(serde_json::Error)]
-pub struct CallgrindJsonError;
+struct CallgrindJsonError;
 
 /// A Callgrind summary declared a schema version the tool does not support.
 #[ohno::error]
@@ -41,7 +39,7 @@ pub struct CallgrindJsonError;
     "unsupported Gungraun summary schema version {version:?} \
      (expected {supported_version:?})"
 )]
-pub struct UnsupportedCallgrindVersionError {
+struct UnsupportedCallgrindVersionError {
     version: String,
     /// The display template can only interpolate this type's own fields, so the
     /// version the parser understands travels with the error instead of being
@@ -59,20 +57,6 @@ impl UnwindSafe for CallgrindJsonError {}
 impl RefUnwindSafe for CallgrindJsonError {}
 impl UnwindSafe for UnsupportedCallgrindVersionError {}
 impl RefUnwindSafe for UnsupportedCallgrindVersionError {}
-
-impl UnsupportedCallgrindVersionError {
-    /// The schema version the summary declared.
-    #[must_use]
-    pub fn version(&self) -> &str {
-        &self.version
-    }
-
-    /// The schema version this tool understands.
-    #[must_use]
-    pub fn supported_version(&self) -> &str {
-        &self.supported_version
-    }
-}
 
 /// Parses one Callgrind `summary.json` into a [`BenchmarkResult`].
 ///
@@ -386,8 +370,8 @@ mod tests {
         let unsupported = error
             .find_source::<UnsupportedCallgrindVersionError>()
             .unwrap();
-        assert_eq!(unsupported.version(), "7");
-        assert_eq!(unsupported.supported_version(), SUPPORTED_VERSION);
+        assert_eq!(unsupported.version, "7");
+        assert_eq!(unsupported.supported_version, SUPPORTED_VERSION);
         assert!(error.find_source::<CallgrindJsonError>().is_none());
     }
 
@@ -409,8 +393,8 @@ mod tests {
         assert!(json_error.find_source::<serde_json::Error>().is_some());
 
         let version_error = UnsupportedCallgrindVersionError::new("9", SUPPORTED_VERSION);
-        assert_eq!(version_error.version(), "9");
-        assert_eq!(version_error.supported_version(), SUPPORTED_VERSION);
+        assert_eq!(version_error.version, "9");
+        assert_eq!(version_error.supported_version, SUPPORTED_VERSION);
         assert!(error::Error::source(&version_error).is_none());
     }
 

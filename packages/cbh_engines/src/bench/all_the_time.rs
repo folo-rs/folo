@@ -18,13 +18,19 @@ use cbh_model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
 use nonempty::NonEmpty;
 use serde::Deserialize;
 
-/// An error encountered while parsing an `all_the_time` operation file.
+/// Parsing an `all_the_time` operation file failed.
 ///
-/// The underlying deserialization failure is carried as the error's source.
+/// The underlying failure is retained in the source chain.
+#[ohno::error]
+#[no_constructors]
+#[from(AllTheTimeJsonError)]
+pub struct AllTheTimeParseError;
+
+/// An `all_the_time` operation file was malformed.
 #[ohno::error]
 #[display("failed to parse all_the_time output")]
 #[from(serde_json::Error)]
-pub struct AllTheTimeParseError;
+struct AllTheTimeJsonError;
 
 // The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
 // which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
@@ -32,6 +38,8 @@ pub struct AllTheTimeParseError;
 // state — so observing them through a shared reference during unwind is harmless.
 impl UnwindSafe for AllTheTimeParseError {}
 impl RefUnwindSafe for AllTheTimeParseError {}
+impl UnwindSafe for AllTheTimeJsonError {}
+impl RefUnwindSafe for AllTheTimeJsonError {}
 
 /// Parses one `all_the_time` operation file into a [`BenchmarkResult`].
 ///
@@ -46,7 +54,7 @@ impl RefUnwindSafe for AllTheTimeParseError {}
 pub fn parse_all_the_time_operation(
     json: &str,
 ) -> Result<Option<BenchmarkResult>, AllTheTimeParseError> {
-    let output: OperationOutput = serde_json::from_str(json)?;
+    let output: OperationOutput = serde_json::from_str(json).map_err(AllTheTimeJsonError::from)?;
     Ok(output_to_record(&output))
 }
 
@@ -114,6 +122,14 @@ mod tests {
 
     assert_impl_all!(
         AllTheTimeParseError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        AllTheTimeJsonError: Send,
         Sync,
         Debug,
         error::Error,
@@ -216,6 +232,7 @@ mod tests {
     #[test]
     fn rejects_malformed_json() {
         let error = parse_all_the_time_operation("{ not json").unwrap_err();
+        assert!(error.find_source::<AllTheTimeJsonError>().is_some());
         assert!(error.find_source::<serde_json::Error>().is_some());
     }
 

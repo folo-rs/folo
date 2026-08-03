@@ -27,12 +27,15 @@
 //! [`cargo-bench-history`]: https://github.com/folo-rs/folo
 
 mod config;
+mod error;
 mod input;
 
 pub use config::{
-    AzureStorageConfig, CloudStorageConfig, Config, ConfigError, ProjectConfig, default_template,
-    load_config, parse_config,
+    AzureStorageConfig, CloudStorageConfig, Config, ProjectConfig, default_template, load_config,
+    parse_config,
 };
+pub use error::ConfigError;
+pub(crate) use error::{ParseConfigError, ReadConfigError, SelectionEnvironmentRequiredError};
 pub use input::{
     CACHE_ENV_VAR, STORAGE_ENV_VAR, cache_env, default_config_path, rebase, resolve_cache_path,
     resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo, storage_env,

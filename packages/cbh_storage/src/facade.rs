@@ -15,7 +15,10 @@ use cbh_config::{CloudStorageConfig, Config};
 use cbh_diag::{Reporter, ReporterExt};
 use cbh_model::sanitize_segment;
 
-use crate::{AzureBlobStorage, CachingStorage, LocalStorage, Storage, StorageError};
+use crate::{
+    AzureBlobStorage, CachingStorage, LocalStorage, Storage, StorageConfigurationError,
+    StorageError,
+};
 
 /// Joins a relative `path` onto `base`, leaving an absolute `path` unchanged.
 ///
@@ -211,10 +214,9 @@ impl StorageFacade {
 ///
 /// # Errors
 ///
-/// Returns a [`StorageError`] whose [`kind()`](StorageError::kind) is
-/// [`Config`](crate::StorageErrorKind::Config) if no storage is selected (no
-/// `--local` and no configured cloud backend), or if the selected cloud backend cannot
-/// be built — for example an Azure backend with a non-HTTPS endpoint.
+/// Returns a [`StorageError`] if no storage is selected (no `--local` and no
+/// configured cloud backend), or if the selected cloud backend cannot be built
+/// — for example an Azure backend with a non-HTTPS endpoint.
 pub fn build_storage(
     local: Option<&Path>,
     config: &Config,
@@ -259,11 +261,13 @@ pub fn build_storage(
                 None => Ok(StorageFacade::Azure(backend)),
             }
         }
-        None => Err(StorageError::config(
+        None => Err(StorageConfigurationError::new(
             "no storage configured: pass --local=<path> (or set \
              CARGO_BENCH_HISTORY_STORAGE and pass a bare --local) or \
-             configure a cloud storage backend in the configuration file",
-        )),
+             configure a cloud storage backend in the configuration file"
+                .to_owned(),
+        )
+        .into()),
     }
 }
 
@@ -355,8 +359,7 @@ impl StorageOverride {
 ///
 /// # Errors
 ///
-/// Returns a [`StorageError`] whose [`kind()`](StorageError::kind) is
-/// [`Config`](crate::StorageErrorKind::Config) if the endpoint is not a valid base URL.
+/// Returns a [`StorageError`] if the endpoint is not a valid base URL.
 #[doc(hidden)]
 pub fn azure_backend_from_parts(
     account: &str,
@@ -375,10 +378,11 @@ pub fn azure_backend_from_parts(
 mod tests {
     use cbh_config::parse_config;
     use cbh_diag::RecordingReporter;
+    use ohno::ErrorExt as _;
     use tempfile::tempdir;
 
     use super::*;
-    use crate::StorageErrorKind;
+    use crate::{ObjectNotFoundError, StorageConfigurationError};
 
     fn config_with_storage(storage: &str) -> Config {
         parse_config(storage).unwrap()
@@ -410,7 +414,8 @@ mod tests {
         // `delete` dispatches to the backend and removes the object.
         storage.delete("v1/proj/run.json").await.unwrap();
         let error = storage.get("v1/proj/run.json").await.unwrap_err();
-        assert!(matches!(error.kind(), StorageErrorKind::NotFound { .. }));
+        assert!(error.is_not_found());
+        assert!(error.find_source::<ObjectNotFoundError>().is_some());
     }
 
     #[test]
@@ -434,7 +439,7 @@ mod tests {
     fn build_storage_without_selection_or_config_is_a_config_error() {
         let config = Config::default();
         let error = build_storage(None, &config, Path::new("/work"), None).unwrap_err();
-        assert!(matches!(error.kind(), StorageErrorKind::Config { .. }));
+        assert!(error.find_source::<StorageConfigurationError>().is_some());
     }
 
     #[test]

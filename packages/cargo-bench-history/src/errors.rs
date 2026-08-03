@@ -1,9 +1,10 @@
-//! The concrete failures `run` and the command handlers report through
-//! [`AppError`](ohno::AppError).
+//! Private failures reported through [`AppError`](ohno::AppError).
 
 use std::error::Error;
 use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
 
 use ohno::{AppError, OhnoCore};
 
@@ -14,46 +15,77 @@ use ohno::{AppError, OhnoCore};
 // them through a shared reference during unwind is harmless. That is the reasoning the
 // manual impls following each type below rest on.
 
-/// The one-line reason `error` is a per-commit build or benchmark failure, or
-/// `None` when it is an infrastructure failure.
+/// A recoverable per-commit failure retained in an [`AppError`] source chain.
 ///
-/// This encodes the contract `docs/DESIGN.md` states under "Backfill": a build or
-/// bench failure stops the run by default (or, with `--ignore-errors`, is recorded
-/// and skipped with an end-of-run summary), while an infrastructure failure always
-/// aborts because continuing cannot produce correct data.
-///
-/// The reason is embedded mid-line in the human-readable end-of-run summary, so it
-/// must be a single line. `ohno` renders a cause as `"\ncaused by: …"` and a
-/// captured backtrace as `"\n\nBacktrace:\n…"`, both strictly after the failing
-/// error's own message, so taking that message's first line cannot admit either
-/// however deep the chain is or whatever `RUST_BACKTRACE` says.
-pub(crate) fn bench_failure_reason(error: &AppError) -> Option<String> {
-    /// The headline of the `T` in `error`'s chain, if there is one.
-    fn headline_of<T: Error + 'static>(error: &AppError) -> Option<String> {
-        error.find_source::<T>().map(|failure| headline(failure))
-    }
-
-    headline_of::<EngineFailedError>(error)
-        .or_else(|| headline_of::<EngineTerminatedError>(error))
-        .or_else(|| headline_of::<InvalidCommandError>(error))
-        .or_else(|| headline_of::<ParseOutputError>(error))
+/// Backfill uses this typed view both to distinguish recoverable benchmark
+/// failures from infrastructure failures and to render the former without
+/// flattening their source chains into strings.
+#[derive(Debug)]
+pub(crate) enum BenchFailure<'a> {
+    /// The benchmark command exited unsuccessfully.
+    EngineFailed(&'a EngineFailedError),
+    /// The benchmark command terminated without an exit code.
+    EngineTerminated(&'a EngineTerminatedError),
+    /// The benchmark command could not be assembled.
+    InvalidCommand(&'a InvalidCommandError),
+    /// A harvested benchmark output could not be parsed.
+    ParseOutput(&'a ParseOutputError),
 }
 
-/// The first line of an error's rendered form: its own message, without the cause
-/// chain and backtrace `ohno` renders on the lines that follow it.
-fn headline(error: &dyn Error) -> String {
-    error
-        .to_string()
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .to_owned()
+impl<'a> BenchFailure<'a> {
+    /// Finds a recoverable per-commit failure anywhere in `error`'s source chain.
+    pub(crate) fn find(error: &'a AppError) -> Option<Self> {
+        error
+            .find_source::<EngineFailedError>()
+            .map(Self::EngineFailed)
+            .or_else(|| {
+                error
+                    .find_source::<EngineTerminatedError>()
+                    .map(Self::EngineTerminated)
+            })
+            .or_else(|| {
+                error
+                    .find_source::<InvalidCommandError>()
+                    .map(Self::InvalidCommand)
+            })
+            .or_else(|| {
+                error
+                    .find_source::<ParseOutputError>()
+                    .map(Self::ParseOutput)
+            })
+    }
+
+    /// Renders the failure as one summary line from its structured fields.
+    pub(crate) fn render(&self) -> String {
+        match self {
+            Self::EngineFailed(failure) => format!(
+                "engine {:?} failed with exit code {}",
+                failure.engine, failure.code
+            ),
+            Self::EngineTerminated(failure) => {
+                format!(
+                    "engine {:?} terminated without an exit code",
+                    failure.engine
+                )
+            }
+            Self::InvalidCommand(failure) => format!(
+                "engine {:?} has an invalid command: {}",
+                failure.engine, failure.message
+            ),
+            Self::ParseOutput(failure) => {
+                format!(
+                    "failed to parse benchmark output: {}",
+                    failure.path.display()
+                )
+            }
+        }
+    }
 }
 
 /// The benchmark command exited with a non-zero status.
 #[derive(ohno::Error)]
 #[display("engine {engine:?} failed with exit code {code}")]
-pub struct EngineFailedError {
+pub(crate) struct EngineFailedError {
     engine: String,
     code: i32,
 
@@ -66,14 +98,16 @@ impl RefUnwindSafe for EngineFailedError {}
 
 impl EngineFailedError {
     /// The benchmark command that failed (`cargo bench`).
+    #[cfg(test)]
     #[must_use]
-    pub fn engine(&self) -> &str {
+    pub(crate) fn engine(&self) -> &str {
         &self.engine
     }
 
     /// The process exit code the command reported.
+    #[cfg(test)]
     #[must_use]
-    pub fn code(&self) -> i32 {
+    pub(crate) fn code(&self) -> i32 {
         self.code
     }
 }
@@ -82,7 +116,7 @@ impl EngineFailedError {
 #[derive(ohno::Error)]
 #[no_constructors]
 #[display("engine {engine:?} terminated without an exit code")]
-pub struct EngineTerminatedError {
+pub(crate) struct EngineTerminatedError {
     engine: String,
 
     #[error]
@@ -103,8 +137,9 @@ impl EngineTerminatedError {
     }
 
     /// The benchmark command that terminated (`cargo bench`).
+    #[cfg(test)]
     #[must_use]
-    pub fn engine(&self) -> &str {
+    pub(crate) fn engine(&self) -> &str {
         &self.engine
     }
 }
@@ -113,7 +148,7 @@ impl EngineTerminatedError {
 #[derive(ohno::Error)]
 #[no_constructors]
 #[display("engine {engine:?} has an invalid command: {message}")]
-pub struct InvalidCommandError {
+pub(crate) struct InvalidCommandError {
     engine: String,
     message: String,
 
@@ -137,14 +172,16 @@ impl InvalidCommandError {
     }
 
     /// The benchmark command whose argv was invalid (`cargo bench`).
+    #[cfg(test)]
     #[must_use]
-    pub fn engine(&self) -> &str {
+    pub(crate) fn engine(&self) -> &str {
         &self.engine
     }
 
     /// The reason the command could not be assembled.
+    #[cfg(test)]
     #[must_use]
-    pub fn problem(&self) -> &str {
+    pub(crate) fn problem(&self) -> &str {
         &self.message
     }
 }
@@ -156,7 +193,7 @@ impl InvalidCommandError {
 #[derive(ohno::Error)]
 #[no_constructors]
 #[display("failed to parse benchmark output: {}", path.display())]
-pub struct ParseOutputError {
+pub(crate) struct ParseOutputError {
     path: PathBuf,
 
     #[error]
@@ -181,8 +218,9 @@ impl ParseOutputError {
     }
 
     /// The benchmark output that could not be parsed.
+    #[cfg(test)]
     #[must_use]
-    pub fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         &self.path
     }
 }
@@ -195,7 +233,7 @@ impl ParseOutputError {
 #[derive(ohno::Error)]
 #[no_constructors]
 #[display("engine {engine:?} produced inconsistent results across --best-of runs")]
-pub struct InconsistentRunsError {
+pub(crate) struct InconsistentRunsError {
     engine: String,
 
     #[error]
@@ -220,8 +258,9 @@ impl InconsistentRunsError {
     }
 
     /// The engine whose repeated harvests disagreed.
+    #[cfg(test)]
     #[must_use]
-    pub fn engine(&self) -> &str {
+    pub(crate) fn engine(&self) -> &str {
         &self.engine
     }
 }
@@ -232,7 +271,7 @@ impl InconsistentRunsError {
 /// request an overwrite.
 #[derive(ohno::Error)]
 #[display("a result is already stored for this run at {key}; pass --overwrite to replace it")]
-pub struct DuplicateResultError {
+pub(crate) struct DuplicateResultError {
     key: String,
 
     #[error]
@@ -244,8 +283,9 @@ impl RefUnwindSafe for DuplicateResultError {}
 
 impl DuplicateResultError {
     /// The object key that already held a result.
+    #[cfg(test)]
     #[must_use]
-    pub fn key(&self) -> &str {
+    pub(crate) fn key(&self) -> &str {
         &self.key
     }
 }
@@ -255,8 +295,8 @@ impl DuplicateResultError {
 /// This includes a dirty working tree, an unresolvable or out-of-history commit
 /// range, or stopping after a per-commit failure without `--ignore-errors`.
 #[derive(ohno::Error)]
-#[display("backfill failed: {message}")]
-pub struct BackfillError {
+#[display("{message}")]
+pub(crate) struct BackfillError {
     message: String,
 
     #[error]
@@ -268,8 +308,9 @@ impl RefUnwindSafe for BackfillError {}
 
 impl BackfillError {
     /// The explanation and any partial backfill summary.
+    #[cfg(test)]
     #[must_use]
-    pub fn summary(&self) -> &str {
+    pub(crate) fn summary(&self) -> &str {
         &self.message
     }
 }
@@ -278,8 +319,8 @@ impl BackfillError {
 /// to no commit in the repository).
 #[derive(ohno::Error)]
 #[no_constructors]
-#[display("import failed: {message}")]
-pub struct ImportError {
+#[display("{message}")]
+pub(crate) struct ImportError {
     message: String,
 
     #[error]
@@ -300,8 +341,9 @@ impl ImportError {
     }
 
     /// The reason the import precondition failed.
+    #[cfg(test)]
     #[must_use]
-    pub fn reason(&self) -> &str {
+    pub(crate) fn reason(&self) -> &str {
         &self.message
     }
 }
@@ -837,8 +879,33 @@ mod tests {
         ];
 
         for error in &bench {
-            assert!(bench_failure_reason(error).is_some());
+            assert!(BenchFailure::find(error).is_some());
         }
+    }
+
+    #[test]
+    fn bench_failure_summaries_render_the_typed_fields() {
+        let failed = AppError::from(EngineFailedError::new("callgrind", 101));
+        let terminated = AppError::from(EngineTerminatedError::new("criterion"));
+        let invalid = AppError::from(InvalidCommandError::new("cargo bench", "command is empty"));
+        let parse = AppError::from(ParseOutputError::caused_by(
+            "target/all-the-time/results.json",
+            io::Error::other("invalid document"),
+        ));
+
+        let failed = BenchFailure::find(&failed).unwrap().render();
+        assert!(failed.contains("callgrind"));
+        assert!(failed.contains("101"));
+
+        let terminated = BenchFailure::find(&terminated).unwrap().render();
+        assert!(terminated.contains("criterion"));
+
+        let invalid = BenchFailure::find(&invalid).unwrap().render();
+        assert!(invalid.contains("cargo bench"));
+        assert!(invalid.contains("command is empty"));
+
+        let parse = BenchFailure::find(&parse).unwrap().render();
+        assert!(parse.contains("target/all-the-time/results.json"));
     }
 
     #[test]
@@ -855,7 +922,7 @@ mod tests {
         ];
 
         for error in &infrastructure {
-            assert!(bench_failure_reason(error).is_none());
+            assert!(BenchFailure::find(error).is_none());
         }
     }
 
@@ -868,37 +935,10 @@ mod tests {
             ParseOutputError::caused_by("a/summary.json", io::Error::other("bad")),
         ));
 
-        let reason = bench_failure_reason(&nested).unwrap();
-
-        // The reason is the bench failure's own wording, not the outer wrapper's.
-        assert!(reason.contains("failed to parse benchmark output"));
-        assert!(reason.contains("summary.json"));
-    }
-
-    #[test]
-    fn a_bench_failure_reason_is_one_line_free_of_causes_and_backtraces() {
-        // The reason is embedded mid-line in the backfill summary, so nothing the
-        // cause chain renders after the failing error's own message may reach it.
-        // `ohno` puts both `caused by:` and a captured backtrace on later lines, so
-        // a cause whose own rendering carries those shapes stands in for a run with
-        // `RUST_BACKTRACE` set without the test having to mutate the environment.
-        let backtrace_shaped = io::Error::other(
-            "the JSON is malformed\n\nBacktrace:\n   0: cbh_engines::parse_callgrind_summary",
-        );
-        let error = AppError::from(ParseOutputError::caused_by(
-            "a/summary.json",
-            backtrace_shaped,
-        ));
-
-        // The unabridged rendering does carry the cause; that is what sources are for.
-        assert!(error.message().contains("Backtrace:"));
-
-        let reason = bench_failure_reason(&error).unwrap();
-
-        assert_eq!(reason.lines().count(), 1);
-        assert!(!reason.contains("Backtrace:"));
-        assert!(!reason.contains("caused by:"));
-        assert!(!reason.contains("the JSON is malformed"));
-        assert!(reason.contains("summary.json"));
+        let Some(BenchFailure::ParseOutput(failure)) = BenchFailure::find(&nested) else {
+            panic!("expected the nested parse failure");
+        };
+        assert_eq!(failure.path, Path::new("a/summary.json"));
+        assert!(failure.find_source::<io::Error>().is_some());
     }
 }

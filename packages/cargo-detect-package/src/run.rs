@@ -119,10 +119,11 @@ mod mock_tests {
 
     use super::*;
     use crate::detection::WorkspaceContext;
+    use crate::errors::CanonicalizeTargetPathError;
     use crate::pal::{FilesystemFacade, MockFilesystem};
     use crate::{
         CurrentDirectoryError, CurrentDirectoryOutsideWorkspaceError, PackageNameMissingError,
-        ParseManifestError, ReadManifestError, TargetPathNotFoundError,
+        ParseManifestError, ReadManifestError,
     };
 
     /// Helper to create a mock filesystem for a simple workspace with one package.
@@ -220,6 +221,42 @@ version = "0.1.0"
     }
 
     #[test]
+    fn outside_package_error_maps_to_private_condition() {
+        let mock = create_simple_workspace_mock();
+        let fs = FilesystemFacade::from_mock(mock);
+        let input = RunInput {
+            path: PathBuf::from("/workspace/README.md"),
+            via_env: Some("PACKAGE".to_string()),
+            outside_package: OutsidePackageAction::Error,
+            subcommand: vec!["unused".to_string()],
+        };
+
+        let error = run_with_filesystem(&input, &fs).unwrap_err();
+
+        assert!(error.find_source::<OutsidePackageError>().is_some());
+    }
+
+    #[test]
+    fn command_execution_error_retains_io_source() {
+        let mock = create_simple_workspace_mock();
+        let fs = FilesystemFacade::from_mock(mock);
+        let input = RunInput {
+            path: PathBuf::from("/workspace/package_a/src/lib.rs"),
+            via_env: None,
+            outside_package: OutsidePackageAction::Workspace,
+            subcommand: Vec::new(),
+        };
+
+        let error = run_with_filesystem(&input, &fs).unwrap_err();
+
+        assert!(error.find_source::<CommandExecutionError>().is_some());
+        assert_eq!(
+            error.find_source::<io::Error>().unwrap().kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+
+    #[test]
     fn mock_nonexistent_file_error() {
         let mut mock = MockFilesystem::new();
 
@@ -257,7 +294,7 @@ version = "0.1.0"
             validate_workspace_context(Path::new("/workspace/package_a/src/nonexistent.rs"), &fs)
                 .unwrap_err();
 
-        assert!(error.find_source::<TargetPathNotFoundError>().is_some());
+        assert!(error.find_source::<CanonicalizeTargetPathError>().is_some());
     }
 
     #[test]

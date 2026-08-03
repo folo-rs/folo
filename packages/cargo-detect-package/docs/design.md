@@ -16,7 +16,6 @@ every package: use workspace scope, succeed without running the command, or fail
 scope is conveyed either through Cargo package arguments or an environment variable, allowing
 Cargo commands and other automation tools to share one detection model.
 
-Workspace discovery, package selection, and command execution are distinct boundaries.
 External execution happens only after scope validation succeeds, so a discovery failure
 cannot launch a command with guessed or partial scope.
 
@@ -26,8 +25,5 @@ Successful scope decisions are reported separately from failures. The CLI report
 stderr and returns a failure status; a child command's status remains the outcome of that child
 rather than being reclassified as a discovery failure.
 
-Operational failures are distinct typed conditions with their original filesystem, manifest,
-or process errors retained as sources. The application boundary carries them through
-`ohno::AppError`, which preserves causal diagnostics and allows callers to identify a specific
-condition without imposing a closed error taxonomy. Context is added at the boundary that
-knows it, while source messages are not flattened into strings or redundantly prefixed.
+Internal ownership and error propagation are documented in the
+[implementation guide](implementation.md).

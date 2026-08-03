@@ -415,8 +415,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        AnalysisFailedError, FirstParentWalkFailedError, NoOutputSelectedError,
-        RepositoryRequiredError,
+        BaseBranchUnavailableError, FirstParentWalkFailedError, InvalidBlessingError,
+        InvalidResultSetError, InvalidStoredUtf8Error, MergeBaseUnavailableError,
+        NoOutputSelectedError, UnknownEngineError, UnresolvedRefError,
     };
 
     fn ts(seconds: i64) -> Timestamp {
@@ -813,7 +814,7 @@ mod tests {
     }
 
     #[test]
-    fn analyze_without_a_repository_is_an_error() {
+    fn analyze_rejects_an_unresolved_head() {
         let storage = MemoryStorage::new();
         seed_linear_step(&storage);
         let git = FakeGitHistory::new(); // No commits: HEAD does not resolve.
@@ -830,7 +831,8 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<RepositoryRequiredError>().is_some());
+        let found = error.find_source::<UnresolvedRefError>().unwrap();
+        assert_eq!(found.reference, "HEAD");
     }
 
     #[test]
@@ -1036,7 +1038,9 @@ mod tests {
             "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json".to_owned();
         block_on(storage.put(&bless_key, &[0xff, 0xfe, 0x00])).unwrap();
         let error = analyze_blessing_error(&storage);
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        let found = error.find_source::<InvalidStoredUtf8Error>().unwrap();
+        assert_eq!(found.object_kind, "stored blessing");
+        assert_eq!(found.key, bless_key);
         assert!(error.find_source::<std::string::FromUtf8Error>().is_some());
     }
 
@@ -1048,7 +1052,10 @@ mod tests {
             "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json".to_owned();
         block_on(storage.put(&bless_key, b"{ not a blessing record")).unwrap();
         let error = analyze_blessing_error(&storage);
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        let found = error.find_source::<InvalidBlessingError>().unwrap();
+        assert_eq!(found.object_kind, "stored blessing");
+        assert_eq!(found.key, bless_key);
+        assert_eq!(found.expected, "blessing record");
         assert!(error.find_source::<serde_json::Error>().is_some());
     }
 
@@ -1893,7 +1900,8 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        let found = error.find_source::<BaseBranchUnavailableError>().unwrap();
+        assert_eq!(found.target_ref, "HEAD");
     }
 
     #[test]
@@ -1930,7 +1938,9 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        let found = error.find_source::<MergeBaseUnavailableError>().unwrap();
+        assert_eq!(found.target_ref, "HEAD");
+        assert_eq!(found.base_commit, "m0");
     }
 
     #[test]
@@ -1966,7 +1976,9 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        let found = error.find_source::<MergeBaseUnavailableError>().unwrap();
+        assert_eq!(found.target_ref, "HEAD");
+        assert_eq!(found.base_commit, "m0");
     }
 
     #[test]
@@ -2065,7 +2077,8 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        let found = error.find_source::<InvalidResultSetError>().unwrap();
+        assert_eq!(found.key, clean_key("c0"));
     }
 
     #[test]
@@ -2087,7 +2100,9 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        let found = error.find_source::<InvalidStoredUtf8Error>().unwrap();
+        assert_eq!(found.object_kind, "stored object");
+        assert_eq!(found.key, clean_key("c0"));
     }
 
     #[test]
@@ -2137,7 +2152,8 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        let found = error.find_source::<UnknownEngineError>().unwrap();
+        assert_eq!(found.name, "dhat");
     }
 
     #[test]
@@ -2162,7 +2178,8 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        let found = error.find_source::<UnresolvedRefError>().unwrap();
+        assert_eq!(found.reference, "does-not-exist");
     }
 
     #[test]

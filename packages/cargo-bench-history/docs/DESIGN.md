@@ -1046,83 +1046,17 @@ in every format (§8.7) — after each affected set's header in text and Markdow
 set in the condensed summary, and as an optional `comparison_base_lags` array on each JSON set — and
 never changes finding selection or the exit code.
 
-## 9. Architecture
+## 9. Diagnostics
 
-The tool is a **shell** (the CLI binary and its library) plus a family of small, private-use
-`cbh_*` **implementation crates** it depends on, following the workspace's impl-crate pattern
-— each a private-use extraction treated as the impl crate directly, with no separate `_impl`
-shell. Responsibilities are split roughly one per crate so each is independently and cheaply
-mutation-tested. All **pure, I/O-free** logic — the stored data model, comparability and
-partitioning, the statistics and analysis math and rendering, and the shared compression
-codec — lives in leaf crates exercised by a fast, Miri-friendly, cheap-to-mutation-test
-in-process suite, while everything that touches the outside world — storage, git, process,
-filesystem, engine parsing, and the CLI — is factored into its own crate too, with the binary
-shell wiring them together.
-
-**Diagnostics and error boundary.** The shell writes successful reports and machine-readable
+The shell writes successful reports and machine-readable
 data to stdout, while progress, effective-selection and effective-partition summaries, verbose
 reasoning, timings, and failures go to stderr. Benchmark child processes inherit the parent
 process's standard streams and may write directly to either one.
 
-Operational failures remain typed and retain their underlying sources across package
-boundaries. The shell's application boundary aggregates them with `ohno::AppError`, preserving
-condition-specific inspection, causal context, and optional backtraces without forcing all
-packages into one closed error taxonomy or flattening causes into strings. Each layer adds only
-the context it owns, transparent boundaries avoid repeating a source's message, and the CLI
-renders the resulting chain once before returning a failure status.
-
-**Async ports and adapters.** The app is async by default on the Tokio runtime, but pure
-logic stays synchronous — parse, map, comparability, series, findings, format — and is the
-Miri-safe bulk of the code and tests. Async is pushed only to the I/O edges, each a small
-port trait (`impl Future` return, no async-trait macro) with a real Tokio adapter and an
-in-`#[cfg(test)]` in-memory fake: the process runner, the environment and git-history
-probes, the benchmark-output harvester, the config writer for `install`, the diagnostics
-reporter, and storage. The reporter carries three independent channels — verbose-gated
-per-object **notes**, independent stage **timings**, and **always-on one-line summaries**
-(the effective-selection and effective-partition lines above) — all written to stderr so
-shell diagnostics do not enter the reports and JSON written to stdout. Time comes from an
-injected clock (the workspace `tick` crate), so
-tests drive it deterministically and orchestration never reads the wall clock directly.
-Orchestration takes the injected ports, and the public async entry wires the real adapters.
-
-**Miri strategy.** Pure logic runs under Miri directly, and the in-memory async
-orchestration tests run *without* a Tokio runtime (a synchronous block-on plus
-always-ready fakes plus a frozen clock), so they stay Miri-safe. Tests that use a real
-runtime, real filesystem or process, or the network emulator are Miri-ignored with a
-reason.
-
-**Compute parallelism.** `analyze`'s two expensive stages — loading and parsing the stored
-objects, and running per-series detection — both fan out across cores, routed through an
-**injected spawner** rather than ad-hoc threads so the work runs on the runtime's shared
-pool in production and inline under Miri, and stays legible in a profiler. The object load
-splits the storage-key-sorted survivors into one balanced chunk per worker; each worker
-fetches, inflates, parses, and **folds** its chunk into its own series builder, dropping
-each parsed run as it goes, and the driver merges the per-worker builders in a serial pass
-whose global sort makes the result byte-identical to a single-threaded fold. Objects are
-parsed into a lean projection carrying only the fields the fold reads (the commit a point
-is labelled with comes from the storage key, not the payload). The parallel parse is only a
-net win with a **scalable global allocator** — the JSON parser's many small allocations
-otherwise contend on the system allocator's cross-thread lock and erase the speedup — so
-the binary installs one. Folding in the worker parallelizes the fold for a wall-time and
-CPU win but does not lower peak memory (every worker's finished builder is briefly resident
-alongside the growing merged one), an accepted tradeoff; further memory reduction (bounded
-merge-as-complete waves and id interning) is deliberately left unexploited in favour of that
-win. The data-flow and parallelism
-map lives in [`analyze.md`](analyze.md).
-
-*Considered and not adopted for the fan-out:* a data-parallelism library whose transitive
-dependency trips Miri's aliasing model (forcing an ugly conditional-compilation serial
-fallback), and short-lived per-call worker threads (which litter the profiler and tie the
-tool to OS-thread spawning instead of the host's runtime). The injected spawner is
-Miri-clean and runtime-agnostic with no conditional compilation.
-
-**Companion crates.** The fake benchmark engine the integration tests launch is a separate
-non-published package, kept structurally out of the shipped tool so installing
-`cargo-bench-history` only ever places the one real binary on a user's PATH. A separate
-non-published **stress harness** drives the `analyze` scaling experiment: it replicates only
-the storage *write* layout to seed a giant synthetic history, then reads it back through the
-real public entry point, so it measures the production path while touching zero production
-code (and needs no test-only feature on the shell crate).
+Failures render their causal diagnostics once on stderr and return a failure status. Internal
+package ownership and execution boundaries are documented in the
+[implementation guide](implementation.md); analysis data flow and parallelism are documented in
+the [analysis implementation guide](analyze.md).
 
 ## 10. Cross-platform notes
 

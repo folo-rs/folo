@@ -16,10 +16,8 @@ use serde::Deserialize;
 
 /// An error encountered while parsing a Criterion result case.
 ///
-/// Which of the two documents failed is the error's source — a
-/// [`BenchmarkParseError`] or an [`EstimatesParseError`] — reachable via
-/// `ohno::ErrorExt::find_source`. This type contributes no wording of its own, so
-/// it displays as the underlying failure.
+/// The error retains the concrete document failure in its source chain and
+/// displays that failure without adding aggregate-level wording.
 #[ohno::error]
 #[no_constructors]
 #[from(BenchmarkParseError, EstimatesParseError)]
@@ -31,7 +29,7 @@ pub struct CriterionParseError;
 #[ohno::error]
 #[display("failed to parse Criterion benchmark.json")]
 #[from(serde_json::Error)]
-pub struct BenchmarkParseError;
+struct BenchmarkParseError;
 
 /// Criterion's `estimates.json` was malformed.
 ///
@@ -39,7 +37,7 @@ pub struct BenchmarkParseError;
 #[ohno::error]
 #[display("failed to parse Criterion estimates.json")]
 #[from(serde_json::Error)]
-pub struct EstimatesParseError;
+struct EstimatesParseError;
 
 // The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
 // which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.

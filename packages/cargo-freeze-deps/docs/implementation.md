@@ -1,13 +1,14 @@
-# cargo-freeze-deps - Implementation
+# cargo-freeze-deps implementation
 
-The command reads the selected manifest, parses it with `toml_edit`, walks each supported
-dependency table, and writes the rendered document to the selected output path. `toml_edit`
-preserves comments and document layout while changed version values use its standard rendering.
+The transformation contract belongs in the package [design](design.md). This guide follows the
+workspace rules for [implementation documentation](../../../docs/implementation.md).
 
-Version requirements are parsed with `semver`. A requirement is frozen only when one comparator
-provides a concrete matching version; missing minor or patch components are zero-filled.
-Unsupported constraint shapes remain unchanged.
+Manifest I/O, structural TOML editing, dependency-table traversal, and version-requirement
+interpretation are separate responsibilities composed by the application entry point. Structural
+editing is isolated behind `toml_edit`, while requirement interpretation is isolated behind
+`semver`.
 
-Distinct failure conditions use `ohno` error types and flow through `AppError`. File and parse
-errors carry the relevant path, and wrapped source errors remain discoverable through the source
-chain.
+Private conditions add context at the responsibility that owns it and flow into the application's
+`ohno::AppError` boundary. Parser, semantic-version, and filesystem causes remain attached without
+becoming application API, following the workspace
+[error-handling guide](../../../docs/error-handling.md).

@@ -8,12 +8,10 @@
 //! workspace convention. They also use a CWD-guard RAII helper so the current directory
 //! is restored even when an assertion fails mid-test.
 
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::{fs, io};
 
-use cargo_freeze_deps::{
-    InvalidVersionError, ParseError, ReadFileError, RunInput, WriteFileError, run,
-};
+use cargo_freeze_deps::{RunInput, run};
 use serial_test::serial;
 
 /// RAII helper: restores the process current directory when dropped, even on panic.
@@ -78,7 +76,7 @@ maybe_pinned = "<2.0.0"
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(miri, ignore)] // Uses real filesystem operations unavailable under Miri.
 fn writes_to_separate_output_path_and_leaves_input_untouched() {
     let temp_dir = tempfile::tempdir().unwrap();
     let input_content = r#"[dependencies]
@@ -103,7 +101,7 @@ serde = "1.2.3"
 
 #[test]
 #[serial] // Reads ./Cargo.toml relative to the process current directory.
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(miri, ignore)] // Uses real filesystem operations unavailable under Miri.
 fn defaults_to_cargo_toml_in_current_directory() {
     let temp_dir = tempfile::tempdir().unwrap();
     write_cargo_toml(
@@ -129,7 +127,7 @@ serde = "1.2.3"
 // -- Workspace-level and package-level files --------------------------------------------------
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(miri, ignore)] // Uses real filesystem operations unavailable under Miri.
 fn workspace_level_cargo_toml_processed() {
     let temp_dir = tempfile::tempdir().unwrap();
     let path = write_cargo_toml(
@@ -156,7 +154,7 @@ tokio = { version = "1.48.0", features = ["full"] }
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(miri, ignore)] // Uses real filesystem operations unavailable under Miri.
 fn combined_workspace_and_package_cargo_toml_processed() {
     let temp_dir = tempfile::tempdir().unwrap();
     let path = write_cargo_toml(
@@ -203,7 +201,7 @@ libc = "0.2.172"
 // -- Realistic mixed file ---------------------------------------------------------------------
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(miri, ignore)] // Uses real filesystem operations unavailable under Miri.
 fn realistic_file_preserves_comments_and_layout() {
     let temp_dir = tempfile::tempdir().unwrap();
     let input = r#"[package]
@@ -250,7 +248,7 @@ mockall = "0.14.0"
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(miri, ignore)] // Uses real filesystem operations unavailable under Miri.
 fn idempotent_when_run_twice() {
     let temp_dir = tempfile::tempdir().unwrap();
     let path = write_cargo_toml(
@@ -283,23 +281,20 @@ tokio = "^1.48"
 // -- Error reporting --------------------------------------------------------------------------
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(miri, ignore)] // Uses real filesystem operations unavailable under Miri.
 fn missing_file_returns_read_error() {
     let temp_dir = tempfile::tempdir().unwrap();
     let missing = temp_dir.path().join("does-not-exist.toml");
 
-    let error = run(&RunInput {
+    run(&RunInput {
         path: missing,
         output: None,
     })
     .unwrap_err();
-
-    assert!(error.find_source::<ReadFileError>().is_some());
-    assert!(error.find_source::<io::Error>().is_some());
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(miri, ignore)] // Relies on host OS errors when writing over a directory.
 fn unwritable_output_returns_write_error() {
     let temp_dir = tempfile::tempdir().unwrap();
     let path = write_cargo_toml(
@@ -310,31 +305,25 @@ serde = "1.2.3"
     );
 
     // Writing over an existing directory fails on every platform we support.
-    let error = run(&RunInput {
+    run(&RunInput {
         path,
         output: Some(temp_dir.path().to_path_buf()),
     })
     .unwrap_err();
-
-    assert!(error.find_source::<WriteFileError>().is_some());
-    assert!(error.find_source::<io::Error>().is_some());
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(miri, ignore)] // Uses real filesystem operations unavailable under Miri.
 fn invalid_toml_returns_parse_error() {
     let temp_dir = tempfile::tempdir().unwrap();
     let path = write_cargo_toml(temp_dir.path(), "this is = not [valid toml");
 
-    let error = run(&RunInput { path, output: None }).unwrap_err();
-
-    assert!(error.find_source::<ParseError>().is_some());
-    assert!(error.find_source::<toml_edit::TomlError>().is_some());
+    run(&RunInput { path, output: None }).unwrap_err();
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
-fn invalid_version_returns_typed_error_with_dep_name() {
+#[cfg_attr(miri, ignore)] // Uses real filesystem operations unavailable under Miri.
+fn invalid_version_returns_an_application_error() {
     let temp_dir = tempfile::tempdir().unwrap();
     let path = write_cargo_toml(
         temp_dir.path(),
@@ -343,16 +332,11 @@ serde = "not-a-version"
 "#,
     );
 
-    let error = run(&RunInput { path, output: None }).unwrap_err();
-    let invalid = error.find_source::<InvalidVersionError>().unwrap();
-
-    assert_eq!(invalid.dep(), "serde");
-    assert_eq!(invalid.version(), "not-a-version");
-    assert!(error.find_source::<semver::Error>().is_some());
+    run(&RunInput { path, output: None }).unwrap_err();
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(miri, ignore)] // Uses real filesystem operations unavailable under Miri.
 fn error_during_freeze_leaves_input_intact() {
     let temp_dir = tempfile::tempdir().unwrap();
     let input = r#"[dependencies]

@@ -86,7 +86,7 @@ impl BenchmarkIdPrefix {
     pub fn new(value: impl Into<String>) -> Result<Self, EmptyBenchmarkIdPrefix> {
         let value = value.into();
         if value.is_empty() {
-            return Err(EmptyBenchmarkIdPrefix::new());
+            return Err(EmptyBenchmarkIdPrefixValueError::new().into());
         }
         Ok(Self(value))
     }
@@ -126,15 +126,15 @@ impl From<BenchmarkIdPrefix> for String {
     }
 }
 
-/// The error returned when constructing a [`BenchmarkIdPrefix`] from an empty
-/// string.
+/// Constructing a [`BenchmarkIdPrefix`] from an empty string failed.
 ///
 /// The error carries a backtrace, so it is [`Clone`] but neither `Copy` nor
 /// comparable by equality; callers detect it from the `Err` case rather than by
 /// comparing error values.
 #[ohno::error]
 #[derive(Clone)]
-#[display("a benchmark-id prefix must not be empty")]
+#[no_constructors]
+#[from(EmptyBenchmarkIdPrefixValueError)]
 pub struct EmptyBenchmarkIdPrefix;
 
 // The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
@@ -144,6 +144,14 @@ pub struct EmptyBenchmarkIdPrefix;
 impl UnwindSafe for EmptyBenchmarkIdPrefix {}
 impl RefUnwindSafe for EmptyBenchmarkIdPrefix {}
 
+/// An empty string cannot identify a benchmark family.
+#[ohno::error]
+#[display("a benchmark-id prefix must not be empty")]
+struct EmptyBenchmarkIdPrefixValueError;
+
+impl UnwindSafe for EmptyBenchmarkIdPrefixValueError {}
+impl RefUnwindSafe for EmptyBenchmarkIdPrefixValueError {}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -152,6 +160,7 @@ mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
 
     use nonempty::nonempty;
+    use ohno::ErrorExt;
     use static_assertions::assert_impl_all;
 
     use super::*;
@@ -159,6 +168,14 @@ mod tests {
     assert_impl_all!(
         EmptyBenchmarkIdPrefix: Clone,
         Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        EmptyBenchmarkIdPrefixValueError: Send,
         Sync,
         Debug,
         error::Error,
@@ -213,7 +230,12 @@ mod tests {
 
     #[test]
     fn benchmark_id_prefix_rejects_an_empty_string() {
-        BenchmarkIdPrefix::new("").unwrap_err();
+        let error = BenchmarkIdPrefix::new("").unwrap_err();
+        assert!(
+            error
+                .find_source::<EmptyBenchmarkIdPrefixValueError>()
+                .is_some()
+        );
         "".parse::<BenchmarkIdPrefix>().unwrap_err();
         BenchmarkIdPrefix::try_from(String::new()).unwrap_err();
     }

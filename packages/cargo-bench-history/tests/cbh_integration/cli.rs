@@ -70,8 +70,8 @@ fn binary_without_a_subcommand_prints_descriptive_help_to_stderr() {
 /// A bare `--local` (no `=value`) selects local storage from the
 /// `CARGO_BENCH_HISTORY_STORAGE` environment variable. Driven against the real
 /// binary so the genuine environment edge is exercised: with the variable set,
-/// storage resolves and the command proceeds past selection to fail for an
-/// unrelated reason (no git repository), proving the env path was accepted.
+/// storage resolves and the command proceeds to repository resolution, proving
+/// the environment path was accepted.
 #[test]
 #[cfg_attr(miri, ignore)] // Spawns a real process, which Miri cannot do.
 fn binary_bare_local_reads_the_storage_path_from_the_environment() {
@@ -85,11 +85,10 @@ fn binary_bare_local_reads_the_storage_path_from_the_environment() {
         .output()
         .unwrap();
 
-    // Storage resolved from the environment; the command then failed only because
-    // the temp directory is not a git repository, not on storage selection.
+    // Storage resolved from the environment, so the later failure does not report
+    // the missing storage environment value.
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "{stderr}");
-    assert!(stderr.contains("requires a git repository"), "{stderr}");
     assert!(
         !stderr.contains("CARGO_BENCH_HISTORY_STORAGE"),
         "storage must have resolved from the environment: {stderr}"

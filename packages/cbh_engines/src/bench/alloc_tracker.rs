@@ -25,13 +25,19 @@ use cbh_model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
 use nonempty::NonEmpty;
 use serde::Deserialize;
 
-/// An error encountered while parsing an `alloc_tracker` operation file.
+/// Parsing an `alloc_tracker` operation file failed.
 ///
-/// The underlying deserialization failure is carried as the error's source.
+/// The underlying failure is retained in the source chain.
+#[ohno::error]
+#[no_constructors]
+#[from(AllocTrackerJsonError)]
+pub struct AllocTrackerParseError;
+
+/// An `alloc_tracker` operation file was malformed.
 #[ohno::error]
 #[display("failed to parse alloc_tracker output")]
 #[from(serde_json::Error)]
-pub struct AllocTrackerParseError;
+struct AllocTrackerJsonError;
 
 // The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
 // which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
@@ -39,6 +45,8 @@ pub struct AllocTrackerParseError;
 // state — so observing them through a shared reference during unwind is harmless.
 impl UnwindSafe for AllocTrackerParseError {}
 impl RefUnwindSafe for AllocTrackerParseError {}
+impl UnwindSafe for AllocTrackerJsonError {}
+impl RefUnwindSafe for AllocTrackerJsonError {}
 
 /// Parses one `alloc_tracker` operation file into a [`BenchmarkResult`].
 ///
@@ -53,7 +61,8 @@ impl RefUnwindSafe for AllocTrackerParseError {}
 pub fn parse_alloc_tracker_operation(
     json: &str,
 ) -> Result<Option<BenchmarkResult>, AllocTrackerParseError> {
-    let output: OperationOutput = serde_json::from_str(json)?;
+    let output: OperationOutput =
+        serde_json::from_str(json).map_err(AllocTrackerJsonError::from)?;
     Ok(output_to_record(&output))
 }
 
@@ -133,6 +142,14 @@ mod tests {
 
     assert_impl_all!(
         AllocTrackerParseError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        AllocTrackerJsonError: Send,
         Sync,
         Debug,
         error::Error,
@@ -262,6 +279,7 @@ mod tests {
     #[test]
     fn rejects_malformed_json() {
         let error = parse_alloc_tracker_operation("{ not json").unwrap_err();
+        assert!(error.find_source::<AllocTrackerJsonError>().is_some());
         assert!(error.find_source::<serde_json::Error>().is_some());
     }
 

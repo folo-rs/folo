@@ -54,9 +54,9 @@ use super::{
     resolve_now,
 };
 use crate::{
-    AnalyzeError, BlessBaseRequiredError, BlessDiscriminantsRequiredError, BlessRefNotFoundError,
+    AnalyzeError, BlessBaseRequiredError, BlessDiscriminantsRequiredError,
     BlessSelectionRequiredError, FirstParentWalkFailedError, ResolveRefFailedError,
-    WorkingTreeProbeFailedError,
+    UnresolvedRefError, WorkingTreeProbeFailedError,
 };
 
 /// The real `bless`: load configuration, wire the configured storage and git
@@ -395,16 +395,21 @@ where
     Ok(message)
 }
 
-/// Resolves a context ref (for example `HEAD` or a commit ID) to a full commit
-/// commit ID, mapping an unresolvable ref (not a repository, or an unknown ref) to a
-/// clear blessing error.
+/// Resolves a context ref (for example `HEAD` or a commit ID) to a full commit ID.
 async fn resolve_commit<G: GitHistory>(git: &G, reference: &str) -> Result<String, AnalyzeError> {
     let resolved = git
         .resolve(reference)
         .await
         .map_err(|error| ResolveRefFailedError::caused_by(reference, error))?;
     resolved
-        .ok_or_else(|| BlessRefNotFoundError::new(reference))
+        .ok_or_else(|| {
+            UnresolvedRefError::new(
+                "blessing benchmarks",
+                reference,
+                "Check that the ref exists or is fetched, and select a repository with --repo if \
+                 needed.",
+            )
+        })
         .map_err(Into::into)
 }
 
@@ -966,13 +971,15 @@ mod tests {
     }
 
     #[test]
-    fn bless_without_a_repository_is_an_error() {
+    fn bless_rejects_an_unresolved_head() {
         let storage = MemoryStorage::new();
         // No commits: HEAD does not resolve.
         let git = FakeGitHistory::new();
         let error =
             drive_bless(&storage, &git, &bless_options(&["all_the_time/read_cell"])).unwrap_err();
-        assert!(error.find_source::<BlessRefNotFoundError>().is_some());
+        let found = error.find_source::<UnresolvedRefError>().unwrap();
+        assert_eq!(found.operation, "blessing benchmarks");
+        assert_eq!(found.reference, "HEAD");
     }
 
     #[test]

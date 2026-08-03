@@ -7,7 +7,7 @@ use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use jiff::{Span, Timestamp};
 
-use crate::{AnalysisFailedError, AnalyzeError};
+use crate::{AnalyzeError, InvalidWindowValueError, WindowOutOfRangeError};
 
 /// Auto-detects the analysis mode from the resolved topology and recorded data.
 ///
@@ -67,13 +67,7 @@ fn default_history_since(now: Timestamp) -> Result<Timestamp, AnalyzeError> {
     now.to_zoned(TimeZone::UTC)
         .checked_sub(Span::new().months(HISTORY_DEFAULT_LOOKBACK_MONTHS))
         .map(|zoned| zoned.timestamp())
-        .map_err(|error| {
-            AnalysisFailedError::caused_by(
-                "default --since window is out of the representable range",
-                error,
-            )
-            .into()
-        })
+        .map_err(|error| WindowOutOfRangeError::caused_by("default --since window", error).into())
 }
 
 /// Parses the `--since` option into an absolute lower-bound instant, if set.
@@ -146,11 +140,7 @@ fn parse_instant(
     if let Ok(span) = value.parse::<Span>() {
         return Ok(Some(instant_before(span, flag, now)?));
     }
-    Err(AnalysisFailedError::new(format!(
-        "invalid {flag} value {value:?}; expected an RFC 3339 timestamp, a YYYY-MM-DD \
-         date, or a relative duration such as \"6 months\" or \"30 days ago\""
-    ))
-    .into())
+    Err(InvalidWindowValueError::new(flag, value).into())
 }
 
 /// Resolves a relative [`Span`] to the instant that far before `now`, treating the
@@ -162,13 +152,7 @@ fn instant_before(span: Span, flag: &str, now: Timestamp) -> Result<Timestamp, A
     now.to_zoned(TimeZone::UTC)
         .checked_sub(span.abs())
         .map(|zoned| zoned.timestamp())
-        .map_err(|error| {
-            AnalysisFailedError::caused_by(
-                format!("{flag} duration is out of the representable range"),
-                error,
-            )
-            .into()
-        })
+        .map_err(|error| WindowOutOfRangeError::caused_by(format!("{flag} duration"), error).into())
 }
 
 #[cfg(test)]
@@ -179,7 +163,6 @@ mod tests {
     use ohno::ErrorExt as _;
 
     use super::*;
-    use crate::AnalysisFailedError;
 
     fn ts(seconds: i64) -> Timestamp {
         Timestamp::from_second(seconds).unwrap()
@@ -312,7 +295,9 @@ mod tests {
     fn since_rejects_garbage() {
         let now: Timestamp = "2024-06-01T00:00:00Z".parse().unwrap();
         let error = parse_since(Some("not-a-date"), now).unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        let found = error.find_source::<InvalidWindowValueError>().unwrap();
+        assert_eq!(found.flag, "--since");
+        assert_eq!(found.value, "not-a-date");
     }
 
     #[test]
@@ -320,7 +305,8 @@ mod tests {
         // Six months before the earliest representable instant does not exist, so the
         // calendar subtraction fails rather than silently saturating.
         let error = default_history_since(Timestamp::MIN).unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        let found = error.find_source::<WindowOutOfRangeError>().unwrap();
+        assert_eq!(found.window, "default --since window");
         assert!(error.find_source::<jiff::Error>().is_some());
     }
 
@@ -328,7 +314,8 @@ mod tests {
     fn a_relative_since_below_the_representable_range_is_an_error() {
         // Same for an explicit relative duration.
         let error = parse_since(Some("5 months"), Timestamp::MIN).unwrap_err();
-        assert!(error.find_source::<AnalysisFailedError>().is_some());
+        let found = error.find_source::<WindowOutOfRangeError>().unwrap();
+        assert_eq!(found.window, "--since duration");
         assert!(error.find_source::<jiff::Error>().is_some());
     }
 }

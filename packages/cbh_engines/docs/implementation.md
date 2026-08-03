@@ -1,0 +1,17 @@
+# cbh_engines implementation
+
+`cbh_engines` implements the engine compatibility behavior specified by the
+[`cargo-bench-history` design](../../cargo-bench-history/docs/DESIGN.md). Its place in the
+application is defined by the
+[`cargo-bench-history` implementation guide](../../cargo-bench-history/docs/implementation.md)
+and the workspace rules for [implementation documentation](../../../docs/implementation.md).
+
+The crate owns translation from each supported engine's artifacts into `cbh_model`, together with
+the environment and harvesting boundaries needed to locate those artifacts. Each adapter owns its
+external schema and mapping logic. Parsing stays pure; process execution remains owned by
+`cbh_git`, and persistence remains owned by `cbh_storage`.
+
+Each parser exposes an operation-level aggregate while concrete document and schema conditions
+remain private to the adapter that understands them. Sources are preserved according to the
+workspace [error-handling guide](../../../docs/error-handling.md). Third-party fixtures and
+producer-consumer round trips protect the adapter boundary against schema drift.

@@ -1,17 +1,14 @@
-// Concrete failure conditions of the tool.
+// Private failure conditions of the tool.
 //
-// Each condition is its own type. They reach the caller through `ohno::AppError`, which
-// keeps them in the source chain so callers can identify a failure without the crate
-// having to expose a closed taxonomy.
+// Each condition reaches the application boundary through `ohno::AppError`.
 
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::PathBuf;
 
 /// The input Cargo.toml file could not be read.
-#[doc(hidden)]
 #[ohno::error]
 #[display("Failed to read '{}'", path.display())]
-pub struct ReadFileError {
+pub(crate) struct ReadFileError {
     path: PathBuf,
 }
 
@@ -23,10 +20,9 @@ impl UnwindSafe for ReadFileError {}
 impl RefUnwindSafe for ReadFileError {}
 
 /// The rewritten Cargo.toml file could not be written.
-#[doc(hidden)]
 #[ohno::error]
 #[display("Failed to write '{}'", path.display())]
-pub struct WriteFileError {
+pub(crate) struct WriteFileError {
     path: PathBuf,
 }
 
@@ -38,10 +34,9 @@ impl UnwindSafe for WriteFileError {}
 impl RefUnwindSafe for WriteFileError {}
 
 /// The input Cargo.toml file is not valid TOML.
-#[doc(hidden)]
 #[ohno::error]
 #[display("Failed to parse '{}'", path.display())]
-pub struct ParseError {
+pub(crate) struct ParseError {
     pub(crate) path: PathBuf,
 }
 
@@ -53,10 +48,9 @@ impl UnwindSafe for ParseError {}
 impl RefUnwindSafe for ParseError {}
 
 /// A dependency's `version` field is not a string.
-#[doc(hidden)]
 #[ohno::error]
 #[display("Dependency '{dep}' has a non-string version field of type {actual_type}")]
-pub struct UnexpectedVersionTypeError {
+pub(crate) struct UnexpectedVersionTypeError {
     dep: String,
     actual_type: String,
 }
@@ -70,23 +64,24 @@ impl RefUnwindSafe for UnexpectedVersionTypeError {}
 
 impl UnexpectedVersionTypeError {
     /// Name of the dependency whose version field is malformed.
+    #[cfg(test)]
     #[must_use]
-    pub fn dep(&self) -> &str {
+    pub(crate) fn dep(&self) -> &str {
         &self.dep
     }
 
     /// The TOML type found in the dependency's `version` field.
+    #[cfg(test)]
     #[must_use]
-    pub fn actual_type(&self) -> &str {
+    pub(crate) fn actual_type(&self) -> &str {
         &self.actual_type
     }
 }
 
 /// A dependency's version requirement is not valid `SemVer`.
-#[doc(hidden)]
 #[ohno::error]
 #[display("Dependency '{dep}' has invalid version requirement '{version}'")]
-pub struct InvalidVersionError {
+pub(crate) struct InvalidVersionError {
     dep: String,
     version: String,
 }
@@ -100,14 +95,16 @@ impl RefUnwindSafe for InvalidVersionError {}
 
 impl InvalidVersionError {
     /// Name of the dependency whose version requirement is invalid.
+    #[cfg(test)]
     #[must_use]
-    pub fn dep(&self) -> &str {
+    pub(crate) fn dep(&self) -> &str {
         &self.dep
     }
 
     /// The literal text of the rejected requirement.
+    #[cfg(test)]
     #[must_use]
-    pub fn version(&self) -> &str {
+    pub(crate) fn version(&self) -> &str {
         &self.version
     }
 }

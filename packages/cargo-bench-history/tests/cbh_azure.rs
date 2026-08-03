@@ -41,10 +41,8 @@ use azure_identity::DeveloperToolsCredential;
 use azure_storage_blob::{BlobContainerClient, BlobContainerClientOptions};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use cargo_bench_history::{
-    Cli, Command, Overrides, RunOutcome, StorageOverride, azure_backend_from_parts,
-    run_with_overrides,
-};
+use cargo_bench_history::{Cli, Command, Overrides, RunOutcome, run_with_overrides};
+use cbh_storage::{StorageOverride, azure_backend_from_parts};
 use futures::FutureExt as _;
 use ohno::AppError;
 use serial_test::serial;

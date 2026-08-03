@@ -7,7 +7,7 @@ use cbh_model::Engine;
 use nonempty::NonEmpty;
 
 use super::selection::Selection;
-use crate::{AnalysisFailedError, AnalyzeError};
+use crate::{AnalyzeError, UnknownEngineError};
 
 /// The current machine's auto-detected facet values, used as the default when a
 /// query facet is omitted (see the *Discriminant set & query facets* section of
@@ -138,13 +138,9 @@ pub(crate) fn facets_are_unconstrained(facets: &DiscriminantSetQuery) -> bool {
 fn parse_engine(name: Option<&str>) -> Result<Option<Engine>, AnalyzeError> {
     match name {
         None => Ok(None),
-        Some(name) => Engine::from_name(name).map(Some).ok_or_else(|| {
-            AnalysisFailedError::new(format!(
-                "unknown engine {name:?}; expected one of: criterion, callgrind, \
-                 alloc_tracker, all_the_time"
-            ))
-            .into()
-        }),
+        Some(name) => Engine::from_name(name)
+            .map(Some)
+            .ok_or_else(|| UnknownEngineError::new(name).into()),
     }
 }
 
@@ -153,6 +149,7 @@ fn parse_engine(name: Option<&str>) -> Result<Option<Engine>, AnalyzeError> {
 mod tests {
     use cbh_detect::{DiscriminantSetQuery, FacetFilter};
     use nonempty::nonempty;
+    use ohno::ErrorExt as _;
 
     use super::*;
 
@@ -182,7 +179,8 @@ mod tests {
         assert!(parse_engine(None).unwrap().is_none());
         assert!(parse_engine(Some("callgrind")).unwrap().is_some());
         let error = parse_engine(Some("nonsuch")).unwrap_err();
-        assert!(error.to_string().contains("unknown"), "{error}");
+        let found = error.find_source::<UnknownEngineError>().unwrap();
+        assert_eq!(found.name, "nonsuch");
     }
 
     #[test]

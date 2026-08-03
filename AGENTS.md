@@ -188,10 +188,10 @@ Callgrind file with its Criterion counterpart.
 
 The `unwrap()` / `expect()` rules in both test and production code, checked
 arithmetic, `Drop`-time invariant checks with `thread::panicking()` guards,
-the `NonZero<usize>` preference for non-zero numeric parameters, and how error
-types are defined with `ohno` (one type per failure condition, transparent
-wrappers, when a `kind` field is warranted, constructor visibility, `#[display]`
-scoping, which derives survive).
+the `NonZero<usize>` preference for non-zero numeric parameters, and how `ohno`
+error boundaries use private condition leaves, public library aggregates, and
+application-level `AppError` (supported decision queries, constructor visibility,
+`#[display]` scoping, and which derives survive).
 
 **Open this when**: choosing between `unwrap`, `expect`, `?`, or explicit
 error handling; auditing arithmetic that could overflow; writing a `Drop` impl

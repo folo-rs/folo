@@ -8,12 +8,11 @@ analysis, codec, and rendering, plus the extracted IO adapters (git, storage, pr
 engines) — released in lockstep with the shell. Several expose a `private-test-util`
 feature carrying in-workspace test/bench utilities.
 
-> **This file is agent instructions, not a design doc.** The *what* and *why* — data model,
-> storage/comparability rules, command semantics, analysis algorithms, architecture — live in
-> [`docs/DESIGN.md`](docs/DESIGN.md), and the `analyze` load/detect flow in
-> [`docs/analyze.md`](docs/analyze.md). **Keep both in sync** when you change a design
-> decision, the data model, the crate layout, the storage format, a command's behaviour, or
-> the analyze pipeline. Do not restate their content here — point at them.
+> **This file is agent instructions, not a design or implementation guide.** User-visible
+> behavior lives in [`docs/DESIGN.md`](docs/DESIGN.md). Package ownership and internal tenets
+> live in [`docs/implementation.md`](docs/implementation.md), with the `analyze` data flow in
+> [`docs/analyze.md`](docs/analyze.md). Keep the owning document in sync when changing behavior,
+> package boundaries, storage format, or the analysis pipeline. Do not restate that content here.
 
 ## Ports and fakes
 

@@ -52,14 +52,16 @@ pub use bless::{bless, unbless};
 pub(crate) use cbh_detect::{Series, SeriesFilter, apply_blessings};
 pub(crate) use cbh_render::{ReportFormat, chart_series, format_value};
 pub(crate) use dataset::{empty_history_hint, select_dataset};
-pub use error::{
-    AnalysisFailedError, AnalyzeError, NoOutputSelectedError, RepositoryRequiredError,
-};
+pub use error::AnalyzeError;
 pub(crate) use error::{
-    BlessBaseRequiredError, BlessDiscriminantsRequiredError, BlessRefNotFoundError,
+    BaseBranchUnavailableError, BlessBaseRequiredError, BlessDiscriminantsRequiredError,
     BlessSelectionRequiredError, CommitterTimeFailedError, DefaultBranchProbeFailedError,
-    FirstParentWalkFailedError, MergeBaseFailedError, ResolveRefFailedError,
-    ToolchainProbeFailedError, WorkingTreeProbeFailedError,
+    EmptyBenchmarkError, FirstParentWalkFailedError, InvalidBlessingError, InvalidResultSetError,
+    InvalidStoredUtf8Error, InvalidWindowValueError, ListAllUnsupportedError, MergeBaseFailedError,
+    MergeBaseUnavailableError, NoOutputSelectedError, PruneBaseConfirmationRequiredError,
+    PruneSelectionRequiredError, ResolveRefFailedError, ToolchainProbeFailedError,
+    UnknownEngineError, UnknownMetricError, UnresolvedRefError, WindowOutOfRangeError,
+    WorkingTreeProbeFailedError,
 };
 pub use examine::execute as examine;
 pub use facets::AutoFacets;

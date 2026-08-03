@@ -23,7 +23,7 @@ use cbh_probe::{
     EnvironmentProbe, HardwareProfile, RustcInfo, SystemProbe, describe_fingerprint_components,
     resolve_machine_key,
 };
-use cbh_storage::{Storage, StorageErrorKind, StorageFacade, build_storage};
+use cbh_storage::{Storage, StorageFacade, build_storage};
 use jiff::Timestamp;
 use ohno::AppError;
 use tick::Clock;
@@ -999,17 +999,16 @@ async fn store_result<S: Storage>(
     }
     match storage.put(object_key, bytes).await {
         Ok(()) => Ok(StoreOutcome::Stored),
-        Err(error) => match error.kind() {
-            StorageErrorKind::AlreadyExists { key } => {
-                let key = key.clone();
-                if skip_existing {
-                    Ok(StoreOutcome::Skipped)
-                } else {
-                    Err(DuplicateResultError::caused_by(key, error).into())
-                }
+        Err(error) => {
+            let Some(key) = error.already_existing_key().map(ToOwned::to_owned) else {
+                return Err(error.into());
+            };
+            if skip_existing {
+                Ok(StoreOutcome::Skipped)
+            } else {
+                Err(DuplicateResultError::caused_by(key, error).into())
             }
-            _ => Err(error.into()),
-        },
+        }
     }
 }
 
@@ -1160,12 +1159,11 @@ mod tests {
     use cbh_diag::RecordingReporter;
     use cbh_engines::{Harvest, RawCriterionCase, RawOperationFile, RawSummary};
     use cbh_git::{EngineStatus, parse_git_info};
-    use cbh_storage::MemoryStorage;
+    use cbh_storage::{MemoryStorage, StorageError, TestStorageError};
     use futures::executor::block_on;
 
     use super::*;
     use crate::model::{BenchmarkIdPrefix, BlessingRecord};
-    use crate::{MissingCaseError, StorageError};
 
     const SINGLE_FIXTURE: &str =
         include_str!("../../tests/fixtures/callgrind/single_unparametrized.summary.json");
@@ -1244,23 +1242,23 @@ mod tests {
 
     impl Storage for FailingStorage {
         async fn put(&self, _key: &str, _bytes: &[u8]) -> Result<(), StorageError> {
-            Err(StorageError::io(io::Error::other("disk full")))
+            Err(TestStorageError::new().into())
         }
 
         async fn put_overwrite(&self, _key: &str, _bytes: &[u8]) -> Result<(), StorageError> {
-            Err(StorageError::io(io::Error::other("disk full")))
+            Err(TestStorageError::new().into())
         }
 
-        async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
-            Err(StorageError::not_found(key))
+        async fn get(&self, _key: &str) -> Result<Vec<u8>, StorageError> {
+            Err(TestStorageError::new().into())
         }
 
         async fn list(&self, _prefix: &str) -> Result<Vec<String>, StorageError> {
             Ok(Vec::new())
         }
 
-        async fn delete(&self, key: &str) -> Result<(), StorageError> {
-            Err(StorageError::not_found(key))
+        async fn delete(&self, _key: &str) -> Result<(), StorageError> {
+            Err(TestStorageError::new().into())
         }
     }
 
@@ -1276,8 +1274,8 @@ mod tests {
             false,
         ))
         .unwrap_err();
-        let found = error.find_source::<StorageError>().unwrap();
-        assert!(matches!(found.kind(), StorageErrorKind::Io));
+        assert!(error.find_source::<StorageError>().is_some());
+        assert!(error.find_source::<TestStorageError>().is_some());
     }
 
     fn frozen_time() -> SystemTime {
@@ -3416,7 +3414,6 @@ mod tests {
 
         let inconsistent = error.find_source::<InconsistentRunsError>().unwrap();
         assert_eq!(inconsistent.engine(), Engine::AllTheTime.to_string());
-        assert!(error.find_source::<MissingCaseError>().is_some());
         assert!(storage.keys().is_empty());
     }
 

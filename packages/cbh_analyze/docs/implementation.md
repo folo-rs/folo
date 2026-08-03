@@ -1,17 +1,22 @@
-# cbh_analyze - Implementation
+# cbh_analyze implementation
 
-`cbh_analyze` implements the query and mutation commands described by the
-[`cargo-bench-history` design](../../cargo-bench-history/docs/DESIGN.md). The binary crate owns
-the user-visible contract; this crate owns the selection, history reconstruction, analysis,
-blessing, pruning, and report-production pipeline behind that contract.
+`cbh_analyze` implements the query and mutation behavior specified by the
+[`cargo-bench-history` design](../../cargo-bench-history/docs/DESIGN.md). Its place in the
+application is defined by the
+[`cargo-bench-history` implementation guide](../../cargo-bench-history/docs/implementation.md)
+and the workspace rules for [implementation documentation](../../../docs/implementation.md).
 
-The command implementations depend on storage, git history, reporting, clocks, and task spawning
-through injected ports. Production entry points assemble concrete adapters, while unit tests use
-in-memory implementations so selection and rendering behavior can be exercised deterministically.
-Shared selection and data-set reconstruction paths keep `analyze`, `list`, `prune`, and `examine`
-aligned where the design requires lockstep behavior.
+This crate owns query and mutation orchestration: selecting and loading stored data, resolving
+repository history, coordinating blessings and pruning, and assembling requested outputs. Shared
+dataset-selection capabilities keep the query commands aligned where the application contract
+requires common behavior. It delegates I/O-free series construction and detection to `cbh_detect`
+and report presentation to `cbh_render`.
 
-Operational failures cross the crate boundary through a transparent aggregate error. Each layer
-adds only the context it owns and retains lower-level typed errors as sources, including failures
-that arise while validating command selections. This preserves condition-specific inspection and
-causal diagnostics when the binary converts the result into `ohno::AppError`.
+Storage, repository history, environment probes, diagnostics, clocks, and task execution remain
+injected dependencies. This crate coordinates those capabilities but does not own their adapters.
+
+Operations cross the crate boundary through a transparent aggregate. Concrete conditions remain
+private to the responsibility that owns their context, while component failures remain attached
+as sources. The shell can therefore convert the aggregate into `ohno::AppError` without exposing
+an internal taxonomy or losing causal diagnostics. The boundary follows the workspace
+[error-handling guide](../../../docs/error-handling.md).
