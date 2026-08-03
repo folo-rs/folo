@@ -82,11 +82,7 @@ async fn collect_without_a_storage_selection_or_cloud_config_errors() {
         .with_bench(&["--callgrind", &bench]);
 
     let error = workspace.drive(&["collect"]).await.unwrap_err();
-    let storage_error = error.find_source::<StorageError>().unwrap();
-    assert!(matches!(
-        storage_error.kind(),
-        StorageErrorKind::Config { .. }
-    ));
+    assert!(error.message().starts_with("no storage configured"));
 
     assert!(
         workspace.stored_objects().is_empty(),
@@ -104,11 +100,7 @@ async fn assert_command_errors_without_storage(args: &[&str]) {
     let workspace = Workspace::new(&storage_only_config()).without_local_storage();
 
     let error = workspace.drive(args).await.unwrap_err();
-    let storage_error = error.find_source::<StorageError>().unwrap();
-    assert!(matches!(
-        storage_error.kind(),
-        StorageErrorKind::Config { .. }
-    ));
+    assert!(error.message().starts_with("no storage configured"));
 }
 
 /// `analyze` fails fast with the storage configuration error when no backend is

@@ -23,7 +23,7 @@ use cbh_probe::{
     EnvironmentProbe, HardwareProfile, RustcInfo, SystemProbe, describe_fingerprint_components,
     resolve_machine_key,
 };
-use cbh_storage::{Storage, StorageErrorKind, StorageFacade, build_storage};
+use cbh_storage::{Storage, StorageFacade, build_storage};
 use jiff::Timestamp;
 use ohno::AppError;
 use tick::Clock;
@@ -999,17 +999,15 @@ async fn store_result<S: Storage>(
     }
     match storage.put(object_key, bytes).await {
         Ok(()) => Ok(StoreOutcome::Stored),
-        Err(error) => match error.kind() {
-            StorageErrorKind::AlreadyExists { key } => {
-                let key = key.clone();
+        Err(error) => {
+            if let Some(key) = error.already_existing_key().map(ToOwned::to_owned) {
                 if skip_existing {
-                    Ok(StoreOutcome::Skipped)
-                } else {
-                    Err(DuplicateResultError::caused_by(key, error).into())
+                    return Ok(StoreOutcome::Skipped);
                 }
+                return Err(DuplicateResultError::caused_by(key, error).into());
             }
-            _ => Err(error.into()),
-        },
+            Err(error.into())
+        }
     }
 }
 
@@ -1160,11 +1158,10 @@ mod tests {
     use cbh_diag::RecordingReporter;
     use cbh_engines::{Harvest, RawCriterionCase, RawOperationFile, RawSummary};
     use cbh_git::{EngineStatus, parse_git_info};
-    use cbh_storage::MemoryStorage;
+    use cbh_storage::{MemoryStorage, StorageError};
     use futures::executor::block_on;
 
     use super::*;
-    use crate::StorageError;
     use crate::model::{AggregateError, BenchmarkIdPrefix, BlessingRecord};
 
     const SINGLE_FIXTURE: &str =
@@ -1244,15 +1241,15 @@ mod tests {
 
     impl Storage for FailingStorage {
         async fn put(&self, _key: &str, _bytes: &[u8]) -> Result<(), StorageError> {
-            Err(StorageError::io(io::Error::other("disk full")))
+            Err(build_storage(None, &Config::default(), Path::new("."), None).unwrap_err())
         }
 
         async fn put_overwrite(&self, _key: &str, _bytes: &[u8]) -> Result<(), StorageError> {
-            Err(StorageError::io(io::Error::other("disk full")))
+            Err(build_storage(None, &Config::default(), Path::new("."), None).unwrap_err())
         }
 
         async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
-            Err(StorageError::not_found(key))
+            MemoryStorage::new().get(key).await
         }
 
         async fn list(&self, _prefix: &str) -> Result<Vec<String>, StorageError> {
@@ -1260,7 +1257,7 @@ mod tests {
         }
 
         async fn delete(&self, key: &str) -> Result<(), StorageError> {
-            Err(StorageError::not_found(key))
+            MemoryStorage::new().delete(key).await
         }
     }
 
@@ -1277,7 +1274,8 @@ mod tests {
         ))
         .unwrap_err();
         let found = error.find_source::<StorageError>().unwrap();
-        assert!(matches!(found.kind(), StorageErrorKind::Io));
+        assert!(!found.is_not_found());
+        assert_eq!(found.already_existing_key(), None);
     }
 
     fn frozen_time() -> SystemTime {

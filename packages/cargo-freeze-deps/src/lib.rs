@@ -12,6 +12,6 @@ mod types;
 mod version;
 
 pub use cli::{Cli, EarlyExit};
-pub use errors::*;
+pub(crate) use errors::*;
 pub use run::run;
 pub use types::*;

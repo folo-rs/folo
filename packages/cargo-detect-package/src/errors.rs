@@ -1,8 +1,4 @@
-// Typed errors describing every way the tool can fail.
-//
-// Each condition is its own type. They reach the caller through `ohno::AppError`, which keeps
-// them in the source chain so callers can identify a failure without the crate having to expose
-// a closed taxonomy.
+// Private conditions converted into the application's `ohno::AppError` boundary.
 
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::PathBuf;
@@ -11,7 +7,7 @@ use std::path::PathBuf;
 #[doc(hidden)]
 #[ohno::error]
 #[display("Failed to determine the current directory")]
-pub struct CurrentDirectoryError;
+pub(crate) struct CurrentDirectoryError;
 
 // The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
 // which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
@@ -24,7 +20,7 @@ impl RefUnwindSafe for CurrentDirectoryError {}
 #[doc(hidden)]
 #[ohno::error]
 #[display("Current directory is not within a Cargo workspace")]
-pub struct CurrentDirectoryOutsideWorkspaceError;
+pub(crate) struct CurrentDirectoryOutsideWorkspaceError;
 
 // The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
 // which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
@@ -33,11 +29,10 @@ pub struct CurrentDirectoryOutsideWorkspaceError;
 impl UnwindSafe for CurrentDirectoryOutsideWorkspaceError {}
 impl RefUnwindSafe for CurrentDirectoryOutsideWorkspaceError {}
 
-/// The target path does not exist or cannot be accessed.
-#[doc(hidden)]
+/// Canonicalizing the target path failed.
 #[ohno::error]
-#[display("Target path '{}' does not exist or cannot be accessed", path.display())]
-pub struct TargetPathNotFoundError {
+#[display("Could not canonicalize target path {:?}", path)]
+pub(crate) struct CanonicalizeTargetPathError {
     path: PathBuf,
 }
 
@@ -45,14 +40,14 @@ pub struct TargetPathNotFoundError {
 // which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
 // However, ohno error types are immutable after construction — no &self method mutates internal
 // state — so observing them through a shared reference during unwind is harmless.
-impl UnwindSafe for TargetPathNotFoundError {}
-impl RefUnwindSafe for TargetPathNotFoundError {}
+impl UnwindSafe for CanonicalizeTargetPathError {}
+impl RefUnwindSafe for CanonicalizeTargetPathError {}
 
 /// No Cargo workspace was found above the target path.
 #[doc(hidden)]
 #[ohno::error]
 #[display("Target path is not within a Cargo workspace")]
-pub struct TargetPathOutsideWorkspaceError;
+pub(crate) struct TargetPathOutsideWorkspaceError;
 
 // The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
 // which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
@@ -69,7 +64,7 @@ impl RefUnwindSafe for TargetPathOutsideWorkspaceError {}
     current_workspace.display(),
     target_workspace.display()
 )]
-pub struct WorkspaceMismatchError {
+pub(crate) struct WorkspaceMismatchError {
     current_workspace: PathBuf,
     target_workspace: PathBuf,
 }
@@ -85,7 +80,7 @@ impl RefUnwindSafe for WorkspaceMismatchError {}
 #[doc(hidden)]
 #[ohno::error]
 #[display("Failed to read '{}/Cargo.toml'", directory.display())]
-pub struct ReadManifestError {
+pub(crate) struct ReadManifestError {
     directory: PathBuf,
 }
 
@@ -100,7 +95,7 @@ impl RefUnwindSafe for ReadManifestError {}
 #[doc(hidden)]
 #[ohno::error]
 #[display("Failed to parse '{}/Cargo.toml'", directory.display())]
-pub struct ParseManifestError {
+pub(crate) struct ParseManifestError {
     directory: PathBuf,
 }
 
@@ -115,7 +110,7 @@ impl RefUnwindSafe for ParseManifestError {}
 #[doc(hidden)]
 #[ohno::error]
 #[display("Could not find package name in {}/Cargo.toml", directory.display())]
-pub struct PackageNameMissingError {
+pub(crate) struct PackageNameMissingError {
     directory: PathBuf,
 }
 
@@ -130,7 +125,7 @@ impl RefUnwindSafe for PackageNameMissingError {}
 #[doc(hidden)]
 #[ohno::error]
 #[display("Path is not in any package")]
-pub struct OutsidePackageError;
+pub(crate) struct OutsidePackageError;
 
 // The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
 // which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
@@ -143,7 +138,7 @@ impl RefUnwindSafe for OutsidePackageError {}
 #[doc(hidden)]
 #[ohno::error]
 #[display("Error executing command")]
-pub struct CommandExecutionError;
+pub(crate) struct CommandExecutionError;
 
 // The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
 // which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
@@ -171,7 +166,7 @@ mod tests {
         CurrentDirectoryOutsideWorkspaceError: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe
     );
     assert_impl_all!(
-        TargetPathNotFoundError: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe
+        CanonicalizeTargetPathError: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe
     );
     assert_impl_all!(
         TargetPathOutsideWorkspaceError: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe

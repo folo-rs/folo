@@ -535,7 +535,7 @@ async fn examine_rejects_an_unknown_metric() {
         ])
         .await
         .unwrap_err();
-    assert!(error.find_source::<AnalysisFailedError>().is_some());
+    assert!(error.message().starts_with("unknown metric"));
 }
 
 /// An unmatched benchmark id is not an error: runs enter the analysis but none
@@ -582,7 +582,7 @@ async fn examine_without_a_repository_errors() {
         ])
         .await
         .unwrap_err();
-    assert!(error.find_source::<RepositoryRequiredError>().is_some());
+    assert!(error.message().starts_with("could not resolve \"HEAD\""));
 }
 
 /// The benchmark id names the series to pivot, so it must be present: an empty
@@ -604,7 +604,7 @@ async fn examine_rejects_an_empty_benchmark() {
         ])
         .await
         .unwrap_err();
-    assert!(error.find_source::<AnalysisFailedError>().is_some());
+    assert!(error.message().starts_with("--benchmark must not be empty"));
 }
 
 /// `--no-text` suppresses the text report, so with no file output requested there
@@ -627,7 +627,7 @@ async fn examine_requires_an_output() {
         ])
         .await
         .unwrap_err();
-    assert!(error.find_source::<NoOutputSelectedError>().is_some());
+    assert!(error.message().starts_with("no output selected"));
 }
 
 /// When runs exist but the selection window excludes them all, `examine` gives the

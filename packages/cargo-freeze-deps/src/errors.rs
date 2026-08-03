@@ -1,8 +1,4 @@
-// Concrete failure conditions of the tool.
-//
-// Each condition is its own type. They reach the caller through `ohno::AppError`, which
-// keeps them in the source chain so callers can identify a failure without the crate
-// having to expose a closed taxonomy.
+// Private conditions converted into the application's `ohno::AppError` boundary.
 
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::PathBuf;
@@ -11,7 +7,7 @@ use std::path::PathBuf;
 #[doc(hidden)]
 #[ohno::error]
 #[display("Failed to read '{}'", path.display())]
-pub struct ReadFileError {
+pub(crate) struct ReadFileError {
     path: PathBuf,
 }
 
@@ -26,7 +22,7 @@ impl RefUnwindSafe for ReadFileError {}
 #[doc(hidden)]
 #[ohno::error]
 #[display("Failed to write '{}'", path.display())]
-pub struct WriteFileError {
+pub(crate) struct WriteFileError {
     path: PathBuf,
 }
 
@@ -41,7 +37,7 @@ impl RefUnwindSafe for WriteFileError {}
 #[doc(hidden)]
 #[ohno::error]
 #[display("Failed to parse '{}'", path.display())]
-pub struct ParseError {
+pub(crate) struct ParseError {
     pub(crate) path: PathBuf,
 }
 
@@ -56,7 +52,7 @@ impl RefUnwindSafe for ParseError {}
 #[doc(hidden)]
 #[ohno::error]
 #[display("Dependency '{dep}' has a non-string version field of type {actual_type}")]
-pub struct UnexpectedVersionTypeError {
+pub(crate) struct UnexpectedVersionTypeError {
     dep: String,
     actual_type: String,
 }
@@ -70,14 +66,16 @@ impl RefUnwindSafe for UnexpectedVersionTypeError {}
 
 impl UnexpectedVersionTypeError {
     /// Name of the dependency whose version field is malformed.
+    #[cfg(test)]
     #[must_use]
-    pub fn dep(&self) -> &str {
+    pub(crate) fn dep(&self) -> &str {
         &self.dep
     }
 
     /// The TOML type found in the dependency's `version` field.
+    #[cfg(test)]
     #[must_use]
-    pub fn actual_type(&self) -> &str {
+    pub(crate) fn actual_type(&self) -> &str {
         &self.actual_type
     }
 }
@@ -86,7 +84,7 @@ impl UnexpectedVersionTypeError {
 #[doc(hidden)]
 #[ohno::error]
 #[display("Dependency '{dep}' has invalid version requirement '{version}'")]
-pub struct InvalidVersionError {
+pub(crate) struct InvalidVersionError {
     dep: String,
     version: String,
 }
@@ -100,14 +98,16 @@ impl RefUnwindSafe for InvalidVersionError {}
 
 impl InvalidVersionError {
     /// Name of the dependency whose version requirement is invalid.
+    #[cfg(test)]
     #[must_use]
-    pub fn dep(&self) -> &str {
+    pub(crate) fn dep(&self) -> &str {
         &self.dep
     }
 
     /// The literal text of the rejected requirement.
+    #[cfg(test)]
     #[must_use]
-    pub fn version(&self) -> &str {
+    pub(crate) fn version(&self) -> &str {
         &self.version
     }
 }

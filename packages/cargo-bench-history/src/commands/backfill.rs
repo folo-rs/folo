@@ -58,7 +58,7 @@ use super::collect::{
 };
 use crate::errors::{
     AddWorktreeFailedError, FirstParentWalkFailedError, RemoveWorktreeFailedError,
-    ResetWorktreeFailedError, ResolveRefFailedError, bench_failure_reason,
+    ResetWorktreeFailedError, ResolveRefFailedError, is_bench_failure, render_bench_failure,
 };
 use crate::model::{Engine, StorageKey, parse_key};
 use crate::{
@@ -134,12 +134,7 @@ enum CommitOutcome {
     /// The engines ran but harvested no benchmark cases, so nothing was stored.
     SkippedEmpty,
     /// The commit failed to build or benchmark (a recoverable, per-commit error).
-    BenchFailed {
-        /// Human-readable failure description.
-        reason: String,
-        /// The original benchmark failure, retained if this failure stops the run.
-        error: AppError,
-    },
+    BenchFailed { error: AppError },
 }
 
 /// The real `backfill`: load configuration, wire the production adapters, and
@@ -223,7 +218,8 @@ where
     teardown.map_err(|error| RemoveWorktreeFailedError::caused_by(worktree, error))?;
 
     let message = report.render(commits.len());
-    if let Some(error) = report.stopped_error.take() {
+    if let Some(stopped_failure) = report.stopped_failure {
+        let error = report.failures.remove(stopped_failure).error;
         Err(BackfillError::caused_by(message, error).into())
     } else {
         Ok(RunOutcome::Completed { message })
@@ -346,11 +342,14 @@ where
             CommitOutcome::Stored { cases } => report.stored.push((commit.clone(), cases)),
             CommitOutcome::SkippedExisting => report.skipped_existing.push(commit.clone()),
             CommitOutcome::SkippedEmpty => report.skipped_empty.push(commit.clone()),
-            CommitOutcome::BenchFailed { reason, error } => {
-                report.failed.push((commit.clone(), reason));
+            CommitOutcome::BenchFailed { error } => {
+                let failure_index = report.failures.len();
+                report.failures.push(FailedCommit {
+                    commit: commit.clone(),
+                    error,
+                });
                 if !options.ignore_errors {
-                    report.stopped = Some(commit.clone());
-                    report.stopped_error = Some(error);
+                    report.stopped_failure = Some(failure_index);
                     break;
                 }
             }
@@ -384,6 +383,13 @@ fn scan_outcome_summary(total: usize, already_recorded: usize, overwrite: bool) 
     )
 }
 
+/// One failed commit and the typed application error that explains it.
+#[derive(Debug)]
+struct FailedCommit {
+    commit: String,
+    error: AppError,
+}
+
 /// The per-commit outcomes a backfill accumulated, rendered into a summary.
 #[derive(Debug, Default)]
 struct BackfillReport {
@@ -393,12 +399,10 @@ struct BackfillReport {
     skipped_existing: Vec<String>,
     /// Commits skipped because they harvested no cases.
     skipped_empty: Vec<String>,
-    /// Commits that failed to build or benchmark, with the reason.
-    failed: Vec<(String, String)>,
-    /// The commit the run stopped at after a failure (without `--ignore-errors`).
-    stopped: Option<String>,
-    /// The original failure at `stopped`, retained for the returned error chain.
-    stopped_error: Option<AppError>,
+    /// Typed per-commit benchmark failures.
+    failures: Vec<FailedCommit>,
+    /// Index in `failures` that stopped processing without `--ignore-errors`.
+    stopped_failure: Option<usize>,
 }
 
 impl BackfillReport {
@@ -411,7 +415,7 @@ impl BackfillReport {
             self.stored.len(),
             self.skipped_existing.len(),
             self.skipped_empty.len(),
-            self.failed.len(),
+            self.failures.len(),
         )];
         for (commit, cases) in &self.stored {
             lines.push(format!(
@@ -426,10 +430,17 @@ impl BackfillReport {
         for commit in &self.skipped_empty {
             lines.push(format!("  skipped {} (no benchmark cases)", short(commit)));
         }
-        for (commit, reason) in &self.failed {
-            lines.push(format!("  failed {} ({reason})", short(commit)));
+        for failure in &self.failures {
+            let reason = render_bench_failure(&failure.error)
+                .expect("BackfillReport stores only classified benchmark failures");
+            lines.push(format!("  failed {} ({reason})", short(&failure.commit)));
         }
-        if let Some(commit) = &self.stopped {
+        if let Some(stopped_failure) = self.stopped_failure {
+            let commit = &self
+                .failures
+                .get(stopped_failure)
+                .expect("stopped_failure indexes a recorded failure")
+                .commit;
             lines.push(format!(
                 "  stopped at {} (pass --ignore-errors to continue past failures)",
                 short(commit)
@@ -481,9 +492,10 @@ fn map_collect_result(result: Result<CollectSummary, AppError>) -> Result<Commit
     if error.find_source::<DuplicateResultError>().is_some() {
         return Ok(CommitOutcome::SkippedExisting);
     }
-    match bench_failure_reason(&error) {
-        Some(reason) => Ok(CommitOutcome::BenchFailed { reason, error }),
-        None => Err(error),
+    if is_bench_failure(&error) {
+        Ok(CommitOutcome::BenchFailed { error })
+    } else {
+        Err(error)
     }
 }
 
@@ -753,9 +765,9 @@ mod tests {
     use futures::executor::block_on;
 
     use super::*;
-    use crate::errors::ParseOutputError;
+    use crate::errors::{EngineFailedError, InvalidCommandError, ParseOutputError};
     use crate::model::{MachineKey, TargetTriple};
-    use crate::{EngineFailedError, StorageError};
+    use cbh_storage::StorageError;
 
     /// A canned per-commit result the fake [`CommitRunner`] returns.
     #[derive(Clone)]
@@ -896,11 +908,14 @@ mod tests {
                 Some(FakeResult::SkippedExisting) => Ok(CommitOutcome::SkippedExisting),
                 Some(FakeResult::SkippedEmpty) => Ok(CommitOutcome::SkippedEmpty),
                 Some(FakeResult::BenchFailed(reason)) => Ok(CommitOutcome::BenchFailed {
-                    reason: reason.clone(),
-                    error: EngineFailedError::new("cargo bench", 1).into(),
+                    error: InvalidCommandError::new("cargo bench", reason).into(),
                 }),
-                Some(FakeResult::Infra(message)) => {
-                    Err(StorageError::io(io::Error::other(message.clone())).into())
+                Some(FakeResult::Infra(_message)) => {
+                    Err(
+                        build_storage(None, &cbh_config::Config::default(), Path::new("."), None)
+                            .unwrap_err()
+                            .into(),
+                    )
                 }
                 None => Ok(CommitOutcome::Stored { cases: 1 }),
             };
@@ -1052,8 +1067,8 @@ mod tests {
         );
         assert!(report.skipped_existing.iter().eq(std::iter::once(&"c1")));
         assert!(report.skipped_empty.iter().eq(std::iter::once(&"f1")));
-        assert!(report.failed.is_empty());
-        assert!(report.stopped.is_none());
+        assert!(report.failures.is_empty());
+        assert!(report.stopped_failure.is_none());
         // Every commit was reset into the worktree, in order.
         assert!(
             git.resets
@@ -1081,13 +1096,10 @@ mod tests {
                 .iter()
                 .eq(std::iter::once(&("c0".to_owned(), 1)))
         );
-        assert!(
-            report
-                .failed
-                .iter()
-                .eq(std::iter::once(&("c1".to_owned(), "boom".to_owned())))
-        );
-        assert_eq!(report.stopped.as_deref(), Some("c1"));
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.failures[0].commit, "c1");
+        assert!(report.render(3).contains("boom"));
+        assert_eq!(report.stopped_failure, Some(0));
         // f1 was never reached.
         assert!(runner.ran.borrow().iter().eq(["c0", "c1"].iter()));
     }
@@ -1108,13 +1120,10 @@ mod tests {
                 .iter()
                 .eq([("c0".to_owned(), 1), ("f1".to_owned(), 1)].iter())
         );
-        assert!(
-            report
-                .failed
-                .iter()
-                .eq(std::iter::once(&("c1".to_owned(), "boom".to_owned())))
-        );
-        assert!(report.stopped.is_none());
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.failures[0].commit, "c1");
+        assert!(report.render(3).contains("boom"));
+        assert!(report.stopped_failure.is_none());
         assert!(runner.ran.borrow().iter().eq(["c0", "c1", "f1"].iter()));
     }
 
@@ -1127,7 +1136,7 @@ mod tests {
         opts.ignore_errors = true;
 
         let error = drive_commits(&opts, &git, &runner, &commits).unwrap_err();
-        assert!(bench_failure_reason(&error).is_none());
+        assert!(!is_bench_failure(&error));
         assert!(error.find_source::<StorageError>().is_some());
         // The loop stopped at the failing commit; f1 was never reached.
         assert!(runner.ran.borrow().iter().eq(["c0", "c1"].iter()));
@@ -1429,9 +1438,11 @@ mod tests {
             stored: vec![("aaaaaaa".to_owned(), 2)],
             skipped_existing: vec!["bbbbbbb".to_owned()],
             skipped_empty: vec!["ccccccc".to_owned()],
-            failed: vec![("ddddddd".to_owned(), "boom".to_owned())],
-            stopped: Some("ddddddd".to_owned()),
-            stopped_error: None,
+            failures: vec![FailedCommit {
+                commit: "ddddddd".to_owned(),
+                error: InvalidCommandError::new("cargo bench", "boom").into(),
+            }],
+            stopped_failure: Some(0),
         };
 
         let rendered = report.render(5);
@@ -1455,7 +1466,11 @@ mod tests {
             rendered.contains("  skipped ccccccc (no benchmark cases)"),
             "{rendered}"
         );
-        assert!(rendered.contains("  failed ddddddd (boom)"), "{rendered}");
+        assert!(
+            rendered
+                .contains("  failed ddddddd (engine \"cargo bench\" has an invalid command: boom)"),
+            "{rendered}"
+        );
         assert!(
             rendered
                 .contains("  stopped at ddddddd (pass --ignore-errors to continue past failures)"),
@@ -1556,7 +1571,7 @@ mod tests {
         .unwrap_err();
 
         assert!(error.find_source::<BackfillError>().is_some());
-        assert!(error.find_source::<EngineFailedError>().is_some());
+        assert!(error.find_source::<InvalidCommandError>().is_some());
         // Teardown still happened despite the failure.
         assert!(git.removed.borrow().iter().eq(std::iter::once(&worktree())));
     }
@@ -1605,13 +1620,14 @@ mod tests {
 
         let failed =
             map_collect_result(Err(EngineFailedError::new("callgrind", 101).into())).unwrap();
-        let CommitOutcome::BenchFailed { reason, error } = failed else {
+        let CommitOutcome::BenchFailed { error } = failed else {
             panic!("expected a bench failure");
         };
-        assert!(reason.contains("101"));
+        assert!(render_bench_failure(&error).unwrap().contains("101"));
         assert!(error.find_source::<EngineFailedError>().is_some());
 
-        let infra = map_collect_result(Err(StorageError::not_found("k").into())).unwrap_err();
+        let storage_error = block_on(MemoryStorage::new().get("k")).unwrap_err();
+        let infra = map_collect_result(Err(storage_error.into())).unwrap_err();
         assert!(infra.find_source::<StorageError>().is_some());
     }
 
@@ -1631,16 +1647,15 @@ mod tests {
         )
         .into()))
         .unwrap();
-        let CommitOutcome::BenchFailed {
-            reason,
-            error: _error,
-        } = outcome
-        else {
+        let CommitOutcome::BenchFailed { error } = outcome else {
             panic!("expected a bench failure");
         };
 
         let mut report = BackfillReport::default();
-        report.failed.push(("c0ffeec0ffee".to_owned(), reason));
+        report.failures.push(FailedCommit {
+            commit: "c0ffeec0ffee".to_owned(),
+            error,
+        });
         let rendered = report.render(1);
 
         assert!(!rendered.contains("Backtrace:"));

@@ -9,12 +9,7 @@
 use std::path::PathBuf;
 use std::{fs, io};
 
-use cargo_detect_package::{
-    CommandExecutionError, CurrentDirectoryOutsideWorkspaceError, OutsidePackageAction,
-    OutsidePackageError, ParseManifestError, RunInput, RunOutcome, TargetPathNotFoundError,
-    TargetPathOutsideWorkspaceError, WorkspaceMismatchError, run,
-};
-use ohno::ErrorExt;
+use cargo_detect_package::{OutsidePackageAction, RunInput, RunOutcome, run};
 use serial_test::serial;
 
 /// Get a cross-platform command that exists on both Windows and Unix.
@@ -367,7 +362,11 @@ fn nonexistent_file_error() {
     std::env::set_current_dir(original_dir).unwrap();
 
     let error = result.unwrap_err();
-    assert!(error.find_source::<TargetPathNotFoundError>().is_some());
+    assert!(
+        error
+            .message()
+            .starts_with("Could not canonicalize target path")
+    );
 }
 
 #[test]
@@ -395,7 +394,11 @@ fn cross_workspace_rejection() {
     std::env::set_current_dir(original_dir).unwrap();
 
     let error = result.unwrap_err();
-    assert!(error.find_source::<WorkspaceMismatchError>().is_some());
+    assert!(
+        error
+            .message()
+            .contains("differs from target path workspace")
+    );
 }
 
 #[test]
@@ -421,8 +424,8 @@ fn outside_workspace_rejection() {
     let error = result.unwrap_err();
     assert!(
         error
-            .find_source::<TargetPathOutsideWorkspaceError>()
-            .is_some()
+            .message()
+            .contains("Target path is not within a Cargo workspace")
     );
 }
 
@@ -449,8 +452,8 @@ fn relative_path_escape_rejection() {
     let error = result.unwrap_err();
     assert!(
         error
-            .find_source::<TargetPathOutsideWorkspaceError>()
-            .is_some()
+            .message()
+            .contains("Target path is not within a Cargo workspace")
     );
 }
 
@@ -575,7 +578,6 @@ fn missing_subcommand_error() {
     std::env::set_current_dir(original_dir).unwrap();
 
     let error = result.unwrap_err();
-    assert!(error.find_source::<CommandExecutionError>().is_some());
     let io_error = error.find_source::<io::Error>().unwrap();
     assert_eq!(io_error.kind(), io::ErrorKind::InvalidInput);
 }
@@ -629,9 +631,8 @@ fn outside_package_action_error() {
     std::env::set_current_dir(original_dir).unwrap();
 
     let error = result.unwrap_err();
-    let outside_package = error.find_source::<OutsidePackageError>().unwrap();
     // This wording is documented in README.md as the tool's user-visible contract.
-    assert_eq!(outside_package.message(), "Path is not in any package");
+    assert!(error.message().starts_with("Path is not in any package"));
 }
 
 #[test]
@@ -691,8 +692,8 @@ fn execution_outside_any_cargo_workspace() {
     let error = result.unwrap_err();
     assert!(
         error
-            .find_source::<CurrentDirectoryOutsideWorkspaceError>()
-            .is_some()
+            .message()
+            .contains("Current directory is not within a Cargo workspace")
     );
 }
 
@@ -766,12 +767,8 @@ fn invalid_toml_package_detection_error() {
     // of the workspace root. The manifest exists and simply cannot be parsed, so the parse
     // failure is what surfaces — the target is not "outside a workspace".
     let error = result.unwrap_err();
-    assert!(
-        error
-            .find_source::<TargetPathOutsideWorkspaceError>()
-            .is_none()
-    );
-    assert!(error.find_source::<ParseManifestError>().is_some());
+    assert!(error.message().contains("Failed to parse"));
+    assert!(!error.message().contains("not within a Cargo workspace"));
 }
 
 #[test]
@@ -796,5 +793,5 @@ fn nonexistent_executable_error() {
     std::env::set_current_dir(original_dir).unwrap();
 
     let error = result.unwrap_err();
-    assert!(error.find_source::<CommandExecutionError>().is_some());
+    assert!(error.find_source::<io::Error>().is_some());
 }

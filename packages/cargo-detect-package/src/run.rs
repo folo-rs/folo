@@ -121,8 +121,8 @@ mod mock_tests {
     use crate::detection::WorkspaceContext;
     use crate::pal::{FilesystemFacade, MockFilesystem};
     use crate::{
-        CurrentDirectoryError, CurrentDirectoryOutsideWorkspaceError, PackageNameMissingError,
-        ParseManifestError, ReadManifestError, TargetPathNotFoundError,
+        CanonicalizeTargetPathError, CurrentDirectoryError, CurrentDirectoryOutsideWorkspaceError,
+        PackageNameMissingError, ParseManifestError, ReadManifestError,
     };
 
     /// Helper to create a mock filesystem for a simple workspace with one package.
@@ -257,7 +257,7 @@ version = "0.1.0"
             validate_workspace_context(Path::new("/workspace/package_a/src/nonexistent.rs"), &fs)
                 .unwrap_err();
 
-        assert!(error.find_source::<TargetPathNotFoundError>().is_some());
+        assert!(error.find_source::<CanonicalizeTargetPathError>().is_some());
     }
 
     #[test]

@@ -11,9 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-use cargo_freeze_deps::{
-    InvalidVersionError, ParseError, ReadFileError, RunInput, WriteFileError, run,
-};
+use cargo_freeze_deps::{RunInput, run};
 use serial_test::serial;
 
 /// RAII helper: restores the process current directory when dropped, even on panic.
@@ -294,11 +292,12 @@ fn missing_file_returns_read_error() {
     })
     .unwrap_err();
 
-    assert!(error.find_source::<ReadFileError>().is_some());
+    assert!(error.message().starts_with("Failed to read"));
     assert!(error.find_source::<io::Error>().is_some());
 }
 
 #[test]
+// Relies on host OS error behavior when writing a file over an existing directory.
 #[cfg_attr(miri, ignore)]
 fn unwritable_output_returns_write_error() {
     let temp_dir = tempfile::tempdir().unwrap();
@@ -316,7 +315,7 @@ serde = "1.2.3"
     })
     .unwrap_err();
 
-    assert!(error.find_source::<WriteFileError>().is_some());
+    assert!(error.message().starts_with("Failed to write"));
     assert!(error.find_source::<io::Error>().is_some());
 }
 
@@ -328,13 +327,13 @@ fn invalid_toml_returns_parse_error() {
 
     let error = run(&RunInput { path, output: None }).unwrap_err();
 
-    assert!(error.find_source::<ParseError>().is_some());
+    assert!(error.message().starts_with("Failed to parse"));
     assert!(error.find_source::<toml_edit::TomlError>().is_some());
 }
 
 #[test]
 #[cfg_attr(miri, ignore)]
-fn invalid_version_returns_typed_error_with_dep_name() {
+fn invalid_version_reports_dependency_and_value() {
     let temp_dir = tempfile::tempdir().unwrap();
     let path = write_cargo_toml(
         temp_dir.path(),
@@ -344,10 +343,11 @@ serde = "not-a-version"
     );
 
     let error = run(&RunInput { path, output: None }).unwrap_err();
-    let invalid = error.find_source::<InvalidVersionError>().unwrap();
-
-    assert_eq!(invalid.dep(), "serde");
-    assert_eq!(invalid.version(), "not-a-version");
+    assert!(
+        error
+            .message()
+            .starts_with("Dependency 'serde' has invalid version requirement 'not-a-version'")
+    );
     assert!(error.find_source::<semver::Error>().is_some());
 }
 

@@ -503,5 +503,5 @@ async fn prune_without_a_repository_errors() {
     let workspace = Workspace::new(&storage_only_config());
 
     let error = workspace.drive(&["prune", "--dirty"]).await.unwrap_err();
-    assert!(error.find_source::<RepositoryRequiredError>().is_some());
+    assert!(error.message().starts_with("could not resolve \"HEAD\""));
 }

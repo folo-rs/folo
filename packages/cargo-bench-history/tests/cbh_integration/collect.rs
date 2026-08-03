@@ -257,9 +257,11 @@ async fn collect_propagates_nonzero_engine_exit() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&["--exit-code", "7"]);
 
     let error = workspace.drive(&["collect"]).await.unwrap_err();
-    let failure = error.find_source::<EngineFailedError>().unwrap();
-    assert_eq!(failure.engine(), "cargo bench");
-    assert_eq!(failure.code(), 7);
+    assert!(
+        error
+            .message()
+            .starts_with("engine \"cargo bench\" failed with exit code 7")
+    );
 
     assert!(
         workspace.stored_objects().is_empty(),
@@ -630,8 +632,8 @@ async fn re_running_the_same_commit_is_refused_as_a_duplicate() {
     workspace.drive(&["collect"]).await.unwrap();
 
     let error = workspace.drive(&["collect"]).await.unwrap_err();
-    let duplicate = error.find_source::<DuplicateResultError>().unwrap();
-    assert!(duplicate.key().ends_with("/clean.json"));
+    assert!(error.message().contains("/clean.json"));
+    assert!(error.message().contains("pass --overwrite"));
 
     // The refused run left the single stored object in place.
     assert_eq!(workspace.stored_objects().len(), 1);

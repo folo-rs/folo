@@ -11,7 +11,7 @@ use crate::detection::WorkspaceContext;
 use crate::manifest::read_manifest;
 use crate::pal::Filesystem;
 use crate::{
-    CurrentDirectoryError, CurrentDirectoryOutsideWorkspaceError, TargetPathNotFoundError,
+    CanonicalizeTargetPathError, CurrentDirectoryError, CurrentDirectoryOutsideWorkspaceError,
     TargetPathOutsideWorkspaceError, WorkspaceMismatchError,
 };
 
@@ -53,7 +53,7 @@ pub(crate) fn validate_workspace_context(
     // absolute locations and only the resolved one says where the lookup actually failed.
     let absolute_target_path = fs
         .canonicalize(&resolved_target_path)
-        .map_err(|error| TargetPathNotFoundError::caused_by(&resolved_target_path, error))?;
+        .map_err(|error| CanonicalizeTargetPathError::caused_by(&resolved_target_path, error))?;
 
     // Find workspace root for the target path, distinguishing a broken manifest from an
     // absent workspace for the same reason as above.
@@ -150,7 +150,7 @@ mod tests {
         // Nonexistent files are now rejected by validate_workspace_context, not detect_package.
         let fs = FilesystemFacade::target();
         let error = validate_workspace_context(Path::new("nonexistent/file.rs"), &fs).unwrap_err();
-        assert!(error.find_source::<TargetPathNotFoundError>().is_some());
+        assert!(error.find_source::<CanonicalizeTargetPathError>().is_some());
     }
 
     /// Creates a minimal temporary Cargo workspace for tests.
