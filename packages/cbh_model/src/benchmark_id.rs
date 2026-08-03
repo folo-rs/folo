@@ -86,7 +86,7 @@ impl BenchmarkIdPrefix {
     pub fn new(value: impl Into<String>) -> Result<Self, EmptyBenchmarkIdPrefix> {
         let value = value.into();
         if value.is_empty() {
-            return Err(EmptyBenchmarkIdPrefix::new());
+            return Err(EmptyBenchmarkIdPrefixValueError::new().into());
         }
         Ok(Self(value))
     }
@@ -134,8 +134,14 @@ impl From<BenchmarkIdPrefix> for String {
 /// comparing error values.
 #[ohno::error]
 #[derive(Clone)]
-#[display("a benchmark-id prefix must not be empty")]
+#[no_constructors]
+#[from(EmptyBenchmarkIdPrefixValueError)]
 pub struct EmptyBenchmarkIdPrefix;
+
+/// An empty value was supplied as a benchmark-id prefix.
+#[ohno::error]
+#[display("a benchmark-id prefix must not be empty")]
+struct EmptyBenchmarkIdPrefixValueError;
 
 // The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
 // which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
@@ -143,6 +149,8 @@ pub struct EmptyBenchmarkIdPrefix;
 // state — so observing them through a shared reference during unwind is harmless.
 impl UnwindSafe for EmptyBenchmarkIdPrefix {}
 impl RefUnwindSafe for EmptyBenchmarkIdPrefix {}
+impl UnwindSafe for EmptyBenchmarkIdPrefixValueError {}
+impl RefUnwindSafe for EmptyBenchmarkIdPrefixValueError {}
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]

@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use cbh_command::{CacheSelection, LocalStorageSelection};
 
+use crate::config::SelectionEnvironmentRequiredError;
 use crate::{Config, ConfigError};
 
 /// The environment variable that supplies the local-storage path for a bare
@@ -103,9 +104,7 @@ pub fn resolve_local_path(
         Some(LocalStorageSelection::Path(path)) => Ok(Some(path.clone())),
         Some(LocalStorageSelection::FromEnv) => match env {
             Some(value) if !value.is_empty() => Ok(Some(PathBuf::from(value))),
-            _ => Err(ConfigError::new(format!(
-                "--local was given without a path and {STORAGE_ENV_VAR} is unset or empty"
-            ))),
+            _ => Err(SelectionEnvironmentRequiredError::new("--local", STORAGE_ENV_VAR).into()),
         },
     }
 }
@@ -147,9 +146,7 @@ pub fn resolve_cache_path(
         Some(CacheSelection::Path(path)) => Ok(Some(path.clone())),
         Some(CacheSelection::FromEnv) => match env {
             Some(value) if !value.is_empty() => Ok(Some(PathBuf::from(value))),
-            _ => Err(ConfigError::new(format!(
-                "--cache was given without a path and {CACHE_ENV_VAR} is unset or empty"
-            ))),
+            _ => Err(SelectionEnvironmentRequiredError::new("--cache", CACHE_ENV_VAR).into()),
         },
     }
 }

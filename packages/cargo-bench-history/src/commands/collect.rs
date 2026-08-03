@@ -1164,8 +1164,8 @@ mod tests {
     use futures::executor::block_on;
 
     use super::*;
-    use crate::model::{BenchmarkIdPrefix, BlessingRecord};
-    use crate::{MissingCaseError, StorageError};
+    use crate::StorageError;
+    use crate::model::{AggregateError, BenchmarkIdPrefix, BlessingRecord};
 
     const SINGLE_FIXTURE: &str =
         include_str!("../../tests/fixtures/callgrind/single_unparametrized.summary.json");
@@ -3416,7 +3416,7 @@ mod tests {
 
         let inconsistent = error.find_source::<InconsistentRunsError>().unwrap();
         assert_eq!(inconsistent.engine(), Engine::AllTheTime.to_string());
-        assert!(error.find_source::<MissingCaseError>().is_some());
+        assert!(error.find_source::<AggregateError>().is_some());
         assert!(storage.keys().is_empty());
     }
 

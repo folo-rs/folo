@@ -1,12 +1,10 @@
 //! Configuration loaded from `.cargo/bench_history.toml`: which project this is
 //! and where its benchmark history is stored.
 
-use std::error::Error;
 use std::io;
 use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use ohno::OhnoCore;
 use serde::Deserialize;
 
 /// The starter configuration written by `install`.
@@ -108,8 +106,7 @@ pub struct AzureStorageConfig {
 /// Returns a [`ConfigError`] if the text is not valid TOML or does not match
 /// the configuration schema.
 pub fn parse_config(text: &str) -> Result<Config, ConfigError> {
-    toml::from_str(text)
-        .map_err(|error| ConfigError::caused_by("failed to parse configuration", error))
+    toml::from_str(text).map_err(|error| ParseConfigError::from(error).into())
 }
 
 /// Loads and parses the configuration file at `path`.
@@ -133,10 +130,7 @@ pub async fn load_config(path: &Path, explicit: bool) -> Result<Config, ConfigEr
             return Ok(Config::default());
         }
         Err(error) => {
-            return Err(ConfigError::caused_by(
-                format!("failed to read configuration at {}", path.display()),
-                error,
-            ));
+            return Err(ReadConfigError::caused_by(path.to_path_buf(), error).into());
         }
     };
     parse_config(&text)
@@ -149,18 +143,30 @@ pub fn default_template() -> &'static str {
 }
 
 /// Loading configuration or resolving a configured option failed.
-///
-/// The message identifies the failed operation. An underlying failure, when
-/// present, is attached as the error source.
-#[derive(ohno::Error)]
-#[display("{message}")]
-// Other crates in the workspace construct this error while wrapping it into their own error
-// types, which the generated `pub(crate)` constructors would not permit.
+#[ohno::error]
 #[no_constructors]
-pub struct ConfigError {
-    message: String,
-    #[error]
-    core: OhnoCore,
+#[from(ReadConfigError, ParseConfigError, SelectionEnvironmentRequiredError)]
+pub struct ConfigError;
+
+/// Reading a configuration file failed.
+#[ohno::error]
+#[display("failed to read configuration at {}", path.display())]
+pub(crate) struct ReadConfigError {
+    path: PathBuf,
+}
+
+/// Configuration text could not be parsed as the expected TOML schema.
+#[ohno::error]
+#[display("failed to parse configuration")]
+#[from(toml::de::Error)]
+pub(crate) struct ParseConfigError;
+
+/// A path-selection option requires a non-empty environment value.
+#[ohno::error]
+#[display("{option} was given without a path and {environment} is unset or empty")]
+pub(crate) struct SelectionEnvironmentRequiredError {
+    option: &'static str,
+    environment: &'static str,
 }
 
 // The OhnoCore field contains Arc<dyn Error + Send + Sync>, which is !UnwindSafe because Arc
@@ -169,33 +175,17 @@ pub struct ConfigError {
 // through a shared reference during unwind is harmless.
 impl UnwindSafe for ConfigError {}
 impl RefUnwindSafe for ConfigError {}
-
-impl ConfigError {
-    /// Creates a configuration error carrying `message`.
-    #[must_use]
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            core: OhnoCore::default(),
-        }
-    }
-
-    /// Creates a configuration error carrying `message`, caused by `error`.
-    #[must_use]
-    pub(crate) fn caused_by(
-        message: impl Into<String>,
-        error: impl Into<Box<dyn Error + Send + Sync>>,
-    ) -> Self {
-        Self {
-            message: message.into(),
-            core: OhnoCore::from(error),
-        }
-    }
-}
+impl UnwindSafe for ReadConfigError {}
+impl RefUnwindSafe for ReadConfigError {}
+impl UnwindSafe for ParseConfigError {}
+impl RefUnwindSafe for ParseConfigError {}
+impl UnwindSafe for SelectionEnvironmentRequiredError {}
+impl RefUnwindSafe for SelectionEnvironmentRequiredError {}
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::error::Error;
     use std::fmt::Debug;
 
     use ohno::ErrorExt;
@@ -369,22 +359,11 @@ key = \"ci-pool-a\"
     }
 
     #[test]
-    fn config_error_without_a_cause_has_no_source() {
-        let error = ConfigError::new("boom");
-        assert!(Error::source(&error).is_none());
-    }
+    fn parse_config_uses_the_private_parse_condition() {
+        let error = parse_config("[").unwrap_err();
 
-    #[test]
-    fn config_error_renders_its_cause_as_a_source() {
-        let error = ConfigError::caused_by("boom", io::Error::other("inner"));
-
-        assert!(error.find_source::<io::Error>().is_some());
-
-        // The cause is carried as a source rather than folded into the message, so the
-        // message stands alone on the first line and the cause follows it.
-        let message = error.message();
-        assert_eq!(message.lines().next(), Some("boom"));
-        assert!(message.contains("inner"));
+        assert!(error.find_source::<ParseConfigError>().is_some());
+        assert!(error.find_source::<toml::de::Error>().is_some());
     }
 
     #[tokio::test]
@@ -419,6 +398,7 @@ key = \"ci-pool-a\"
             "{message}"
         );
         assert!(message.contains("absent.toml"), "{message}");
+        assert!(error.find_source::<ReadConfigError>().is_some());
         assert!(error.find_source::<io::Error>().is_some());
     }
 

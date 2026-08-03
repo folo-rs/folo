@@ -346,8 +346,7 @@ pub use errors::{
     InconsistentRunsError, InvalidCommandError, ParseOutputError,
 };
 pub use model::{
-    AggregateError, BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo,
-    EnvironmentProvider, GitInfo, Metric, MetricKind, MissingCaseError, MissingMetricError, Run,
-    RunContext, SCHEMA_VERSION, ToolchainInfo,
+    BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, EnvironmentProvider, GitInfo,
+    Metric, MetricKind, Run, RunContext, SCHEMA_VERSION, ToolchainInfo,
 };
 pub use outcome::RunOutcome;

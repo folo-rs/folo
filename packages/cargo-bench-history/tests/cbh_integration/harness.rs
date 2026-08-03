@@ -30,9 +30,6 @@ fn public_error_conditions_are_exported_from_the_shell_crate() {
     assert_error::<AnalysisFailedError>();
     assert_error::<NoOutputSelectedError>();
     assert_error::<RepositoryRequiredError>();
-    assert_error::<cargo_bench_history::AggregateError>();
-    assert_error::<cargo_bench_history::MissingCaseError>();
-    assert_error::<cargo_bench_history::MissingMetricError>();
     assert_error::<EngineFailedError>();
     assert_error::<cargo_bench_history::EngineTerminatedError>();
     assert_error::<cargo_bench_history::InvalidCommandError>();

@@ -26,12 +26,16 @@ use nonempty::NonEmpty;
 use serde::Deserialize;
 
 /// An error encountered while parsing an `alloc_tracker` operation file.
-///
-/// The underlying deserialization failure is carried as the error's source.
+#[ohno::error]
+#[no_constructors]
+#[from(AllocTrackerJsonError)]
+pub struct AllocTrackerParseError;
+
+/// The `alloc_tracker` operation document could not be deserialized.
 #[ohno::error]
 #[display("failed to parse alloc_tracker output")]
 #[from(serde_json::Error)]
-pub struct AllocTrackerParseError;
+struct AllocTrackerJsonError;
 
 // The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
 // which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
@@ -39,6 +43,8 @@ pub struct AllocTrackerParseError;
 // state — so observing them through a shared reference during unwind is harmless.
 impl UnwindSafe for AllocTrackerParseError {}
 impl RefUnwindSafe for AllocTrackerParseError {}
+impl UnwindSafe for AllocTrackerJsonError {}
+impl RefUnwindSafe for AllocTrackerJsonError {}
 
 /// Parses one `alloc_tracker` operation file into a [`BenchmarkResult`].
 ///
@@ -53,7 +59,8 @@ impl RefUnwindSafe for AllocTrackerParseError {}
 pub fn parse_alloc_tracker_operation(
     json: &str,
 ) -> Result<Option<BenchmarkResult>, AllocTrackerParseError> {
-    let output: OperationOutput = serde_json::from_str(json)?;
+    let output: OperationOutput =
+        serde_json::from_str(json).map_err(AllocTrackerJsonError::from)?;
     Ok(output_to_record(&output))
 }
 
