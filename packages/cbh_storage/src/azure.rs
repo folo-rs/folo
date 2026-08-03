@@ -795,6 +795,16 @@ mod tests {
         assert!(error.find_source::<azure_core::Error>().is_some());
     }
 
+    #[test]
+    fn decompression_error_converts_to_storage_error() {
+        let error: StorageError =
+            AzureDecompressObjectError::caused_by("object", io::Error::other("invalid gzip"))
+                .into();
+
+        assert!(error.find_source::<AzureDecompressObjectError>().is_some());
+        assert!(error.find_source::<io::Error>().is_some());
+    }
+
     /// A far-future Unix second, well beyond any token refresh margin, for fake
     /// credentials in the pure `from_parts` tests (which never actually acquire a
     /// token, but must construct one that would look fresh).

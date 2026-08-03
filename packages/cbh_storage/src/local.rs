@@ -668,6 +668,21 @@ mod tests {
 
     #[tokio::test]
     #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn put_overwrite_blocked_by_an_existing_file_reports_io_error() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path());
+        storage.put("v1/a", b"file").await.unwrap();
+
+        let error = storage
+            .put_overwrite("v1/a/b.json", b"x")
+            .await
+            .unwrap_err();
+
+        assert!(error.find_source::<CreateObjectDirectoryError>().is_some());
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
     async fn delete_removes_an_object_and_leaves_siblings() {
         let dir = tempdir().unwrap();
         let storage = LocalStorage::new(dir.path());
