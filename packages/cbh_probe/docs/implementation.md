@@ -10,6 +10,8 @@ The crate owns observation of repository, toolchain, and hardware facts and deri
 machine fingerprint from those facts. It delegates command execution to `cbh_git` and returns
 shared facts through `cbh_model`, keeping observation separate from collection policy.
 
-Unexpected process failures remain `io::Error` values at this low-level boundary. Callers that
-know the operation being attempted add semantic context under the workspace
+`SystemProbe` is best-effort: subprocess launch and exit failures become absent repository
+observations or fallback toolchain observations rather than failing the probe. The
+`EnvironmentProbe` trait retains `io::Result` so alternate implementations can report unexpected
+failures for callers to contextualize under the workspace
 [error-handling guide](../../../docs/error-handling.md).

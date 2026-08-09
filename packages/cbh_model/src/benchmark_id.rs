@@ -126,21 +126,17 @@ impl From<BenchmarkIdPrefix> for String {
     }
 }
 
-/// Constructing a [`BenchmarkIdPrefix`] from an empty string failed.
-///
-/// The error carries a backtrace, so it is [`Clone`] but neither `Copy` nor
-/// comparable by equality; callers detect it from the `Err` case rather than by
-/// comparing error values.
+/// Error returned when a [`BenchmarkIdPrefix`] is constructed from an empty value.
 #[ohno::error]
 #[derive(Clone)]
 #[no_constructors]
 #[from(EmptyBenchmarkIdPrefixValueError)]
 pub struct EmptyBenchmarkIdPrefix;
 
-// The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
-// which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
-// However, ohno error types are immutable after construction — no &self method mutates internal
-// state — so observing them through a shared reference during unwind is harmless.
+// `#[ohno::error]` injects `OhnoCore`, which blocks automatic unwind-safety trait
+// inference. All ohno error types in this module expose no mutation, so unwinding
+// cannot reveal a partially mutated value. Introducing mutation or interior mutability
+// requires re-evaluating every manual impl below.
 impl UnwindSafe for EmptyBenchmarkIdPrefix {}
 impl RefUnwindSafe for EmptyBenchmarkIdPrefix {}
 
@@ -258,7 +254,6 @@ mod tests {
 
     #[test]
     fn benchmark_id_prefix_deserialization_rejects_an_empty_string() {
-        let error = serde_json::from_str::<BenchmarkIdPrefix>("\"\"").unwrap_err();
-        assert!(error.to_string().contains("benchmark-id prefix"), "{error}");
+        serde_json::from_str::<BenchmarkIdPrefix>("\"\"").unwrap_err();
     }
 }

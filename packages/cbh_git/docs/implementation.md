@@ -6,10 +6,11 @@ application is defined by the
 [`cargo-bench-history` implementation guide](../../cargo-bench-history/docs/implementation.md)
 and the workspace rules for [implementation documentation](../../../docs/implementation.md).
 
-The crate owns two external-process boundaries: launching benchmark commands and querying
-read-only repository topology. It returns portable process outcomes and repository facts to its
-callers, but does not decide command policy, history selection, or analysis meaning. Parsing of
-captured command output remains pure and separate from process execution.
+The crate owns benchmark execution and shared subprocess capture, including environment handling
+for commands in historical worktrees. `GitHistory` provides the read-only repository-topology
+boundary. The crate returns portable process outcomes and repository facts, while callers retain
+command policy, history selection, worktree lifecycle, and analysis meaning. Parsing of captured
+command output remains pure and separate from process execution.
 
 Production adapters use Tokio processes, while private test support provides deterministic
 repository substitutes for component tests. Unexpected invocation failures remain `io::Error`

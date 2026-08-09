@@ -1,11 +1,9 @@
 //! The error the `analyze`-family commands fail with, [`AnalyzeError`].
 
-use std::error::Error;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use cbh_config::ConfigError;
 use cbh_storage::StorageError;
-use ohno::OhnoCore;
 
 /// An error from an `analyze`-family command (`analyze`, `list`, `prune`,
 /// `examine`, `bless`, `unbless`).
@@ -264,191 +262,74 @@ impl UnwindSafe for BlessDiscriminantsRequiredError {}
 impl RefUnwindSafe for BlessDiscriminantsRequiredError {}
 
 /// Asking git what commit a ref names failed.
-#[derive(ohno::Error)]
-#[no_constructors]
+#[ohno::error]
 #[display("failed to resolve the git ref {reference}")]
 pub(crate) struct ResolveRefFailedError {
     reference: String,
-
-    #[error]
-    core: OhnoCore,
 }
 
 impl UnwindSafe for ResolveRefFailedError {}
 impl RefUnwindSafe for ResolveRefFailedError {}
 
-impl ResolveRefFailedError {
-    /// Records that resolving `reference` failed because of `error`.
-    #[must_use]
-    pub(crate) fn caused_by(
-        reference: impl Into<String>,
-        error: impl Into<Box<dyn Error + Send + Sync>>,
-    ) -> Self {
-        Self {
-            reference: reference.into(),
-            core: OhnoCore::from(error),
-        }
-    }
-}
-
 /// Walking a commit's first-parent ancestry failed.
-#[derive(ohno::Error)]
-#[no_constructors]
+#[ohno::error]
 #[display("failed to walk the first-parent ancestry of {reference}")]
 pub(crate) struct FirstParentWalkFailedError {
     reference: String,
-
-    #[error]
-    core: OhnoCore,
 }
 
 impl UnwindSafe for FirstParentWalkFailedError {}
 impl RefUnwindSafe for FirstParentWalkFailedError {}
 
-impl FirstParentWalkFailedError {
-    /// Records that walking the ancestry of `reference` failed because of `error`.
-    #[must_use]
-    pub(crate) fn caused_by(
-        reference: impl Into<String>,
-        error: impl Into<Box<dyn Error + Send + Sync>>,
-    ) -> Self {
-        Self {
-            reference: reference.into(),
-            core: OhnoCore::from(error),
-        }
-    }
-}
-
 /// Asking git for the merge-base of the target and base commits failed.
-#[derive(ohno::Error)]
-#[no_constructors]
+#[ohno::error]
 #[display("failed to determine the merge-base of {target} and {base}")]
 pub(crate) struct MergeBaseFailedError {
     target: String,
     base: String,
-
-    #[error]
-    core: OhnoCore,
 }
 
 impl UnwindSafe for MergeBaseFailedError {}
 impl RefUnwindSafe for MergeBaseFailedError {}
 
-impl MergeBaseFailedError {
-    /// Records that the merge-base lookup for `target` and `base` failed because of
-    /// `error`.
-    #[must_use]
-    pub(crate) fn caused_by(
-        target: impl Into<String>,
-        base: impl Into<String>,
-        error: impl Into<Box<dyn Error + Send + Sync>>,
-    ) -> Self {
-        Self {
-            target: target.into(),
-            base: base.into(),
-            core: OhnoCore::from(error),
-        }
-    }
-}
-
 /// Asking git for a commit's committer time failed.
-#[derive(ohno::Error)]
-#[no_constructors]
+#[ohno::error]
 #[display("failed to read the committer time of {reference}")]
 pub(crate) struct CommitterTimeFailedError {
     reference: String,
-
-    #[error]
-    core: OhnoCore,
 }
 
 impl UnwindSafe for CommitterTimeFailedError {}
 impl RefUnwindSafe for CommitterTimeFailedError {}
 
-impl CommitterTimeFailedError {
-    /// Records that reading the committer time of `reference` failed because of
-    /// `error`.
-    #[must_use]
-    pub(crate) fn caused_by(
-        reference: impl Into<String>,
-        error: impl Into<Box<dyn Error + Send + Sync>>,
-    ) -> Self {
-        Self {
-            reference: reference.into(),
-            core: OhnoCore::from(error),
-        }
-    }
-}
-
 /// Checking whether the working tree has uncommitted changes failed.
-#[derive(ohno::Error)]
-#[no_constructors]
+#[ohno::error]
 #[display("failed to check whether the working tree is dirty")]
-pub(crate) struct WorkingTreeProbeFailedError {
-    #[error]
-    core: OhnoCore,
-}
+pub(crate) struct WorkingTreeProbeFailedError;
 
 impl UnwindSafe for WorkingTreeProbeFailedError {}
 impl RefUnwindSafe for WorkingTreeProbeFailedError {}
 
-impl WorkingTreeProbeFailedError {
-    /// Records that the working-tree check failed because of `error`.
-    #[must_use]
-    pub(crate) fn caused_by(error: impl Into<Box<dyn Error + Send + Sync>>) -> Self {
-        Self {
-            core: OhnoCore::from(error),
-        }
-    }
-}
-
 /// Detecting the repository's default branch failed.
-#[derive(ohno::Error)]
-#[no_constructors]
+#[ohno::error]
 #[display("failed to detect the repository's default branch")]
-pub(crate) struct DefaultBranchProbeFailedError {
-    #[error]
-    core: OhnoCore,
-}
+pub(crate) struct DefaultBranchProbeFailedError;
 
 impl UnwindSafe for DefaultBranchProbeFailedError {}
 impl RefUnwindSafe for DefaultBranchProbeFailedError {}
 
-impl DefaultBranchProbeFailedError {
-    /// Records that the default-branch lookup failed because of `error`.
-    #[must_use]
-    pub(crate) fn caused_by(error: impl Into<Box<dyn Error + Send + Sync>>) -> Self {
-        Self {
-            core: OhnoCore::from(error),
-        }
-    }
-}
-
 /// Probing the Rust toolchain a run is attributed to failed.
-#[derive(ohno::Error)]
-#[no_constructors]
+#[ohno::error]
 #[display("failed to probe the Rust toolchain")]
-pub(crate) struct ToolchainProbeFailedError {
-    #[error]
-    core: OhnoCore,
-}
+pub(crate) struct ToolchainProbeFailedError;
 
 impl UnwindSafe for ToolchainProbeFailedError {}
 impl RefUnwindSafe for ToolchainProbeFailedError {}
 
-impl ToolchainProbeFailedError {
-    /// Records that the toolchain probe failed because of `error`.
-    #[must_use]
-    pub(crate) fn caused_by(error: impl Into<Box<dyn Error + Send + Sync>>) -> Self {
-        Self {
-            core: OhnoCore::from(error),
-        }
-    }
-}
-
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::error::Error;
     use std::fmt::Debug;
     use std::io;
 

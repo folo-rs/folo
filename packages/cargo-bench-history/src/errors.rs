@@ -265,10 +265,9 @@ impl InconsistentRunsError {
     }
 }
 
-/// A result already exists for this run's identity.
+/// A result already exists at this run's computed storage key.
 ///
-/// The identity consists of the same partition and commit, and the run did not
-/// request an overwrite.
+/// The run did not request an overwrite.
 #[derive(ohno::Error)]
 #[display("a result is already stored for this run at {key}; pass --overwrite to replace it")]
 pub(crate) struct DuplicateResultError {

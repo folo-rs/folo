@@ -404,7 +404,7 @@ async fn resolve_commit<G: GitHistory>(git: &G, reference: &str) -> Result<Strin
     resolved
         .ok_or_else(|| {
             UnresolvedRefError::new(
-                "blessing benchmarks",
+                "resolving a blessing context",
                 reference,
                 "Check that the ref exists or is fetched, and select a repository with --repo if \
                  needed.",
@@ -978,7 +978,27 @@ mod tests {
         let error =
             drive_bless(&storage, &git, &bless_options(&["all_the_time/read_cell"])).unwrap_err();
         let found = error.find_source::<UnresolvedRefError>().unwrap();
-        assert_eq!(found.operation, "blessing benchmarks");
+        assert_eq!(found.operation, "resolving a blessing context");
+        assert_eq!(found.reference, "HEAD");
+    }
+
+    #[test]
+    fn unbless_rejects_an_unresolved_head() {
+        let storage = MemoryStorage::new();
+        // No commits: HEAD does not resolve.
+        let git = FakeGitHistory::new();
+        let error = block_on(unbless_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &UnblessOptions::default(),
+            &auto(),
+            &RecordingReporter::new(),
+        ))
+        .unwrap_err();
+        let found = error.find_source::<UnresolvedRefError>().unwrap();
+        assert_eq!(found.operation, "resolving a blessing context");
         assert_eq!(found.reference, "HEAD");
     }
 

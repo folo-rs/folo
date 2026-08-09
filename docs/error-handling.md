@@ -70,16 +70,23 @@ it spans several modules or grows past a handful, as in `cbh_analyze`,
 
 ### Library boundaries
 
-A library defines one private or `pub(crate)` leaf per distinct failure condition.
-Its stable public API returns an aggregate for each behavioral family that can
-fail. The aggregate is public; its leaves, fields, constructors, and exact
-taxonomy are not.
+When a library owns a semantic operation or behavioral failure family, it defines
+one private or `pub(crate)` leaf per distinct failure condition. Its stable public
+API returns an aggregate for each behavioral family that can fail. The aggregate
+is public; its leaves, fields, constructors, and exact taxonomy are not.
+
+A mechanism-only component may return the appropriate foreign error when it does
+not yet know the attempted semantic operation. The caller that owns that context
+maps the foreign error into a private semantic leaf, then converts the leaf into
+the owning library aggregate or `AppError`.
 
 ```rust
 #[ohno::error]
+#[display("manifest path does not identify a file")]
 pub(crate) struct NotAFileError;
 
 #[ohno::error]
+#[display("failed to parse manifest")]
 pub(crate) struct ManifestParseError;
 
 #[ohno::error]

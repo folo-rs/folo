@@ -12,8 +12,11 @@ dataset-selection capabilities keep the query commands aligned where the applica
 requires common behavior. It delegates I/O-free series construction and detection to `cbh_detect`
 and report presentation to `cbh_render`.
 
-Storage, repository history, environment probes, diagnostics, clocks, and task execution remain
-injected dependencies. This crate coordinates those capabilities but does not own their adapters.
+The public command entry points own production wiring: they resolve and construct the configured
+storage, repository, diagnostics, environment, time, and task-execution capabilities before
+delegating. Their inner `*_with` orchestrators receive generic ports and explicit runtime values,
+which keeps policy deterministic and same-crate tests in memory. The component crates own the
+adapter implementations; `cbh_analyze` selects and coordinates them.
 
 Operations cross the crate boundary through a transparent aggregate. Concrete conditions remain
 private to the responsibility that owns their context, while component failures remain attached

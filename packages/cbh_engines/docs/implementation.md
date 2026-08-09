@@ -13,5 +13,8 @@ external schema and mapping logic. Parsing stays pure; process execution remains
 
 Each parser exposes an operation-level aggregate while concrete document and schema conditions
 remain private to the adapter that understands them. Sources are preserved according to the
-workspace [error-handling guide](../../../docs/error-handling.md). Third-party fixtures and
-producer-consumer round trips protect the adapter boundary against schema drift.
+workspace [error-handling guide](../../../docs/error-handling.md). Live producer-consumer round
+trips detect schema drift for the in-workspace `alloc_tracker` and `all_the_time` engines.
+Committed Criterion and Callgrind fixtures regression-test their recorded external schemas; those
+fixtures must be regenerated or the schemas otherwise validated when the external producers are
+upgraded.

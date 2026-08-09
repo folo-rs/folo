@@ -189,7 +189,8 @@ Callgrind file with its Criterion counterpart.
 The `unwrap()` / `expect()` rules in both test and production code, checked
 arithmetic, `Drop`-time invariant checks with `thread::panicking()` guards,
 the `NonZero<usize>` preference for non-zero numeric parameters, and how `ohno`
-error boundaries use private condition leaves, public library aggregates, and
+error boundaries use private condition leaves and public aggregates for semantic
+library operations, foreign errors for mechanism-only boundaries, and
 application-level `AppError` (supported decision queries, constructor visibility,
 `#[display]` scoping, and which derives survive).
 

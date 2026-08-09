@@ -112,8 +112,9 @@ where
         return Err(UnresolvedRefError::new(
             "resolving history",
             target_ref,
-            "Check that the ref exists or is fetched, and select a repository with --repo or \
-             --context if needed.",
+            "Check that the ref exists in the selected repository, and fetch it if it is absent. \
+             Select a different repository with --repo, or select a different target ref with \
+             --context.",
         )
         .into());
     };

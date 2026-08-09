@@ -43,25 +43,22 @@ pub struct Selection {
     pub chosen_run: usize,
 }
 
-/// A cross-run inconsistency that makes a best-of-N reduction ill-defined.
+/// Reports inconsistent benchmark cases or metrics across runs.
 ///
 /// Every run must measure the same set of cases and the same metrics per case, so
 /// that each metric has exactly one sample per run to minimize over. A missing or
 /// extra case or metric in any run is a hard error rather than something to paper
 /// over, because it means the runs did not exercise the same work.
-///
-/// The error retains and displays the concrete inconsistency without adding
-/// aggregate-level wording. It is [`Clone`] but not comparable by equality.
 #[ohno::error]
 #[derive(Clone)]
 #[no_constructors]
 #[from(MissingCaseError, MissingMetricError)]
 pub struct AggregateError;
 
-// The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
-// which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
-// However, ohno error types are immutable after construction — no &self method mutates internal
-// state — so observing them through a shared reference during unwind is harmless.
+// `#[ohno::error]` injects `OhnoCore`, which blocks automatic unwind-safety trait
+// inference. All ohno error types in this module expose no mutation, so unwinding
+// cannot reveal a partially mutated value. Introducing mutation or interior mutability
+// requires re-evaluating every manual impl below.
 impl UnwindSafe for AggregateError {}
 impl RefUnwindSafe for AggregateError {}
 
@@ -77,10 +74,6 @@ struct MissingCaseError {
     run_index: usize,
 }
 
-// The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
-// which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
-// However, ohno error types are immutable after construction — no &self method mutates internal
-// state — so observing them through a shared reference during unwind is harmless.
 impl UnwindSafe for MissingCaseError {}
 impl RefUnwindSafe for MissingCaseError {}
 
@@ -501,9 +494,9 @@ mod tests {
 
         let error = AggregateError::from(missing_case);
 
-        // The wrapper adds no wording of its own, so a caller that only prints the
-        // error still sees the specific inconsistency. Matching on the prefix
-        // tolerates the optional trailing backtrace block.
+        // The expected text is taken from the source rather than written out, so this
+        // asserts pass-through rather than any particular wording. Matching on the
+        // prefix tolerates the optional trailing backtrace block.
         assert!(error.to_string().starts_with(&expected));
     }
 }

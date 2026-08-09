@@ -1979,8 +1979,13 @@ mod tests {
     fn parse_metric_rejects_an_unknown_name() {
         let error = parse_metric("bogus").unwrap_err();
         let found = error.find_source::<UnknownMetricError>().unwrap();
+        let expected = MetricKind::ALL
+            .iter()
+            .map(|kind| kind.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
         assert_eq!(found.name, "bogus");
-        assert!(!found.valid.is_empty());
+        assert_eq!(found.valid, expected);
     }
 
     #[test]

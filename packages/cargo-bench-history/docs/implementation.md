@@ -6,9 +6,11 @@ application's package boundaries.
 
 ## Ownership map
 
-The application crate is the composition shell. It owns typed-command dispatch, application-level
-orchestration, concrete adapter wiring, output destinations, and the process entry point. The
-private-use crates own the capabilities composed directly or indirectly by that shell:
+The application crate is the composition shell. It owns typed-command dispatch, passes command
+options and test overrides into the owning command entry points, handles final output destinations,
+and owns the process entry point. It selects and wires concrete adapters for command families it
+drives directly; the analysis command family delegates that responsibility to `cbh_analyze`. The
+private-use crates own the capabilities composed into the application:
 
 * [`cbh_cli`](../../cbh_cli/docs/implementation.md) owns argument parsing, help rendering, and
   early exits before command execution.
@@ -35,7 +37,8 @@ private-use crates own the capabilities composed directly or indirectly by that 
   detection, and finding production.
 * [`cbh_render`](../../cbh_render/docs/implementation.md) owns report presentation and formatting.
 * [`cbh_analyze`](../../cbh_analyze/docs/implementation.md) owns query and mutation orchestration,
-  including data loading and selection around detection and rendering.
+  including data loading and selection around detection and rendering. Its public command entry
+  points select the production capabilities before delegating to generic inner orchestrators.
 
 These boundaries are directional: component crates do not depend on the shell, and behavioral
 policy remains with the application even when a component implements it. More detailed analysis
@@ -44,9 +47,13 @@ data flow is documented in the [analysis implementation guide](analyze.md).
 ## Implementation tenets
 
 Pure transformation and decision logic remains synchronous in component crates. External work is
-kept behind narrow asynchronous ports, with production adapters selected by the shell and
-deterministic substitutes used by component tests. This keeps orchestration independent of a
-particular process, filesystem, storage service, clock, or task executor.
+kept behind narrow asynchronous ports. The real entry point that owns each command family selects
+its production adapters: the shell does so for families it drives directly, while the public
+`cbh_analyze` entry points construct the analysis diagnostics, storage, repository, environment,
+runtime clock, and Tokio task-execution capabilities. The inner `*_with` orchestrators receive
+generic ports and resolved values, with deterministic substitutes used by component tests. This
+keeps orchestration independent of a particular process, filesystem, storage service, clock, or
+task executor.
 
 Error boundaries match the context each component owns. Semantic operations expose package
 aggregates where callers need a component-level boundary. Lower-level components instead return
@@ -58,8 +65,9 @@ failure reaches the shell.
 Shell-owned conditions and contextualized component failures enter `ohno::AppError`. Concrete
 conditions remain private to the layer that owns their context, and lower-level causes remain
 attached rather than being flattened. The shared conventions are defined by the workspace
-[error-handling guide](../../../docs/error-handling.md). Hidden test-support constructors exposed
-by the shell use the same application boundary as command execution.
+[error-handling guide](../../../docs/error-handling.md). The shell exposes no test-support
+constructors: fixtures that need a concrete backend build it through the owning component's
+public constructor and inject it as an override.
 
 Integration-only benchmark engines and stress tools remain outside the production dependency
 boundary. They drive the same public shell or persisted format without adding test-only behavior

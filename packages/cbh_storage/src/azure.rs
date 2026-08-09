@@ -226,6 +226,9 @@ impl AzureBlobStorage {
         let client = self.container_client()?;
         match client.create(None).await {
             Ok(_) => Ok(()),
+            // Only this exact service code proves that the intended container already exists.
+            // Treating every conflict as success would hide lease and service-condition failures
+            // that must remain operation errors with their Azure SDK sources intact.
             Err(error)
                 if has_storage_error_code(&error, &StorageErrorCode::ContainerAlreadyExists) =>
             {
@@ -667,6 +670,11 @@ struct AzureSdkDiagnosticError(azure_core::Error);
 
 impl fmt::Display for AzureSdkDiagnosticError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The SDK retry layer can replace the outer Display message with an opaque retry
+        // message that hides the underlying credential, transport, or service failure. Debug
+        // deliberately retains the complete diagnostic, while Error::source below keeps the
+        // typed source chain traversable. Revisit this substitution if the SDK makes its outer
+        // Display complete or stops providing the full failure through Debug.
         fmt::Debug::fmt(&self.0, f)
     }
 }
@@ -701,6 +709,12 @@ fn classify(error: &azure_core::Error) -> Fault {
 
 /// Maps an upload failure using the request mode that produced it.
 fn map_upload_error(error: azure_core::Error, key: &str, mode: UploadMode) -> StorageError {
+    // Only conditional-create mode paired with the exact BlobAlreadyExists code proves ordinary
+    // key occupancy. That decision authorizes put_overwrite to perform an unconditional overwrite
+    // and arm cache invalidation. Every other conflict or precondition failure — including leases,
+    // missing containers, service conditions, and failures in overwrite or marker modes — must
+    // remain an operation error carrying its SDK source. Broadening either side of this guard
+    // would convert operational failures into normal collisions.
     if mode.is_conditional_create()
         && has_storage_error_code(&error, &StorageErrorCode::BlobAlreadyExists)
     {

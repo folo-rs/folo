@@ -498,9 +498,10 @@ around. Because it changes only which reconstructed series are detected on (not 
 are selected), the ghost filter is analyze-only and outside the selection lockstep (§8.5).
 
 Output toggles select which renderings one analysis pass emits — text to stdout by default,
-with file toggles that compose so a single pass can emit text, Markdown, and JSON at once;
-requesting no output at all is an error. Beyond those three canonical renderings, `analyze`
-offers one **derived** output — a condensed Markdown *summary* — for a downstream consumer
+with file output flags that compose so a single pass can also write Markdown and JSON to
+their requested paths; requesting no output at all is an error. Beyond those three canonical
+renderings, `analyze` offers one **derived** output — a condensed Markdown *summary* — for a
+downstream consumer
 whose body has a hard size limit (the workflow posts it as a rolling GitHub issue, capped at
 65,536 characters). The summary keeps only the most significant findings and drops the
 per-facet grouping, so it is intentionally lossy; it is analyze-only because truncating a
@@ -1048,10 +1049,11 @@ never changes finding selection or the exit code.
 
 ## 9. Diagnostics
 
-The shell writes successful reports and machine-readable
-data to stdout, while progress, effective-selection and effective-partition summaries, verbose
-reasoning, timings, and failures go to stderr. Benchmark child processes inherit the parent
-process's standard streams and may write directly to either one.
+The shell writes successful human-readable text reports to stdout. Requested Markdown and JSON
+reports are written to the paths supplied by their output flags. Progress, effective-selection
+and effective-partition summaries, verbose reasoning, timings, and failures go to stderr.
+Benchmark child processes inherit the parent process's standard streams and may write directly
+to either one.
 
 Failures identify the attempted operation, retain relevant underlying causes, render their causal
 diagnostics once without redundant category prefixes on stderr, and return a failure status.

@@ -2079,6 +2079,7 @@ mod tests {
         .unwrap_err();
         let found = error.find_source::<InvalidResultSetError>().unwrap();
         assert_eq!(found.key, clean_key("c0"));
+        assert!(error.find_source::<serde_json::Error>().is_some());
     }
 
     #[test]
@@ -2103,6 +2104,7 @@ mod tests {
         let found = error.find_source::<InvalidStoredUtf8Error>().unwrap();
         assert_eq!(found.object_kind, "stored object");
         assert_eq!(found.key, clean_key("c0"));
+        assert!(error.find_source::<std::str::Utf8Error>().is_some());
     }
 
     #[test]

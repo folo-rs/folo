@@ -3,6 +3,12 @@ use std::path::PathBuf;
 
 use ohno::OhnoCore;
 
+// Unwind-safety rationale for every manual implementation in this module: the `OhnoCore` that
+// ohno injects or requires blocks automatic inference through its trait-object source. These error
+// types expose no mutation or interior mutability, so unwinding cannot expose inconsistent state.
+// Adding mutation or interior mutability to either type requires re-evaluating its manual
+// implementations.
+
 /// An error from a storage operation.
 ///
 /// Callers can distinguish only the conditions that drive storage control flow:
@@ -19,10 +25,6 @@ pub struct StorageError {
     core: OhnoCore,
 }
 
-// The OhnoCore field holds an Arc<dyn Error + Send + Sync>, which is !UnwindSafe because Arc
-// requires T: RefUnwindSafe and trait objects are !RefUnwindSafe. However, ohno error types are
-// immutable after construction — no &self method mutates internal state — so observing them
-// through a shared reference during unwind is harmless.
 impl UnwindSafe for StorageError {}
 impl RefUnwindSafe for StorageError {}
 
