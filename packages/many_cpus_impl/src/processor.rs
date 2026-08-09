@@ -139,11 +139,12 @@ impl Processor {
         self.inner.relative_speed()
     }
 
-    /// The model name of the processor.
+    /// An opaque, human-oriented identifier for the processor model.
     ///
-    /// This is intended for *identification* and diagnostics, not comparison. The value is only
-    /// meaningful within a single system and is **not** comparable across systems or operating
-    /// systems.
+    /// This is intended for identification and diagnostics. The contents are arbitrary: the value
+    /// carries no guaranteed format, structure or meaning, so treat it as an opaque label rather
+    /// than parsing it. A placeholder is reported when the operating system discloses nothing
+    /// about the model.
     ///
     /// The exact string may change between versions of `many_cpus`; the same processor can report a
     /// different model after an upgrade, and such a change is not considered a breaking change.
