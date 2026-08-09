@@ -66,6 +66,7 @@ mod fake {
     #[derive(Debug, Default)]
     pub(crate) struct MemoryConfigWriter {
         files: Mutex<HashMap<PathBuf, String>>,
+        failure: Option<io::ErrorKind>,
     }
 
     impl MemoryConfigWriter {
@@ -81,6 +82,14 @@ mod fake {
             writer
         }
 
+        /// A writer that fails every write with an injected I/O error.
+        pub(crate) fn failing() -> Self {
+            Self {
+                files: Mutex::default(),
+                failure: Some(io::ErrorKind::Other),
+            }
+        }
+
         /// The contents recorded for `path`, if any.
         pub(crate) fn written(&self, path: &Path) -> Option<String> {
             self.files.lock().unwrap().get(path).cloned()
@@ -89,6 +98,9 @@ mod fake {
 
     impl ConfigWriter for MemoryConfigWriter {
         async fn write_new(&self, path: &Path, contents: &str) -> io::Result<bool> {
+            if let Some(kind) = self.failure {
+                return Err(io::Error::from(kind));
+            }
             let mut files = self.files.lock().unwrap();
             if files.contains_key(path) {
                 return Ok(false);

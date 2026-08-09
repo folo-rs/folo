@@ -34,7 +34,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cbh_diag::{Reporter, ReporterExt, count_noun};
 
-use super::{Storage, StorageError, cache_epoch_key, project_objects_prefix};
+use crate::{Storage, StorageError, cache_epoch_key, project_objects_prefix};
 
 /// The epoch a project that has never recorded a mutation reports.
 ///
@@ -119,7 +119,7 @@ where
         // genesis epoch so an untouched project reuses its mirror run after run.
         let cloud_epoch = match self.inner.get(&marker_key).await {
             Ok(bytes) => bytes,
-            Err(StorageError::NotFound { .. }) => GENESIS_EPOCH.to_vec(),
+            Err(error) if error.is_not_found() => GENESIS_EPOCH.to_vec(),
             Err(other) => return Err(other),
         };
         // The mirror records the epoch it last synced under the *same* key the cloud
@@ -127,7 +127,7 @@ where
         // marker object rather than a separate bookkeeping slot.
         let recorded_epoch = match self.cache.get(&marker_key).await {
             Ok(bytes) => Some(bytes),
-            Err(StorageError::NotFound { .. }) => None,
+            Err(error) if error.is_not_found() => None,
             Err(other) => return Err(other),
         };
 
@@ -216,7 +216,7 @@ where
                 self.hits.fetch_add(1, Ordering::Relaxed);
                 Ok(bytes)
             }
-            Err(StorageError::NotFound { .. }) => {
+            Err(error) if error.is_not_found() => {
                 let bytes = self.inner.get(key).await?;
                 // Mirror the object so a later run (or a re-fetch this run) is served
                 // locally. `put_overwrite` keeps the populate idempotent even if the
@@ -246,9 +246,10 @@ where
 mod tests {
     use cbh_diag::RecordingReporter;
     use futures::executor::block_on;
+    use ohno::ErrorExt as _;
 
     use super::*;
-    use crate::MemoryStorage;
+    use crate::{MemoryStorage, ObjectNotFoundError, TestStorageError};
 
     /// Builds a decorator over two in-memory fakes (cloud + mirror) so the
     /// read-through logic is exercised reactor-free and under Miri.
@@ -413,9 +414,7 @@ mod tests {
         }
 
         async fn get(&self, _key: &str) -> Result<Vec<u8>, StorageError> {
-            Err(StorageError::Io(std::io::Error::other(
-                "backend unavailable",
-            )))
+            Err(TestStorageError::new().into())
         }
 
         async fn list(&self, _prefix: &str) -> Result<Vec<String>, StorageError> {
@@ -474,7 +473,8 @@ mod tests {
 
         block_on(storage.delete("v1/p/objects/criterion/a.json")).unwrap();
         let error = block_on(storage.inner().get("v1/p/objects/criterion/a.json")).unwrap_err();
-        assert!(matches!(error, StorageError::NotFound { .. }), "{error:?}");
+        assert!(error.is_not_found());
+        assert!(error.find_source::<ObjectNotFoundError>().is_some());
     }
 
     #[test]
@@ -483,7 +483,7 @@ mod tests {
         // not a miss, so get must surface it instead of falling through to the cloud.
         let storage = CachingStorage::new(MemoryStorage::new(), GetFailsStorage);
         let error = block_on(storage.get("v1/p/objects/criterion/a.json")).unwrap_err();
-        assert!(matches!(error, StorageError::Io(_)), "{error:?}");
+        assert!(error.find_source::<TestStorageError>().is_some());
     }
 
     #[test]
@@ -493,7 +493,7 @@ mod tests {
         let storage = CachingStorage::new(GetFailsStorage, MemoryStorage::new());
         let reporter = RecordingReporter::new();
         let error = block_on(storage.synchronize("p", &reporter)).unwrap_err();
-        assert!(matches!(error, StorageError::Io(_)), "{error:?}");
+        assert!(error.find_source::<TestStorageError>().is_some());
     }
 
     #[test]
@@ -504,6 +504,6 @@ mod tests {
         let storage = CachingStorage::new(MemoryStorage::new(), GetFailsStorage);
         let reporter = RecordingReporter::new();
         let error = block_on(storage.synchronize("p", &reporter)).unwrap_err();
-        assert!(matches!(error, StorageError::Io(_)), "{error:?}");
+        assert!(error.find_source::<TestStorageError>().is_some());
     }
 }

@@ -53,7 +53,11 @@ use super::{
     AutoFacets, Selection, facet_filtered_candidates, resolve_auto_facets, resolve_facets,
     resolve_now,
 };
-use crate::AnalyzeError;
+use crate::{
+    AnalyzeError, BlessBaseRequiredError, BlessDiscriminantsRequiredError,
+    BlessSelectionRequiredError, FirstParentWalkFailedError, ResolveRefFailedError,
+    UnresolvedRefError, WorkingTreeProbeFailedError,
+};
 
 /// The real `bless`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
@@ -180,11 +184,7 @@ where
         // whole commit.
         Vec::new()
     } else if options.prefixes.is_empty() {
-        return Err(AnalyzeError::Bless {
-            message: "at least one benchmark-id prefix is required (or pass --all); for example \
-                      `bless all_the_time/read_cell`"
-                .to_owned(),
-        });
+        return Err(BlessSelectionRequiredError::new().into());
     } else {
         options.prefixes.clone()
     };
@@ -200,9 +200,7 @@ where
     // commit joins the base's first-parent history.
     let base = resolve_base(git, config, options.base.as_deref())
         .await?
-        .ok_or_else(|| AnalyzeError::Bless {
-            message: "could not determine the base branch; specify it with --base".to_owned(),
-        })?;
+        .ok_or_else(BlessBaseRequiredError::new)?;
 
     let selection = Selection::from_bless(options);
     let facets = resolve_facets(&selection, Some(auto))?;
@@ -239,7 +237,7 @@ where
     let on_base = git
         .first_parent(&base.commit)
         .await
-        .map_err(AnalyzeError::Io)?
+        .map_err(|error| FirstParentWalkFailedError::caused_by(&base.commit, error))?
         .iter()
         .any(|commit| commit.commit_id == head);
     if !on_base {
@@ -256,8 +254,11 @@ where
     // blessed — the local edits are simply irrelevant. Warn rather than refuse, so
     // an accidental uncommitted edit does not block blessing an already-recorded
     // clean run. The warning is only relevant when blessing the checked-out commit.
-    let working_tree_dirty =
-        options.context.is_none() && git.is_dirty().await.map_err(AnalyzeError::Io)?;
+    let working_tree_dirty = options.context.is_none()
+        && git
+            .is_dirty()
+            .await
+            .map_err(WorkingTreeProbeFailedError::caused_by)?;
 
     let issued_unix = now.as_second();
     let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
@@ -279,13 +280,7 @@ where
         ));
         let sets = synthesize_target_sets(&facets);
         if sets.is_empty() {
-            return Err(AnalyzeError::Bless {
-                message: format!(
-                    "no stored result at the context commit {short} and the target-triple or \
-                     machine-key facet is unconstrained, so no discriminant set can be targeted; \
-                     pass --target-triple and --machine-key (or record a run at the commit first)"
-                ),
-            });
+            return Err(BlessDiscriminantsRequiredError::new(short).into());
         }
         sets.into_iter()
             .map(|set| {
@@ -307,10 +302,7 @@ where
         let json = record
             .to_json()
             .expect("a freshly built blessing always serializes to JSON");
-        storage
-            .put_overwrite(bless_key, json.as_bytes())
-            .await
-            .map_err(AnalyzeError::Storage)?;
+        storage.put_overwrite(bless_key, json.as_bytes()).await?;
         reporter.note_with(|| format!("blessed set {set} at {bless_key}"));
         sets = sets.saturating_add(1);
     }
@@ -387,7 +379,7 @@ where
 
     let mut removed = 0_usize;
     for key in &blessings_at_head {
-        storage.delete(key).await.map_err(AnalyzeError::Storage)?;
+        storage.delete(key).await?;
         reporter.note_with(|| format!("removed blessing {key}"));
         removed = removed.saturating_add(1);
     }
@@ -403,19 +395,22 @@ where
     Ok(message)
 }
 
-/// Resolves a context ref (for example `HEAD` or a commit ID) to a full commit
-/// commit ID, mapping an unresolvable ref (not a repository, or an unknown ref) to a
-/// clear blessing error.
+/// Resolves a context ref (for example `HEAD` or a commit ID) to a full commit ID.
 async fn resolve_commit<G: GitHistory>(git: &G, reference: &str) -> Result<String, AnalyzeError> {
-    git.resolve(reference)
+    let resolved = git
+        .resolve(reference)
         .await
-        .map_err(AnalyzeError::Io)?
-        .ok_or_else(|| AnalyzeError::Bless {
-            message: format!(
-                "could not resolve {reference}; run this inside a git repository (or pass --repo) \
-                 and check the ref exists"
-            ),
+        .map_err(|error| ResolveRefFailedError::caused_by(reference, error))?;
+    resolved
+        .ok_or_else(|| {
+            UnresolvedRefError::new(
+                "resolving a blessing context",
+                reference,
+                "Check that the ref exists or is fetched, and select a repository with --repo if \
+                 needed.",
+            )
         })
+        .map_err(Into::into)
 }
 
 /// The first twelve characters of a commit ID (all of it when shorter), for messages.
@@ -491,6 +486,7 @@ mod tests {
     use cbh_storage::MemoryStorage;
     use futures::executor::block_on;
     use nonempty::nonempty;
+    use ohno::ErrorExt as _;
 
     use super::*;
 
@@ -621,8 +617,7 @@ mod tests {
         let storage = MemoryStorage::new();
         block_on(storage.put(&clean_key("c2"), clean_run_json("c2", 1000).as_bytes())).unwrap();
         let error = drive_bless(&storage, &master_git(), &bless_options(&[])).unwrap_err();
-        assert!(matches!(error, AnalyzeError::Bless { .. }), "{error:?}");
-        assert!(error.to_string().contains("prefix"), "{error}");
+        assert!(error.find_source::<BlessSelectionRequiredError>().is_some());
     }
 
     #[test]
@@ -907,14 +902,12 @@ mod tests {
         };
 
         let error = drive_bless(&storage, &master_git(), &options).unwrap_err();
-        match error {
-            AnalyzeError::Bless { message } => {
-                assert!(message.contains("no stored result"), "{message}");
-                assert!(message.contains("machine-key"), "{message}");
-            }
-            other => panic!("expected a bless error, got {other:?}"),
-        }
-        assert!(stored_blessings(&storage).is_empty(), "nothing written");
+        assert!(
+            error
+                .find_source::<BlessDiscriminantsRequiredError>()
+                .is_some()
+        );
+        assert!(stored_blessings(&storage).is_empty());
     }
 
     #[test]
@@ -978,18 +971,71 @@ mod tests {
     }
 
     #[test]
-    fn bless_without_a_repository_is_an_error() {
+    fn bless_rejects_an_unresolved_head() {
         let storage = MemoryStorage::new();
         // No commits: HEAD does not resolve.
         let git = FakeGitHistory::new();
         let error =
             drive_bless(&storage, &git, &bless_options(&["all_the_time/read_cell"])).unwrap_err();
-        match error {
-            AnalyzeError::Bless { message } => {
-                assert!(message.contains("could not resolve HEAD"), "{message}");
-            }
-            other => panic!("expected a bless error, got {other:?}"),
-        }
+        let found = error.find_source::<UnresolvedRefError>().unwrap();
+        assert_eq!(found.operation, "resolving a blessing context");
+        assert_eq!(found.reference, "HEAD");
+    }
+
+    #[test]
+    fn unbless_rejects_an_unresolved_head() {
+        let storage = MemoryStorage::new();
+        // No commits: HEAD does not resolve.
+        let git = FakeGitHistory::new();
+        let error = block_on(unbless_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &UnblessOptions::default(),
+            &auto(),
+            &RecordingReporter::new(),
+        ))
+        .unwrap_err();
+        let found = error.find_source::<UnresolvedRefError>().unwrap();
+        assert_eq!(found.operation, "resolving a blessing context");
+        assert_eq!(found.reference, "HEAD");
+    }
+
+    #[test]
+    fn bless_names_a_failed_ref_resolution() {
+        // Resolving the context, walking the base's ancestry, and probing the working
+        // tree are all on the bless path, so each must name itself rather than a
+        // neighbour.
+        let storage = MemoryStorage::new();
+        let mut git = master_git();
+        git.fail_resolve();
+
+        let error =
+            drive_bless(&storage, &git, &bless_options(&["all_the_time/read_cell"])).unwrap_err();
+        assert!(error.find_source::<ResolveRefFailedError>().is_some());
+    }
+
+    #[test]
+    fn bless_names_a_failed_ancestry_walk() {
+        let storage = MemoryStorage::new();
+        let mut git = master_git();
+        git.fail_first_parent();
+
+        let error =
+            drive_bless(&storage, &git, &bless_options(&["all_the_time/read_cell"])).unwrap_err();
+        assert!(error.find_source::<FirstParentWalkFailedError>().is_some());
+    }
+
+    #[test]
+    fn bless_names_a_failed_working_tree_probe() {
+        let storage = MemoryStorage::new();
+        let mut git = master_git();
+        git.fail_is_dirty();
+
+        let error =
+            drive_bless(&storage, &git, &bless_options(&["all_the_time/read_cell"])).unwrap_err();
+        assert!(error.find_source::<WorkingTreeProbeFailedError>().is_some());
     }
 
     #[test]
@@ -1006,16 +1052,7 @@ mod tests {
             .head("master"); // No `.mark_default(...)`.
         let error =
             drive_bless(&storage, &git, &bless_options(&["all_the_time/read_cell"])).unwrap_err();
-        match error {
-            AnalyzeError::Bless { message } => {
-                assert!(
-                    message.contains("could not determine the base branch"),
-                    "{message}"
-                );
-                assert!(message.contains("--base"), "{message}");
-            }
-            other => panic!("expected a bless error, got {other:?}"),
-        }
+        assert!(error.find_source::<BlessBaseRequiredError>().is_some());
     }
 
     #[test]

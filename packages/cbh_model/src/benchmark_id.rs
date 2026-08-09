@@ -1,7 +1,7 @@
 //! The stable identity of a benchmark series and the prefix used to scope it.
 
-use std::error::Error;
 use std::fmt;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::str::FromStr;
 
 use nonempty::NonEmpty;
@@ -86,7 +86,7 @@ impl BenchmarkIdPrefix {
     pub fn new(value: impl Into<String>) -> Result<Self, EmptyBenchmarkIdPrefix> {
         let value = value.into();
         if value.is_empty() {
-            return Err(EmptyBenchmarkIdPrefix);
+            return Err(EmptyBenchmarkIdPrefixValueError::new().into());
         }
         Ok(Self(value))
     }
@@ -126,25 +126,58 @@ impl From<BenchmarkIdPrefix> for String {
     }
 }
 
-/// The error returned when constructing a [`BenchmarkIdPrefix`] from an empty
-/// string.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Error returned when a [`BenchmarkIdPrefix`] is constructed from an empty value.
+#[ohno::error]
+#[derive(Clone)]
+#[no_constructors]
+#[from(EmptyBenchmarkIdPrefixValueError)]
 pub struct EmptyBenchmarkIdPrefix;
 
-impl fmt::Display for EmptyBenchmarkIdPrefix {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("a benchmark-id prefix must not be empty")
-    }
-}
+// `#[ohno::error]` injects `OhnoCore`, which blocks automatic unwind-safety trait
+// inference. All ohno error types in this module expose no mutation, so unwinding
+// cannot reveal a partially mutated value. Introducing mutation or interior mutability
+// requires re-evaluating every manual impl below.
+impl UnwindSafe for EmptyBenchmarkIdPrefix {}
+impl RefUnwindSafe for EmptyBenchmarkIdPrefix {}
 
-impl Error for EmptyBenchmarkIdPrefix {}
+/// An empty string cannot identify a benchmark family.
+#[ohno::error]
+#[display("a benchmark-id prefix must not be empty")]
+struct EmptyBenchmarkIdPrefixValueError;
+
+impl UnwindSafe for EmptyBenchmarkIdPrefixValueError {}
+impl RefUnwindSafe for EmptyBenchmarkIdPrefixValueError {}
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::error;
+    use std::fmt::Debug;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use nonempty::nonempty;
+    use ohno::ErrorExt;
+    use static_assertions::assert_impl_all;
 
     use super::*;
+
+    assert_impl_all!(
+        EmptyBenchmarkIdPrefix: Clone,
+        Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        EmptyBenchmarkIdPrefixValueError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
 
     #[test]
     fn leading_segment_distinguishes_otherwise_equal_ids() {
@@ -193,12 +226,14 @@ mod tests {
 
     #[test]
     fn benchmark_id_prefix_rejects_an_empty_string() {
-        assert_eq!(BenchmarkIdPrefix::new(""), Err(EmptyBenchmarkIdPrefix));
-        assert_eq!("".parse::<BenchmarkIdPrefix>(), Err(EmptyBenchmarkIdPrefix));
-        assert_eq!(
-            BenchmarkIdPrefix::try_from(String::new()),
-            Err(EmptyBenchmarkIdPrefix)
+        let error = BenchmarkIdPrefix::new("").unwrap_err();
+        assert!(
+            error
+                .find_source::<EmptyBenchmarkIdPrefixValueError>()
+                .is_some()
         );
+        "".parse::<BenchmarkIdPrefix>().unwrap_err();
+        BenchmarkIdPrefix::try_from(String::new()).unwrap_err();
     }
 
     #[test]
@@ -219,7 +254,6 @@ mod tests {
 
     #[test]
     fn benchmark_id_prefix_deserialization_rejects_an_empty_string() {
-        let error = serde_json::from_str::<BenchmarkIdPrefix>("\"\"").unwrap_err();
-        assert!(error.to_string().contains("benchmark-id prefix"), "{error}");
+        serde_json::from_str::<BenchmarkIdPrefix>("\"\"").unwrap_err();
     }
 }

@@ -25,7 +25,7 @@ use super::load::{
 };
 use super::selection::Selection;
 use super::window::{auto_mode, before_since_cutoff, resolve_since, since_cutoff_reason};
-use crate::AnalyzeError;
+use crate::{AnalyzeError, InvalidBlessingError, InvalidStoredUtf8Error};
 
 /// The data an analysis (or listing) draws on, plus the bookkeeping needed to
 /// explain an empty outcome and warn about ephemeral data.
@@ -392,9 +392,9 @@ where
     });
 
     // Load the blessing sidecars on in-window commits into a per-set map. A
-    // blessing on a commit outside the analyzed history (or that fails to parse) is
-    // irrelevant and skipped. Branch mode ignores blessings entirely, so
-    // only history mode pays the load.
+    // blessing on a commit outside the analyzed history is irrelevant and skipped,
+    // while one that fails to parse fails the run. Branch mode ignores blessings
+    // entirely, so only history mode pays the load.
     let mut blessings: HashMap<DiscriminantSet, Vec<BlessingPlacement>> = HashMap::new();
     if mode == AnalysisMode::History {
         let blessing_started = Instant::now();
@@ -417,11 +417,12 @@ where
         // Phase 2 — fetch and deserialize concurrently, then restore storage-key
         // order (`buffer_unordered` completes out of order).
         let mut fetched = load_objects_concurrently(storage, to_fetch, |key, bytes| {
-            let text = String::from_utf8(bytes).map_err(|error| AnalyzeError::Analyze {
-                message: format!("stored blessing {key} is not valid UTF-8: {error}"),
+            let text = String::from_utf8(bytes).map_err(|error| {
+                InvalidStoredUtf8Error::caused_by("stored blessing", key, error)
             })?;
-            BlessingRecord::from_json(&text).map_err(|error| AnalyzeError::Analyze {
-                message: format!("stored blessing {key} is not a valid blessing record: {error}"),
+            BlessingRecord::from_json(&text).map_err(|error| {
+                InvalidBlessingError::caused_by("stored blessing", key, "blessing record", error)
+                    .into()
             })
         })
         .await?;

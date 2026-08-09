@@ -12,28 +12,34 @@
 //! parser so a field renamed or dropped on either side of the boundary fails the
 //! build.
 
-use std::error::Error;
-use std::fmt;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use cbh_model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
 use nonempty::NonEmpty;
 use serde::Deserialize;
 
-/// An error encountered while parsing an `all_the_time` operation file.
-#[derive(Debug)]
-pub struct AllTheTimeParseError(serde_json::Error);
+/// Parsing an `all_the_time` operation file failed.
+///
+/// The underlying failure is retained in the source chain.
+#[ohno::error]
+#[no_constructors]
+#[from(AllTheTimeJsonError)]
+pub struct AllTheTimeParseError;
 
-impl fmt::Display for AllTheTimeParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "failed to parse all_the_time output: {}", self.0)
-    }
-}
+/// An `all_the_time` operation file was malformed.
+#[ohno::error]
+#[display("failed to parse all_the_time output")]
+#[from(serde_json::Error)]
+struct AllTheTimeJsonError;
 
-impl Error for AllTheTimeParseError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.0)
-    }
-}
+// The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
+// which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
+// However, ohno error types are immutable after construction — no &self method mutates internal
+// state — so observing them through a shared reference during unwind is harmless.
+impl UnwindSafe for AllTheTimeParseError {}
+impl RefUnwindSafe for AllTheTimeParseError {}
+impl UnwindSafe for AllTheTimeJsonError {}
+impl RefUnwindSafe for AllTheTimeJsonError {}
 
 /// Parses one `all_the_time` operation file into a [`BenchmarkResult`].
 ///
@@ -48,7 +54,7 @@ impl Error for AllTheTimeParseError {
 pub fn parse_all_the_time_operation(
     json: &str,
 ) -> Result<Option<BenchmarkResult>, AllTheTimeParseError> {
-    let output: OperationOutput = serde_json::from_str(json).map_err(AllTheTimeParseError)?;
+    let output: OperationOutput = serde_json::from_str(json).map_err(AllTheTimeJsonError::from)?;
     Ok(output_to_record(&output))
 }
 
@@ -105,7 +111,31 @@ mod tests {
     )]
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
+    use std::error;
+    use std::fmt::Debug;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
+    use ohno::ErrorExt;
+    use static_assertions::assert_impl_all;
+
     use super::*;
+
+    assert_impl_all!(
+        AllTheTimeParseError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        AllTheTimeJsonError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
 
     const READ_CELL_FIXTURE: &str =
         include_str!("../../tests/fixtures/all_the_time/read_cell.json");
@@ -202,11 +232,8 @@ mod tests {
     #[test]
     fn rejects_malformed_json() {
         let error = parse_all_the_time_operation("{ not json").unwrap_err();
-        assert!(
-            error.to_string().contains("failed to parse all_the_time"),
-            "{error}"
-        );
-        assert!(error.source().is_some());
+        assert!(error.find_source::<AllTheTimeJsonError>().is_some());
+        assert!(error.find_source::<serde_json::Error>().is_some());
     }
 
     /// Parses a fixture that is expected to yield a stored record.

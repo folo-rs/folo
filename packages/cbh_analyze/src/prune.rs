@@ -43,7 +43,10 @@ use super::{
     facet_filtered_candidates, parse_since, resolve_auto_facets, resolve_facets, resolve_history,
     resolve_now,
 };
-use crate::{AnalyzeError, RenderedReports, ReportRequest};
+use crate::{
+    AnalyzeError, PruneBaseConfirmationRequiredError, PruneSelectionRequiredError, RenderedReports,
+    ReportRequest,
+};
 
 /// Which runs a prune pass deletes.
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -70,12 +73,7 @@ impl Scope {
             (false, false) => None,
         };
         if scope.is_none() && !options.include_blessings {
-            return Err(AnalyzeError::Analyze {
-                message: "specify what to delete: --clean (clean runs), --dirty (dirty \
-                          snapshots), --all (both), and/or --include-blessings (blessing \
-                          sidecars)"
-                    .to_owned(),
-            });
+            return Err(PruneSelectionRequiredError::new().into());
         }
         Ok(scope)
     }
@@ -234,12 +232,7 @@ where
     // itself (`context == base`), the whole selection is base-branch history.
     // Refuse to delete it without explicit confirmation.
     if tip_is_merge_base && !options.prune_base {
-        return Err(AnalyzeError::Analyze {
-            message: format!(
-                "this will delete benchmark history of the {base_name} branch, which is the \
-                 base branch. Confirm with --prune-base if this is correct."
-            ),
-        });
+        return Err(PruneBaseConfirmationRequiredError::new(base_name).into());
     }
 
     // Runs and blessing sidecars are pruned independently: `--clean`/`--dirty`/`--all`
@@ -373,7 +366,7 @@ where
             for commit in &set.commits {
                 for key in &commit.keys {
                     reporter.note_with(|| format!("deleting {key}"));
-                    storage.delete(key).await.map_err(AnalyzeError::Storage)?;
+                    storage.delete(key).await?;
                 }
             }
         }
@@ -775,8 +768,13 @@ mod tests {
     use futures::executor::block_on;
     use jiff::Timestamp;
     use nonempty::nonempty;
+    use ohno::ErrorExt as _;
 
     use super::*;
+    use crate::{
+        NoOutputSelectedError, PruneBaseConfirmationRequiredError, PruneSelectionRequiredError,
+        UnresolvedRefError,
+    };
 
     fn config() -> Config {
         Config::default()
@@ -1316,12 +1314,7 @@ mod tests {
             &RecordingReporter::new(),
         ))
         .unwrap_err();
-        match error {
-            AnalyzeError::Analyze { message } => {
-                assert!(message.contains("--include-blessings"), "{message}");
-            }
-            other => panic!("expected an Analyze error, got {other:?}"),
-        }
+        assert!(error.find_source::<PruneSelectionRequiredError>().is_some());
     }
 
     #[test]
@@ -1365,14 +1358,7 @@ mod tests {
             &RecordingReporter::new(),
         ))
         .unwrap_err();
-        match error {
-            AnalyzeError::Analyze { message } => {
-                assert!(message.contains("--clean"), "{message}");
-                assert!(message.contains("--dirty"), "{message}");
-                assert!(message.contains("--all"), "{message}");
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        assert!(error.find_source::<PruneSelectionRequiredError>().is_some());
         // Nothing was deleted.
         assert!(keys(&storage).contains(&clean_key("f1")));
     }
@@ -1402,12 +1388,7 @@ mod tests {
             &RecordingReporter::new(),
         ))
         .unwrap_err();
-        match error {
-            AnalyzeError::Analyze { message } => {
-                assert!(message.contains("no output selected"), "{message}");
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        assert!(error.find_source::<NoOutputSelectedError>().is_some());
         // Nothing was deleted.
         assert!(keys(&storage).contains(&clean_key("f1")));
     }
@@ -1463,18 +1444,12 @@ mod tests {
             &RecordingReporter::new(),
         ))
         .unwrap_err();
-        match error {
-            AnalyzeError::Analyze { message } => {
-                assert!(message.contains("--prune-base"), "{message}");
-                assert!(
-                    message.contains("master"),
-                    "names the base branch: {message}"
-                );
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        let found = error
+            .find_source::<PruneBaseConfirmationRequiredError>()
+            .unwrap();
+        assert_eq!(found.base_name, "master");
         // Nothing was deleted without confirmation.
-        assert!(keys(&storage).contains(&clean_key("c3")), "kept");
+        assert!(keys(&storage).contains(&clean_key("c3")));
     }
 
     #[test]
@@ -1551,7 +1526,7 @@ mod tests {
     }
 
     #[test]
-    fn prune_requires_a_repository() {
+    fn prune_rejects_an_unresolved_head() {
         let storage = MemoryStorage::new();
         store(&storage, &dirty_key("c0", 100), &set("c0"));
         let git = FakeGitHistory::new(); // No commits: HEAD does not resolve.
@@ -1566,12 +1541,8 @@ mod tests {
             &RecordingReporter::new(),
         ))
         .unwrap_err();
-        match error {
-            AnalyzeError::Analyze { message } => {
-                assert!(message.contains("requires a git repository"), "{message}");
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        let found = error.find_source::<UnresolvedRefError>().unwrap();
+        assert_eq!(found.reference, "HEAD");
     }
 
     #[test]

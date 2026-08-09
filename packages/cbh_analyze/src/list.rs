@@ -34,7 +34,11 @@ use super::{
     dirty_base_exception_warning, empty_history_hint, facet_filtered_candidates,
     resolve_auto_facets, resolve_facets, resolve_now, select_dataset,
 };
-use crate::{AnalyzeError, RenderedReports, ReportRequest};
+use crate::{
+    AnalyzeError, CommitterTimeFailedError, InvalidBlessingError, InvalidStoredUtf8Error,
+    ListAllUnsupportedError, RenderedReports, ReportRequest, ResolveRefFailedError,
+    UnresolvedRefError,
+};
 
 /// The real `list`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
@@ -124,12 +128,7 @@ where
         options.json.as_deref(),
     )?;
     if options.all && options.subject != ListSubject::Blessings {
-        return Err(AnalyzeError::Analyze {
-            message: "--all applies only to `list blessings`, where it widens the view from \
-                      the current commit to the most recent blessing of every benchmark in \
-                      the window; it has no meaning for `list runs` or `list discriminants`"
-                .to_owned(),
-        });
+        return Err(ListAllUnsupportedError::new().into());
     }
     let selection = Selection::from_list(options);
 
@@ -594,11 +593,14 @@ where
     let head = git
         .resolve("HEAD")
         .await
-        .map_err(AnalyzeError::Io)?
-        .ok_or_else(|| AnalyzeError::Analyze {
-            message: "this command requires a git repository: could not resolve HEAD. \
-                      Run inside a repository (or pass --repo)."
-                .to_owned(),
+        .map_err(|error| ResolveRefFailedError::caused_by("HEAD", error))?
+        .ok_or_else(|| {
+            UnresolvedRefError::new(
+                "listing blessings",
+                "HEAD",
+                "Check that the ref exists or is fetched, and select a repository with --repo if \
+                 needed.",
+            )
         })?;
     let facets = resolve_facets(selection, Some(auto))?;
     let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
@@ -606,19 +608,21 @@ where
     // The blessed commit is HEAD; its committer date comes from git topology, so
     // the sidecar itself need not carry a denormalized copy. A single-commit read
     // dates HEAD without walking its first-parent ancestry.
-    let head_commit_time = git.committer_time("HEAD").await.map_err(AnalyzeError::Io)?;
+    let head_commit_time = git
+        .committer_time("HEAD")
+        .await
+        .map_err(|error| CommitterTimeFailedError::caused_by("HEAD", error))?;
 
     let mut entries = Vec::new();
     for (key, parsed) in candidates {
         if !(parsed.is_bless() && parsed.commit == head) {
             continue;
         }
-        let bytes = storage.get(&key).await.map_err(AnalyzeError::Storage)?;
-        let text = String::from_utf8(bytes).map_err(|error| AnalyzeError::Analyze {
-            message: format!("stored object {key} is not valid UTF-8: {error}"),
-        })?;
-        let record = BlessingRecord::from_json(&text).map_err(|error| AnalyzeError::Analyze {
-            message: format!("stored object {key} is not a valid blessing: {error}"),
+        let bytes = storage.get(&key).await?;
+        let text = String::from_utf8(bytes)
+            .map_err(|error| InvalidStoredUtf8Error::caused_by("stored object", &key, error))?;
+        let record = BlessingRecord::from_json(&text).map_err(|error| {
+            InvalidBlessingError::caused_by("stored object", &key, "blessing", error)
         })?;
         reporter.note_with(|| format!("blessing {key}"));
         entries.push(BlessingEntry {
@@ -892,8 +896,13 @@ mod tests {
     use futures::executor::block_on;
     use jiff::Timestamp;
     use nonempty::nonempty;
+    use ohno::ErrorExt as _;
 
     use super::*;
+    use crate::{
+        InvalidBlessingError, InvalidStoredUtf8Error, ListAllUnsupportedError,
+        NoOutputSelectedError, UnresolvedRefError,
+    };
 
     fn config() -> Config {
         Config::default()
@@ -1368,7 +1377,7 @@ mod tests {
     }
 
     #[test]
-    fn list_requires_a_repository() {
+    fn list_rejects_an_unresolved_head() {
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c0"), &two_metric_set(0, "c0"));
         let git = FakeGitHistory::new(); // No commits: HEAD does not resolve.
@@ -1384,7 +1393,8 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
+        let found = error.find_source::<UnresolvedRefError>().unwrap();
+        assert_eq!(found.reference, "HEAD");
     }
 
     #[test]
@@ -1443,12 +1453,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        match error {
-            AnalyzeError::Analyze { message } => {
-                assert!(message.contains("no output selected"), "{message}");
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        assert!(error.find_source::<NoOutputSelectedError>().is_some());
     }
 
     #[test]
@@ -1525,13 +1530,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        match error {
-            AnalyzeError::Analyze { message } => {
-                assert!(message.contains("--all"), "{message}");
-                assert!(message.contains("list blessings"), "{message}");
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        assert!(error.find_source::<ListAllUnsupportedError>().is_some());
     }
 
     #[test]
@@ -1733,16 +1732,34 @@ mod tests {
     }
 
     #[test]
-    fn list_blessings_requires_a_repository() {
+    fn list_blessings_rejects_an_unresolved_head() {
         let storage = MemoryStorage::new();
         // No commits: HEAD does not resolve.
         let error = list_blessings_error(&storage, &FakeGitHistory::new());
-        match error {
-            AnalyzeError::Analyze { message } => {
-                assert!(message.contains("could not resolve HEAD"), "{message}");
-            }
-            other => panic!("expected an analyze error, got {other:?}"),
-        }
+        let found = error.find_source::<UnresolvedRefError>().unwrap();
+        assert_eq!(found.reference, "HEAD");
+    }
+
+    #[test]
+    fn list_blessings_names_a_failed_head_resolution() {
+        // Resolving HEAD and dating it are adjacent queries on this path, so each
+        // must name itself rather than the other.
+        let storage = MemoryStorage::new();
+        let mut git = linear_git();
+        git.fail_resolve();
+
+        let error = list_blessings_error(&storage, &git);
+        assert!(error.find_source::<ResolveRefFailedError>().is_some());
+    }
+
+    #[test]
+    fn list_blessings_names_a_failed_head_dating() {
+        let storage = MemoryStorage::new();
+        let mut git = linear_git();
+        git.fail_committer_time();
+
+        let error = list_blessings_error(&storage, &git);
+        assert!(error.find_source::<CommitterTimeFailedError>().is_some());
     }
 
     #[test]
@@ -1751,12 +1768,10 @@ mod tests {
         // HEAD is c3 in `linear_git`; a sidecar there with corrupt bytes.
         block_on(storage.put(&bless_key("c3", 100), &[0xff, 0xfe, 0x00])).unwrap();
         let error = list_blessings_error(&storage, &linear_git());
-        match error {
-            AnalyzeError::Analyze { message } => {
-                assert!(message.contains("is not valid UTF-8"), "{message}");
-            }
-            other => panic!("expected an analyze error, got {other:?}"),
-        }
+        let found = error.find_source::<InvalidStoredUtf8Error>().unwrap();
+        assert_eq!(found.object_kind, "stored object");
+        assert!(found.key.ends_with("/c3/bless-100.json"));
+        assert!(error.find_source::<std::string::FromUtf8Error>().is_some());
     }
 
     #[test]
@@ -1764,12 +1779,10 @@ mod tests {
         let storage = MemoryStorage::new();
         block_on(storage.put(&bless_key("c3", 100), b"{ not a blessing record")).unwrap();
         let error = list_blessings_error(&storage, &linear_git());
-        match error {
-            AnalyzeError::Analyze { message } => {
-                assert!(message.contains("is not a valid blessing"), "{message}");
-            }
-            other => panic!("expected an analyze error, got {other:?}"),
-        }
+        let found = error.find_source::<InvalidBlessingError>().unwrap();
+        assert_eq!(found.expected, "blessing");
+        assert!(found.key.ends_with("/c3/bless-100.json"));
+        assert!(error.find_source::<serde_json::Error>().is_some());
     }
 
     #[test]

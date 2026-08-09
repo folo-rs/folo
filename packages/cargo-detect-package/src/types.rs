@@ -4,7 +4,6 @@
 
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::{error, fmt, io};
 
 /// Action to take when a path is not within any package.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -74,37 +73,6 @@ pub enum RunOutcome {
     Ignored,
 }
 
-/// Errors that can occur during a run.
-#[doc(hidden)]
-#[derive(Debug)]
-#[expect(
-    clippy::exhaustive_enums,
-    reason = "This is a hidden enum for internal/test use only"
-)]
-pub enum RunError {
-    /// Failed to validate workspace context.
-    WorkspaceValidation(String),
-    /// Failed to detect package.
-    PackageDetection(String),
-    /// Path is not in any package and --outside-package=error was specified.
-    OutsidePackage,
-    /// Failed to execute the subcommand.
-    CommandExecution(io::Error),
-}
-
-impl fmt::Display for RunError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::WorkspaceValidation(msg) => write!(f, "{msg}"),
-            Self::PackageDetection(msg) => write!(f, "Error detecting package: {msg}"),
-            Self::OutsidePackage => write!(f, "Path is not in any package"),
-            Self::CommandExecution(e) => write!(f, "Error executing command: {e}"),
-        }
-    }
-}
-
-impl error::Error for RunError {}
-
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -145,34 +113,5 @@ mod tests {
 
         let result = "invalid".parse::<OutsidePackageAction>();
         result.unwrap_err();
-    }
-
-    #[test]
-    fn run_error_display_workspace_validation() {
-        let error = RunError::WorkspaceValidation("some validation error".to_string());
-        let display = format!("{error}");
-        assert!(!display.is_empty());
-    }
-
-    #[test]
-    fn run_error_display_package_detection() {
-        let error = RunError::PackageDetection("could not find package".to_string());
-        let display = format!("{error}");
-        assert!(!display.is_empty());
-    }
-
-    #[test]
-    fn run_error_display_outside_package() {
-        let error = RunError::OutsidePackage;
-        let display = format!("{error}");
-        assert!(!display.is_empty());
-    }
-
-    #[test]
-    fn run_error_display_command_execution() {
-        let io_error = io::Error::new(io::ErrorKind::NotFound, "command not found");
-        let error = RunError::CommandExecution(io_error);
-        let display = format!("{error}");
-        assert!(!display.is_empty());
     }
 }

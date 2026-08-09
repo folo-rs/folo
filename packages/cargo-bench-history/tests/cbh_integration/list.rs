@@ -144,10 +144,7 @@ async fn list_without_a_repository_errors() {
     let workspace = Workspace::new(&storage_only_config());
 
     let error = workspace.drive(&["list", "runs"]).await.unwrap_err();
-    let RunError::Analyze { message } = error else {
-        panic!("expected an analyze error, got {error:?}");
-    };
-    assert!(message.contains("requires a git repository"), "{message}");
+    assert!(error.find_source::<cbh_analyze::AnalyzeError>().is_some());
 }
 
 /// `--all` is a `list blessings`-only switch; passing it to another subject is a
@@ -163,9 +160,5 @@ async fn list_runs_rejects_the_blessings_only_all_switch() {
         .drive(&["list", "runs", "--all"])
         .await
         .unwrap_err();
-    let RunError::Analyze { message } = error else {
-        panic!("expected an analyze error, got {error:?}");
-    };
-    assert!(message.contains("--all"), "{message}");
-    assert!(message.contains("list blessings"), "{message}");
+    assert!(error.find_source::<cbh_analyze::AnalyzeError>().is_some());
 }

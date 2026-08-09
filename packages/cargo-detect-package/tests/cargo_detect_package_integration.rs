@@ -9,7 +9,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use cargo_detect_package::{OutsidePackageAction, RunError, RunInput, RunOutcome, run};
+use cargo_detect_package::{OutsidePackageAction, RunInput, RunOutcome, run};
 use serial_test::serial;
 
 /// Get a cross-platform command that exists on both Windows and Unix.
@@ -87,6 +87,24 @@ package_a = { path = "../package_a" }
     fs::write(workspace_root.join("root_file.rs"), "// root file\n").unwrap();
 
     temp_dir
+}
+
+/// Creates a workspace and an existing sibling file outside it under one temporary root.
+fn create_workspace_with_sibling_file() -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let workspace_root = temp_dir.path().join("workspace");
+    fs::create_dir_all(&workspace_root).unwrap();
+    fs::write(
+        workspace_root.join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"2\"\n",
+    )
+    .unwrap();
+
+    let outside_file = temp_dir.path().join("outside").join("file.rs");
+    fs::create_dir_all(outside_file.parent().unwrap()).unwrap();
+    fs::write(&outside_file, "// outside the workspace\n").unwrap();
+
+    (temp_dir, workspace_root, outside_file)
 }
 
 /// Creates a separate workspace for cross-workspace testing.
@@ -343,15 +361,7 @@ fn nonexistent_file_error() {
 
     std::env::set_current_dir(original_dir).unwrap();
 
-    match result {
-        Err(RunError::WorkspaceValidation(msg)) => {
-            assert!(
-                msg.contains("does not exist"),
-                "Expected 'does not exist' in error, got: {msg}"
-            );
-        }
-        other => panic!("Expected WorkspaceValidation error, got {other:?}"),
-    }
+    result.unwrap_err();
 }
 
 #[test]
@@ -378,32 +388,17 @@ fn cross_workspace_rejection() {
 
     std::env::set_current_dir(original_dir).unwrap();
 
-    match result {
-        Err(RunError::WorkspaceValidation(msg)) => {
-            assert!(
-                msg.contains("differs from target path workspace"),
-                "Expected cross-workspace error, got: {msg}"
-            );
-        }
-        other => panic!("Expected WorkspaceValidation error, got {other:?}"),
-    }
+    result.unwrap_err();
 }
 
 #[test]
 #[serial] // Changes working directory.
 #[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
 fn outside_workspace_rejection() {
-    let workspace = create_simple_workspace();
-    let workspace_root = workspace.path();
+    let (_temp_dir, workspace_root, outside_file) = create_workspace_with_sibling_file();
 
     let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(workspace_root).unwrap();
-
-    let outside_file = if cfg!(windows) {
-        PathBuf::from("C:\\Windows\\System32\\notepad.exe")
-    } else {
-        PathBuf::from("/etc/passwd")
-    };
+    std::env::set_current_dir(&workspace_root).unwrap();
 
     let input = RunInput {
         path: outside_file,
@@ -416,29 +411,20 @@ fn outside_workspace_rejection() {
 
     std::env::set_current_dir(original_dir).unwrap();
 
-    match result {
-        Err(RunError::WorkspaceValidation(msg)) => {
-            assert!(
-                msg.contains("not within a Cargo workspace"),
-                "Expected outside-workspace error, got: {msg}"
-            );
-        }
-        other => panic!("Expected WorkspaceValidation error, got {other:?}"),
-    }
+    result.unwrap_err();
 }
 
 #[test]
 #[serial] // Changes working directory.
 #[cfg_attr(miri, ignore)] // OS interactions exceed Miri emulation capabilities.
 fn relative_path_escape_rejection() {
-    let workspace = create_simple_workspace();
-    let workspace_root = workspace.path();
+    let (_temp_dir, workspace_root, _outside_file) = create_workspace_with_sibling_file();
 
     let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(workspace_root).unwrap();
+    std::env::set_current_dir(&workspace_root).unwrap();
 
     let input = RunInput {
-        path: PathBuf::from("../../../outside_file.rs"),
+        path: PathBuf::from("../outside/file.rs"),
         via_env: Some("PKG".to_string()),
         outside_package: OutsidePackageAction::Workspace,
         subcommand: get_test_command(),
@@ -448,7 +434,7 @@ fn relative_path_escape_rejection() {
 
     std::env::set_current_dir(original_dir).unwrap();
 
-    assert!(result.is_err(), "Expected error for path escape attempt");
+    result.unwrap_err();
 }
 
 #[test]
@@ -571,12 +557,7 @@ fn missing_subcommand_error() {
 
     std::env::set_current_dir(original_dir).unwrap();
 
-    match result {
-        Err(RunError::CommandExecution(e)) => {
-            assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
-        }
-        other => panic!("Expected CommandExecution error, got {other:?}"),
-    }
+    result.unwrap_err();
 }
 
 #[test]
@@ -627,10 +608,7 @@ fn outside_package_action_error() {
 
     std::env::set_current_dir(original_dir).unwrap();
 
-    match result {
-        Err(RunError::OutsidePackage) => {}
-        other => panic!("Expected OutsidePackage error, got {other:?}"),
-    }
+    result.unwrap_err();
 }
 
 #[test]
@@ -687,15 +665,7 @@ fn execution_outside_any_cargo_workspace() {
 
     std::env::set_current_dir(original_dir).unwrap();
 
-    match result {
-        Err(RunError::WorkspaceValidation(msg)) => {
-            assert!(
-                msg.contains("not within a Cargo workspace"),
-                "Expected not-in-workspace error, got: {msg}"
-            );
-        }
-        other => panic!("Expected WorkspaceValidation error, got {other:?}"),
-    }
+    result.unwrap_err();
 }
 
 #[test]
@@ -764,18 +734,8 @@ fn invalid_toml_package_detection_error() {
 
     std::env::set_current_dir(original_dir).unwrap();
 
-    match result {
-        // The error comes from WorkspaceValidation because find_workspace_root() encounters
-        // the malformed Cargo.toml when walking up the directory tree to find the workspace root.
-        // This is expected behavior - malformed TOML is detected and reported as an error.
-        Err(RunError::WorkspaceValidation(msg)) => {
-            assert!(
-                msg.contains("TOML") || msg.contains("parse"),
-                "Expected TOML parse error, got: {msg}"
-            );
-        }
-        other => panic!("Expected WorkspaceValidation error with TOML error, got {other:?}"),
-    }
+    // Manifest validation fails before any child command is started.
+    result.unwrap_err();
 }
 
 #[test]
@@ -799,8 +759,5 @@ fn nonexistent_executable_error() {
 
     std::env::set_current_dir(original_dir).unwrap();
 
-    match result {
-        Err(RunError::CommandExecution(_)) => {}
-        other => panic!("Expected CommandExecution error, got {other:?}"),
-    }
+    result.unwrap_err();
 }

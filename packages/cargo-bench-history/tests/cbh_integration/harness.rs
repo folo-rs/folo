@@ -9,13 +9,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) use cargo_bench_history::{
     AutoFacets, BenchmarkId, BenchmarkResult, Cli, Command, EnvironmentInfo, GitInfo, Metric,
-    MetricKind, Overrides, Run, RunContext, RunError, RunOutcome, SCHEMA_VERSION, ToolchainInfo,
+    MetricKind, Overrides, Run, RunContext, RunOutcome, SCHEMA_VERSION, ToolchainInfo,
     default_template, run, run_with_overrides,
 };
 use cbh_codec as codec;
 use cbh_model::{DiscriminantSet, Engine, MachineKey, TargetTriple};
 pub(crate) use jiff::Timestamp;
 use nonempty::nonempty;
+pub(crate) use ohno::AppError;
 pub(crate) use serial_test::serial;
 pub(crate) use testing::CwdGuard;
 use tick::Clock;
@@ -871,7 +872,7 @@ impl Workspace {
     }
 
     /// Drives a command with `args` against this workspace.
-    pub(crate) async fn drive(&self, args: &[&str]) -> Result<RunOutcome, RunError> {
+    pub(crate) async fn drive(&self, args: &[&str]) -> Result<RunOutcome, AppError> {
         self.flush_git();
         // Point the harvest at this workspace's own `target/` explicitly, so a
         // shared ambient `CARGO_TARGET_DIR` (as `cargo llvm-cov` sets during
@@ -919,7 +920,7 @@ impl Workspace {
     pub(crate) async fn drive_resolving_target_root(
         &self,
         args: &[&str],
-    ) -> Result<RunOutcome, RunError> {
+    ) -> Result<RunOutcome, AppError> {
         self.flush_git();
         let mut bench_command = vec![cargo_bench_history_faker::binary_path().to_owned()];
         bench_command.extend(self.bench.iter().cloned());

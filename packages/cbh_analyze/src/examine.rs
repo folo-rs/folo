@@ -46,7 +46,9 @@ use super::{
     dirty_base_exception_warning, empty_history_hint, format_value, resolve_auto_facets,
     resolve_now, select_dataset,
 };
-use crate::{AnalyzeError, RenderedReports, ReportRequest};
+use crate::{
+    AnalyzeError, EmptyBenchmarkError, RenderedReports, ReportRequest, UnknownMetricError,
+};
 
 /// How many leading characters of a commit title the text and Markdown tables
 /// keep. The truncation is a readability convenience of those renderings; the JSON
@@ -152,11 +154,8 @@ where
     // The benchmark identity scopes the series load coarsely (a prefix of the
     // qualified id); the exact `id == benchmark` narrowing happens after series
     // reconstruction. An unmatched id is not an error — it yields an empty pivot.
-    let prefix = BenchmarkIdPrefix::new(options.benchmark.clone()).map_err(|_empty| {
-        AnalyzeError::Analyze {
-            message: "--benchmark must not be empty".to_owned(),
-        }
-    })?;
+    let prefix = BenchmarkIdPrefix::new(options.benchmark.clone())
+        .map_err(EmptyBenchmarkError::caused_by)?;
     let prefixes = [prefix];
     let filter = SeriesFilter {
         prefixes: &prefixes,
@@ -223,9 +222,7 @@ fn parse_metric(name: &str) -> Result<MetricKind, AnalyzeError> {
             .map(|kind| kind.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        AnalyzeError::Analyze {
-            message: format!("unknown metric {name:?}; expected one of: {valid}"),
-        }
+        UnknownMetricError::new(name, valid).into()
     })
 }
 
@@ -732,8 +729,10 @@ mod tests {
     use futures::executor::block_on;
     use jiff::Timestamp;
     use nonempty::nonempty;
+    use ohno::ErrorExt as _;
 
     use super::*;
+    use crate::{EmptyBenchmarkError, UnknownMetricError, UnresolvedRefError};
 
     fn config() -> Config {
         Config::default()
@@ -1867,13 +1866,38 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        match error {
-            AnalyzeError::Analyze { message } => {
-                assert!(message.contains("unknown metric"), "{message}");
-                assert!(message.contains("instruction_count"), "{message}");
-            }
-            other => panic!("expected an Analyze error, got {other:?}"),
-        }
+        let found = error.find_source::<UnknownMetricError>().unwrap();
+        assert_eq!(found.name, "not_a_metric");
+    }
+
+    #[test]
+    fn empty_benchmark_preserves_the_typed_source() {
+        let storage = MemoryStorage::new();
+        let git = linear_git();
+        let opts = ExamineOptions {
+            benchmark: String::new(),
+            ..options()
+        };
+
+        let error = block_on(examine_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &opts,
+            &auto(),
+            Timestamp::from_second(0).unwrap(),
+            &RecordingReporter::new(),
+            &spawner(),
+        ))
+        .unwrap_err();
+
+        assert!(error.find_source::<EmptyBenchmarkError>().is_some());
+        assert!(
+            error
+                .find_source::<cbh_model::EmptyBenchmarkIdPrefix>()
+                .is_some()
+        );
     }
 
     #[test]
@@ -1901,7 +1925,7 @@ mod tests {
     }
 
     #[test]
-    fn requires_a_repository() {
+    fn rejects_an_unresolved_head() {
         let storage = MemoryStorage::new();
         store(
             &storage,
@@ -1921,7 +1945,8 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
+        let found = error.find_source::<UnresolvedRefError>().unwrap();
+        assert_eq!(found.reference, "HEAD");
     }
 
     #[test]
@@ -1951,18 +1976,16 @@ mod tests {
     }
 
     #[test]
-    fn parse_metric_lists_every_valid_name_on_error() {
+    fn parse_metric_rejects_an_unknown_name() {
         let error = parse_metric("bogus").unwrap_err();
-        let AnalyzeError::Analyze { message } = error else {
-            panic!("expected an Analyze error");
-        };
-        for kind in MetricKind::ALL {
-            assert!(
-                message.contains(kind.as_str()),
-                "the error should list {}: {message}",
-                kind.as_str()
-            );
-        }
+        let found = error.find_source::<UnknownMetricError>().unwrap();
+        let expected = MetricKind::ALL
+            .iter()
+            .map(|kind| kind.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        assert_eq!(found.name, "bogus");
+        assert_eq!(found.valid, expected);
     }
 
     #[test]

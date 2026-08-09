@@ -26,12 +26,14 @@ pkg-fmt = "zip"
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
 mimalloc = { workspace = true }
+ohno = { workspace = true, features = ["app-err"] }
 semver = { workspace = true }
 toml_edit = { workspace = true, features = ["parse", "display"] }
 
 [dev-dependencies]
 mutants = { workspace = true }
 serial_test = { workspace = true }
+static_assertions = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

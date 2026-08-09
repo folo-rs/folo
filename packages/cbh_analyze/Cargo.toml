@@ -30,6 +30,7 @@ cbh_storage = { workspace = true }
 futures = { workspace = true }
 jiff = { workspace = true, features = ["serde"] }
 nonempty = { workspace = true }
+ohno = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tick = { workspace = true, features = ["tokio"] }
@@ -41,6 +42,7 @@ cbh_git = { path = "../cbh_git", features = ["private-test-util"] }
 cbh_storage = { path = "../cbh_storage", features = ["private-test-util"] }
 futures = { workspace = true, features = ["executor"] }
 mutants = { workspace = true }
+static_assertions = { workspace = true }
 tick = { workspace = true, features = ["test-util"] }
 
 [lints]

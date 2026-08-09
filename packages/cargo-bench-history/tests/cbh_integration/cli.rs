@@ -1,3 +1,5 @@
+use crate::harness::{Workspace, storage_only_config};
+
 #[test]
 #[cfg_attr(miri, ignore)] // Spawns a real process, which Miri cannot do.
 fn binary_help_exits_success_on_stdout() {
@@ -69,31 +71,23 @@ fn binary_without_a_subcommand_prints_descriptive_help_to_stderr() {
 
 /// A bare `--local` (no `=value`) selects local storage from the
 /// `CARGO_BENCH_HISTORY_STORAGE` environment variable. Driven against the real
-/// binary so the genuine environment edge is exercised: with the variable set,
-/// storage resolves and the command proceeds past selection to fail for an
-/// unrelated reason (no git repository), proving the env path was accepted.
+/// binary and a repository fixture so success proves both the environment and
+/// repository edges resolved.
 #[test]
 #[cfg_attr(miri, ignore)] // Spawns a real process, which Miri cannot do.
 fn binary_bare_local_reads_the_storage_path_from_the_environment() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = dir.path().join("store");
+    let workspace = Workspace::repo(&storage_only_config());
+    let store = workspace.root().join("store");
+    std::fs::create_dir_all(&store).unwrap();
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_cargo-bench-history"))
         .args(["list", "runs", "--local"])
-        .current_dir(dir.path())
+        .current_dir(workspace.root())
         .env("CARGO_BENCH_HISTORY_STORAGE", &store)
         .output()
         .unwrap();
 
-    // Storage resolved from the environment; the command then failed only because
-    // the temp directory is not a git repository, not on storage selection.
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success(), "{stderr}");
-    assert!(stderr.contains("requires a git repository"), "{stderr}");
-    assert!(
-        !stderr.contains("CARGO_BENCH_HISTORY_STORAGE"),
-        "storage must have resolved from the environment: {stderr}"
-    );
+    assert!(output.status.success());
 }
 
 /// A bare `--local` with `CARGO_BENCH_HISTORY_STORAGE` unset is a storage

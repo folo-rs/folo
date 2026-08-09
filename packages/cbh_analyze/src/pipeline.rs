@@ -33,7 +33,7 @@ use super::dataset::{empty_history_hint, select_dataset};
 use super::facets::AutoFacets;
 use super::history::dirty_base_exception_warning;
 use super::selection::Selection;
-use crate::{AnalyzeError, RenderedReports, ReportRequest};
+use crate::{AnalyzeError, RenderedReports, ReportRequest, ToolchainProbeFailedError};
 
 /// The real `analyze`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
@@ -143,7 +143,17 @@ fn should_colorize(is_terminal: bool, no_color: bool) -> bool {
 #[cfg_attr(test, mutants::skip)] // Probes the host environment; the facet resolution it feeds is tested.
 pub(crate) async fn detect_auto_facets() -> Result<AutoFacets, AnalyzeError> {
     let probe = SystemProbe::default();
-    let toolchain = probe.toolchain().await.map_err(AnalyzeError::Io)?;
+    detect_auto_facets_with(&probe).await
+}
+
+/// Resolves auto-detected facets from an injected environment probe.
+async fn detect_auto_facets_with<P: EnvironmentProbe>(
+    probe: &P,
+) -> Result<AutoFacets, AnalyzeError> {
+    let toolchain = probe
+        .toolchain()
+        .await
+        .map_err(ToolchainProbeFailedError::caused_by)?;
     let hardware = probe.hardware().await;
     Ok(AutoFacets {
         triple: toolchain.host.unwrap_or_default(),
@@ -386,6 +396,7 @@ fn all_ghosts_hint(tip_commit: &str) -> String {
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
+    use std::io;
     use std::path::PathBuf;
 
     use cbh_config::{Config, parse_config};
@@ -395,12 +406,19 @@ mod tests {
         BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, BlessingRecord, EnvironmentInfo, GitInfo,
         Metric, MetricKind, Run, RunContext, ToolchainInfo, sanitize_segment,
     };
+    use cbh_probe::{HardwareProfile, RustcInfo};
     use cbh_storage::{MemoryStorage, Storage};
     use futures::executor::block_on;
     use jiff::Timestamp;
     use nonempty::nonempty;
+    use ohno::ErrorExt as _;
 
     use super::*;
+    use crate::{
+        BaseBranchUnavailableError, FirstParentWalkFailedError, InvalidBlessingError,
+        InvalidResultSetError, InvalidStoredUtf8Error, MergeBaseUnavailableError,
+        NoOutputSelectedError, UnknownEngineError, UnresolvedRefError,
+    };
 
     fn ts(seconds: i64) -> Timestamp {
         Timestamp::from_second(seconds).unwrap()
@@ -409,6 +427,35 @@ mod tests {
     /// A minimal configuration; `analyze_with` only reads `project.default_branch`.
     fn config() -> Config {
         Config::default()
+    }
+
+    struct FailingProbe;
+
+    impl EnvironmentProbe for FailingProbe {
+        async fn git(&self) -> io::Result<GitInfo> {
+            Ok(GitInfo::default())
+        }
+
+        async fn toolchain(&self) -> io::Result<RustcInfo> {
+            Err(io::Error::other("injected toolchain failure"))
+        }
+
+        async fn hardware(&self) -> HardwareProfile {
+            HardwareProfile {
+                processors: 1,
+                memory_regions: 1,
+                processor_models: Vec::new(),
+                processor_speeds: Vec::new(),
+            }
+        }
+    }
+
+    #[test]
+    fn auto_facet_toolchain_failure_is_mapped_at_the_call_site() {
+        let error = block_on(detect_auto_facets_with(&FailingProbe)).unwrap_err();
+
+        assert!(error.find_source::<ToolchainProbeFailedError>().is_some());
+        assert!(error.find_source::<io::Error>().is_some());
     }
 
     /// Builds a stored result set carrying one record with one `Ir` metric.
@@ -767,7 +814,7 @@ mod tests {
     }
 
     #[test]
-    fn analyze_without_a_repository_is_an_error() {
+    fn analyze_rejects_an_unresolved_head() {
         let storage = MemoryStorage::new();
         seed_linear_step(&storage);
         let git = FakeGitHistory::new(); // No commits: HEAD does not resolve.
@@ -784,11 +831,32 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
-        assert!(
-            error.to_string().contains("requires a git repository"),
-            "{error}"
-        );
+        let found = error.find_source::<UnresolvedRefError>().unwrap();
+        assert_eq!(found.reference, "HEAD");
+    }
+
+    #[test]
+    fn analyze_propagates_a_typed_git_failure() {
+        // The typed git failures raised deep in history resolution must survive
+        // propagation out of the top-level entry point, not be flattened on the way.
+        let storage = MemoryStorage::new();
+        seed_linear_step(&storage);
+        let mut git = linear_git();
+        git.fail_first_parent();
+        let error = block_on(analyze_with(
+            &git,
+            &storage,
+            "folo",
+            &config(),
+            &options(),
+            &auto(),
+            now_anchor(),
+            &RecordingReporter::new(),
+            false,
+            &spawner(),
+        ))
+        .unwrap_err();
+        assert!(error.find_source::<FirstParentWalkFailedError>().is_some());
     }
 
     #[test]
@@ -970,12 +1038,10 @@ mod tests {
             "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json".to_owned();
         block_on(storage.put(&bless_key, &[0xff, 0xfe, 0x00])).unwrap();
         let error = analyze_blessing_error(&storage);
-        match error {
-            AnalyzeError::Analyze { message } => {
-                assert!(message.contains("is not valid UTF-8"), "{message}");
-            }
-            other => panic!("expected an analyze error, got {other:?}"),
-        }
+        let found = error.find_source::<InvalidStoredUtf8Error>().unwrap();
+        assert_eq!(found.object_kind, "stored blessing");
+        assert_eq!(found.key, bless_key);
+        assert!(error.find_source::<std::string::FromUtf8Error>().is_some());
     }
 
     #[test]
@@ -986,15 +1052,11 @@ mod tests {
             "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/c3/bless-3.json".to_owned();
         block_on(storage.put(&bless_key, b"{ not a blessing record")).unwrap();
         let error = analyze_blessing_error(&storage);
-        match error {
-            AnalyzeError::Analyze { message } => {
-                assert!(
-                    message.contains("is not a valid blessing record"),
-                    "{message}"
-                );
-            }
-            other => panic!("expected an analyze error, got {other:?}"),
-        }
+        let found = error.find_source::<InvalidBlessingError>().unwrap();
+        assert_eq!(found.object_kind, "stored blessing");
+        assert_eq!(found.key, bless_key);
+        assert_eq!(found.expected, "blessing record");
+        assert!(error.find_source::<serde_json::Error>().is_some());
     }
 
     #[test]
@@ -1815,8 +1877,7 @@ mod tests {
         // HEAD resolves, but there is no advertised default branch and no --base /
         // config default, so the base branch cannot be determined and there is no
         // merge-base to split the timeline on. Rather than silently analyze the
-        // incomplete topology as a base-branch (history) view, this is an error
-        // that tells the user how to supply the missing history.
+        // incomplete topology as a base-branch (history) view, this is an error.
         let mut git = FakeGitHistory::new();
         git.commit("c0", None)
             .commit("c1", Some("c0"))
@@ -1839,13 +1900,8 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
-        let message = error.to_string();
-        assert!(
-            message.contains("could not determine the base branch"),
-            "{message}"
-        );
-        assert!(message.contains("--base"), "{message}");
+        let found = error.find_source::<BaseBranchUnavailableError>().unwrap();
+        assert_eq!(found.target_ref, "HEAD");
     }
 
     #[test]
@@ -1855,9 +1911,7 @@ mod tests {
         // The base branch resolves, but it shares no history with the target — the
         // shallow-clone case, where the fetched depth stops short of the branch
         // point. `git merge-base` finds no common ancestor, so the timeline cannot
-        // be split; this errors and leads with the deepen-the-clone fix rather than
-        // guessing a base-branch view. The base was auto-detected here, so the
-        // message also offers --base as the way to name a different one.
+        // be split and this errors rather than guessing a base-branch view.
         let mut git = FakeGitHistory::new();
         git.commit("c0", None)
             .commit("c1", Some("c0"))
@@ -1884,23 +1938,17 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
-        let message = error.to_string();
-        assert!(message.contains("no common ancestor"), "{message}");
-        assert!(message.contains("--unshallow"), "{message}");
-        // Auto-detected base: offer --base as the way to name the intended one.
-        assert!(message.contains("--base"), "{message}");
+        let found = error.find_source::<MergeBaseUnavailableError>().unwrap();
+        assert_eq!(found.target_ref, "HEAD");
+        assert_eq!(found.base_commit, "m0");
     }
 
     #[test]
-    fn analyze_with_an_explicit_disjoint_base_does_not_suggest_a_different_base() {
+    fn analyze_rejects_an_explicit_disjoint_base() {
         let storage = MemoryStorage::new();
         seed_linear_step(&storage);
         // The user deliberately chose `--base master`, which resolves but shares no
-        // history with the target. The remedy is still to deepen the clone; we must
-        // not glibly tell them to pass some other --base, since they picked this one
-        // on purpose. Only if the history is complete is the chosen base called out
-        // as genuinely unrelated.
+        // history with the target, so the requested topology cannot be resolved.
         let mut git = FakeGitHistory::new();
         git.commit("c0", None)
             .commit("c1", Some("c0"))
@@ -1928,16 +1976,9 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
-        let message = error.to_string();
-        assert!(message.contains("--unshallow"), "{message}");
-        // The deliberately chosen base is named and reported as unrelated, without
-        // suggesting the user pick a different --base value.
-        assert!(
-            message.contains("master is genuinely unrelated"),
-            "{message}"
-        );
-        assert!(!message.contains("name the intended base"), "{message}");
+        let found = error.find_source::<MergeBaseUnavailableError>().unwrap();
+        assert_eq!(found.target_ref, "HEAD");
+        assert_eq!(found.base_commit, "m0");
     }
 
     #[test]
@@ -2036,7 +2077,9 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
+        let found = error.find_source::<InvalidResultSetError>().unwrap();
+        assert_eq!(found.key, clean_key("c0"));
+        assert!(error.find_source::<serde_json::Error>().is_some());
     }
 
     #[test]
@@ -2058,7 +2101,10 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
+        let found = error.find_source::<InvalidStoredUtf8Error>().unwrap();
+        assert_eq!(found.object_kind, "stored object");
+        assert_eq!(found.key, clean_key("c0"));
+        assert!(error.find_source::<std::str::Utf8Error>().is_some());
     }
 
     #[test]
@@ -2084,8 +2130,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
-        assert!(error.to_string().contains("no output selected"), "{error}");
+        assert!(error.find_source::<NoOutputSelectedError>().is_some());
     }
 
     #[test]
@@ -2109,7 +2154,8 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
+        let found = error.find_source::<UnknownEngineError>().unwrap();
+        assert_eq!(found.name, "dhat");
     }
 
     #[test]
@@ -2134,8 +2180,8 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
-        assert!(error.to_string().contains("--base"), "{error}");
+        let found = error.find_source::<UnresolvedRefError>().unwrap();
+        assert_eq!(found.reference, "does-not-exist");
     }
 
     #[test]
