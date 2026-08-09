@@ -171,6 +171,7 @@ mod tests {
         );
 
         assert_eq!(error.path, Path::new("some/Cargo.toml"));
+        assert!(error.message().contains("some/Cargo.toml"));
         assert!(error.find_source::<io::Error>().is_some());
     }
 
@@ -182,6 +183,7 @@ mod tests {
         );
 
         assert_eq!(error.path, Path::new("some/Cargo.toml"));
+        assert!(error.message().contains("some/Cargo.toml"));
         assert!(error.find_source::<io::Error>().is_some());
     }
 
@@ -193,6 +195,7 @@ mod tests {
         let error = ParseError::caused_by(Path::new("some/Cargo.toml"), source);
 
         assert_eq!(error.path, Path::new("some/Cargo.toml"));
+        assert!(error.message().contains("some/Cargo.toml"));
         assert!(error.find_source::<toml_edit::TomlError>().is_some());
     }
 
@@ -202,6 +205,8 @@ mod tests {
 
         assert_eq!(error.dep(), "serde");
         assert_eq!(error.actual_type(), "integer");
+        assert!(error.message().contains("serde"));
+        assert!(error.message().contains("integer"));
     }
 
     #[test]
@@ -211,6 +216,8 @@ mod tests {
 
         assert_eq!(error.dep(), "serde");
         assert_eq!(error.version(), "not-a-version");
+        assert!(error.message().contains("serde"));
+        assert!(error.message().contains("not-a-version"));
         assert!(error.find_source::<semver::Error>().is_some());
     }
 }

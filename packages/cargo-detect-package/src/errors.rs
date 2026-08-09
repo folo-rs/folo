@@ -145,7 +145,9 @@ impl RefUnwindSafe for CommandExecutionError {}
 mod tests {
     use std::error::Error;
     use std::fmt::Debug;
+    use std::io;
     use std::panic::{RefUnwindSafe, UnwindSafe};
+    use std::path::Path;
 
     use ohno::ErrorExt;
     use static_assertions::assert_impl_all;
@@ -182,5 +184,48 @@ mod tests {
             OutsidePackageError::new().message(),
             "Path is not in any package"
         );
+    }
+
+    /// Design (`docs/design.md`, "Diagnostics and error boundary") promises that a
+    /// diagnostic identifies the workspace, manifest or path it concerns. The field
+    /// assertions elsewhere only prove the value is carried, not that it is rendered.
+    #[test]
+    fn path_bearing_messages_identify_their_path() {
+        let manifest = Path::new("some/dir/Cargo.toml");
+
+        assert!(
+            CanonicalizeTargetPathError::caused_by(
+                Path::new("some/dir/target.rs"),
+                io::Error::new(io::ErrorKind::NotFound, "missing"),
+            )
+            .message()
+            .contains("some/dir/target.rs")
+        );
+
+        assert!(
+            ReadManifestError::caused_by(manifest, io::Error::new(io::ErrorKind::NotFound, "gone"))
+                .message()
+                .contains("some/dir/Cargo.toml")
+        );
+
+        assert!(
+            ParseManifestError::caused_by(
+                manifest,
+                toml::from_str::<toml::Value>("this is = not [valid toml").unwrap_err(),
+            )
+            .message()
+            .contains("some/dir/Cargo.toml")
+        );
+
+        assert!(
+            PackageNameMissingError::new(manifest)
+                .message()
+                .contains("some/dir/Cargo.toml")
+        );
+
+        let mismatch =
+            WorkspaceMismatchError::new(Path::new("left/root"), Path::new("right/root")).message();
+        assert!(mismatch.contains("left/root"));
+        assert!(mismatch.contains("right/root"));
     }
 }
