@@ -96,12 +96,15 @@ async fn examine_renders_a_text_pivot_with_titles() {
         message.contains(&short_head),
         "short head id present: {message}"
     );
-    // Values and their titles both appear.
+    // Values and their titles both appear. The tip is checked as a whole row — its
+    // short commit paired with its value and title — with the title derived from
+    // the fixture length, so raising the evidence gate cannot leave this asserting
+    // an interior commit while the real tip goes unrendered.
     assert!(message.contains("100"), "{message}");
-    assert!(message.contains("130"), "{message}");
+    let tip_title = format!("c{MIN_SERIES_POINTS}");
     assert!(
-        message.contains("c10"),
-        "the tip's title is shown: {message}"
+        message.contains(&format!("  {short_head}  130  {tip_title}\n")),
+        "the tip's point row is shown: {message}"
     );
     // The series is charted before its data points: the rasciigraph axis marker
     // appears ahead of the first point row. Match c1's title with its leading

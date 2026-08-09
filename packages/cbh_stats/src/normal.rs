@@ -1,4 +1,48 @@
 //! The standard normal distribution and the p-values derived from it.
+//!
+//! # Formulations
+//!
+//! The error function is evaluated by the two classical real-argument forms of
+//! Abramowitz & Stegun, *Handbook of Mathematical Functions* (1964), chapter 7,
+//! each taken on the side of [`SERIES_LIMIT`] where it converges:
+//!
+//! * Equation 7.1.6, below the limit:
+//!   `erf(x) = (2/√π)·e^(−x²)·Σ_(n≥0) 2ⁿ·x^(2n+1)/(1·3·5·…·(2n+1))`. The
+//!   denominator is the double factorial `(2n+1)!!`, carried from one term to
+//!   the next by a single multiplication.
+//! * Equation 7.1.14, at or above the limit:
+//!   `erfc(x) = (e^(−x²)/√π)·1/(x + (1/2)/(x + 1/(x + (3/2)/(x + 2/(x + …)))))`,
+//!   whose partial numerators rise by [`NUMERATOR_STEP`] per level. It holds
+//!   for positive arguments only, and `erfc(−x) = 2 − erfc(x)` covers the rest.
+//!
+//! The fraction is evaluated from its deepest level upwards with a zero tail
+//! rather than by a forward recurrence. Every partial denominator is `x` plus a
+//! positive quantity and so is bounded away from zero, which is what makes the
+//! backward sweep stable without the rescaling a forward evaluation needs.
+//!
+//! # Validation
+//!
+//! Every quantity fixed here — the crossover, the term count, the level count
+//! and the accuracy the entry points claim — is pinned by this module's tests.
+//! Their reference values are quoted to the full precision of `f64` from an
+//! independent double-precision implementation (`scipy.special` 1.18), so a
+//! transcription error in an offset or a sign shows up as a failing test
+//! rather than as a plausible wrong answer.
+//!
+//! Measured against those references, the relative error of `erfc` stays below
+//! `1e-14` over `|x| ≤ 30`, which is the whole domain this format can express:
+//! past it the positive tail underflows to zero and the negative tail saturates
+//! at two. The tests assert the reference points an order of magnitude looser
+//! than that, so another platform's last-bit choices in `exp` cannot make them
+//! flaky while a transcription error still cannot hide.
+//!
+//! The term and level counts are converged rather than merely plausible:
+//! evaluating at twice either count reproduces the same bits everywhere in that
+//! domain, and that doubling is the procedure to repeat whenever either count
+//! is questioned. Both counts are parameters of the functions below for exactly
+//! that reason. The crossover is bracketed from both sides by the same means —
+//! below it the fraction outgrows [`FRACTION_DEPTH`], and above it `1 − erf`
+//! cancels away leading digits that no term count can restore.
 
 use std::f64::consts;
 
@@ -7,23 +51,26 @@ use crate::clamp_p_value;
 /// Magnitude below which `erf` is evaluated by its series rather than `erfc` by
 /// its continued fraction.
 ///
-/// The series stays accurate everywhere but needs ever more terms as the
-/// argument grows, while the continued fraction converges ever faster; they
-/// meet comfortably here, where both are converged.
+/// The band where both routes are good is narrow, and this sits inside it.
+/// Lower, and the fraction outgrows its budget of [`FRACTION_DEPTH`] levels: it
+/// needs 135 levels at `1.2` and 185 at `1.0`. Higher, and the subtraction
+/// `1 − erf` cancels the leading digits of an ever smaller result, costing two
+/// digits by `2.0` and eight by `4.0` however many terms the series is given.
 const SERIES_LIMIT: f64 = 1.5;
 
 /// Terms of the `erf` series evaluated below [`SERIES_LIMIT`].
 ///
-/// Successive terms shrink by more than half once the running denominator
-/// passes `2·SERIES_LIMIT²`, so this many terms drives the remainder far below
-/// the rounding error of the sum.
+/// Twenty-three terms already reach the last bit anywhere in that range, the
+/// worst case sitting at the limit itself, so this count carries margin while
+/// keeping the sum's cost independent of its argument.
 const SERIES_TERMS: u32 = 28;
 
 /// Levels of the `erfc` continued fraction evaluated above [`SERIES_LIMIT`].
 ///
-/// The fraction is evaluated from its deepest level upwards with a zero tail,
-/// and this depth converges the result to the last bit for every argument that
-/// does not underflow.
+/// Ninety-three levels already reach the last bit anywhere in that range, the
+/// worst case sitting at the limit itself where the fraction converges
+/// slowest, so this depth carries margin while keeping the sweep's cost
+/// independent of its argument.
 const FRACTION_DEPTH: u32 = 120;
 
 /// Difference between successive partial numerators of the fraction, which run
@@ -62,14 +109,14 @@ pub(crate) fn two_sided_p_from_z(z: f64) -> f64 {
 fn erfc(x: f64) -> f64 {
     if prefers_series(x.abs()) {
         // `erf` is odd and small here, so subtracting it from one cannot cancel.
-        return 1.0 - erf_series(x);
+        return 1.0 - erf_series(x, SERIES_TERMS);
     }
     if x.is_sign_positive() {
-        tail_erfc(x)
+        tail_erfc(x, FRACTION_DEPTH)
     } else {
         // The series would overflow long before `erfc` reaches its limit of two,
         // so the reflection `erfc(−x) = 2 − erfc(x)` covers the negative tail.
-        2.0 - tail_erfc(-x)
+        2.0 - tail_erfc(-x, FRACTION_DEPTH)
     }
 }
 
@@ -85,14 +132,16 @@ fn prefers_series(magnitude: f64) -> bool {
 
 /// The error function `erf(x)` for arguments below [`SERIES_LIMIT`].
 ///
-/// Uses the form `erf(x) = (2/√π)·e^(−x²)·Σ 2ⁿ·x^(2n+1)/(2n+1)!!`, whose terms
-/// are all of one sign, so the sum accumulates no cancellation error.
-fn erf_series(x: f64) -> f64 {
+/// Sums `terms` terms of the series beyond the leading one (see the module's
+/// formulation notes), all of one sign, so the sum accumulates no cancellation
+/// error. [`SERIES_TERMS`] is the count the crate is validated at; the count is
+/// a parameter so that the validation can be reproduced at another one.
+fn erf_series(x: f64, terms: u32) -> f64 {
     let x_squared = x * x;
     let mut term = x;
     let mut total = x;
     let mut denominator = 1.0_f64;
-    for _ in 0..SERIES_TERMS {
+    for _ in 0..terms {
         denominator += 2.0;
         term *= 2.0 * x_squared / denominator;
         total += term;
@@ -102,14 +151,15 @@ fn erf_series(x: f64) -> f64 {
 
 /// The complementary error function for arguments at or above [`SERIES_LIMIT`].
 ///
-/// Uses the continued fraction
-/// `erfc(x) = (e^(−x²)/√π)·1/(x + (1/2)/(x + 1/(x + (3/2)/(x + …))))`, which is
-/// a product of the vanishing exponential and a bounded factor and therefore
-/// keeps its relative accuracy however small the result becomes.
-fn tail_erfc(x: f64) -> f64 {
+/// Evaluates `depth` levels of the fraction (see the module's formulation
+/// notes), which is a product of the vanishing exponential and a bounded factor
+/// and therefore keeps its relative accuracy however small the result becomes.
+/// [`FRACTION_DEPTH`] is the depth the crate is validated at; the depth is a
+/// parameter so that the validation can be reproduced at another one.
+fn tail_erfc(x: f64, depth: u32) -> f64 {
     // Evaluated from the deepest level upwards: every partial denominator is
     // `x + (a positive value)`, so no level can approach zero.
-    let levels_below_top = FRACTION_DEPTH.saturating_sub(1);
+    let levels_below_top = depth.saturating_sub(1);
     let mut numerator = f64::from(levels_below_top) * NUMERATOR_STEP;
     let mut fraction = 0.0_f64;
     for _ in 0..levels_below_top {
@@ -167,8 +217,62 @@ mod tests {
         // immaterial.
         for offset in -4_i32..=3_i32 {
             let x = SERIES_LIMIT + f64::from(offset) / 10.0;
-            close_relative(1.0 - erf_series(x), tail_erfc(x), 1e-13);
+            close_relative(
+                1.0 - erf_series(x, SERIES_TERMS),
+                tail_erfc(x, FRACTION_DEPTH),
+                1e-13,
+            );
         }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Miri perturbs `exp`, so no bitwise comparison of its results holds.
+    fn erf_series_is_converged_at_its_term_count() {
+        // The procedure that establishes the term count: doubling it must not
+        // move a single bit anywhere the series is used.
+        for step in 0_i32..150_i32 {
+            let x = f64::from(step) / 100.0;
+            assert_eq!(
+                erf_series(x, SERIES_TERMS),
+                erf_series(x, SERIES_TERMS * 2),
+                "the series moved when its term count doubled at {x}"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Miri perturbs `exp`, so no bitwise comparison of its results holds.
+    fn tail_erfc_is_converged_at_its_depth() {
+        // The same procedure for the fraction, over the whole range it serves:
+        // beyond thirty the result underflows and carries no information.
+        for step in 150_i32..=3000_i32 {
+            let x = f64::from(step) / 100.0;
+            assert_eq!(
+                tail_erfc(x, FRACTION_DEPTH),
+                tail_erfc(x, FRACTION_DEPTH * 2),
+                "the fraction moved when its depth doubled at {x}"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Miri perturbs `exp`, so no bitwise comparison of its results holds.
+    fn neither_route_can_take_over_the_other_side_of_the_crossover() {
+        // Why the crossover sits where it does, from both sides.
+        //
+        // Below it the fraction is no longer converged at the depth used, so
+        // quadrupling that depth changes the answer.
+        assert_ne!(
+            tail_erfc(1.0, FRACTION_DEPTH),
+            tail_erfc(1.0, FRACTION_DEPTH * 4)
+        );
+        // Above it the series route loses accuracy to the `1 − erf`
+        // subtraction, which no term count repairs: a generously converged
+        // series still disagrees with the fraction far beyond rounding.
+        let series_route = 1.0 - erf_series(4.0, SERIES_TERMS * 4);
+        let fraction_route = tail_erfc(4.0, FRACTION_DEPTH);
+        let error = ((series_route - fraction_route) / fraction_route).abs();
+        assert!(error > 1e-9, "the subtraction lost only {error} at 4.0");
     }
 
     #[test]

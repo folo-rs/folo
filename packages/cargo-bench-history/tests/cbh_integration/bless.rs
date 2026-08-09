@@ -90,9 +90,15 @@ async fn list_blessings_reports_the_blessing_recorded_at_head() {
     assert_eq!(blessings.len(), 1, "{message}");
     assert_eq!(blessings[0]["commit"], short_head, "{message}");
     // The blessed commit's committer date is read from git topology (HEAD is the
-    // seeded tip c10, dated 2024-01-10), not from a denormalized copy on the sidecar.
+    // seeded tip), not from a denormalized copy on the sidecar. The tip's date is
+    // derived from the fixture's own timeline so it follows the fixture's length.
+    let dates = sequential_dates(RISING_HISTORY_FIRST_DATE, MIN_SERIES_POINTS);
+    let tip_date = dates
+        .last()
+        .expect("the rising fixture seeds at least one commit");
     assert_eq!(
-        blessings[0]["commit_time"], "2024-01-10T00:00:00Z",
+        blessings[0]["commit_time"],
+        format!("{tip_date}T00:00:00Z"),
         "{message}"
     );
     assert!(

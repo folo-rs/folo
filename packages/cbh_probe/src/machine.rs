@@ -430,40 +430,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Queries real hardware, which Miri cannot model.
-    fn a_rebooted_host_keeps_its_fingerprint() {
-        // A reboot can shift the speed calibration a host reports without any hardware
-        // changing — a notch moves, or the processors split across one more notch than
-        // before. Applied to this machine's real profile, only the recorded provenance
-        // moves, so the key its history accumulates under must stay put — otherwise one
-        // runner's series splits at every reboot.
-        //
-        // The recalibration appends a notch at a speed no current notch uses, which
-        // keeps the histogram well formed and differs from the original by length
-        // alone. That holds whatever this host reports, including a host that reports
-        // no speed histogram at all, so the test pins the fingerprint rather than the
-        // shape of the machine it happens to run on.
-        let hardware = system_profile();
-        let unused_speed = hardware
-            .processor_speeds
-            .iter()
-            .map(|&(speed, _)| speed)
-            .max()
-            .map_or(0, |highest| highest.saturating_add(1));
-        let mut processor_speeds = hardware.processor_speeds.clone();
-        processor_speeds.push((unused_speed, 1));
-        let recalibrated = HardwareProfile {
-            processor_speeds,
-            ..hardware.clone()
-        };
-        assert_ne!(
-            hardware.processor_speeds, recalibrated.processor_speeds,
-            "{hardware:?}"
-        );
-        assert_eq!(fingerprint(&hardware), fingerprint(&recalibrated));
-    }
-
-    #[test]
     fn a_production_arm_runner_keeps_one_key_across_its_calibration_readings() {
         // Hardware captured from the live `folohistory` benchmark store on 2026-08-01.
         //

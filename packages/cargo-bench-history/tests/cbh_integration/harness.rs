@@ -59,6 +59,13 @@ pub(crate) const MIN_REGIME: usize = 5;
 /// silently skipped.
 pub(crate) const MIN_SERIES_POINTS: usize = 2 * MIN_REGIME;
 
+/// The committer date of the first commit the rising Callgrind fixture
+/// ([`Workspace::seed_rising_callgrind_history`]) stamps; each later commit is one
+/// calendar day on. Named so a test that must know where the fixture's timeline
+/// starts or ends derives it (via [`sequential_dates`]) instead of restating a
+/// date that moves whenever the fixture's length does.
+pub(crate) const RISING_HISTORY_FIRST_DATE: &str = "2024-01-01";
+
 /// Processors the `rekey` fixture hardware records.
 ///
 /// The fixture is one machine whose boot-time speed calibration was read
@@ -1319,11 +1326,12 @@ impl Workspace {
 
     /// Seeds a flat clean Callgrind history followed by a clear, sustained upward
     /// step: [`MIN_REGIME`] commits at 100 then [`MIN_REGIME`] commits at 130,
-    /// labeled `c1`.. and dated one day apart from 2024-01-01. The series holds
-    /// [`MIN_SERIES_POINTS`] points — long enough that the change-point detector
-    /// analyses it, with each regime clearing the per-regime persistence gate.
+    /// labeled `c1`.. and dated one day apart from [`RISING_HISTORY_FIRST_DATE`].
+    /// The series holds [`MIN_SERIES_POINTS`] points — long enough that the
+    /// change-point detector analyses it, with each regime clearing the per-regime
+    /// persistence gate.
     pub(crate) fn seed_rising_callgrind_history(&self) {
-        self.seed_stepped_callgrind("2024-01-01", "c", 100.0, 130.0);
+        self.seed_stepped_callgrind(RISING_HISTORY_FIRST_DATE, "c", 100.0, 130.0);
     }
 
     /// Seeds a rising Callgrind history for `count` distinct benchmarks sharing one

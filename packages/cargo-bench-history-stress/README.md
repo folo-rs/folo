@@ -132,6 +132,10 @@ so it can be redirected to a file cleanly; all progress logging goes to stderr.
 
 ## Output
 
+The report is a summary block naming the dataset that was seeded, followed by one
+timing row per measured mode. Its shape is fixed; its numbers are not, so they are
+left as placeholders here rather than pinned to a run that would go stale:
+
 ```
 cargo-bench-history stress results
 ==================================
@@ -140,9 +144,41 @@ discriminant sets: 20
 benchmarks / set: 1000
 main commits:     2000
   with a run:     1002
-...
+branch commits:   6
+dirty snapshots:  3
+objects seeded:   <count>
+series defined:   <count>
+data seeded:      <compressed size>
+repo build:       <seconds>
+generate + write: <seconds>
+upload:           <seconds>
+
 mode        duration        cpu   cpu%   objects   series  regressions  improvements  notable
 ----        -------- ----------   ----   -------   ------  -----------  ------------  -------
-history     240.400s  1105.204s    46%     20040    20000        11400          4000      yes
-branch       81.164s   402.918s    41%     20220    20000         8119             0      yes
+history       <secs>     <secs>  <pct>   <count>  <count>      <count>       <count>   yes/no
+branch        <secs>     <secs>  <pct>   <count>  <count>      <count>       <count>   yes/no
 ```
+
+The summary block restates the sizing — the flags, plus the discriminant-set count
+the engine × triple matrix in `src/scenario.rs` fixes — then what seeding produced
+and what each seeding phase cost. Each mode row then reports:
+
+| Column | Meaning |
+| --- | --- |
+| `duration` | Wall-clock time of the fastest `analyze` run in that mode. |
+| `cpu` | Processor time consumed across all threads during that run. |
+| `cpu%` | Processor time as a fraction of `duration × cores` — full saturation is 100%. |
+| `objects` | Stored objects the run loaded. |
+| `series` | Reconstructed `(set, benchmark, metric)` series. |
+| `regressions` / `improvements` | Findings the detectors reported. |
+| `notable` | Whether the run reported anything at all. |
+
+Finding counts are a joint property of the sizing and the detectors' evidence gates,
+so they move whenever either does — treat them as an observation of the run in front
+of you, not a figure to compare against this page. What is fixed is their ceiling:
+only a series whose seeded shape actually moves can be flagged, and in `branch` mode
+that is just the benchmarks the cross-cutting rules touch (indices divisible by
+`BRANCH_DIVISOR` or by `DIRTY_DIVISOR`, in `src/scenario.rs`) — a minority of the
+seeded series. A count near that ceiling means the gates are letting nearly every
+seeded shape through; a count of zero means the sizing is below the evidence the
+detectors demand.

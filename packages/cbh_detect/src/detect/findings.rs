@@ -47,6 +47,15 @@
 //! floor and residual-scatter check, and is suppressed when a single step on the
 //! same series already explains at least as much movement.
 //!
+//! Every gate above tests evidence, never cause. A level shift the surrounding
+//! infrastructure produced — a toolchain upgrade, a move to a different runner — is
+//! a real shift in the measured series, so it is reported as a finding to be blessed
+//! rather than filtered out on the grounds of its origin. That is a statement about
+//! what the detectors decline to look at, not a promise of detection: such a shift
+//! still has to clear the same history-length, magnitude, scatter, significance and
+//! false-discovery gates as any other move, and one that fails any of them goes
+//! unreported like any other.
+//!
 //! Polarity: every metric is lower-is-better (instruction counts, branch counts,
 //! allocations, wall and processor time), so a rise is a
 //! [`Direction::Regression`] and a fall is a [`Direction::Improvement`].
@@ -64,116 +73,192 @@ use crate::detect::parallel::{balanced_chunk_sizes, worker_count};
 use crate::detect::{Series, SeriesPoint, noise_gates};
 
 /// Tunable parameters of the engine-aware analysis.
+///
+/// Every field is read as supplied and gates one stage of detection on its own; no
+/// relationship between fields is required or enforced, so any combination is a
+/// valid configuration. A combination that leaves a stage unreachable — a
+/// [`compare_window`](Self::compare_window) holding fewer commit levels than
+/// [`min_series_points`](Self::min_series_points), say — makes that stage abstain
+/// rather than misreport.
+///
+/// [`AnalysisConfig::default()`](Self::default) is the tuned policy the tool ships.
+/// Field documentation that gives a worked example, or that relates one field's
+/// value to another's, describes that default configuration rather than the type.
 #[derive(Clone, Copy, Debug)]
 pub struct AnalysisConfig {
-    /// Minimum points each side of a change must have for the step to be trusted
-    /// (persistence): a one-off blip on the latest point cannot flag.
+    /// Minimum points each side of a change must hold for the step to be trusted.
+    ///
+    /// A split leaving either regime shorter than this raises no candidate, so a move
+    /// confined to fewer than this many trailing points cannot flag (persistence).
+    /// Branch mode applies it to the base-side commit levels either side of a
+    /// candidate regime boundary, and to the comparison sample as a whole.
     pub min_regime: usize,
-    /// Minimum points a series must carry before it is evaluated at all. A shorter
-    /// series raises no finding and does not count toward the false-discovery
-    /// family, since no split within it can satisfy
-    /// [`min_regime`](Self::min_regime) on both sides.
+    /// Minimum points a series must carry before it is evaluated at all.
+    ///
+    /// A shorter series raises no finding and does not count toward the
+    /// false-discovery family: it is unjudged rather than judged-and-quiet (see
+    /// [`Testability`]). History mode measures the post-blessing window against this
+    /// floor; branch mode measures the base-side commit levels inside
+    /// [`compare_window`](Self::compare_window) against it.
+    ///
+    /// Under [`AnalysisConfig::default()`](Self::default) this is two full regimes,
+    /// the shortest series a split can satisfy [`min_regime`](Self::min_regime) on
+    /// both sides of.
     pub min_series_points: usize,
-    /// Significance level a noisy change-point's Mann–Whitney rank test must clear
-    /// (Pettitt only locates the split; its analytic p-value is too conservative on
-    /// short series to gate significance).
+    /// Significance level a change-point's Mann–Whitney rank test must clear.
+    ///
+    /// Pettitt only locates the split — its analytic p-value is too conservative on
+    /// short series to gate significance — so the rank test between the two regimes
+    /// decides. Branch mode holds its prediction-interval p-value to the same level,
+    /// as does a candidate base-side regime boundary.
     pub change_alpha: f64,
-    /// Target false-discovery rate for the Benjamini–Hochberg filter over noisy
-    /// candidates.
+    /// Target false-discovery rate for the Benjamini–Hochberg filter.
+    ///
+    /// The filter runs over the surviving candidates with the family sized from every
+    /// series the pass judged (see [`SeriesCensus::judged`]), so a larger judged suite
+    /// demands a smaller p-value of each candidate.
     pub fdr_q: f64,
     /// Minimum points a series needs before a slow-drift finding is considered.
-    pub drift_min_points: usize,
-    /// Significance level a noisy drift's Mann–Kendall trend must clear.
-    pub drift_alpha: f64,
-    /// Minimum relative magnitude (3%) a noisy move must reach to matter in
-    /// practice, regardless of statistical significance.
-    pub practical_relative: f64,
-    /// Minimum absolute magnitude, in the metric's own units, a move on an
-    /// instruction or branch count must reach. Composed by conjunction with
-    /// [`practical_relative`](Self::practical_relative): these counts move in whole
-    /// integer units, so at a small baseline a few units of build-layout jitter is a
-    /// large *percentage* move that the relative floor alone would let through.
-    pub practical_absolute_count: f64,
-    /// Minimum absolute magnitude, in nanoseconds, a timing move must reach. A move
-    /// of under a nanosecond an iteration is not worth acting on regardless of the
-    /// percentage it works out to, so on a benchmark measuring a couple of
-    /// nanoseconds an iteration this is the gate that binds rather than the relative
-    /// floor.
-    pub practical_absolute_time: f64,
-    /// Minimum absolute magnitude, in bytes or allocations, an allocation move must
-    /// reach. A fraction of a byte or of an allocation cannot happen, so one whole
-    /// unit is the smallest move worth reporting and the floor rejects only the
-    /// sub-unit moves that amortizing across a run's iterations can manufacture.
-    pub practical_absolute_alloc: f64,
-    /// Smallest scatter an instruction or branch count can express, in counts. Bounds
-    /// the base window's standard deviation from below in branch mode's prediction
-    /// interval, so a window that repeats one integer still yields a usable standard
-    /// error. See [`scatter_floor_time`](Self::scatter_floor_time) for why this is not
-    /// the same quantity as an absolute magnitude floor.
-    pub scatter_floor_count: f64,
-    /// Smallest scatter a timing metric can express, in nanoseconds — zero, because a
-    /// time is a regression slope over a run's iterations and resolves far below a
-    /// clock tick.
     ///
-    /// A scatter floor is the metric's *quantum*, not a statement about which moves
-    /// matter: it exists only to keep a degenerate base window from collapsing the
-    /// standard error. Raising it would make every timing series behave as if it
-    /// wobbled by that much, imposing an absolute detection threshold in units of the
-    /// standard error on top of the
-    /// [`practical_absolute_time`](Self::practical_absolute_time) floor that already
-    /// decides which timing moves are worth reporting.
+    /// Independent of [`min_series_points`](Self::min_series_points), which decides
+    /// whether the series is judged at all: a series above that floor but below this
+    /// one is judged, and can raise only a level shift.
+    ///
+    /// [`AnalysisConfig::default()`](Self::default) sets the two equal, so both
+    /// history detectors demand the same evidence and a series is evaluable by both
+    /// or by neither.
+    pub drift_min_points: usize,
+    /// Significance level a drift's Mann–Kendall trend must clear.
+    pub drift_alpha: f64,
+    /// Minimum relative magnitude a move must reach to matter in practice.
+    ///
+    /// Applied to the move against its baseline, independently of statistical
+    /// significance, so a certain but tiny move is not reported. Branch mode
+    /// substitutes [`branch_practical_relative`](Self::branch_practical_relative).
+    pub practical_relative: f64,
+    /// Absolute magnitude floor for instruction and branch counts, in counts.
+    ///
+    /// Composed by conjunction with the relative floor in force
+    /// ([`practical_relative`](Self::practical_relative), or
+    /// [`branch_practical_relative`](Self::branch_practical_relative) in branch mode):
+    /// a move must clear both. An absolute floor is needed alongside the relative one
+    /// because these counts move in whole units, so on a small baseline a handful of
+    /// units of build-layout jitter works out to a large *percentage* move that the
+    /// relative floor alone would let through.
+    pub practical_absolute_count: f64,
+    /// Absolute magnitude floor for timing moves, in nanoseconds.
+    ///
+    /// Composed by conjunction with the relative floor in force, exactly as
+    /// [`practical_absolute_count`](Self::practical_absolute_count) is. A timing
+    /// figure resolves far below a nanosecond, so this expresses which moves are worth
+    /// acting on rather than what the engine can measure.
+    ///
+    /// Under [`AnalysisConfig::default()`](Self::default) this is the binding gate on
+    /// a benchmark measuring a couple of nanoseconds an iteration, where the relative
+    /// floor works out to a fraction of a nanosecond.
+    pub practical_absolute_time: f64,
+    /// Absolute magnitude floor for allocation moves, in bytes or allocations.
+    ///
+    /// Composed by conjunction with the relative floor in force, exactly as
+    /// [`practical_absolute_count`](Self::practical_absolute_count) is. What an
+    /// allocation floor rejects is the sub-unit moves that amortizing a run's warmup
+    /// and buffer-resize allocations across its iterations manufactures, since a
+    /// fraction of a byte or of an allocation cannot happen.
+    pub practical_absolute_alloc: f64,
+    /// Lower bound on the scatter of an instruction or branch count sample, in counts.
+    ///
+    /// Branch mode's prediction interval takes its standard error from the base
+    /// window's standard deviation, and this bounds that deviation from below, so a
+    /// window that happens to repeat one value still yields a usable standard error
+    /// rather than a degenerate one. A scatter floor is the metric's *quantum*, not a
+    /// statement about which moves matter — see
+    /// [`scatter_floor_time`](Self::scatter_floor_time) for what raising one costs.
+    pub scatter_floor_count: f64,
+    /// Lower bound on the scatter of a timing sample, in nanoseconds.
+    ///
+    /// Serves the same role as [`scatter_floor_count`](Self::scatter_floor_count).
+    /// Raising it makes every timing series behave as if it wobbled by at least that
+    /// much, imposing an absolute detection threshold in units of the standard error
+    /// on top of the [`practical_absolute_time`](Self::practical_absolute_time) floor
+    /// that already decides which timing moves are worth reporting.
+    ///
+    /// [`AnalysisConfig::default()`](Self::default) leaves timing scatter unbounded
+    /// from below, because a time is a regression slope over a run's iterations and
+    /// resolves far below a clock tick, so it has no quantum to express. The price is
+    /// that a base window of identical timings yields no verdict, which is silence
+    /// rather than a spurious certainty.
     pub scatter_floor_time: f64,
-    /// Smallest scatter an allocation metric can express, in bytes or allocations.
-    /// Code that allocated nothing gives a base window of zeroes, whose scatter is
-    /// exactly zero, and this is what keeps that (real and important) move judgeable.
+    /// Lower bound on the scatter of an allocation sample, in bytes or allocations.
+    ///
+    /// Serves the same role as [`scatter_floor_count`](Self::scatter_floor_count).
+    /// The case it exists for is code that allocated nothing and now allocates: a base
+    /// window of zeroes has exactly zero scatter, and without a positive floor the
+    /// standard error collapses and that (real and important) move cannot be judged.
     pub scatter_floor_alloc: f64,
-    /// How many recent base-side commit levels branch mode inspects before comparing
-    /// the branch's latest state. A genuine level shift inside this window narrows the
-    /// comparison to the trailing regime; otherwise the whole window is used.
+    /// How many recent base-side commits branch mode inspects.
+    ///
+    /// The window is the base evidence the branch's latest state is compared against.
+    /// A genuine level shift accepted inside it narrows the comparison to the trailing
+    /// regime; otherwise the whole window is the comparison sample. Its size therefore
+    /// sets both how small a move branch mode can resolve and how far back it looks
+    /// for a current-regime boundary, and a window holding fewer commit levels than
+    /// [`min_series_points`](Self::min_series_points) leaves branch mode unable to
+    /// judge the series at all.
     pub compare_window: usize,
-    /// Minimum relative magnitude a noisy *branch* move must reach. Raised above the
-    /// history floor: a feature-branch signal must be high-confidence, since we
-    /// would rather miss a small move than cry wolf on a pull request.
+    /// Minimum relative magnitude a *branch* move must reach.
+    ///
+    /// Branch mode's substitute for [`practical_relative`](Self::practical_relative),
+    /// applied both to a reported move and to a candidate base-side regime boundary.
+    ///
+    /// [`AnalysisConfig::default()`](Self::default) holds it above the history floor:
+    /// a feature-branch signal must be high-confidence, since we would rather miss a
+    /// small move than cry wolf on a pull request.
     pub branch_practical_relative: f64,
-    /// Multiple of the per-measurement noise floor a branch move must exceed where
-    /// the engine reports per-point confidence intervals. An additional veto on top
-    /// of the prediction-interval test, able only to suppress a candidate.
+    /// Multiple of the per-measurement noise floor a branch move must exceed.
+    ///
+    /// Applies only where the engine reports per-point confidence intervals, whose
+    /// median half-width is that noise floor. An additional veto on top of the
+    /// prediction-interval test, able only to suppress a candidate.
     pub branch_noise_multiple: f64,
-    /// Multiple of a series' own between-commit residual scatter (median absolute
-    /// residual of the fitted step or line model) that a move must exceed before it
-    /// is trusted. This is the primary, series-intrinsic noise gate applied to every
-    /// engine: a clean series has near-zero residual scatter, so any persistent move
-    /// clears it, while a jittery series demands a move that stands out above its own
-    /// run-to-run wobble. It composes with (and is independent of) the optional
-    /// confidence-interval veto available on dispersion-reporting engines.
+    /// Multiple of a series' own residual scatter a move must exceed to be trusted.
+    ///
+    /// The scatter is the median absolute residual of the fitted step or line model —
+    /// the series' between-commit wobble. This is the primary, series-intrinsic noise
+    /// gate applied to every engine: a clean series has near-zero residual scatter, so
+    /// any persistent move clears it, while a jittery series demands a move that stands
+    /// out above its own run-to-run wobble. It composes with (and is independent of)
+    /// the optional confidence-interval veto available on dispersion-reporting engines.
     pub residual_noise_multiple: f64,
-    /// Minimum **probability of superiority** (Mann–Whitney common-language effect
-    /// size) the two regimes of a level shift must reach for the shift to be trusted:
+    /// Minimum **probability of superiority** a level shift's two regimes must reach.
+    ///
+    /// The probability of superiority is the Mann–Whitney common-language effect size:
     /// the fraction of after-vs-before commit pairs that move in the finding's
     /// direction. It is the *effect-size* companion to the rank test's *significance*
     /// gate, and closes a hole the significance gate cannot: a rank test grows
     /// "significant" with sample size even for two heavily overlapping regimes, so a
     /// long but stationary series that merely oscillates between two levels — noisy
     /// yet stable — otherwise reads as a change-point. A genuine step scores ~1 here;
-    /// bimodal jitter scores near ½. Because a move that already clears the residual
-    /// gate is well-separated in practice, this only ever *suppresses* a candidate the
-    /// median-based gates were fooled by, never creates one.
+    /// bimodal jitter scores near ½. The gate composes by conjunction, so it can only
+    /// suppress a candidate the median-based gates were fooled by, never create one.
     pub min_regime_separation: f64,
-    /// Minimum probability of superiority a base-window split must reach before branch
-    /// mode accepts it as a regime boundary and discards the levels before it.
+    /// Minimum probability of superiority a base-window split must reach.
     ///
-    /// Held above [`min_regime_separation`](Self::min_regime_separation) because the two
-    /// decisions carry asymmetric costs. Reporting a move makes a claim a human then
-    /// checks; accepting a boundary *discards evidence*, shrinking the comparison sample
-    /// to the trailing regime and rebuilding the scatter estimate from it alone — so a
-    /// wrong boundary can collapse a noisy window's dispersion to near zero and make any
-    /// subsequent tip read as certain. A boundary that throws data away must be
-    /// unambiguous.
+    /// Branch mode accepts a base-side split as a regime boundary — discarding the
+    /// levels before it — only when the split clears this rather than
+    /// [`min_regime_separation`](Self::min_regime_separation).
     ///
-    /// The statistic is coarse at these sample sizes, so this reads as "essentially no
-    /// crossing pair may contradict the boundary" rather than as a precise probability:
-    /// with the smallest regimes on both sides it admits one contradicting pair in
-    /// twenty-five and no more.
+    /// The two decisions carry asymmetric costs, which is why
+    /// [`AnalysisConfig::default()`](Self::default) holds this the higher of the pair.
+    /// Reporting a move makes a claim a human then checks; accepting a boundary
+    /// *discards evidence*, shrinking the comparison sample to the trailing regime and
+    /// rebuilding the scatter estimate from it alone — so a wrong boundary can collapse
+    /// a noisy window's dispersion to near zero and make any subsequent tip read as
+    /// certain. A boundary that throws data away must be unambiguous.
+    ///
+    /// The statistic is coarse at these sample sizes, so at the default this reads as
+    /// "essentially no crossing pair may contradict the boundary" rather than as a
+    /// precise probability: with the smallest regimes on both sides it admits one
+    /// contradicting pair in twenty-five and no more.
     pub min_base_split_separation: f64,
 }
 
@@ -312,11 +397,9 @@ pub enum UnjudgedReason {
 }
 
 impl UnjudgedReason {
-    /// Every reason, in reporting order.
-    ///
-    /// The order runs with the pipeline: what the ghost filter dropped before
-    /// detection, then the history-mode shortfalls, then the branch-mode ones.
-    pub const ALL: [Self; 5] = [
+    /// Every reason, in declaration order, so a test can cover the set exhaustively.
+    #[cfg(test)]
+    const ALL: [Self; 5] = [
         Self::Ghost,
         Self::TooFewPoints,
         Self::TooFewPointsSinceBlessing,
@@ -369,7 +452,7 @@ pub enum Testability {
 impl Testability {
     /// Whether the detector reached a verdict.
     #[must_use]
-    pub fn is_judged(self) -> bool {
+    fn is_judged(self) -> bool {
         self == Self::Judged
     }
 }
@@ -410,7 +493,7 @@ impl SeriesCensus {
 
     /// Absorbs another census, so a pass split across workers can recombine into one
     /// account.
-    pub fn merge(&mut self, other: &Self) {
+    fn merge(&mut self, other: &Self) {
         self.judged = self.judged.saturating_add(other.judged);
         for (&reason, &series) in &other.unjudged {
             self.record_unjudged(reason, series);
@@ -438,7 +521,10 @@ impl SeriesCensus {
         self.judged.saturating_add(self.unjudged())
     }
 
-    /// The unjudged series broken down by reason, in [`UnjudgedReason::ALL`] order.
+    /// The unjudged series broken down by reason, in [`UnjudgedReason`] order.
+    ///
+    /// That order runs with the pipeline: what the ghost filter dropped before
+    /// detection, then the history-mode shortfalls, then the branch-mode ones.
     /// Reasons that account for no series are omitted.
     pub fn reasons(&self) -> impl Iterator<Item = (UnjudgedReason, usize)> + '_ {
         self.unjudged

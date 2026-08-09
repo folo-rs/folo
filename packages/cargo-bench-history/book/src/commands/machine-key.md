@@ -13,8 +13,11 @@ allocations too, because libraries dispatch to different code paths on different
 microarchitectures. So every engine's history is partitioned by this machine key, and runs
 from different machines are never mixed.
 
-`--verbose` additionally reports the factors behind the key on standard error, for tracing a
-key change to the hardware detail that moved.
+`--verbose` additionally reports the factors behind the key on standard error — the fingerprint
+version, the processor and memory-region counts, and the processor models — for tracing a key
+change to the hardware detail that moved. Facts that are merely recorded beside a run as
+provenance, per-processor speeds among them, are left out, so what is listed is exactly what the
+key depends on.
 
 The key hashes only **properties of the hardware**: the processor and memory-region counts and
 the distinct processor models present. Readings that the same machine can report differently

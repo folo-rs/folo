@@ -12,18 +12,18 @@
 /// Default `min_regime`: each side of a change must hold at least this many points
 /// for the step to be trusted, so a one-off blip on the latest point cannot flag.
 ///
-/// A regime this size has its level taken as a median over five points, which is a
-/// stable estimator. Smaller regimes make the level an extreme order statistic of a
-/// handful of recent measurements, which the residual gate — estimated from the
-/// series as a whole — cannot then judge fairly.
+/// A regime this size takes its level as a median over a handful of points, which is
+/// a stable estimator. Smaller regimes make the level an extreme order statistic of a
+/// few recent measurements, which the residual gate — estimated from the series as a
+/// whole — cannot then judge fairly.
 pub(crate) const MIN_REGIME: usize = 5;
 
 /// Default `min_series_points`: a series shorter than this is not evaluated at all,
 /// and does not count toward the false-discovery family.
 ///
-/// Two full regimes are the least a change-point can be built from, so this is
-/// twice [`MIN_REGIME`]. Below it no split can satisfy the regime floor, so
-/// evaluating the series can only produce noise.
+/// Two full regimes are the least a change-point can be built from. Below this floor
+/// no split can satisfy [`MIN_REGIME`] on both sides, so evaluating the series can
+/// only produce noise.
 pub(crate) const MIN_SERIES_POINTS: usize = 2 * MIN_REGIME;
 
 /// Default `change_alpha`: the significance level a change-point's Mann–Whitney
@@ -46,7 +46,7 @@ pub(crate) const DRIFT_MIN_POINTS: usize = MIN_SERIES_POINTS;
 pub(crate) const DRIFT_ALPHA: f64 = 0.05;
 
 /// Default `practical_relative`: a history move must shift the level by at least
-/// this fraction (3%) to matter in practice, regardless of significance.
+/// this fraction to matter in practice, regardless of significance.
 pub(crate) const PRACTICAL_RELATIVE: f64 = 0.03;
 
 /// Default `practical_absolute_count`: a move on an instruction or branch count must
@@ -75,7 +75,7 @@ pub(crate) const PRACTICAL_ABSOLUTE_TIME: f64 = 1.0;
 pub(crate) const PRACTICAL_ABSOLUTE_ALLOC: f64 = 1.0;
 
 /// Default `scatter_floor_count`: the smallest scatter an instruction or branch
-/// count can express, one whole count.
+/// count can express.
 ///
 /// This is the metric's *quantum* rather than a significance threshold. It bounds
 /// the base window's standard deviation from below in the branch-mode prediction
@@ -99,12 +99,12 @@ pub(crate) const SCATTER_FLOOR_COUNT: f64 = 1.0;
 pub(crate) const SCATTER_FLOOR_TIME: f64 = 0.0;
 
 /// Default `scatter_floor_alloc`: the smallest scatter an allocation metric can
-/// express, one whole byte or allocation.
+/// express.
 ///
 /// The case it exists for is code that allocated nothing and now allocates: a base
 /// window of zeroes has exactly zero scatter, and without a floor the standard error
-/// collapses and the move cannot be judged at all. One unit is the finest scatter
-/// the underlying count can distinguish.
+/// collapses and the move cannot be judged at all. The finest scatter the underlying
+/// count can distinguish is the unit it counts.
 pub(crate) const SCATTER_FLOOR_ALLOC: f64 = 1.0;
 
 /// Default `compare_window`: how many recent base-side **commits** branch mode
@@ -125,8 +125,8 @@ pub(crate) const SCATTER_FLOOR_ALLOC: f64 = 1.0;
 /// inside it, and could shrink to a useless sample however long the history grew.
 pub(crate) const COMPARE_WINDOW: usize = 16;
 
-/// Default `branch_practical_relative`: a branch move must reach this fraction
-/// (5%), raised above the history floor, to keep pull-request false positives down.
+/// Default `branch_practical_relative`: a branch move must reach this fraction,
+/// raised above the history floor, to keep pull-request false positives down.
 pub(crate) const BRANCH_PRACTICAL_RELATIVE: f64 = 0.05;
 
 /// Default `branch_noise_multiple`: multiple of the per-measurement noise floor a
@@ -157,13 +157,13 @@ pub(crate) const MIN_REGIME_SEPARATION: f64 = 0.85;
 /// which is a higher standard than merely reporting a move.
 ///
 /// The statistic is coarse at these sample sizes — the smallest regimes hold
-/// [`MIN_REGIME`] levels each, and the superiority of a 5-against-5 split moves in
-/// steps of 1/25 — so this floor is read as "essentially no crossing pair may
-/// contradict the boundary" rather than as a precise probability: at 5 against 5 it
-/// admits one contradicting pair in twenty-five and no more, and a wider split
-/// tolerates correspondingly few. A stationary series that oscillates between two
-/// levels leaves several contradicting pairs in every candidate split and is rejected
-/// on that basis.
+/// [`MIN_REGIME`] levels each, so the superiority of a smallest-regime split moves in
+/// steps of one twenty-fifth — so this floor is read as "essentially no crossing pair
+/// may contradict the boundary" rather than as a precise probability: at the smallest
+/// regimes it admits one contradicting pair in twenty-five and no more, and a wider
+/// split tolerates correspondingly few. A stationary series that oscillates between
+/// two levels leaves several contradicting pairs in every candidate split and is
+/// rejected on that basis.
 pub(crate) const MIN_BASE_SPLIT_SEPARATION: f64 = 0.95;
 
 /// Largest interior window size resolved-spike search will scan; longer histories

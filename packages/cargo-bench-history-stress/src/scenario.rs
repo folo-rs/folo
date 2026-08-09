@@ -78,8 +78,8 @@ const FAMILY_COUNT: usize = 5;
 /// The family whose ~75% step a blessing re-baselines (in the blessed sets).
 const BLESSABLE_FAMILY: usize = 3;
 
-/// Discriminant sets at or before this index receive the family-3 blessing; the
-/// rest keep the un-blessed step, so the two cases contrast in one run.
+/// Discriminant sets below this index receive the family-3 blessing; the rest
+/// keep the un-blessed step, so the two cases contrast in one run.
 const BLESSED_SET_LIMIT: usize = 3;
 
 /// Every benchmark whose index is a multiple of this is elevated on the feature

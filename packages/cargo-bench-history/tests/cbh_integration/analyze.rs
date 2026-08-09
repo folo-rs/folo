@@ -121,10 +121,26 @@ async fn analyze_canary_an_unmistakable_step_is_always_reported() {
     let finding = &parsed["findings"][0];
     assert_eq!(finding["direction"], "regression", "{report}");
     assert_eq!(finding["kind"], "instruction_count", "{report}");
-    let relative = finding["relative_delta"].as_f64().unwrap();
-    assert!(
-        (relative - 1.0).abs() < 0.01,
-        "the reported move must be the seeded doubling: {report}"
+    // Nothing on the path from the seeded values to this field approximates: the
+    // change-point detector represents each regime by its median, which for a run
+    // of identical values is that value itself; 200 - 100 and 100 / 100 are both
+    // exact in binary floating point; and the JSON projection copies the `f64`
+    // through untouched. So the doubling is asserted exactly. A tolerance would
+    // let a wrong baseline or a wrong relative-delta formula pass unnoticed while
+    // the canary still reported green.
+    //
+    // The method is pinned because these exact values are the two-regime model's.
+    // The drift detector describes the same fixture with a fitted line, whose
+    // endpoints straddle the two levels rather than sitting on them, so it would
+    // report a materially different baseline, latest and movement. Pinning the
+    // method keeps the three assertions below anchored to the model that produces
+    // them.
+    assert_eq!(finding["method"], "change_point", "{report}");
+    assert_eq!(finding["baseline"], 100.0, "{report}");
+    assert_eq!(finding["latest"], 200.0, "{report}");
+    assert_eq!(
+        finding["relative_delta"], 1.0,
+        "the reported move must be exactly the seeded doubling: {report}"
     );
 }
 
@@ -1537,8 +1553,12 @@ async fn analyze_branch_selects_official_line_from_a_feature_checkout() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn analyze_official_line_follows_first_parent_across_a_merge() {
+    // The merge takes the second position on the official line, so the plain
+    // commits after it are labeled from three up to the length the detector needs.
+    const FIRST_LABEL_AFTER_MERGE: usize = 3;
+
     let workspace = Workspace::repo(&storage_only_config());
-    // master:  root - c1 - M - c3 - c4 - c5 - c6 - c7 - c8 - c9 - c10
+    // master:  root - c1 - M - c3 - c4 - .. - c{MIN_SERIES_POINTS}
     //                  \   /            (M merges the side branch in)
     //  side:            sf1 - sf2
     workspace.commit("c1");
@@ -1547,23 +1567,22 @@ async fn analyze_official_line_follows_first_parent_across_a_merge() {
     workspace.commit("sf2");
     workspace.checkout("master");
     workspace.merge("side", "M");
-    workspace.commit("c3");
-    workspace.commit("c4");
-    workspace.commit("c5");
-    workspace.commit("c6");
-    workspace.commit("c7");
-    workspace.commit("c8");
-    workspace.commit("c9");
-    workspace.commit("c10");
+    let after_merge: Vec<String> = (FIRST_LABEL_AFTER_MERGE..=MIN_SERIES_POINTS)
+        .map(|index| format!("c{index}"))
+        .collect();
+    for label in &after_merge {
+        workspace.commit(label);
+    }
 
-    // The first-parent line c1 -> M -> c3 -> .. -> c10 carries a clean sustained
+    // The first-parent line c1 -> M -> c3 -> .. carries a clean sustained
     // regression on its tail: `MIN_REGIME` points at 100 then `MIN_REGIME` at 130,
     // for `MIN_SERIES_POINTS` points in all — enough for the change-point detector.
-    for label in ["c1", "M", "c3", "c4", "c5"] {
-        workspace.seed_callgrind(label, 100.0);
-    }
-    for label in ["c6", "c7", "c8", "c9", "c10"] {
-        workspace.seed_callgrind(label, 130.0);
+    let line = ["c1".to_owned(), "M".to_owned()]
+        .into_iter()
+        .chain(after_merge);
+    for (index, label) in line.enumerate() {
+        let value = if index < MIN_REGIME { 100.0 } else { 130.0 };
+        workspace.seed_callgrind(&label, value);
     }
     // Side-branch points sit on the second-parent side and must never leak into the
     // official line; they carry wild values that would distort the series if read.
@@ -1575,7 +1594,7 @@ async fn analyze_official_line_follows_first_parent_across_a_merge() {
     assert_eq!(
         parsed["runs"],
         u64::try_from(MIN_SERIES_POINTS).unwrap(),
-        "only the first-parent line c1 -> M -> c3 -> .. -> c10 is analyzed, not \
+        "only the first-parent line c1 -> M -> c3 -> .. is analyzed, not \
          the side branch: {report}"
     );
     assert_eq!(
@@ -2051,13 +2070,14 @@ async fn analyze_history_no_newer_data_renders_a_trailing_gap() {
         "the lagging history flags the same step even though the tip lacks the metric: {lag_report}"
     );
 
-    // The lagging series ends at c6 but its chart is filled with a trailing gap column
-    // up to the analyzed tip c7, so it spans exactly as many columns — and renders
-    // exactly as wide — as the full history's chart. Without that trailing fill the
-    // lagging chart would stop one column short of the tip and be one character
-    // narrower. (`rasciigraph` draws a trailing gap and a continued flat plateau
-    // identically — both a blank final column — so the rendered width, not the glyph
-    // content, is what proves the fill reached the tip.)
+    // The lagging series ends at the last dated commit but its chart is filled with
+    // a trailing gap column up to the analyzed tip, so it spans exactly as many
+    // columns — and renders exactly as wide — as the full history's chart. Without
+    // that trailing fill the lagging chart would stop one column short of the tip
+    // and be one character narrower. (`rasciigraph` draws a trailing gap and a
+    // continued flat plateau identically — both a blank final column — so the
+    // rendered width, not the glyph content, is what proves the fill reached the
+    // tip.)
     assert!(
         chart_width(&full_report) > 0,
         "the full history draws a chart: {full_report}"

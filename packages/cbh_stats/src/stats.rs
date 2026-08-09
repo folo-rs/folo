@@ -468,14 +468,22 @@ pub fn theil_sen_line(values: &[f64]) -> Option<(f64, f64)> {
 /// threshold `(m/m)·q = q` is then cleared by every p-value handed in and the
 /// whole subset is rejected unconditionally.
 ///
-/// A `family_size` below `p_values.len()` describes fewer hypotheses than were
-/// actually tested and is a caller error. It is treated as `p_values.len()`
-/// rather than trusted, which bounds the procedure at its classic form and keeps
-/// a miscount from making the filter more permissive.
+/// # Panics
+///
+/// Panics if `family_size` is smaller than `p_values.len()`. Every p-value is
+/// the verdict on a hypothesis the caller examined, so the family examined
+/// always contains at least the hypotheses that produced p-values; a smaller
+/// one is a miscounted census rather than a stricter correction, and correcting
+/// it here would silently restore the unconditional pass described above.
 #[must_use]
 pub fn benjamini_hochberg(p_values: &[f64], q: f64, family_size: usize) -> Vec<bool> {
     let tested = p_values.len();
-    let m_f = count_to_f64(tested.max(family_size));
+    assert!(
+        family_size >= tested,
+        "every p-value is the verdict on an examined hypothesis, so the examined \
+         family contains at least the hypotheses that produced these p-values"
+    );
+    let m_f = count_to_f64(family_size);
 
     let mut ordered: Vec<(usize, f64)> = p_values.iter().copied().enumerate().collect();
     // Unstable sort: equal p-values are interchangeable for the step-up cutoff (a
@@ -981,7 +989,7 @@ mod tests {
         let candidates = [0.0001, 0.002, 0.008, 0.011, 0.03, 0.047];
         let mut previous = candidates.len();
 
-        for family_size in 1_usize..=64 {
+        for family_size in candidates.len()..=64 {
             let kept = keep_count(&benjamini_hochberg(&candidates, 0.1, family_size));
             assert!(
                 kept <= previous,
@@ -995,23 +1003,14 @@ mod tests {
     }
 
     #[test]
-    fn benjamini_hochberg_ignores_a_family_smaller_than_the_p_values() {
-        // An undercounted family is treated as the p-values themselves, so it can
-        // never loosen the thresholds below the classic form.
-        let candidates = [0.01, 0.02, 0.5];
-        let classic = benjamini_hochberg(&candidates, 0.1, candidates.len());
-
-        for undercount in 0..candidates.len() {
-            assert_eq!(benjamini_hochberg(&candidates, 0.1, undercount), classic);
-        }
-        assert_eq!(classic, vec![true, true, false]);
-    }
-
-    #[test]
-    fn benjamini_hochberg_survives_a_family_size_of_zero() {
-        // A zero family cannot divide the thresholds into infinity and wave every
-        // hypothesis through; the p-values still face their own count.
-        assert_eq!(benjamini_hochberg(&[0.9], 0.1, 0), vec![false]);
+    #[should_panic]
+    fn benjamini_hochberg_rejects_a_family_smaller_than_the_p_values() {
+        // A family that does not contain every hypothesis these p-values came
+        // from is a broken census, and normalising it away would restore the
+        // candidates-only correction that `family_size` exists to prevent. The
+        // accepted boundary — a family of exactly these p-values — is pinned by
+        // `benjamini_hochberg_keeps_the_significant_prefix`.
+        _ = benjamini_hochberg(&[0.01, 0.02, 0.5], 0.1, 2);
     }
 
     #[test]
