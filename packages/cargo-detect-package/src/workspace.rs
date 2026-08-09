@@ -52,36 +52,30 @@ pub(crate) fn validate_workspace_context(
     // Canonicalize the resolved target path - it must exist. The error names the resolved
     // path rather than the argument, because a relative argument is probed at two different
     // absolute locations and only the resolved one says where the lookup actually failed.
-    let absolute_target_path = fs
+    // Normalizing immediately keeps the Windows verbatim prefix out of the workspace walk
+    // below, out of the manifest diagnostics that walk can raise, and out of the
+    // `starts_with()` comparisons in `detect_package()`.
+    let canonical_target_path = fs
         .canonicalize(&resolved_target_path)
         .map_err(|error| CanonicalizeTargetPathError::caused_by(&resolved_target_path, error))?;
+    let absolute_target_path = normalize_path(&canonical_target_path, fs);
 
     // Find workspace root for the target path, distinguishing a broken manifest from an
     // absent workspace for the same reason as above.
     let target_workspace_root = find_workspace_root(&absolute_target_path, fs)?
         .ok_or_else(TargetPathOutsideWorkspaceError::new)?;
 
-    // Verify both paths are in the same workspace.
-    // Normalize paths to handle Windows path representation differences.
-    let current_workspace_normalized = normalize_path(&current_workspace_root, fs);
-    let target_workspace_normalized = normalize_path(&target_workspace_root, fs);
-
-    if current_workspace_normalized != target_workspace_normalized {
-        return Err(WorkspaceMismatchError::new(
-            current_workspace_normalized,
-            target_workspace_normalized,
-        )
-        .into());
+    // Verify both paths are in the same workspace. Both roots arrive normalized, so they
+    // compare in one path representation.
+    if current_workspace_root != target_workspace_root {
+        return Err(
+            WorkspaceMismatchError::new(current_workspace_root, target_workspace_root).into(),
+        );
     }
 
-    // Normalize the absolute target path as well to ensure consistent path format with
-    // workspace_root. This is important on Windows where canonicalize() adds UNC prefixes
-    // that would break starts_with() comparisons in detect_package().
-    let absolute_target_path_normalized = normalize_path(&absolute_target_path, fs);
-
     Ok(WorkspaceContext {
-        absolute_target_path: absolute_target_path_normalized,
-        workspace_root: target_workspace_normalized,
+        absolute_target_path,
+        workspace_root: target_workspace_root,
     })
 }
 
@@ -101,11 +95,9 @@ fn find_workspace_root(
             // Check if this is a workspace root.
             let manifest = read_manifest(current_dir, fs)?;
             if manifest.get("workspace").is_some() {
-                // Return canonicalized path for consistent comparison.
-                return Ok(Some(
-                    fs.canonicalize(current_dir)
-                        .unwrap_or_else(|_| current_dir.to_path_buf()),
-                ));
+                // Return a normalized path so comparisons see one representation and
+                // diagnostics built from this root never carry a Windows verbatim prefix.
+                return Ok(Some(normalize_path(current_dir, fs)));
             }
         }
 

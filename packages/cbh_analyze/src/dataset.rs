@@ -392,9 +392,9 @@ where
     });
 
     // Load the blessing sidecars on in-window commits into a per-set map. A
-    // blessing on a commit outside the analyzed history (or that fails to parse) is
-    // irrelevant and skipped. Branch mode ignores blessings entirely, so
-    // only history mode pays the load.
+    // blessing on a commit outside the analyzed history is irrelevant and skipped,
+    // while one that fails to parse fails the run. Branch mode ignores blessings
+    // entirely, so only history mode pays the load.
     let mut blessings: HashMap<DiscriminantSet, Vec<BlessingPlacement>> = HashMap::new();
     if mode == AnalysisMode::History {
         let blessing_started = Instant::now();

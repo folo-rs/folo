@@ -291,8 +291,8 @@ impl DuplicateResultError {
 
 /// A backfill precondition or per-commit operation failed.
 ///
-/// This includes a dirty working tree, an unresolvable or out-of-history commit
-/// range, or stopping after a per-commit failure without `--ignore-errors`.
+/// This includes an unresolvable or out-of-history commit range, or stopping
+/// after a per-commit failure without `--ignore-errors`.
 #[derive(ohno::Error)]
 #[display("{message}")]
 pub(crate) struct BackfillError {
@@ -850,10 +850,10 @@ mod tests {
 
     #[test]
     fn backfill_and_import_failures_carry_their_explanations() {
-        let backfill = BackfillError::new("the working tree is dirty");
+        let backfill = BackfillError::new("--from is not an ancestor of --to");
         let import = ImportError::new("--commit resolves to no commit in the repository");
 
-        assert_eq!(backfill.summary(), "the working tree is dirty");
+        assert_eq!(backfill.summary(), "--from is not an ancestor of --to");
         assert_eq!(
             import.reason(),
             "--commit resolves to no commit in the repository"

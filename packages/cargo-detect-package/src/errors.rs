@@ -130,7 +130,7 @@ impl RefUnwindSafe for OutsidePackageError {}
 
 /// The subcommand could not be executed.
 #[ohno::error]
-#[display("Error executing command")]
+#[display("Could not execute command")]
 pub(crate) struct CommandExecutionError;
 
 // The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,

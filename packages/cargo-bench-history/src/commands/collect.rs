@@ -1276,6 +1276,7 @@ mod tests {
         .unwrap_err();
         assert!(error.find_source::<StorageError>().is_some());
         assert!(error.find_source::<TestStorageError>().is_some());
+        assert!(error.find_source::<DuplicateResultError>().is_none());
     }
 
     fn frozen_time() -> SystemTime {
