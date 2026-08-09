@@ -6,6 +6,11 @@
 //! This package provides several types of object pools designed for different use cases,
 //! from basic pooling to advanced memory layouts with custom drop policies.
 //!
+//! # Maintenance status
+//!
+//! This package is superseded and receives maintenance only. Prefer [`multitude`] for the
+//! opaque and blind pooling scenarios and [`plurality`] for the pinned pooling scenario.
+//!
 //! # Motivating scenario
 //!
 //! The primary characteristics of the target scenario are:
@@ -132,6 +137,8 @@
 //! ```
 //!
 //! [casting]: define_pooled_dyn_cast
+//! [`multitude`]: https://crates.io/crates/multitude
+//! [`plurality`]: https://crates.io/crates/plurality
 
 mod blind;
 mod builders;
