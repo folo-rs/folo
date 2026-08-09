@@ -24,8 +24,9 @@ history.
 
 Read the repetition count differently from the rest, though. Because the reduction keeps a
 *minimum*, and the expected minimum of `N` samples falls as `N` rises, changing it moves the
-recorded level of **every** benchmark at once — a step spanning the whole suite at one commit
-is the signature of the count changing, not of the code changing. Each run records the count
+recorded level of every benchmark noisy enough to be affected — a broad step across the suite
+at one commit is the signature of the count changing, not of the code changing. Each run
+records the count
 it was reduced from, so which protocol produced a value stays recoverable from the stored
 data. See [`collect --best-of`](../commands/collect.md).
 

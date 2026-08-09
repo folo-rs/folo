@@ -682,9 +682,9 @@ pub(crate) fn partition_selection_summary(
     )
 }
 
-/// Builds the write-only host-hardware provenance recorded on every stored run:
-/// the hardware facts the probe observed and the key the fingerprint factors among
-/// them hash to.
+/// Builds the write-only host-hardware provenance recorded on the runs this
+/// command stores: the hardware facts the probe observed and the key the
+/// fingerprint factors among them hash to.
 ///
 /// It always records the auto-detected fingerprint (independent of any
 /// `--machine-key` override used to partition storage), so that a later change in
@@ -892,9 +892,10 @@ where
         },
         store.tool_version.to_owned(),
     );
-    // Record the host hardware provenance on every stored run (write-only): the
-    // hardware facts and the key their fingerprint factors hash to, so a later
-    // change in a machine key can be traced to the specific factor that moved.
+    // Record the host hardware provenance on the runs this command stores
+    // (write-only): the hardware facts and the key their fingerprint factors hash
+    // to, so a later change in a machine key can be traced to the specific factor
+    // that moved.
     let mut context = context;
     context.machine = Some(machine_info(&shared.hardware));
     // Record the measurement protocol alongside it: how many repetitions of the

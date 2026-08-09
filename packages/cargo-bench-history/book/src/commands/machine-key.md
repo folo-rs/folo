@@ -27,12 +27,12 @@ to do damage: a GitHub-hosted ARM64 Windows runner reports all four of its Cobal
 processors calibrated at 10678 on most boots and one of the four at 10681 on others, and
 hashing that reading would fork the runner's history between the two. That is exactly the
 fragmentation the key exists to prevent, and the speeds add no discriminating power the
-processor models do not already carry. They are recorded with every run as provenance instead,
-so a machine's speed mix is answered from its stored runs rather than from its key.
+processor models do not already carry. They are recorded beside a run as provenance instead
+whenever its host was probed, so a machine's speed mix is answered from its stored runs
+rather than from its key.
 
 The key is version-tagged, so a change to the factors it hashes forks stored history into a
 new partition rather than silently mixing incomparable data.
-[`rekey`](rekey.md) closes such a fork by migrating the stored objects onto the new format.
 
 See [Comparability and partitioning](../concepts/comparability.md) for how the machine key
 fits into the discriminant set.

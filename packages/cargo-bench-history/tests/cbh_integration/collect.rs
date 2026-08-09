@@ -22,9 +22,9 @@ async fn collect_callgrind_end_to_end_stores_results() {
     // git repository, so the commit resolves to the `unknown` fallback and the clean
     // tree yields `clean.json`.
     //
-    // The host-hardware provenance is recorded on every stored run (write-only); its
-    // fingerprint is the machine key the run partitions under, a 16-char lowercase
-    // hex digest of the probed factors.
+    // The host-hardware provenance is recorded on the runs `collect` stores
+    // (write-only); its fingerprint is the machine key the run partitions under, a
+    // 16-char lowercase hex digest of the probed factors.
     let triple = &set.context.toolchain.target_triple;
     let machine = set
         .context

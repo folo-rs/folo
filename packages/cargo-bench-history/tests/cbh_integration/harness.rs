@@ -13,10 +13,7 @@ pub(crate) use cargo_bench_history::{
     default_template, run, run_with_overrides,
 };
 use cbh_codec as codec;
-use cbh_model::{
-    BenchmarkIdPrefix, BlessingRecord, DiscriminantSet, Engine, MachineInfo, MachineKey,
-    TargetTriple,
-};
+use cbh_model::{DiscriminantSet, Engine, MachineKey, TargetTriple};
 pub(crate) use jiff::Timestamp;
 use nonempty::nonempty;
 pub(crate) use serial_test::serial;
@@ -65,42 +62,6 @@ pub(crate) const MIN_SERIES_POINTS: usize = 2 * MIN_REGIME;
 /// starts or ends derives it (via [`sequential_dates`]) instead of restating a
 /// date that moves whenever the fixture's length does.
 pub(crate) const RISING_HISTORY_FIRST_DATE: &str = "2024-01-01";
-
-/// Processors the `rekey` fixture hardware records.
-///
-/// The fixture is one machine whose boot-time speed calibration was read
-/// differently across reboots. The two speeds fork the retired (`mk2`) key, which
-/// hashed the speed histogram, while the current (`mk3`) key — which does not —
-/// puts both under one partition. That is exactly the fragmentation `rekey`
-/// repairs, so the fixture reproduces it literally.
-pub(crate) const REKEY_PROCESSORS: usize = 8;
-
-/// Memory regions the `rekey` fixture hardware records.
-pub(crate) const REKEY_MEMORY_REGIONS: usize = 1;
-
-/// Processor model the `rekey` fixture hardware records.
-pub(crate) const REKEY_PROCESSOR_MODEL: &str = "Test CPU 3000";
-
-/// The lower of the two boot-time speed readings the `rekey` fixture hardware
-/// reports.
-pub(crate) const REKEY_SLOW_SPEED: u64 = 3141;
-
-/// The higher of the two boot-time speed readings the `rekey` fixture hardware
-/// reports.
-pub(crate) const REKEY_FAST_SPEED: u64 = 3142;
-
-/// The retired-format machine key the slow reading of the fixture hardware hashes
-/// to. Pinned here so the suite proves the migration lands on the exact partitions
-/// the stored history occupies, rather than on whatever the code happens to
-/// compute.
-pub(crate) const REKEY_SLOW_LEGACY_KEY: &str = "f2717448bb41b899";
-
-/// The retired-format machine key the fast reading of the fixture hardware hashes
-/// to.
-pub(crate) const REKEY_FAST_LEGACY_KEY: &str = "6400c9f0b4bb3763";
-
-/// The current-format machine key both readings of the fixture hardware hash to.
-pub(crate) const REKEY_CURRENT_KEY: &str = "4ffd697efb295d32";
 
 /// Canonical faker `--callgrind` identity/metric fragments, kept in lockstep with
 /// what the `collect` identity assertions expect. A fragment is everything after
@@ -1088,91 +1049,6 @@ impl Workspace {
         objects.pop().unwrap()
     }
 
-    /// Every stored object key, sorted. Unlike [`stored_objects`](Self::stored_objects)
-    /// this parses nothing, so it also sees blessing sidecars.
-    pub(crate) fn stored_keys(&self) -> Vec<String> {
-        let store = self.root().join("store");
-        let mut files = Vec::new();
-        collect_json_files(&store, &mut files);
-        let mut keys: Vec<String> = files
-            .into_iter()
-            .map(|path| {
-                path.strip_prefix(&store)
-                    .unwrap()
-                    .components()
-                    .map(|component| component.as_os_str().to_string_lossy().into_owned())
-                    .collect::<Vec<_>>()
-                    .join("/")
-            })
-            .collect();
-        keys.sort();
-        keys
-    }
-
-    /// Seeds a clean Callgrind run under `machine_key` that records the fixture
-    /// hardware read at `speed`, so `rekey` can recompute both key formats from the
-    /// object's own provenance.
-    pub(crate) fn seed_rekey_clean(&self, machine_key: &str, speed: u64, label: &str, value: f64) {
-        let commit_id = self.commit_id(label);
-        let observed = self.committer_time(&commit_id);
-        let key = seed_clean_key(
-            Engine::Callgrind,
-            HARNESS_AUTO_TRIPLE,
-            machine_key,
-            &commit_id,
-        );
-        self.seed(
-            &key,
-            &rekey_result_set(observed.as_second(), &commit_id, speed, value),
-        );
-    }
-
-    /// Seeds a dirty Callgrind snapshot under `machine_key` recording the fixture
-    /// hardware read at `speed`.
-    pub(crate) fn seed_rekey_dirty(
-        &self,
-        machine_key: &str,
-        speed: u64,
-        observed: &str,
-        label: &str,
-        value: f64,
-    ) {
-        let commit_id = self.commit_id(label);
-        let effective: Timestamp = format!("{observed}T00:00:00Z").parse().unwrap();
-        let key = seed_dirty_key(
-            Engine::Callgrind,
-            HARNESS_AUTO_TRIPLE,
-            machine_key,
-            &commit_id,
-            effective.as_second(),
-        );
-        self.seed(
-            &key,
-            &rekey_result_set(effective.as_second(), &commit_id, speed, value),
-        );
-    }
-
-    /// Seeds a blessing sidecar under `machine_key`. The sidecar records no hardware
-    /// of its own, so `rekey` can only move it by following the runs of its own
-    /// partition.
-    pub(crate) fn seed_rekey_bless(&self, machine_key: &str, issued: &str, label: &str) {
-        let commit_id = self.commit_id(label);
-        let issued_at: Timestamp = format!("{issued}T00:00:00Z").parse().unwrap();
-        let key = DiscriminantSet::new(
-            Engine::Callgrind,
-            &TargetTriple::from(HARNESS_AUTO_TRIPLE),
-            &MachineKey::from(machine_key),
-        )
-        .bless_key(SEED_PROJECT, &commit_id, issued_at.as_second());
-        let record = BlessingRecord::new(
-            commit_id,
-            issued_at,
-            vec![BenchmarkIdPrefix::new("nm").unwrap()],
-            TOOL_VERSION.to_owned(),
-        );
-        self.seed_raw_json(&key, &record.to_json().unwrap());
-    }
-
     /// Writes `set` to `key` (a `/`-separated object key) under the local store,
     /// mirroring the layout `collect` produces — including the gzip body encoding the
     /// storage layer applies, so the production read path inflates it correctly.
@@ -1916,29 +1792,6 @@ pub(crate) fn ir_result_set(effective: i64, commit: &str, value: f64) -> Run {
         commit,
         vec![Metric::new(MetricKind::InstructionCount, value)],
     )
-}
-
-/// Builds a Callgrind result set that also records the `rekey` fixture hardware,
-/// read at `speed`, with the fingerprint the retired key format derived from it.
-///
-/// A real run records the auto-detected hardware hash as its fingerprint whatever
-/// key it is stored under, so the fixture does the same: the fingerprint follows
-/// the hardware, not the partition.
-pub(crate) fn rekey_result_set(effective: i64, commit: &str, speed: u64, value: f64) -> Run {
-    let fingerprint = match speed {
-        REKEY_SLOW_SPEED => REKEY_SLOW_LEGACY_KEY,
-        REKEY_FAST_SPEED => REKEY_FAST_LEGACY_KEY,
-        other => panic!("no pinned legacy key for speed {other}"),
-    };
-    let mut set = ir_result_set(effective, commit, value);
-    set.context.machine = Some(MachineInfo {
-        processors: REKEY_PROCESSORS,
-        memory_regions: REKEY_MEMORY_REGIONS,
-        processor_models: vec![REKEY_PROCESSOR_MODEL.to_owned()],
-        processor_speeds: vec![(speed, REKEY_PROCESSORS)],
-        fingerprint: fingerprint.to_owned(),
-    });
-    set
 }
 
 /// A configuration with an explicit project `id` (which may contain characters

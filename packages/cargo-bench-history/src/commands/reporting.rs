@@ -1,5 +1,5 @@
 //! Thin wrappers over the `cbh_analyze` reporting commands (`analyze`, `list`,
-//! `examine`, `prune`, `rekey`, `bless`, `unbless`).
+//! `examine`, `prune`, `bless`, `unbless`).
 //!
 //! `cbh_analyze` renders each requested report into a [`RenderedReports`] and returns
 //! it (plus the regression count for `analyze`, or a message string for
@@ -18,8 +18,8 @@ use tick::Clock;
 
 use crate::output::{TokioOutputWriter, write_reports};
 use crate::{
-    AnalyzeOptions, BlessOptions, ExamineOptions, ListOptions, PruneOptions, RekeyOptions,
-    RunError, RunOutcome, UnblessOptions,
+    AnalyzeOptions, BlessOptions, ExamineOptions, ListOptions, PruneOptions, RunError, RunOutcome,
+    UnblessOptions,
 };
 
 /// Runs `analyze`, writes its rendered reports, and reports the regression count.
@@ -121,31 +121,6 @@ pub(crate) async fn prune(
 ) -> Result<RunOutcome, RunError> {
     let rendered =
         cbh_analyze::prune(options, workspace_dir, clock, storage_override, auto_facets).await?;
-    write_rendered(
-        workspace_dir,
-        options.verbose,
-        options.markdown.as_deref(),
-        options.json.as_deref(),
-        None,
-        &rendered,
-    )
-    .await?;
-    Ok(RunOutcome::Completed {
-        message: rendered.text.unwrap_or_default(),
-    })
-}
-
-/// Runs `rekey` and writes its rendered reports.
-///
-/// # Errors
-///
-/// Returns a [`RunError`] if the migration or a report write fails.
-pub(crate) async fn rekey(
-    options: &RekeyOptions,
-    workspace_dir: &Path,
-    storage_override: Option<StorageFacade>,
-) -> Result<RunOutcome, RunError> {
-    let rendered = cbh_analyze::rekey(options, workspace_dir, storage_override).await?;
     write_rendered(
         workspace_dir,
         options.verbose,

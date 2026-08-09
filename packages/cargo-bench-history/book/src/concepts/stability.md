@@ -103,6 +103,8 @@ Consequences worth planning for:
 [`collect --best-of N`](../commands/collect.md) is a second source of movement with no source
 change, and this one is self-inflicted. It runs the suite `N` times and stores the per-metric
 **minimum**, and the expected value of a minimum falls as the sample count rises — so raising
-or lowering `N` shifts the recorded level of every benchmark at once. Pick a value per machine
+or lowering `N` can shift the recorded level of the whole suite at once. The shift reaches a
+metric only in proportion to that metric's noise: a deterministic one does not move, and any
+single observation may come out unchanged. Pick a value per machine
 and project and keep it fixed. Every stored run records the count it was reduced from, so the
 protocol behind a value stays recoverable from the stored data.

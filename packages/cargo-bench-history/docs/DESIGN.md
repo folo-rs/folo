@@ -12,7 +12,7 @@ analyzes that history for trends that snapshot / "previous run" tools cannot see
 It stores every result over time (local path or Azure blob), runs in multiple
 environments (dev PC, GitHub Actions, ADO), and partitions data only where results are
 not otherwise comparable. Its commands are `collect`, `install`, `analyze`, `examine`,
-`backfill`, `list`, `prune`, `rekey`, `bless`, and `unbless`.
+`backfill`, `list`, `prune`, `bless`, and `unbless`.
 
 ## 1. Benchmark engines and what they emit
 
@@ -224,8 +224,7 @@ Because the key is persisted and compared across machines and tool versions, it 
 truncated to a compact path segment, and a golden test pins a fixed profile to its digest
 so an accidental change to the canonical form is caught. The version tag is what makes a
 change to the factor set an explicit, visible fork of stored history rather than a silent
-break, and `rekey` (§7.10) closes such a fork afterwards by migrating the stored objects
-onto the new format. A command-line override wins over the computed fingerprint (it is
+break. A command-line override wins over the computed fingerprint (it is
 CLI-only — a committed config would carry a machine key wrong for some checkouts). The key
 is computed for every run, because every engine is partitioned by it.
 
@@ -241,9 +240,9 @@ emit them to standard error under `--verbose`, and the standalone `machine-key` 
 prints the key to standard output (with `--verbose` adding the factors to standard error).
 Only true factors appear there, so what is shown is exactly what the key depends on. The
 latter exists so CI can capture the real per-runner key and thread it into a later `analyze`
-selection. Those factors, the resulting fingerprint, and the speed histogram that is
-deliberately not a factor are also recorded on every stored run as write-only provenance
-(see §5).
+selection. Where a run's host is probed, those factors, the resulting fingerprint, and the
+speed histogram that is deliberately not a factor are also recorded beside it as write-only
+provenance (see §5).
 
 ## 5. Run context
 
@@ -256,17 +255,19 @@ and cargo versions and the resolved execution triple; and provenance (tool versi
 version, machine key). Git and environment access go through a small abstraction so the
 logic is unit-testable without a real repo or CI.
 
-The context also carries optional **host-hardware provenance** (`context.machine`): the
-fingerprint factors (processor and memory-region counts, processor models), the
-per-processor speed histogram, and the auto-detected key the factors hash to. It is
-**write-only** — nothing reads it back — and exists purely so that a later change in a
-machine key can be traced to the specific factor that moved (for example, a runner pool
-swapping CPU models). The speed histogram is recorded even though it is not a factor (§4),
-because it is the sharpest available evidence of what the host actually was. It records the
-auto-detected fingerprint regardless of any `--machine-key` override, and is an additive,
-backward-compatible field (absent on runs written before it existed and on the non-`collect`
-construction sites that do not probe hardware), so its introduction only bumps the schema
-version for legibility.
+The context also carries optional **host-hardware provenance** (`context.machine`),
+recorded whenever the storing path probed the host: the current fingerprint factors
+(processor and memory-region counts, processor models), the per-processor speed histogram,
+which is deliberately not one of those factors (§4), and the auto-detected key the factors
+hash to. It is **write-only** — nothing reads it back — and exists purely so that a later
+change in a machine key can be traced to the specific factor that moved (for example, a
+runner pool swapping CPU models). The speed histogram is recorded even though it is not a
+factor, because it is the sharpest available evidence of what the host actually was. It
+records the auto-detected fingerprint regardless of any `--machine-key` override, and is an
+additive, backward-compatible field, absent on runs written before it existed and on the
+non-`collect` construction sites that do not probe hardware, so its introduction only bumps
+the schema version for legibility. Nothing may therefore assume a stored run carries it, nor
+that what it carries is the whole of what a key was computed from at the time.
 
 Alongside it the context records the **measurement protocol** the numbers were produced
 under: how many repetitions of the whole suite the stored values were reduced from — one for
@@ -772,120 +773,6 @@ lets a test attribute a whole synthetic series across history from a single HEAD
 `--dirty` records the run as a dirty snapshot rather than a clean point. The commit must
 still exist: `import` never invents git topology, so real integration testing still requires
 a real history.
-
-### 7.10 `rekey`
-
-The machine key is version-tagged so a change to its factor set forks stored history
-visibly rather than silently (§4). A fork is honest but not free: the same machine's series
-splits into two short, non-comparable stretches, and short stretches are exactly what the
-detector reports badly on. `rekey` **closes the fork by migrating stored objects onto the
-current key format**, merging the fragments back into one continuous series. It needs no
-benchmark re-run because every stored run already records the full hardware profile behind
-its key (§5), so both the retired and the current key can be recomputed from the object
-itself.
-
-**Copy, never move.** Every migrated object is written to its new key with the write-once
-put and the source is left exactly where it is; nothing is ever deleted. That makes the
-command idempotent for free — a second pass finds each destination already present — and
-makes a bad outcome recoverable by deleting the copies. A destination that already exists
-with **different** bytes is a genuine conflict rather than a repeat, so the pass stops. The
-copies of an earlier pass are ordinary stored objects that a later pass reads back, so a
-later pass excludes every object standing at a destination it would itself write; otherwise
-the merge assessment would compare a group against a set that contains it and invent a merge
-the store does not face.
-
-One current key can only hold one object per commit and kind, so two partitions that merge
-and both hold the same commit put two **distinct** objects — distinct because their hardware
-rendered apart, which is why they were keyed apart — in contention for one key. Neither
-stands for the other, so both are left where they are and the contested destination is
-reported. The merged series simply carries no point at that commit, which reads as an
-ordinary gap.
-
-**Only proven hardware hashes move.** The machine segment of a key is not necessarily a
-hardware hash: `collect` accepts an explicit `--machine-key` override for stable CI-pool
-keys, and such a partition is a deliberate operator decision that would be corrupted by
-moving it. Recomputation alone cannot tell the two apart, because an override-keyed run
-still records the real host's fingerprint. So an object is migrated only when its key
-segment *is* the retired hash of its own recorded hardware. Every other segment — an
-override, or a segment already equal to the current hash — is reported and left untouched.
-
-Both recomputations rest on a faithful reimplementation of the retired rendering rule, so
-the pass first **proves** that reimplementation against the data: a run records the machine
-key its own capture computed, so recomputing the retired *and* current hashes of its recorded
-hardware must reproduce that fingerprint under one of the two — the retired one for history
-captured before the format changed, the current one for history captured after. A fingerprint
-that matches neither means the reimplemented rendering is not the one that keyed this store,
-which invalidates every subsequent decision, so the pass is abandoned rather than the object
-skipped. Objects that record no hardware at all cannot be placed and are reported, never
-silently dropped. So are objects whose recorded hardware the retired rule cannot render at
-all: the facts arrive deserialized from an arbitrarily old object, and one that claims, say,
-more processors at a single speed than the machine word can count describes no machine that
-ever existed. Rendering such facts anyway — by clamping the impossible figure to something
-representable — would hash a histogram the machine never had, and that hash may be a
-*different* machine's key, so the object is left unproven and reported instead. Such an
-object makes no claim the retired rendering could contradict either, so it indicts only
-itself and never abandons the pass. The one segment it can still be placed under is the
-current hash: that rendering is the live probe rather than a reimplementation, and it reads
-none of the factors the retired one dropped, so a segment equal to it proves itself and the
-object simply has nothing to migrate. Blessing sidecars record no hardware of their own, so
-they follow the mapping their partition's runs establish; a blessing under a partition
-holding no runs is reported and left.
-
-**Merging is not always safe, so the default is a dry run.** Writing requires an explicit
-`--apply`; a bare `rekey` reports what would happen. Splicing two key partitions into one
-series concatenates two sets of measurements. If both really are the same machine their
-levels agree and the merge is invisible — the intended outcome. If they systematically
-differ, the merge *manufactures* a step change at the splice and floods the next analysis
-with fresh findings: precisely the failure the key change exists to remove. The report
-therefore states, for every pair of partitions that would merge and every `(benchmark,
-metric)` both hold, the **level offset** between their medians (absolute and relative) and
-the **interleaving pattern** over commit order — whether the two occupy overlapping stretches
-of history (interleaved: one machine rebooting, harmless) or disjoint ones (time-blocked:
-indistinguishable from a real change at the boundary).
-
-**The pair is judged, not the benchmark.** What manufactures a visible step is the offset the
-two partitions share *across* their benchmarks; independent per-benchmark scatter is
-measurement noise that simply becomes within-series noise after the splice, where the
-detector's own significance gates already handle it. Each merging pair is therefore reduced
-to a single **systematic offset**: the median of the relative offsets over those shared
-`(benchmark, metric)` pairs whose move clears the metric's absolute floor. The median, rather
-than the mean, so that a minority of benchmarks whose *code* genuinely changed while one
-partition was active cannot drag the verdict; the absolute floor, so that a move too small to
-mean anything is not mistaken for evidence either way. A pair with no move large enough to
-read has no systematic offset at all and cannot manufacture a step, so it does not block.
-
-Judging each benchmark individually cannot work, and the report says so by demoting that
-reading. A store holds hundreds of shared benchmarks, per-benchmark run-to-run variation is
-a few percent, and the tolerance is tighter than that — so on any real partition pair *some*
-benchmark exceeds it by chance, with probability approaching one as the family grows. The pair
-of partitions a calibration wobble splits off one ARM64 Windows runner shares over a hundred
-readable offsets, more than a third of which exceed the tolerance on their own, while the pair
-as a whole sits under a tenth of a percent apart. A gate that refuses every real input protects
-nothing: it teaches the operator to pass `--allow-level-shift` reflexively, which disables the
-check for the genuinely different machine too. Individual offsets beyond the tolerance are still
-reported, flagged, and counted, because they say "this particular series may gain a step at the
-splice", which is worth seeing — but they decide nothing.
-
-A systematic offset large enough to be reportable **refuses the migration**, in the dry run
-and under `--apply` alike, so the preview can never disagree with what applying would do. The
-threshold is half of the detector's relative practical-significance floor (§8.2), read from the
-same configuration. The absolute floors are spent earlier, on choosing which offsets are large
-enough moves to enter the median; a median of fractions has no units left to compare a
-magnitude against. The medians compared here estimate a whole group's level, while the detector
-compares the regimes on either side of a change point, so the two need not coincide; halving
-the floor is the margin that covers the difference and keeps a merge below the threshold well
-clear of what the detector calls practically significant. Reading the margin off a median
-rather than off a single benchmark is what makes so tight a threshold affordable. Where a pair
-shares exactly one readable offset the median *is* that offset, so the gate stays as
-conservative as a per-benchmark rule in precisely the case where there is nothing to average
-over — a deliberate property, not a degenerate one. `--allow-level-shift` proceeds anyway, for
-an operator who has read the report and accepts the step.
-
-`rekey` takes **no discriminant facets** and is deliberately outside the `analyze` / `list` /
-`prune` selection lockstep. Those commands select a comparable slice of history to reason
-about; `rekey` is a whole-store maintenance pass whose correctness comes from processing
-every object, and a facet would silently migrate half a partition — leaving history in a
-state neither key format describes.
 
 ## 8. Analysis
 

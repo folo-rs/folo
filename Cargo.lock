@@ -533,7 +533,6 @@ dependencies = [
  "cbh_model",
  "cbh_probe",
  "cbh_render",
- "cbh_stats",
  "cbh_storage",
  "futures",
  "jiff",
@@ -541,7 +540,6 @@ dependencies = [
  "nonempty",
  "serde",
  "serde_json",
- "sha2",
  "tick",
 ]
 

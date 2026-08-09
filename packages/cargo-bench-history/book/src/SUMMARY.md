@@ -16,7 +16,6 @@
 - [examine](commands/examine.md)
 - [list](commands/list.md)
 - [prune](commands/prune.md)
-- [rekey](commands/rekey.md)
 - [bless / unbless](commands/bless.md)
 - [machine-key](commands/machine-key.md)
 

@@ -65,8 +65,6 @@ pub enum Command {
     /// Show the raw per-commit data points of one `(benchmark, metric)` series
     /// from the data set a matching `analyze`/`list` pass resolves.
     Examine(ExamineOptions),
-    /// Re-partition stored objects under the current machine-key format.
-    Rekey(RekeyOptions),
     /// Replay `collect` across a range of historical commits.
     Backfill(BackfillOptions),
     /// Accept a benchmark's current level on the base branch as intentional.
@@ -504,44 +502,6 @@ pub struct PruneOptions {
     pub prune_base: bool,
     /// Preview what would be removed without deleting anything.
     pub dry_run: bool,
-    /// Suppress the default text report on standard output (`--no-text`).
-    pub no_text: bool,
-    /// Write the Markdown report to this path, if set (`--markdown <path>`). A
-    /// relative path resolves against the working directory.
-    pub markdown: Option<PathBuf>,
-    /// Write the JSON report to this path, if set (`--json <path>`). A relative
-    /// path resolves against the working directory.
-    pub json: Option<PathBuf>,
-    /// Emit detailed diagnostic notes to standard error describing each step.
-    pub verbose: bool,
-}
-
-/// Options for the `rekey` command.
-///
-/// `rekey` re-partitions stored objects under the current machine-key format,
-/// merging the fragments a key-format change left behind. It sees the whole store
-/// (no discriminant facets) and copies rather than moves, so it never deletes or
-/// overwrites. Writing is opt-in via `apply`; the default pass only reports.
-#[doc(hidden)]
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct RekeyOptions {
-    /// Path to the configuration file, if overridden.
-    pub config_path: Option<PathBuf>,
-    /// Repository to resolve git topology from; defaults to the working directory.
-    pub repo: Option<PathBuf>,
-    /// Local-storage selection from `--local`; overrides the configured cloud
-    /// backend. `None` means `--local` was not given (use the configured backend).
-    pub local: Option<LocalStorageSelection>,
-    /// Target ref whose first-parent line places stored commits in history for the
-    /// merge assessment; defaults to `HEAD`.
-    pub context: Option<String>,
-    /// Perform the copies. Off by default, so a pass reports its plan and writes
-    /// nothing.
-    pub apply: bool,
-    /// Proceed even when a merging pair's systematic offset — the median relative
-    /// offset across the benchmark and metric series the two partitions share —
-    /// reaches the merge tolerance.
-    pub allow_level_shift: bool,
     /// Suppress the default text report on standard output (`--no-text`).
     pub no_text: bool,
     /// Write the Markdown report to this path, if set (`--markdown <path>`). A

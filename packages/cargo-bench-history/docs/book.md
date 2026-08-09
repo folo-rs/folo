@@ -29,8 +29,10 @@ The teaching points that every chapter should reinforce, not just the concept ch
    reconstructed series. Motivate this before any command.
 2. **High signal-to-noise, never cry wolf.** No engine is deterministic, so every metric is
    treated as noisy and gated hard. We would rather miss a marginal move than raise a false alarm.
-   The gates suppress *noise*, never real-but-uninteresting shifts: an infrastructure-caused step
-   is reported and then blessed, not gated away.
+   The gates weigh *evidence*, never cause, so a real-but-uninteresting shift is not filtered out
+   for being uninteresting: an infrastructure-caused step is meant to be reported and then
+   blessed. That is a statement about what the gates decline to consider, not a promise of
+   detection — such a step still has to clear the same evidence and magnitude gates as any other.
 3. **Comparability is explicit.** Two results compare only when their *discriminant sets* match;
    everything else is metadata so its effect shows up as a timeline step, not a silent fork.
 4. **Append-only by default.** Normal collection never replaces an existing clean run; overwrite
@@ -100,7 +102,6 @@ concept pages link up into the commands that exercise them.
 | `examine` | Drill-down from a finding to the raw per-commit points of one `(benchmark, metric)` series; no detection, no judgment. |
 | `list` | Preview the exact data set `analyze` would consume (`runs` / `discriminants` / `blessings`) without analyzing. |
 | `prune` | Delete a chosen scope of stored data; never touches base-branch history without an explicit confirm. |
-| `rekey` | Migrate stored objects onto the current machine-key format; copies rather than moves, and previews what merging does to the numbers. |
 | `bless` / `unbless` | Manually accept an intentional change so history stops re-flagging it; per-benchmark; honored only in history mode. |
 | `machine-key` | Print the hardware fingerprint that all history is partitioned by; it hashes hardware identity only, and `--verbose` explains the factors. |
 

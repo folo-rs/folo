@@ -35,17 +35,18 @@ pub struct RunContext {
     /// Version of the cargo-bench-history tool that produced this run.
     pub tool_version: String,
     /// Host hardware provenance: the machine fingerprint and the hardware facts
-    /// recorded beside it. Write-only — nothing reads it back today; it is recorded
-    /// so that a later change in a machine key can be traced to the specific fact
-    /// that changed. `None` on runs written before this field existed (and on the
-    /// many non-collect construction sites that do not probe hardware).
+    /// recorded beside it. Write-only — nothing reads it back; it is recorded so
+    /// that a later change in a machine key can be traced to the specific fact that
+    /// changed. Recorded only where the storing path probed the host, so it is
+    /// `None` on runs written before this field existed and on the many non-collect
+    /// construction sites that do not probe hardware.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<MachineInfo>,
     /// How many repetitions of the whole benchmark suite the stored numbers were
     /// reduced from (`--best-of N`): every metric here is the minimum of this many
     /// samples of that metric.
     ///
-    /// Write-only measurement-protocol provenance: nothing reads it back today. It
+    /// Write-only measurement-protocol provenance: nothing reads it back. It
     /// is recorded because the minimum of N samples is an order statistic whose
     /// expected value falls as N rises, so the count is part of what was measured —
     /// a history spanning two counts is not measuring the same quantity throughout,
@@ -87,12 +88,14 @@ impl RunContext {
 
 /// Host hardware provenance recorded with a run.
 ///
-/// It carries the hardware facts the host reported and the machine fingerprint they
-/// produced. Write-only metadata: nothing reads it back today; it exists so that a
-/// later change in a machine key can be traced to the specific hardware detail that
-/// changed (for example, a runner pool swapping CPU models). It records the host's
-/// auto-detected fingerprint and is independent of any `--machine-key` override
-/// used to partition storage.
+/// It carries the current fingerprint factors the host reported, the fingerprint they
+/// produced, and further hardware facts that do not participate in that fingerprint —
+/// so it is neither a subset nor a superset of what authenticates the key, and cannot
+/// stand in for the factor set of some other key version. Write-only metadata: nothing
+/// reads it back; it exists so that a later change in a machine key can be traced to
+/// the specific hardware detail that changed (for example, a runner pool swapping CPU
+/// models). It records the host's auto-detected fingerprint and is independent of any
+/// `--machine-key` override used to partition storage.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MachineInfo {
     /// Number of logical processors the host reported.
@@ -113,9 +116,10 @@ pub struct MachineInfo {
     /// itself. Defaults to empty when reading records that predate it.
     #[serde(default)]
     pub processor_speeds: Vec<(u64, usize)>,
-    /// The hardware fingerprint the factors hash to: the host's auto-detected
+    /// The hardware fingerprint the factors above hash to: the host's auto-detected
     /// identity, recorded regardless of the machine key the run was partitioned
-    /// under (see the type-level note).
+    /// under (see the type-level note). The speed histogram is not among those
+    /// factors and does not enter it.
     pub fingerprint: String,
 }
 

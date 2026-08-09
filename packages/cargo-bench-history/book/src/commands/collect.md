@@ -30,7 +30,9 @@ Callgrind's deterministic counts make min-of-N a costly no-op for that engine.
 
 Because the reduction keeps a minimum, `N` is part of the measurement protocol, not just a
 speed/quality knob: the expected minimum of `N` samples falls as `N` rises, so changing `N`
-shifts the recorded level of *every* benchmark at once. Keep `N` fixed for a given machine
+can shift the recorded level of the whole suite at once. It moves a metric only to the extent
+that metric is noisy — a deterministic one is unaffected, as with Callgrind above, and any
+individual observation may land unchanged. Keep `N` fixed for a given machine
 and project if you want the history to stay a like-for-like record. Every stored run records
 the count it was reduced from, so a value's protocol is always recoverable from the stored
 data even if the setting changes.

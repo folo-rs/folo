@@ -13,4 +13,4 @@ pub(crate) use collect::execute as collect;
 pub(crate) use import::execute as import;
 pub(crate) use install::execute as install;
 pub(crate) use machine_key::execute as machine_key;
-pub(crate) use reporting::{analyze, bless, examine, list, prune, rekey, unbless};
+pub(crate) use reporting::{analyze, bless, examine, list, prune, unbless};

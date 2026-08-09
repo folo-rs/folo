@@ -13,7 +13,6 @@ runs, analyze what changed, inspect the evidence, and maintain the stored data. 
 | [`examine`](examine.md) | Pivot a single `(benchmark, metric)` series into its raw per-commit points. |
 | [`list`](list.md) | Preview the data set an `analyze` pass would consume, or catalog stored partitions. |
 | [`prune`](prune.md) | Delete a chosen portion of the stored data set. |
-| [`rekey`](rekey.md) | Migrate stored objects onto the current machine-key format. |
 | [`bless` / `unbless`](bless.md) | Accept (or un-accept) an intentional performance change on the base branch. |
 | [`machine-key`](machine-key.md) | Print this machine's hardware fingerprint. |
 
@@ -32,6 +31,3 @@ therefore preview a range with `list runs`, inspect one of its series with `exam
 prune it without learning a second set of filters. The analysis-only flags
 (`--include-improvements`, `--include-inactive`) and condensed Markdown summary are
 exceptions because the other commands select data but never detect findings.
-
-[`rekey`](rekey.md) stands outside this lockstep on purpose: it is a whole-store maintenance
-pass rather than a query, and processing every object is what makes it correct.
