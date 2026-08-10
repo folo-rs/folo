@@ -108,19 +108,13 @@ impl<T> FutureDeque<T> {
     }
 
     /// Adds a future to the back of the deque.
-    pub fn push_back(&mut self, future: impl Future<Output = T> + Send + 'static)
-    where
-        T: 'static,
-    {
+    pub fn push_back(&mut self, future: impl Future<Output = T> + Send + 'static) {
         let handle = FUTURES_ARENA.with(|arena| erase(arena, future));
         self.core.push_back_handle(handle);
     }
 
     /// Adds a future to the front of the deque.
-    pub fn push_front(&mut self, future: impl Future<Output = T> + Send + 'static)
-    where
-        T: 'static,
-    {
+    pub fn push_front(&mut self, future: impl Future<Output = T> + Send + 'static) {
         let handle = FUTURES_ARENA.with(|arena| erase(arena, future));
         self.core.push_front_handle(handle);
     }
@@ -275,6 +269,31 @@ mod tests {
         assert_eq!(deque.poll_front(cx), Poll::Ready(Some(1)));
         assert_eq!(deque.poll_front(cx), Poll::Ready(Some(2)));
         assert_eq!(deque.poll_front(cx), Poll::Ready(None));
+    }
+
+    /// The output type carries no `'static` bound, so a deque can be named with a borrowed
+    /// element type. Erasing the future behind a trait object is what puts this at risk, so it
+    /// is asserted here. The futures themselves capture nothing, which keeps them `'static` as
+    /// the push methods require.
+    #[test]
+    fn push_accepts_borrowed_output_type() {
+        // The parameter exists to introduce an `'a` that is provably shorter than `'static`.
+        fn drain_borrowed<'a>(_borrow: &'a str) -> Option<&'a str> {
+            let mut deque = FutureDeque::<&'a str>::new();
+            deque.push_back(async { "back" });
+            deque.push_front(async { "front" });
+
+            let waker = Waker::noop();
+            let cx = &mut Context::from_waker(waker);
+
+            match deque.poll_front(cx) {
+                Poll::Ready(value) => value,
+                Poll::Pending => None,
+            }
+        }
+
+        let owned = "borrowed".to_string();
+        assert_eq!(drain_borrowed(&owned), Some("front"));
     }
 
     #[test]

@@ -18,7 +18,7 @@ futures-stream = ["dep:futures-core"]
 
 [dependencies]
 futures-core = { workspace = true, optional = true }
-multitude = { workspace = true }
+multitude = { workspace = true, features = ["dst"] }
 plurality = { workspace = true }
 
 [dev-dependencies]
