@@ -111,7 +111,7 @@ every report states how many that was, in its header:
 A silent report then says exactly what that silence covers, and what it does not:
 
 ```text
-No notable changes detected.
+No notable changes detected among the series that were judged.
   Judged 12 of 14 series; none moved beyond the measurement floor.
   Not judged: 1 series not measured at the analyzed tip commit; 1 series with too few points
   in the analyzed window.
@@ -133,6 +133,13 @@ the gates require:
 `judged 0 of N` is the case to watch: nothing was tested, so the silence is not evidence that
 nothing moved. The report says so outright. It usually means history is still accumulating, or
 that the benchmarks stopped being collected at the tip commit.
+
+The verdict is decided against the series that *could* have been judged, which excludes ghosts.
+A pull request benchmarks only the packages it impacts while analysis reads the whole store, so
+every untouched package leaves a ghost behind; counting those would render a healthy run as
+"judged 12 of 3000" and train readers to ignore the one field that exists to stop them ignoring
+it. Ghosts stay in the totals and in the breakdown, so the numbers still add up on their face —
+they are only kept out of the ratio that decides whether an all-clear is warranted.
 
 Note what the tool does *not* claim either way: it reports that a measured level moved, never
 why it moved. Attributing a move — and deciding it is acceptable — is your judgment, recorded
@@ -208,8 +215,10 @@ list:
 {
   "census": {
     "total": 14,
+    "in_scope": 13,
     "judged": 12,
     "unjudged": 2,
+    "coverage": "partial",
     "reasons": [
       { "reason": "ghost", "count": 1 },
       { "reason": "too_few_points", "count": 1 }
@@ -217,6 +226,11 @@ list:
   }
 }
 ```
+
+`coverage` is the verdict's reach as a single stable token — `no_series`, `nothing_in_scope`,
+`nothing_judged`, `partial` or `full` — so automation can gate on it without re-deriving the
+ratio and reaching a different conclusion than the report it accompanies. Only `full` is an
+unqualified all-clear.
 
 `--verbose` goes further, naming each unjudged series individually with the evidence it carried
 and the gate rule that declined it.
