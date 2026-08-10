@@ -9,7 +9,7 @@ this design.
 
 * **Open this when**: preparing a pull request that touches a published package; deciding what
   version a package should get; implementing or debugging the version check, the
-  `cargo-release-plan` tool, or the release-versioning skill; a pull request is blocked by the
+  `cargo-release-plan` tool, or the `increment-versions` skill; a pull request is blocked by the
   `validate-versions` check.
 * **Cross-links**: [`release-automation.md`](release-automation.md) (the publish half),
   [`git-workflow.md`](git-workflow.md) (pull request mechanics),
@@ -87,6 +87,9 @@ pull request to run reports it and it goes out one merge later. The cost is that
 request is asked to resolve drift it did not cause. That is inherent to a check that reports what
 must be released rather than who caused it, and the skill makes resolving it cheap.
 
+Requiring up-to-date branches serialises merges. If pull request throughput ever suffers, a merge
+queue is the better answer and provides the same guarantee.
+
 ## Released content
 
 A package's released content is the set of files under its directory that **Cargo would put in
@@ -108,6 +111,11 @@ counted as changes, since Cargo would not package them either.
 `Cargo.lock` is not released content even though every published crate carries one. The
 published copy is a fresh per-package resolve against the live crates.io index at publish time,
 not a function of the source tree, and consumers ignore a dependency's lockfile.
+
+A package's `Cargo.toml` is compared as a file, so a comment-only or formatting-only edit to it
+counts as a released-content change and forces a publish. This keeps the rule uniform — one
+comparison for every file in the package — at the price of an occasional gratuitous release. The
+alternative, comparing parsed manifests, is more machinery than the problem deserves.
 
 ### Opting content out
 
@@ -189,11 +197,11 @@ which is how two sources of truth start to diverge. They are deleted.
 
 ## Package status
 
-| Status               | Condition                                                                  | Verdict  |
-| -------------------- | -------------------------------------------------------------------------- | -------- |
-| `releasing`          | the declared version increased since the anchor                             | pass     |
-| `unreleased-changes` | the version did not increase, and released content changed since the anchor | **fail** |
-| `released`           | the version did not increase, and nothing released-relevant changed         | pass     |
+| Status               | Condition                                                | Verdict  |
+| -------------------- | -------------------------------------------------------- | -------- |
+| `releasing`          | version increased since anchor                           | pass     |
+| `unreleased-changes` | version unchanged, released content changed since anchor | **fail** |
+| `released`           | version unchanged, nothing released-relevant changed     | pass     |
 
 `releasing` is the state of a package the pull request is publishing. It stays passing however
 much the branch changes afterwards, because all of it ships under the new version.
@@ -322,9 +330,9 @@ deleted packaged file, a newly excluded directory, a moved package directory, a
 workspace-inherited field change, a manifest reformatted without a version change, a merge commit
 on the base branch's first-parent line, and a shallow history.
 
-## The skill
+## The `increment-versions` skill
 
-`.github/skills/release-versioning/SKILL.md` — the repository's first skill. It is invoked when a
+`.github/skills/increment-versions/SKILL.md` — the repository's first skill. It is invoked when a
 pull request is ready to merge, or when the `validate-versions` check fails.
 
 Mechanics live in `just` recipes, per the repository rule that logic worth testing must not live
@@ -335,7 +343,10 @@ in prose; the skill file carries the judgement.
    "no breaking changes". This is the trap the current `verify-semver-checks` recipe guards
    against, and the guard survives the removal of `release-plz update`.
 2. **Collect.** `just release-report <dir>` runs `cargo release-plan report` and then
-   `cargo semver-checks --workspace`, capturing both.
+   `cargo semver-checks --workspace --all-features`, capturing both.
+
+   `--all-features` is used because gated API is still public API, and a breaking change behind a
+   feature flag is invisible to a default-feature run.
 
    Semver checking is workspace-wide, not restricted to changed packages, and the reason is worth
    stating so nobody later "optimises" it away: a package's public API can break without any of
@@ -396,8 +407,9 @@ list.
 means rustdoc for both baseline and current across forty-four packages, and the `cbh_*` family is
 slow to build. In CI it is therefore scoped to the packages this pull request releases, minus
 group members dragged along with no API change of their own (the `_impl` crates are `doc(hidden)`
-and have no consumer-visible surface). Group closure means this set is not always small, so the
-job runs in parallel with the rest of validation rather than gating it.
+and have no consumer-visible surface). It runs with `--all-features`, for the same reason the
+skill does. Group closure means this set is not always small, so the job runs in parallel with the
+rest of validation rather than gating it.
 
 It runs with `if: always()` on `needs: [validate-versions]`, so a failing version check still
 surfaces insufficient-increment findings in the same round trip rather than hiding them behind a
@@ -410,7 +422,7 @@ job as well.
 
 ```mermaid
 flowchart TD
-    A["Author finishes changes"] --> B["Skill: report + semver-checks"]
+    A["Author finishes changes"] --> B["increment-versions: report + semver-checks"]
     B --> C["Proposed plan with per-package justification"]
     C --> D{"Human approves?"}
     D -- adjust --> C
@@ -448,15 +460,35 @@ only unreleased changes are benchmarks or package-local documentation.
 
 Steps 1–3 must complete before step 4, or every pull request is immediately red.
 
-## Publish volume
+## Publish volume and rate limits
 
 Every merge that touches a published package now publishes it, and group closure multiplies that:
 a one-line change in any `cbh_*` crate publishes all sixteen members of the `cargo-bench-history`
-group. crates.io burst-limits new versions, which is why the exclusion policy exists as much to
-keep publish volume sane as to keep the invariant honest. The existing three-attempt,
-fifteen-minute retry around `release-plz release`, combined with its idempotency, absorbs the rate
-limit; a throttled run resumes and finishes, and because group consistency is defined on declared
-versions the intermediate part-published state does not fail the check.
+group. Long publish runs are therefore expected by design, not an anomaly to be engineered away.
+
+crates.io throttles publishing with a per-user token bucket, and the applicable limit is the one
+for **new versions of existing crates**: a burst of 30 with one token refilled per minute. (The
+much tighter new-crate limit — burst 5, one per ten minutes — does not apply here, because
+Trusted Publishing cannot perform a crate's first publish, so bootstrapping a new crate is a
+manual step outside this flow.) A full-workspace reconciliation of 44 crates against a fully
+drained bucket therefore costs at most about 44 minutes of waiting, and any single group release
+fits inside the burst.
+
+`release-plz release` is idempotent — it re-checks the registry and skips already-published
+versions — so a throttled run resumes rather than restarting. The retry around it is widened from
+three attempts to **ten**, keeping the fifteen-minute spacing: each wait refills roughly fifteen
+tokens, so ten attempts buy far more headroom than even a full-workspace release consumes, and
+the extra attempts cost nothing when nothing is throttled.
+
+The job timeout is raised accordingly, but it cannot simply be set to the arithmetic worst case:
+GitHub-hosted jobs are hard-capped at six hours, so `timeout-minutes` is set just below that
+ceiling (350). This is deliberate — the job's own timeout then fires first and produces a clean
+failure with the usual `ci-failure` issue, instead of the platform killing the run. A release
+pathological enough to exhaust that budget is finished by re-running the workflow, which is safe
+for the same idempotency reason.
+
+Because group consistency is defined on declared versions, an intermediate part-published state
+never fails the check while a run is working through it.
 
 ## Reuse outside this repository
 
@@ -468,19 +500,3 @@ pointing a check at `cargo release-plan check`.
 The skill and the `just` recipes stay local for now. The skill is the part most entangled with
 local conventions, and skills are new to this repository; extracting it is worth doing only once
 the shape has survived contact with real pull requests.
-
-## Open decisions
-
-* **Name.** `cargo-release-plan` versus the original `cargo-release-diff`. The tool decides status
-  and applies increments, not only diffs.
-* **`examples/`.** Kept as released content above, on the grounds that examples are consumer
-  documentation. The counter-argument is publish volume.
-* **Comment-only manifest edits.** A comment-only change to a package `Cargo.toml` counts as
-  released content under a file diff and forces a publish. Accepting that keeps the rule simple;
-  the alternative is comparing parsed manifests, which is more machinery than the problem
-  deserves.
-* **Feature configuration for `cargo-semver-checks`.** `--all-features` gives the best coverage but
-  can fail on mutually exclusive feature sets; the default feature set can miss breakage in gated
-  API.
-* **Branch protection.** Requiring up-to-date branches serialises merges. A merge queue is the
-  better answer if pull request throughput becomes a problem.
