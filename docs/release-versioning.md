@@ -18,9 +18,8 @@ this design.
 
 ## The invariant
 
-> A package is released by incrementing its version. Therefore, on `main`, every publishable
-> package's most recent version increment comes at or after its most recent change to released
-> content.
+> A package is released by incrementing its version. Therefore, on `main`, no publishable
+> package has released content sitting past its most recent version increment.
 
 A pull request that changes a package's released content must also increment that package's
 version. The version decision moves from an occasional, batched, after-the-fact activity into
@@ -35,40 +34,42 @@ Two consequences follow directly:
   undetectable behavioural break, a meaningful feature addition, keeping a version group
   aligned), but may never lower it below.
 
-## The anchor
+## The anchor and the rule
 
 The version increment *is* the release event, so the git repository holds everything needed to
-evaluate the invariant. A package's **anchor** is the commit in which its declared version most
-recently changed. Everything released-relevant after the anchor is unreleased.
+evaluate the invariant.
 
-Two implementation details matter:
+A package's **anchor** is the most recent commit on the **base branch's first-parent line** in
+which its declared version changed. Walking first-parent means each merged pull request counts
+as a single step regardless of how it was merged, and reading the anchor off the base branch
+rather than off the working branch means a branch's own commits never become anchors.
 
-* The comparison is on the **parsed `version` field**, not on a textual diff of the manifest, so
-  reformatting, key reordering and line moves do not register as increments.
-* A commit's version is compared against its **first parent**, so a merge that brings in someone
-  else's increment is itself an increment on this branch. That is deliberate — see
-  [Concurrent pull requests](#concurrent-pull-requests).
+The rule is then one predicate:
 
-A package's creation commit counts as a version change (absent → present), so a package added
-and released in one pull request needs no special handling.
+> A package fails if its released content differs between its anchor and the work tree, while
+> its declared version has not increased since the anchor.
 
-This needs full history in CI (`fetch-depth: 0`) but nothing else: no tags, no base branch, no
-merge base, no merge ref, no network. Tags are not consulted, because tagging is atomic with
+It has two readings, and both are needed:
+
+* **The version increased on this branch.** The package is being released, and everything on the
+  branch ships under the new version. Where in the branch the increment sits is irrelevant, and
+  so is how much changes after it — which is what keeps the check stable across review
+  iterations.
+* **The version did not increase.** The package is not being released, so nothing
+  released-relevant may sit past its anchor. This catches the branch's own unaccompanied changes
+  *and* content already sitting unreleased on the base branch, which is what makes the check
+  cover every publishable package rather than only the ones the pull request touched.
+
+Two implementation details matter. The comparison is on the **parsed `version` field**, not on a
+textual diff of the manifest, so reformatting, key reordering and line moves do not register as
+increments. And a package's creation commit counts as a version change (absent → present), so a
+package added and released in one pull request needs no special handling.
+
+The base revision defaults to `origin/main` and CI passes the pull request's base SHA explicitly.
+A stale base is safe rather than unsound: it can only move the anchor further back, which reports
+more, never less. The check needs full history (`fetch-depth: 0`) and the base ref, and nothing
+else — no tags, no merge ref, no network. Tags are not consulted, because tagging is atomic with
 neither the merge nor the publish, so an absent tag proves nothing.
-
-### The increment comes last
-
-Because the anchor is the *most recent* version change, the increment must be the last
-released-content change on the branch. Change `src/` after incrementing and the check goes red
-again, asking for another increment.
-
-This is a real workflow constraint and it is the right one. It matches how the skill is used —
-the increment is applied at the end, on approval — and it is what makes the invariant
-inductive: if every merge to `main` satisfies it, then no package on `main` ever has content
-sitting past its last increment, so no later pull request inherits a false reading.
-
-Its cost is that a review round after the skill has run consumes another version number. That
-cost is zero in substance: the skipped version was never published, so nothing refers to it.
 
 ### Concurrent pull requests
 
@@ -76,17 +77,15 @@ Two branches cut from the same commit both increment `foo` 0.6.1 → 0.6.2. Git 
 identical single-line edits without a conflict, so without care the second merge lands changed
 code under a version crates.io already has, and `release-plz release` skips it.
 
-Requiring branches to be up to date before merge closes this. When the second branch merges
-`main` in, it picks up the first pull request's changes to `foo` — but not a version change,
-since both sides already read 0.6.2. Those incoming changes land *after* the branch's own
-increment, so the check reports `foo` as having unreleased changes and demands 0.6.3.
+Requiring branches to be up to date before merge closes this. Once the first pull request has
+merged, the second one's base contains 0.6.2, so its declared version has *not* increased
+relative to its anchor — while its content has. The check demands 0.6.3.
 
 The residual window is a second pull request merging while the first one's publish is still in
-flight. Nothing is lost even then: the check evaluates **every** publishable package, not only
-the ones the pull request touched, so the next pull request to run reports the package and it
-goes out one merge later. The cost is that a later pull request is asked to resolve drift it did
-not cause. That is inherent to a check that reports what must be released rather than who caused
-it, and the skill makes resolving it cheap.
+flight. Nothing is lost even then: because the rule covers every publishable package, the next
+pull request to run reports it and it goes out one merge later. The cost is that a later pull
+request is asked to resolve drift it did not cause. That is inherent to a check that reports what
+must be released rather than who caused it, and the skill makes resolving it cheap.
 
 ## Released content
 
@@ -190,10 +189,14 @@ which is how two sources of truth start to diverge. They are deleted.
 
 ## Package status
 
-| Status               | Condition                                                | Verdict  |
-| -------------------- | -------------------------------------------------------- | -------- |
-| `unreleased-changes` | released content changed after the package's anchor       | **fail** |
-| `released`           | nothing released-relevant changed after the anchor        | pass     |
+| Status               | Condition                                                                  | Verdict  |
+| -------------------- | -------------------------------------------------------------------------- | -------- |
+| `releasing`          | the declared version increased since the anchor                             | pass     |
+| `unreleased-changes` | the version did not increase, and released content changed since the anchor | **fail** |
+| `released`           | the version did not increase, and nothing released-relevant changed         | pass     |
+
+`releasing` is the state of a package the pull request is publishing. It stays passing however
+much the branch changes afterwards, because all of it ships under the new version.
 
 Group consistency is a separate, group-level verdict rather than a package status: a package can
 have unreleased changes *and* belong to an inconsistent group, and both are reported.
@@ -236,7 +239,7 @@ behaviour is caught by CI rather than by a missed release.
 ### `report`
 
 ```
-cargo release-plan report --out-dir <dir> [--manifest-path <p>] [--verbose]
+cargo release-plan report --out-dir <dir> [--base <rev>] [--manifest-path <p>] [--verbose]
 ```
 
 Writes `<dir>/report.json` plus one `<dir>/diffs/<package>.patch` per package with unreleased
@@ -253,7 +256,7 @@ package that is not yet released".
       "declared_version": "0.1.43",
       "group": "nm",
       "status": "unreleased-changes",
-      "anchor": { "commit": "1a2b…", "version_from": "0.1.42", "version_to": "0.1.43" },
+      "anchor": { "commit": "1a2b…", "version": "0.1.43" },
       "changed": [
         { "path": "src/hashing.rs", "change": "modified", "source": "package" },
         { "path": "Cargo.toml", "change": "modified", "source": "package" },
@@ -282,7 +285,7 @@ independently in one pass is wrong; the graph makes the required ordering explic
 ### `check`
 
 ```
-cargo release-plan check [--manifest-path <p>] [--format text|github]
+cargo release-plan check [--base <rev>] [--manifest-path <p>] [--format text|github]
 ```
 
 Exits non-zero on any package with unreleased changes or any inconsistent group, printing one
@@ -313,10 +316,11 @@ Unit tests cover anchor resolution, group verdicts, packaging-rule matching, inh
 attribution and plan expansion. Integration tests build fixture repositories in
 `tempfile::tempdir()` and drive `run()` directly, using the hermetic `run_git` helper pattern from
 `cargo-bench-history`'s test harness (pinned identity, no signing, no autogc). Fixtures cover an
-increment followed by further changes, group closure with an unpublished member, `=`-pin
-propagation, a deleted packaged file, a newly excluded directory, a moved package directory, a
-workspace-inherited field change, a manifest reformatted without a version change, and a shallow
-history.
+increment placed early in a branch with further changes after it, unreleased content already
+present on the base branch, group closure with an unpublished member, `=`-pin propagation, a
+deleted packaged file, a newly excluded directory, a moved package directory, a
+workspace-inherited field change, a manifest reformatted without a version change, a merge commit
+on the base branch's first-parent line, and a shallow history.
 
 ## The skill
 
@@ -350,8 +354,7 @@ in prose; the skill file carries the judgement.
    package's unreleased changes can run to thousands of lines.
 5. **Apply, on approval.** `cargo release-plan apply`, then re-run `check` and the scoped
    `cargo semver-checks` to confirm the result, and write the summary into the pull request
-   description. The increment must be the branch's last released-content change, so this step
-   comes last; if review then forces further changes, the skill runs again. The plan is not
+   description. Further changes may follow the increment without invalidating it. The plan is not
    committed: the check verifies manifest state, not intent, so a plan file in the repository
    would be inert churn.
 
@@ -372,17 +375,20 @@ validate-versions:
   steps:
     - uses: actions/checkout@v6
       with:
-        fetch-depth: 0   # anchors are found by walking version history
+        fetch-depth: 0   # anchors are found by walking the base branch's version history
     - uses: ./.github/actions/setup-environment
     - id: check
+      env:
+        RELEASE_PLAN_BASE: ${{ github.event.pull_request.base.sha }}
       run: just validate-versions
       shell: pwsh
 ```
 
-The recipe is a thin wrapper over `cargo release-plan check --format github`, which also emits the
-set of packages this pull request releases, for the next job. No PowerShell module is introduced:
-the classification logic is the Rust tool's job and is tested there. The job joins `alert`'s
-`needs:` list.
+The recipe is a thin wrapper over `cargo release-plan check --base <sha> --format github`, which
+also emits the set of packages this pull request releases, for the next job. Passing the base SHA
+from the event payload avoids inferring it from refs. No PowerShell module is introduced: the
+classification logic is the Rust tool's job and is tested there. The job joins `alert`'s `needs:`
+list.
 
 ### `semver-checks`
 
@@ -410,7 +416,6 @@ flowchart TD
     D -- adjust --> C
     D -- yes --> E["apply: versions, pins, groups, lockfile"]
     E --> F["validate-versions + scoped semver-checks"]
-    F -- further review changes --> B
     F --> G["Merge to main"]
     G --> H["release.yml publishes every unpublished version"]
 ```
