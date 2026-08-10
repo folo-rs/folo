@@ -1,0 +1,407 @@
+//! The one output-facing projection of what an analysis actually judged.
+//!
+//! [`SeriesCensus`] is the detector's raw account. Every surface a reader or an
+//! automation meets — the text report, the Markdown report, the JSON document and
+//! the pull-request comment composed from it — needs the same three things out of
+//! that account: a verdict that does not overstate what was ruled out, the complete
+//! per-reason breakdown, and how much of the suite the verdict covers. Deriving
+//! those independently per surface is how they drift apart, so they are derived
+//! once here and every surface reads them from [`Coverage`].
+
+use cbh_detect::{SeriesCensus, UnjudgedReason};
+
+/// How much of the in-scope suite an analysis reached a verdict on.
+///
+/// The three "nothing was judged" situations are distinct operational states with
+/// distinct remedies — no results at all, results that were all ghosts, and results
+/// that were all declined by the gates — so they are distinct variants rather than
+/// one lumped "blind" state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CoverageState {
+    /// The analysis accounted for no series whatsoever: nothing was collected, or
+    /// nothing survived loading. Remedy: look at collection, not at the gates.
+    NoSeries,
+    /// Series were accounted for, but every one of them was a ghost, so nothing was
+    /// in scope at the analyzed tip commit. Remedy: check that the benchmarks still
+    /// run at the analyzed commit.
+    NothingInScope,
+    /// In-scope series existed and none of them could be judged. Remedy: the
+    /// per-reason breakdown says which evidence floor they fell short of.
+    NothingJudged,
+    /// Some, but not all, in-scope series were judged. A silent report is an
+    /// all-clear over the judged part only.
+    Partial,
+    /// Every in-scope series was judged, so a silent report is a full all-clear.
+    Full,
+}
+
+impl CoverageState {
+    /// The stable `snake_case` wire name of the state, as the JSON report carries it
+    /// and downstream automation matches on it.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NoSeries => "no_series",
+            Self::NothingInScope => "nothing_in_scope",
+            Self::NothingJudged => "nothing_judged",
+            Self::Partial => "partial",
+            Self::Full => "full",
+        }
+    }
+}
+
+/// What an analysis judged, projected from a [`SeriesCensus`] into the account every
+/// rendering reports.
+///
+/// Counts *metric series* throughout, matching the census: one benchmark measured for
+/// several metrics contributes one entry per metric.
+///
+/// Ghosts sit outside the [`in_scope`](Self::in_scope) denominator the
+/// [`state`](Self::state) is derived from. A pull request benchmarks only the packages
+/// it touches while analysis reads the whole store, so every untouched package's series
+/// is a ghost; counting those would render a healthy run as "judged 12 of 3000" and
+/// train readers to ignore the field. They remain in [`total`](Self::total) and in the
+/// per-reason breakdown, so nothing is hidden — they are only kept out of the ratio
+/// that decides whether an all-clear is warranted.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Coverage {
+    state: CoverageState,
+    judged: usize,
+    in_scope: usize,
+    total: usize,
+    unjudged: Vec<(UnjudgedReason, usize)>,
+}
+
+impl Coverage {
+    /// Projects a census onto the coverage every surface reports.
+    #[must_use]
+    pub fn from_census(census: &SeriesCensus) -> Self {
+        let unjudged: Vec<(UnjudgedReason, usize)> = census.reasons().collect();
+        let ghosts = unjudged
+            .iter()
+            .find_map(|&(reason, count)| (reason == UnjudgedReason::Ghost).then_some(count))
+            .unwrap_or(0);
+        let total = census.total();
+        let in_scope = total.saturating_sub(ghosts);
+        let judged = census.judged();
+
+        let state = if total == 0 {
+            CoverageState::NoSeries
+        } else if in_scope == 0 {
+            CoverageState::NothingInScope
+        } else if judged == 0 {
+            CoverageState::NothingJudged
+        } else if judged < in_scope {
+            CoverageState::Partial
+        } else {
+            CoverageState::Full
+        };
+
+        Self {
+            state,
+            judged,
+            in_scope,
+            total,
+            unjudged,
+        }
+    }
+
+    /// How much of the in-scope suite was judged.
+    #[must_use]
+    pub fn state(&self) -> CoverageState {
+        self.state
+    }
+
+    /// How many series the detectors reached a verdict on.
+    #[must_use]
+    pub fn judged(&self) -> usize {
+        self.judged
+    }
+
+    /// How many series could have been judged: every accounted series except the
+    /// ghosts, which no analysis can judge.
+    #[must_use]
+    pub fn in_scope(&self) -> usize {
+        self.in_scope
+    }
+
+    /// Every series the analysis accounted for, ghosts included.
+    #[must_use]
+    pub fn total(&self) -> usize {
+        self.total
+    }
+
+    /// How many series went unjudged, for any reason.
+    #[must_use]
+    pub fn unjudged(&self) -> usize {
+        self.total.saturating_sub(self.judged)
+    }
+
+    /// The unjudged series broken down by reason, in the census's reporting order.
+    /// Complete: ghosts are listed here even though they sit outside
+    /// [`in_scope`](Self::in_scope).
+    pub fn reasons(&self) -> impl Iterator<Item = (UnjudgedReason, usize)> + '_ {
+        self.unjudged.iter().copied()
+    }
+
+    /// The primary verdict for a report that produced no findings.
+    ///
+    /// An all-clear is a claim about the series that were judged, so a run that judged
+    /// nothing does not open with one, and a run that judged only part of its suite
+    /// opens with an all-clear that says so.
+    #[must_use]
+    pub fn verdict(&self) -> &'static str {
+        match self.state {
+            // An analysis that accounted for no series is not a coverage shortfall in a
+            // suite — there is no suite yet — and the empty-outcome hint that accompanies
+            // this case explains the emptiness in full, so the familiar all-clear stands
+            // and the qualification below states what it rests on.
+            CoverageState::NoSeries | CoverageState::Full => "No notable changes detected.",
+            CoverageState::NothingInScope => {
+                "Nothing was in scope at the analyzed tip commit, so nothing was judged."
+            }
+            CoverageState::NothingJudged => {
+                "Nothing was judged, so no change could be detected either way."
+            }
+            CoverageState::Partial => {
+                "No notable changes detected among the series that were judged."
+            }
+        }
+    }
+
+    /// The sentences qualifying the verdict, in reading order: what the silence covers,
+    /// then what it does not.
+    ///
+    /// Both sentences count against [`total`](Self::total) rather than
+    /// [`in_scope`](Self::in_scope), so a human report adds up on its face: the judged
+    /// series plus every reason listed in the second sentence account for the whole
+    /// suite, ghosts included.
+    #[must_use]
+    pub fn qualifications(&self) -> Vec<String> {
+        let mut sentences = vec![self.coverage_sentence()];
+        if self.unjudged() > 0 {
+            let reasons: Vec<String> = self
+                .reasons()
+                .map(|(reason, count)| format!("{count} series {}", reason.describe()))
+                .collect();
+            sentences.push(format!("Not judged: {}.", reasons.join("; ")));
+        }
+        sentences
+    }
+
+    /// The sentence stating how far the verdict reaches.
+    fn coverage_sentence(&self) -> String {
+        match self.state {
+            CoverageState::NoSeries => {
+                "No benchmark series were analyzed, so this run tested nothing.".to_owned()
+            }
+            CoverageState::NothingInScope => format!(
+                "None of the {} series accounted for is measured at the analyzed tip \
+                 commit, so nothing was tested.",
+                self.total
+            ),
+            CoverageState::NothingJudged => format!(
+                "Judged 0 of {} series, so nothing was tested: this silence is not \
+                 evidence that nothing moved.",
+                self.total
+            ),
+            CoverageState::Partial | CoverageState::Full => format!(
+                "Judged {} of {} series; none moved beyond the measurement floor.",
+                self.judged, self.total
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use cbh_detect::Testability;
+
+    use super::*;
+
+    /// A census of `judged` judged series plus the given unjudged breakdown.
+    fn census_of(judged: usize, unjudged: &[(UnjudgedReason, usize)]) -> SeriesCensus {
+        let mut census = SeriesCensus::default();
+        for _ in 0..judged {
+            census.record(Testability::Judged);
+        }
+        for &(reason, count) in unjudged {
+            census.record_unjudged(reason, count);
+        }
+        census
+    }
+
+    /// Every distinct shape a census can present, with the state it projects to and
+    /// the in-scope ratio behind it. Table-driven so a new [`UnjudgedReason`] or a new
+    /// [`CoverageState`] is added here once and checked against every surface.
+    fn coverage_cases() -> Vec<(&'static str, SeriesCensus, CoverageState, usize, usize)> {
+        vec![
+            (
+                "absent census",
+                SeriesCensus::default(),
+                CoverageState::NoSeries,
+                0,
+                0,
+            ),
+            (
+                "every series a ghost",
+                census_of(0, &[(UnjudgedReason::Ghost, 4)]),
+                CoverageState::NothingInScope,
+                0,
+                0,
+            ),
+            (
+                "in scope but nothing judged",
+                census_of(0, &[(UnjudgedReason::TooFewPoints, 3)]),
+                CoverageState::NothingJudged,
+                0,
+                3,
+            ),
+            (
+                "partial: ghost",
+                census_of(2, &[(UnjudgedReason::Ghost, 1)]),
+                // Ghosts sit outside the denominator, so a run whose only shortfall is
+                // ghosts judged everything it could: full coverage, not partial.
+                CoverageState::Full,
+                2,
+                2,
+            ),
+            (
+                "partial: too few points",
+                census_of(2, &[(UnjudgedReason::TooFewPoints, 1)]),
+                CoverageState::Partial,
+                2,
+                3,
+            ),
+            (
+                "partial: too few points since blessing",
+                census_of(2, &[(UnjudgedReason::TooFewPointsSinceBlessing, 1)]),
+                CoverageState::Partial,
+                2,
+                3,
+            ),
+            (
+                "partial: not measured on branch",
+                census_of(2, &[(UnjudgedReason::NotMeasuredOnBranch, 1)]),
+                CoverageState::Partial,
+                2,
+                3,
+            ),
+            (
+                "partial: too few base commits",
+                census_of(2, &[(UnjudgedReason::TooFewBaseCommits, 1)]),
+                CoverageState::Partial,
+                2,
+                3,
+            ),
+            (
+                "mixed reasons",
+                census_of(
+                    4,
+                    &[
+                        (UnjudgedReason::Ghost, 2),
+                        (UnjudgedReason::TooFewPoints, 3),
+                        (UnjudgedReason::NotMeasuredOnBranch, 1),
+                    ],
+                ),
+                CoverageState::Partial,
+                4,
+                8,
+            ),
+            (
+                "full coverage",
+                census_of(5, &[]),
+                CoverageState::Full,
+                5,
+                5,
+            ),
+        ]
+    }
+
+    #[test]
+    fn every_census_shape_projects_to_its_state() {
+        for (name, census, expected, judged, in_scope) in coverage_cases() {
+            let coverage = Coverage::from_census(&census);
+            assert_eq!(coverage.state(), expected, "{name}");
+            assert_eq!(coverage.judged(), judged, "{name}");
+            assert_eq!(coverage.in_scope(), in_scope, "{name}");
+            assert_eq!(coverage.total(), census.total(), "{name}");
+            assert_eq!(coverage.unjudged(), census.unjudged(), "{name}");
+        }
+    }
+
+    #[test]
+    fn only_a_complete_verdict_reads_as_an_all_clear() {
+        // The point of the projection: silence claims an all-clear only where something
+        // was actually judged, so a blind run cannot read as a clean one.
+        for (name, census, expected, ..) in coverage_cases() {
+            let coverage = Coverage::from_census(&census);
+            let claims_all_clear = coverage.verdict() == "No notable changes detected.";
+            let earned = matches!(expected, CoverageState::Full | CoverageState::NoSeries);
+            assert_eq!(claims_all_clear, earned, "{name}: {}", coverage.verdict());
+        }
+    }
+
+    #[test]
+    fn a_ghost_is_counted_once_per_metric_series() {
+        // One benchmark measured for two metrics is two series, and the census counts
+        // series, so a two-metric ghost leaves two accounted for and none in scope.
+        let coverage = Coverage::from_census(&census_of(0, &[(UnjudgedReason::Ghost, 2)]));
+        assert_eq!(coverage.total(), 2);
+        assert_eq!(coverage.in_scope(), 0);
+        assert_eq!(coverage.state(), CoverageState::NothingInScope);
+    }
+
+    #[test]
+    fn qualifications_account_for_every_series() {
+        let coverage = Coverage::from_census(&census_of(
+            4,
+            &[
+                (UnjudgedReason::Ghost, 2),
+                (UnjudgedReason::TooFewPoints, 3),
+            ],
+        ));
+        let sentences = coverage.qualifications();
+        assert_eq!(
+            sentences,
+            vec![
+                "Judged 4 of 9 series; none moved beyond the measurement floor.".to_owned(),
+                "Not judged: 2 series not measured at the analyzed tip commit; 3 series \
+                 with too few points in the analyzed window."
+                    .to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_fully_judged_analysis_lists_no_shortfall() {
+        let coverage = Coverage::from_census(&census_of(3, &[]));
+        assert_eq!(
+            coverage.qualifications(),
+            vec!["Judged 3 of 3 series; none moved beyond the measurement floor.".to_owned()]
+        );
+    }
+
+    #[test]
+    fn state_wire_names_are_distinct_and_stable() {
+        let states = [
+            CoverageState::NoSeries,
+            CoverageState::NothingInScope,
+            CoverageState::NothingJudged,
+            CoverageState::Partial,
+            CoverageState::Full,
+        ];
+        let names: Vec<&str> = states.iter().map(|state| state.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "no_series",
+                "nothing_in_scope",
+                "nothing_judged",
+                "partial",
+                "full"
+            ]
+        );
+    }
+}

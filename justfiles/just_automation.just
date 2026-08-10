@@ -430,6 +430,36 @@ gh-file-pr-comment repo pr marker body_file:
         -Verbose
     Write-Verbose "Rolling PR comment is available at $url." -Verbose
 
+# Composes the rolling PR benchmark comment body from the artefacts gh-analyze-pr-bench-history left
+# in `dir` (report.json, summary.md, notable.txt), writing it to `dir`/comment-body.md for the
+# staleness check and the post step that follow. Thin wrapper over Format-PrBenchCommentBody in
+# scripts/bench-history/BenchHistoryComment.psm1 (Pester-tested via `just test-scripts`), where the
+# verdict logic lives: when the analysis flagged nothing, an all-clear is claimed only where the
+# report's own coverage state says every in-scope series was actually judged. `marker` is the hidden
+# dedup marker, `commit_marker_prefix` the hidden analyzed-commit marker's prefix, `analyzed_sha` the
+# full 40-char head SHA the numbers describe, `packages` the space-separated impacted-package list the
+# delta job produced, and `artifact_url` the full-report artifact link (empty when there were no
+# findings to attach). Touches no network.
+[group('automation')]
+[script]
+gh-compose-pr-bench-comment dir marker commit_marker_prefix analyzed_sha packages artifact_url='':
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+    Import-Module ./scripts/bench-history/BenchHistoryComment.psm1 -Force
+
+    $bodyFile = Join-Path '{{dir}}' 'comment-body.md'
+    Write-Verbose "Composing the rolling PR benchmark comment for analyzed commit {{analyzed_sha}} from the analysis artefacts in {{dir}}, writing it to $bodyFile." -Verbose
+    $body = Format-PrBenchCommentBody `
+        -Marker '{{marker}}' `
+        -CommitMarkerPrefix '{{commit_marker_prefix}}' `
+        -AnalyzedSha '{{analyzed_sha}}' `
+        -Packages '{{packages}}' `
+        -ScratchDir '{{dir}}' `
+        -ReportArtifactUrl '{{artifact_url}}' `
+        -Verbose
+    Set-Content -LiteralPath $bodyFile -Value $body -Encoding utf8
+
 # Defense-in-depth for the analyze post path (see .github/workflows/pr-bench-history.yml and
 # .github/workflows/design.md): a PR benchmark run takes hours, and although a newer push normally
 # supersedes the in-flight run before it posts, a push that RACES this run's final post could still

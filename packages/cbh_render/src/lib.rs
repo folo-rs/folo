@@ -19,6 +19,8 @@
 //!
 //! [`cargo-bench-history`]: https://github.com/folo-rs/folo
 
+mod coverage;
 mod report;
 
+pub use coverage::*;
 pub use report::*;

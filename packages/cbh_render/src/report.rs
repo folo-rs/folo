@@ -19,6 +19,8 @@ use colored::Colorize;
 use rasciigraph::{Config, plot};
 use serde::Serialize;
 
+use crate::Coverage;
+
 /// Height, in rows, of a finding chart.
 const CHART_HEIGHT: u32 = 4;
 /// Width, in columns, of a finding chart.
@@ -174,20 +176,28 @@ pub struct ReportInput<'a> {
 
 /// The JSON shape of the series census.
 ///
-/// Self-contained: `total` is `judged` plus `unjudged`, and `unjudged` is the sum of
-/// the `reasons` counts, so a consumer can read coverage without cross-referencing
-/// the rest of the document. It counts *series*, and its total spans the whole suite
-/// the analysis started from — including the ghost-filtered series the top-level
-/// `series` tally excludes.
+/// Self-contained: `total` is `judged` plus `unjudged`, `unjudged` is the sum of the
+/// `reasons` counts, and `coverage` is the verdict-bearing state derived from
+/// `in_scope` — so a consumer reads coverage without cross-referencing the rest of the
+/// document or re-deriving the ghost arithmetic. It counts *series*, and its total
+/// spans the whole suite the analysis started from — including the ghost-filtered
+/// series the top-level `series` tally excludes.
 #[derive(Serialize)]
 struct JsonCensus {
     /// Every series the analysis accounted for.
     total: usize,
+    /// Every series that could have been judged: `total` less the ghosts, which no
+    /// analysis can judge. The denominator `coverage` is derived from.
+    in_scope: usize,
     /// Series the detectors reached a verdict on. A silent report says nothing about
     /// the rest.
     judged: usize,
     /// Series that were not tested at all.
     unjudged: usize,
+    /// How much of the in-scope suite was judged, as a stable `snake_case` state name
+    /// (see [`CoverageState`]). The one field automation gates on: an empty findings
+    /// list means "nothing moved" only at `full`.
+    coverage: &'static str,
     /// The unjudged series broken down by reason, in reporting order. Empty when
     /// every series was judged.
     reasons: Vec<JsonUnjudged>,
@@ -204,13 +214,15 @@ struct JsonUnjudged {
 }
 
 impl JsonCensus {
-    /// Projects a [`SeriesCensus`] onto its JSON shape.
-    fn from_census(census: &SeriesCensus) -> Self {
+    /// Projects the shared [`Coverage`] onto its JSON shape.
+    fn from_coverage(coverage: &Coverage) -> Self {
         Self {
-            total: census.total(),
-            judged: census.judged(),
-            unjudged: census.unjudged(),
-            reasons: census
+            total: coverage.total(),
+            in_scope: coverage.in_scope(),
+            judged: coverage.judged(),
+            unjudged: coverage.unjudged(),
+            coverage: coverage.state().as_str(),
+            reasons: coverage
                 .reasons()
                 .map(|(reason, count)| JsonUnjudged {
                     reason: reason.as_str(),
@@ -487,13 +499,14 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
     // the process is run. The guard restores auto-detection on return.
     let _color = ColorOverride::force(color);
 
+    let coverage = Coverage::from_census(&input.census);
     let regressions = count_top(input.findings, Direction::Regression);
 
     let mut header = vec![format!(
         "runs: {}",
         runs_with_span(input.runs, input.commit_span)
     )];
-    header.extend(judged_field(&input.census));
+    header.extend(judged_field(&coverage));
     header.push(format!("regressions: {regressions}"));
     if input.report_improvements {
         header.push(format!(
@@ -513,10 +526,10 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
     ];
 
     if input.findings.is_empty() {
-        lines.push("No notable changes detected.".to_owned());
+        lines.push(coverage.verdict().to_owned());
         // Silence is a claim about the judged series only, so state how far it
         // reaches. Indented under the verdict it qualifies.
-        for sentence in silence_sentences(&input.census) {
+        for sentence in coverage.qualifications() {
             lines.push(format!("  {sentence}"));
         }
         if let Some(hint) = input.hint {
@@ -614,49 +627,25 @@ fn set_counts_line(summary: &SetSummary<'_>, report_improvements: bool) -> Strin
 /// `series judged: 42 of 53`. `None` when the analysis accounted for no series at
 /// all, where a `0 of 0` ratio would be noise and the empty-outcome hint speaks
 /// instead.
-fn judged_field(census: &SeriesCensus) -> Option<String> {
-    (census.total() > 0)
-        .then(|| format!("series judged: {} of {}", census.judged(), census.total()))
+fn judged_field(coverage: &Coverage) -> Option<String> {
+    (coverage.total() > 0).then(|| {
+        format!(
+            "series judged: {} of {}",
+            coverage.judged(),
+            coverage.total()
+        )
+    })
 }
 
 /// The Markdown bullet form of [`judged_field`].
-fn judged_bullet(census: &SeriesCensus) -> Option<String> {
-    (census.total() > 0)
-        .then(|| format!("- Series judged: {} of {}", census.judged(), census.total()))
-}
-
-/// The sentences that qualify a silent verdict, in reading order: what the silence
-/// covers, then what it does not.
-///
-/// A report with no findings says "nothing moved" only for the series that were
-/// judged, so both surfaces state the coverage rather than leaving the reader to
-/// assume it was total. An analysis that accounted for no series says nothing here —
-/// the empty-outcome hint already explains that case in full.
-fn silence_sentences(census: &SeriesCensus) -> Vec<String> {
-    if census.total() == 0 {
-        return Vec::new();
-    }
-    let mut sentences = vec![if census.judged() == 0 {
+fn judged_bullet(coverage: &Coverage) -> Option<String> {
+    (coverage.total() > 0).then(|| {
         format!(
-            "Judged 0 of {} series, so nothing was tested: this silence is not \
-             evidence that nothing moved.",
-            census.total()
+            "- Series judged: {} of {}",
+            coverage.judged(),
+            coverage.total()
         )
-    } else {
-        format!(
-            "Judged {} of {} series; none moved beyond the measurement floor.",
-            census.judged(),
-            census.total()
-        )
-    }];
-    if census.unjudged() > 0 {
-        let reasons: Vec<String> = census
-            .reasons()
-            .map(|(reason, count)| format!("{count} series {}", reason.describe()))
-            .collect();
-        sentences.push(format!("Not judged: {}.", reasons.join("; ")));
-    }
-    sentences
+    })
 }
 
 /// Formats the run tally with the analyzed commit span appended, so the report
@@ -932,6 +921,7 @@ pub fn chart(values: &[f64]) -> Option<String> {
 }
 
 fn render_markdown(input: &ReportInput<'_>) -> String {
+    let coverage = Coverage::from_census(&input.census);
     let regressions = count_top(input.findings, Direction::Regression);
 
     let mut lines = vec![
@@ -944,7 +934,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
             runs_with_span(input.runs, input.commit_span)
         ),
     ];
-    lines.extend(judged_bullet(&input.census));
+    lines.extend(judged_bullet(&coverage));
     lines.push(format!("- Regressions: {regressions}"));
     if input.report_improvements {
         lines.push(format!(
@@ -955,8 +945,8 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
 
     if input.findings.is_empty() {
         lines.push(String::new());
-        lines.push("No notable changes detected.".to_owned());
-        for sentence in silence_sentences(&input.census) {
+        lines.push(coverage.verdict().to_owned());
+        for sentence in coverage.qualifications() {
             lines.push(String::new());
             lines.push(sentence);
         }
@@ -1015,6 +1005,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
 /// report for the rest.
 #[must_use]
 pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -> String {
+    let coverage = Coverage::from_census(&input.census);
     let regressions = count_top(input.findings, Direction::Regression);
 
     let mut lines = vec![
@@ -1027,7 +1018,7 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
             runs_with_span(input.runs, input.commit_span)
         ),
     ];
-    lines.extend(judged_bullet(&input.census));
+    lines.extend(judged_bullet(&coverage));
     lines.push(format!("- Regressions: {regressions}"));
     if input.report_improvements {
         lines.push(format!(
@@ -1038,8 +1029,8 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
 
     if input.findings.is_empty() {
         lines.push(String::new());
-        lines.push("No notable changes detected.".to_owned());
-        for sentence in silence_sentences(&input.census) {
+        lines.push(coverage.verdict().to_owned());
+        for sentence in coverage.qualifications() {
             lines.push(String::new());
             lines.push(sentence);
         }
@@ -1179,7 +1170,7 @@ fn render_json(input: &ReportInput<'_>) -> String {
         regressions: count_top(input.findings, Direction::Regression),
         improvements: count_top(input.findings, Direction::Improvement),
         ghosts_excluded: input.ghosts_excluded,
-        census: JsonCensus::from_census(&input.census),
+        census: JsonCensus::from_coverage(&Coverage::from_census(&input.census)),
         hint: input.hint,
         warning: input.warning,
         findings: input
@@ -1707,18 +1698,28 @@ mod tests {
             !text.contains("none moved beyond the measurement floor"),
             "nothing was measured against the floor: {text}"
         );
+        assert!(
+            !text.contains("No notable changes detected"),
+            "a run that judged nothing claims no all-clear: {text}"
+        );
 
         let markdown = render(&input, ReportFormat::Markdown, false);
         assert!(
             markdown.contains("this silence is not evidence that nothing moved"),
             "{markdown}"
         );
+        assert!(
+            !markdown.contains("No notable changes detected"),
+            "{markdown}"
+        );
     }
 
     #[test]
     fn an_empty_analysis_leaves_the_coverage_field_to_the_hint() {
-        // With no series at all there is no coverage to report — a "0 of 0" ratio is
-        // noise — and the empty-outcome hint already explains the whole situation.
+        // With no series at all there is no coverage ratio to report — a "0 of 0" ratio
+        // is noise — and the empty-outcome hint explains the whole situation. The
+        // verdict still states that nothing was tested, so the lead line is not read as
+        // an all-clear over a suite that was never looked at.
         let input = ReportInput {
             census: SeriesCensus::default(),
             hint: Some("Found 2 stored runs ... dirty snapshots"),
@@ -1728,10 +1729,190 @@ mod tests {
         let text = render(&input, ReportFormat::Text, false);
         assert!(!text.contains("series judged"), "{text}");
         assert!(!text.contains("Judged"), "{text}");
+        assert!(
+            text.contains("No benchmark series were analyzed, so this run tested nothing."),
+            "{text}"
+        );
         assert!(text.contains("Found 2 stored runs"), "{text}");
 
         let markdown = render(&input, ReportFormat::Markdown, false);
         assert!(!markdown.contains("Series judged"), "{markdown}");
+        assert!(
+            markdown.contains("No benchmark series were analyzed"),
+            "{markdown}"
+        );
+    }
+
+    /// Every distinct coverage situation, with the phrase each human surface must
+    /// carry and the phrase it must not. Shared by the text, Markdown and summary
+    /// renderings so a coverage state cannot degrade on one surface while the others
+    /// stay correct.
+    fn silent_surface_cases() -> Vec<(&'static str, SeriesCensus, &'static str, &'static str)> {
+        vec![
+            (
+                "absent census",
+                SeriesCensus::default(),
+                "No benchmark series were analyzed, so this run tested nothing.",
+                "Judged",
+            ),
+            (
+                "every series a ghost",
+                census_of(0, &[(UnjudgedReason::Ghost, 4)]),
+                "Nothing was in scope at the analyzed tip commit, so nothing was judged.",
+                "No notable changes detected",
+            ),
+            (
+                "nothing judged",
+                census_of(0, &[(UnjudgedReason::TooFewPoints, 2)]),
+                "Nothing was judged, so no change could be detected either way.",
+                "No notable changes detected",
+            ),
+            (
+                "partial: too few points",
+                census_of(2, &[(UnjudgedReason::TooFewPoints, 1)]),
+                "with too few points in the analyzed window",
+                "No notable changes detected.",
+            ),
+            (
+                "partial: too few points since blessing",
+                census_of(2, &[(UnjudgedReason::TooFewPointsSinceBlessing, 1)]),
+                "with too few points since being blessed",
+                "No notable changes detected.",
+            ),
+            (
+                "partial: not measured on branch",
+                census_of(2, &[(UnjudgedReason::NotMeasuredOnBranch, 1)]),
+                "not measured on the branch",
+                "No notable changes detected.",
+            ),
+            (
+                "partial: too few base commits",
+                census_of(2, &[(UnjudgedReason::TooFewBaseCommits, 1)]),
+                "with too few base-branch commits to compare against",
+                "No notable changes detected.",
+            ),
+            (
+                "mixed reasons",
+                census_of(
+                    2,
+                    &[
+                        (UnjudgedReason::Ghost, 1),
+                        (UnjudgedReason::NotMeasuredOnBranch, 2),
+                    ],
+                ),
+                "Not judged: 1 series not measured at the analyzed tip commit; 2 series \
+                 not measured on the branch.",
+                "No notable changes detected.",
+            ),
+            (
+                "full coverage",
+                census_of(3, &[]),
+                "No notable changes detected.",
+                "Not judged",
+            ),
+            (
+                "full coverage with ghosts only",
+                census_of(3, &[(UnjudgedReason::Ghost, 2)]),
+                "No notable changes detected.",
+                "among the series that were judged",
+            ),
+        ]
+    }
+
+    #[test]
+    fn every_silent_surface_reports_the_same_coverage() {
+        for (name, census, expected, forbidden) in silent_surface_cases() {
+            let input = ReportInput {
+                census,
+                ..flat_input(&[])
+            };
+            let renderings = [
+                ("text", render(&input, ReportFormat::Text, false)),
+                ("markdown", render(&input, ReportFormat::Markdown, false)),
+                (
+                    "summary",
+                    render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT),
+                ),
+            ];
+            for (surface, rendering) in renderings {
+                assert!(
+                    rendering.contains(expected),
+                    "{name} on {surface} states its coverage: {rendering}"
+                );
+                assert!(
+                    !rendering.contains(forbidden),
+                    "{name} on {surface} overstates its coverage: {rendering}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_multi_metric_ghost_counts_once_per_metric_series() {
+        // The census counts metric series, so a single benchmark carrying two metrics
+        // leaves two ghosts behind — the report must reconcile against that unit, not
+        // against a benchmark tally.
+        let input = ReportInput {
+            census: census_of(1, &[(UnjudgedReason::Ghost, 2)]),
+            ghosts_excluded: 1,
+            ..flat_input(&[])
+        };
+
+        let text = render(&input, ReportFormat::Text, false);
+        assert!(text.contains("series judged: 1 of 3"), "{text}");
+        assert!(
+            text.contains("Not judged: 2 series not measured at the analyzed tip commit."),
+            "{text}"
+        );
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&render(&input, ReportFormat::Json, false)).unwrap();
+        assert_eq!(parsed["census"]["total"], 3);
+        assert_eq!(parsed["census"]["in_scope"], 1);
+        assert_eq!(parsed["census"]["coverage"], "full");
+        assert_eq!(
+            parsed["ghosts_excluded"], 1,
+            "the benchmark tally is a separate unit from the census's series"
+        );
+    }
+
+    #[test]
+    fn json_census_carries_the_coverage_state_for_every_shape() {
+        // Automation gates on `coverage`, so every distinct situation must reach the
+        // JSON with its own state and an in-scope denominator that excludes ghosts.
+        let cases = [
+            ("absent census", SeriesCensus::default(), "no_series", 0),
+            (
+                "every series a ghost",
+                census_of(0, &[(UnjudgedReason::Ghost, 4)]),
+                "nothing_in_scope",
+                0,
+            ),
+            (
+                "nothing judged",
+                census_of(0, &[(UnjudgedReason::NotMeasuredOnBranch, 2)]),
+                "nothing_judged",
+                2,
+            ),
+            (
+                "partial",
+                census_of(2, &[(UnjudgedReason::TooFewBaseCommits, 1)]),
+                "partial",
+                3,
+            ),
+            ("full", census_of(2, &[]), "full", 2),
+        ];
+
+        for (name, census, state, in_scope) in cases {
+            let input = ReportInput {
+                census,
+                ..flat_input(&[])
+            };
+            let json = render(&input, ReportFormat::Json, false);
+            let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed["census"]["coverage"], state, "{name}: {json}");
+            assert_eq!(parsed["census"]["in_scope"], in_scope, "{name}: {json}");
+        }
     }
 
     #[test]
