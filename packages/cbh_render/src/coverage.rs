@@ -152,11 +152,11 @@ impl Coverage {
     #[must_use]
     pub fn verdict(&self) -> &'static str {
         match self.state {
-            // An analysis that accounted for no series is not a coverage shortfall in a
-            // suite — there is no suite yet — and the empty-outcome hint that accompanies
-            // this case explains the emptiness in full, so the familiar all-clear stands
-            // and the qualification below states what it rests on.
-            CoverageState::NoSeries | CoverageState::Full => "No notable changes detected.",
+            CoverageState::Full => "No notable changes detected.",
+            // An analysis that accounted for no series judged nothing, so it is in no
+            // position to report an absence of change; the empty-outcome hint that
+            // accompanies this case explains the emptiness itself.
+            CoverageState::NoSeries => "Nothing was analyzed, so no change could be detected.",
             CoverageState::NothingInScope => {
                 "Nothing was in scope at the analyzed tip commit, so nothing was judged."
             }
@@ -338,7 +338,7 @@ mod tests {
         for (name, census, expected, ..) in coverage_cases() {
             let coverage = Coverage::from_census(&census);
             let claims_all_clear = coverage.verdict() == "No notable changes detected.";
-            let earned = matches!(expected, CoverageState::Full | CoverageState::NoSeries);
+            let earned = matches!(expected, CoverageState::Full);
             assert_eq!(claims_all_clear, earned, "{name}: {}", coverage.verdict());
         }
     }

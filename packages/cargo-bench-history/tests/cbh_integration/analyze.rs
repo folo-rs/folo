@@ -1,9 +1,9 @@
 use crate::harness::*;
 
-/// An empty history analyzes cleanly and reports nothing.
+/// An empty history analyzes cleanly and states that it tested nothing.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_empty_history_reports_no_changes() {
+async fn analyze_empty_history_reports_that_nothing_was_analyzed() {
     let workspace = Workspace::repo(&storage_only_config());
 
     let outcome = workspace.drive(&["analyze"]).await.unwrap();
@@ -16,10 +16,15 @@ async fn analyze_empty_history_reports_no_changes() {
         panic!("expected an analyzed outcome, got {outcome:?}");
     };
     assert_eq!(regressions, 0);
-    assert!(report.contains("No notable changes detected."), "{report}");
     // An empty history judged nothing, so the report must not dress its silence as
-    // an all-clear: there is no coverage to state and nothing was measured against
-    // the floor. The empty-outcome hint carries the explanation instead.
+    // an all-clear: the verdict says nothing was analyzed, there is no coverage to
+    // state, and nothing was measured against the floor. The empty-outcome hint
+    // carries the explanation instead.
+    assert!(
+        report.contains("Nothing was analyzed, so no change could be detected."),
+        "{report}"
+    );
+    assert!(!report.contains("No notable changes detected."), "{report}");
     assert!(!report.contains("series judged"), "{report}");
     assert!(
         !report.contains("none moved beyond the measurement floor"),

@@ -226,31 +226,42 @@ where
         let ghost_started = Instant::now();
         let before = series.len();
         let ghosts = retain_present_at_context(&mut series, &dataset.tip_commit);
-        for (set, id) in &ghosts {
+        debug_assert_eq!(
+            ghosts.len(),
+            before.saturating_sub(series.len()),
+            "the filter reports every series it drops"
+        );
+        for (set, id, kind) in &ghosts {
             reporter.note_with(|| {
                 format!(
-                    "excluding benchmark {} from {set}: not present at the context commit {}",
+                    "excluding {} {} in {set}: not present at the context commit {}",
                     id.qualified(),
+                    kind.as_str(),
                     short_commit(&dataset.tip_commit),
                 )
             });
         }
+        // The report's ghost tally speaks of benchmarks while the census speaks of
+        // metric series. Both are read off the one list, so the two units cannot
+        // disagree about what was dropped. The list is ordered by `(set, id, kind)`,
+        // so a benchmark's series are adjacent and plain deduplication suffices.
+        let mut benchmarks: Vec<_> = ghosts.iter().map(|(set, id, _)| (set, id)).collect();
+        benchmarks.dedup();
         reporter.note_with(|| {
             format!(
-                "ghost filter: excluded {} not present at the context commit {}; {} remain",
-                count_noun(ghosts.len(), "ghost benchmark"),
+                "ghost filter: excluded {} ghost series across {} not present at the \
+                 context commit {}, leaving {} series",
+                ghosts.len(),
+                count_noun(benchmarks.len(), "benchmark"),
                 short_commit(&dataset.tip_commit),
-                count_noun(series.len(), "series"),
+                series.len(),
             )
         });
         reporter.timing(
             "ghost filter (retain_present_at_context)",
             ghost_started.elapsed(),
         );
-        // The tally counts benchmarks (one per dropped identity); the census counts
-        // series, so a benchmark carrying several metrics is accounted for once per
-        // metric there.
-        (ghosts.len(), before.saturating_sub(series.len()))
+        (benchmarks.len(), ghosts.len())
     };
 
     // Re-baseline blessed series before detection (history mode only; branch
@@ -962,12 +973,18 @@ mod tests {
     }
 
     #[test]
-    fn empty_history_reports_no_changes() {
+    fn empty_history_reports_that_nothing_was_analyzed() {
         let storage = MemoryStorage::new();
         let git = linear_git();
         let (report, regressions) = analyze(&git, &storage, "folo", &options());
         assert_eq!(regressions, 0);
-        assert!(report.contains("No notable changes detected."), "{report}");
+        // An analysis that reconstructed no series ruled nothing out, so it leads with
+        // that rather than with an all-clear it did not earn.
+        assert!(
+            report.contains("Nothing was analyzed, so no change could be detected."),
+            "{report}"
+        );
+        assert!(!report.contains("No notable changes detected."), "{report}");
     }
 
     #[test]
@@ -1432,7 +1449,7 @@ mod tests {
             );
         }
 
-        let (report, _, _) = analyze_json(&linear_git(), &storage, "folo", &options());
+        let (report, _, reporter) = analyze_json(&linear_git(), &storage, "folo", &options());
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(parsed["ghosts_excluded"], 1, "one benchmark: {report}");
         assert_eq!(parsed["series"], 0, "none survived the filter: {report}");
@@ -1443,6 +1460,29 @@ mod tests {
             "{report}"
         );
         assert_eq!(parsed["census"]["reasons"][0]["count"], 2, "{report}");
+
+        // The trail names each excluded series, so a reader reconciling it against the
+        // census counts the same two things the census counted.
+        assert!(
+            reporter.contains("excluding nm/nm::observe/pull instruction_count in "),
+            "{:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains("excluding nm/nm::observe/pull conditional_branches in "),
+            "{:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains("ghost filter: excluded 2 ghost series across 1 benchmark"),
+            "{:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains("leaving 0 series"),
+            "{:?}",
+            reporter.notes()
+        );
     }
 
     #[test]
@@ -1526,7 +1566,7 @@ mod tests {
         assert_eq!(parsed["ghosts_excluded"], 1, "{report}");
         assert_eq!(parsed["series"], 1, "only `kept` survives, {report}");
         assert!(
-            reporter.contains("excluding benchmark ghost"),
+            reporter.contains("excluding ghost instruction_count in "),
             "{:?}",
             reporter.notes()
         );

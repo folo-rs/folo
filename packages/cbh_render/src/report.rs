@@ -1718,8 +1718,8 @@ mod tests {
     fn an_empty_analysis_leaves_the_coverage_field_to_the_hint() {
         // With no series at all there is no coverage ratio to report — a "0 of 0" ratio
         // is noise — and the empty-outcome hint explains the whole situation. The
-        // verdict still states that nothing was tested, so the lead line is not read as
-        // an all-clear over a suite that was never looked at.
+        // verdict states that nothing was analyzed, so the lead line is not read as an
+        // all-clear over a suite that was never looked at.
         let input = ReportInput {
             census: SeriesCensus::default(),
             hint: Some("Found 2 stored runs ... dirty snapshots"),
@@ -1729,6 +1729,10 @@ mod tests {
         let text = render(&input, ReportFormat::Text, false);
         assert!(!text.contains("series judged"), "{text}");
         assert!(!text.contains("Judged"), "{text}");
+        assert!(
+            text.contains("Nothing was analyzed, so no change could be detected."),
+            "{text}"
+        );
         assert!(
             text.contains("No benchmark series were analyzed, so this run tested nothing."),
             "{text}"
@@ -1752,8 +1756,8 @@ mod tests {
             (
                 "absent census",
                 SeriesCensus::default(),
-                "No benchmark series were analyzed, so this run tested nothing.",
-                "Judged",
+                "Nothing was analyzed, so no change could be detected.",
+                "No notable changes detected.",
             ),
             (
                 "every series a ghost",
@@ -1981,7 +1985,10 @@ mod tests {
             census: judged_census(0),
         };
         let report = render(&input, ReportFormat::Text, false);
-        assert!(report.contains("No notable changes detected."), "{report}");
+        assert!(
+            report.contains("Nothing was analyzed, so no change could be detected."),
+            "{report}"
+        );
         assert!(report.contains("Found 2 stored runs"), "{report}");
     }
 
@@ -2264,7 +2271,10 @@ mod tests {
             census: judged_census(0),
         };
         let report = render(&input, ReportFormat::Markdown, false);
-        assert!(report.contains("No notable changes detected."), "{report}");
+        assert!(
+            report.contains("Nothing was analyzed, so no change could be detected."),
+            "{report}"
+        );
         assert!(report.contains("commit your working tree"), "{report}");
     }
 

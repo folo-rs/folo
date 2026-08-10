@@ -132,7 +132,9 @@ the gates require:
 
 `judged 0 of N` is the case to watch: nothing was tested, so the silence is not evidence that
 nothing moved. The report says so outright. It usually means history is still accumulating, or
-that the benchmarks stopped being collected at the tip commit.
+that the benchmarks stopped being collected at the tip commit. When no series were
+reconstructed at all there is no ratio to print, and the report leads with the fact that
+nothing was analyzed.
 
 The verdict is decided against the series that *could* have been judged, which excludes ghosts.
 A pull request benchmarks only the packages it impacts while analysis reads the whole store, so

@@ -1272,8 +1272,10 @@ How it surfaces (§8.7) follows what a reader needs where:
   automation can gate on coverage instead of on the absence of findings.
 * **Verbose** diagnostics name each unjudged series individually, with the evidence it carried
   and the gate rule that declined it, so the verdict can be reconstructed rather than trusted.
-* An analysis that accounted for **no series at all** states no coverage; there is nothing to
-  qualify, and the empty-outcome hint (§7.3) already explains why the run found nothing.
+* An analysis that accounted for **no series at all** states no coverage ratio — there is
+  nothing to take a ratio of — and its verdict says that nothing was analyzed rather than
+  reporting an absence of change, which it is in no position to claim; the empty-outcome hint
+  (§7.3) explains why the run found nothing.
 
 ## 9. Architecture
 
