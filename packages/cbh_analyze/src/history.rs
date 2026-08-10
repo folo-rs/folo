@@ -11,7 +11,11 @@ use cbh_git::GitHistory;
 use jiff::Timestamp;
 
 use super::selection::Selection;
-use crate::AnalyzeError;
+use crate::{
+    AnalyzeError, BaseBranchUnavailableError, DefaultBranchProbeFailedError,
+    FirstParentWalkFailedError, MergeBaseFailedError, MergeBaseUnavailableError,
+    ResolveRefFailedError, UnresolvedRefError, WorkingTreeProbeFailedError,
+};
 
 /// How the base-branch dirty-tip exception is gated.
 ///
@@ -51,6 +55,11 @@ pub(crate) struct ResolvedHistory {
     /// First-parent position of each selected commit, for series ordering. An
     /// object whose commit is absent is outside the analyzed history.
     pub(crate) order: HashMap<String, usize>,
+    /// The selected commits in first-parent order, oldest first — the reverse of
+    /// [`order`](Self::order), so `ordered_commits[order[c]] == c`. It lets a
+    /// consumer name the commit at a topological index, including one that carries
+    /// no data; only `examine` reads it.
+    pub(crate) ordered_commits: Vec<String>,
     /// Committer timestamp of each first-parent commit, for deciding the
     /// `--since` cutoff from topology before any object is fetched. A
     /// commit absent here has an unknown time and is treated as in-window.
@@ -91,17 +100,23 @@ pub(crate) async fn resolve_history<G>(
 where
     G: GitHistory,
 {
-    // Resolving the timeline requires a repository: the topology comes from git
-    // history, not from stored timestamps. An unresolvable target ref means there
-    // is no repository here (or the branch does not exist), which is an error.
+    // The topology comes from git history, not from stored timestamps. The git port
+    // cannot distinguish a missing ref from a path that is not a repository, so the
+    // error must describe only the unresolved ref.
     let target_ref = selection.context.unwrap_or("HEAD");
-    let Some(target_commit_id) = git.resolve(target_ref).await.map_err(AnalyzeError::Io)? else {
-        return Err(AnalyzeError::Analyze {
-            message: format!(
-                "this command requires a git repository: could not resolve {target_ref:?}. \
-                 Run inside a repository (or pass --repo / --context)."
-            ),
-        });
+    let Some(target_commit_id) = git
+        .resolve(target_ref)
+        .await
+        .map_err(|error| ResolveRefFailedError::caused_by(target_ref, error))?
+    else {
+        return Err(UnresolvedRefError::new(
+            "resolving history",
+            target_ref,
+            "Check that the ref exists in the selected repository, and fetch it if it is absent. \
+             Select a different repository with --repo, or select a different target ref with \
+             --context.",
+        )
+        .into());
     };
 
     // A base branch is required: the analysis splits the target's first-parent line
@@ -114,21 +129,13 @@ where
         commit: base_commit_id,
     }) = resolve_base(git, config, selection.base).await?
     else {
-        return Err(AnalyzeError::Analyze {
-            message: format!(
-                "could not determine the base branch to compare {target_ref} against: no \
-                 --base was given and no default branch could be resolved. Pass an explicit \
-                 --base, set project.default_branch, or make the default branch available \
-                 (a shallow clone or a checkout that never fetched the base branch is the \
-                 usual cause)."
-            ),
-        });
+        return Err(BaseBranchUnavailableError::new(target_ref).into());
     };
     let first_parent_started = Instant::now();
     let first_parent = git
         .first_parent(&target_commit_id)
         .await
-        .map_err(AnalyzeError::Io)?;
+        .map_err(|error| FirstParentWalkFailedError::caused_by(&target_commit_id, error))?;
     reporter.timing(
         "git.first_parent ancestry walk (target's first-parent line)",
         first_parent_started.elapsed(),
@@ -151,7 +158,9 @@ where
     let merge_base = git
         .merge_base(&target_commit_id, &base_commit_id)
         .await
-        .map_err(AnalyzeError::Io)?;
+        .map_err(|error| {
+            MergeBaseFailedError::caused_by(&target_commit_id, &base_commit_id, error)
+        })?;
 
     reporter.if_enabled(|notes| {
         notes.note(&format!(
@@ -188,16 +197,13 @@ where
                      project.default_branch."
                 .to_owned(),
         };
-        return Err(AnalyzeError::Analyze {
-            message: format!(
-                "could not determine the merge-base of the target {target_ref} \
-                 ({target_commit_id}) and the base commit {base_commit_id}: they share no \
-                 common ancestor in the available history. This is almost always a shallow \
-                 clone whose depth stops short of the branch point — fetch the full history \
-                 (`git fetch --unshallow`, or set fetch-depth: 0 on actions/checkout) so the \
-                 branch point is present.{remedy}"
-            ),
-        });
+        return Err(MergeBaseUnavailableError::new(
+            target_ref,
+            &target_commit_id,
+            &base_commit_id,
+            remedy,
+        )
+        .into());
     };
 
     // The base-branch dirty-tip exception: `analyze`/`list` admit a base-side tip's
@@ -206,9 +212,10 @@ where
     // can remove them regardless of the present working-tree state. The probe result
     // is reused for the report's tip annotation, so `analyze` never runs it twice.
     let working_tree_dirty = match policy {
-        DirtyTipPolicy::WhenWorkingTreeDirty if !selection.no_dirty => {
-            git.is_dirty().await.map_err(AnalyzeError::Io)?
-        }
+        DirtyTipPolicy::WhenWorkingTreeDirty if !selection.no_dirty => git
+            .is_dirty()
+            .await
+            .map_err(WorkingTreeProbeFailedError::caused_by)?,
         _ => false,
     };
     let dirty_tip_exception = match policy {
@@ -258,6 +265,7 @@ where
         tip_commit: target_commit_id,
         tip_dirty: working_tree_dirty,
         order,
+        ordered_commits: ancestry,
         commit_times,
         commit_subjects,
         admit_dirty,
@@ -300,10 +308,17 @@ pub(crate) async fn resolve_base<G: GitHistory>(
     base: Option<&str>,
 ) -> Result<Option<ResolvedBase>, AnalyzeError> {
     if let Some(base) = base {
-        let Some(commit) = git.resolve(base).await.map_err(AnalyzeError::Io)? else {
-            return Err(AnalyzeError::Analyze {
-                message: format!("could not resolve --base {base:?}"),
-            });
+        let Some(commit) = git
+            .resolve(base)
+            .await
+            .map_err(|error| ResolveRefFailedError::caused_by(base, error))?
+        else {
+            return Err(UnresolvedRefError::new(
+                "resolving the comparison base",
+                base,
+                "Check that the --base ref exists or is fetched.",
+            )
+            .into());
         };
         return Ok(Some(ResolvedBase {
             name: base.to_owned(),
@@ -311,17 +326,130 @@ pub(crate) async fn resolve_base<G: GitHistory>(
         }));
     }
     if let Some(default) = config.project.default_branch.as_deref()
-        && let Some(commit) = git.resolve(default).await.map_err(AnalyzeError::Io)?
+        && let Some(commit) = git
+            .resolve(default)
+            .await
+            .map_err(|error| ResolveRefFailedError::caused_by(default, error))?
     {
         return Ok(Some(ResolvedBase {
             name: default.to_owned(),
             commit,
         }));
     }
-    if let Some(name) = git.default_branch().await.map_err(AnalyzeError::Io)?
-        && let Some(commit) = git.resolve(&name).await.map_err(AnalyzeError::Io)?
+    if let Some(name) = git
+        .default_branch()
+        .await
+        .map_err(DefaultBranchProbeFailedError::caused_by)?
+        && let Some(commit) = git
+            .resolve(&name)
+            .await
+            .map_err(|error| ResolveRefFailedError::caused_by(&name, error))?
     {
         return Ok(Some(ResolvedBase { name, commit }));
     }
     Ok(None)
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use cbh_diag::RecordingReporter;
+    use cbh_git::FakeGitHistory;
+    use futures::executor::block_on;
+    use ohno::ErrorExt as _;
+
+    use super::*;
+
+    /// A two-commit history: `HEAD` is `c1`, whose base `master` is its parent `c0`.
+    fn git() -> FakeGitHistory {
+        let mut git = FakeGitHistory::new();
+        git.commit("c0", None)
+            .commit("c1", Some("c0"))
+            .branch("master", "c0")
+            .head("c1");
+        git
+    }
+
+    fn selection(base: Option<&'static str>) -> Selection<'static> {
+        Selection {
+            context: None,
+            base,
+            no_dirty: false,
+            since: None,
+            engine: &[],
+            target_triple: &[],
+            machine_key: &[],
+        }
+    }
+
+    /// Resolves the topology of `git` against `master`, expecting it to fail.
+    fn resolve_error(git: &FakeGitHistory) -> AnalyzeError {
+        resolve_error_for(git, &selection(Some("master")))
+    }
+
+    fn resolve_error_for(git: &FakeGitHistory, selection: &Selection<'_>) -> AnalyzeError {
+        // `ResolvedHistory` is not `Debug`, so `unwrap_err` is unavailable here.
+        block_on(resolve_history(
+            git,
+            &Config::default(),
+            selection,
+            DirtyTipPolicy::WhenWorkingTreeDirty,
+            &RecordingReporter::new(),
+        ))
+        .err()
+        .unwrap()
+    }
+
+    #[test]
+    fn a_failed_ref_resolution_names_that_query() {
+        let mut git = git();
+        git.fail_resolve();
+
+        let error = resolve_error(&git);
+        assert!(error.find_source::<ResolveRefFailedError>().is_some());
+    }
+
+    #[test]
+    fn a_failed_default_branch_probe_names_that_query() {
+        // With no --base and no configured default branch, the base comes from the
+        // repository's advertised default branch.
+        let mut git = git();
+        git.fail_default_branch();
+
+        let error = resolve_error_for(&git, &selection(None));
+        assert!(
+            error
+                .find_source::<DefaultBranchProbeFailedError>()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn a_failed_ancestry_walk_names_that_query() {
+        // The ancestry walk and the merge-base lookup sit next to each other on this
+        // path, so each must name itself rather than the other.
+        let mut git = git();
+        git.fail_first_parent();
+
+        let error = resolve_error(&git);
+        assert!(error.find_source::<FirstParentWalkFailedError>().is_some());
+    }
+
+    #[test]
+    fn a_failed_merge_base_lookup_names_that_query() {
+        let mut git = git();
+        git.fail_merge_base();
+
+        let error = resolve_error(&git);
+        assert!(error.find_source::<MergeBaseFailedError>().is_some());
+    }
+
+    #[test]
+    fn a_failed_working_tree_probe_names_that_query() {
+        let mut git = git();
+        git.fail_is_dirty();
+
+        let error = resolve_error(&git);
+        assert!(error.find_source::<WorkingTreeProbeFailedError>().is_some());
+    }
 }

@@ -34,6 +34,7 @@ cbh_diag = { workspace = true }
 cbh_model = { workspace = true }
 futures = { workspace = true }
 jiff = { workspace = true }
+ohno = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util"] }
@@ -44,6 +45,7 @@ futures = { workspace = true, features = ["executor"] }
 mutants = { workspace = true }
 reqwest = { workspace = true, features = ["gzip", "rustls"] }
 serial_test = { workspace = true }
+static_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 

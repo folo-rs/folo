@@ -27,14 +27,16 @@ use cbh_engines::{BenchOutputSource, FsBenchOutputSource};
 use cbh_git::{GitHistory, SystemGitHistory};
 use cbh_probe::{EnvironmentProbe, SystemProbe};
 use cbh_storage::{Storage, StorageFacade, build_storage};
+use ohno::AppError;
 use tick::Clock;
 
 use super::collect::{
     FinalizeDeps, SharedContext, StoreParams, build_message, describe_storage, finalize_and_store,
     harvest_records, probe_context,
 };
+use crate::errors::{ImportError, ResolveRefFailedError};
 use crate::model::{BenchmarkResult, Engine, TargetTriple};
-use crate::{ImportOptions, RunError, RunOutcome, finish_with_flush};
+use crate::{ImportOptions, RunOutcome, finish_with_flush};
 
 /// The real `import`: wire the production adapters and orchestrate.
 ///
@@ -44,7 +46,7 @@ pub(crate) async fn execute(
     options: &ImportOptions,
     workspace_dir: &Path,
     storage_override: Option<StorageFacade>,
-) -> Result<RunOutcome, RunError> {
+) -> Result<RunOutcome, AppError> {
     let reporter = StderrReporter::new(options.verbose);
 
     // `--repo` selects the repository whose git state and project identity the
@@ -125,12 +127,12 @@ pub(crate) async fn execute(
 /// relying on argument parsing. A relative path resolves against the repository
 /// base, matching `collect`'s target-root resolution; an absolute path is taken
 /// as given.
-fn resolve_target_root(target_dir: &Path, base: &Path) -> Result<PathBuf, RunError> {
+fn resolve_target_root(target_dir: &Path, base: &Path) -> Result<PathBuf, AppError> {
     if target_dir.as_os_str().is_empty() {
-        return Err(RunError::Import {
-            message: "import requires a non-empty --target-dir naming the curated output tree"
-                .to_owned(),
-        });
+        return Err(ImportError::new(
+            "import requires a non-empty --target-dir naming the curated output tree",
+        )
+        .into());
     }
     Ok(if target_dir.is_absolute() {
         target_dir.to_path_buf()
@@ -153,7 +155,7 @@ async fn orchestrate_import<O, P, G, S>(
     store: &FinalizeDeps<'_, S>,
     clock: &Clock,
     env: &dyn Fn(&str) -> Option<String>,
-) -> Result<RunOutcome, RunError>
+) -> Result<RunOutcome, AppError>
 where
     O: BenchOutputSource,
     P: EnvironmentProbe,
@@ -164,9 +166,9 @@ where
     // combination on the CLI, so enforce the same contract for programmatic callers
     // rather than silently letting overwrite win.
     if options.overwrite && options.skip_existing {
-        return Err(RunError::Import {
-            message: "--overwrite and --skip-existing are mutually exclusive".to_owned(),
-        });
+        return Err(
+            ImportError::new("--overwrite and --skip-existing are mutually exclusive").into(),
+        );
     }
 
     // One bucket per engine (parallel to `Engine::ALL`). Import has a single
@@ -230,7 +232,7 @@ async fn apply_overrides<G>(
     options: &ImportOptions,
     git: &G,
     reporter: &dyn Reporter,
-) -> Result<SharedContext, RunError>
+) -> Result<SharedContext, AppError>
 where
     G: GitHistory,
 {
@@ -245,11 +247,11 @@ where
         let resolved = git
             .resolve(reference)
             .await
-            .map_err(RunError::Io)?
-            .ok_or_else(|| RunError::Import {
-                message: format!(
+            .map_err(|error| ResolveRefFailedError::caused_by(reference, error))?
+            .ok_or_else(|| {
+                ImportError::new(format!(
                     "--commit {reference:?} does not resolve to any commit in this repository"
-                ),
+                ))
             })?;
         reporter.note_with(|| {
             format!(
@@ -414,7 +416,7 @@ mod tests {
         probe: &FakeProbe,
         git: &FakeGitHistory,
         storage: &MemoryStorage,
-    ) -> Result<RunOutcome, RunError> {
+    ) -> Result<RunOutcome, AppError> {
         let now = SystemTime::UNIX_EPOCH
             .checked_add(Duration::from_secs(FROZEN_UNIX))
             .unwrap();
@@ -594,14 +596,35 @@ mod tests {
         )
         .unwrap_err();
 
-        let RunError::Import { message } = error else {
-            panic!("expected an import error, got {error:?}");
-        };
-        assert!(message.contains("does-not-exist"), "{message}");
+        assert!(error.find_source::<ImportError>().is_some());
         assert!(
             storage.keys().is_empty(),
             "an unresolved commit stores nothing"
         );
+    }
+
+    #[test]
+    fn commit_resolution_failure_is_mapped_at_the_call_site() {
+        let storage = MemoryStorage::new();
+        let options = ImportOptions {
+            commit: Some("release-1.0".to_owned()),
+            ..ImportOptions::default()
+        };
+        let mut git = FakeGitHistory::new();
+        git.fail_resolve();
+
+        let error = run_import(
+            &options,
+            &callgrind_output(),
+            &FakeProbe::new(),
+            &git,
+            &storage,
+        )
+        .unwrap_err();
+
+        assert!(error.find_source::<ResolveRefFailedError>().is_some());
+        assert!(error.find_source::<io::Error>().is_some());
+        assert!(storage.keys().is_empty());
     }
 
     #[test]
@@ -622,10 +645,7 @@ mod tests {
         )
         .unwrap_err();
 
-        let RunError::Import { message } = error else {
-            panic!("expected an import error, got {error:?}");
-        };
-        assert!(message.contains("mutually exclusive"), "{message}");
+        assert!(error.find_source::<ImportError>().is_some());
         assert!(
             storage.keys().is_empty(),
             "a rejected import stores nothing"
@@ -667,10 +687,7 @@ mod tests {
     #[test]
     fn resolve_target_root_rejects_an_empty_target_dir() {
         let error = resolve_target_root(&PathBuf::new(), &PathBuf::from("/work")).unwrap_err();
-        let RunError::Import { message } = error else {
-            panic!("expected an import error, got {error:?}");
-        };
-        assert!(message.contains("--target-dir"), "{message}");
+        assert!(error.find_source::<ImportError>().is_some());
     }
 
     #[test]

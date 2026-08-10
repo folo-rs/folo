@@ -49,14 +49,22 @@ use cbh_engines::FsBenchOutputSource;
 use cbh_git::{GitHistory, SystemGitHistory, TokioBenchRunner, capture};
 use cbh_probe::SystemProbe;
 use cbh_storage::{Storage, build_storage};
+use ohno::AppError;
 use tick::Clock;
 
 use super::collect::{
     CollectDeps, CollectSummary, Partition, default_bench_command, partition_selection_summary,
     probe_partition, run_engines,
 };
+use crate::errors::{
+    AddWorktreeFailedError, BenchFailure, FirstParentWalkFailedError, RemoveWorktreeFailedError,
+    ResetWorktreeFailedError, ResolveRefFailedError,
+};
 use crate::model::{Engine, StorageKey, parse_key};
-use crate::{BackfillOptions, CollectOptions, RunError, RunOutcome, finish_with_flush};
+use crate::{
+    BackfillError, BackfillOptions, CollectOptions, DuplicateResultError, RunOutcome,
+    finish_with_flush,
+};
 
 /// Read access to a repository's commit topology plus the worktree lifecycle a
 /// backfill needs to check out each commit in isolation.
@@ -99,7 +107,7 @@ trait CommitRunner {
     /// Implementations announce the partition they scanned. A backfill that a job
     /// timeout ends never reaches the summary, so the pre-check has to state its
     /// own inputs to leave any trace of what the run decided to measure.
-    fn recorded_commits(&self) -> impl Future<Output = Result<HashSet<String>, RunError>>;
+    fn recorded_commits(&self) -> impl Future<Output = Result<HashSet<String>, AppError>>;
 
     /// Runs the engines in `worktree` and reports the outcome. Recoverable
     /// build/bench failures are reported as [`CommitOutcome::BenchFailed`];
@@ -109,11 +117,11 @@ trait CommitRunner {
         &self,
         worktree: &Path,
         commit: &str,
-    ) -> impl Future<Output = Result<CommitOutcome, RunError>>;
+    ) -> impl Future<Output = Result<CommitOutcome, AppError>>;
 }
 
 /// What happened when a single commit was processed.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 enum CommitOutcome {
     /// Results were stored; `cases` benchmark cases were harvested.
     Stored {
@@ -126,10 +134,7 @@ enum CommitOutcome {
     /// The engines ran but harvested no benchmark cases, so nothing was stored.
     SkippedEmpty,
     /// The commit failed to build or benchmark (a recoverable, per-commit error).
-    BenchFailed {
-        /// Human-readable failure description.
-        reason: String,
-    },
+    BenchFailed(AppError),
 }
 
 /// The real `backfill`: load configuration, wire the production adapters, and
@@ -138,7 +143,7 @@ pub(crate) async fn execute(
     options: &BackfillOptions,
     workspace_dir: &Path,
     bench_command: Option<Vec<String>>,
-) -> Result<RunOutcome, RunError> {
+) -> Result<RunOutcome, AppError> {
     // `--repo` selects the repository to backfill (where git history is read and
     // worktrees are created), relative to the ambient base; it defaults to the
     // base directory itself.
@@ -183,14 +188,14 @@ pub(crate) async fn execute(
 /// Validation precedes any worktree work, so a precondition failure leaves the
 /// repository untouched. The worktree is always torn down — on success and on
 /// failure — and a stop after a per-commit failure surfaces as
-/// [`RunError::Backfill`] (a non-zero exit) carrying the partial summary.
+/// a [`BackfillError`] (a non-zero exit) carrying the partial summary.
 async fn execute_backfill<G, C>(
     options: &BackfillOptions,
     git: &G,
     runner: &C,
     worktree: &Path,
     reporter: &dyn Reporter,
-) -> Result<RunOutcome, RunError>
+) -> Result<RunOutcome, AppError>
 where
     G: BackfillGit,
     C: CommitRunner,
@@ -205,16 +210,16 @@ where
 
     git.add_worktree(worktree, first)
         .await
-        .map_err(RunError::Io)?;
+        .map_err(|error| AddWorktreeFailedError::caused_by(worktree, first, error))?;
     let result = run_commits(options, git, runner, worktree, &commits, reporter).await;
     let teardown = git.remove_worktree(worktree).await;
 
-    let report = result?;
-    teardown.map_err(RunError::Io)?;
+    let mut report = result?;
+    teardown.map_err(|error| RemoveWorktreeFailedError::caused_by(worktree, error))?;
 
     let message = report.render(commits.len());
-    if report.stopped.is_some() {
-        Err(RunError::Backfill { message })
+    if let Some(error) = report.take_stopping_error() {
+        Err(BackfillError::caused_by(message, error).into())
     } else {
         Ok(RunOutcome::Completed { message })
     }
@@ -233,19 +238,22 @@ where
 async fn plan_commits<G: BackfillGit>(
     options: &BackfillOptions,
     git: &G,
-) -> Result<Vec<String>, RunError> {
+) -> Result<Vec<String>, AppError> {
     let from = resolve_required(git, &options.from, "--from").await?;
     let to = resolve_required(git, &options.to, "--to").await?;
 
-    let mut ancestry = git.first_parent(&to).await.map_err(RunError::Io)?;
+    let mut ancestry = git
+        .first_parent(&to)
+        .await
+        .map_err(|error| FirstParentWalkFailedError::caused_by(&to, error))?;
     let start = ancestry
         .iter()
         .position(|commit| commit == &from)
-        .ok_or_else(|| RunError::Backfill {
-            message: format!(
+        .ok_or_else(|| {
+            BackfillError::new(format!(
                 "--from ({}) is not a first-parent ancestor of --to ({})",
                 options.from, options.to
-            ),
+            ))
         })?;
 
     // The ancestry arrives oldest-first, which is what locating `--from` above
@@ -260,12 +268,12 @@ async fn resolve_required<G: BackfillGit>(
     git: &G,
     reference: &str,
     flag: &str,
-) -> Result<String, RunError> {
+) -> Result<String, AppError> {
     git.resolve(reference)
         .await
-        .map_err(RunError::Io)?
-        .ok_or_else(|| RunError::Backfill {
-            message: format!("cannot resolve {flag} ({reference}) to a commit"),
+        .map_err(|error| ResolveRefFailedError::caused_by(reference, error))?
+        .ok_or_else(|| {
+            BackfillError::new(format!("cannot resolve {flag} ({reference}) to a commit")).into()
         })
 }
 
@@ -289,7 +297,7 @@ async fn run_commits<G, C>(
     worktree: &Path,
     commits: &[String],
     reporter: &dyn Reporter,
-) -> Result<BackfillReport, RunError>
+) -> Result<BackfillReport, AppError>
 where
     G: BackfillGit,
     C: CommitRunner,
@@ -326,15 +334,21 @@ where
             report.skipped_existing.push(commit.clone());
             continue;
         }
-        git.reset_to(worktree, commit).await.map_err(RunError::Io)?;
+        git.reset_to(worktree, commit)
+            .await
+            .map_err(|error| ResetWorktreeFailedError::caused_by(worktree, commit, error))?;
         match runner.run(worktree, commit).await? {
             CommitOutcome::Stored { cases } => report.stored.push((commit.clone(), cases)),
             CommitOutcome::SkippedExisting => report.skipped_existing.push(commit.clone()),
             CommitOutcome::SkippedEmpty => report.skipped_empty.push(commit.clone()),
-            CommitOutcome::BenchFailed { reason } => {
-                report.failed.push((commit.clone(), reason));
+            CommitOutcome::BenchFailed(error) => {
+                let failure_index = report.failures.len();
+                report.failures.push(FailedCommit {
+                    commit: commit.clone(),
+                    error,
+                });
                 if !options.ignore_errors {
-                    report.stopped = Some(commit.clone());
+                    report.stopped_failure = Some(failure_index);
                     break;
                 }
             }
@@ -377,10 +391,22 @@ struct BackfillReport {
     skipped_existing: Vec<String>,
     /// Commits skipped because they harvested no cases.
     skipped_empty: Vec<String>,
-    /// Commits that failed to build or benchmark, with the reason.
-    failed: Vec<(String, String)>,
-    /// The commit the run stopped at after a failure (without `--ignore-errors`).
-    stopped: Option<String>,
+    /// Commits that failed to build or benchmark.
+    failures: Vec<FailedCommit>,
+    /// The entry in `failures` that stopped the run without `--ignore-errors`.
+    stopped_failure: Option<usize>,
+}
+
+/// A commit and its typed benchmark failure.
+///
+/// The error remains intact until summary rendering and, when it stopped the run,
+/// is then moved into the returned [`BackfillError`] source chain.
+#[derive(Debug)]
+struct FailedCommit {
+    /// The commit that could not be benchmarked.
+    commit: String,
+    /// The recoverable benchmark failure.
+    error: AppError,
 }
 
 impl BackfillReport {
@@ -393,7 +419,7 @@ impl BackfillReport {
             self.stored.len(),
             self.skipped_existing.len(),
             self.skipped_empty.len(),
-            self.failed.len(),
+            self.failures.len(),
         )];
         for (commit, cases) in &self.stored {
             lines.push(format!(
@@ -408,16 +434,29 @@ impl BackfillReport {
         for commit in &self.skipped_empty {
             lines.push(format!("  skipped {} (no benchmark cases)", short(commit)));
         }
-        for (commit, reason) in &self.failed {
-            lines.push(format!("  failed {} ({reason})", short(commit)));
+        for failure in &self.failures {
+            let reason = BenchFailure::find(&failure.error)
+                .expect("failures contains only errors classified by BenchFailure::find")
+                .render();
+            lines.push(format!("  failed {} ({reason})", short(&failure.commit)));
         }
-        if let Some(commit) = &self.stopped {
+        if let Some(failure_index) = self.stopped_failure {
+            let failure = self
+                .failures
+                .get(failure_index)
+                .expect("stopped_failure is assigned only after inserting that failure");
             lines.push(format!(
                 "  stopped at {} (pass --ignore-errors to continue past failures)",
-                short(commit)
+                short(&failure.commit)
             ));
         }
         lines.join("\n")
+    }
+
+    /// Takes the failure that stopped the run for the returned error chain.
+    fn take_stopping_error(&mut self) -> Option<AppError> {
+        let failure_index = self.stopped_failure.take()?;
+        Some(self.failures.remove(failure_index).error)
     }
 }
 
@@ -449,19 +488,24 @@ fn worktree_path() -> PathBuf {
 /// A stored set (or several) is success; a duplicate is a resumable skip; an
 /// empty harvest is a non-fatal skip; a build/bench failure is recoverable;
 /// everything else (storage, configuration, I/O) is infrastructure and aborts.
-fn map_collect_result(result: Result<CollectSummary, RunError>) -> Result<CommitOutcome, RunError> {
-    match result {
-        Ok(summary) if summary.stored > 0 => Ok(CommitOutcome::Stored {
-            cases: summary.harvested,
-        }),
-        Ok(_) => Ok(CommitOutcome::SkippedEmpty),
-        Err(RunError::Duplicate { .. }) => Ok(CommitOutcome::SkippedExisting),
-        Err(
-            error @ (RunError::Engine { .. } | RunError::Command { .. } | RunError::Parse { .. }),
-        ) => Ok(CommitOutcome::BenchFailed {
-            reason: error.to_string(),
-        }),
-        Err(other) => Err(other),
+fn map_collect_result(result: Result<CollectSummary, AppError>) -> Result<CommitOutcome, AppError> {
+    let error = match result {
+        Ok(summary) if summary.stored > 0 => {
+            return Ok(CommitOutcome::Stored {
+                cases: summary.harvested,
+            });
+        }
+        Ok(_) => return Ok(CommitOutcome::SkippedEmpty),
+        Err(error) => error,
+    };
+
+    if error.find_source::<DuplicateResultError>().is_some() {
+        return Ok(CommitOutcome::SkippedExisting);
+    }
+    if BenchFailure::find(&error).is_some() {
+        Ok(CommitOutcome::BenchFailed(error))
+    } else {
+        Err(error)
     }
 }
 
@@ -481,7 +525,7 @@ async fn recorded_commits_in<S: Storage>(
     project_id: &str,
     partition: &Partition,
     reporter: &dyn Reporter,
-) -> Result<HashSet<String>, RunError> {
+) -> Result<HashSet<String>, AppError> {
     let mut recorded = HashSet::new();
     for engine in Engine::ALL {
         let prefix = partition
@@ -646,7 +690,7 @@ struct SystemCommitRunner<'a, S> {
 
 impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
     #[cfg_attr(test, mutants::skip)] // Probes the real host; the scan is tested separately.
-    async fn recorded_commits(&self) -> Result<HashSet<String>, RunError> {
+    async fn recorded_commits(&self) -> Result<HashSet<String>, AppError> {
         // The partition comes from the same helper (and the same worktree probe)
         // the store path uses, so the commits treated as already recorded are
         // exactly the ones that would collide were they benchmarked again — the
@@ -669,7 +713,7 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
     }
 
     #[cfg_attr(test, mutants::skip)] // Wires real adapters; the result mapping is tested via `map_collect_result`.
-    async fn run(&self, worktree: &Path, _commit: &str) -> Result<CommitOutcome, RunError> {
+    async fn run(&self, worktree: &Path, _commit: &str) -> Result<CommitOutcome, AppError> {
         // A historical checkout is built and described by the toolchain it pins
         // itself, not by the one that happened to build this tool, so the stored
         // provenance names the compiler that produced the numbers.
@@ -727,11 +771,12 @@ mod tests {
 
     use cbh_diag::RecordingReporter;
     use cbh_git::FakeGitHistory;
-    use cbh_storage::MemoryStorage;
+    use cbh_storage::{MemoryStorage, StorageError, TestStorageError};
     use futures::executor::block_on;
 
     use super::*;
-    use crate::StorageError;
+    use crate::EngineFailedError;
+    use crate::errors::ParseOutputError;
     use crate::model::{MachineKey, TargetTriple};
 
     /// A canned per-commit result the fake [`CommitRunner`] returns.
@@ -740,8 +785,8 @@ mod tests {
         Stored(usize),
         SkippedExisting,
         SkippedEmpty,
-        BenchFailed(String),
-        Infra(String),
+        BenchFailed,
+        Infra,
     }
 
     /// In-memory [`BackfillGit`] over a [`FakeGitHistory`], recording worktree ops.
@@ -750,6 +795,9 @@ mod tests {
         added: RefCell<Vec<(PathBuf, String)>>,
         resets: RefCell<Vec<(PathBuf, String)>>,
         removed: RefCell<Vec<PathBuf>>,
+        fail_add: bool,
+        fail_reset: bool,
+        fail_remove: bool,
     }
 
     impl FakeBackfillGit {
@@ -759,7 +807,25 @@ mod tests {
                 added: RefCell::new(Vec::new()),
                 resets: RefCell::new(Vec::new()),
                 removed: RefCell::new(Vec::new()),
+                fail_add: false,
+                fail_reset: false,
+                fail_remove: false,
             }
+        }
+
+        fn with_add_failure(mut self) -> Self {
+            self.fail_add = true;
+            self
+        }
+
+        fn with_reset_failure(mut self) -> Self {
+            self.fail_reset = true;
+            self
+        }
+
+        fn with_remove_failure(mut self) -> Self {
+            self.fail_remove = true;
+            self
         }
     }
 
@@ -780,19 +846,31 @@ mod tests {
             self.added
                 .borrow_mut()
                 .push((path.to_owned(), commit.to_owned()));
-            ready(Ok(()))
+            ready(if self.fail_add {
+                Err(io::Error::other("injected add-worktree failure"))
+            } else {
+                Ok(())
+            })
         }
 
         fn reset_to(&self, path: &Path, commit: &str) -> impl Future<Output = io::Result<()>> {
             self.resets
                 .borrow_mut()
                 .push((path.to_owned(), commit.to_owned()));
-            ready(Ok(()))
+            ready(if self.fail_reset {
+                Err(io::Error::other("injected reset-worktree failure"))
+            } else {
+                Ok(())
+            })
         }
 
         fn remove_worktree(&self, path: &Path) -> impl Future<Output = io::Result<()>> {
             self.removed.borrow_mut().push(path.to_owned());
-            ready(Ok(()))
+            ready(if self.fail_remove {
+                Err(io::Error::other("injected remove-worktree failure"))
+            } else {
+                Ok(())
+            })
         }
     }
 
@@ -825,7 +903,7 @@ mod tests {
     }
 
     impl CommitRunner for FakeCommitRunner {
-        fn recorded_commits(&self) -> impl Future<Output = Result<HashSet<String>, RunError>> {
+        fn recorded_commits(&self) -> impl Future<Output = Result<HashSet<String>, AppError>> {
             ready(Ok(self.complete.clone()))
         }
 
@@ -833,17 +911,18 @@ mod tests {
             &self,
             _worktree: &Path,
             commit: &str,
-        ) -> impl Future<Output = Result<CommitOutcome, RunError>> {
+        ) -> impl Future<Output = Result<CommitOutcome, AppError>> {
             self.ran.borrow_mut().push(commit.to_owned());
             let result = match self.outcomes.get(commit) {
                 Some(FakeResult::Stored(cases)) => Ok(CommitOutcome::Stored { cases: *cases }),
                 Some(FakeResult::SkippedExisting) => Ok(CommitOutcome::SkippedExisting),
                 Some(FakeResult::SkippedEmpty) => Ok(CommitOutcome::SkippedEmpty),
-                Some(FakeResult::BenchFailed(reason)) => Ok(CommitOutcome::BenchFailed {
-                    reason: reason.clone(),
-                }),
-                Some(FakeResult::Infra(message)) => {
-                    Err(RunError::Io(io::Error::other(message.clone())))
+                Some(FakeResult::BenchFailed) => Ok(CommitOutcome::BenchFailed(
+                    EngineFailedError::new("cargo bench", 1).into(),
+                )),
+                Some(FakeResult::Infra) => {
+                    let error = StorageError::from(TestStorageError::new());
+                    Err(error.into())
                 }
                 None => Ok(CommitOutcome::Stored { cases: 1 }),
             };
@@ -886,7 +965,7 @@ mod tests {
         git: &G,
         runner: &C,
         commits: &[String],
-    ) -> Result<BackfillReport, RunError> {
+    ) -> Result<BackfillReport, AppError> {
         let reporter = RecordingReporter::new();
         block_on(run_commits(
             options,
@@ -919,10 +998,7 @@ mod tests {
     fn plan_rejects_an_unresolvable_endpoint() {
         let git = FakeBackfillGit::new(fixture());
         let error = block_on(plan_commits(&options("absent", "f2"), &git)).unwrap_err();
-        let RunError::Backfill { message } = error else {
-            panic!("expected a backfill error, got {error:?}");
-        };
-        assert!(message.contains("cannot resolve --from"), "{message}");
+        assert!(error.find_source::<BackfillError>().is_some());
     }
 
     #[test]
@@ -930,10 +1006,33 @@ mod tests {
         // f1 is on the feature side, not in master's first-parent ancestry.
         let git = FakeBackfillGit::new(fixture());
         let error = block_on(plan_commits(&options("f1", "c3"), &git)).unwrap_err();
-        let RunError::Backfill { message } = error else {
-            panic!("expected a backfill error, got {error:?}");
-        };
-        assert!(message.contains("not a first-parent ancestor"), "{message}");
+        assert!(error.find_source::<BackfillError>().is_some());
+    }
+
+    #[test]
+    fn plan_maps_a_ref_resolution_failure() {
+        let mut history = fixture();
+        history.fail_resolve();
+        let git = FakeBackfillGit::new(history);
+
+        let error = block_on(plan_commits(&options("c1", "f2"), &git)).unwrap_err();
+
+        assert!(error.find_source::<ResolveRefFailedError>().is_some());
+        assert!(error.find_source::<FirstParentWalkFailedError>().is_none());
+        assert!(error.find_source::<io::Error>().is_some());
+    }
+
+    #[test]
+    fn plan_maps_a_first_parent_walk_failure() {
+        let mut history = fixture();
+        history.fail_first_parent();
+        let git = FakeBackfillGit::new(history);
+
+        let error = block_on(plan_commits(&options("c1", "f2"), &git)).unwrap_err();
+
+        assert!(error.find_source::<FirstParentWalkFailedError>().is_some());
+        assert!(error.find_source::<ResolveRefFailedError>().is_none());
+        assert!(error.find_source::<io::Error>().is_some());
     }
 
     #[test]
@@ -975,8 +1074,8 @@ mod tests {
         );
         assert!(report.skipped_existing.iter().eq(std::iter::once(&"c1")));
         assert!(report.skipped_empty.iter().eq(std::iter::once(&"f1")));
-        assert!(report.failed.is_empty());
-        assert!(report.stopped.is_none());
+        assert!(report.failures.is_empty());
+        assert!(report.stopped_failure.is_none());
         // Every commit was reset into the worktree, in order.
         assert!(
             git.resets
@@ -993,7 +1092,7 @@ mod tests {
     #[test]
     fn run_commits_stops_on_first_failure_by_default() {
         let git = FakeBackfillGit::new(fixture());
-        let runner = FakeCommitRunner::new().with("c1", FakeResult::BenchFailed("boom".to_owned()));
+        let runner = FakeCommitRunner::new().with("c1", FakeResult::BenchFailed);
         let commits = vec!["c0".to_owned(), "c1".to_owned(), "f1".to_owned()];
 
         let report = drive_commits(&options("c0", "f1"), &git, &runner, &commits).unwrap();
@@ -1004,13 +1103,13 @@ mod tests {
                 .iter()
                 .eq(std::iter::once(&("c0".to_owned(), 1)))
         );
-        assert!(
-            report
-                .failed
-                .iter()
-                .eq(std::iter::once(&("c1".to_owned(), "boom".to_owned())))
-        );
-        assert_eq!(report.stopped.as_deref(), Some("c1"));
+        assert_eq!(report.failures.len(), 1);
+        let recorded = report.failures.first().unwrap();
+        assert_eq!(recorded.commit, "c1");
+        let failure = recorded.error.find_source::<EngineFailedError>().unwrap();
+        assert_eq!(failure.engine(), "cargo bench");
+        assert_eq!(failure.code(), 1);
+        assert_eq!(report.stopped_failure, Some(0));
         // f1 was never reached.
         assert!(runner.ran.borrow().iter().eq(["c0", "c1"].iter()));
     }
@@ -1018,7 +1117,7 @@ mod tests {
     #[test]
     fn run_commits_continues_past_failures_with_ignore_errors() {
         let git = FakeBackfillGit::new(fixture());
-        let runner = FakeCommitRunner::new().with("c1", FakeResult::BenchFailed("boom".to_owned()));
+        let runner = FakeCommitRunner::new().with("c1", FakeResult::BenchFailed);
         let commits = vec!["c0".to_owned(), "c1".to_owned(), "f1".to_owned()];
         let mut opts = options("c0", "f1");
         opts.ignore_errors = true;
@@ -1031,26 +1130,25 @@ mod tests {
                 .iter()
                 .eq([("c0".to_owned(), 1), ("f1".to_owned(), 1)].iter())
         );
-        assert!(
-            report
-                .failed
-                .iter()
-                .eq(std::iter::once(&("c1".to_owned(), "boom".to_owned())))
-        );
-        assert!(report.stopped.is_none());
+        assert_eq!(report.failures.len(), 1);
+        let recorded = report.failures.first().unwrap();
+        assert_eq!(recorded.commit, "c1");
+        assert!(recorded.error.find_source::<EngineFailedError>().is_some());
+        assert!(report.stopped_failure.is_none());
         assert!(runner.ran.borrow().iter().eq(["c0", "c1", "f1"].iter()));
     }
 
     #[test]
     fn run_commits_aborts_on_infrastructure_error_even_with_ignore_errors() {
         let git = FakeBackfillGit::new(fixture());
-        let runner = FakeCommitRunner::new().with("c1", FakeResult::Infra("disk".to_owned()));
+        let runner = FakeCommitRunner::new().with("c1", FakeResult::Infra);
         let commits = vec!["c0".to_owned(), "c1".to_owned(), "f1".to_owned()];
         let mut opts = options("c0", "f1");
         opts.ignore_errors = true;
 
         let error = drive_commits(&opts, &git, &runner, &commits).unwrap_err();
-        assert!(matches!(error, RunError::Io(_)), "{error:?}");
+        assert!(BenchFailure::find(&error).is_none());
+        assert!(error.find_source::<StorageError>().is_some());
         // The loop stopped at the failing commit; f1 was never reached.
         assert!(runner.ran.borrow().iter().eq(["c0", "c1"].iter()));
     }
@@ -1351,8 +1449,11 @@ mod tests {
             stored: vec![("aaaaaaa".to_owned(), 2)],
             skipped_existing: vec!["bbbbbbb".to_owned()],
             skipped_empty: vec!["ccccccc".to_owned()],
-            failed: vec![("ddddddd".to_owned(), "boom".to_owned())],
-            stopped: Some("ddddddd".to_owned()),
+            failures: vec![FailedCommit {
+                commit: "ddddddd".to_owned(),
+                error: EngineFailedError::new("cargo bench", 1).into(),
+            }],
+            stopped_failure: Some(0),
         };
 
         let rendered = report.render(5);
@@ -1376,12 +1477,47 @@ mod tests {
             rendered.contains("  skipped ccccccc (no benchmark cases)"),
             "{rendered}"
         );
-        assert!(rendered.contains("  failed ddddddd (boom)"), "{rendered}");
+        assert!(
+            rendered.contains("  failed ddddddd (engine \"cargo bench\" failed with exit code 1)"),
+            "{rendered}"
+        );
         assert!(
             rendered
                 .contains("  stopped at ddddddd (pass --ignore-errors to continue past failures)"),
             "{rendered}"
         );
+    }
+
+    #[test]
+    fn stopping_error_comes_from_the_explicit_failure_entry() {
+        let mut report = BackfillReport {
+            failures: vec![
+                FailedCommit {
+                    commit: "c0".to_owned(),
+                    error: EngineFailedError::new("criterion", 1).into(),
+                },
+                FailedCommit {
+                    commit: "c1".to_owned(),
+                    error: ParseOutputError::caused_by(
+                        "target/callgrind/summary.json",
+                        io::Error::other("invalid summary"),
+                    )
+                    .into(),
+                },
+            ],
+            stopped_failure: Some(1),
+            ..BackfillReport::default()
+        };
+
+        let error = report.take_stopping_error().unwrap();
+        let failure = error.find_source::<ParseOutputError>().unwrap();
+
+        assert_eq!(failure.path(), Path::new("target/callgrind/summary.json"));
+        assert!(error.find_source::<io::Error>().is_some());
+        assert!(error.find_source::<EngineFailedError>().is_none());
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.failures.first().unwrap().commit, "c0");
+        assert!(report.stopped_failure.is_none());
     }
 
     #[test]
@@ -1413,9 +1549,60 @@ mod tests {
     }
 
     #[test]
+    fn execute_maps_an_add_worktree_failure() {
+        let git = FakeBackfillGit::new(fixture()).with_add_failure();
+        let error = block_on(execute_backfill(
+            &options("c0", "f2"),
+            &git,
+            &FakeCommitRunner::new(),
+            &worktree(),
+            &RecordingReporter::new(),
+        ))
+        .unwrap_err();
+
+        assert!(error.find_source::<AddWorktreeFailedError>().is_some());
+        assert!(error.find_source::<io::Error>().is_some());
+        assert!(git.removed.borrow().is_empty());
+    }
+
+    #[test]
+    fn execute_maps_a_reset_failure_and_still_tears_down() {
+        let git = FakeBackfillGit::new(fixture()).with_reset_failure();
+        let error = block_on(execute_backfill(
+            &options("c0", "f2"),
+            &git,
+            &FakeCommitRunner::new(),
+            &worktree(),
+            &RecordingReporter::new(),
+        ))
+        .unwrap_err();
+
+        assert!(error.find_source::<ResetWorktreeFailedError>().is_some());
+        assert!(error.find_source::<io::Error>().is_some());
+        assert!(git.removed.borrow().iter().eq(std::iter::once(&worktree())));
+    }
+
+    #[test]
+    fn execute_maps_a_remove_worktree_failure() {
+        let git = FakeBackfillGit::new(fixture()).with_remove_failure();
+        let error = block_on(execute_backfill(
+            &options("c0", "f2"),
+            &git,
+            &FakeCommitRunner::new(),
+            &worktree(),
+            &RecordingReporter::new(),
+        ))
+        .unwrap_err();
+
+        assert!(error.find_source::<RemoveWorktreeFailedError>().is_some());
+        assert!(error.find_source::<io::Error>().is_some());
+        assert!(git.removed.borrow().iter().eq(std::iter::once(&worktree())));
+    }
+
+    #[test]
     fn execute_returns_error_and_tears_down_when_stopped() {
         let git = FakeBackfillGit::new(fixture());
-        let runner = FakeCommitRunner::new().with("c1", FakeResult::BenchFailed("boom".to_owned()));
+        let runner = FakeCommitRunner::new().with("c1", FakeResult::BenchFailed);
         let error = block_on(execute_backfill(
             &options("c0", "f2"),
             &git,
@@ -1425,10 +1612,8 @@ mod tests {
         ))
         .unwrap_err();
 
-        let RunError::Backfill { message } = error else {
-            panic!("expected a backfill error, got {error:?}");
-        };
-        assert!(message.contains("stopped at c1"), "{message}");
+        assert!(error.find_source::<BackfillError>().is_some());
+        assert!(error.find_source::<EngineFailedError>().is_some());
         // Teardown still happened despite the failure.
         assert!(git.removed.borrow().iter().eq(std::iter::once(&worktree())));
     }
@@ -1436,7 +1621,7 @@ mod tests {
     #[test]
     fn execute_tears_down_after_an_infrastructure_abort() {
         let git = FakeBackfillGit::new(fixture());
-        let runner = FakeCommitRunner::new().with("c0", FakeResult::Infra("disk".to_owned()));
+        let runner = FakeCommitRunner::new().with("c0", FakeResult::Infra);
         let error = block_on(execute_backfill(
             &options("c0", "f2"),
             &git,
@@ -1446,7 +1631,7 @@ mod tests {
         ))
         .unwrap_err();
 
-        assert!(matches!(error, RunError::Io(_)), "{error:?}");
+        assert!(error.find_source::<StorageError>().is_some());
         assert!(git.removed.borrow().iter().eq(std::iter::once(&worktree())));
     }
 
@@ -1458,7 +1643,7 @@ mod tests {
             labels: Vec::new(),
         }))
         .unwrap();
-        assert_eq!(stored, CommitOutcome::Stored { cases: 7 });
+        assert!(matches!(stored, CommitOutcome::Stored { cases: 7 }));
 
         let empty = map_collect_result(Ok(CollectSummary {
             stored: 0,
@@ -1466,28 +1651,62 @@ mod tests {
             labels: Vec::new(),
         }))
         .unwrap();
-        assert_eq!(empty, CommitOutcome::SkippedEmpty);
+        assert!(matches!(empty, CommitOutcome::SkippedEmpty));
 
-        let duplicate = map_collect_result(Err(RunError::Duplicate {
-            key: "v1/p/objects/callgrind/t/m1/abc/clean.json".to_owned(),
-        }))
+        let duplicate = map_collect_result(Err(DuplicateResultError::new(
+            "v1/p/objects/callgrind/t/m1/abc/clean.json",
+        )
+        .into()))
         .unwrap();
-        assert_eq!(duplicate, CommitOutcome::SkippedExisting);
+        assert!(matches!(duplicate, CommitOutcome::SkippedExisting));
 
-        let failed = map_collect_result(Err(RunError::Engine {
-            engine: "callgrind".to_owned(),
-            code: Some(101),
-        }))
-        .unwrap();
-        let CommitOutcome::BenchFailed { reason } = failed else {
+        let failed =
+            map_collect_result(Err(EngineFailedError::new("callgrind", 101).into())).unwrap();
+        let CommitOutcome::BenchFailed(error) = failed else {
             panic!("expected a bench failure");
         };
-        assert!(reason.contains("101"), "{reason}");
+        let failure = error.find_source::<EngineFailedError>().unwrap();
+        assert_eq!(failure.engine(), "callgrind");
+        assert_eq!(failure.code(), 101);
 
-        let infra = map_collect_result(Err(RunError::Storage(StorageError::NotFound {
-            key: "k".to_owned(),
-        })));
-        assert!(matches!(infra, Err(RunError::Storage(_))), "{infra:?}");
+        let storage_error = block_on(MemoryStorage::new().get("k")).unwrap_err();
+        let infra = map_collect_result(Err(storage_error.into())).unwrap_err();
+        assert!(infra.find_source::<StorageError>().is_some());
+    }
+
+    #[test]
+    fn a_recorded_bench_failure_never_carries_a_backtrace_into_the_summary() {
+        // Under `--ignore-errors` the summary is the *success* path, so a per-commit
+        // reason is rendered from the typed failure's fields. The full source chain
+        // stays attached to the retained error rather than entering that line.
+        let parse_failure = io::Error::other(
+            "the JSON is malformed\n\nBacktrace:\n   0: cbh_engines::parse_callgrind_summary",
+        );
+        let outcome = map_collect_result(Err(ParseOutputError::caused_by(
+            "target/callgrind/summary.json",
+            parse_failure,
+        )
+        .into()))
+        .unwrap();
+        let CommitOutcome::BenchFailed(error) = outcome else {
+            panic!("expected a bench failure");
+        };
+        let failure = error.find_source::<ParseOutputError>().unwrap();
+        assert_eq!(failure.path(), Path::new("target/callgrind/summary.json"));
+        assert!(error.find_source::<io::Error>().is_some());
+
+        let mut report = BackfillReport::default();
+        report.failures.push(FailedCommit {
+            commit: "c0ffeec0ffee".to_owned(),
+            error,
+        });
+        let rendered = report.render(1);
+
+        assert!(!rendered.contains("Backtrace:"));
+        assert!(!rendered.contains("caused by:"));
+        assert!(rendered.contains("target/callgrind/summary.json"));
+        // The per-commit note stays on the single line the summary reserves for it.
+        assert_eq!(rendered.lines().count(), 2);
     }
 
     #[test]

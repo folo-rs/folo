@@ -1,114 +1,335 @@
-use std::error::Error;
-use std::{fmt, io};
+use std::panic::{RefUnwindSafe, UnwindSafe};
+use std::path::PathBuf;
+
+use ohno::OhnoCore;
+
+// Unwind-safety rationale for every manual implementation in this module: the `OhnoCore` that
+// ohno injects or requires blocks automatic inference through its trait-object source. These error
+// types expose no mutation or interior mutability, so unwinding cannot expose inconsistent state.
+// Adding mutation or interior mutability to either type requires re-evaluating its manual
+// implementations.
 
 /// An error from a storage operation.
+///
+/// Callers can distinguish only the conditions that drive storage control flow:
+/// [`is_not_found`](Self::is_not_found) identifies an absent object for cache and
+/// fallback decisions, while [`already_existing_key`](Self::already_existing_key)
+/// identifies a write-once collision. All concrete failures remain available in
+/// the error's source chain.
+#[derive(ohno::Error)]
+#[no_constructors]
+pub struct StorageError {
+    decision: StorageErrorDecision,
+
+    #[error]
+    core: OhnoCore,
+}
+
+impl UnwindSafe for StorageError {}
+impl RefUnwindSafe for StorageError {}
+
+impl StorageError {
+    /// Returns whether the requested object did not exist.
+    ///
+    /// This lets cache reads treat absence as a miss and cache synchronization treat
+    /// an absent invalidation marker as the stable genesis epoch.
+    #[must_use]
+    pub fn is_not_found(&self) -> bool {
+        matches!(self.decision, StorageErrorDecision::NotFound)
+    }
+
+    /// Returns the key involved in a write-once collision, if any.
+    ///
+    /// This lets callers skip or report duplicate results and lets an explicit
+    /// overwrite retry only after the write-once probe confirms the object exists.
+    #[must_use]
+    pub fn already_existing_key(&self) -> Option<&str> {
+        match &self.decision {
+            StorageErrorDecision::AlreadyExists { key } => Some(key),
+            StorageErrorDecision::Other | StorageErrorDecision::NotFound => None,
+        }
+    }
+}
+
+/// The complete internal state needed for storage control-flow decisions.
 #[derive(Debug)]
-pub enum StorageError {
-    /// No object exists at the requested key.
-    NotFound {
-        /// The key that was not found.
-        key: String,
-    },
-    /// The key was not a valid storage key (it contained an empty, `.`, or `..`
-    /// segment, or a platform-absolute segment, that could escape the storage
-    /// root).
-    InvalidKey {
-        /// The rejected key.
-        key: String,
-    },
-    /// An object already exists at the requested key. Storage is write-once, so
-    /// an existing object is never overwritten.
-    AlreadyExists {
-        /// The key that was already occupied.
-        key: String,
-    },
-    /// The storage backend is misconfigured (e.g. an Azure endpoint that is not a
-    /// valid HTTPS URL).
-    Config {
-        /// Human-readable description of the misconfiguration.
-        message: String,
-    },
-    /// An underlying I/O error occurred.
-    Io(io::Error),
+enum StorageErrorDecision {
+    /// The failure does not drive a caller decision.
+    Other,
+    /// The requested object does not exist.
+    NotFound,
+    /// A write-once operation found an existing object.
+    AlreadyExists { key: String },
 }
 
-impl fmt::Display for StorageError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NotFound { key } => write!(f, "object not found: {key}"),
-            Self::InvalidKey { key } => write!(f, "invalid storage key: {key}"),
-            Self::AlreadyExists { key } => write!(f, "object already exists: {key}"),
-            Self::Config { message } => write!(f, "storage configuration error: {message}"),
-            Self::Io(error) => write!(f, "storage I/O error: {error}"),
+/// A requested storage object does not exist.
+#[ohno::error]
+#[display("object not found: {key}")]
+pub(crate) struct ObjectNotFoundError {
+    pub(crate) key: String,
+}
+
+/// A write-once operation found an object already stored at its key.
+#[ohno::error]
+#[display("object already exists: {key}")]
+pub(crate) struct ObjectAlreadyExistsError {
+    pub(crate) key: String,
+}
+
+/// A storage key cannot safely identify an object within a backend.
+#[ohno::error]
+#[display("invalid storage key: {key}")]
+pub(crate) struct InvalidStorageKeyError {
+    pub(crate) key: String,
+}
+
+/// Storage configuration cannot produce a usable backend.
+#[ohno::error]
+#[display("{message}")]
+pub(crate) struct StorageConfigurationError {
+    pub(crate) message: String,
+}
+
+/// Creating the parent directories for a local object failed.
+#[ohno::error]
+#[display(
+    "could not create local storage parent directories at {}",
+    path.display()
+)]
+pub(crate) struct CreateLocalParentDirectoriesError {
+    pub(crate) path: PathBuf,
+}
+
+/// Inspecting whether a local object already exists failed.
+#[ohno::error]
+#[display("could not inspect local storage object at {}", path.display())]
+pub(crate) struct InspectLocalObjectExistenceError {
+    pub(crate) path: PathBuf,
+}
+
+/// Atomically writing a local object failed.
+#[ohno::error]
+#[display("could not write local storage object at {}", path.display())]
+pub(crate) struct WriteLocalObjectError {
+    pub(crate) path: PathBuf,
+}
+
+/// Reading a local object's stored bytes failed.
+#[ohno::error]
+#[display("could not read local storage object at {}", path.display())]
+pub(crate) struct ReadLocalObjectError {
+    pub(crate) path: PathBuf,
+}
+
+/// Decompressing a local object's stored bytes failed.
+#[ohno::error]
+#[display(
+    "could not decompress local storage object at {}",
+    path.display()
+)]
+pub(crate) struct DecompressLocalObjectError {
+    pub(crate) path: PathBuf,
+}
+
+/// Opening a local directory for a listing failed.
+#[ohno::error]
+#[display(
+    "could not open local storage listing directory at {}",
+    path.display()
+)]
+pub(crate) struct OpenLocalListingDirectoryError {
+    pub(crate) path: PathBuf,
+}
+
+/// Advancing a local directory listing failed.
+#[ohno::error]
+#[display(
+    "could not advance local storage listing directory at {}",
+    path.display()
+)]
+pub(crate) struct AdvanceLocalListingDirectoryError {
+    pub(crate) path: PathBuf,
+}
+
+/// Inspecting a local directory entry during a listing failed.
+#[ohno::error]
+#[display(
+    "could not inspect local storage listing entry at {}",
+    path.display()
+)]
+pub(crate) struct InspectLocalListingEntryError {
+    pub(crate) path: PathBuf,
+}
+
+/// Removing a local object failed.
+#[ohno::error]
+#[display("could not remove local storage object at {}", path.display())]
+pub(crate) struct RemoveLocalObjectError {
+    pub(crate) path: PathBuf,
+}
+
+/// An Azure Blob operation failed.
+#[ohno::error]
+#[display("{operation}")]
+pub(crate) struct AzureBlobOperationError {
+    pub(crate) operation: String,
+}
+
+/// Decompressing an Azure blob's stored bytes failed.
+#[ohno::error]
+#[display("could not decompress Azure blob {key:?}")]
+pub(crate) struct DecompressAzureBlobError {
+    pub(crate) key: String,
+}
+
+impl From<ObjectNotFoundError> for StorageError {
+    fn from(error: ObjectNotFoundError) -> Self {
+        Self {
+            decision: StorageErrorDecision::NotFound,
+            core: OhnoCore::from(error),
         }
     }
 }
 
-impl Error for StorageError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::NotFound { .. }
-            | Self::InvalidKey { .. }
-            | Self::AlreadyExists { .. }
-            | Self::Config { .. } => None,
-            Self::Io(error) => Some(error),
+impl From<ObjectAlreadyExistsError> for StorageError {
+    fn from(error: ObjectAlreadyExistsError) -> Self {
+        let key = error.key.clone();
+        Self {
+            decision: StorageErrorDecision::AlreadyExists { key },
+            core: OhnoCore::from(error),
         }
     }
 }
+
+macro_rules! impl_other_storage_error {
+    ($($source:ty),+ $(,)?) => {
+        $(
+            impl From<$source> for StorageError {
+                fn from(error: $source) -> Self {
+                    Self {
+                        decision: StorageErrorDecision::Other,
+                        core: OhnoCore::from(error),
+                    }
+                }
+            }
+        )+
+    };
+}
+
+impl_other_storage_error!(
+    InvalidStorageKeyError,
+    StorageConfigurationError,
+    CreateLocalParentDirectoriesError,
+    InspectLocalObjectExistenceError,
+    WriteLocalObjectError,
+    ReadLocalObjectError,
+    DecompressLocalObjectError,
+    OpenLocalListingDirectoryError,
+    AdvanceLocalListingDirectoryError,
+    InspectLocalListingEntryError,
+    RemoveLocalObjectError,
+    AzureBlobOperationError,
+    DecompressAzureBlobError,
+);
+
+/// A non-semantic storage failure used to exercise propagation in unit tests.
+#[cfg(any(test, feature = "private-test-util"))]
+#[doc(hidden)]
+#[derive(Default, ohno::Error)]
+#[no_constructors]
+#[display("test storage failure")]
+pub struct TestStorageError {
+    #[error]
+    core: OhnoCore,
+}
+
+#[cfg(any(test, feature = "private-test-util"))]
+impl UnwindSafe for TestStorageError {}
+#[cfg(any(test, feature = "private-test-util"))]
+impl RefUnwindSafe for TestStorageError {}
+
+#[cfg(any(test, feature = "private-test-util"))]
+impl TestStorageError {
+    /// Creates a non-semantic failure for propagation tests.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[cfg(any(test, feature = "private-test-util"))]
+impl_other_storage_error!(TestStorageError);
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::error::Error;
+    use std::fmt::Debug;
+    use std::io;
+
+    use ohno::ErrorExt as _;
+    use static_assertions::assert_impl_all;
+
     use super::*;
 
+    assert_impl_all!(StorageError: Send, Sync, Debug, Error, UnwindSafe, RefUnwindSafe);
+
     #[test]
-    fn not_found_display_includes_key() {
-        let error = StorageError::NotFound {
-            key: "v1/x".to_owned(),
-        };
-        assert_eq!(error.to_string(), "object not found: v1/x");
+    fn not_found_decision_retains_the_leaf_and_cause() {
+        let error: StorageError =
+            ObjectNotFoundError::caused_by("v1/x".to_owned(), io::Error::other("missing")).into();
+
+        assert!(error.is_not_found());
+        assert_eq!(error.already_existing_key(), None);
+        let leaf = error.find_source::<ObjectNotFoundError>().unwrap();
+        assert_eq!(leaf.key, "v1/x");
+        assert!(error.find_source::<io::Error>().is_some());
+        assert!(matches!(error.decision, StorageErrorDecision::NotFound));
     }
 
     #[test]
-    fn io_display_and_source() {
-        let error = StorageError::Io(io::Error::other("disk gone"));
-        assert!(error.to_string().contains("disk gone"));
-        assert!(error.source().is_some());
+    fn already_exists_decision_retains_the_key_in_both_places() {
+        let error: StorageError = ObjectAlreadyExistsError::new("v1/dup".to_owned()).into();
+
+        assert!(!error.is_not_found());
+        assert_eq!(error.already_existing_key(), Some("v1/dup"));
+        let leaf = error.find_source::<ObjectAlreadyExistsError>().unwrap();
+        assert_eq!(leaf.key, "v1/dup");
+        assert!(matches!(
+            error.decision,
+            StorageErrorDecision::AlreadyExists { ref key } if key == "v1/dup"
+        ));
     }
 
     #[test]
-    fn not_found_has_no_source() {
-        let error = StorageError::NotFound {
-            key: "k".to_owned(),
-        };
-        assert!(error.source().is_none());
+    fn other_decision_retains_the_operation_leaf_and_cause() {
+        let path = PathBuf::from("root/object");
+        let error: StorageError =
+            ReadLocalObjectError::caused_by(path.clone(), io::Error::other("unreadable")).into();
+
+        assert!(!error.is_not_found());
+        assert_eq!(error.already_existing_key(), None);
+        let leaf = error.find_source::<ReadLocalObjectError>().unwrap();
+        assert_eq!(leaf.path, path);
+        assert!(error.find_source::<io::Error>().is_some());
+        assert!(matches!(error.decision, StorageErrorDecision::Other));
     }
 
     #[test]
-    fn invalid_key_display_and_no_source() {
-        let error = StorageError::InvalidKey {
-            key: "v1/../escape".to_owned(),
-        };
-        assert!(error.to_string().contains("v1/../escape"), "{error}");
-        assert!(error.source().is_none());
+    fn invalid_key_is_an_other_decision_with_a_typed_leaf() {
+        let error: StorageError = InvalidStorageKeyError::new("v1/../escape".to_owned()).into();
+
+        assert!(matches!(error.decision, StorageErrorDecision::Other));
+        let leaf = error.find_source::<InvalidStorageKeyError>().unwrap();
+        assert_eq!(leaf.key, "v1/../escape");
     }
 
     #[test]
-    fn already_exists_display_and_no_source() {
-        let error = StorageError::AlreadyExists {
-            key: "v1/dup".to_owned(),
-        };
-        assert!(error.to_string().contains("v1/dup"), "{error}");
-        assert!(error.source().is_none());
-    }
+    fn configuration_is_an_other_decision_with_a_typed_leaf() {
+        let error: StorageError =
+            StorageConfigurationError::new("both backends selected".to_owned()).into();
 
-    #[test]
-    fn config_display_and_no_source() {
-        let error = StorageError::Config {
-            message: "both keys set".to_owned(),
-        };
-        assert!(error.to_string().contains("both keys set"), "{error}");
-        assert!(error.to_string().contains("configuration"), "{error}");
-        assert!(error.source().is_none());
+        assert!(matches!(error.decision, StorageErrorDecision::Other));
+        assert!(error.find_source::<StorageConfigurationError>().is_some());
     }
 }

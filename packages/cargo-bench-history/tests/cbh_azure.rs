@@ -42,10 +42,11 @@ use azure_storage_blob::{BlobContainerClient, BlobContainerClientOptions};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use cargo_bench_history::{
-    Cli, Command, Overrides, RunError, RunOutcome, StorageOverride, azure_backend_from_parts,
-    run_with_overrides,
+    Cli, Command, Overrides, RunOutcome, StorageOverride, run_with_overrides,
 };
+use cbh_storage::azure_backend_from_parts;
 use futures::FutureExt as _;
+use ohno::AppError;
 use serial_test::serial;
 
 /// A valid faker `--callgrind` argument for the Azure scenarios. They assert only on
@@ -512,7 +513,7 @@ impl AzureWorkspace {
 
     /// Drives a command with `args` against this workspace, pointing the
     /// harvest at the workspace's own `target/` so it is hermetic.
-    async fn drive(&self, args: &[&str]) -> Result<RunOutcome, RunError> {
+    async fn drive(&self, args: &[&str]) -> Result<RunOutcome, AppError> {
         let target_root = self.dir.path().join("target");
         // Drive `collect`/`backfill` against the faker instead of `cargo bench`:
         // the program plus its fixture-describing arguments form the benchmark

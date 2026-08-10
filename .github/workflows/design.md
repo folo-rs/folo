@@ -107,11 +107,14 @@ rendering toolchain.
 
 Coverage is a side effect of the ordinary test run, not a separate re-execution. A single
 commit therefore produces several coverage uploads — one per platform, plus a conditional
-upload from the Azure-backend job. Codecov is configured to hold all notifications until a
-final gate job signals that every expected upload for the commit has landed, so the reported
-figure is computed from the complete set rather than flapping as partial uploads arrive. The
-gate keys off "every expected upload succeeded or was legitimately skipped", never off a
-hardcoded upload count, because the Azure upload is conditional.
+upload from the Azure-backend job. A platform upload is itself conditional on a report
+existing: a delta-scoped run can measure only packages that carry no instrumented code, which
+yields nothing to report, nothing to upload and nothing to notify about. Codecov is configured
+to hold all notifications until a final gate job signals that every expected upload for the
+commit has landed, so the reported figure is computed from the complete set rather than
+flapping as partial uploads arrive. The gate keys off "every expected upload succeeded or was
+legitimately skipped", never off a hardcoded upload count, because the Azure upload is
+conditional; when no coverage landed at all, it releases nothing.
 
 ## Azure backend testing
 

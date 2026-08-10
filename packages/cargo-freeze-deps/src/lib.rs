@@ -5,11 +5,13 @@
 //! to its literal `=X.Y.Z` form.
 
 mod cli;
+mod errors;
 mod freeze;
 mod run;
 mod types;
 mod version;
 
 pub use cli::{Cli, EarlyExit};
+pub(crate) use errors::*;
 pub use run::run;
 pub use types::*;

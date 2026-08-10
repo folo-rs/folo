@@ -8,42 +8,47 @@
 //! and act as a schema-drift canary: if Criterion changes its format, parsing the
 //! fixtures fails and the mismatch is caught immediately.
 
-use std::error::Error;
-use std::fmt;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use cbh_model::{BenchmarkId, BenchmarkResult, Metric, MetricKind};
 use nonempty::NonEmpty;
 use serde::Deserialize;
 
 /// An error encountered while parsing a Criterion result case.
-#[derive(Debug)]
-pub enum CriterionParseError {
-    /// The `benchmark.json` was not valid JSON or did not match the expected shape.
-    Benchmark(serde_json::Error),
-    /// The `estimates.json` was not valid JSON or did not match the expected shape.
-    Estimates(serde_json::Error),
-}
+///
+/// The error retains the concrete document failure in its source chain and
+/// displays that failure without adding aggregate-level wording.
+#[ohno::error]
+#[no_constructors]
+#[from(BenchmarkParseError, EstimatesParseError)]
+pub struct CriterionParseError;
 
-impl fmt::Display for CriterionParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Benchmark(error) => {
-                write!(f, "failed to parse Criterion benchmark.json: {error}")
-            }
-            Self::Estimates(error) => {
-                write!(f, "failed to parse Criterion estimates.json: {error}")
-            }
-        }
-    }
-}
+/// Criterion's `benchmark.json` was malformed.
+///
+/// The document was not valid JSON or did not match the expected shape.
+#[ohno::error]
+#[display("failed to parse Criterion benchmark.json")]
+#[from(serde_json::Error)]
+struct BenchmarkParseError;
 
-impl Error for CriterionParseError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Benchmark(error) | Self::Estimates(error) => Some(error),
-        }
-    }
-}
+/// Criterion's `estimates.json` was malformed.
+///
+/// The document was not valid JSON or did not match the expected shape.
+#[ohno::error]
+#[display("failed to parse Criterion estimates.json")]
+#[from(serde_json::Error)]
+struct EstimatesParseError;
+
+// The #[ohno::error] macro injects an OhnoCore field containing Arc<dyn Error + Send + Sync>,
+// which is !UnwindSafe because Arc requires T: RefUnwindSafe and trait objects are !RefUnwindSafe.
+// However, ohno error types are immutable after construction — no &self method mutates internal
+// state — so observing them through a shared reference during unwind is harmless.
+impl UnwindSafe for CriterionParseError {}
+impl RefUnwindSafe for CriterionParseError {}
+impl UnwindSafe for BenchmarkParseError {}
+impl RefUnwindSafe for BenchmarkParseError {}
+impl UnwindSafe for EstimatesParseError {}
+impl RefUnwindSafe for EstimatesParseError {}
 
 /// Parses one Criterion result case (its `benchmark.json` and `estimates.json`)
 /// into a [`BenchmarkResult`].
@@ -56,9 +61,9 @@ pub fn parse_criterion_case(
     estimates_json: &str,
 ) -> Result<BenchmarkResult, CriterionParseError> {
     let benchmark: Benchmark =
-        serde_json::from_str(benchmark_json).map_err(CriterionParseError::Benchmark)?;
+        serde_json::from_str(benchmark_json).map_err(BenchmarkParseError::from)?;
     let estimates: Estimates =
-        serde_json::from_str(estimates_json).map_err(CriterionParseError::Estimates)?;
+        serde_json::from_str(estimates_json).map_err(EstimatesParseError::from)?;
     Ok(case_to_record(&benchmark, &estimates))
 }
 
@@ -151,9 +156,40 @@ mod tests {
     )]
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
+    use std::error;
+    use std::fmt::Debug;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use nonempty::nonempty;
+    use ohno::ErrorExt;
+    use static_assertions::assert_impl_all;
 
     use super::*;
+
+    assert_impl_all!(
+        CriterionParseError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        BenchmarkParseError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        EstimatesParseError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
 
     const STD_INSTANT_BENCHMARK: &str =
         include_str!("../../tests/fixtures/criterion/std_instant/benchmark.json");
@@ -344,35 +380,49 @@ mod tests {
     #[test]
     fn rejects_malformed_benchmark_json() {
         let error = parse_criterion_case("{ not json", STD_INSTANT_ESTIMATES).unwrap_err();
-        assert!(matches!(error, CriterionParseError::Benchmark(_)));
+        assert!(error.find_source::<BenchmarkParseError>().is_some());
+        assert!(error.find_source::<EstimatesParseError>().is_none());
     }
 
     #[test]
     fn rejects_malformed_estimates_json() {
         let error = parse_criterion_case(STD_INSTANT_BENCHMARK, "{ not json").unwrap_err();
-        assert!(matches!(error, CriterionParseError::Estimates(_)));
+        assert!(error.find_source::<EstimatesParseError>().is_some());
+        assert!(error.find_source::<BenchmarkParseError>().is_none());
     }
 
     #[test]
-    fn error_display_and_source() {
+    fn parse_conditions_carry_their_sources() {
         let benchmark_error =
             parse_criterion_case("{ not json", STD_INSTANT_ESTIMATES).unwrap_err();
         assert!(
             benchmark_error
-                .to_string()
-                .contains("failed to parse Criterion benchmark.json"),
-            "{benchmark_error}"
+                .find_source::<BenchmarkParseError>()
+                .is_some()
         );
-        assert!(benchmark_error.source().is_some());
+        assert!(benchmark_error.find_source::<serde_json::Error>().is_some());
 
         let estimates_error =
             parse_criterion_case(STD_INSTANT_BENCHMARK, "{ not json").unwrap_err();
         assert!(
             estimates_error
-                .to_string()
-                .contains("failed to parse Criterion estimates.json"),
-            "{estimates_error}"
+                .find_source::<EstimatesParseError>()
+                .is_some()
         );
-        assert!(estimates_error.source().is_some());
+        assert!(estimates_error.find_source::<serde_json::Error>().is_some());
+    }
+
+    #[test]
+    fn criterion_parse_error_displays_as_the_underlying_failure() {
+        let serde_error = serde_json::from_str::<serde_json::Value>("{ not json").unwrap_err();
+        let benchmark_error = BenchmarkParseError::from(serde_error);
+        let expected = benchmark_error.to_string();
+
+        let error = CriterionParseError::from(benchmark_error);
+
+        // The wrapper adds no wording of its own, so a caller that only prints the
+        // error still sees the specific failure. Matching on the prefix tolerates
+        // the optional trailing backtrace block.
+        assert!(error.to_string().starts_with(&expected));
     }
 }

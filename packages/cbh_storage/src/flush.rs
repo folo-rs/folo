@@ -17,9 +17,9 @@ use crate::StorageError;
 /// failure is never silently dropped, even when the command itself also failed.
 ///
 /// The command's own error type `E` only has to know how to carry a
-/// [`StorageError`], so each caller keeps its own aggregate error type (the
-/// binary's `RunError`, `cbh_analyze`'s `AnalyzeError`) without this port
-/// depending on either.
+/// [`StorageError`], so each caller keeps its own error type (`ohno::AppError` in
+/// the binary, `cbh_analyze`'s `AnalyzeError`) without this port depending on
+/// either.
 ///
 /// # Errors
 ///
@@ -41,6 +41,7 @@ where
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+    use crate::ObjectNotFoundError;
 
     // A stand-in command error type, so the tests exercise `finish_with_flush`
     // without depending on any consumer's aggregate error type. It carries a flush
@@ -61,9 +62,16 @@ mod tests {
     // A distinct flush failure, so it is unambiguously different from a command
     // failure once both are folded into `StandInError`.
     fn flush_failure() -> StorageError {
-        StorageError::NotFound {
-            key: "cache-epoch".to_owned(),
-        }
+        ObjectNotFoundError::new("cache-epoch".to_owned()).into()
+    }
+
+    // Recognizes the failure `flush_failure` produces once it has been folded into
+    // `StandInError`, so both precedence tests assert on it identically.
+    fn is_flush_failure(error: &StandInError) -> bool {
+        let StandInError::Storage(storage) = error else {
+            return false;
+        };
+        storage.is_not_found()
     }
 
     #[test]
@@ -80,7 +88,7 @@ mod tests {
         let error = finish_with_flush::<&str, StandInError>(Ok("done"), Err(flush_failure()))
             .expect_err("the flush failed");
         assert!(
-            matches!(error, StandInError::Storage(StorageError::NotFound { .. })),
+            is_flush_failure(&error),
             "expected the flush error, got {error:?}"
         );
     }
@@ -107,7 +115,7 @@ mod tests {
         )
         .expect_err("both failed");
         assert!(
-            matches!(error, StandInError::Storage(StorageError::NotFound { .. })),
+            is_flush_failure(&error),
             "expected the flush error to win, got {error:?}"
         );
     }

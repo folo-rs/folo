@@ -2,12 +2,11 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![doc(hidden)]
 #![expect(
-    clippy::exhaustive_enums,
     clippy::exhaustive_structs,
     reason = "this crate's `pub` items form an internal handoff boundary between the \
               cargo-bench-history sub-crates rather than a stable public API, so \
-              exhaustive matching and construction of its value types by those \
-              in-workspace consumers is intended"
+              exhaustive construction of its value types by those in-workspace \
+              consumers is intended"
 )]
 
 //! Implementation crate for [`cargo-bench-history`]; do not depend on this directly.
@@ -54,6 +53,16 @@ pub(crate) use cbh_detect::{Series, SeriesFilter, apply_blessings};
 pub(crate) use cbh_render::{ReportFormat, chart_series, format_value};
 pub(crate) use dataset::{empty_history_hint, select_dataset};
 pub use error::AnalyzeError;
+pub(crate) use error::{
+    BaseBranchUnavailableError, BlessBaseRequiredError, BlessDiscriminantsRequiredError,
+    BlessSelectionRequiredError, CommitterTimeFailedError, DefaultBranchProbeFailedError,
+    EmptyBenchmarkError, FirstParentWalkFailedError, InvalidBlessingError, InvalidResultSetError,
+    InvalidStoredUtf8Error, InvalidWindowValueError, ListAllUnsupportedError, MergeBaseFailedError,
+    MergeBaseUnavailableError, NoOutputSelectedError, PruneBaseConfirmationRequiredError,
+    PruneSelectionRequiredError, ResolveRefFailedError, ToolchainProbeFailedError,
+    UnknownEngineError, UnknownMetricError, UnresolvedRefError, WindowOutOfRangeError,
+    WorkingTreeProbeFailedError,
+};
 pub use examine::execute as examine;
 pub use facets::AutoFacets;
 pub(crate) use facets::resolve_facets;

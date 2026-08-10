@@ -534,9 +534,10 @@ around. Because it changes only which reconstructed series are detected on (not 
 are selected), the ghost filter is analyze-only and outside the selection lockstep (§8.5).
 
 Output toggles select which renderings one analysis pass emits — text to stdout by default,
-with file toggles that compose so a single pass can emit text, Markdown, and JSON at once;
-requesting no output at all is an error. Beyond those three canonical renderings, `analyze`
-offers one **derived** output — a condensed Markdown *summary* — for a downstream consumer
+with file output flags that compose so a single pass can also write Markdown and JSON to
+their requested paths; requesting no output at all is an error. Beyond those three canonical
+renderings, `analyze` offers one **derived** output — a condensed Markdown *summary* — for a
+downstream consumer
 whose body has a hard size limit (the workflow posts it as a rolling GitHub issue, capped at
 65,536 characters). The summary keeps only the most significant findings and drops the
 per-facet grouping, so it is intentionally lossy; it is analyze-only because truncating a
@@ -696,7 +697,7 @@ default, or the most recent blessing of every benchmark across the analysis wind
 
 `examine` answers the question a finding raises: *which commits actually moved this
 number?* Where `analyze` reports that a benchmark's metric shifted and draws a small chart,
-`examine` **pivots that chart into its data points** — one row per recorded observation of a
+`examine` **pivots that chart into a per-commit listing** — a row for every commit of a
 single `(benchmark, metric)` series, in git first-parent order, each row pairing the value
 with the short commit id and the start of the commit's title. A maintainer reads the values
 down the column, spots where one jumps, and reads across to the title to correlate the move
@@ -706,9 +707,9 @@ It is a **drill-down sibling of `list runs`**: both are read-only previews over 
 exact data-set selection that never analyze, so `examine` reuses that selection pipeline
 unchanged and stays in the same lockstep — a selection parameter added to `analyze` is added
 to `list`, `prune`, and `examine` alike. Like `analyze` it requires a resolvable repository
-(it needs first-parent topology to order the points and each commit's title to label them)
-and repeats the pivot once **per matching discriminant set**, since the same series can exist
-under several triples or machine keys.
+(it needs first-parent topology to enumerate and order the listed commits and each commit's
+title to label them) and repeats the pivot once **per matching discriminant set**, since the
+same series can exist under several triples or machine keys.
 
 Two required options name the series, and they are the one place a command names a
 **metric**: `--benchmark <qualified-id>` selects exactly one benchmark identity and
@@ -723,22 +724,28 @@ gives; when runs enter but none carry the named `(benchmark, metric)` pair, a di
 pointing at the unmatched benchmark id or metric name.
 
 `examine` runs **no detection and no re-baselining** — it has no findings, modes, or
-blessings. It lists every selected **observation** (a commit carrying both a clean run and
-dirty snapshots contributes a row each, ordered clean-before-dirty and flagged, so a value's
-provenance is unambiguous), which is why the analysis-only flags (improvements, inactive
-findings) are not part of its surface. The three output renderings compose from one pass as
-everywhere else: the per-commit table on stdout by default, the same table in Markdown, and a
-machine-readable JSON form that carries, per discriminant set, the ordered points with
-full-precision values and each commit's full title — the 50-character title truncation is a
-readability convenience of the text and Markdown tables, not of the data. The text and
-Markdown renderings **lead each set with the same small line chart `analyze` draws**, reusing
-its renderer, so a maintainer sees the shape of the series before reading the points it
-pivots; the chart is **topology-accurate** — one column per first-parent commit, so a
-data-less commit between observations (or a trailing run of them up to the analyzed tip)
-renders as a gap that the tabular points, which list only real observations, do not carry.
-The line is drawn **uncolored**, and only when a set has at least two points. The JSON form
-carries no chart (a charting concern the human reports draw from internally, not data a
-consumer reconstructs).
+blessings, which is why the analysis-only flags (improvements, inactive findings) are not
+part of its surface. It lists **every commit** from the earliest one at which any matching
+set carries the series through to the analyzed tip: a commit carrying data contributes a row
+per **observation** (clean run before dirty snapshots, each flagged, so a value's provenance
+is unambiguous), and a commit carrying none is marked `n/a`. That opening is a union across
+the sets, so every set lists the same commits and two of them can be read side by side.
+Nothing caps the listing; `--since` bounds it, and `--verbose` states the resolved range.
+
+The three output renderings compose from one pass as everywhere else: the per-commit table
+on stdout by default, the same table in Markdown, and a machine-readable JSON form that
+mirrors it row for row with full-precision values and each commit's full title — the
+50-character title truncation is a readability convenience of the text and Markdown tables,
+not of the data — carrying a null value and no clean/dirty flag where a commit has no data.
+The text and Markdown renderings **lead each set with the same line chart history-mode
+`analyze` draws**, reusing its renderer, so a maintainer sees the shape of the series before
+reading the rows beneath it. The chart is not the table: it plots that set's real
+observations only and trims its leading gap, so a late-starting set opens its chart after its
+table, and beyond the fixed chart width it bins commits into shared columns (§8.6). The table
+is the complete listing; the chart is the shape of the series. The line is drawn
+**uncolored**, and only when a set has at least two observations. The JSON form carries no
+chart (a charting concern the human reports draw from internally, not data a consumer
+reconstructs).
 
 ### 7.9 `import`
 
@@ -1277,71 +1284,19 @@ How it surfaces (§8.7) follows what a reader needs where:
   reporting an absence of change, which it is in no position to claim; the empty-outcome hint
   (§7.3) explains why the run found nothing.
 
-## 9. Architecture
+## 9. Diagnostics
 
-The tool is a **shell** (the CLI binary and its library) plus a family of small, private-use
-`cbh_*` **implementation crates** it depends on, following the workspace's impl-crate pattern
-— each a private-use extraction treated as the impl crate directly, with no separate `_impl`
-shell. Responsibilities are split roughly one per crate so each is independently and cheaply
-mutation-tested. All **pure, I/O-free** logic — the stored data model, comparability and
-partitioning, the statistics and analysis math and rendering, and the shared compression
-codec — lives in leaf crates exercised by a fast, Miri-friendly, cheap-to-mutation-test
-in-process suite, while everything that touches the outside world — storage, git, process,
-filesystem, engine parsing, and the CLI — is factored into its own crate too, with the binary
-shell wiring them together.
+The shell writes successful human-readable text reports to stdout. Requested Markdown and JSON
+reports are written to the paths supplied by their output flags. Progress, effective-selection
+and effective-partition summaries, verbose reasoning, timings, and failures go to stderr.
+Benchmark child processes inherit the parent process's standard streams and may write directly
+to either one.
 
-**Async ports and adapters.** The app is async by default on the Tokio runtime, but pure
-logic stays synchronous — parse, map, comparability, series, findings, format — and is the
-Miri-safe bulk of the code and tests. Async is pushed only to the I/O edges, each a small
-port trait (`impl Future` return, no async-trait macro) with a real Tokio adapter and an
-in-`#[cfg(test)]` in-memory fake: the process runner, the environment and git-history
-probes, the benchmark-output harvester, the config writer for `install`, the diagnostics
-reporter, and storage. The reporter carries three independent channels — verbose-gated
-per-object **notes**, independent stage **timings**, and **always-on one-line summaries**
-(the effective-selection and effective-partition lines above) — all written to stderr so
-stdout stays a clean machine-readable stream of reports and JSON. Time comes from an
-injected clock (the workspace `tick` crate), so
-tests drive it deterministically and orchestration never reads the wall clock directly.
-Orchestration takes the injected ports, and the public async entry wires the real adapters.
-
-**Miri strategy.** Pure logic runs under Miri directly, and the in-memory async
-orchestration tests run *without* a Tokio runtime (a synchronous block-on plus
-always-ready fakes plus a frozen clock), so they stay Miri-safe. Tests that use a real
-runtime, real filesystem or process, or the network emulator are Miri-ignored with a
-reason.
-
-**Compute parallelism.** `analyze`'s two expensive stages — loading and parsing the stored
-objects, and running per-series detection — both fan out across cores, routed through an
-**injected spawner** rather than ad-hoc threads so the work runs on the runtime's shared
-pool in production and inline under Miri, and stays legible in a profiler. The object load
-splits the storage-key-sorted survivors into one balanced chunk per worker; each worker
-fetches, inflates, parses, and **folds** its chunk into its own series builder, dropping
-each parsed run as it goes, and the driver merges the per-worker builders in a serial pass
-whose global sort makes the result byte-identical to a single-threaded fold. Objects are
-parsed into a lean projection carrying only the fields the fold reads (the commit a point
-is labelled with comes from the storage key, not the payload). The parallel parse is only a
-net win with a **scalable global allocator** — the JSON parser's many small allocations
-otherwise contend on the system allocator's cross-thread lock and erase the speedup — so
-the binary installs one. Folding in the worker parallelizes the fold for a wall-time and
-CPU win but does not lower peak memory (every worker's finished builder is briefly resident
-alongside the growing merged one), an accepted tradeoff; further memory reduction (bounded
-merge-as-complete waves and id interning) is deliberately left unexploited in favour of that
-win. The data-flow and parallelism
-map lives in [`analyze.md`](analyze.md).
-
-*Considered and not adopted for the fan-out:* a data-parallelism library whose transitive
-dependency trips Miri's aliasing model (forcing an ugly conditional-compilation serial
-fallback), and short-lived per-call worker threads (which litter the profiler and tie the
-tool to OS-thread spawning instead of the host's runtime). The injected spawner is
-Miri-clean and runtime-agnostic with no conditional compilation.
-
-**Companion crates.** The fake benchmark engine the integration tests launch is a separate
-non-published package, kept structurally out of the shipped tool so installing
-`cargo-bench-history` only ever places the one real binary on a user's PATH. A separate
-non-published **stress harness** drives the `analyze` scaling experiment: it replicates only
-the storage *write* layout to seed a giant synthetic history, then reads it back through the
-real public entry point, so it measures the production path while touching zero production
-code (and needs no test-only feature on the shell crate).
+Failures identify the attempted operation, retain relevant underlying causes, render their causal
+diagnostics once without redundant category prefixes on stderr, and return a failure status.
+Internal package ownership and execution boundaries are documented in the
+[implementation guide](implementation.md); analysis data flow and parallelism are documented in
+the [analysis implementation guide](analyze.md).
 
 ## 10. Cross-platform notes
 

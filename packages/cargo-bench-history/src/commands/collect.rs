@@ -24,15 +24,23 @@ use cbh_probe::{
     EnvironmentProbe, HardwareProfile, RustcInfo, SystemProbe, describe_fingerprint_components,
     resolve_machine_key,
 };
-use cbh_storage::{Storage, StorageError, StorageFacade, build_storage};
+use cbh_storage::{Storage, StorageFacade, build_storage};
 use jiff::Timestamp;
+use ohno::AppError;
 use tick::Clock;
 
+use crate::errors::{
+    BenchCommandFailedError, EngineFailedError, EngineTerminatedError, GitProbeFailedError,
+    HarvestFailedError, InconsistentRunsError, InvalidCommandError, ParseOutputError,
+    ToolchainProbeFailedError,
+};
 use crate::model::{
     BenchmarkResult, DiscriminantSet, Engine, EnvironmentInfo, GitInfo, MachineInfo, MachineKey,
     Run, RunContext, TargetTriple, ToolchainInfo, detect_environment, min_per_metric,
 };
-use crate::{CollectOptions, LocalStorageSelection, RunError, RunOutcome, finish_with_flush};
+use crate::{
+    CollectOptions, DuplicateResultError, LocalStorageSelection, RunOutcome, finish_with_flush,
+};
 
 /// The program and base arguments the production tool runs to benchmark the
 /// workspace. The first-class scope flags (`--workspace`/`--package`/`--bench`)
@@ -87,7 +95,7 @@ pub(crate) async fn execute(
     target_root: Option<PathBuf>,
     bench_command: Option<Vec<String>>,
     storage_override: Option<StorageFacade>,
-) -> Result<RunOutcome, RunError> {
+) -> Result<RunOutcome, AppError> {
     let reporter = StderrReporter::new(options.verbose);
 
     // `--repo` selects the repository the run operates on (where benches run, git
@@ -241,13 +249,16 @@ pub(crate) struct SharedContext {
 pub(crate) async fn probe_context<P>(
     probe: &P,
     env: &dyn Fn(&str) -> Option<String>,
-) -> Result<SharedContext, RunError>
+) -> Result<SharedContext, AppError>
 where
     P: EnvironmentProbe,
 {
-    let rustc = probe.toolchain().await?;
+    let rustc = probe
+        .toolchain()
+        .await
+        .map_err(ToolchainProbeFailedError::caused_by)?;
     Ok(SharedContext {
-        git: probe.git().await?,
+        git: probe.git().await.map_err(GitProbeFailedError::caused_by)?,
         target_triple: TargetTriple::from(rustc.host.clone().unwrap_or_default()),
         rustc,
         env: detect_environment(env),
@@ -314,7 +325,7 @@ pub(crate) async fn probe_partition<P>(
     probe: &P,
     env: &dyn Fn(&str) -> Option<String>,
     machine_key_override: Option<&str>,
-) -> Result<Partition, RunError>
+) -> Result<Partition, AppError>
 where
     P: EnvironmentProbe,
 {
@@ -401,7 +412,7 @@ pub(crate) struct CollectSummary {
 pub(crate) async fn execute_collect<R, P, O, S>(
     options: &CollectOptions,
     deps: &CollectDeps<'_, R, P, O, S>,
-) -> Result<RunOutcome, RunError>
+) -> Result<RunOutcome, AppError>
 where
     R: BenchRunner,
     P: EnvironmentProbe,
@@ -431,7 +442,7 @@ where
 /// With `--best-of N` the whole suite runs `N` times and each metric is reduced to
 /// its minimum across the runs (see [`min_per_metric`]), so a transient slowdown
 /// on one run is discarded rather than stored. Every run must measure the same set
-/// of cases and metrics; a mismatch fails the collection ([`RunError::Inconsistent`]).
+/// of cases and metrics; a mismatch fails the collection ([`InconsistentRunsError`]).
 /// The stored run takes its timeline position and dirty-snapshot key from the
 /// first run's start, and the git/toolchain/hardware context is probed once after
 /// the runs finish (it does not change between them). `N == 1` reproduces a plain
@@ -439,7 +450,7 @@ where
 pub(crate) async fn run_engines<R, P, O, S>(
     options: &CollectOptions,
     deps: &CollectDeps<'_, R, P, O, S>,
-) -> Result<CollectSummary, RunError>
+) -> Result<CollectSummary, AppError>
 where
     R: BenchRunner,
     P: EnvironmentProbe,
@@ -502,11 +513,15 @@ where
             });
         }
 
-        let status = deps.runner.run_benches(&argv, &env).await?;
+        let status = deps
+            .runner
+            .run_benches(&argv, &env)
+            .await
+            .map_err(|error| BenchCommandFailedError::caused_by(argv.join(" "), error))?;
         if !status.success {
-            return Err(RunError::Engine {
-                engine: BENCH_COMMAND_LABEL.to_owned(),
-                code: status.code,
+            return Err(match status.code {
+                Some(code) => EngineFailedError::new(BENCH_COMMAND_LABEL, code).into(),
+                None => EngineTerminatedError::new(BENCH_COMMAND_LABEL).into(),
             });
         }
         deps.reporter.note_with(|| {
@@ -572,7 +587,7 @@ pub(crate) async fn finalize_and_store<S>(
     triple_note: &str,
     per_engine: &[Vec<Vec<BenchmarkResult>>],
     run_start: SystemTime,
-) -> Result<CollectSummary, RunError>
+) -> Result<CollectSummary, AppError>
 where
     S: Storage,
 {
@@ -607,10 +622,8 @@ where
 
     for (bucket, engine) in per_engine.iter().zip(Engine::ALL) {
         let runs = bucket.len();
-        let combined = min_per_metric(bucket).map_err(|error| RunError::Inconsistent {
-            engine: engine.to_string(),
-            message: error.to_string(),
-        })?;
+        let combined = min_per_metric(bucket)
+            .map_err(|error| InconsistentRunsError::caused_by(engine.to_string(), error))?;
         note_best_of_selections(store.reporter, engine, runs, &combined.selections);
 
         let summary = store_engine(
@@ -756,12 +769,13 @@ fn note_best_of_selections(
 fn build_bench_argv(
     bench_command: &[String],
     options: &CollectOptions,
-) -> Result<Vec<String>, RunError> {
+) -> Result<Vec<String>, AppError> {
     let Some((program, _)) = bench_command.split_first() else {
-        return Err(RunError::Command {
-            engine: BENCH_COMMAND_LABEL.to_owned(),
-            message: "the benchmark command is empty".to_owned(),
-        });
+        return Err(InvalidCommandError::new(
+            BENCH_COMMAND_LABEL,
+            "the benchmark command is empty",
+        )
+        .into());
     };
     debug_assert!(!program.is_empty());
 
@@ -817,11 +831,14 @@ pub(crate) async fn harvest_records<O>(
     reporter: &dyn Reporter,
     engine: Engine,
     since: Option<SystemTime>,
-) -> Result<Vec<BenchmarkResult>, RunError>
+) -> Result<Vec<BenchmarkResult>, AppError>
 where
     O: BenchOutputSource,
 {
-    let harvest = output.collect(engine, since, reporter).await?;
+    let harvest = output
+        .collect(engine, since, reporter)
+        .await
+        .map_err(|error| HarvestFailedError::caused_by(engine.to_string(), error))?;
     parse_harvest(&harvest, reporter)
 }
 
@@ -840,7 +857,7 @@ async fn store_engine<S>(
     engine: Engine,
     reduction: Reduction,
     run_start: SystemTime,
-) -> Result<EngineSummary, RunError>
+) -> Result<EngineSummary, AppError>
 where
     S: Storage,
 {
@@ -1002,7 +1019,7 @@ enum StoreOutcome {
 ///
 /// A normal run is write-once: if an object already exists at the key (a clean
 /// re-run of the same commit, or a dirty snapshot sharing an effective second),
-/// the collision surfaces as [`RunError::Duplicate`] so the caller can refuse it.
+/// the collision surfaces as [`DuplicateResultError`] so the caller can refuse it.
 /// `--overwrite` replaces any existing object in place instead; `--skip-existing`
 /// instead treats the existing object as a success that writes nothing — the
 /// append-only mode the CI collection uses so it never overwrites an object
@@ -1013,21 +1030,23 @@ async fn store_result<S: Storage>(
     bytes: &[u8],
     overwrite: bool,
     skip_existing: bool,
-) -> Result<StoreOutcome, RunError> {
+) -> Result<StoreOutcome, AppError> {
     if overwrite {
         storage.put_overwrite(object_key, bytes).await?;
         return Ok(StoreOutcome::Stored);
     }
     match storage.put(object_key, bytes).await {
         Ok(()) => Ok(StoreOutcome::Stored),
-        Err(StorageError::AlreadyExists { key }) => {
+        Err(error) => {
+            let Some(key) = error.already_existing_key().map(ToOwned::to_owned) else {
+                return Err(error.into());
+            };
             if skip_existing {
                 Ok(StoreOutcome::Skipped)
             } else {
-                Err(RunError::Duplicate { key })
+                Err(DuplicateResultError::caused_by(key, error).into())
             }
         }
-        Err(error) => Err(error.into()),
     }
 }
 
@@ -1041,15 +1060,13 @@ async fn store_result<S: Storage>(
 fn parse_harvest(
     harvest: &Harvest,
     reporter: &dyn Reporter,
-) -> Result<Vec<BenchmarkResult>, RunError> {
+) -> Result<Vec<BenchmarkResult>, AppError> {
     match harvest {
         Harvest::Callgrind(summaries) => {
             let mut records = Vec::with_capacity(summaries.len());
             for summary in summaries {
-                let record =
-                    parse_callgrind_summary(&summary.content).map_err(|error| RunError::Parse {
-                        message: format!("{}: {error}", summary.path.display()),
-                    })?;
+                let record = parse_callgrind_summary(&summary.content)
+                    .map_err(|error| ParseOutputError::caused_by(&summary.path, error))?;
                 records.push(record);
             }
             Ok(records)
@@ -1057,12 +1074,8 @@ fn parse_harvest(
         Harvest::Criterion(cases) => {
             let mut records = Vec::with_capacity(cases.len());
             for case in cases {
-                let record =
-                    parse_criterion_case(&case.benchmark, &case.estimates).map_err(|error| {
-                        RunError::Parse {
-                            message: format!("{}: {error}", case.dir.display()),
-                        }
-                    })?;
+                let record = parse_criterion_case(&case.benchmark, &case.estimates)
+                    .map_err(|error| ParseOutputError::caused_by(&case.dir, error))?;
                 records.push(record);
             }
             Ok(records)
@@ -1070,11 +1083,8 @@ fn parse_harvest(
         Harvest::AllocTracker(files) => {
             let mut records = Vec::with_capacity(files.len());
             for file in files {
-                let record = parse_alloc_tracker_operation(&file.content).map_err(|error| {
-                    RunError::Parse {
-                        message: format!("{}: {error}", file.path.display()),
-                    }
-                })?;
+                let record = parse_alloc_tracker_operation(&file.content)
+                    .map_err(|error| ParseOutputError::caused_by(&file.path, error))?;
                 push_or_skip(&mut records, record, file, reporter);
             }
             Ok(records)
@@ -1082,11 +1092,8 @@ fn parse_harvest(
         Harvest::AllTheTime(files) => {
             let mut records = Vec::with_capacity(files.len());
             for file in files {
-                let record = parse_all_the_time_operation(&file.content).map_err(|error| {
-                    RunError::Parse {
-                        message: format!("{}: {error}", file.path.display()),
-                    }
-                })?;
+                let record = parse_all_the_time_operation(&file.content)
+                    .map_err(|error| ParseOutputError::caused_by(&file.path, error))?;
                 push_or_skip(&mut records, record, file, reporter);
             }
             Ok(records)
@@ -1190,11 +1197,11 @@ mod tests {
     use cbh_diag::RecordingReporter;
     use cbh_engines::{Harvest, RawCriterionCase, RawOperationFile, RawSummary};
     use cbh_git::{EngineStatus, parse_git_info};
-    use cbh_storage::MemoryStorage;
+    use cbh_storage::{MemoryStorage, StorageError, TestStorageError};
     use futures::executor::block_on;
 
     use super::*;
-    use crate::model::{BenchmarkIdPrefix, BlessingRecord};
+    use crate::model::{AggregateError, BenchmarkIdPrefix, BlessingRecord};
 
     const SINGLE_FIXTURE: &str =
         include_str!("../../tests/fixtures/callgrind/single_unparametrized.summary.json");
@@ -1273,27 +1280,23 @@ mod tests {
 
     impl Storage for FailingStorage {
         async fn put(&self, _key: &str, _bytes: &[u8]) -> Result<(), StorageError> {
-            Err(StorageError::Io(io::Error::other("disk full")))
+            Err(TestStorageError::new().into())
         }
 
         async fn put_overwrite(&self, _key: &str, _bytes: &[u8]) -> Result<(), StorageError> {
-            Err(StorageError::Io(io::Error::other("disk full")))
+            Err(TestStorageError::new().into())
         }
 
-        async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
-            Err(StorageError::NotFound {
-                key: key.to_owned(),
-            })
+        async fn get(&self, _key: &str) -> Result<Vec<u8>, StorageError> {
+            Err(TestStorageError::new().into())
         }
 
         async fn list(&self, _prefix: &str) -> Result<Vec<String>, StorageError> {
             Ok(Vec::new())
         }
 
-        async fn delete(&self, key: &str) -> Result<(), StorageError> {
-            Err(StorageError::NotFound {
-                key: key.to_owned(),
-            })
+        async fn delete(&self, _key: &str) -> Result<(), StorageError> {
+            Err(TestStorageError::new().into())
         }
     }
 
@@ -1309,10 +1312,9 @@ mod tests {
             false,
         ))
         .unwrap_err();
-        assert!(
-            matches!(error, RunError::Storage(_)),
-            "expected a storage error, got {error:?}"
-        );
+        assert!(error.find_source::<StorageError>().is_some());
+        assert!(error.find_source::<TestStorageError>().is_some());
+        assert!(error.find_source::<DuplicateResultError>().is_none());
     }
 
     fn frozen_time() -> SystemTime {
@@ -1486,6 +1488,7 @@ mod tests {
     #[derive(Clone)]
     struct FakeRunner {
         status: EngineStatus,
+        failure: Option<io::ErrorKind>,
         calls: Arc<Mutex<Vec<Vec<String>>>>,
         envs: Arc<Mutex<Vec<RecordedEnv>>>,
     }
@@ -1497,6 +1500,7 @@ mod tests {
                     success: true,
                     code: Some(0),
                 },
+                failure: None,
                 calls: Arc::default(),
                 envs: Arc::default(),
             }
@@ -1508,6 +1512,33 @@ mod tests {
                     success: false,
                     code: Some(code),
                 },
+                failure: None,
+                calls: Arc::default(),
+                envs: Arc::default(),
+            }
+        }
+
+        /// A run that died without reporting an exit code, as a process killed by a
+        /// signal does.
+        fn terminated() -> Self {
+            Self {
+                status: EngineStatus {
+                    success: false,
+                    code: None,
+                },
+                failure: None,
+                calls: Arc::default(),
+                envs: Arc::default(),
+            }
+        }
+
+        fn io_failing() -> Self {
+            Self {
+                status: EngineStatus {
+                    success: false,
+                    code: None,
+                },
+                failure: Some(io::ErrorKind::Other),
                 calls: Arc::default(),
                 envs: Arc::default(),
             }
@@ -1530,6 +1561,9 @@ mod tests {
         ) -> io::Result<EngineStatus> {
             self.calls.lock().unwrap().push(argv.to_vec());
             self.envs.lock().unwrap().push(env.to_vec());
+            if let Some(kind) = self.failure {
+                return Err(io::Error::from(kind));
+            }
             Ok(self.status)
         }
     }
@@ -1539,6 +1573,8 @@ mod tests {
         git: GitInfo,
         rustc: RustcInfo,
         hardware: HardwareProfile,
+        git_failure: Option<io::ErrorKind>,
+        toolchain_failure: Option<io::ErrorKind>,
     }
 
     impl FakeProbe {
@@ -1564,16 +1600,34 @@ mod tests {
                     processor_models: vec!["Test CPU 3000".to_owned()],
                     processor_speeds: vec![(3141, 8)],
                 },
+                git_failure: None,
+                toolchain_failure: None,
             }
+        }
+
+        fn with_git_failure(mut self) -> Self {
+            self.git_failure = Some(io::ErrorKind::Other);
+            self
+        }
+
+        fn with_toolchain_failure(mut self) -> Self {
+            self.toolchain_failure = Some(io::ErrorKind::Other);
+            self
         }
     }
 
     impl EnvironmentProbe for FakeProbe {
         async fn git(&self) -> io::Result<GitInfo> {
+            if let Some(kind) = self.git_failure {
+                return Err(io::Error::from(kind));
+            }
             Ok(self.git.clone())
         }
 
         async fn toolchain(&self) -> io::Result<RustcInfo> {
+            if let Some(kind) = self.toolchain_failure {
+                return Err(io::Error::from(kind));
+            }
             Ok(self.rustc.clone())
         }
 
@@ -1595,6 +1649,7 @@ mod tests {
         criterion: Vec<RawCriterionCase>,
         alloc: Vec<RawOperationFile>,
         time: Vec<RawOperationFile>,
+        failure: Option<Engine>,
     }
 
     impl FakeOutput {
@@ -1709,6 +1764,13 @@ mod tests {
                 ..Self::default()
             }
         }
+
+        fn failing(engine: Engine) -> Self {
+            Self {
+                failure: Some(engine),
+                ..Self::default()
+            }
+        }
     }
 
     impl BenchOutputSource for FakeOutput {
@@ -1718,6 +1780,9 @@ mod tests {
             _since: Option<SystemTime>,
             _reporter: &dyn Reporter,
         ) -> io::Result<Harvest> {
+            if self.failure == Some(engine) {
+                return Err(io::Error::other("injected harvest failure"));
+            }
             Ok(match engine {
                 Engine::Callgrind => Harvest::Callgrind(self.callgrind.clone()),
                 Engine::Criterion => Harvest::Criterion(self.criterion.clone()),
@@ -1739,7 +1804,7 @@ mod tests {
         probe: &FakeProbe,
         output: &FakeOutput,
         storage: &MemoryStorage,
-    ) -> Result<RunOutcome, RunError> {
+    ) -> Result<RunOutcome, AppError> {
         drive_at(FROZEN_UNIX, options, runner, probe, output, storage)
     }
 
@@ -1750,7 +1815,7 @@ mod tests {
         probe: &FakeProbe,
         output: &FakeOutput,
         storage: &MemoryStorage,
-    ) -> Result<RunOutcome, RunError> {
+    ) -> Result<RunOutcome, AppError> {
         let reporter = StderrReporter::new(true);
         drive_at_with(now_unix, options, runner, probe, output, storage, &reporter)
     }
@@ -1763,7 +1828,7 @@ mod tests {
         output: &FakeOutput,
         storage: &MemoryStorage,
         reporter: &dyn Reporter,
-    ) -> Result<RunOutcome, RunError> {
+    ) -> Result<RunOutcome, AppError> {
         let now = SystemTime::UNIX_EPOCH
             .checked_add(Duration::from_secs(now_unix))
             .unwrap();
@@ -2021,10 +2086,9 @@ mod tests {
         )
         .unwrap_err();
 
-        let RunError::Duplicate { key } = error else {
-            panic!("expected a duplicate error, got {error:?}");
-        };
-        assert!(key.ends_with("/clean.json"), "{key}");
+        let duplicate = error.find_source::<DuplicateResultError>().unwrap();
+        assert!(duplicate.key().ends_with("/clean.json"));
+        assert!(error.find_source::<StorageError>().is_some());
         // The second run left the single stored object untouched.
         assert_eq!(storage.keys().len(), 1);
     }
@@ -2295,7 +2359,7 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(matches!(error, RunError::Duplicate { .. }), "{error:?}");
+        assert!(error.find_source::<DuplicateResultError>().is_some());
         assert_eq!(storage.keys().len(), 1);
 
         // With --overwrite the clash is resolved by replacing the object in place.
@@ -2404,13 +2468,111 @@ mod tests {
         )
         .unwrap_err();
 
-        match error {
-            RunError::Engine { engine, code } => {
-                assert_eq!(engine, "cargo bench");
-                assert_eq!(code, Some(101));
-            }
-            other => panic!("expected engine error, got {other:?}"),
-        }
+        let failure = error.find_source::<EngineFailedError>().unwrap();
+        assert_eq!(failure.engine(), "cargo bench");
+        assert_eq!(failure.code(), 101);
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn engine_termination_without_an_exit_code_is_an_error() {
+        // A process killed by a signal reports failure with no exit code to name, so
+        // it is a distinct failure from a non-zero exit rather than a missing code.
+        let storage = MemoryStorage::new();
+        let error = drive(
+            &CollectOptions::default(),
+            &FakeRunner::terminated(),
+            &FakeProbe::new(),
+            &FakeOutput::with_two_callgrind_summaries(),
+            &storage,
+        )
+        .unwrap_err();
+
+        let terminated = error.find_source::<EngineTerminatedError>().unwrap();
+        assert_eq!(terminated.engine(), "cargo bench");
+        assert!(error.find_source::<EngineFailedError>().is_none());
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn benchmark_command_io_failure_is_mapped_at_the_call_site() {
+        let storage = MemoryStorage::new();
+        let error = drive(
+            &CollectOptions::default(),
+            &FakeRunner::io_failing(),
+            &FakeProbe::new(),
+            &FakeOutput::default(),
+            &storage,
+        )
+        .unwrap_err();
+
+        assert!(error.find_source::<BenchCommandFailedError>().is_some());
+        assert_eq!(
+            error.find_source::<io::Error>().unwrap().kind(),
+            io::ErrorKind::Other
+        );
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn toolchain_probe_failure_is_mapped_at_the_call_site() {
+        let storage = MemoryStorage::new();
+        let error = drive(
+            &CollectOptions::default(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new().with_toolchain_failure(),
+            &FakeOutput::default(),
+            &storage,
+        )
+        .unwrap_err();
+
+        assert!(error.find_source::<ToolchainProbeFailedError>().is_some());
+        assert!(error.find_source::<GitProbeFailedError>().is_none());
+        assert_eq!(
+            error.find_source::<io::Error>().unwrap().kind(),
+            io::ErrorKind::Other
+        );
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn git_probe_failure_is_mapped_at_the_call_site() {
+        let storage = MemoryStorage::new();
+        let error = drive(
+            &CollectOptions::default(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new().with_git_failure(),
+            &FakeOutput::default(),
+            &storage,
+        )
+        .unwrap_err();
+
+        assert!(error.find_source::<GitProbeFailedError>().is_some());
+        assert!(error.find_source::<ToolchainProbeFailedError>().is_none());
+        assert_eq!(
+            error.find_source::<io::Error>().unwrap().kind(),
+            io::ErrorKind::Other
+        );
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn harvest_failure_is_mapped_at_the_call_site() {
+        let storage = MemoryStorage::new();
+        let error = drive(
+            &CollectOptions::default(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            &FakeOutput::failing(Engine::Criterion),
+            &storage,
+        )
+        .unwrap_err();
+
+        assert!(error.find_source::<HarvestFailedError>().is_some());
+        assert_eq!(
+            error.find_source::<io::Error>().unwrap().kind(),
+            io::ErrorKind::Other
+        );
         assert!(storage.keys().is_empty());
     }
 
@@ -2512,14 +2674,8 @@ mod tests {
         )
         .unwrap_err();
 
-        match error {
-            RunError::Parse { message } => {
-                assert!(message.contains("Criterion"), "{message}");
-                // The offending case directory is named so failures are actionable.
-                assert!(message.contains("new"), "{message}");
-            }
-            other => panic!("expected parse error, got {other:?}"),
-        }
+        let parse = error.find_source::<ParseOutputError>().unwrap();
+        assert_eq!(parse.path(), Path::new("criterion/grp/std/now/new"));
         assert!(storage.keys().is_empty());
     }
 
@@ -2535,13 +2691,8 @@ mod tests {
         )
         .unwrap_err();
 
-        match error {
-            RunError::Parse { message } => {
-                // The offending operation file is named so failures are actionable.
-                assert!(message.contains("allocate_vec.json"), "{message}");
-            }
-            other => panic!("expected parse error, got {other:?}"),
-        }
+        let parse = error.find_source::<ParseOutputError>().unwrap();
+        assert_eq!(parse.path(), Path::new("alloc_tracker/allocate_vec.json"));
         assert!(storage.keys().is_empty());
     }
 
@@ -2557,12 +2708,8 @@ mod tests {
         )
         .unwrap_err();
 
-        match error {
-            RunError::Parse { message } => {
-                assert!(message.contains("read_cell.json"), "{message}");
-            }
-            other => panic!("expected parse error, got {other:?}"),
-        }
+        let parse = error.find_source::<ParseOutputError>().unwrap();
+        assert_eq!(parse.path(), Path::new("all_the_time/read_cell.json"));
         assert!(storage.keys().is_empty());
     }
 
@@ -2812,15 +2959,8 @@ mod tests {
         )
         .unwrap_err();
 
-        match error {
-            RunError::Parse { message } => {
-                assert!(message.contains("Callgrind"), "{message}");
-                // The offending file is named so multi-summary failures are
-                // actionable.
-                assert!(message.contains("summary.json"), "{message}");
-            }
-            other => panic!("expected parse error, got {other:?}"),
-        }
+        let parse = error.find_source::<ParseOutputError>().unwrap();
+        assert_eq!(parse.path(), Path::new("a/summary.json"));
         assert!(storage.keys().is_empty());
     }
 
@@ -2940,13 +3080,9 @@ mod tests {
     #[test]
     fn build_bench_argv_rejects_an_empty_command() {
         let error = build_bench_argv(&[], &CollectOptions::default()).unwrap_err();
-        match error {
-            RunError::Command { engine, message } => {
-                assert_eq!(engine, "cargo bench");
-                assert!(message.contains("empty"), "{message}");
-            }
-            other => panic!("expected command error, got {other:?}"),
-        }
+        let invalid = error.find_source::<InvalidCommandError>().unwrap();
+        assert_eq!(invalid.engine(), "cargo bench");
+        assert_eq!(invalid.problem(), "the benchmark command is empty");
     }
 
     // --- best-of-N orchestration ---------------------------------------------
@@ -3066,7 +3202,7 @@ mod tests {
         output: &O,
         storage: &MemoryStorage,
         reporter: &dyn Reporter,
-    ) -> Result<RunOutcome, RunError>
+    ) -> Result<RunOutcome, AppError>
     where
         R: BenchRunner,
         O: BenchOutputSource,
@@ -3287,13 +3423,9 @@ mod tests {
         let error =
             drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap_err();
 
-        match error {
-            RunError::Engine { engine, code } => {
-                assert_eq!(engine, "cargo bench");
-                assert_eq!(code, Some(101));
-            }
-            other => panic!("expected an engine failure, got {other:?}"),
-        }
+        let failure = error.find_source::<EngineFailedError>().unwrap();
+        assert_eq!(failure.engine(), "cargo bench");
+        assert_eq!(failure.code(), 101);
         assert_eq!(
             runner.call_count(),
             2,
@@ -3319,13 +3451,9 @@ mod tests {
         let error =
             drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap_err();
 
-        match error {
-            RunError::Inconsistent { engine, message } => {
-                assert_eq!(engine, Engine::AllTheTime.to_string());
-                assert!(message.contains("read_cell"), "{message}");
-            }
-            other => panic!("expected an inconsistency error, got {other:?}"),
-        }
+        let inconsistent = error.find_source::<InconsistentRunsError>().unwrap();
+        assert_eq!(inconsistent.engine(), Engine::AllTheTime.to_string());
+        assert!(error.find_source::<AggregateError>().is_some());
         assert!(storage.keys().is_empty());
     }
 

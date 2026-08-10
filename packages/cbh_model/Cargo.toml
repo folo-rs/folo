@@ -19,12 +19,14 @@ doc = false
 [dependencies]
 jiff = { workspace = true, features = ["serde"] }
 nonempty = { workspace = true, features = ["serialize"] }
+ohno = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 smallvec = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 criterion = { workspace = true }
+static_assertions = { workspace = true }
 
 [[bench]]
 name = "cbh_model"

@@ -13,8 +13,7 @@
 //! isolation.
 
 use std::collections::HashMap;
-use std::error::Error;
-use std::fmt;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use crate::{BenchmarkId, BenchmarkResult, MetricKind, MetricList};
 
@@ -44,58 +43,56 @@ pub struct Selection {
     pub chosen_run: usize,
 }
 
-/// A cross-run inconsistency that makes a best-of-N reduction ill-defined.
+/// Reports inconsistent benchmark cases or metrics across runs.
 ///
 /// Every run must measure the same set of cases and the same metrics per case, so
 /// that each metric has exactly one sample per run to minimize over. A missing or
 /// extra case or metric in any run is a hard error rather than something to paper
 /// over, because it means the runs did not exercise the same work.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum AggregateError {
-    /// A benchmark case is present in some runs but absent from `run_index`.
-    MissingCase {
-        /// The case that is not measured uniformly across the runs.
-        id: BenchmarkId,
-        /// Zero-based index of the run the case is missing from.
-        run_index: usize,
-    },
-    /// A metric of `kind` for `id` is present in some runs but absent from
-    /// `run_index`.
-    MissingMetric {
-        /// The case whose metrics differ across the runs.
-        id: BenchmarkId,
-        /// The metric kind that is not reported uniformly across the runs.
-        kind: MetricKind,
-        /// Zero-based index of the run the metric is missing from.
-        run_index: usize,
-    },
+#[ohno::error]
+#[derive(Clone)]
+#[no_constructors]
+#[from(MissingCaseError, MissingMetricError)]
+pub struct AggregateError;
+
+// `#[ohno::error]` injects `OhnoCore`, which blocks automatic unwind-safety trait
+// inference. All ohno error types in this module expose no mutation, so unwinding
+// cannot reveal a partially mutated value. Introducing mutation or interior mutability
+// requires re-evaluating every manual impl below.
+impl UnwindSafe for AggregateError {}
+impl RefUnwindSafe for AggregateError {}
+
+/// A benchmark case is present in some runs but absent from another.
+#[ohno::error]
+#[display(
+    "benchmark case '{id}' is missing from run {}; every best-of run must \
+     measure the same set of cases",
+    run_index.saturating_add(1)
+)]
+struct MissingCaseError {
+    id: BenchmarkId,
+    run_index: usize,
 }
 
-impl fmt::Display for AggregateError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingCase { id, run_index } => write!(
-                f,
-                "benchmark case '{id}' is missing from run {}; every best-of run must \
-                 measure the same set of cases",
-                run_index.saturating_add(1)
-            ),
-            Self::MissingMetric {
-                id,
-                kind,
-                run_index,
-            } => write!(
-                f,
-                "metric '{}' for benchmark case '{id}' is missing from run {}; every \
-                 best-of run must report the same metrics per case",
-                kind.as_str(),
-                run_index.saturating_add(1)
-            ),
-        }
-    }
+impl UnwindSafe for MissingCaseError {}
+impl RefUnwindSafe for MissingCaseError {}
+
+/// A metric is present for a case in some runs but absent from another.
+#[ohno::error]
+#[display(
+    "metric '{}' for benchmark case '{id}' is missing from run {}; every \
+     best-of run must report the same metrics per case",
+    kind.as_str(),
+    run_index.saturating_add(1)
+)]
+struct MissingMetricError {
+    id: BenchmarkId,
+    kind: MetricKind,
+    run_index: usize,
 }
 
-impl Error for AggregateError {}
+impl UnwindSafe for MissingMetricError {}
+impl RefUnwindSafe for MissingMetricError {}
 
 /// Reduces `runs` to a single result set, keeping the minimum value per metric.
 ///
@@ -200,20 +197,14 @@ fn check_case_consistency(
         let run_index = offset.saturating_add(1);
         for reference_result in reference {
             if !lookup.contains_key(&reference_result.id) {
-                return Err(AggregateError::MissingCase {
-                    id: reference_result.id.clone(),
-                    run_index,
-                });
+                return Err(MissingCaseError::new(reference_result.id.clone(), run_index).into());
             }
         }
         // A case in this run but not the reference is equally inconsistent: report
         // it as missing from the reference run (index zero).
         for result in run {
             if !reference_lookup.contains_key(&result.id) {
-                return Err(AggregateError::MissingCase {
-                    id: result.id.clone(),
-                    run_index: 0,
-                });
+                return Err(MissingCaseError::new(result.id.clone(), 0_usize).into());
             }
         }
     }
@@ -236,22 +227,19 @@ fn check_metric_consistency(
                 .expect("case consistency guarantees every run holds this case");
             for reference_metric in &reference_result.metrics {
                 if find_metric(result, reference_metric.kind).is_none() {
-                    return Err(AggregateError::MissingMetric {
-                        id: id.clone(),
-                        kind: reference_metric.kind,
+                    return Err(MissingMetricError::new(
+                        id.clone(),
+                        reference_metric.kind,
                         run_index,
-                    });
+                    )
+                    .into());
                 }
             }
             // A metric in this run but not the reference is equally inconsistent:
             // report it as missing from the reference run (index zero).
             for metric in &result.metrics {
                 if find_metric(reference_result, metric.kind).is_none() {
-                    return Err(AggregateError::MissingMetric {
-                        id: id.clone(),
-                        kind: metric.kind,
-                        run_index: 0,
-                    });
+                    return Err(MissingMetricError::new(id.clone(), metric.kind, 0_usize).into());
                 }
             }
         }
@@ -273,10 +261,42 @@ mod tests {
         reason = "aggregated values are exact copies of the inputs, not computed"
     )]
 
+    use std::error;
+    use std::fmt::Debug;
+    use std::panic::{RefUnwindSafe, UnwindSafe};
+
     use nonempty::nonempty;
+    use ohno::ErrorExt;
+    use static_assertions::assert_impl_all;
 
     use super::*;
     use crate::Metric;
+
+    assert_impl_all!(
+        AggregateError: Clone,
+        Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        MissingCaseError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        MissingMetricError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
 
     fn id(name: &str) -> BenchmarkId {
         BenchmarkId::new(nonempty![name.to_owned()])
@@ -399,13 +419,9 @@ mod tests {
 
         let error = min_per_metric(&runs).unwrap_err();
 
-        match error {
-            AggregateError::MissingCase { id, run_index } => {
-                assert_eq!(id.qualified(), "b");
-                assert_eq!(run_index, 1);
-            }
-            other => panic!("expected a missing-case error, got {other:?}"),
-        }
+        let missing = error.find_source::<MissingCaseError>().unwrap();
+        assert_eq!(missing.id.qualified(), "b");
+        assert_eq!(missing.run_index, 1);
     }
 
     #[test]
@@ -418,13 +434,9 @@ mod tests {
 
         let error = min_per_metric(&runs).unwrap_err();
 
-        match error {
-            AggregateError::MissingCase { id, run_index } => {
-                assert_eq!(id.qualified(), "b");
-                assert_eq!(run_index, 0);
-            }
-            other => panic!("expected a missing-case error, got {other:?}"),
-        }
+        let missing = error.find_source::<MissingCaseError>().unwrap();
+        assert_eq!(missing.id.qualified(), "b");
+        assert_eq!(missing.run_index, 0);
     }
 
     #[test]
@@ -439,18 +451,10 @@ mod tests {
 
         let error = min_per_metric(&runs).unwrap_err();
 
-        match error {
-            AggregateError::MissingMetric {
-                id,
-                kind,
-                run_index,
-            } => {
-                assert_eq!(id.qualified(), "case");
-                assert_eq!(kind, MetricKind::ProcessorTime);
-                assert_eq!(run_index, 1);
-            }
-            other => panic!("expected a missing-metric error, got {other:?}"),
-        }
+        let missing = error.find_source::<MissingMetricError>().unwrap();
+        assert_eq!(missing.id.qualified(), "case");
+        assert_eq!(missing.kind, MetricKind::ProcessorTime);
+        assert_eq!(missing.run_index, 1);
     }
 
     #[test]
@@ -465,34 +469,34 @@ mod tests {
 
         let error = min_per_metric(&runs).unwrap_err();
 
-        match error {
-            AggregateError::MissingMetric {
-                kind, run_index, ..
-            } => {
-                assert_eq!(kind, MetricKind::ProcessorTime);
-                assert_eq!(run_index, 0);
-            }
-            other => panic!("expected a missing-metric error, got {other:?}"),
-        }
+        let missing = error.find_source::<MissingMetricError>().unwrap();
+        assert_eq!(missing.kind, MetricKind::ProcessorTime);
+        assert_eq!(missing.run_index, 0);
     }
 
     #[test]
-    fn error_messages_name_the_case_and_run() {
-        let missing_case = AggregateError::MissingCase {
-            id: id("some/case"),
-            run_index: 2,
-        };
-        let text = missing_case.to_string();
-        assert!(text.contains("some/case"), "{text}");
-        assert!(text.contains("run 3"), "{text}");
+    fn errors_carry_the_missing_case_metric_and_run() {
+        let missing_case = MissingCaseError::new(id("some/case"), 2_usize);
+        assert_eq!(missing_case.id.qualified(), "some/case");
+        assert_eq!(missing_case.run_index, 2);
 
-        let missing_metric = AggregateError::MissingMetric {
-            id: id("some/case"),
-            kind: MetricKind::WallTime,
-            run_index: 0,
-        };
-        let text = missing_metric.to_string();
-        assert!(text.contains("wall_time"), "{text}");
-        assert!(text.contains("run 1"), "{text}");
+        let missing_metric =
+            MissingMetricError::new(id("some/case"), MetricKind::WallTime, 0_usize);
+        assert_eq!(missing_metric.id.qualified(), "some/case");
+        assert_eq!(missing_metric.kind, MetricKind::WallTime);
+        assert_eq!(missing_metric.run_index, 0);
+    }
+
+    #[test]
+    fn aggregate_error_displays_as_the_underlying_inconsistency() {
+        let missing_case = MissingCaseError::new(id("some/case"), 1_usize);
+        let expected = missing_case.to_string();
+
+        let error = AggregateError::from(missing_case);
+
+        // The expected text is taken from the source rather than written out, so this
+        // asserts pass-through rather than any particular wording. Matching on the
+        // prefix tolerates the optional trailing backtrace block.
+        assert!(error.to_string().starts_with(&expected));
     }
 }

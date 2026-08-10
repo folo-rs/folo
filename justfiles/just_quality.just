@@ -39,9 +39,20 @@ coverage-package := if package == "" { "" } else { "-p " + replace(package, " ",
 coverage-report:
     cargo +{{ env_var('RUST_NIGHTLY') }} llvm-cov report {{ coverage-package }} --open
 
+# Writes the lcov report the CI coverage upload consumes. A measured scope that contains no
+# instrumented code at all yields no report file instead of an error - see
+# scripts/build/Coverage.psm1 (Pester-tested via `just test-scripts`), which owns that decision,
+# leaving this recipe a thin import + call.
 [group('quality')]
+[script]
 coverage-report-ci:
-    cargo +{{ env_var('RUST_NIGHTLY') }} llvm-cov report --lcov --output-path lcov.info
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    Import-Module "{{ justfile_directory() }}/scripts/build/Coverage.psm1" -Force
+
+    Export-CoverageReport -Toolchain "{{ env_var('RUST_NIGHTLY') }}" -OutputPath "lcov.info" | Out-Null
 
 [group('quality')]
 [no-cd]
