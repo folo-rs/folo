@@ -527,23 +527,44 @@ mod tests {
 
     #[test]
     fn student_t_two_sided_p_approaches_the_normal_limit() {
-        // The t distribution converges to the standard normal as its degrees of
-        // freedom grow.
-        close_relative(
-            student_t_two_sided_p(1.96, 1e9),
-            two_sided_p_from_z(1.96),
-            1e-5,
-        );
-        close_relative(
-            student_t_two_sided_p(1.96, 1e6),
-            two_sided_p_from_z(1.96),
-            1e-4,
-        );
+        // The t distribution converges to the standard normal at a rate of one over its
+        // degrees of freedom, so every tenfold increase must close the gap by about a
+        // decade. Asserting the rate rather than one bound separates real convergence
+        // from a formula that merely happens to land nearby.
+        let normal = two_sided_p_from_z(1.96);
+        let gap = |degrees_of_freedom: f64| {
+            ((student_t_two_sided_p(1.96, degrees_of_freedom) - normal) / normal).abs()
+        };
+
+        let mut coarser = gap(1e2);
+        for exponent in 3_i32..=6_i32 {
+            let finer = gap(10.0_f64.powi(exponent));
+            let shrinkage = coarser / finer;
+            assert!(
+                (9.0..11.0).contains(&shrinkage),
+                "a decade of degrees of freedom closed the gap {shrinkage}-fold, not tenfold"
+            );
+            coarser = finer;
+        }
+
         close_relative(
             student_t_two_sided_p(3.0, 1e6),
             two_sided_p_from_z(3.0),
             1e-4,
         );
+
+        // At the extreme below, the two log-gamma terms whose difference the density
+        // needs both run to some ten billion, so subtracting them spends most of the
+        // mantissa and the agreement stops improving — it worsens. The detector compares
+        // a tip against a base window of at most a few dozen points, so no such degrees
+        // of freedom arise in use; this bound records where the arithmetic gives out,
+        // and is deliberately loose enough to hold under a less exact library routine.
+        close_relative(
+            student_t_two_sided_p(1.96, 1e9),
+            two_sided_p_from_z(1.96),
+            1e-4,
+        );
+
         // Ten degrees of freedom are nowhere near the limit, which is the whole
         // reason a small-sample test needs this distribution at all.
         assert!(student_t_two_sided_p(3.0, 10.0) > 4.0 * two_sided_p_from_z(3.0));
