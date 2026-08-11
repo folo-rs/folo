@@ -1,4 +1,4 @@
-//! Task wrapper for executing user-provided closures.
+//! Task representation and the wrappers that adapt user-provided closures to it.
 
 use std::any::Any;
 use std::panic::{self, AssertUnwindSafe};
@@ -6,18 +6,47 @@ use std::pin::Pin;
 
 use events_once::PooledSender;
 use fast_time::Instant;
-use infinity_pool::define_pooled_dyn_cast;
+use multitude::dst::pointee;
+use multitude::{Arena, coerce};
 use pin_project::pin_project;
 
 use crate::metrics::{CLOCK, EXECUTION_TIME_MS, SCHEDULING_DELAY_MS};
 
+/// Unit of work handed to a worker thread.
+///
+/// Every queued task is stored behind `dyn VicinalTask`, so this trait is what the worker
+/// loop knows about a task: it can run it exactly once, in place, without knowing the
+/// closure type or return type it was built from. The `Send` supertrait is what allows the
+/// erased form to travel from the spawning thread to the worker thread.
+///
+/// The `pointee` attribute supplies the pointer-metadata implementation that
+/// [`multitude::Box`] requires of its unsized targets. `pointee` is `ptr_meta`'s macro,
+/// re-exported by `multitude`, and it emits `::ptr_meta::*` paths unless told otherwise;
+/// the `crate` argument redirects those at `multitude`'s re-export so this package needs
+/// no direct dependency on `ptr_meta`. Depending on `ptr_meta` directly would be worse: the
+/// generated impls must target the exact `ptr_meta` instance `multitude` was built against,
+/// so a version skew would surface as an unrelated-looking trait mismatch.
+#[pointee(crate = ::multitude::dst)]
 pub(crate) trait VicinalTask: Send + 'static {
     fn call(self: Pin<&mut Self>);
 }
 
-// Enable casting pooled items to VicinalTask trait objects.
-define_pooled_dyn_cast!(VicinalTask);
+/// Owning handle to a type-erased task, as stored in a processor's task queue.
+///
+/// The handle owns its slice of the arena outright and keeps the backing storage alive on
+/// its own, so queueing, dequeuing and executing a task need no further contact with the
+/// arena or the lock that guards it.
+pub(crate) type ErasedTaskHandle = Pin<multitude::Box<dyn VicinalTask>>;
 
+/// Moves `task` into the arena and erases its type.
+pub(crate) fn alloc_task(arena: &Arena, task: impl VicinalTask) -> ErasedTaskHandle {
+    let handle = arena.alloc_box(task);
+
+    multitude::Box::into_pin(multitude::Box::unsize(handle, coerce!(dyn VicinalTask)))
+}
+
+/// Outcome of running a task to completion: either its return value or the payload of the
+/// panic that unwound out of it.
 pub(crate) type TaskResult<R> = Result<R, Box<dyn Any + Send>>;
 
 /// Extracts a human-readable message from a panic payload.

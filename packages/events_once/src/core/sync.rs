@@ -7,11 +7,9 @@ use std::hint::spin_loop;
 use std::marker::PhantomPinned;
 use std::mem::{MaybeUninit, offset_of};
 use std::panic::RefUnwindSafe;
-#[cfg(debug_assertions)]
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::pin::Pin;
 use std::ptr::NonNull;
-#[cfg(test)]
+#[cfg(any(debug_assertions, test))]
 use std::sync::Arc;
 #[cfg(any(debug_assertions, test))]
 use std::sync::Mutex;
@@ -236,32 +234,39 @@ where
         (RawSender::new(sender_core), RawReceiver::new(receiver_core))
     }
 
-    /// Uses the provided closure to inspect the backtrace of the current awaiter,
-    /// if there is an awaiter and if backtrace capturing is enabled.
+    /// Returns a snapshot of the backtrace of the most recent awaiter of this event,
+    /// if there has been an awaiter and if backtrace capturing is enabled.
     ///
     /// This method is only available in debug builds (`cfg(debug_assertions)`).
     /// For any data to be present, `RUST_BACKTRACE=1` or `RUST_LIB_BACKTRACE=1` must be set.
     ///
-    /// The closure receives `None` if no one is awaiting the event.
+    /// The snapshot is a shared owner of the backtrace and remains valid even if the event is
+    /// released afterwards. Callers that want to hand a backtrace to user code must take a
+    /// snapshot instead of inspecting the event under its lock, so that no lock is held while
+    /// user code runs.
     #[cfg(debug_assertions)]
-    pub(crate) fn inspect_awaiter(&self, f: impl FnOnce(Option<&Backtrace>)) {
-        let guard = self.backtrace.lock().expect(NEVER_POISONED);
+    pub(crate) fn awaiter_backtrace(&self) -> Option<Arc<Backtrace>> {
+        let backtrace = self.backtrace.lock().expect(NEVER_POISONED);
 
-        // We catch panics from the closure to drop the guard cleanly, preventing
-        // poisoning of the backtrace mutex. Without this, a panicking closure would
-        // poison the mutex, and the receiver's drop handler (which calls final_poll)
-        // would double-panic when trying to lock it during unwinding.
-        //
-        // AssertUnwindSafe: only covers the MutexGuard, which is inherently
-        // !UnwindSafe. We drop it cleanly before resume_unwind.
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            f(guard.as_ref());
-        }));
-        drop(guard);
+        backtrace.as_ref().map(Arc::clone)
+    }
 
-        if let Err(payload) = result {
-            resume_unwind(payload);
-        }
+    /// Releases the backtrace of the most recent awaiter of the event.
+    ///
+    /// The storage an event occupies may be reused or freed without dropping the event, so
+    /// whoever releases an event calls this first, to release the memory that the backtrace
+    /// occupies. Snapshots taken earlier remain valid because they are shared owners of the
+    /// backtrace.
+    #[cfg(debug_assertions)]
+    pub(crate) fn clear_awaiter_backtrace(event_cell: &UnsafeCell<Self>) {
+        // SAFETY: The cell's pointer is always valid and points to an initialized event because
+        // the caller is still an endpoint of it. We only ever create shared references to the
+        // event through this cell, so no exclusive reference can alias this one.
+        let event = unsafe { &*event_cell.get() };
+
+        let mut backtrace = event.backtrace.lock().expect(NEVER_POISONED);
+
+        *backtrace = None;
     }
 
     /// Sets the value of the event and notifies the receiver's awaiter, if there is one.
@@ -1747,24 +1752,19 @@ mod tests {
 
     #[cfg(debug_assertions)]
     #[test]
-    fn inspect_awaiter_no_awaiter() {
+    fn awaiter_backtrace_no_awaiter() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
         let _endpoints = unsafe { Event::<i32>::placed(place.as_mut()) };
 
-        let mut called = false;
-        unsafe { place.inner.get().as_ref().unwrap().assume_init_ref() }.inspect_awaiter(
-            |backtrace| {
-                called = true;
-                assert!(backtrace.is_none());
-            },
-        );
+        let backtrace =
+            unsafe { place.inner.get().as_ref().unwrap().assume_init_ref() }.awaiter_backtrace();
 
-        assert!(called);
+        assert!(backtrace.is_none());
     }
 
     #[cfg(debug_assertions)]
     #[test]
-    fn inspect_awaiter_with_awaiter() {
+    fn awaiter_backtrace_with_awaiter() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
         let (_sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
@@ -1772,20 +1772,15 @@ mod tests {
         let mut receiver = Box::pin(receiver);
         _ = receiver.as_mut().poll(&mut cx);
 
-        let mut called = false;
-        unsafe { place.inner.get().as_ref().unwrap().assume_init_ref() }.inspect_awaiter(
-            |backtrace| {
-                called = true;
-                assert!(backtrace.is_some());
-            },
-        );
+        let backtrace =
+            unsafe { place.inner.get().as_ref().unwrap().assume_init_ref() }.awaiter_backtrace();
 
-        assert!(called);
+        assert!(backtrace.is_some());
     }
 
     #[cfg(debug_assertions)]
     #[test]
-    fn inspect_awaiter_after_sender_drop() {
+    fn awaiter_backtrace_after_sender_drop() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
         let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
@@ -1795,20 +1790,15 @@ mod tests {
 
         drop(sender);
 
-        let mut called = false;
-        unsafe { place.inner.get().as_ref().unwrap().assume_init_ref() }.inspect_awaiter(
-            |backtrace| {
-                called = true;
-                assert!(backtrace.is_some());
-            },
-        );
+        let backtrace =
+            unsafe { place.inner.get().as_ref().unwrap().assume_init_ref() }.awaiter_backtrace();
 
-        assert!(called);
+        assert!(backtrace.is_some());
     }
 
     #[cfg(debug_assertions)]
     #[test]
-    fn inspect_awaiter_after_receiver_drop() {
+    fn awaiter_backtrace_after_receiver_drop() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
         let (_sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
@@ -1818,15 +1808,50 @@ mod tests {
 
         drop(receiver);
 
-        let mut called = false;
-        unsafe { place.inner.get().as_ref().unwrap().assume_init_ref() }.inspect_awaiter(
-            |backtrace| {
-                called = true;
-                assert!(backtrace.is_some());
-            },
-        );
+        let backtrace =
+            unsafe { place.inner.get().as_ref().unwrap().assume_init_ref() }.awaiter_backtrace();
 
-        assert!(called);
+        assert!(backtrace.is_some());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn awaiter_backtrace_outlives_event() {
+        let backtrace = {
+            let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+            let (_sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+
+            let mut cx = task::Context::from_waker(Waker::noop());
+            let mut receiver = Box::pin(receiver);
+            _ = receiver.as_mut().poll(&mut cx);
+
+            unsafe { place.inner.get().as_ref().unwrap().assume_init_ref() }
+                .awaiter_backtrace()
+                .expect("the event has been awaited")
+        };
+
+        // The event storage is gone but the snapshot remains readable.
+        _ = backtrace.status();
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn released_event_releases_backtrace() {
+        let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+
+        {
+            let (_sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
+
+            let mut cx = task::Context::from_waker(Waker::noop());
+            let mut receiver = Box::pin(receiver);
+            _ = receiver.as_mut().poll(&mut cx);
+        }
+
+        // The event has been released but its storage is still ours to inspect. Releasing an
+        // event releases its backtrace, because the storage may be reused without dropping it.
+        let event = unsafe { place.inner.get().as_ref().unwrap().assume_init_ref() };
+
+        assert!(event.awaiter_backtrace().is_none());
     }
 
     /// Installs a hook closure and runs the test body while holding the

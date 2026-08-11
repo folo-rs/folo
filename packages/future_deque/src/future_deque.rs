@@ -4,28 +4,16 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use infinity_pool::{BlindPool, BlindPooledMut};
+use multitude::Arena;
 
-use crate::erased_future::{ErasedFuture, PooledCastErasedFuture as _};
-use crate::future_deque_core::{FutureDequeCore, FutureHandle};
+use crate::erased_future::alloc_future;
+use crate::future_deque_core::FutureDequeCore;
 
-// Thread-local object pool for storing type-erased futures. Each thread gets its own pool
-// instance, so futures inserted on one thread are backed by that thread's slab allocator.
-// The pool is cloned (reference-counted) into each `FutureDeque` instance so that pool
-// handles remain valid for the lifetime of the deque, even if the thread-local is destroyed
-// first.
+// Thread-local arena for storing type-erased futures. Each thread allocates from its own
+// arena, and the resulting handles keep their backing chunks alive independently, so a
+// handle stays valid after the arena — and the thread that owned it — is gone.
 thread_local! {
-    static FUTURES_POOL: BlindPool = BlindPool::new();
-}
-
-// Bridges the generic `FutureHandle<T>` abstraction to the concrete `BlindPooledMut` handle
-// type used by the `Send` variant. The `LocalFutureDeque` has an equivalent impl for
-// `LocalBlindPooledMut`.
-#[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarder to pool handle method.
-impl<T> FutureHandle<T> for BlindPooledMut<dyn ErasedFuture<T>> {
-    fn as_pin_mut(&mut self) -> Pin<&mut dyn ErasedFuture<T>> {
-        BlindPooledMut::as_pin_mut(self)
-    }
+    static FUTURES_ARENA: Arena = Arena::new();
 }
 
 /// A deque of futures with deterministic front-to-back polling order.
@@ -107,8 +95,7 @@ impl<T> FutureHandle<T> for BlindPooledMut<dyn ErasedFuture<T>> {
 /// assert_eq!(deque.pop_front(), Some(2));
 /// ```
 pub struct FutureDeque<T> {
-    futures_pool: BlindPool,
-    core: FutureDequeCore<T, BlindPooledMut<dyn ErasedFuture<T>>>,
+    core: FutureDequeCore<T>,
 }
 
 impl<T> FutureDeque<T> {
@@ -116,22 +103,19 @@ impl<T> FutureDeque<T> {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            futures_pool: FUTURES_POOL.with(BlindPool::clone),
             core: FutureDequeCore::new(),
         }
     }
 
     /// Adds a future to the back of the deque.
     pub fn push_back(&mut self, future: impl Future<Output = T> + Send + 'static) {
-        let handle = self.futures_pool.insert(future);
-        let handle = handle.cast_erased_future::<T>();
+        let handle = FUTURES_ARENA.with(|arena| alloc_future(arena, future));
         self.core.push_back_handle(handle);
     }
 
     /// Adds a future to the front of the deque.
     pub fn push_front(&mut self, future: impl Future<Output = T> + Send + 'static) {
-        let handle = self.futures_pool.insert(future);
-        let handle = handle.cast_erased_future::<T>();
+        let handle = FUTURES_ARENA.with(|arena| alloc_future(arena, future));
         self.core.push_front_handle(handle);
     }
 
@@ -234,19 +218,29 @@ impl<T> futures_core::Stream for FutureDeque<T> {
 }
 
 // SAFETY: The erased type `dyn ErasedFuture<T>` does not carry a `Send` bound, so
-// `BlindPooledMut<dyn ErasedFuture<T>>` is not automatically `Send`. However, `push_back`
-// and `push_front` both require `F: Future + Send + 'static`, guaranteeing that every
-// value behind the trait object is in fact `Send`. This is the intended usage pattern of
-// `BlindPooledMut` — it deliberately does not require `T: Send` so that trait object
-// casts do not need to carry marker bounds. All other fields (`BlindPool`, waker metadata
-// behind `Arc<Mutex<…>>`) are `Send + Sync`.
+// `multitude::Box<dyn ErasedFuture<T>>` is not automatically `Send`. However, `push_back`
+// and `push_front` both require `F: Future + Send + 'static`, guaranteeing that every value
+// behind the trait object is in fact `Send`. Erasure deliberately drops the marker bound so
+// that a single erased handle type serves both deque variants. The arena chunk backing each
+// handle is reference-counted and safe to release from any thread. All other state — result
+// values of type `T`, the shared parent waker behind `Arc<Mutex<Waker>>`, and the waker
+// metadata reached through `MetaPtr` (itself declared `Send`) — is `Send` given `T: Send`.
 unsafe impl<T: Send> Send for FutureDeque<T> {}
 
-// The internal `dyn ErasedFuture<T>` trait objects and the `UnsafeCell` inside the waker metadata
-// prevent auto-derivation. However, all mutable state is either behind `Arc<Mutex<…>>` (which is
-// unconditionally unwind-safe due to poisoning) or confined to owned pool handles that are not
-// shared through references. A `FutureDeque` that survives a panic is safe to drop or continue
-// using because each slot independently tracks its own lifecycle.
+// SAFETY: `Sync` is likewise blocked only by the erased `dyn ErasedFuture<T>`. Sharing
+// `&FutureDeque<T>` never exposes a reference to a stored future or to a stored result: the
+// only `&self` operations are `len`, `is_empty` and `Debug`, which read slot counts and
+// discriminants. Every state transition — polling, pushing, popping, dropping — requires
+// `&mut self` or ownership, so the borrow checker serializes all access to the futures
+// themselves. `T: Sync` mirrors the bound the compiler would infer for the result values.
+unsafe impl<T: Sync> Sync for FutureDeque<T> {}
+
+// The erased `dyn ErasedFuture<T>` trait object is not `UnwindSafe`, which blocks
+// auto-derivation for every type that transitively contains a stored future. The guarantee
+// nevertheless holds: all mutable state is either behind `Arc<Mutex<…>>` (unconditionally
+// unwind-safe due to poisoning) or confined to owned handles that are never shared through
+// references. A `FutureDeque` that survives a panic is safe to drop or continue using
+// because each slot independently tracks its own lifecycle.
 impl<T> UnwindSafe for FutureDeque<T> {}
 impl<T> RefUnwindSafe for FutureDeque<T> {}
 
@@ -275,6 +269,31 @@ mod tests {
         assert_eq!(deque.poll_front(cx), Poll::Ready(Some(1)));
         assert_eq!(deque.poll_front(cx), Poll::Ready(Some(2)));
         assert_eq!(deque.poll_front(cx), Poll::Ready(None));
+    }
+
+    /// The output type carries no `'static` bound, so a deque can be named with a borrowed
+    /// element type. Erasing the future behind a trait object is what puts this at risk, so it
+    /// is asserted here. The futures themselves capture nothing, which keeps them `'static` as
+    /// the push methods require.
+    #[test]
+    fn push_accepts_borrowed_output_type() {
+        // The parameter exists to introduce an `'a` that is provably shorter than `'static`.
+        fn drain_borrowed<'a>(_borrow: &'a str) -> Option<&'a str> {
+            let mut deque = FutureDeque::<&'a str>::new();
+            deque.push_back(async { "back" });
+            deque.push_front(async { "front" });
+
+            let waker = Waker::noop();
+            let cx = &mut Context::from_waker(waker);
+
+            match deque.poll_front(cx) {
+                Poll::Ready(value) => value,
+                Poll::Pending => None,
+            }
+        }
+
+        let owned = "borrowed".to_string();
+        assert_eq!(drain_borrowed(&owned), Some("front"));
     }
 
     #[test]

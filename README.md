@@ -92,18 +92,19 @@ allocators that keep the memory around for reuse, so the next allocation is simp
 While allocator APIs are still an unstable Rust feature, there are stable-API alternatives.
 Another term for special-purpose allocators is object pools and [`infinity_pool`][infinity_pool]
 offers several of them, from basic `Vec<T>` style pinned object collections to type-agnostic object
-pools that can allocate any type of object. While the safe-API variants come with substantial
-overheads compared to the unsafe-API variants, they both can surpass the efficiency of using the
-global memory allocator under many conditions. Your mileage may vary - measure 100 times,
-cut 10 times.
+pools that can allocate any type of object, though it is superseded and receives maintenance only.
+While the safe-API variants come with substantial overheads compared to the unsafe-API variants,
+they both can surpass the efficiency of using the global memory allocator under many conditions.
+Your mileage may vary - measure 100 times, cut 10 times. The packages here now reach for
+[`multitude`][multitude] when many objects share a lifetime and for [`plurality`][plurality] when
+objects are individually rented and returned.
 
 A surprising source of memory allocations in high-performance code can be signaling. We are used
 to thinking of oneshot channels as cheap and efficient things and while this is true, they are
 still built upon shared memory allocated from the heap. Every signaling channel you create is a
 heap allocation and they can add up fast! [`events_once`][events_once] provides you with pooled
-signaling channels that take advantage of `infinity_pool` to reuse memory allocations, as well
-as providing single-threaded and unsafe-code-managed events for lower overhead in specialized
-scenarios.
+signaling channels that reuse memory allocations, as well as providing single-threaded and
+unsafe-code-managed events for lower overhead in specialized scenarios.
 
 ```
 bagels_cooked_weight_grams: 2300; sum 744000; mean 323
@@ -187,11 +188,13 @@ Packages present in the repo but not relevant to a general audience:
 [linked]: packages/linked/README.md
 [many_cpus]: packages/many_cpus/README.md
 [many_cpus_b]: packages/many_cpus_benchmarking/README.md
+[multitude]: https://crates.io/crates/multitude
 [nm]: packages/nm/README.md
 [nm_otel]: packages/nm_otel/README.md
 [nonzero]: https://github.com/rust-lang/rfcs/pull/3786
 [numa]: https://www.kernel.org/doc/html/v4.18/vm/numa.html
 [par_bench]: packages/par_bench/README.md
+[plurality]: https://crates.io/crates/plurality
 [region_cached]: packages/region_cached/README.md
 [region_local]: packages/region_local/README.md
 [structural_changes]: https://sander.saares.eu/2025/03/31/structural-changes-for-48-throughput-in-a-rust-web-service/

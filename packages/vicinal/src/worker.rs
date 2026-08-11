@@ -4,10 +4,13 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::sync::atomic::{self, AtomicBool, Ordering};
 
-use infinity_pool::BlindPooledMut;
+use crate::{ErasedTaskHandle, NEVER_POISONED};
 
-use crate::{NEVER_POISONED, VicinalTask};
-
+/// What one pass of a worker's main loop accomplished, and thus what the loop does next.
+///
+/// The two `Executed` outcomes mean work was found and the loop should immediately look for
+/// more; they are kept apart so tests can assert queue priority. `WaitingForWork` sends the
+/// worker to sleep on the wake event and `Shutdown` ends the thread.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum IterationResult {
     ExecutedUrgent,
@@ -16,16 +19,21 @@ pub(crate) enum IterationResult {
     WaitingForWork,
 }
 
+/// The body of a worker thread's main loop, isolated from thread management.
+///
+/// It borrows only the parts of a processor's state that executing work needs, which lets a
+/// single iteration be driven directly by tests without spawning a thread or constructing a
+/// pool. Priority between the two queues lives here and nowhere else.
 pub(crate) struct WorkerCore<'a> {
-    urgent_queue: &'a Mutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
-    regular_queue: &'a Mutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
+    urgent_queue: &'a Mutex<VecDeque<ErasedTaskHandle>>,
+    regular_queue: &'a Mutex<VecDeque<ErasedTaskHandle>>,
     shutdown_flag: &'a AtomicBool,
 }
 
 impl<'a> WorkerCore<'a> {
     pub(crate) fn new(
-        urgent_queue: &'a Mutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
-        regular_queue: &'a Mutex<VecDeque<BlindPooledMut<dyn VicinalTask>>>,
+        urgent_queue: &'a Mutex<VecDeque<ErasedTaskHandle>>,
+        regular_queue: &'a Mutex<VecDeque<ErasedTaskHandle>>,
         shutdown_flag: &'a AtomicBool,
     ) -> Self {
         Self {
@@ -47,13 +55,13 @@ impl<'a> WorkerCore<'a> {
 
         let task = self.urgent_queue.lock().expect(NEVER_POISONED).pop_front();
         if let Some(mut task) = task {
-            task.as_pin_mut().call();
+            task.as_mut().call();
             return IterationResult::ExecutedUrgent;
         }
 
         let task = self.regular_queue.lock().expect(NEVER_POISONED).pop_front();
         if let Some(mut task) = task {
-            task.as_pin_mut().call();
+            task.as_mut().call();
             return IterationResult::ExecutedRegular;
         }
 
@@ -67,10 +75,10 @@ mod tests {
     use std::pin::Pin;
     use std::sync::atomic::AtomicU32;
 
-    use infinity_pool::BlindPool;
+    use multitude::Arena;
 
     use super::*;
-    use crate::PooledCastVicinalTask;
+    use crate::{VicinalTask, alloc_task};
 
     /// A simple task that increments a counter when called.
     struct CountingTask {
@@ -124,13 +132,13 @@ mod tests {
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         COUNTER.store(0, Ordering::Relaxed);
 
-        let pool = BlindPool::new();
+        let arena = Arena::new();
         let urgent = Mutex::new(VecDeque::new());
         let regular = Mutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(false);
 
-        let task = pool.insert(CountingTask::new(&COUNTER));
-        urgent.lock().unwrap().push_back(task.cast_vicinal_task());
+        let task = alloc_task(&arena, CountingTask::new(&COUNTER));
+        urgent.lock().unwrap().push_back(task);
 
         let core = WorkerCore::new(&urgent, &regular, &shutdown);
 
@@ -145,21 +153,15 @@ mod tests {
         URGENT_COUNTER.store(0, Ordering::Relaxed);
         REGULAR_COUNTER.store(0, Ordering::Relaxed);
 
-        let pool = BlindPool::new();
+        let arena = Arena::new();
         let urgent = Mutex::new(VecDeque::new());
         let regular = Mutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(false);
 
-        let urgent_task = pool.insert(CountingTask::new(&URGENT_COUNTER));
-        let regular_task = pool.insert(CountingTask::new(&REGULAR_COUNTER));
-        urgent
-            .lock()
-            .unwrap()
-            .push_back(urgent_task.cast_vicinal_task());
-        regular
-            .lock()
-            .unwrap()
-            .push_back(regular_task.cast_vicinal_task());
+        let urgent_task = alloc_task(&arena, CountingTask::new(&URGENT_COUNTER));
+        let regular_task = alloc_task(&arena, CountingTask::new(&REGULAR_COUNTER));
+        urgent.lock().unwrap().push_back(urgent_task);
+        regular.lock().unwrap().push_back(regular_task);
 
         let core = WorkerCore::new(&urgent, &regular, &shutdown);
 
@@ -174,13 +176,13 @@ mod tests {
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         COUNTER.store(0, Ordering::Relaxed);
 
-        let pool = BlindPool::new();
+        let arena = Arena::new();
         let urgent = Mutex::new(VecDeque::new());
         let regular = Mutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(false);
 
-        let task = pool.insert(CountingTask::new(&COUNTER));
-        regular.lock().unwrap().push_back(task.cast_vicinal_task());
+        let task = alloc_task(&arena, CountingTask::new(&COUNTER));
+        regular.lock().unwrap().push_back(task);
 
         let core = WorkerCore::new(&urgent, &regular, &shutdown);
 
@@ -193,13 +195,13 @@ mod tests {
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         COUNTER.store(0, Ordering::Relaxed);
 
-        let pool = BlindPool::new();
+        let arena = Arena::new();
         let urgent = Mutex::new(VecDeque::new());
         let regular = Mutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(true);
 
-        let task = pool.insert(CountingTask::new(&COUNTER));
-        regular.lock().unwrap().push_back(task.cast_vicinal_task());
+        let task = alloc_task(&arena, CountingTask::new(&COUNTER));
+        regular.lock().unwrap().push_back(task);
 
         let core = WorkerCore::new(&urgent, &regular, &shutdown);
 

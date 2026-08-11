@@ -2,6 +2,10 @@
 
 Object pools with trait object support and multiple access models. Provides faster alternatives to `Box::pin()`, `Arc::pin()` and `Rc::pin()`.
 
+## Maintenance status
+
+This package is superseded and receives maintenance only. Prefer [`multitude`](https://crates.io/crates/multitude) for the opaque and blind pooling scenarios and [`plurality`](https://crates.io/crates/plurality) for the pinned pooling scenario.
+
 ## Pool types
 
 * **PinnedPool** - basic object pool for a single type with pinned memory guarantees

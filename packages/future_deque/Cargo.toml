@@ -1,6 +1,6 @@
 [package]
 name = "future_deque"
-description = "Pool-backed deque collections for managing groups of futures"
+description = "Deque collections for managing groups of futures"
 publish = true
 version = "0.1.15"
 
@@ -18,9 +18,12 @@ futures-stream = ["dep:futures-core"]
 
 [dependencies]
 futures-core = { workspace = true, optional = true }
-infinity_pool = { workspace = true }
+multitude = { workspace = true, features = ["dst"] }
+plurality = { workspace = true }
 
 [dev-dependencies]
+all_the_time = { path = "../all_the_time" }
+alloc_tracker = { path = "../alloc_tracker" }
 criterion = { workspace = true }
 events_once = { path = "../events_once" }
 futures = { workspace = true, features = ["executor"] }

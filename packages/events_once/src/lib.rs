@@ -296,12 +296,16 @@ mod core;
 mod disconnected;
 mod lake;
 mod pool;
+#[cfg(all(test, debug_assertions))]
+mod reentrancy;
 
 pub use core::*;
 
 #[cfg(debug_assertions)]
 pub(crate) use backtrace::*;
-pub(crate) use constants::NEVER_POISONED;
+pub(crate) use constants::{EVENT_COUNT_FITS_IN_USIZE, NEVER_POISONED};
 pub use disconnected::*;
 pub use lake::*;
 pub use pool::*;
+#[cfg(all(test, debug_assertions))]
+pub(crate) use reentrancy::*;
