@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::iter::once;
 use std::mem;
 use std::sync::{Arc, OnceLock};
@@ -302,7 +303,15 @@ impl BuildTargetPlatform {
                         // us, so every optional field below rejects blank values as if unset.
                         #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation, reason = "we expect small positive numbers for bogomips, which can have their integer part losslessly converted to u32")]
                         match key.to_ascii_lowercase().as_str() {
-                            CPUINFO_KEY_PROCESSOR => index = value.parse::<ProcessorId>().ok(),
+                            // Only the absence of this key may make us skip a record. A key that
+                            // is present but unreadable identifies a processor we failed to
+                            // understand, and dropping such a record would undercount the
+                            // processors while looking exactly like a healthy read to the caller.
+                            CPUINFO_KEY_PROCESSOR => {
+                                index = Some(value.parse::<ProcessorId>().expect(
+                                    "the kernel renders the processor index as a decimal number",
+                                ));
+                            }
                             CPUINFO_KEY_BOGOMIPS => {
                                 bogomips = value.parse::<f32>().map(|f| f.round() as u32).ok();
                             }
@@ -320,7 +329,9 @@ impl BuildTargetPlatform {
                     // Some architectures close the file with a blank-line-separated block of
                     // machine-level facts (hardware name, board revision, serial number) that
                     // describes no processor at all. Such a block carries no processor index,
-                    // which is how we recognize it and skip it.
+                    // which is how we recognize it and skip it. A record that does carry the key
+                    // has already been resolved to an index or failed loudly above, so this is
+                    // the only record we may drop.
                     let index = index?;
 
                     Some(CpuInfo {
@@ -515,9 +526,11 @@ const SYNTHESIZED_MODEL_PREFIX: &str = "cpuinfo";
 /// processor with. A single field is still worth reporting - partial discrimination between
 /// different hardware beats none.
 fn synthesize_model(implementer: Option<&str>, part: Option<&str>) -> Option<Arc<str>> {
-    // Values are passed through exactly as the kernel rendered them. Any reinterpretation (numeric
-    // parsing, reformatting) risks failing or losing information on a rendering we did not expect,
-    // whereas an opaque string is always faithful and still discriminates between core designs.
+    // Values are re-rendered from the number they carry rather than copied verbatim. The kernel
+    // pads each field to a width of its own choosing, which is a formatting decision and not
+    // something it promises us; were it to change, the model would move while the hardware stood
+    // still and consumers that partition data by model would see their partitions fork. See
+    // `canonical_identity_value()`.
     //
     // Naming the source field of each value keeps the origin traceable back to the file. It also
     // means the result cannot be mistaken for a kernel-provided `model name`, which is always
@@ -527,7 +540,9 @@ fn synthesize_model(implementer: Option<&str>, part: Option<&str>) -> Option<Arc
         (CPUINFO_KEY_PART, part),
     ]
     .into_iter()
-    .filter_map(|(key, value)| value.map(|value| format!("{key}={value}")))
+    .filter_map(|(key, value)| {
+        value.map(|value| format!("{key}={}", canonical_identity_value(value)))
+    })
     .join(", ");
 
     if fields.is_empty() {
@@ -535,6 +550,29 @@ fn synthesize_model(implementer: Option<&str>, part: Option<&str>) -> Option<Arc
     }
 
     Some(Arc::from(format!("{SYNTHESIZED_MODEL_PREFIX}({fields})")))
+}
+
+/// Renders one identity field value in a form that depends only on the number it carries.
+///
+/// Every spelling of one value therefore yields one model string, so nothing about how the kernel
+/// chose to write the value down can reach a consumer that tells hardware apart by model. The
+/// canonical form keeps the base the kernel writes in, as that is what makes the value
+/// recognizable against the kernel's own output, and drops the padding, as the digit count is
+/// precisely the part of the rendering the kernel picks per field.
+///
+/// A value we cannot interpret is carried through as it came: an unfamiliar rendering still
+/// distinguishes one core design from another, which beats discarding it.
+fn canonical_identity_value(value: &str) -> Cow<'_, str> {
+    const HEX_PREFIX: &str = "0x";
+    const HEX_RADIX: u32 = 16;
+
+    value
+        .split_at_checked(HEX_PREFIX.len())
+        .filter(|(prefix, _)| prefix.eq_ignore_ascii_case(HEX_PREFIX))
+        .and_then(|(_, digits)| u64::from_str_radix(digits, HEX_RADIX).ok())
+        .map_or(Cow::Borrowed(value), |number| {
+            Cow::Owned(format!("{number:#x}"))
+        })
 }
 
 /// This is the relative path of the cgroup the current process belongs to (e.g. `/foo/bar`)
@@ -602,7 +640,7 @@ mod tests {
     )]
     use std::fmt::Write;
 
-    use testing::f64_diff_abs;
+    use testing::{assert_panics, f64_diff_abs};
 
     use super::*;
     use crate::pal::linux::{MockBindings, MockFilesystem};
@@ -1898,6 +1936,9 @@ CPU part        : 0xd0c
     fn cpuinfo_with_trailing_machine_block_ignores_the_block() {
         // Some architectures append a block describing the machine rather than a processor. It
         // carries no processor index, so it must be skipped instead of counted as a processor.
+        // The absence of the index is the whole reason we may skip it - see
+        // `cpuinfo_with_unreadable_processor_index_fails_loudly` for the record that carries the
+        // index but no readable value, which is not ours to skip.
         let cpuinfo = "processor       : 0
 model name      : Example Processor rev 4 (v7l)
 BogoMIPS        : 38.40
@@ -1913,6 +1954,93 @@ Serial          : 100000001b0f1a0d
 
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].as_deref(), Some("Example Processor rev 4 (v7l)"));
+    }
+
+    #[test]
+    fn cpuinfo_with_unreadable_processor_index_fails_loudly() {
+        // Dropping this record would report a two-processor machine as a one-processor machine,
+        // and an undercount is invisible to consumers - a smaller machine is a perfectly
+        // plausible reading. Only a record that names no processor at all may be skipped.
+        let cpuinfo = "processor       : 0
+bogomips        : 50.00
+
+processor       : the second one
+bogomips        : 50.00
+";
+
+        let mut fs = MockFilesystem::new();
+
+        fs.expect_get_cpuinfo_contents()
+            .times(1)
+            .return_const(cpuinfo.to_string());
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(MockBindings::new()),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        assert_panics(|| platform.get_cpuinfo());
+    }
+
+    #[test]
+    fn cpuinfo_with_differently_rendered_fields_reports_one_model() {
+        // Consumers partition their data by model, so the model must follow the hardware and
+        // nothing else. These payloads describe one processor in every spelling the kernel could
+        // plausibly reach for, and all of them have to land on the same model.
+        let as_the_kernel_renders_it = "processor       : 0
+BogoMIPS        : 50.00
+CPU implementer : 0x41
+CPU part        : 0xd0c
+";
+
+        let padded_wider = "processor       : 0
+BogoMIPS        : 50.00
+CPU implementer : 0x041
+CPU part        : 0x0d0c
+";
+
+        let uppercase = "processor       : 0
+BogoMIPS        : 50.00
+CPU implementer : 0X41
+CPU part        : 0xD0C
+";
+
+        // Written with escapes because the extra spacing is on the ends of the values, where a
+        // multi-line literal would leave it at the mercy of trailing-whitespace tooling.
+        let padded_with_whitespace =
+            "processor : 0\nbogomips :  50.00 \nCPU implementer :   0x41  \nCPU part :  0xd0c \n";
+
+        for cpuinfo in [
+            as_the_kernel_renders_it,
+            padded_wider,
+            uppercase,
+            padded_with_whitespace,
+        ] {
+            let models = models_from_cpuinfo(cpuinfo, [0]);
+
+            assert_eq!(
+                models[0].as_deref(),
+                Some("cpuinfo(cpu implementer=0x41, cpu part=0xd0c)")
+            );
+        }
+    }
+
+    #[test]
+    fn cpuinfo_with_unrecognized_field_rendering_reports_it_verbatim() {
+        // A rendering we cannot read still tells one core design from another, so it is reported
+        // rather than dropped.
+        let cpuinfo = "processor       : 0
+BogoMIPS        : 50.00
+CPU implementer : ARM
+CPU part        : Neoverse-N1
+";
+
+        let models = models_from_cpuinfo(cpuinfo, [0]);
+
+        assert_eq!(
+            models[0].as_deref(),
+            Some("cpuinfo(cpu implementer=ARM, cpu part=Neoverse-N1)")
+        );
     }
 
     /// Loads processors from a raw `/proc/cpuinfo` payload, with all processors online, allowed

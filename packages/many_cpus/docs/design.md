@@ -36,8 +36,10 @@ groups measurement history by the set of models a machine reports; if every mach
 architecture reports the same placeholder, unrelated hardware collapses into one group
 and incomparable measurements are mixed together. Such callers own the consequences of
 the model changing between package versions — a change re-groups their data — which is
-why the identity fields used are ones the platform derives from the hardware itself
-rather than anything that varies with how the machine is configured or observed.
+why a synthesized model follows the hardware and nothing else. The identity fields used
+are ones the platform derives from the hardware rather than from how the machine is
+configured, and each field value is rendered in a form determined by the value alone, so
+that the platform's own choice of how to write a value down cannot reach the caller.
 
 Synthesis deliberately stops at the granularity of a core design. Identity fields that
 describe the stepping of an individual chip are excluded, because including them would
@@ -46,9 +48,11 @@ no stepping — and would split callers' per-model data sets more finely than th
 hardware would be split on a platform that provides names. Over-partitioning starves each
 partition of data, which is a worse outcome than treating two steppings as one model.
 
-Field values are carried through exactly as the platform renders them. The package does
-not translate them into vendor or core names: such a mapping is a large table that goes
-stale with every hardware release, and a wrong name is worse than a faithful raw
-identity, which always distinguishes what needs distinguishing. A synthesized label names
-the fields it was built from, so it is traceable back to its source and cannot be
-confused with a platform-provided name.
+Field values are reduced to one spelling per value before they enter a label, because how
+wide a platform writes a value is a presentation choice it makes no promise about, while
+the value itself is the hardware. A spelling that cannot be interpreted is kept as it
+came, as it still distinguishes what needs distinguishing. The package does not translate
+values into vendor or core names: such a mapping is a large table that goes stale with
+every hardware release, and a wrong name is worse than a faithful raw identity. A
+synthesized label names the fields it was built from, so it is traceable back to its
+source and cannot be confused with a platform-provided name.

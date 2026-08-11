@@ -261,11 +261,15 @@ mod tests {
         // Why the crossover sits where it does, from both sides.
         //
         // Below it the fraction is no longer converged at the depth used, so
-        // quadrupling that depth changes the answer.
-        assert_ne!(
-            tail_erfc(1.0, FRACTION_DEPTH),
-            tail_erfc(1.0, FRACTION_DEPTH * 4)
-        );
+        // quadrupling that depth changes the answer. Both depths carry the same
+        // exponential factor, so their disagreement is the fraction's alone: a
+        // threshold well under that disagreement and far above the last bits of
+        // a double separates "not converged" from "converged", which bitwise
+        // inequality — satisfied by any last-bit wobble — does not.
+        let shallow = tail_erfc(1.0, FRACTION_DEPTH);
+        let deep = tail_erfc(1.0, FRACTION_DEPTH * 4);
+        let error = ((shallow - deep) / deep).abs();
+        assert!(error > 1e-14, "the fraction moved only {error} at 1.0");
         // Above it the series route loses accuracy to the `1 − erf`
         // subtraction, which no term count repairs: a generously converged
         // series still disagrees with the fraction far beyond rounding.
