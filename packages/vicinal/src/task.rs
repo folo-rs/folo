@@ -6,8 +6,8 @@ use std::pin::Pin;
 
 use events_once::PooledSender;
 use fast_time::Instant;
-use multitude::Arena;
 use multitude::dst::pointee;
+use multitude::{Arena, coerce};
 use pin_project::pin_project;
 
 use crate::metrics::{CLOCK, EXECUTION_TIME_MS, SCHEDULING_DELAY_MS};
@@ -42,10 +42,7 @@ pub(crate) type ErasedTaskHandle = Pin<multitude::Box<dyn VicinalTask>>;
 pub(crate) fn erase_task(arena: &Arena, task: impl VicinalTask) -> ErasedTaskHandle {
     let handle = arena.alloc_box(task);
 
-    multitude::Box::into_pin(multitude::Box::unsize(
-        handle,
-        multitude::coerce!(dyn VicinalTask),
-    ))
+    multitude::Box::into_pin(multitude::Box::unsize(handle, coerce!(dyn VicinalTask)))
 }
 
 /// Outcome of running a task to completion: either its return value or the payload of the

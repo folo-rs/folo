@@ -3,6 +3,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use multitude::dst::pointee;
+use multitude::{Arena, coerce};
 
 /// Type erasure trait for futures stored in a future deque.
 ///
@@ -38,13 +39,13 @@ pub(crate) type ErasedFutureHandle<T> = Pin<multitude::Box<dyn ErasedFuture<T>>>
 
 /// Moves `future` into the arena and erases its type.
 pub(crate) fn erase<T, F: Future<Output = T> + 'static>(
-    arena: &multitude::Arena,
+    arena: &Arena,
     future: F,
 ) -> ErasedFutureHandle<T> {
     let handle = arena.alloc_box(future);
 
     multitude::Box::into_pin(multitude::Box::unsize(
         handle,
-        multitude::coerce!(<T> dyn ErasedFuture<T>),
+        coerce!(<T> dyn ErasedFuture<T>),
     ))
 }
