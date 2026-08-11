@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tracing::trace;
 
 use crate::metrics::CLOCK;
-use crate::{JoinHandle, NEVER_POISONED, PoolInner, erase_task, wrap_task};
+use crate::{JoinHandle, NEVER_POISONED, PoolInner, alloc_task, wrap_task};
 
 /// A handle for spawning tasks on a [`Pool`][crate::Pool].
 ///
@@ -166,7 +166,7 @@ impl Scheduler {
         // released before any queue lock is taken, so allocation never blocks a dequeue.
         let dyn_task = {
             let arena = state.task_arena.lock().expect(NEVER_POISONED);
-            erase_task(&arena, wrapped)
+            alloc_task(&arena, wrapped)
         };
 
         // Push to the appropriate queue.
@@ -229,7 +229,7 @@ impl Scheduler {
         // released before any queue lock is taken, so allocation never blocks a dequeue.
         let dyn_task = {
             let arena = state.task_arena.lock().expect(NEVER_POISONED);
-            erase_task(&arena, wrapped)
+            alloc_task(&arena, wrapped)
         };
 
         // Push to the appropriate queue.

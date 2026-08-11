@@ -39,7 +39,7 @@ pub(crate) trait VicinalTask: Send + 'static {
 pub(crate) type ErasedTaskHandle = Pin<multitude::Box<dyn VicinalTask>>;
 
 /// Moves `task` into the arena and erases its type.
-pub(crate) fn erase_task(arena: &Arena, task: impl VicinalTask) -> ErasedTaskHandle {
+pub(crate) fn alloc_task(arena: &Arena, task: impl VicinalTask) -> ErasedTaskHandle {
     let handle = arena.alloc_box(task);
 
     multitude::Box::into_pin(multitude::Box::unsize(handle, coerce!(dyn VicinalTask)))

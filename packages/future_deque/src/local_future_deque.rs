@@ -6,7 +6,7 @@ use std::task::{Context, Poll};
 
 use multitude::Arena;
 
-use crate::erased_future::erase;
+use crate::erased_future::alloc_future;
 use crate::future_deque_core::FutureDequeCore;
 
 // Thread-local arena for storing type-erased futures in the `!Send` variant. It is separate
@@ -108,13 +108,13 @@ impl<T> LocalFutureDeque<T> {
 
     /// Adds a future to the back of the deque.
     pub fn push_back(&mut self, future: impl Future<Output = T> + 'static) {
-        let handle = LOCAL_FUTURES_ARENA.with(|arena| erase(arena, future));
+        let handle = LOCAL_FUTURES_ARENA.with(|arena| alloc_future(arena, future));
         self.core.push_back_handle(handle);
     }
 
     /// Adds a future to the front of the deque.
     pub fn push_front(&mut self, future: impl Future<Output = T> + 'static) {
-        let handle = LOCAL_FUTURES_ARENA.with(|arena| erase(arena, future));
+        let handle = LOCAL_FUTURES_ARENA.with(|arena| alloc_future(arena, future));
         self.core.push_front_handle(handle);
     }
 

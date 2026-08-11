@@ -38,7 +38,7 @@ impl<T, F: Future<Output = T>> ErasedFuture<T> for F {
 pub(crate) type ErasedFutureHandle<T> = Pin<multitude::Box<dyn ErasedFuture<T>>>;
 
 /// Moves `future` into the arena and erases its type.
-pub(crate) fn erase<T, F: Future<Output = T> + 'static>(
+pub(crate) fn alloc_future<T, F: Future<Output = T> + 'static>(
     arena: &Arena,
     future: F,
 ) -> ErasedFutureHandle<T> {

@@ -78,7 +78,7 @@ mod tests {
     use multitude::Arena;
 
     use super::*;
-    use crate::{VicinalTask, erase_task};
+    use crate::{VicinalTask, alloc_task};
 
     /// A simple task that increments a counter when called.
     struct CountingTask {
@@ -137,7 +137,7 @@ mod tests {
         let regular = Mutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(false);
 
-        let task = erase_task(&arena, CountingTask::new(&COUNTER));
+        let task = alloc_task(&arena, CountingTask::new(&COUNTER));
         urgent.lock().unwrap().push_back(task);
 
         let core = WorkerCore::new(&urgent, &regular, &shutdown);
@@ -158,8 +158,8 @@ mod tests {
         let regular = Mutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(false);
 
-        let urgent_task = erase_task(&arena, CountingTask::new(&URGENT_COUNTER));
-        let regular_task = erase_task(&arena, CountingTask::new(&REGULAR_COUNTER));
+        let urgent_task = alloc_task(&arena, CountingTask::new(&URGENT_COUNTER));
+        let regular_task = alloc_task(&arena, CountingTask::new(&REGULAR_COUNTER));
         urgent.lock().unwrap().push_back(urgent_task);
         regular.lock().unwrap().push_back(regular_task);
 
@@ -181,7 +181,7 @@ mod tests {
         let regular = Mutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(false);
 
-        let task = erase_task(&arena, CountingTask::new(&COUNTER));
+        let task = alloc_task(&arena, CountingTask::new(&COUNTER));
         regular.lock().unwrap().push_back(task);
 
         let core = WorkerCore::new(&urgent, &regular, &shutdown);
@@ -200,7 +200,7 @@ mod tests {
         let regular = Mutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(true);
 
-        let task = erase_task(&arena, CountingTask::new(&COUNTER));
+        let task = alloc_task(&arena, CountingTask::new(&COUNTER));
         regular.lock().unwrap().push_back(task);
 
         let core = WorkerCore::new(&urgent, &regular, &shutdown);
