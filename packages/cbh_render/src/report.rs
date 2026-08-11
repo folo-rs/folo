@@ -624,26 +624,25 @@ fn set_counts_line(summary: &SetSummary<'_>, report_improvements: bool) -> Strin
 }
 
 /// The header field disclosing how much of the suite was judged, as
-/// `series judged: 42 of 53`. `None` when the analysis accounted for no series at
-/// all, where a `0 of 0` ratio would be noise and the empty-outcome hint speaks
-/// instead.
+/// `in-scope series judged: 42 of 53`. `None` when nothing was in scope, where a `0 of
+/// 0` ratio would be noise and the verdict — or the empty-outcome hint — speaks instead.
 fn judged_field(coverage: &Coverage) -> Option<String> {
-    (coverage.total() > 0).then(|| {
+    (coverage.in_scope() > 0).then(|| {
         format!(
-            "series judged: {} of {}",
+            "in-scope series judged: {} of {}",
             coverage.judged(),
-            coverage.total()
+            coverage.in_scope()
         )
     })
 }
 
 /// The Markdown bullet form of [`judged_field`].
 fn judged_bullet(coverage: &Coverage) -> Option<String> {
-    (coverage.total() > 0).then(|| {
+    (coverage.in_scope() > 0).then(|| {
         format!(
-            "- Series judged: {} of {}",
+            "- In-scope series judged: {} of {}",
             coverage.judged(),
-            coverage.total()
+            coverage.in_scope()
         )
     })
 }
@@ -1619,9 +1618,14 @@ mod tests {
         assert!(report.contains("No notable changes detected."), "{report}");
         // The verdict is qualified by how much of the suite it covers, so the silence
         // cannot be read as an all-clear over series that were never looked at.
-        assert!(report.contains("series judged: 1 of 1"), "{report}");
         assert!(
-            report.contains("Judged 1 of 1 series; none moved beyond the measurement floor."),
+            report.contains("in-scope series judged: 1 of 1"),
+            "{report}"
+        );
+        assert!(
+            report.contains(
+                "Judged 1 of 1 in-scope series; none moved beyond the measurement floor."
+            ),
             "{report}"
         );
         assert!(
@@ -1656,9 +1660,11 @@ mod tests {
         };
 
         let text = render(&input, ReportFormat::Text, false);
-        assert!(text.contains("series judged: 4 of 9"), "{text}");
+        assert!(text.contains("in-scope series judged: 4 of 7"), "{text}");
         assert!(
-            text.contains("Judged 4 of 9 series; none moved beyond the measurement floor."),
+            text.contains(
+                "Judged 4 of 7 in-scope series; none moved beyond the measurement floor."
+            ),
             "{text}"
         );
         assert!(
@@ -1670,12 +1676,54 @@ mod tests {
         );
 
         let markdown = render(&input, ReportFormat::Markdown, false);
-        assert!(markdown.contains("- Series judged: 4 of 9"), "{markdown}");
+        assert!(
+            markdown.contains("- In-scope series judged: 4 of 7"),
+            "{markdown}"
+        );
         assert!(markdown.contains("Not judged: 2 series"), "{markdown}");
 
         let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
-        assert!(summary.contains("- Series judged: 4 of 9"), "{summary}");
+        assert!(
+            summary.contains("- In-scope series judged: 4 of 7"),
+            "{summary}"
+        );
         assert!(summary.contains("Not judged: 2 series"), "{summary}");
+    }
+
+    #[test]
+    fn a_run_whose_only_shortfall_is_ghosts_reads_as_a_full_all_clear() {
+        // The contradiction this guards against: an unqualified all-clear over a ratio
+        // reading as partial coverage, so one silent report tells a reader who trusts the
+        // headline and a reader who trusts the ratio opposite things. The ghosts are
+        // still disclosed, in the breakdown that lists what went unjudged.
+        let input = ReportInput {
+            census: census_of(3, &[(UnjudgedReason::Ghost, 2)]),
+            ..flat_input(&[])
+        };
+
+        for (surface, rendering) in [
+            ("text", render(&input, ReportFormat::Text, false)),
+            ("markdown", render(&input, ReportFormat::Markdown, false)),
+            (
+                "summary",
+                render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT),
+            ),
+        ] {
+            assert!(
+                rendering.contains("No notable changes detected."),
+                "{surface}: {rendering}"
+            );
+            assert!(
+                rendering.contains(
+                    "Judged 3 of 3 in-scope series; none moved beyond the measurement floor."
+                ),
+                "{surface}: {rendering}"
+            );
+            assert!(
+                rendering.contains("Not judged: 2 series not measured at the analyzed tip commit."),
+                "{surface}: {rendering}"
+            );
+        }
     }
 
     #[test]
@@ -1689,7 +1737,7 @@ mod tests {
         };
 
         let text = render(&input, ReportFormat::Text, false);
-        assert!(text.contains("series judged: 0 of 7"), "{text}");
+        assert!(text.contains("in-scope series judged: 0 of 7"), "{text}");
         assert!(
             text.contains("this silence is not evidence that nothing moved"),
             "{text}"
@@ -1717,9 +1765,9 @@ mod tests {
     #[test]
     fn an_empty_analysis_leaves_the_coverage_field_to_the_hint() {
         // With no series at all there is no coverage ratio to report — a "0 of 0" ratio
-        // is noise — and the empty-outcome hint explains the whole situation. The
-        // verdict states that nothing was analyzed, so the lead line is not read as an
-        // all-clear over a suite that was never looked at.
+        // is noise — and the verdict already states that nothing was analyzed, so the
+        // lead line is not read as an all-clear over a suite that was never looked at.
+        // The empty-outcome hint carries the explanation, and it carries it once.
         let input = ReportInput {
             census: SeriesCensus::default(),
             hint: Some("Found 2 stored runs ... dirty snapshots"),
@@ -1734,17 +1782,15 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("No benchmark series were analyzed, so this run tested nothing."),
-            "{text}"
+            !text.contains("this run tested nothing"),
+            "the verdict and the hint already say it: {text}"
         );
         assert!(text.contains("Found 2 stored runs"), "{text}");
 
         let markdown = render(&input, ReportFormat::Markdown, false);
         assert!(!markdown.contains("Series judged"), "{markdown}");
-        assert!(
-            markdown.contains("No benchmark series were analyzed"),
-            "{markdown}"
-        );
+        assert!(!markdown.contains("this run tested nothing"), "{markdown}");
+        assert!(markdown.contains("Found 2 stored runs"), "{markdown}");
     }
 
     /// Every distinct coverage situation, with the phrase each human surface must
@@ -1863,7 +1909,7 @@ mod tests {
         };
 
         let text = render(&input, ReportFormat::Text, false);
-        assert!(text.contains("series judged: 1 of 3"), "{text}");
+        assert!(text.contains("in-scope series judged: 1 of 1"), "{text}");
         assert!(
             text.contains("Not judged: 2 series not measured at the analyzed tip commit."),
             "{text}"
@@ -3383,10 +3429,13 @@ mod tests {
         // that was judged qualifies every verdict in the report, so it is stated.
         let text = render(&input, ReportFormat::Text, false);
         assert!(!text.contains("series: "), "{text}");
-        assert!(text.contains("series judged: 1 of 1"), "{text}");
+        assert!(text.contains("in-scope series judged: 1 of 1"), "{text}");
         let markdown = render(&input, ReportFormat::Markdown, false);
         assert!(!markdown.contains("- Series: "), "{markdown}");
-        assert!(markdown.contains("- Series judged: 1 of 1"), "{markdown}");
+        assert!(
+            markdown.contains("- In-scope series judged: 1 of 1"),
+            "{markdown}"
+        );
 
         // JSON keeps the series count for machine consumers (e.g. the stress harness).
         let json = render(&input, ReportFormat::Json, false);

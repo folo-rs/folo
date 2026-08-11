@@ -56,13 +56,15 @@ impl CoverageState {
 /// Counts *metric series* throughout, matching the census: one benchmark measured for
 /// several metrics contributes one entry per metric.
 ///
-/// Ghosts sit outside the [`in_scope`](Self::in_scope) denominator the
-/// [`state`](Self::state) is derived from. A pull request benchmarks only the packages
-/// it touches while analysis reads the whole store, so every untouched package's series
-/// is a ghost; counting those would render a healthy run as "judged 12 of 3000" and
-/// train readers to ignore the field. They remain in [`total`](Self::total) and in the
-/// per-reason breakdown, so nothing is hidden — they are only kept out of the ratio
-/// that decides whether an all-clear is warranted.
+/// Ghosts sit outside [`in_scope`](Self::in_scope), which is the denominator of both
+/// the [`state`](Self::state) and every ratio a rendering states. A pull request
+/// benchmarks only the packages it touches while analysis reads the whole store, so
+/// every untouched package's series is a ghost; a denominator counting those would leave
+/// a healthy run reading as a handful of series judged out of thousands, and train
+/// readers to ignore the field. The exclusion reaches only the ratio that decides
+/// whether an all-clear is warranted: [`total`](Self::total) and
+/// [`reasons`](Self::reasons) keep the whole account, so a consumer that needs the ghosts
+/// has them.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Coverage {
     state: CoverageState,
@@ -172,13 +174,13 @@ impl Coverage {
     /// The sentences qualifying the verdict, in reading order: what the silence covers,
     /// then what it does not.
     ///
-    /// Both sentences count against [`total`](Self::total) rather than
-    /// [`in_scope`](Self::in_scope), so a human report adds up on its face: the judged
-    /// series plus every reason listed in the second sentence account for the whole
-    /// suite, ghosts included.
+    /// Between them they account for the whole suite: the judged series are counted
+    /// against [`in_scope`](Self::in_scope), and the breakdown that follows names every
+    /// unjudged series — ghosts included — so the judged count and the listed reasons
+    /// together reach [`total`](Self::total).
     #[must_use]
     pub fn qualifications(&self) -> Vec<String> {
-        let mut sentences = vec![self.coverage_sentence()];
+        let mut sentences: Vec<String> = self.coverage_sentence().into_iter().collect();
         if self.unjudged() > 0 {
             let reasons: Vec<String> = self
                 .reasons()
@@ -189,26 +191,29 @@ impl Coverage {
         sentences
     }
 
-    /// The sentence stating how far the verdict reaches.
-    fn coverage_sentence(&self) -> String {
+    /// The sentence stating how far the verdict reaches, absent where there is no reach
+    /// to state.
+    fn coverage_sentence(&self) -> Option<String> {
         match self.state {
-            CoverageState::NoSeries => {
-                "No benchmark series were analyzed, so this run tested nothing.".to_owned()
-            }
-            CoverageState::NothingInScope => format!(
+            // An analysis that accounted for nothing has no ratio to state, and its
+            // verdict already says that nothing was analyzed — as does the empty-outcome
+            // hint that accompanies it. A third statement of the one fact is noise.
+            CoverageState::NoSeries => None,
+            CoverageState::NothingInScope => Some(format!(
                 "None of the {} series accounted for is measured at the analyzed tip \
                  commit, so nothing was tested.",
                 self.total
-            ),
-            CoverageState::NothingJudged => format!(
-                "Judged 0 of {} series, so nothing was tested: this silence is not \
-                 evidence that nothing moved.",
-                self.total
-            ),
-            CoverageState::Partial | CoverageState::Full => format!(
-                "Judged {} of {} series; none moved beyond the measurement floor.",
-                self.judged, self.total
-            ),
+            )),
+            CoverageState::NothingJudged => Some(format!(
+                "Judged 0 of {} in-scope series, so nothing was tested: this silence is \
+                 not evidence that nothing moved.",
+                self.in_scope
+            )),
+            CoverageState::Partial | CoverageState::Full => Some(format!(
+                "Judged {} of {} in-scope series; none moved beyond the measurement \
+                 floor.",
+                self.judged, self.in_scope
+            )),
         }
     }
 }
@@ -344,6 +349,44 @@ mod tests {
     }
 
     #[test]
+    fn every_ratio_a_verdict_carries_agrees_with_the_state() {
+        // The headline and the ratio beneath it must not tell a reader opposite things,
+        // which they can only do while they answer to different denominators.
+        for (name, census, expected, judged, in_scope) in coverage_cases() {
+            let coverage = Coverage::from_census(&census);
+            let Some(ratio) = coverage
+                .qualifications()
+                .into_iter()
+                .find_map(|sentence| parse_ratio(&sentence))
+            else {
+                assert!(
+                    matches!(
+                        expected,
+                        CoverageState::NoSeries | CoverageState::NothingInScope
+                    ),
+                    "{name}: a state over an in-scope suite states its ratio"
+                );
+                continue;
+            };
+            assert_eq!(ratio, (judged, in_scope), "{name}");
+            assert_eq!(
+                ratio.0 == ratio.1,
+                matches!(expected, CoverageState::Full),
+                "{name}: a complete ratio and a complete state are the same fact"
+            );
+        }
+    }
+
+    /// The `judged` and `of` counts of a `Judged N of M in-scope series` sentence, or
+    /// `None` for a sentence that states no ratio.
+    fn parse_ratio(sentence: &str) -> Option<(usize, usize)> {
+        let rest = sentence.strip_prefix("Judged ")?;
+        let (judged, rest) = rest.split_once(" of ")?;
+        let (in_scope, _) = rest.split_once(" in-scope series")?;
+        Some((judged.parse().ok()?, in_scope.parse().ok()?))
+    }
+
+    #[test]
     fn a_ghost_is_counted_once_per_metric_series() {
         // One benchmark measured for two metrics is two series, and the census counts
         // series, so a two-metric ghost leaves two accounted for and none in scope.
@@ -366,7 +409,8 @@ mod tests {
         assert_eq!(
             sentences,
             vec![
-                "Judged 4 of 9 series; none moved beyond the measurement floor.".to_owned(),
+                "Judged 4 of 7 in-scope series; none moved beyond the measurement floor."
+                    .to_owned(),
                 "Not judged: 2 series not measured at the analyzed tip commit; 3 series \
                  with too few points in the analyzed window."
                     .to_owned(),
@@ -379,8 +423,58 @@ mod tests {
         let coverage = Coverage::from_census(&census_of(3, &[]));
         assert_eq!(
             coverage.qualifications(),
-            vec!["Judged 3 of 3 series; none moved beyond the measurement floor.".to_owned()]
+            vec![
+                "Judged 3 of 3 in-scope series; none moved beyond the measurement floor."
+                    .to_owned()
+            ]
         );
+    }
+
+    #[test]
+    fn a_run_whose_only_shortfall_is_ghosts_reads_as_fully_covered() {
+        // The contradiction this guards against: an unqualified all-clear over a ratio
+        // that reads as partial coverage, leaving the two halves of one silent report
+        // telling a reader opposite things.
+        let coverage = Coverage::from_census(&census_of(3, &[(UnjudgedReason::Ghost, 2)]));
+        assert_eq!(coverage.verdict(), "No notable changes detected.");
+        assert_eq!(
+            coverage.qualifications(),
+            vec![
+                "Judged 3 of 3 in-scope series; none moved beyond the measurement floor."
+                    .to_owned(),
+                "Not judged: 2 series not measured at the analyzed tip commit.".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_run_that_judged_nothing_in_scope_counts_against_the_in_scope_suite() {
+        let coverage = Coverage::from_census(&census_of(
+            0,
+            &[
+                (UnjudgedReason::Ghost, 4),
+                (UnjudgedReason::TooFewPoints, 2),
+            ],
+        ));
+        assert_eq!(
+            coverage.qualifications(),
+            vec![
+                "Judged 0 of 2 in-scope series, so nothing was tested: this silence is \
+                 not evidence that nothing moved."
+                    .to_owned(),
+                "Not judged: 4 series not measured at the analyzed tip commit; 2 series \
+                 with too few points in the analyzed window."
+                    .to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_analysis_that_accounted_for_nothing_states_no_qualification() {
+        // The verdict already says nothing was analyzed and the empty-outcome hint
+        // explains why, so there is neither a ratio nor a breakdown left to add.
+        let coverage = Coverage::from_census(&SeriesCensus::default());
+        assert_eq!(coverage.qualifications(), Vec::<String>::new());
     }
 
     #[test]

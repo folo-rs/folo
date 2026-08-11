@@ -24,7 +24,9 @@ use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
 use cbh_model::DiscriminantSet;
 use cbh_probe::{EnvironmentProbe, SystemProbe, resolve_machine_key};
-use cbh_render::{DEFAULT_SUMMARY_LIMIT, ReportInput, SetSummary, render, render_markdown_summary};
+use cbh_render::{
+    Coverage, DEFAULT_SUMMARY_LIMIT, ReportInput, SetSummary, render, render_markdown_summary,
+};
 use cbh_storage::{Storage, StorageFacade, resolve_storage};
 use jiff::Timestamp;
 use tick::Clock;
@@ -467,19 +469,23 @@ fn note_series_census<R: Reporter + ?Sized>(
                 config.compare_window,
             ),
         };
-        let breakdown = if census.unjudged() == 0 {
+        // The trail states the same ratio the report's header and verdict do, read from
+        // the one projection all of them share, so a verbose run cannot contradict the
+        // report it explains.
+        let coverage = Coverage::from_census(census);
+        let breakdown = if coverage.unjudged() == 0 {
             "every series was judged".to_owned()
         } else {
-            census
+            coverage
                 .reasons()
                 .map(|(reason, count)| format!("{count} {}", reason.describe()))
                 .collect::<Vec<_>>()
                 .join(", ")
         };
         notes.note(&format!(
-            "series census: judged {} of {} series; {breakdown}; {rule}",
-            census.judged(),
-            census.total(),
+            "series census: judged {} of {} in-scope series; {breakdown}; {rule}",
+            coverage.judged(),
+            coverage.in_scope(),
         ));
     });
 }
@@ -1378,7 +1384,8 @@ mod tests {
 
         let (_, _, reporter) = analyze_json(&history_git(), &storage, "folo", &options());
         assert!(
-            reporter.contains("series census: judged 1 of 1 series; every series was judged"),
+            reporter
+                .contains("series census: judged 1 of 1 in-scope series; every series was judged"),
             "{:?}",
             reporter.notes()
         );
@@ -1484,7 +1491,7 @@ mod tests {
             reporter.notes()
         );
         assert!(
-            reporter.contains("series census: judged 1 of 3 series"),
+            reporter.contains("series census: judged 1 of 2 in-scope series"),
             "{:?}",
             reporter.notes()
         );

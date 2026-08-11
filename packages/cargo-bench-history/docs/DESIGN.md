@@ -1239,7 +1239,7 @@ never changes finding selection or the exit code.
 
 ### 8.9 Accounting for what was judged
 
-Every report states **how many series it judged, out of how many it accounted for**, and names
+Every report states **how many series it judged, out of how many it could have judged**, and names
 the reason for each series it did not judge. Without that, silence is ambiguous: the identical
 "no notable changes" is printed when every series was judged and none moved, when every series
 was too short to test, when the benchmarks stopped being collected, and when a mis-set gate
@@ -1265,24 +1265,54 @@ carries exactly one reason — the first that applies in pipeline order:
 * **too few base-branch commits to compare against** — branch mode has a tip observation but
   too few base levels to build a prediction interval from.
 
-The set of judged series is exactly the false-discovery family (§8.3), so the coverage a report
-states is the same fact the correction is computed from and the two cannot drift apart.
+Ghosts are excluded from the denominator, so what a report takes its ratio against — and
+derives its coverage state from — is the **in-scope** suite: every series accounted for except
+those the ghost filter dropped. A pull request benchmarks only the packages it impacts while the
+analysis reads the whole store, so every untouched package leaves ghosts behind, and a
+denominator counting them would leave the healthy case reading as a handful of series judged out
+of thousands. A field that is alarming even when nothing is wrong is a field readers learn to
+skip, which costs precisely the disclosure this accounting exists to buy. The exclusion reaches
+only that ratio: the total and the per-reason breakdown keep the whole account, so a consumer
+that needs the ghosts has them, and each surface discloses as much of them as its readers need.
+
+The reach of a verdict is published as a single **coverage state**, the field automation gates
+on:
+
+* `no_series` — nothing was accounted for at all.
+* `nothing_in_scope` — everything accounted for was a ghost.
+* `nothing_judged` — an in-scope suite existed and none of it could be judged.
+* `partial` — some, but not all, of the in-scope suite was judged.
+* `full` — the whole in-scope suite was judged.
+
+Only `full` makes an empty findings list an unqualified all-clear; under every other state the
+silence is partly or wholly an absence of evidence. The states that judged nothing stay distinct
+because their remedies differ: look at collection, at the analyzed commit, or at the evidence the
+gates require.
+
+The set of judged series is exactly the false-discovery family (§8.3), so what a report counts as
+judged is the same set the correction is computed over and the two cannot drift apart. The
+denominator it is counted against is a separate question, answered by the in-scope rule above.
 
 How it surfaces (§8.7) follows what a reader needs where:
 
-* Every format carries the **coverage tally** in its header — judged of accounted-for — so a
-  report bearing findings still discloses what it did not look at, in one field.
+* Every format carries the **coverage tally** in its header — judged of in-scope — so a report
+  bearing findings still states how much of the suite it was able to judge, in one field.
 * A report with **no findings** additionally qualifies its silence in prose: what the silence
   covers, and, when anything was unjudged, a one-line breakdown by reason. This is where the
-  ambiguity actually bites, and a healthy repository pays exactly one sentence for it.
-* JSON carries the full census — the totals and a per-reason breakdown — as structured data, so
-  automation can gate on coverage instead of on the absence of findings.
+  ambiguity actually bites, and a healthy repository pays exactly one sentence for it. The ratio
+  in that prose and the verdict above it answer to the same denominator, so a reader who trusts
+  the headline and a reader who trusts the ratio cannot reach opposite conclusions.
+* JSON carries the full census — the accounted-for and in-scope totals, the judged count, the
+  coverage state and a per-reason breakdown — as structured data, so automation can gate on
+  coverage instead of on the absence of findings without re-deriving the ghost arithmetic and
+  disagreeing with the report it accompanies.
 * **Verbose** diagnostics name each unjudged series individually, with the evidence it carried
   and the gate rule that declined it, so the verdict can be reconstructed rather than trusted.
-* An analysis that accounted for **no series at all** states no coverage ratio — there is
-  nothing to take a ratio of — and its verdict says that nothing was analyzed rather than
-  reporting an absence of change, which it is in no position to claim; the empty-outcome hint
-  (§7.3) explains why the run found nothing.
+* An analysis with **nothing in scope** states no coverage ratio — there is nothing to take a
+  ratio of — and says so in its own words instead. Where nothing was accounted for at all, the
+  verdict states that nothing was analyzed rather than reporting an absence of change, which it
+  is in no position to claim, and the empty-outcome hint (§7.3) explains why the run found
+  nothing; the verdict and the hint say it once between them.
 
 ## 9. Diagnostics
 

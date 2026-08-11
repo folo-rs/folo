@@ -105,14 +105,14 @@ exactly as it does to base-branch history.
 every report states how many that was, in its header:
 
 ```text
-  runs: 240 (a1b2c3d → e4f5a6b)  series judged: 12 of 14  regressions: 0
+  runs: 240 (a1b2c3d → e4f5a6b)  in-scope series judged: 12 of 13  regressions: 0
 ```
 
 A silent report then says exactly what that silence covers, and what it does not:
 
 ```text
 No notable changes detected among the series that were judged.
-  Judged 12 of 14 series; none moved beyond the measurement floor.
+  Judged 12 of 13 in-scope series; none moved beyond the measurement floor.
   Not judged: 1 series not measured at the analyzed tip commit; 1 series with too few points
   in the analyzed window.
 ```
@@ -130,18 +130,21 @@ the gates require:
 - **too few base-branch commits to compare against** — branch mode has a tip measurement but
   too little base history to compare it with.
 
-`judged 0 of N` is the case to watch: nothing was tested, so the silence is not evidence that
+`Judged 0 of N` is the case to watch: nothing was tested, so the silence is not evidence that
 nothing moved. The report says so outright. It usually means history is still accumulating, or
-that the benchmarks stopped being collected at the tip commit. When no series were
-reconstructed at all there is no ratio to print, and the report leads with the fact that
+that the benchmarks stopped being collected at the tip commit. When nothing was in scope at all
+there is no ratio to print, and the report says instead that nothing it accounted for is
+measured at the analyzed commit; with no series reconstructed at all it leads with the fact that
 nothing was analyzed.
 
-The verdict is decided against the series that *could* have been judged, which excludes ghosts.
-A pull request benchmarks only the packages it impacts while analysis reads the whole store, so
-every untouched package leaves a ghost behind; counting those would render a healthy run as
-"judged 12 of 3000" and train readers to ignore the one field that exists to stop them ignoring
-it. Ghosts stay in the totals and in the breakdown, so the numbers still add up on their face —
-they are only kept out of the ratio that decides whether an all-clear is warranted.
+The denominator is the series that *could* have been judged, which excludes ghosts — and the
+verdict above it is decided against the same denominator, so the headline and the ratio cannot
+tell you different things. A pull request benchmarks only the packages it impacts while analysis
+reads the whole store, so every untouched package leaves a ghost behind; counting those would
+leave a healthy run reading as a dozen series judged out of thousands, and train readers to
+ignore the one field that exists to stop them ignoring it. Ghosts are still named in the
+breakdown a silent report prints, and the [JSON census](#report-formats) counts them, so you can
+always ask how much of the store this run did not measure.
 
 Note what the tool does *not* claim either way: it reports that a measured level moved, never
 why it moved. Attributing a move — and deciding it is acceptable — is your judgment, recorded

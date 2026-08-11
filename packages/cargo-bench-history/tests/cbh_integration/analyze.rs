@@ -183,7 +183,10 @@ async fn analyze_reports_a_series_it_could_not_judge_rather_than_omitting_it() {
     let RunOutcome::Analyzed { report, .. } = text else {
         panic!("expected an analyzed outcome, got {text:?}");
     };
-    assert!(report.contains("series judged: 0 of 1"), "{report}");
+    assert!(
+        report.contains("in-scope series judged: 0 of 1"),
+        "{report}"
+    );
     assert!(
         report.contains("this silence is not evidence that nothing moved"),
         "{report}"

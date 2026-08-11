@@ -1701,15 +1701,15 @@ pub(crate) fn time_result_set_with_dispersion(
 /// The number of series a rendered text report states it judged, read from the
 /// coverage field every analysis report carries in its header.
 ///
-/// Panics when the report carries no coverage field: a report that accounted for no
-/// series at all cannot support any claim about the detectors.
+/// Panics when the report carries no coverage field: a report with nothing in scope
+/// cannot support any claim about the detectors.
 pub(crate) fn judged_series(report: &str) -> usize {
     let (_, tail) = report
-        .split_once("series judged: ")
+        .split_once("in-scope series judged: ")
         .unwrap_or_else(|| panic!("the report header states its series coverage: {report}"));
     let (judged, _) = tail
         .split_once(" of ")
-        .unwrap_or_else(|| panic!("the coverage field reads `judged of total`: {report}"));
+        .unwrap_or_else(|| panic!("the coverage field reads `judged of in-scope`: {report}"));
     judged
         .parse()
         .unwrap_or_else(|_| panic!("the coverage field counts series: {report}"))
