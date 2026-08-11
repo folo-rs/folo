@@ -108,9 +108,13 @@ Diffing against the work tree rather than a commit means uncommitted edits are v
 the state the skill actually runs in. Untracked files are reported as an advisory and never
 counted as changes, since Cargo would not package them either.
 
-`Cargo.lock` is not released content even though every published crate carries one. The
-published copy is a fresh per-package resolve against the live crates.io index at publish time,
-not a function of the source tree, and consumers ignore a dependency's lockfile.
+`Cargo.lock` is not released content, even though every published crate carries one — pure
+libraries included. What ships is not the workspace lockfile but a per-package lockfile that Cargo
+derives when it builds the archive, narrowed to that package's own dependency closure. It is
+therefore not a function of the package's source: it moves whenever anything in that closure is
+updated, and the workspace lockfile it derives from is shared by every member, so counting it
+would mark the whole workspace unreleased on any dependency update. Consumers ignore a
+dependency's lockfile in any case.
 
 A package's `Cargo.toml` is compared as a file, so a comment-only or formatting-only edit to it
 counts as a released-content change and forces a publish. This keeps the rule uniform — one
@@ -448,7 +452,7 @@ versioning.
 ## Migration
 
 The check cannot be switched on against the current tree: 23 of 44 publishable packages have
-released content sitting past their anchor, an artefact of version incrementing having been
+released content sitting past their anchor, an artifact of version incrementing having been
 batched and occasional. The exclusions bring that to 15; the 8 they resolve are packages whose
 only unreleased changes are benchmarks or package-local documentation.
 
