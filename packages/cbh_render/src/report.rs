@@ -1927,6 +1927,37 @@ mod tests {
     }
 
     #[test]
+    fn an_analysis_with_nothing_in_scope_states_no_ratio_on_any_surface() {
+        // Every series was a ghost, so the ratio would read "0 of 0" — a figure that
+        // reports no coverage while looking like a measurement. The verdict carries the
+        // meaning instead, on text and Markdown alike.
+        let input = ReportInput {
+            census: census_of(0, &[(UnjudgedReason::Ghost, 3)]),
+            ghosts_excluded: 3,
+            ..flat_input(&[])
+        };
+
+        let text = render(&input, ReportFormat::Text, false);
+        assert!(!text.contains("in-scope series judged"), "{text}");
+        assert!(
+            text.contains("Nothing was in scope at the analyzed tip commit"),
+            "{text}"
+        );
+
+        let markdown = render(&input, ReportFormat::Markdown, false);
+        assert!(!markdown.contains("In-scope series judged"), "{markdown}");
+        assert!(
+            markdown.contains("Nothing was in scope at the analyzed tip commit"),
+            "{markdown}"
+        );
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&render(&input, ReportFormat::Json, false)).unwrap();
+        assert_eq!(parsed["census"]["in_scope"], 0);
+        assert_eq!(parsed["census"]["coverage"], "nothing_in_scope");
+    }
+
+    #[test]
     fn json_census_carries_the_coverage_state_for_every_shape() {
         // Automation gates on `coverage`, so every distinct situation must reach the
         // JSON with its own state and an in-scope denominator that excludes ghosts.
