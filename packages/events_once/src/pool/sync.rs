@@ -1,18 +1,12 @@
 use std::any::type_name;
 #[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
-use std::cell::UnsafeCell;
 use std::fmt;
 use std::marker::PhantomData;
-use std::mem::MaybeUninit;
-#[cfg(debug_assertions)]
-use std::panic::{self, AssertUnwindSafe};
 use std::sync::{Arc, Mutex};
 
-use infinity_pool::RawPinnedPool;
-
 use crate::{
-    Event, NEVER_POISONED, PooledReceiver, PooledRef, PooledSender, ReceiverCore, SenderCore,
+    NEVER_POISONED, PoolState, PooledReceiver, PooledRef, PooledSender, ReceiverCore, SenderCore,
 };
 
 /// A pool of reusable one-time thread-safe events.
@@ -52,7 +46,7 @@ impl<T: Send + 'static> fmt::Debug for EventPool<T> {
 }
 
 pub(crate) struct EventPoolCore<T: 'static> {
-    pub(crate) pool: Mutex<RawPinnedPool<UnsafeCell<MaybeUninit<Event<T>>>>>,
+    pub(crate) state: Mutex<PoolState<T>>,
 }
 
 impl<T: Send + 'static> EventPool<T> {
@@ -61,7 +55,7 @@ impl<T: Send + 'static> EventPool<T> {
     pub fn new() -> Self {
         Self {
             core: Arc::new(EventPoolCore {
-                pool: Mutex::new(RawPinnedPool::new()),
+                state: Mutex::new(PoolState::new()),
             }),
             _owns_some: PhantomData,
         }
@@ -73,29 +67,13 @@ impl<T: Send + 'static> EventPool<T> {
     #[inline]
     #[must_use]
     pub fn rent(&self) -> (PooledSender<T>, PooledReceiver<T>) {
-        let storage = {
-            let mut pool = self.core.pool.lock().expect(NEVER_POISONED);
+        let event = self.core.state.lock().expect(NEVER_POISONED).rent();
 
-            #[expect(unused_unsafe, reason = "rustc cannot handle the closure")]
-            // SAFETY: We are required to initialize the storage of the item we store in the pool.
-            // We do - that is what new_in_inner is for.
-            unsafe {
-                pool.insert_with(|place| {
-                    // This is a sandwich of MaybeUninit<UnsafeCell<MaybeUninit<Event<T>>>>.
-                    // The outer MaybeUninit is for the pool to manage uninitialized storage.
-                    // It does not know that we are expecting to use the internal MaybeUninit
-                    // instead (which we want to do to preserve the UnsafeCell around everything).
-                    //
-                    // SAFETY: We still treat it as uninitialized due to the inner MaybeUninit.
-                    let place = unsafe { place.assume_init_mut() };
-
-                    Event::new_in_inner(place);
-                })
-            }
-        }
-        .into_shared();
-
-        let event_ref = PooledRef::new(Arc::clone(&self.core), storage);
+        let event_ref = PooledRef::new(
+            #[cfg(debug_assertions)]
+            Arc::clone(&self.core),
+            event,
+        );
 
         let inner_sender = SenderCore::new(event_ref.clone());
         let inner_receiver = ReceiverCore::new(event_ref);
@@ -109,17 +87,13 @@ impl<T: Send + 'static> EventPool<T> {
     /// Returns `true` if no events have currently been rented from the pool.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        let pool = self.core.pool.lock().expect(NEVER_POISONED);
-
-        pool.is_empty()
+        self.core.state.lock().expect(NEVER_POISONED).is_empty()
     }
 
     /// Returns the number of events that have currently been rented from the pool.
     #[must_use]
     pub fn len(&self) -> usize {
-        let pool = self.core.pool.lock().expect(NEVER_POISONED);
-
-        pool.len()
+        self.core.state.lock().expect(NEVER_POISONED).len()
     }
 
     /// Uses the provided closure to inspect the backtraces of the most recent awaiter of each
@@ -130,49 +104,32 @@ impl<T: Send + 'static> EventPool<T> {
     ///
     /// The closure is called once for each event in the pool that has been awaited at some point
     /// in the past.
+    ///
+    /// # Reentrancy
+    ///
+    /// The closure may freely use this pool: it may rent events, drop endpoints of events it
+    /// obtained earlier and call [`inspect_awaiters()`][Self::inspect_awaiters] again. The
+    /// backtraces are snapshotted before the first call to the closure, so the sequence of
+    /// backtraces the closure receives is unaffected by what the closure does to the pool.
     #[cfg(debug_assertions)]
     pub fn inspect_awaiters(&self, mut f: impl FnMut(&Backtrace)) {
-        let pool = self.core.pool.lock().expect(NEVER_POISONED);
-
-        let mut panic_payload = None;
-        for event_ptr in pool.iter() {
-            // SAFETY: The pool remains alive for the duration of this function call, satisfying
-            // the lifetime requirement. The pointer is valid as it comes from the pool's iterator.
-            // We only ever create shared references to the events, so no conflicting exclusive
-            // references can exist.
-            let event_cell = unsafe { event_ptr.as_ref() };
-
-            // SAFETY: See above.
-            let event_maybe = unsafe { event_cell.get().as_ref() };
-
-            // SAFETY: UnsafeCell pointer is never null.
-            let event = unsafe { event_maybe.unwrap_unchecked() };
-
-            // SAFETY: We only ever create shared references, never exclusive ones.
-            let event = unsafe { event.assume_init_ref() };
-
-            // We catch panics from the user closure to drop the pool guard cleanly,
-            // preventing mutex poisoning.
-            // AssertUnwindSafe: only covers `&mut f` (inherently !UnwindSafe due to
-            // &mut). The user closure itself determines unwind safety of captured state.
-            let result = panic::catch_unwind(AssertUnwindSafe(|| {
-                event.inspect_awaiter(|bt| {
-                    if let Some(bt) = bt {
-                        f(bt);
-                    }
-                });
-            }));
-            if let Err(payload) = result {
-                panic_payload = Some(payload);
-                break;
-            }
+        for backtrace in self.awaiter_backtraces() {
+            f(&backtrace);
         }
+    }
 
-        drop(pool);
-
-        if let Some(payload) = panic_payload {
-            panic::resume_unwind(payload);
-        }
+    /// Snapshots the backtrace of the most recent awaiter of each awaited event in the pool.
+    ///
+    /// The pool lock is released before this returns, so the caller may pass the snapshots to
+    /// user-supplied code without holding any lock. Each snapshot is a shared owner of the
+    /// backtrace, so it stays valid even if its event is released in the meantime.
+    #[cfg(debug_assertions)]
+    pub(crate) fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>> {
+        self.core
+            .state
+            .lock()
+            .expect(NEVER_POISONED)
+            .awaiter_backtraces()
     }
 }
 
@@ -195,7 +152,7 @@ impl<T: Send + 'static> Clone for EventPool<T> {
 impl<T: Send + 'static> fmt::Debug for EventPoolCore<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(type_name::<Self>())
-            .field("pool", &self.pool)
+            .field("state", &self.state)
             .finish()
     }
 }
@@ -203,6 +160,8 @@ impl<T: Send + 'static> fmt::Debug for EventPoolCore<T> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    #[cfg(debug_assertions)]
+    use std::cell::RefCell;
     use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::sync::Barrier;
     use std::task::{self, Poll, Waker};
@@ -210,10 +169,14 @@ mod tests {
 
     use futures::executor::block_on;
     use static_assertions::assert_impl_all;
+    #[cfg(debug_assertions)]
+    use testing::assert_panics_with;
     use testing::with_watchdog;
 
     use super::*;
     use crate::Disconnected;
+    #[cfg(debug_assertions)]
+    use crate::assert_inspect_awaiters_is_reentrant;
 
     assert_impl_all!(EventPool<u32>: Send, Sync);
 
@@ -755,7 +718,6 @@ mod tests {
 
     #[cfg(debug_assertions)]
     #[test]
-    #[should_panic(expected = "intentional panic to verify pass-through")]
     fn inspect_awaiters_propagates_panic_from_closure() {
         let pool = EventPool::<i32>::new();
         let (_sender, receiver) = pool.rent();
@@ -764,8 +726,99 @@ mod tests {
         let mut cx = task::Context::from_waker(Waker::noop());
         _ = receiver.as_mut().poll(&mut cx);
 
+        assert_panics_with(
+            || {
+                pool.inspect_awaiters(|_bt| {
+                    panic!("intentional panic to verify pass-through");
+                });
+            },
+            |message| assert!(message.contains("pass-through")),
+        );
+
+        // The pool is still usable, which proves that the panic did not leave any lock behind.
+        assert_eq!(pool.len(), 1);
+
+        let mut inspected_count = 0;
+
         pool.inspect_awaiters(|_bt| {
-            panic!("intentional panic to verify pass-through");
+            inspected_count += 1;
         });
+
+        assert_eq!(inspected_count, 1);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn inspect_awaiters_closure_may_reenter_pool() {
+        let pool = EventPool::<i32>::new();
+
+        let (_sender, receiver) = pool.rent();
+        let mut receiver = Box::pin(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        _ = receiver.as_mut().poll(&mut cx);
+
+        assert_inspect_awaiters_is_reentrant(&|f| pool.inspect_awaiters(f), &|| {
+            let (sender, receiver) = pool.rent();
+            drop(sender);
+            drop(receiver);
+        });
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn inspect_awaiters_tolerates_endpoint_drop_from_closure() {
+        const EVENT_COUNT: usize = 3;
+
+        let pool = EventPool::<i32>::new();
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let mut endpoints = Vec::with_capacity(EVENT_COUNT);
+
+        for _ in 0..EVENT_COUNT {
+            let (sender, receiver) = pool.rent();
+            let mut receiver = Box::pin(receiver);
+            _ = receiver.as_mut().poll(&mut cx);
+            endpoints.push((sender, receiver));
+        }
+
+        // The closure releases the events it is inspecting. The backtraces it receives are
+        // snapshots, so they remain valid and each event is still visited exactly once.
+        let endpoints = RefCell::new(endpoints);
+        let mut inspected_count = 0;
+
+        pool.inspect_awaiters(|_bt| {
+            inspected_count += 1;
+            drop(endpoints.borrow_mut().pop());
+        });
+
+        assert_eq!(inspected_count, EVENT_COUNT);
+        assert!(pool.is_empty());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn released_event_releases_backtrace() {
+        let pool = EventPool::<i32>::new();
+        let (sender, receiver) = pool.rent();
+        let mut receiver = Box::pin(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        _ = receiver.as_mut().poll(&mut cx);
+
+        // The receiver leaves the event behind for the sender to release.
+        drop(receiver);
+
+        let mut backtraces = pool.awaiter_backtraces();
+        assert_eq!(backtraces.len(), 1);
+
+        let backtrace = backtraces.pop().expect("the event has been awaited");
+        assert_eq!(Arc::strong_count(&backtrace), 2);
+
+        drop(sender);
+
+        // Releasing the event releases its backtrace, leaving the snapshot as the only owner.
+        assert_eq!(Arc::strong_count(&backtrace), 1);
     }
 }

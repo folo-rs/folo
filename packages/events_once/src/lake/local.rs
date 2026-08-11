@@ -5,6 +5,8 @@ use std::cell::RefCell;
 use std::fmt;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::rc::Rc;
+#[cfg(debug_assertions)]
+use std::sync::Arc;
 
 use hash_hasher::HashedMap;
 
@@ -122,13 +124,34 @@ impl LocalEventLake {
     ///
     /// The closure is called once for each event in the lake that has been awaited at some point
     /// in the past.
+    ///
+    /// # Reentrancy
+    ///
+    /// The closure may freely use this lake: it may rent events, drop endpoints of events it
+    /// obtained earlier and call [`inspect_awaiters()`][Self::inspect_awaiters] again. The
+    /// backtraces are snapshotted before the first call to the closure, so the sequence of
+    /// backtraces the closure receives is unaffected by what the closure does to the lake.
     #[cfg(debug_assertions)]
     pub fn inspect_awaiters(&self, mut f: impl FnMut(&Backtrace)) {
+        for backtrace in self.awaiter_backtraces() {
+            f(&backtrace);
+        }
+    }
+
+    /// Snapshots the backtrace of the most recent awaiter of each awaited event in the lake.
+    ///
+    /// Both the lake borrow and the borrows of the pools it contains are released before this
+    /// returns, so the caller may pass the snapshots to user-supplied code without holding any
+    /// borrow. Each snapshot is a shared owner of the backtrace, so it stays valid even if its
+    /// event is released in the meantime.
+    #[cfg(debug_assertions)]
+    fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>> {
         let pools = self.core.pools.borrow();
 
-        for entry in pools.values() {
-            entry.inspect_awaiters(&mut f);
-        }
+        pools
+            .values()
+            .flat_map(|entry| entry.awaiter_backtraces())
+            .collect()
     }
 }
 
@@ -174,7 +197,7 @@ trait ErasedPool: fmt::Debug {
     fn len(&self) -> usize;
 
     #[cfg(debug_assertions)]
-    fn inspect_awaiters(&self, f: &mut dyn FnMut(&Backtrace));
+    fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>>;
 }
 
 impl<T: 'static> ErasedPool for PoolWrapper<T> {
@@ -191,8 +214,8 @@ impl<T: 'static> ErasedPool for PoolWrapper<T> {
     }
 
     #[cfg(debug_assertions)]
-    fn inspect_awaiters(&self, f: &mut dyn FnMut(&Backtrace)) {
-        self.inner.inspect_awaiters(|bt| f(bt));
+    fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>> {
+        self.inner.awaiter_backtraces()
     }
 }
 
@@ -204,8 +227,12 @@ mod tests {
     use std::task::Waker;
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
+    #[cfg(debug_assertions)]
+    use testing::assert_panics_with;
 
     use super::*;
+    #[cfg(debug_assertions)]
+    use crate::assert_inspect_awaiters_is_reentrant;
 
     assert_impl_all!(LocalEventLake: Clone);
     assert_not_impl_any!(LocalEventLake: Send, Sync);
@@ -333,5 +360,83 @@ mod tests {
         });
 
         assert_eq!(call_count, 1);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn inspect_awaiters_propagates_panic_from_closure() {
+        let lake = LocalEventLake::new();
+        let (_sender, receiver) = lake.rent::<i32>();
+        let mut receiver = Box::pin(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        _ = receiver.as_mut().poll(&mut cx);
+
+        assert_panics_with(
+            || {
+                lake.inspect_awaiters(|_| {
+                    panic!("intentional panic to verify pass-through");
+                });
+            },
+            |message| assert!(message.contains("pass-through")),
+        );
+
+        // The lake is still usable, which proves that the panic did not leave any borrow behind.
+        let mut call_count = 0;
+
+        lake.inspect_awaiters(|_| {
+            call_count += 1;
+        });
+
+        assert_eq!(call_count, 1);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn inspect_awaiters_closure_may_reenter_lake() {
+        let lake = LocalEventLake::new();
+
+        let (_sender, receiver) = lake.rent::<i32>();
+        let mut receiver = Box::pin(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        _ = receiver.as_mut().poll(&mut cx);
+
+        assert_inspect_awaiters_is_reentrant(&|f| lake.inspect_awaiters(f), &|| {
+            // A payload type the lake has no pool for yet, to also exercise pool insertion.
+            let (sender, receiver) = lake.rent::<u8>();
+            drop(sender);
+            drop(receiver);
+        });
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn inspect_awaiters_tolerates_endpoint_drop_from_closure() {
+        let lake = LocalEventLake::new();
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+
+        let (sender1, receiver1) = lake.rent::<i32>();
+        let (sender2, receiver2) = lake.rent::<i32>();
+
+        let mut receiver1 = Box::pin(receiver1);
+        let mut receiver2 = Box::pin(receiver2);
+
+        _ = receiver1.as_mut().poll(&mut cx);
+        _ = receiver2.as_mut().poll(&mut cx);
+
+        // The closure releases the events it is inspecting. The backtraces it receives are
+        // snapshots, so they remain valid and each event is still visited exactly once.
+        let endpoints = RefCell::new(vec![(sender1, receiver1), (sender2, receiver2)]);
+        let mut call_count = 0;
+
+        lake.inspect_awaiters(|_| {
+            call_count += 1;
+            drop(endpoints.borrow_mut().pop());
+        });
+
+        assert_eq!(call_count, 2);
+        assert!(lake.is_empty());
     }
 }

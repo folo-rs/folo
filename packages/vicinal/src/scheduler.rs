@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tracing::trace;
 
 use crate::metrics::CLOCK;
-use crate::{JoinHandle, NEVER_POISONED, PoolInner, PooledCastVicinalTask, wrap_task};
+use crate::{JoinHandle, NEVER_POISONED, PoolInner, alloc_task, wrap_task};
 
 /// A handle for spawning tasks on a [`Pool`][crate::Pool].
 ///
@@ -162,9 +162,12 @@ impl Scheduler {
         // Wrap the task to capture panics and send the result.
         let wrapped = wrap_task(task, sender, spawn_time);
 
-        // Insert the wrapped task into the pool and cast to trait object.
-        let pooled_task = state.task_pool.insert(wrapped);
-        let dyn_task = pooled_task.cast_vicinal_task();
+        // Move the task into this processor's arena and erase its type. The arena lock is
+        // released before any queue lock is taken, so allocation never blocks a dequeue.
+        let dyn_task = {
+            let arena = state.task_arena.lock().expect(NEVER_POISONED);
+            alloc_task(&arena, wrapped)
+        };
 
         // Push to the appropriate queue.
         if urgent {
@@ -222,9 +225,12 @@ impl Scheduler {
         // Wrap the task to capture panics and log them.
         let wrapped = wrap_task_and_forget(task, spawn_time);
 
-        // Insert the wrapped task into the pool and cast to trait object.
-        let pooled_task = state.task_pool.insert(wrapped);
-        let dyn_task = pooled_task.cast_vicinal_task();
+        // Move the task into this processor's arena and erase its type. The arena lock is
+        // released before any queue lock is taken, so allocation never blocks a dequeue.
+        let dyn_task = {
+            let arena = state.task_arena.lock().expect(NEVER_POISONED);
+            alloc_task(&arena, wrapped)
+        };
 
         // Push to the appropriate queue.
         if urgent {

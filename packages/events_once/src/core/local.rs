@@ -10,6 +10,8 @@ use std::mem::{MaybeUninit, offset_of};
 use std::panic::RefUnwindSafe;
 use std::pin::Pin;
 use std::ptr::NonNull;
+#[cfg(debug_assertions)]
+use std::sync::Arc;
 use std::task::Waker;
 
 #[cfg(debug_assertions)]
@@ -210,17 +212,34 @@ impl<T: 'static> LocalEvent<T> {
         )
     }
 
-    /// Uses the provided closure to inspect the backtrace of the current awaiter,
-    /// if there is an awaiter and if backtrace capturing is enabled.
+    /// Returns a snapshot of the backtrace of the most recent awaiter of this event,
+    /// if there has been an awaiter and if backtrace capturing is enabled.
     ///
     /// This method is only available in debug builds (`cfg(debug_assertions)`).
     /// For any data to be present, `RUST_BACKTRACE=1` or `RUST_LIB_BACKTRACE=1` must be set.
     ///
-    /// The closure receives `None` if no one is awaiting the event.
+    /// The snapshot is a shared owner of the backtrace and remains valid even if the event is
+    /// released afterwards. Callers that want to hand a backtrace to user code must take a
+    /// snapshot instead of inspecting the event under its borrow, so that no borrow is held
+    /// while user code runs.
     #[cfg(debug_assertions)]
-    pub(crate) fn inspect_awaiter(&self, f: impl FnOnce(Option<&Backtrace>)) {
+    pub(crate) fn awaiter_backtrace(&self) -> Option<Arc<Backtrace>> {
         let backtrace = self.backtrace.borrow();
-        f(backtrace.as_ref());
+
+        backtrace.as_ref().map(Arc::clone)
+    }
+
+    /// Releases the backtrace of the most recent awaiter of this event.
+    ///
+    /// The storage an event occupies may be reused or freed without dropping the event, so
+    /// whoever releases an event calls this first, to release the memory that the backtrace
+    /// occupies. Snapshots taken earlier remain valid because they are shared owners of the
+    /// backtrace.
+    #[cfg(debug_assertions)]
+    pub(crate) fn clear_awaiter_backtrace(&self) {
+        let mut backtrace = self.backtrace.borrow_mut();
+
+        *backtrace = None;
     }
 
     /// Sets the value of the event and notifies the awaiter, if there is one.
@@ -1079,22 +1098,18 @@ mod tests {
 
     #[cfg(debug_assertions)]
     #[test]
-    fn inspect_awaiter_no_awaiter() {
+    fn awaiter_backtrace_no_awaiter() {
         let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let _endpoints = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
 
-        let mut called = false;
-        unsafe { place.inner.assume_init_ref() }.inspect_awaiter(|backtrace| {
-            called = true;
-            assert!(backtrace.is_none());
-        });
+        let backtrace = unsafe { place.inner.assume_init_ref() }.awaiter_backtrace();
 
-        assert!(called);
+        assert!(backtrace.is_none());
     }
 
     #[cfg(debug_assertions)]
     #[test]
-    fn inspect_awaiter_with_awaiter() {
+    fn awaiter_backtrace_with_awaiter() {
         let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (_sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
 
@@ -1102,18 +1117,14 @@ mod tests {
         let mut receiver = Box::pin(receiver);
         _ = receiver.as_mut().poll(&mut cx);
 
-        let mut called = false;
-        unsafe { place.inner.assume_init_ref() }.inspect_awaiter(|backtrace| {
-            called = true;
-            assert!(backtrace.is_some());
-        });
+        let backtrace = unsafe { place.inner.assume_init_ref() }.awaiter_backtrace();
 
-        assert!(called);
+        assert!(backtrace.is_some());
     }
 
     #[cfg(debug_assertions)]
     #[test]
-    fn inspect_awaiter_after_sender_drop() {
+    fn awaiter_backtrace_after_sender_drop() {
         let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
 
@@ -1123,18 +1134,14 @@ mod tests {
 
         drop(sender);
 
-        let mut called = false;
-        unsafe { place.inner.assume_init_ref() }.inspect_awaiter(|backtrace| {
-            called = true;
-            assert!(backtrace.is_some());
-        });
+        let backtrace = unsafe { place.inner.assume_init_ref() }.awaiter_backtrace();
 
-        assert!(called);
+        assert!(backtrace.is_some());
     }
 
     #[cfg(debug_assertions)]
     #[test]
-    fn inspect_awaiter_after_receiver_drop() {
+    fn awaiter_backtrace_after_receiver_drop() {
         let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
         let (_sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
 
@@ -1144,13 +1151,49 @@ mod tests {
 
         drop(receiver);
 
-        let mut called = false;
-        unsafe { place.inner.assume_init_ref() }.inspect_awaiter(|backtrace| {
-            called = true;
-            assert!(backtrace.is_some());
-        });
+        let backtrace = unsafe { place.inner.assume_init_ref() }.awaiter_backtrace();
 
-        assert!(called);
+        assert!(backtrace.is_some());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn awaiter_backtrace_outlives_event() {
+        let backtrace = {
+            let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
+            let (_sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+
+            let mut cx = task::Context::from_waker(Waker::noop());
+            let mut receiver = Box::pin(receiver);
+            _ = receiver.as_mut().poll(&mut cx);
+
+            unsafe { place.inner.assume_init_ref() }
+                .awaiter_backtrace()
+                .expect("the event has been awaited")
+        };
+
+        // The event storage is gone but the snapshot remains readable.
+        _ = backtrace.status();
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn released_event_releases_backtrace() {
+        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
+
+        {
+            let (_sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
+
+            let mut cx = task::Context::from_waker(Waker::noop());
+            let mut receiver = Box::pin(receiver);
+            _ = receiver.as_mut().poll(&mut cx);
+        }
+
+        // The event has been released but its storage is still ours to inspect. Releasing an
+        // event releases its backtrace, because the storage may be reused without dropping it.
+        let event = unsafe { place.inner.assume_init_ref() };
+
+        assert!(event.awaiter_backtrace().is_none());
     }
 
     // Regression test for the synchronous reentrancy hazard in `set`. A waker
