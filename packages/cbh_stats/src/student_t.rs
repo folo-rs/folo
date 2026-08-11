@@ -174,29 +174,35 @@ fn regularized_incomplete_beta(a: f64, b: f64, x: f64) -> f64 {
     // The factor common to both tails, formed in logarithms because its parts
     // overflow long before their product does.
     let scale = (ln_gamma(a + b) - ln_gamma(a) - ln_gamma(b) + a * x.ln() + b * (-x).ln_1p()).exp();
-    // The continued fraction converges only for arguments below this limit, so
-    // the rest of the interval is evaluated through the reflection
-    // `I_x(a, b) = 1 − I_(1−x)(b, a)`, which puts the argument back inside it.
-    // This is purely a convergence switch — the switch of Numerical Recipes in
-    // C, 2nd ed., §6.4 (`betai`) — and not the distribution's mode, which is
-    // `(a − 1)/(a + b − 2)` and lies elsewhere: routing by the mode would send
-    // part of the domain down the route that does not converge.
-    let direct_route_limit = (a + 1.0) / (a + b + 2.0);
-    if converges_directly(x, direct_route_limit) {
+    // The fraction is evaluated on whichever side keeps the result from being formed
+    // by complementing a nearly equal quantity, the other side being reached through
+    // the reflection `I_x(a, b) = 1 − I_(1−x)(b, a)`.
+    if takes_direct_route(x, direct_route_limit(a, b)) {
         scale * beta_continued_fraction(a, b, x, FRACTION_PAIRS) / a
     } else {
         1.0 - scale * beta_continued_fraction(b, a, 1.0 - x, FRACTION_PAIRS) / b
     }
 }
 
-/// Whether the fraction converges for `x` directly, rather than reflected.
+/// The argument above which the reflection is used instead of the direct route.
+///
+/// This is the switch of Numerical Recipes in C, 2nd ed., §6.4 (`betai`). It is not
+/// the distribution's mode, which is `(a − 1)/(a + b − 2)` and lies below it: routing
+/// by the mode would send part of the domain down the route that reaches its answer by
+/// subtracting a nearly equal quantity from one, which for lopsided shapes costs most
+/// of the significant digits of a small tail.
+fn direct_route_limit(a: f64, b: f64) -> f64 {
+    (a + 1.0) / (a + b + 2.0)
+}
+
+/// Whether `x` is evaluated by the direct route rather than through the reflection.
 //
-// Mutation-skipped: the two routes are the same function evaluated two ways and
-// agree to the last bits at the boundary — `regularized_incomplete_beta_
-// complements_its_own_reflection` pins that — so moving the boundary by one
-// value cannot change any result.
+// Mutation-skipped: at the shapes this crate evaluates the two routes agree far inside
+// the tolerance the reference values are pinned to — `regularized_incomplete_beta_
+// complements_its_own_reflection` pins that — so moving the comparison by one
+// representable value cannot change a result.
 #[cfg_attr(test, mutants::skip)]
-fn converges_directly(x: f64, direct_route_limit: f64) -> bool {
+fn takes_direct_route(x: f64, direct_route_limit: f64) -> bool {
     x < direct_route_limit
 }
 
@@ -331,13 +337,30 @@ mod tests {
     }
 
     #[test]
+    fn direct_route_limit_sits_above_the_mode() {
+        // A boundary placed elsewhere is invisible in almost every result — both routes
+        // compute the same function, and for even shapes they agree to the last bits —
+        // so it is pinned by value rather than through what it returns. It shows itself
+        // only at lopsided shapes, where the rejected route reaches a small tail by
+        // subtracting a nearly equal quantity from one and loses most of its digits.
+        close_relative(direct_route_limit(3.0, 7.0), 1.0 / 3.0, 1e-15);
+        close_relative(direct_route_limit(0.5, 20.0), 1.5 / 22.5, 1e-15);
+        close_relative(direct_route_limit(20.0, 0.5), 21.0 / 22.5, 1e-15);
+
+        // The mode lies below the boundary, so the arguments between the two are
+        // evaluated directly although they lie past the mode.
+        let mode = (3.0 - 1.0) / (3.0 + 7.0 - 2.0);
+        assert!(mode < direct_route_limit(3.0, 7.0));
+    }
+
+    #[test]
     fn regularized_incomplete_beta_matches_reference_values_across_the_route_switch() {
         // Shapes of three and seven put the route switch at 1/3 and the
         // distribution's mode at 1/4, so the arguments between them are
         // evaluated by the direct route although they lie past the mode. Every
         // value here is a reference value, not a self-consistency check, so
         // routing them the other way would be visible.
-        let switch = (3.0 + 1.0) / (3.0 + 7.0 + 2.0);
+        let switch = direct_route_limit(3.0, 7.0);
         let cases = [
             (0.2, 2.618_024_960_000_001_6e-1),
             (0.25, 3.993_225_097_656_25e-1),
