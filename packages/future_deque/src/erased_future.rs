@@ -2,6 +2,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use multitude::dst::pointee;
+
 /// Type erasure trait for futures stored in a future deque.
 ///
 /// `Future` cannot be erased directly because it carries its result as an associated type,
@@ -10,10 +12,13 @@ use std::task::{Context, Poll};
 /// output type it produces.
 ///
 /// The `pointee` attribute supplies the pointer-metadata implementation that
-/// [`multitude::Box`] requires of its unsized targets. The `crate` argument redirects the
-/// generated paths at `multitude`'s re-export of that vocabulary, so this package needs no
-/// direct dependency on the underlying `ptr_meta` crate.
-#[multitude::dst::pointee(crate = ::multitude::dst)]
+/// [`multitude::Box`] requires of its unsized targets. `pointee` is `ptr_meta`'s macro,
+/// re-exported by `multitude`, and it emits `::ptr_meta::*` paths unless told otherwise;
+/// the `crate` argument redirects those at `multitude`'s re-export so this package needs
+/// no direct dependency on `ptr_meta`. Depending on `ptr_meta` directly would be worse: the
+/// generated impls must target the exact `ptr_meta` instance `multitude` was built against,
+/// so a version skew would surface as an unrelated-looking trait mismatch.
+#[pointee(crate = ::multitude::dst)]
 pub(crate) trait ErasedFuture<T> {
     /// Polls the underlying future.
     fn poll_erased(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T>;

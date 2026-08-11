@@ -7,6 +7,7 @@ use std::pin::Pin;
 use events_once::PooledSender;
 use fast_time::Instant;
 use multitude::Arena;
+use multitude::dst::pointee;
 use pin_project::pin_project;
 
 use crate::metrics::{CLOCK, EXECUTION_TIME_MS, SCHEDULING_DELAY_MS};
@@ -19,10 +20,13 @@ use crate::metrics::{CLOCK, EXECUTION_TIME_MS, SCHEDULING_DELAY_MS};
 /// erased form to travel from the spawning thread to the worker thread.
 ///
 /// The `pointee` attribute supplies the pointer-metadata implementation that
-/// [`multitude::Box`] requires of its unsized targets. The `crate` argument redirects the
-/// generated paths at `multitude`'s re-export of that vocabulary, so this package needs no
-/// direct dependency on the underlying `ptr_meta` crate.
-#[multitude::dst::pointee(crate = ::multitude::dst)]
+/// [`multitude::Box`] requires of its unsized targets. `pointee` is `ptr_meta`'s macro,
+/// re-exported by `multitude`, and it emits `::ptr_meta::*` paths unless told otherwise;
+/// the `crate` argument redirects those at `multitude`'s re-export so this package needs
+/// no direct dependency on `ptr_meta`. Depending on `ptr_meta` directly would be worse: the
+/// generated impls must target the exact `ptr_meta` instance `multitude` was built against,
+/// so a version skew would surface as an unrelated-looking trait mismatch.
+#[pointee(crate = ::multitude::dst)]
 pub(crate) trait VicinalTask: Send + 'static {
     fn call(self: Pin<&mut Self>);
 }
