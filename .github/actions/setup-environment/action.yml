@@ -18,7 +18,11 @@ inputs:
       glibc security update therefore invalidates the previously installed debug symbols, and
       installing valgrind everywhere would let that routine update take down clippy, docs, miri
       and mutants across the whole repository. Jobs that run Callgrind opt back in by setting
-      this to "true".
+      this to "true". A job declares the requirement, not the platform: only Linux-gated steps
+      read this input, so a multi-OS job sets it unconditionally and its Windows and macOS legs
+      ignore it. Repeating a `runner.os` condition at the call sites would duplicate a decision
+      this action already owns, and would suppress the request on any platform that later grows
+      a valgrind install path of its own.
     required: false
     default: "false"
 
