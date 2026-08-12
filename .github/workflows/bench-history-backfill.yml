@@ -89,7 +89,10 @@ jobs:
           fetch-depth: 0
 
       - name: Setup environment
+        # Backfill runs the Callgrind measurement engine, which drives Valgrind.
         uses: ./.github/actions/setup-environment
+        with:
+          install-valgrind: "true"
 
       # cargo-bench-history self-federates with GitHub OIDC: given the managed identity's client id
       # and tenant - plus the ACTIONS_ID_TOKEN_* values GitHub injects because of id-token: write -

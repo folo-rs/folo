@@ -207,7 +207,11 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup environment
+        # The benchmark smoke check below runs every bench target once, and on Linux the
+        # `*_cg` targets are real Gungraun harnesses that execute under Valgrind.
         uses: ./.github/actions/setup-environment
+        with:
+          install-valgrind: "true"
 
       - name: Run tests with coverage on ${{ matrix.platform }}
         id: coverage
@@ -335,7 +339,11 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup environment
+        # The benchmark smoke check below runs every bench target once, and on Linux the
+        # `*_cg` targets are real Gungraun harnesses that execute under Valgrind.
         uses: ./.github/actions/setup-environment
+        with:
+          install-valgrind: "true"
 
       - name: Run tests on ${{ matrix.platform }}
         run: just package="${{ needs.delta.outputs.packages }}" test

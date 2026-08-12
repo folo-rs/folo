@@ -237,7 +237,10 @@ jobs:
           fetch-depth: 0
 
       - name: Setup environment
+        # Collection runs the Callgrind measurement engine, which drives Valgrind.
         uses: ./.github/actions/setup-environment
+        with:
+          install-valgrind: "true"
 
       # Reused unchanged from bench-history.yml: export the prod identity's client id and tenant
       # under the standard names cargo-bench-history reads, then let the tool mint OIDC assertions on

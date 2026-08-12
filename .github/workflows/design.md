@@ -408,6 +408,16 @@ the mostly-cached setup time it would save. Toolchain versions are defined once 
 `constants.env` and `rust-toolchain.toml` and reach the workflows through the `just`
 commands they call, so no version is ever duplicated into a workflow file.
 
+The one deliberate deviation from "one identical environment everywhere" is Valgrind. It is
+installed only where a job actually executes Callgrind measurements — the benchmark
+collection jobs, the test jobs that smoke-run every bench target, and the cache warmup that
+primes their caches — because Valgrind pulls in glibc debug symbols that are pinned to the
+exact glibc build on the runner image. Installing it in every job would put every Ubuntu job
+in the repository at the mercy of routine Ubuntu security updates, so the opt-in confines
+that exposure to the jobs that cannot work without it. For the same reason the APT package
+cache is scoped to the runner image version, so it rolls forward with the image instead of
+serving debug symbols that no longer match.
+
 ## Transient-fault handling
 
 CI touches unreliable infrastructure — package mirrors, the GitHub API, runner disks — where a
