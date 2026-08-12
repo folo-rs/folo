@@ -25,4 +25,8 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup environment
+        # Warms every cache the real jobs restore, so it must request the same APT package set
+        # as the widest consumer - otherwise the Valgrind-installing jobs always take a miss.
         uses: ./.github/actions/setup-environment
+        with:
+          install-valgrind: "true"

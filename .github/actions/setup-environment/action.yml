@@ -10,32 +10,90 @@ inputs:
       in CI (only the on-demand `just bench-history-stress-azure` uses it), so it has no input.
     required: false
     default: "false"
+  install-valgrind:
+    description: >-
+      Whether the Linux APT install should also include valgrind. Off by default because only
+      the jobs that actually execute Callgrind benchmarks need it, and valgrind drags in
+      libc6-dbg - a package pinned by an EXACT version relation to the image's libc6. Any Ubuntu
+      glibc security update therefore invalidates the previously installed debug symbols, and
+      installing valgrind everywhere would let that routine update take down clippy, docs, miri
+      and mutants across the whole repository. Jobs that run Callgrind opt back in by setting
+      this to "true". A job declares the requirement, not the platform: only Linux-gated steps
+      read this input, so a multi-OS job sets it unconditionally and its Windows and macOS legs
+      ignore it. Repeating a `runner.os` condition at the call sites would duplicate a decision
+      this action already owns, and would suppress the request on any platform that later grows
+      a valgrind install path of its own.
+    required: false
+    default: "false"
 
 runs:
   using: composite
   steps:
+    - name: Resolve runner image version (Linux)
+      # Feeds the runner image version into the APT cache key below. GitHub-hosted runners set
+      # ImageVersion (e.g. 20260810.271) on every job, but a composite action's `with:` block
+      # cannot be relied on to resolve the `env` context, whereas the `steps` context always
+      # resolves - so the value is exported as a step output instead. Fail loudly when it is
+      # absent rather than emitting an empty string, because an empty key component would
+      # silently restore the image-independent cache this step exists to eliminate.
+      id: image
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        if [ -z "$ImageVersion" ]; then
+          echo "ImageVersion is not set; the APT cache cannot be scoped to the runner image." >&2
+          exit 1
+        fi
+        echo "version=$ImageVersion" >> "$GITHUB_OUTPUT"
+
+    - name: Refresh APT package index (Linux)
+      # cache-apt-pkgs-action never refreshes the index (its `refresh` input is documented as
+      # obsolete), so on a cache miss it resolves package versions from the index baked into
+      # the runner image at image build time. Ubuntu withdraws superseded packages from the
+      # archive when it publishes an update, so an index that predates one resolves a version
+      # that no longer exists and the download 404s.
+      #
+      # This applies to every package requested below, not only valgrind, so the refresh is
+      # unconditional on Linux. build-essential and cmake are NOT preinstalled: the Ubuntu
+      # image README lists neither in its apt package inventory, and the CMake it does ship is
+      # an upstream build under /usr/local, unrelated to the archive's `cmake` package that
+      # this step installs together with cmake-data, libjsoncpp25 and librhash0. Scoping the
+      # cache key to the image version (see below) also means every image roll forces exactly
+      # that fresh resolve on every Linux job, so gating the refresh on the valgrind opt-in
+      # would leave the other jobs one archive update away from the same 404.
+      if: runner.os == 'Linux'
+      shell: bash
+      # Acquire::Retries covers a transient mirror blip in place, matching the workspace stance
+      # that a single infrastructure fault must not drop a whole job (see workflows/design.md).
+      run: sudo apt-get update -o Acquire::Retries=3
+
     - name: Install APT packages (Linux)
       # The GitHub-hosted Ubuntu images already ship git, git-lfs, gcc, make, curl,
       # libssl-dev, pkg-config and PowerShell (apt reports them "already the newest"), so
-      # only build-essential, cmake and valgrind - plus their dependencies - are genuinely
-      # installed here. Package downloads are not the bottleneck (~1s for tens of MB on the
-      # Azure mirrors); the cost is the `apt-get update` index refresh and the dpkg
-      # unpack/configure. cache-apt-pkgs-action restores the already-configured files from
-      # an actions/cache entry and skips apt entirely on a hit, cutting this step from ~15s
-      # (amd64) / ~26s (arm64) to a few seconds. The action is in upstream maintenance mode,
-      # so `@v1` only rolls forward to backward-compatible fixes within its major line -
-      # there is no breaking v2 to chase.
+      # only build-essential, cmake and - where a job opts in - valgrind, plus their
+      # dependencies, are genuinely installed here. Package downloads are not the bottleneck
+      # (~1s for tens of MB on the Azure mirrors); the cost is the `apt-get update` index
+      # refresh and the dpkg unpack/configure. cache-apt-pkgs-action restores the
+      # already-configured files from an actions/cache entry and skips apt entirely on a hit,
+      # cutting this step from ~15s (amd64) / ~26s (arm64) to a few seconds. The action is in
+      # upstream maintenance mode, so `@v1` only rolls forward to backward-compatible fixes
+      # within its major line - there is no breaking v2 to chase.
       #
       # execute_install_scripts runs each package's postinst (e.g. ldconfig) on restore so
-      # valgrind's shared-library dependencies resolve. No PR-validation job runs valgrind
-      # (only the nightly bench-history workflow does), so the Verify step below actually
-      # executes valgrind to prove the restored fileset is functional before a regression
-      # could reach that workflow.
+      # valgrind's shared-library dependencies resolve.
+      #
+      # The action's own cache key hashes only the requested package names and the arch, so it
+      # cannot see that valgrind's libc6-dbg carries detached glibc debug symbols that are only
+      # valid against the exact libc6 build present on the image. A cache hit after a glibc
+      # update would then restore stale symbols and valgrind would abort at startup. Scoping
+      # the key to the runner image version makes the cache roll forward with the image
+      # automatically; the leading literal is a manual bust knob, bumped to discard every
+      # existing entry deliberately.
       if: runner.os == 'Linux'
       uses: awalsh128/cache-apt-pkgs-action@v1
       with:
-        packages: build-essential cmake valgrind
-        version: "1"
+        packages: ${{ inputs.install-valgrind == 'true' && 'build-essential cmake valgrind' || 'build-essential cmake' }}
+        version: 1-${{ steps.image.outputs.version }}
         execute_install_scripts: true
 
     - name: Install PowerShell (Linux ARM64)
@@ -174,6 +232,8 @@ runs:
     
     - name: Verify environment setup
       shell: bash
+      env:
+        INSTALL_VALGRIND: ${{ inputs.install-valgrind }}
       run: |
         echo "Verifying installed tools..."
         just --version
@@ -181,12 +241,15 @@ runs:
         rustc --version
         pwsh --version
         if [ "$RUNNER_OS" = "Linux" ]; then
-          # Prove the APT packages restored from the cache are functional. valgrind is the
-          # one that matters: no PR-validation job runs it (only the nightly bench-history
-          # workflow does), and a fileset-only cache restore could leave its shared
-          # libraries unregistered - so actually run it against a trivial program rather
-          # than only printing a version.
+          # Prove the APT packages restored from the cache are functional. valgrind is the one
+          # that matters: a fileset-only cache restore could leave its shared libraries
+          # unregistered, or leave detached glibc debug symbols that no longer match the
+          # image's libc6 - so actually run it against a trivial program rather than only
+          # printing a version, failing here rather than hours later inside a benchmark run.
+          # Checked only where a job opted in, since valgrind is not installed otherwise.
           cmake --version
-          valgrind --quiet --error-exitcode=1 /bin/true
+          if [ "$INSTALL_VALGRIND" = "true" ]; then
+            valgrind --quiet --error-exitcode=1 /bin/true
+          fi
         fi
         echo "Environment setup complete"
