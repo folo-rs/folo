@@ -44,14 +44,20 @@ runs:
 
     - name: Refresh APT package index (Linux)
       # cache-apt-pkgs-action never refreshes the index (its `refresh` input is documented as
-      # obsolete), so on a cache miss it resolves package versions from the image's baked-in
-      # index. Ubuntu withdraws superseded packages from the archive when it publishes a
-      # security update, so a stale index resolves a version that no longer exists and the
-      # download 404s. Only the valgrind path is exposed to this: build-essential and cmake are
-      # already at the image's newest version and need no download, whereas valgrind's
-      # libc6-dbg is not preinstalled and must be fetched. Gating the refresh on the same input
-      # therefore keeps its cost off every other Linux job.
-      if: runner.os == 'Linux' && inputs.install-valgrind == 'true'
+      # obsolete), so on a cache miss it resolves package versions from the index baked into
+      # the runner image at image build time. Ubuntu withdraws superseded packages from the
+      # archive when it publishes an update, so an index that predates one resolves a version
+      # that no longer exists and the download 404s.
+      #
+      # This applies to every package requested below, not only valgrind, so the refresh is
+      # unconditional on Linux. build-essential and cmake are NOT preinstalled: the Ubuntu
+      # image README lists neither in its apt package inventory, and the CMake it does ship is
+      # an upstream build under /usr/local, unrelated to the archive's `cmake` package that
+      # this step installs together with cmake-data, libjsoncpp25 and librhash0. Scoping the
+      # cache key to the image version (see below) also means every image roll forces exactly
+      # that fresh resolve on every Linux job, so gating the refresh on the valgrind opt-in
+      # would leave the other jobs one archive update away from the same 404.
+      if: runner.os == 'Linux'
       shell: bash
       # Acquire::Retries covers a transient mirror blip in place, matching the workspace stance
       # that a single infrastructure fault must not drop a whole job (see workflows/design.md).
@@ -83,7 +89,7 @@ runs:
       uses: awalsh128/cache-apt-pkgs-action@v1
       with:
         packages: ${{ inputs.install-valgrind == 'true' && 'build-essential cmake valgrind' || 'build-essential cmake' }}
-        version: "1-${{ steps.image.outputs.version }}"
+        version: 1-${{ steps.image.outputs.version }}
         execute_install_scripts: true
 
     - name: Install PowerShell (Linux ARM64)

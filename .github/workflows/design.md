@@ -416,7 +416,9 @@ exact glibc build on the runner image. Installing it in every job would put ever
 in the repository at the mercy of routine Ubuntu security updates, so the opt-in confines
 that exposure to the jobs that cannot work without it. For the same reason the APT package
 cache is scoped to the runner image version, so it rolls forward with the image instead of
-serving debug symbols that no longer match.
+serving debug symbols that no longer match — and because that scoping makes every image roll
+resolve packages afresh, the APT index is refreshed on every Linux job rather than trusted as
+the image left it.
 
 ## Transient-fault handling
 
