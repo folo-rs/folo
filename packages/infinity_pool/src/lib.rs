@@ -8,8 +8,15 @@
 //!
 //! # Maintenance status
 //!
-//! This package is superseded and receives maintenance only. Prefer [`multitude`] for the
-//! opaque and blind pooling scenarios and [`plurality`] for the pinned pooling scenario.
+//! This package receives maintenance only.
+//!
+//! For the pinned pooling scenario, prefer [`plurality`], whose `Pool<T>` is an equivalent
+//! of [`PinnedPool`]. It pools a single named type, so it is not an alternative to
+//! [`OpaquePool`] or [`BlindPool`].
+//!
+//! Where all the objects can be reclaimed together, an arena allocator such as [`multitude`]
+//! can take the place of a type-agnostic pool, trading per-object slot reuse for cheaper
+//! allocation.
 //!
 //! # Motivating scenario
 //!
