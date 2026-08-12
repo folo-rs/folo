@@ -20,12 +20,14 @@ From that topology `analyze` auto-selects one of two **modes** — there is no f
 one:
 
 - **history** — the base-branch view (the analyzed tip *is* the merge-base). It applies
-  long-range change-point detection, drift detection, and false-discovery correction, and
-  reports regressions only by default.
+  long-range change-point detection and drift detection, and reports regressions only by
+  default.
 - **branch** — the feature-branch view (commits past the merge-base). It judges the branch by
   its tip commit's latest state against the base and reports both regressions and improvements.
   Only the tip commit lands in the base on merge, so the branch's own intermediate history is
   ignored.
+
+Both modes correct for false discoveries across everything they judged.
 
 See [Analysis](../concepts/analysis.md) for what each mode detects.
 
@@ -47,9 +49,11 @@ See [Analysis](../concepts/analysis.md) for what each mode detects.
 
 ## Output
 
-Each finding names the benchmark and metric, quantifies the move and confidence, attributes
-it to a commit, and draws a compact, topology-accurate chart — one column per first-parent
-commit, so a commit with no measurement is a gap rather than being collapsed away. History
+Each finding names the benchmark and metric, quantifies the move, states a **confidence** —
+the strength of the evidence behind that particular finding, not a fixed threshold it
+cleared — attributes it to a commit, and draws a compact, topology-accurate chart — one column
+per first-parent commit, so a commit with no measurement is a gap rather than being collapsed
+away. History
 mode charts the full selected series, keeping a trailing gap up to the analyzed tip when a
 benchmark has not been measured on the most recent commits. Branch mode charts the comparison
 baseline followed by the recent per-commit tail ending at the tip, keeping the one commit
@@ -59,6 +63,11 @@ intermediate branch points do not change the tip-only judgment.
 Text goes to stdout by default. File toggles compose, so a single pass can emit text,
 Markdown, and JSON at once; requesting no output at all is an error. A derived, condensed
 Markdown **summary** is also available for a size-limited downstream consumer.
+
+Every report also states how many series it **judged**, and names the reason for each one it
+did not, so that "no notable changes" can be read for what it covers rather than taken as a
+blanket all-clear. See
+[Reading a silent report](../concepts/analysis.md#reading-a-silent-report).
 
 > **Comparison-base warnings (branch mode)**
 > On rotating CI machine pools the newest base commits may carry data only under a different

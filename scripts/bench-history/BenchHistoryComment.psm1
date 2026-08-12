@@ -59,6 +59,27 @@ $script:StaleBannerClose = '<!-- /folo-bench-history-stale -->'
 # writer and both readers live here, it needs no workflow-level definition.
 $script:InProgressMarker = '<!-- folo-bench-history-in-progress -->'
 
+# The heading every rolling comment opens with - the placeholder and the analyzed body alike - so a
+# reader sees one comment evolving in place rather than two unrelated posts.
+$script:CommentHeader = '### Performance impact (vs `main`)'
+
+# How the pull-request comment words each in-scope coverage shortfall, keyed by the `reason` wire name
+# the analysis report carries (cbh_detect's UnjudgedReason). Worded to follow a series count, matching
+# the reasons' own prose in the full report but phrased for a PR reader. Reasons absent from this map -
+# a reason added to the tool after this module was written - are NOT guessed at: Format-CoverageVerdict
+# falls back to naming the raw reason, so a new shortfall reads as an honest unknown instead of being
+# mislabelled as one of these.
+#
+# `ghost` is deliberately absent because it never reaches this map: ghosts are out of scope by
+# construction (see Get-SeriesCoverage) and the "Collection scope" line already tells the reader which
+# packages were benchmarked.
+$script:CoverageShortfallPhrases = @{
+    'too_few_points'                = 'with too few measurements in the analyzed window'
+    'too_few_points_since_blessing' = 'with too few measurements since being blessed'
+    'not_measured_on_branch'        = 'not measured on this branch'
+    'too_few_base_commits'          = 'with too little `main` history to compare against'
+}
+
 function Invoke-GhCapture {
     # Runs `gh` with the given arguments, capturing stdout and stderr SEPARATELY. stderr is
     # redirected to a temp file so it never contaminates stdout: `gh` can print warnings - e.g.
@@ -666,15 +687,37 @@ function Add-StalenessBannerIfBehind {
     return $true
 }
 
+function Format-CollectionScope {
+    # Pure string transform: the "Collection scope" line every rolling comment carries, disclosing which
+    # packages were benchmarked so a reader never mistakes a clean result for the whole suite. A PR run
+    # benchmarks ONLY the packages it impacts - the changed packages plus their dependents (cargo-delta
+    # scoped) - and analyze's ghost filter narrows the report to exactly that set, so the set is named
+    # explicitly. Shared by the in-progress placeholder and the analyzed comment (which differ only in
+    # tense) so the two lines cannot drift apart.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][string] $Packages,
+        [Parameter(Mandatory)][ValidateSet('benchmarked', 'benchmarking')][string] $Verb
+    )
+
+    # Split the space-separated package list the delta job produced, dropping blanks and de-duping, then
+    # render each as inline code. A distinct local name (not $Packages) avoids coercing the array back
+    # into the string-typed parameter.
+    $names = @(($Packages -split '\s+') | Where-Object { $_ } | Sort-Object -Unique)
+    $renderedPackages = ($names | ForEach-Object { '`' + $_ + '`' }) -join ', '
+    $packageNoun = if ($names.Count -eq 1) { 'package' } else { 'packages' }
+    return "**Collection scope:** $Verb the $($names.Count) $packageNoun impacted by this PR ($renderedPackages)."
+}
+
 function Format-InProgressBody {
     # Pure string transform: renders the "benchmarking in progress" placeholder body, prefixed with the
     # dedup $Marker (so the next run - and the eventual analyze - find and update THIS comment instead of
     # posting a duplicate) and the hidden in-progress marker (so Set-RollingCommentStaleness and
     # Publish-InProgressComment can tell a still-empty placeholder from a comment carrying real results).
-    # Mirrors the analyze comment's header and "Collection scope" line - listing exactly the packages
-    # this PR impacts, sorted and de-duped the same way - so the placeholder reads as an early form of the
-    # very comment analyze will later overwrite. Factored out (and kept unexported) so the rendering is
-    # one testable place, mirroring Add-StalenessBanner.
+    # Mirrors the analyzed comment's header and "Collection scope" line so the placeholder reads as an
+    # early form of the very comment analyze will later overwrite. Factored out (and kept unexported) so
+    # the rendering is one testable place, mirroring Add-StalenessBanner.
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -682,22 +725,13 @@ function Format-InProgressBody {
         [Parameter(Mandatory)][string] $Packages
     )
 
-    # Split the space-separated package list the delta job produced, dropping blanks and de-duping, then
-    # render each as inline code - the same shaping the analyze compose step applies, so the two scope
-    # lines stay worded alike. A distinct local name (not $Packages) avoids coercing the array back into
-    # the string-typed parameter.
-    $names = @(($Packages -split '\s+') | Where-Object { $_ } | Sort-Object -Unique)
-    $renderedPackages = ($names | ForEach-Object { '`' + $_ + '`' }) -join ', '
-    $packageNoun = if ($names.Count -eq 1) { 'package' } else { 'packages' }
-    $scope = "**Collection scope:** benchmarking the $($names.Count) $packageNoun impacted by this PR ($renderedPackages)."
-
     $lines = @(
         $Marker
         $script:InProgressMarker
         ''
-        "### Performance impact (vs ``main``)"
+        $script:CommentHeader
         ''
-        $scope
+        (Format-CollectionScope -Packages $Packages -Verb 'benchmarking')
         ''
         ('⏳ **Benchmarking in progress.** Results will appear here when the run completes - this can ' +
             'take a few hours. This comment refreshes automatically on every push.')
@@ -787,4 +821,303 @@ function Publish-InProgressComment {
     return $true
 }
 
-Export-ModuleMember -Function Find-RollingComment, Publish-RollingComment, Remove-RollingComment, Get-CommitsBehind, Set-RollingCommentStaleness, Add-StalenessBannerIfBehind, Publish-InProgressComment
+function Get-ReportField {
+    # Reads one field out of a parsed JSON object, yielding $null when the field is absent. A report can
+    # come from a tool version older than the field being read, and `Set-StrictMode -Version Latest` turns
+    # a plain `$object.missing` into a terminating error - which would fail the workflow step that renders
+    # the comment instead of degrading it. Every read of a report document goes through here.
+    [CmdletBinding()]
+    [OutputType([object])]
+    param(
+        [Parameter(Mandatory)][AllowNull()] $InputObject,
+        [Parameter(Mandatory)][string] $Name
+    )
+
+    if ($null -eq $InputObject) {
+        return $null
+    }
+
+    $property = $InputObject.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        return $null
+    }
+    return $property.Value
+}
+
+function Get-SeriesCoverage {
+    # Reads the coverage projection out of an analysis JSON report (`report.json` in the analyze job's
+    # scratch dir) - the account of what the detectors actually judged, and why they left the rest
+    # unjudged.
+    #
+    # No findings is not automatically good news: the detector reaches a verdict only on a series it has
+    # enough evidence to judge, so an empty findings list means "nothing moved" only when something was
+    # actually judged. The tool computes that judgement once, in cbh_render's Coverage projection, and
+    # publishes it in the report's `census` block as `coverage` (the state), `in_scope` (the denominator,
+    # ghosts already excluded) and the per-reason breakdown. This function transports that projection; it
+    # does NOT re-derive it, so the comment cannot disagree with the report it summarizes.
+    #
+    # Ghost series - those not measured at the analyzed tip commit - are already out of `in_scope` there.
+    # A PR benchmarks only the impacted packages while analysis reads the whole store, so every series
+    # belonging to an untouched package is a ghost; counting those would render the healthy case as
+    # "judged 12 of 3000" and train readers to ignore the one field meant to expose a blind run.
+    #
+    # Returns a hashtable with every key always present: State (the wire name, 'unknown' when the report
+    # does not state one), Judged, InScope, Total and Shortfalls (the unjudged breakdown, ghosts removed,
+    # in the report's order). A report carrying no census at all - the placeholder the analyze recipe
+    # writes when every collect leg failed - yields the 'no_series' state, which is the honest reading:
+    # nothing was measured.
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][string] $ReportPath
+    )
+
+    $blind = @{
+        State      = 'no_series'
+        Judged     = 0
+        InScope    = 0
+        Total      = 0
+        Shortfalls = @()
+    }
+
+    if (-not (Test-Path -LiteralPath $ReportPath)) {
+        Write-Verbose ("No analysis report at '$ReportPath', so the run produced no series to judge; " +
+            "reporting no coverage rather than an all-clear.")
+        return $blind
+    }
+
+    $report = Get-Content -LiteralPath $ReportPath -Raw | ConvertFrom-Json
+    $census = Get-ReportField -InputObject $report -Name 'census'
+    if ($null -eq $census) {
+        Write-Verbose ("Analysis report '$ReportPath' carries no census block, so no series were " +
+            "accounted for; reporting no coverage rather than an all-clear.")
+        return $blind
+    }
+
+    $shortfalls = @()
+    foreach ($entry in @(Get-ReportField -InputObject $census -Name 'reasons')) {
+        $reason = [string](Get-ReportField -InputObject $entry -Name 'reason')
+        # An unnamed entry cannot be described to a reader, and a ghost is already out of scope; both are
+        # dropped from the breakdown the verdict explains rather than rendered as an empty clause.
+        if ([string]::IsNullOrEmpty($reason) -or $reason -eq 'ghost') {
+            continue
+        }
+        $shortfalls += @{ Reason = $reason; Count = [int](Get-ReportField -InputObject $entry -Name 'count') }
+    }
+
+    # A census without a coverage state is a report from a tool version that predates the projection (or
+    # a truncated document). Say so rather than inventing a verdict from the raw counts - re-deriving it
+    # here is exactly the drift this projection exists to prevent.
+    $stateValue = Get-ReportField -InputObject $census -Name 'coverage'
+    $state = if ($null -eq $stateValue) { 'unknown' } else { [string]$stateValue }
+
+    $coverage = @{
+        State      = $state
+        Judged     = [int](Get-ReportField -InputObject $census -Name 'judged')
+        InScope    = [int](Get-ReportField -InputObject $census -Name 'in_scope')
+        Total      = [int](Get-ReportField -InputObject $census -Name 'total')
+        Shortfalls = $shortfalls
+    }
+    Write-Verbose ("Analysis report '$ReportPath' states coverage '$($coverage.State)': judged " +
+        "$($coverage.Judged) of $($coverage.InScope) in-scope series ($($coverage.Total) accounted " +
+        "for in total, ghosts included).")
+    return $coverage
+}
+
+function Format-CoverageShortfall {
+    # Pure string transform: the unjudged breakdown as one clause list - "3 series with too few
+    # measurements in the analyzed window; 1 series not measured on this branch" - for a verdict sentence
+    # to embed. A reason this module does not recognise is named verbatim instead of being folded into a
+    # neighbouring phrase, so a shortfall added to the tool later reads as an honest unknown rather than
+    # as a wrong explanation. ("series" is both singular and plural, so the counts need no agreement.)
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]] $Shortfalls
+    )
+
+    $clauses = @()
+    foreach ($shortfall in $Shortfalls) {
+        $reason = [string]$shortfall.Reason
+        $phrase = if ($script:CoverageShortfallPhrases.ContainsKey($reason)) {
+            $script:CoverageShortfallPhrases[$reason]
+        } else {
+            "not judged for an unrecognized reason (``$reason``)"
+        }
+        $clauses += "$([int]$shortfall.Count) series $phrase"
+    }
+
+    # A state that lists no reason at all should still produce a grammatical sentence; the report is
+    # internally inconsistent in that case, and saying so is better than emitting a dangling clause.
+    if ($clauses.Count -eq 0) {
+        return 'no reason was reported'
+    }
+    return ($clauses -join '; ')
+}
+
+function Format-CoverageVerdict {
+    # Pure string transform: the verdict paragraph a findings-free PR comment carries, rendered from the
+    # coverage projection Get-SeriesCoverage transported. Returns the body lines (blank strings where a
+    # paragraph break belongs).
+    #
+    # A checkmark is reserved for the one state that earns it - every in-scope series judged. Every other
+    # state, including a coverage state this module does not recognise, leads with a warning and says
+    # what was NOT assessed, so the most-read surface of this tool cannot report success precisely when
+    # it has gone blind.
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)][hashtable] $Coverage
+    )
+
+    $judged = [int]$Coverage.Judged
+    $inScope = [int]$Coverage.InScope
+    $shortfalls = Format-CoverageShortfall -Shortfalls @($Coverage.Shortfalls)
+
+    switch ([string]$Coverage.State) {
+        'full' {
+            return @(
+                "✅ No benchmark regressions detected against ``main`` (all $inScope in-scope series judged)."
+            )
+        }
+        'partial' {
+            return @(
+                "⚠️ **No regressions among the $judged of $inScope series that could be judged.**"
+                ''
+                ("The remaining $($inScope - $judged) were not assessed: $shortfalls. This is only a " +
+                    "partial all-clear. Run ``cargo bench-history analyze`` with ``--verbose`` to see " +
+                    'which series and why.')
+            )
+        }
+        'nothing_judged' {
+            return @(
+                "⚠️ **Nothing was judged.** None of the $inScope in-scope series could be assessed, so this PR was not compared against ``main``."
+                ''
+                "Not assessed: $shortfalls."
+                ''
+                ('This is not an all-clear: no series carried enough evidence to judge. Series become ' +
+                    'assessable as `main` accumulates more measurements.')
+            )
+        }
+        'nothing_in_scope' {
+            return @(
+                '⚠️ **Nothing in scope was measured**, so this PR was not assessed against `main`.'
+                ''
+                'This is not an all-clear. No benchmark series was recorded at the analyzed commit; check the workflow logs.'
+            )
+        }
+        'no_series' {
+            return @(
+                '⚠️ **No benchmark results were produced**, so nothing was compared against `main`.'
+                ''
+                'This is not an all-clear: the run did not measure this PR. Check the workflow logs.'
+            )
+        }
+        default {
+            return @(
+                "⚠️ **Benchmark coverage could not be determined** (the report states ``$($Coverage.State)``), so no all-clear is claimed."
+                ''
+                'This is not an all-clear: how much of the suite was judged is unknown. Check the workflow logs.'
+            )
+        }
+    }
+}
+
+function Format-PrBenchCommentBody {
+    # Composes the rolling PR benchmark comment body from the artefacts the analyze recipe leaves in
+    # $ScratchDir (its four-artefact contract: report.md, report.json, summary.md, notable.txt). Called
+    # by the analyze job through the gh-compose-pr-bench-comment recipe, which writes the returned string
+    # to the body file the staleness check and the post step then consume.
+    #
+    # Two shapes, one skeleton (header, collection scope, analyzed commit):
+    #   * findings      -> the condensed Markdown summary, a link to the full-report artifact, and the
+    #                      "how to read this" footer;
+    #   * no findings   -> the coverage verdict, which claims an all-clear only where one was earned.
+    #
+    # The body leads with the caller-supplied dedup marker (so the next run updates THIS comment instead
+    # of posting a duplicate) and a hidden analyzed-commit marker built from $CommitMarkerPrefix (so the
+    # mark-stale job can recover which commit the numbers describe). The visible analyzed-commit line
+    # prints the FULL 40-char SHA bare - no backticks - because GitHub autolinks a bare commit SHA and
+    # renders it abbreviated, so the link and the short display come for free; truncating it into a code
+    # span would throw both away. Both markers derive from the same $AnalyzedSha, so they cannot drift.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][string] $Marker,
+        [Parameter(Mandatory)][string] $CommitMarkerPrefix,
+        [Parameter(Mandatory)][string] $AnalyzedSha,
+        [Parameter(Mandatory)][string] $Packages,
+        [Parameter(Mandatory)][string] $ScratchDir,
+        [string] $ReportArtifactUrl
+    )
+
+    Assert-CommitSha -Sha $AnalyzedSha -Label 'Analyzed'
+
+    if (-not (Test-Path -LiteralPath $ScratchDir)) {
+        throw "Analysis scratch directory '$ScratchDir' does not exist."
+    }
+
+    $notablePath = Join-Path $ScratchDir 'notable.txt'
+    if (-not (Test-Path -LiteralPath $notablePath)) {
+        throw "Analysis notable flag '$notablePath' does not exist."
+    }
+    $notable = (Get-Content -LiteralPath $notablePath -Raw).Trim() -eq 'true'
+
+    $scope = Format-CollectionScope -Packages $Packages -Verb 'benchmarked'
+    $analyzedLine = "**Analyzed commit:** $AnalyzedSha"
+
+    if ($notable) {
+        $summary = (Get-Content -LiteralPath (Join-Path $ScratchDir 'summary.md') -Raw).TrimEnd()
+        $fullReport = "**Full report:** the complete Markdown and JSON reports are attached to this workflow run. [Download the full report bundle]($ReportArtifactUrl)."
+        # Literal Markdown: the single-quoted here-string keeps the inline-code backticks verbatim.
+        $footer = @'
+**How to read this**
+
+This compares this PR's benchmark level against `main` (branch mode). It is **advisory** - it never blocks the merge; the workflow's check status reflects run success, not whether there are findings. Shared runners are noisy, so treat small movements with suspicion (`--best-of 3` and the false-discovery filter already suppress most noise).
+
+To investigate a finding, copy its benchmark id and metric and run:
+
+`cargo bench-history examine --benchmark <id> --metric <name>`
+
+If a regression is an intentional tradeoff, bless it on the base commit; if it is a defect, fix it. Improvements are shown for information only.
+'@
+        Write-Verbose "The analysis flagged findings; composing the rolling comment around the condensed summary and a link to the full-report artifact."
+        $parts = @(
+            $script:CommentHeader
+            ''
+            $scope
+            ''
+            $analyzedLine
+            ''
+            $summary
+            ''
+            '---'
+            ''
+            $fullReport
+            ''
+            '---'
+            ''
+            $footer
+        )
+    } else {
+        $coverage = Get-SeriesCoverage -ReportPath (Join-Path $ScratchDir 'report.json')
+        Write-Verbose ("The analysis flagged nothing; composing the rolling comment around the report's " +
+            "own coverage state '$($coverage.State)' so an all-clear is claimed only where it was earned.")
+        $parts = @(
+            $script:CommentHeader
+            ''
+            $scope
+            ''
+            $analyzedLine
+            ''
+        ) + (Format-CoverageVerdict -Coverage $coverage) + @(
+            ''
+            'This check is advisory and never blocks the merge. It refreshes on every push.'
+        )
+    }
+
+    $commitMarker = "$CommitMarkerPrefix$AnalyzedSha -->"
+    return (@($Marker, $commitMarker, '') + $parts) -join "`n"
+}
+
+Export-ModuleMember -Function Find-RollingComment, Publish-RollingComment, Remove-RollingComment, Get-CommitsBehind, Set-RollingCommentStaleness, Add-StalenessBannerIfBehind, Publish-InProgressComment, Format-PrBenchCommentBody

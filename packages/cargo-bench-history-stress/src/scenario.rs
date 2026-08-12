@@ -27,6 +27,16 @@
 //!
 //! One cross-cutting step drives the other mode: an elevation on the feature
 //! branch for `b % BRANCH_DIVISOR == 0` (a `branch`-mode regression).
+//!
+//! A seeded shape only becomes a *finding* once the history carries the evidence
+//! the analysis gates demand: a series is judged at all only from the detectors'
+//! minimum number of points, and a step is trusted only when a full regime sits on
+//! each side of it. Roughly half the commits carry a run, so a `commits` below
+//! twice the minimum series length produces no findings at all, and for a stretch
+//! above that only part of the seeded set surfaces, since whether a given step
+//! keeps a whole regime behind it depends on where it lands among the run-carrying
+//! commits. Eight times the minimum regime sits clear of that stretch, and is the
+//! size the smoke tests seed.
 
 // The synthetic values are illustrative magnitudes, not real measurements:
 // bounded small-integer index arithmetic and lossy integer/f64 conversions here
@@ -68,8 +78,8 @@ const FAMILY_COUNT: usize = 5;
 /// The family whose ~75% step a blessing re-baselines (in the blessed sets).
 const BLESSABLE_FAMILY: usize = 3;
 
-/// Discriminant sets at or before this index receive the family-3 blessing; the
-/// rest keep the un-blessed step, so the two cases contrast in one run.
+/// Discriminant sets below this index receive the family-3 blessing; the rest
+/// keep the un-blessed step, so the two cases contrast in one run.
 const BLESSED_SET_LIMIT: usize = 3;
 
 /// Every benchmark whose index is a multiple of this is elevated on the feature

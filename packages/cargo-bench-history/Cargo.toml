@@ -60,6 +60,7 @@ azure_storage_blob = { workspace = true, features = ["default"] }
 base64 = { workspace = true }
 cargo-bench-history-faker = { path = "../cargo-bench-history-faker", features = ["private-test-util"] }
 cbh_codec = { path = "../cbh_codec" }
+cbh_detect = { path = "../cbh_detect" }
 cbh_diag = { path = "../cbh_diag", features = ["private-test-util"] }
 cbh_git = { path = "../cbh_git", features = ["private-test-util"] }
 cbh_storage = { path = "../cbh_storage", features = ["private-test-util"] }

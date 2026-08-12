@@ -12,7 +12,11 @@ pub(crate) mod discriminant;
 pub(crate) mod findings;
 mod noise_gates;
 pub(crate) mod parallel;
+#[cfg(test)]
+mod recorded;
 pub(crate) mod run_points;
+#[cfg(test)]
+mod scatter;
 pub(crate) mod selection;
 pub(crate) mod series;
 #[cfg(test)]
@@ -20,8 +24,9 @@ mod signal_validation;
 
 pub use discriminant::{DiscriminantSetQuery, FacetFilter};
 pub use findings::{
-    AnalysisConfig, AnalysisContext, AnalysisMode, Direction, Finding, FindingMethod, SeriesValue,
-    find_changes_spawned, short_commit,
+    AnalysisConfig, AnalysisContext, AnalysisMode, Detection, Direction, Finding, FindingMethod,
+    SeriesCensus, SeriesValue, Testability, UnjudgedReason, find_changes_spawned, short_commit,
+    testability,
 };
 pub use parallel::{balanced_chunk_sizes, worker_count};
 pub use run_points::{MetricPoint, ResultPoints, RunPoints};

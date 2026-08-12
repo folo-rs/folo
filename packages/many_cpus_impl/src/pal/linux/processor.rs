@@ -12,7 +12,8 @@ pub(crate) struct ProcessorImpl {
     pub(crate) efficiency_class: EfficiencyClass,
     pub(crate) relative_speed: RelativeSpeed,
 
-    /// Model from the `model name` field of `/proc/cpuinfo`, `None` when absent.
+    /// Best-effort model of the processor, `None` when `/proc/cpuinfo` identifies it in no way
+    /// we recognize.
     pub(crate) model: Option<Arc<str>>,
 
     pub(crate) is_active: bool,

@@ -62,4 +62,8 @@ unexplained step at the boundary of a backfilled span with suspicion.
 ## Noise reduction
 
 `--best-of N` carries through to each commit's `collect`, applying the same min-of-N noise
-reduction uniformly across the range.
+reduction uniformly across the range. Use the same `N` the range's neighbours were collected
+with: the reduction keeps a minimum, whose expected value falls as `N` rises, so a span
+backfilled with a different count sits at a different level for every metric noisy enough to
+be affected, and meets its neighbours as a step.
+Each backfilled run records the count it was reduced from, like any other run.

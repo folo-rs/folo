@@ -11,12 +11,13 @@ use crate::{BenchmarkId, Metric, MetricKind, RunContext};
 /// it: version 2 dropped the redundant per-object `commit` timestamp (a run's
 /// timeline position is resolved from git topology, keyed by its commit ID),
 /// version 3 dropped the redundant `short_commit` (an abbreviation of the full
-/// commit ID the analysis already has from the storage key), and version 4 added
-/// the optional host-hardware provenance (`context.machine`). Every one of these
+/// commit ID the analysis already has from the storage key), version 4 added
+/// the optional host-hardware provenance (`context.machine`), and version 5 added
+/// the optional best-of repetition count (`context.best_of`). Every one of these
 /// changes is wire-compatible: older records still deserialize because a removed
 /// field is ignored and an added field defaults to absent. The version is bumped
 /// so a file's provenance stays legible, not because a read path branches on it.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// A complete benchmark run: the unit of storage (one immutable file per run).
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -155,6 +156,8 @@ impl BenchmarkResult {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::num::NonZero;
+
     use nonempty::nonempty;
 
     use super::*;
@@ -176,6 +179,7 @@ mod tests {
             processor_speeds: vec![(3141, 8)],
             fingerprint: "test-fingerprint".to_owned(),
         });
+        context.best_of = NonZero::new(3);
         context
     }
 

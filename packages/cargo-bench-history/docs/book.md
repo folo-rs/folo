@@ -29,6 +29,10 @@ The teaching points that every chapter should reinforce, not just the concept ch
    reconstructed series. Motivate this before any command.
 2. **High signal-to-noise, never cry wolf.** No engine is deterministic, so every metric is
    treated as noisy and gated hard. We would rather miss a marginal move than raise a false alarm.
+   The gates weigh *evidence*, never cause, so a real-but-uninteresting shift is not filtered out
+   for being uninteresting: an infrastructure-caused step is meant to be reported and then
+   blessed. That is a statement about what the gates decline to consider, not a promise of
+   detection — such a step still has to clear the same evidence and magnitude gates as any other.
 3. **Comparability is explicit.** Two results compare only when their *discriminant sets* match;
    everything else is metadata so its effect shows up as a timeline step, not a silent fork.
 4. **Append-only by default.** Normal collection never replaces an existing clean run; overwrite
@@ -99,7 +103,7 @@ concept pages link up into the commands that exercise them.
 | `list` | Preview the exact data set `analyze` would consume (`runs` / `discriminants` / `blessings`) without analyzing. |
 | `prune` | Delete a chosen scope of stored data; never touches base-branch history without an explicit confirm. |
 | `bless` / `unbless` | Manually accept an intentional change so history stops re-flagging it; per-benchmark; honored only in history mode. |
-| `machine-key` | Print the hardware fingerprint that all history is partitioned by; `--verbose` explains the factors. |
+| `machine-key` | Print the hardware fingerprint that all history is partitioned by; it hashes hardware identity only, and `--verbose` explains the factors. |
 
 ### Part 3 — Concepts
 
@@ -123,11 +127,13 @@ concept pages link up into the commands that exercise them.
 
 - **Goal**: how findings are produced with high signal-to-noise.
 - **Teach**: the two finding methods (change-point step vs. monotonic drift) and how one wins per
-  series; the noise-aware gates and the practical-magnitude floor; the two auto-selected modes
-  (history over the whole series vs. branch judging the *tip commit* against the base — tenet 7);
-  full-history vs. bounded baseline-and-tip charts; re-baselining via resolved spikes and
-  blessings; the three report formats sharing one pass and the advisory-finding /
-  JSON-is-the-signal split (tenet 6); no severity classification.
+  series; the noise-aware gates and the practical-magnitude floor (relative *and* absolute, on
+  every metric) and what they are *not* for (tenet 2); how branch mode judges the *tip commit* as
+  one new observation against the base's commit-to-commit scatter; that confidence reports
+  evidence strength; the false-discovery family being every judged series in either mode; the two
+  auto-selected modes (tenet 7); full-history vs. bounded baseline-and-tip charts; re-baselining
+  via resolved spikes and blessings; the three report formats sharing one pass and the
+  advisory-finding / JSON-is-the-signal split (tenet 6); no severity classification.
 
 ## Maintenance
 

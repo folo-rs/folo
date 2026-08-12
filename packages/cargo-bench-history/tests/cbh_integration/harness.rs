@@ -40,6 +40,30 @@ pub(crate) const HARNESS_AUTO_TRIPLE: &str = "x86_64-unknown-linux-gnu";
 /// select them with an explicit `--machine-key`.
 pub(crate) const HARNESS_AUTO_MACHINE_KEY: &str = "harness-auto-machine";
 
+/// The minimum number of points a change-point regime (the flat side and the
+/// stepped side of a split) must hold before the history detector trusts the
+/// split. Mirrors `cbh_detect::AnalysisConfig::default().min_regime`; the
+/// [`fixture_gate_sizes_match_the_detector_defaults`] guard test keeps the two in
+/// lockstep. Fixtures build a flat regime and a stepped regime of this size so a
+/// seeded step clears the detector's per-regime persistence gate.
+pub(crate) const MIN_REGIME: usize = 5;
+
+/// The minimum number of points a series must carry to be analysed at all — below
+/// it the series is not judged and is not even counted in the false-discovery
+/// family. Equal to two full regimes and mirrors
+/// `cbh_detect::AnalysisConfig::default().min_series_points` (also the value of
+/// `DRIFT_MIN_POINTS` and the base-side commit-level floor branch mode demands).
+/// Fixtures seed at least this many points so their series is judged rather than
+/// silently skipped.
+pub(crate) const MIN_SERIES_POINTS: usize = 2 * MIN_REGIME;
+
+/// The committer date of the first commit the rising Callgrind fixture
+/// ([`Workspace::seed_rising_callgrind_history`]) stamps; each later commit is one
+/// calendar day on. Named so a test that must know where the fixture's timeline
+/// starts or ends derives it (via [`sequential_dates`]) instead of restating a
+/// date that moves whenever the fixture's length does.
+pub(crate) const RISING_HISTORY_FIRST_DATE: &str = "2024-01-01";
+
 /// Canonical faker `--callgrind` identity/metric fragments, kept in lockstep with
 /// what the `collect` identity assertions expect. A fragment is everything after
 /// the on-disk `GROUP` — `MODULE|FUNCTION[|ID[|PACKAGE_DIR]]=IR/BC/BI`; the
@@ -1150,31 +1174,50 @@ impl Workspace {
         );
     }
 
-    /// Seeds a flat history followed by a clear, sustained upward step — a
-    /// regression with enough points on each side to satisfy the change-point
-    /// detector's persistence requirement.
+    /// Seeds a flat-then-stepped clean Callgrind history: [`MIN_REGIME`] commits at
+    /// `baseline` then [`MIN_REGIME`] commits at `raised`, labeled `{prefix}1`..
+    /// and dated one day apart from `first_date` (`YYYY-MM-DD`). The series holds
+    /// [`MIN_SERIES_POINTS`] points — the minimum the change-point detector will
+    /// analyse — with each regime long enough to clear the per-regime persistence
+    /// gate, so a step between the regimes is a trustable sustained change.
+    pub(crate) fn seed_stepped_callgrind(
+        &self,
+        first_date: &str,
+        prefix: &str,
+        baseline: f64,
+        raised: f64,
+    ) {
+        for (index, date) in sequential_dates(first_date, MIN_SERIES_POINTS)
+            .into_iter()
+            .enumerate()
+        {
+            let label = format!(
+                "{prefix}{}",
+                index.checked_add(1).expect("commit index overflow")
+            );
+            self.commit_dated(&date, &label);
+            let value = if index < MIN_REGIME { baseline } else { raised };
+            self.seed_callgrind(&label, value);
+        }
+    }
+
+    /// Seeds a flat clean Callgrind history followed by a clear, sustained upward
+    /// step: [`MIN_REGIME`] commits at 100 then [`MIN_REGIME`] commits at 130,
+    /// labeled `c1`.. and dated one day apart from [`RISING_HISTORY_FIRST_DATE`].
+    /// The series holds [`MIN_SERIES_POINTS`] points — long enough that the
+    /// change-point detector analyses it, with each regime clearing the per-regime
+    /// persistence gate.
     pub(crate) fn seed_rising_callgrind_history(&self) {
-        self.commit_dated("2024-01-01", "c1");
-        self.seed_callgrind("c1", 100.0);
-        self.commit_dated("2024-01-02", "c2");
-        self.seed_callgrind("c2", 100.0);
-        self.commit_dated("2024-01-03", "c3");
-        self.seed_callgrind("c3", 100.0);
-        self.commit_dated("2024-01-04", "c4");
-        self.seed_callgrind("c4", 130.0);
-        self.commit_dated("2024-01-05", "c5");
-        self.seed_callgrind("c5", 130.0);
-        self.commit_dated("2024-01-06", "c6");
-        self.seed_callgrind("c6", 130.0);
+        self.seed_stepped_callgrind(RISING_HISTORY_FIRST_DATE, "c", 100.0, 130.0);
     }
 
     /// Seeds a rising Callgrind history for `count` distinct benchmarks sharing one
     /// partition, so a single analysis pass yields `count` regression findings of
     /// distinct magnitudes. Each benchmark holds a flat baseline of 100 across the
-    /// first three commits, then steps to a benchmark-specific higher value across
-    /// the last three — a sustained regression the change-point detector flags.
-    /// Benchmark `i` steps to `120 + i`, so magnitudes are distinct and strictly
-    /// increasing, giving the global ranking a deterministic order.
+    /// first [`MIN_REGIME`] commits, then steps to a benchmark-specific higher value
+    /// across the last [`MIN_REGIME`] — a sustained regression the change-point
+    /// detector flags. Benchmark `i` steps to `120 + i`, so magnitudes are distinct
+    /// and strictly increasing, giving the global ranking a deterministic order.
     pub(crate) fn seed_many_rising_callgrind_history(&self, count: usize) {
         let baseline = vec![100.0; count];
         // `count` is a small test parameter; a u16 cast keeps the value exact and
@@ -1184,21 +1227,18 @@ impl Workspace {
                 120.0 + f64::from(u16::try_from(index).expect("benchmark count fits in u16"))
             })
             .collect();
-        for (date, label) in [
-            ("2024-01-01", "c1"),
-            ("2024-01-02", "c2"),
-            ("2024-01-03", "c3"),
-        ] {
-            self.commit_dated(date, label);
-            self.seed_many_callgrind(label, &baseline);
-        }
-        for (date, label) in [
-            ("2024-01-04", "c4"),
-            ("2024-01-05", "c5"),
-            ("2024-01-06", "c6"),
-        ] {
-            self.commit_dated(date, label);
-            self.seed_many_callgrind(label, &raised);
+        for (index, date) in sequential_dates("2024-01-01", MIN_SERIES_POINTS)
+            .into_iter()
+            .enumerate()
+        {
+            let label = format!("c{}", index.checked_add(1).expect("commit index overflow"));
+            self.commit_dated(&date, &label);
+            let values = if index < MIN_REGIME {
+                &baseline
+            } else {
+                &raised
+            };
+            self.seed_many_callgrind(&label, values);
         }
     }
 
@@ -1264,25 +1304,20 @@ impl Workspace {
     }
 
     /// Seeds a flat Criterion `wall_time` history then a clear, sustained upward
-    /// step. Four points on each side give the rank-sum gate enough power to
-    /// distinguish the step from noise.
+    /// step: [`MIN_REGIME`] commits at 20 then [`MIN_REGIME`] commits at 30, labeled
+    /// `d1`.. and dated one day apart from 2024-02-01. The series holds
+    /// [`MIN_SERIES_POINTS`] points, long enough for the change-point detector to
+    /// analyse it with each regime clearing the per-regime persistence gate.
     pub(crate) fn seed_rising_criterion_history(&self, machine: &str) {
-        self.commit_dated("2024-02-01", "d1");
-        self.seed_criterion("d1", machine, 20.0);
-        self.commit_dated("2024-02-02", "d2");
-        self.seed_criterion("d2", machine, 20.0);
-        self.commit_dated("2024-02-03", "d3");
-        self.seed_criterion("d3", machine, 20.0);
-        self.commit_dated("2024-02-04", "d4");
-        self.seed_criterion("d4", machine, 20.0);
-        self.commit_dated("2024-02-05", "d5");
-        self.seed_criterion("d5", machine, 30.0);
-        self.commit_dated("2024-02-06", "d6");
-        self.seed_criterion("d6", machine, 30.0);
-        self.commit_dated("2024-02-07", "d7");
-        self.seed_criterion("d7", machine, 30.0);
-        self.commit_dated("2024-02-08", "d8");
-        self.seed_criterion("d8", machine, 30.0);
+        for (index, date) in sequential_dates("2024-02-01", MIN_SERIES_POINTS)
+            .into_iter()
+            .enumerate()
+        {
+            let label = format!("d{}", index.checked_add(1).expect("commit index overflow"));
+            self.commit_dated(&date, &label);
+            let value = if index < MIN_REGIME { 20.0 } else { 30.0 };
+            self.seed_criterion(&label, machine, value);
+        }
     }
 
     /// Seeds one Callgrind result set carrying two distinct benchmark identities,
@@ -1447,6 +1482,23 @@ impl Drop for ClearedTargetDir {
             std::env::set_var("CARGO_TARGET_DIR", previous);
         }
     }
+}
+
+/// Produces `count` consecutive `YYYY-MM-DD` date strings starting at `start`
+/// (`YYYY-MM-DD`), one calendar day apart. Fixtures use it to generate commit
+/// chains long enough to clear the detectors' minimum-evidence gates without
+/// hand-writing every date. Callers keep `start` and `count` inside `analyze`'s
+/// default six-month look-back window (see [`analysis_now`]).
+pub(crate) fn sequential_dates(start: &str, count: usize) -> Vec<String> {
+    let mut date: jiff::civil::Date = start.parse().expect("start is a valid YYYY-MM-DD date");
+    let mut dates = Vec::with_capacity(count);
+    for _ in 0..count {
+        dates.push(date.to_string());
+        date = date
+            .tomorrow()
+            .expect("date stays within the supported range");
+    }
+    dates
 }
 
 /// A fixed clock anchor for `analyze`/`list`'s history-mode default `--since`
@@ -1646,6 +1698,37 @@ pub(crate) fn time_result_set_with_dispersion(
     Run::new(context, vec![record])
 }
 
+/// The number of series a rendered text report states it judged, read from the
+/// coverage field every analysis report carries in its header.
+///
+/// Panics when the report carries no coverage field: a report with nothing in scope
+/// cannot support any claim about the detectors.
+pub(crate) fn judged_series(report: &str) -> usize {
+    let (_, tail) = report
+        .split_once("in-scope series judged: ")
+        .unwrap_or_else(|| panic!("the report header states its series coverage: {report}"));
+    let (judged, _) = tail
+        .split_once(" of ")
+        .unwrap_or_else(|| panic!("the coverage field reads `judged of in-scope`: {report}"));
+    judged
+        .parse()
+        .unwrap_or_else(|_| panic!("the coverage field counts series: {report}"))
+}
+
+/// Asserts that an analysis actually reached a verdict on at least one series.
+///
+/// An assertion that nothing was flagged only says something about the detectors
+/// when the data reached them. The same silence is also what a history too short to
+/// judge, a ghost-filtered benchmark, or a detector switched off by a bad gate
+/// produces — so a test asserting an absence states this first, and thereby cannot
+/// pass vacuously.
+pub(crate) fn assert_history_was_judged(report: &str) {
+    assert!(
+        judged_series(report) > 0,
+        "the analysis judged nothing, so its silence proves nothing: {report}"
+    );
+}
+
 pub(crate) fn ir_of(record: &BenchmarkResult) -> f64 {
     record
         .metrics
@@ -1747,4 +1830,20 @@ fn commit_dated_reuses_the_existing_commit() {
     let first = workspace.commit_dated("2024-01-01", "c1");
     let again = workspace.commit_dated("2024-01-05", "c1");
     assert_eq!(first, again, "the label reuses c1's commit");
+}
+
+/// The fixture sizing constants must track the detector's public defaults; if a
+/// gate default moves, this guard fails so the fixtures are re-derived rather than
+/// silently seeding too little (or needless) history.
+#[test]
+fn fixture_gate_sizes_match_the_detector_defaults() {
+    let config = cbh_detect::AnalysisConfig::default();
+    assert_eq!(
+        MIN_REGIME, config.min_regime,
+        "MIN_REGIME must match the detector's per-regime persistence gate"
+    );
+    assert_eq!(
+        MIN_SERIES_POINTS, config.min_series_points,
+        "MIN_SERIES_POINTS must match the detector's minimum-series-length gate"
+    );
 }

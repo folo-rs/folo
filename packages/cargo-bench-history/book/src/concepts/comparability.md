@@ -12,14 +12,23 @@ is `{ project, engine, target_triple, machine_key }`:
 - **`engine`** — different units and semantics never mix.
 - **`target_triple`** — even simulated counts are not comparable across
   architectures.
-- **`machine_key`** — always present: a fingerprint of the host the benchmark ran on. Every
-  engine is partitioned by it, because every engine's numbers vary with the hardware in
+- **`machine_key`** — always present: a fingerprint of the host hardware the benchmark ran on.
+  Every engine is partitioned by it, because every engine's numbers vary with the hardware in
   practice. See [machine-key](../commands/machine-key.md).
 
 Deliberately **metadata, not partition** — so a change shows up as a timeline step, which is
-the whole point of the tool — are the toolchain versions, OS/libc, commit, branch, and
-environment provider. A rustc bump therefore appears as a step in the series rather than
-silently forking history.
+the whole point of the tool — are the toolchain versions, OS/libc, commit, branch, the
+environment provider, and the `--best-of` repetition count the run's values were reduced
+from. A rustc bump therefore appears as a step in the series rather than silently forking
+history.
+
+Read the repetition count differently from the rest, though. Because the reduction keeps a
+*minimum*, and the expected minimum of `N` samples falls as `N` rises, changing it moves the
+recorded level of every benchmark noisy enough to be affected — a broad step across the suite
+at one commit is the signature of the count changing, not of the code changing. Each run
+records the count
+it was reduced from, so which protocol produced a value stays recoverable from the stored
+data. See [`collect --best-of`](../commands/collect.md).
 
 ## Ordering the timeline
 
@@ -32,7 +41,7 @@ time, so a rebase or amended date can never leave a stale timestamp behind.
 ```mermaid
 flowchart LR
   RR[BenchmarkResult] --> RS[Run]
-  CTX[RunContext: git + env + toolchain + machine] --> RS
+  CTX[RunContext: git + env + toolchain + machine + best-of] --> RS
   RS -->|collect stores| ST[(Storage)]
   ST -->|analyze reconstructs by topology| SE[Series] --> F[Findings]
 ```

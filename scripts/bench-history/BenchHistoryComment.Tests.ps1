@@ -1032,6 +1032,441 @@ Describe 'Publish-InProgressComment (mocked gh api)' {
     }
 }
 
+Describe 'Format-CollectionScope (unexported string transform)' {
+    It 'renders a single impacted package with singular wording' {
+        InModuleScope BenchHistoryComment {
+            $scope = Format-CollectionScope -Packages 'solo' -Verb 'benchmarked'
+            $scope | Should -Be '**Collection scope:** benchmarked the 1 package impacted by this PR (`solo`).'
+        }
+    }
+
+    It 'sorts and de-duplicates multiple impacted packages with plural wording' {
+        InModuleScope BenchHistoryComment {
+            $scope = Format-CollectionScope -Packages 'beta alpha  beta' -Verb 'benchmarking'
+            $scope | Should -Be '**Collection scope:** benchmarking the 2 packages impacted by this PR (`alpha`, `beta`).'
+        }
+    }
+}
+
+Describe 'Get-SeriesCoverage (unexported report projection)' {
+    BeforeAll {
+        # Every distinct coverage situation the analysis can report, as the report.json the analyze job
+        # leaves behind. Shared by the verdict and body suites below so one situation is described once
+        # and checked on every surface it reaches.
+        function Format-CoverageReportJson {
+            param(
+                [Parameter(Mandatory)][AllowNull()][hashtable] $Census,
+                [bool] $Notable = $false
+            )
+
+            $report = if ($null -eq $Census) { @{ notable = $Notable } } else { @{ notable = $Notable; census = $Census } }
+            return ($report | ConvertTo-Json -Depth 6)
+        }
+
+        function Write-CoverageScratch {
+            param(
+                [Parameter(Mandatory)][string] $ReportJson,
+                [string] $Notable = 'false',
+                [string] $Summary = '## Findings'
+            )
+
+            $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("bh-scratch-$([guid]::NewGuid().ToString('n'))")
+            New-Item -ItemType Directory -Path $dir | Out-Null
+            Set-Content -LiteralPath (Join-Path $dir 'report.json') -Value $ReportJson -Encoding utf8
+            Set-Content -LiteralPath (Join-Path $dir 'notable.txt') -Value $Notable -Encoding utf8
+            Set-Content -LiteralPath (Join-Path $dir 'summary.md') -Value $Summary -Encoding utf8
+            return $dir
+        }
+
+        $script:ScratchRoots = @()
+    }
+
+    AfterAll {
+        foreach ($root in $script:ScratchRoots) {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'transports the state and counts the report states (<Name>)' -TestCases @(
+        @{
+            Name = 'nothing in scope'
+            Census = @{ total = 4; in_scope = 0; judged = 0; unjudged = 4; coverage = 'nothing_in_scope'
+                reasons = @(@{ reason = 'ghost'; count = 4 })
+            }
+            State = 'nothing_in_scope'; Judged = 0; InScope = 0; Shortfalls = 0
+        }
+        @{
+            Name = 'nothing judged'
+            Census = @{ total = 3; in_scope = 3; judged = 0; unjudged = 3; coverage = 'nothing_judged'
+                reasons = @(@{ reason = 'too_few_base_commits'; count = 3 })
+            }
+            State = 'nothing_judged'; Judged = 0; InScope = 3; Shortfalls = 1
+        }
+        @{
+            Name = 'partial'
+            Census = @{ total = 5; in_scope = 4; judged = 3; unjudged = 2; coverage = 'partial'
+                reasons = @(@{ reason = 'ghost'; count = 1 }, @{ reason = 'too_few_points'; count = 1 })
+            }
+            State = 'partial'; Judged = 3; InScope = 4; Shortfalls = 1
+        }
+        @{
+            Name = 'full'
+            Census = @{ total = 2; in_scope = 2; judged = 2; unjudged = 0; coverage = 'full'; reasons = @() }
+            State = 'full'; Judged = 2; InScope = 2; Shortfalls = 0
+        }
+    ) {
+        $dir = Write-CoverageScratch -ReportJson (Format-CoverageReportJson -Census $Census)
+        $script:ScratchRoots += $dir
+        $expected = @{ State = $State; Judged = $Judged; InScope = $InScope; Shortfalls = $Shortfalls }
+        InModuleScope BenchHistoryComment -Parameters @{ Dir = $dir; Expected = $expected } {
+            param($Dir, $Expected)
+
+            $coverage = Get-SeriesCoverage -ReportPath (Join-Path $Dir 'report.json')
+            $coverage.State | Should -Be $Expected.State
+            $coverage.Judged | Should -Be $Expected.Judged
+            $coverage.InScope | Should -Be $Expected.InScope
+            # Ghosts are out of scope by construction, so they never reach the shortfall list the
+            # comment explains; the "Collection scope" line covers them instead.
+            $reasons = @(@($coverage.Shortfalls) | ForEach-Object { [string]$_.Reason })
+            $reasons.Count | Should -Be $Expected.Shortfalls
+            $reasons | Should -Not -Contain 'ghost'
+        }
+    }
+
+    It 'reports no series when the report carries no census (total collect failure)' {
+        $dir = Write-CoverageScratch -ReportJson (Format-CoverageReportJson -Census $null)
+        $script:ScratchRoots += $dir
+        InModuleScope BenchHistoryComment -Parameters @{ Dir = $dir } {
+            param($Dir)
+
+            $coverage = Get-SeriesCoverage -ReportPath (Join-Path $Dir 'report.json')
+            $coverage.State | Should -Be 'no_series'
+            $coverage.InScope | Should -Be 0
+        }
+    }
+
+    It 'reports no series when the report file is absent' {
+        InModuleScope BenchHistoryComment {
+            $missing = Join-Path ([System.IO.Path]::GetTempPath()) "bh-absent-$([guid]::NewGuid().ToString('n')).json"
+            (Get-SeriesCoverage -ReportPath $missing).State | Should -Be 'no_series'
+        }
+    }
+
+    It 'refuses to guess a state the report does not carry' {
+        # A census without a coverage field comes from a tool that predates the projection. Re-deriving
+        # the verdict here is exactly the drift the projection exists to prevent, so it stays unknown.
+        $census = @{ total = 3; in_scope = 3; judged = 1; unjudged = 2
+            reasons = @(@{ reason = 'too_few_points'; count = 2 })
+        }
+        $dir = Write-CoverageScratch -ReportJson (Format-CoverageReportJson -Census $census)
+        $script:ScratchRoots += $dir
+        InModuleScope BenchHistoryComment -Parameters @{ Dir = $dir } {
+            param($Dir)
+
+            (Get-SeriesCoverage -ReportPath (Join-Path $Dir 'report.json')).State | Should -Be 'unknown'
+        }
+    }
+
+    It 'does not throw or invent a shortfall when the census omits fields' {
+        # A truncated document, or one from a tool version older than a field being read, must degrade
+        # to zeroes and an empty breakdown - `Set-StrictMode -Version Latest` turns a bare property read
+        # on a missing field into a terminating error that would fail the whole comment step.
+        $dir = Write-CoverageScratch -ReportJson '{"notable":false,"census":{"coverage":"partial"}}'
+        $script:ScratchRoots += $dir
+        InModuleScope BenchHistoryComment -Parameters @{ Dir = $dir } {
+            param($Dir)
+
+            $coverage = Get-SeriesCoverage -ReportPath (Join-Path $Dir 'report.json')
+            $coverage.State | Should -Be 'partial'
+            $coverage.Judged | Should -Be 0
+            $coverage.InScope | Should -Be 0
+            $coverage.Total | Should -Be 0
+            @($coverage.Shortfalls).Count | Should -Be 0
+            # An entry naming no reason cannot be described to a reader, so it is dropped rather than
+            # rendered as an empty clause.
+            Format-CoverageShortfall -Shortfalls @($coverage.Shortfalls) | Should -Be 'no reason was reported'
+        }
+    }
+}
+
+Describe 'Format-CoverageVerdict (unexported string transform)' {
+    It 'claims an all-clear only where every in-scope series was judged (<Name>)' -TestCases @(
+        @{ Name = 'full'; State = 'full'; AllClear = $true }
+        @{ Name = 'partial'; State = 'partial'; AllClear = $false }
+        @{ Name = 'nothing judged'; State = 'nothing_judged'; AllClear = $false }
+        @{ Name = 'nothing in scope'; State = 'nothing_in_scope'; AllClear = $false }
+        @{ Name = 'no series'; State = 'no_series'; AllClear = $false }
+        @{ Name = 'a state added after this module'; State = 'invented_later'; AllClear = $false }
+        @{ Name = 'a report that stated no state'; State = 'unknown'; AllClear = $false }
+    ) {
+        InModuleScope BenchHistoryComment -Parameters @{ State = $State; AllClear = $AllClear } {
+            param($State, $AllClear)
+
+            $coverage = @{
+                State      = $State
+                Judged     = 2
+                InScope    = 4
+                Total      = 5
+                Shortfalls = @(@{ Reason = 'too_few_points'; Count = 2 })
+            }
+            $verdict = (Format-CoverageVerdict -Coverage $coverage) -join "`n"
+            # The checkmark is the at-a-glance signal a reader scans for, so it must appear for exactly
+            # one state and the warning sign for every other.
+            $verdict.Contains([char]0x2705) | Should -Be $AllClear
+            $verdict.Contains([char]0x26A0) | Should -Be (-not $AllClear)
+        }
+    }
+
+    It 'explains each in-scope shortfall in the reader''s terms (<Reason>)' -TestCases @(
+        @{ Reason = 'too_few_points'; Phrase = '2 series with too few measurements in the analyzed window' }
+        @{ Reason = 'too_few_points_since_blessing'; Phrase = '2 series with too few measurements since being blessed' }
+        @{ Reason = 'not_measured_on_branch'; Phrase = '2 series not measured on this branch' }
+        @{ Reason = 'too_few_base_commits'; Phrase = '2 series with too little `main` history to compare against' }
+    ) {
+        InModuleScope BenchHistoryComment -Parameters @{ Reason = $Reason; Phrase = $Phrase } {
+            param($Reason, $Phrase)
+
+            $coverage = @{
+                State      = 'partial'
+                Judged     = 2
+                InScope    = 4
+                Total      = 4
+                Shortfalls = @(@{ Reason = $Reason; Count = 2 })
+            }
+            ((Format-CoverageVerdict -Coverage $coverage) -join "`n").Contains($Phrase) | Should -BeTrue
+        }
+    }
+
+    It 'names a reason it does not recognize instead of mislabelling it' {
+        # The failure this guards against: a reason added to the tool later being described as short
+        # base-branch history, which would send the reader chasing the wrong explanation.
+        InModuleScope BenchHistoryComment {
+            $coverage = @{
+                State      = 'partial'
+                Judged     = 2
+                InScope    = 4
+                Total      = 4
+                Shortfalls = @(@{ Reason = 'invented_later'; Count = 2 })
+            }
+            $verdict = (Format-CoverageVerdict -Coverage $coverage) -join "`n"
+            $verdict.Contains('2 series not judged for an unrecognized reason (`invented_later`)') | Should -BeTrue
+            $verdict.Contains('`main` history') | Should -BeFalse
+        }
+    }
+
+    It 'lists every reason when several fell short' {
+        InModuleScope BenchHistoryComment {
+            $coverage = @{
+                State      = 'nothing_judged'
+                Judged     = 0
+                InScope    = 5
+                Total      = 7
+                Shortfalls = @(
+                    @{ Reason = 'too_few_points'; Count = 3 }
+                    @{ Reason = 'not_measured_on_branch'; Count = 2 }
+                )
+            }
+            $verdict = (Format-CoverageVerdict -Coverage $coverage) -join "`n"
+            $verdict.Contains('Not assessed: 3 series with too few measurements in the analyzed window; 2 series not measured on this branch.') | Should -BeTrue
+        }
+    }
+}
+
+Describe 'Format-PrBenchCommentBody (composed rolling comment)' {
+    BeforeAll {
+        $script:AnalyzedSha = 'a' * 40
+        $script:CommitPrefix = '<!-- folo-bench-history-analyzed: '
+        $script:BodyScratchRoots = @()
+
+        function Write-BodyScratch {
+            param(
+                [Parameter(Mandatory)][AllowNull()][hashtable] $Census,
+                [string] $Notable = 'false',
+                [string] $Summary = '## Findings',
+                [bool] $NotableFlag = $false
+            )
+
+            $report = if ($null -eq $Census) { @{ notable = $NotableFlag } } else { @{ notable = $NotableFlag; census = $Census } }
+            $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("bh-body-$([guid]::NewGuid().ToString('n'))")
+            New-Item -ItemType Directory -Path $dir | Out-Null
+            Set-Content -LiteralPath (Join-Path $dir 'report.json') -Value ($report | ConvertTo-Json -Depth 6) -Encoding utf8
+            Set-Content -LiteralPath (Join-Path $dir 'notable.txt') -Value $Notable -Encoding utf8
+            Set-Content -LiteralPath (Join-Path $dir 'summary.md') -Value $Summary -Encoding utf8
+            $script:BodyScratchRoots += $dir
+            return $dir
+        }
+
+        function Get-ComposedBody {
+            param(
+                [Parameter(Mandatory)][string] $ScratchDir,
+                [string] $ArtifactUrl = ''
+            )
+
+            return Format-PrBenchCommentBody `
+                -Marker $script:Marker `
+                -CommitMarkerPrefix $script:CommitPrefix `
+                -AnalyzedSha $script:AnalyzedSha `
+                -Packages 'alpha beta' `
+                -ScratchDir $ScratchDir `
+                -ReportArtifactUrl $ArtifactUrl
+        }
+    }
+
+    AfterAll {
+        foreach ($root in $script:BodyScratchRoots) {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'renders the verdict the report warrants (<Name>)' -TestCases @(
+        @{
+            Name = 'absent census'
+            Census = $null
+            Expected = @('**No benchmark results were produced**')
+            Forbidden = @('No benchmark regressions detected')
+        }
+        @{
+            Name = 'every series a ghost'
+            Census = @{ total = 4; in_scope = 0; judged = 0; unjudged = 4; coverage = 'nothing_in_scope'
+                reasons = @(@{ reason = 'ghost'; count = 4 })
+            }
+            Expected = @('**Nothing in scope was measured**')
+            Forbidden = @('No benchmark regressions detected')
+        }
+        @{
+            Name = 'in scope but nothing judged'
+            Census = @{ total = 3; in_scope = 3; judged = 0; unjudged = 3; coverage = 'nothing_judged'
+                reasons = @(@{ reason = 'too_few_base_commits'; count = 3 })
+            }
+            Expected = @(
+                '**Nothing was judged.** None of the 3 in-scope series could be assessed'
+                'Not assessed: 3 series with too little `main` history to compare against.'
+            )
+            Forbidden = @('No benchmark regressions detected')
+        }
+        @{
+            Name = 'partial: too few points'
+            Census = @{ total = 4; in_scope = 4; judged = 3; unjudged = 1; coverage = 'partial'
+                reasons = @(@{ reason = 'too_few_points'; count = 1 })
+            }
+            Expected = @(
+                '**No regressions among the 3 of 4 series that could be judged.**'
+                'The remaining 1 were not assessed: 1 series with too few measurements in the analyzed window.'
+            )
+            Forbidden = @('No benchmark regressions detected')
+        }
+        @{
+            Name = 'partial: too few points since blessing'
+            Census = @{ total = 4; in_scope = 4; judged = 3; unjudged = 1; coverage = 'partial'
+                reasons = @(@{ reason = 'too_few_points_since_blessing'; count = 1 })
+            }
+            Expected = @('1 series with too few measurements since being blessed')
+            Forbidden = @('No benchmark regressions detected')
+        }
+        @{
+            Name = 'partial: not measured on branch'
+            Census = @{ total = 4; in_scope = 4; judged = 3; unjudged = 1; coverage = 'partial'
+                reasons = @(@{ reason = 'not_measured_on_branch'; count = 1 })
+            }
+            # The bug this replaces: a series the branch never measured was reported as ordinary
+            # base-history warm-up, which is a different situation with a different remedy.
+            Expected = @('1 series not measured on this branch')
+            Forbidden = @('`main` history to compare against')
+        }
+        @{
+            Name = 'partial: too few base commits'
+            Census = @{ total = 4; in_scope = 4; judged = 3; unjudged = 1; coverage = 'partial'
+                reasons = @(@{ reason = 'too_few_base_commits'; count = 1 })
+            }
+            Expected = @('1 series with too little `main` history to compare against')
+            Forbidden = @('No benchmark regressions detected')
+        }
+        @{
+            Name = 'mixed reasons'
+            Census = @{ total = 9; in_scope = 7; judged = 4; unjudged = 5; coverage = 'partial'
+                reasons = @(
+                    @{ reason = 'ghost'; count = 2 }
+                    @{ reason = 'too_few_points'; count = 2 }
+                    @{ reason = 'not_measured_on_branch'; count = 1 }
+                )
+            }
+            Expected = @(
+                'The remaining 3 were not assessed: 2 series with too few measurements in the analyzed window; 1 series not measured on this branch.'
+            )
+            Forbidden = @('ghost')
+        }
+        @{
+            Name = 'a reason added after this module was written'
+            Census = @{ total = 4; in_scope = 4; judged = 3; unjudged = 1; coverage = 'partial'
+                reasons = @(@{ reason = 'invented_later'; count = 1 })
+            }
+            Expected = @('1 series not judged for an unrecognized reason (`invented_later`)')
+            Forbidden = @('`main` history to compare against')
+        }
+        @{
+            Name = 'full coverage'
+            Census = @{ total = 3; in_scope = 3; judged = 3; unjudged = 0; coverage = 'full'; reasons = @() }
+            Expected = @('No benchmark regressions detected against `main` (all 3 in-scope series judged).')
+            Forbidden = @('not assessed')
+        }
+        @{
+            Name = 'a multi-metric ghost, counted per metric series'
+            Census = @{ total = 3; in_scope = 1; judged = 1; unjudged = 2; coverage = 'full'
+                reasons = @(@{ reason = 'ghost'; count = 2 })
+            }
+            Expected = @('(all 1 in-scope series judged)')
+            Forbidden = @('3 in-scope')
+        }
+    ) {
+        $body = Get-ComposedBody -ScratchDir (Write-BodyScratch -Census $Census)
+        foreach ($phrase in $Expected) {
+            $body.Contains($phrase) | Should -BeTrue -Because "the comment states '$phrase':`n$body"
+        }
+        foreach ($phrase in $Forbidden) {
+            $body.Contains($phrase) | Should -BeFalse -Because "the comment must not state '$phrase':`n$body"
+        }
+    }
+
+    It 'leads every body with the dedup marker, the analyzed-commit marker and the shared header' {
+        $body = Get-ComposedBody -ScratchDir (Write-BodyScratch -Census $null)
+        $lines = $body -split "`n"
+        $lines[0] | Should -Be $script:Marker
+        $lines[1] | Should -Be "$script:CommitPrefix$script:AnalyzedSha -->"
+        $body.Contains('### Performance impact (vs `main`)') | Should -BeTrue
+        $body.Contains("**Analyzed commit:** $script:AnalyzedSha") | Should -BeTrue
+        $body.Contains('**Collection scope:** benchmarked the 2 packages impacted by this PR (`alpha`, `beta`).') | Should -BeTrue
+        $body.Contains('This check is advisory and never blocks the merge.') | Should -BeTrue
+    }
+
+    It 'carries the condensed summary, the artifact link and the footer when there are findings' {
+        $dir = Write-BodyScratch -Census @{ total = 2; in_scope = 2; judged = 2; unjudged = 0; coverage = 'full'; reasons = @() } `
+            -Notable 'true' -Summary '## Regression in `alpha`' -NotableFlag $true
+        $body = Get-ComposedBody -ScratchDir $dir -ArtifactUrl 'https://example.invalid/artifact'
+        $body.Contains('## Regression in `alpha`') | Should -BeTrue
+        $body.Contains('[Download the full report bundle](https://example.invalid/artifact)') | Should -BeTrue
+        $body.Contains('**How to read this**') | Should -BeTrue
+        # The coverage verdict belongs to the silent path only: with findings on display, the reader is
+        # already looking at what moved.
+        $body.Contains('in-scope series judged') | Should -BeFalse
+    }
+
+    It 'rejects an analyzed SHA that is not a full commit id' {
+        { Get-ComposedBody -ScratchDir (Write-BodyScratch -Census $null) } | Should -Not -Throw
+        {
+            Format-PrBenchCommentBody -Marker $script:Marker -CommitMarkerPrefix $script:CommitPrefix `
+                -AnalyzedSha 'abc' -Packages 'alpha' -ScratchDir (Write-BodyScratch -Census $null)
+        } | Should -Throw '*40-character hex*'
+    }
+
+    It 'throws when the analysis artefacts are missing' {
+        $empty = Join-Path ([System.IO.Path]::GetTempPath()) ("bh-body-empty-$([guid]::NewGuid().ToString('n'))")
+        New-Item -ItemType Directory -Path $empty | Out-Null
+        $script:BodyScratchRoots += $empty
+        { Get-ComposedBody -ScratchDir $empty } | Should -Throw '*notable flag*'
+        { Get-ComposedBody -ScratchDir (Join-Path $empty 'nowhere') } | Should -Throw '*scratch directory*'
+    }
+}
+
 Describe 'Format-InProgressBody (unexported string transform)' {
     It 'renders a single impacted package with singular wording' {
         InModuleScope BenchHistoryComment {

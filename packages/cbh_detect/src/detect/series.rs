@@ -525,13 +525,15 @@ pub fn apply_blessings<S: BuildHasher>(
 /// itself never measured, every benchmark is a ghost and the whole list is emptied
 /// — the caller distinguishes that empty outcome for the user.
 ///
-/// Returns the removed ghost benchmark identities, deduplicated across metric kinds
-/// and ordered by `(set, id)`, so a caller can report exactly what it excluded.
+/// Returns one entry per removed metric series, ordered by `(set, id, kind)`. That
+/// is the unit the series census counts, so a caller's diagnostics and its census
+/// reconcile against each other; deduplicating on `(set, id)` recovers the ghost
+/// benchmarks behind them.
 #[must_use]
 pub fn retain_present_at_context(
     series: &mut Vec<Series>,
     context_commit: &str,
-) -> Vec<(DiscriminantSet, BenchmarkId)> {
+) -> Vec<(DiscriminantSet, BenchmarkId, MetricKind)> {
     // The benchmarks the context commit measured: a single series carrying a point
     // on that commit marks its whole benchmark present, across every metric kind.
     // Keyed by `(set, id)` so a benchmark present in one discriminant set does not
@@ -547,23 +549,24 @@ pub fn retain_present_at_context(
         }
     }
 
-    // Retain the present benchmarks and record each dropped ghost once (a benchmark
-    // spans several metric-kind series, so dedupe by identity).
-    let mut removed: HashSet<(DiscriminantSet, BenchmarkId)> = HashSet::new();
+    // Retain the present benchmarks and record every dropped series, so the report is
+    // in the same unit the census counts rather than a coarser benchmark identity.
+    let mut removed: Vec<(DiscriminantSet, BenchmarkId, MetricKind)> = Vec::new();
     series.retain(|one| {
         // Clone the identity key once per series and reuse it for both the presence
-        // test and the removed-set insert, avoiding a second clone per ghost.
+        // test and the removal record, avoiding a second clone per ghost.
         let key = (one.set.clone(), one.id.clone());
         if present.contains(&key) {
             true
         } else {
-            removed.insert(key);
+            let (set, id) = key;
+            removed.push((set, id, one.kind));
             false
         }
     });
 
-    // A stable, deterministic order for the diagnostics the caller emits.
-    let mut removed: Vec<(DiscriminantSet, BenchmarkId)> = removed.into_iter().collect();
+    // A stable, deterministic order for the diagnostics the caller emits. The triple
+    // is unique per series, so the unstable sort has no ties to reorder.
     removed.sort_unstable();
     removed
 }
@@ -1148,6 +1151,38 @@ mod tests {
             object_key,
             result: Run::new(context, vec![record]),
         }
+    }
+
+    #[test]
+    fn retain_present_at_context_reports_a_ghost_once_per_metric_series() {
+        // `pkgb` carries two metric kinds and disappears before the context commit.
+        // The account is in metric series, so both of its series are named rather
+        // than the benchmark once — a caller that reported per benchmark could not
+        // reconcile its diagnostics against the series census.
+        let objects = vec![
+            clean_metrics(
+                "c0",
+                100,
+                "pkgb",
+                &[
+                    (MetricKind::InstructionCount, 10.0),
+                    (MetricKind::ConditionalBranches, 100.0),
+                ],
+            ),
+            clean_metrics("c1", 200, "pkga", &[(MetricKind::InstructionCount, 11.0)]),
+        ];
+        let mut series = build_series(&objects, &order(&["c0", "c1"]), &SeriesFilter::default());
+
+        let removed = retain_present_at_context(&mut series, "c1");
+
+        assert_eq!(series.len(), 1, "only the present benchmark survives");
+        assert_eq!(removed.len(), 2);
+        assert_eq!(removed[0].1.qualified(), "pkgb/group/case");
+        assert_eq!(removed[1].1.qualified(), "pkgb/group/case");
+        assert_ne!(
+            removed[0].2, removed[1].2,
+            "each of the ghost's metric series is named"
+        );
     }
 
     #[test]

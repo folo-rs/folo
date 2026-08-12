@@ -282,6 +282,7 @@ mod tests {
     )]
 
     use std::io;
+    use std::num::NonZero;
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime};
 
@@ -498,6 +499,9 @@ mod tests {
         assert_eq!(run.context.git.commit.as_deref(), Some(PROBED_COMMIT));
         assert_eq!(run.context.git.branch.as_deref(), Some("main"));
         assert!(!run.context.git.dirty);
+        // An import reduces one curated harvest, so the recorded measurement
+        // protocol is a single repetition.
+        assert_eq!(run.context.best_of, NonZero::new(1));
         assert_eq!(
             run.context.toolchain.target_triple,
             "x86_64-pc-windows-msvc"

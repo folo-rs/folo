@@ -7,7 +7,8 @@
 //! keeps both halves easy to reason about.
 
 use std::cmp::Ordering;
-use std::f64::consts;
+
+use crate::{NO_EVIDENCE, clamp_p_value, two_sided_p_from_z};
 
 /// Casts a small count to `f64`. Series lengths are far below 2^53, so the
 /// conversion is exact.
@@ -89,31 +90,43 @@ pub fn median_in_place(values: &mut [f64]) -> Option<f64> {
     }
 }
 
-/// The standard normal cumulative distribution function, `Φ(z)`.
+/// The arithmetic mean of `values`, or `None` if empty.
+#[must_use]
+pub fn mean(values: &[f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    let total: f64 = values.iter().sum();
+    Some(total / count_to_f64(values.len()))
+}
+
+/// The sample standard deviation of `values`, or `None` for fewer than two
+/// points.
 ///
-/// Evaluated via the Abramowitz & Stegun 7.1.26 rational approximation of `erf`
-/// (absolute error below 1.5e-7), which is ample for deriving p-values.
-pub(crate) fn normal_cdf(z: f64) -> f64 {
-    0.5 * (1.0 + erf(z / consts::SQRT_2))
-}
-
-/// The error function `erf(x)` (Abramowitz & Stegun 7.1.26).
-fn erf(x: f64) -> f64 {
-    let sign = if x < 0.0 { -1.0 } else { 1.0 };
-    let x = x.abs();
-    let t = 1.0 / (1.0 + 0.327_591_1 * x);
-    let poly = ((((1.061_405_429 * t - 1.453_152_027) * t + 1.421_413_741) * t - 0.284_496_736)
-        * t
-        + 0.254_829_592)
-        * t;
-    let y = 1.0 - poly * (-x * x).exp();
-    sign * y
-}
-
-/// The two-sided p-value for a standard-normal test statistic `z`.
-pub(crate) fn two_sided_p_from_z(z: f64) -> f64 {
-    let p = 2.0 * (1.0 - normal_cdf(z.abs()));
-    p.clamp(0.0, 1.0)
+/// Bessel-corrected: the squared deviations are divided by `n − 1`, so this
+/// estimates the scatter of the population the values were drawn from rather
+/// than the scatter of the values themselves. Identical values legitimately
+/// give `0.0`.
+///
+/// The deviations are formed against the mean rather than accumulated as
+/// `E[x²] − E[x]²`, so values clustered within a few parts per million of a
+/// large mean — benchmark timings, for one — keep their significant digits
+/// instead of losing them to cancellation between two huge, nearly equal sums.
+#[must_use]
+pub fn sample_std_dev(values: &[f64]) -> Option<f64> {
+    let n = values.len();
+    if n < 2 {
+        return None;
+    }
+    let mean = mean(values)?;
+    let sum_of_squares: f64 = values
+        .iter()
+        .map(|&value| {
+            let deviation = value - mean;
+            deviation * deviation
+        })
+        .sum();
+    Some((sum_of_squares / count_to_f64(n.saturating_sub(1))).sqrt())
 }
 
 /// Average (fractional) ranks of `values`, 1-based, with ties sharing the mean
@@ -173,9 +186,9 @@ pub struct ChangePoint {
 /// Returns `None` for fewer than two points. The statistic is the rank form
 /// `U_t = 2·R_t − t·(n+1)` (with `R_t` the sum of the first `t` average ranks);
 /// `K = max_t |U_t|`, the change index is `argmax`, and the significance is
-/// `p ≈ 2·exp(−6K²/(n³+n²))` (clamped to `[0, 1]`). The first maximizing `t`
-/// wins, so a perfectly flat series reports a degenerate split at index 1 that the
-/// caller rejects on a zero median difference.
+/// `p ≈ 2·exp(−6K²/(n³+n²))`, clamped into the reportable p-value range. The
+/// first maximizing `t` wins, so a perfectly flat series reports a degenerate
+/// split at index 1 that the caller rejects on a zero median difference.
 #[must_use]
 pub fn pettitt(values: &[f64]) -> Option<ChangePoint> {
     let n = values.len();
@@ -209,7 +222,7 @@ pub fn pettitt(values: &[f64]) -> Option<ChangePoint> {
 
     let k = best_u.abs();
     let denominator = n_f * n_f * n_f + n_f * n_f;
-    let p_value = (2.0 * (-6.0 * k * k / denominator).exp()).clamp(0.0, 1.0);
+    let p_value = clamp_p_value(2.0 * (-6.0 * k * k / denominator).exp());
     Some(ChangePoint {
         index: best_index,
         k_statistic: k,
@@ -298,7 +311,7 @@ impl MannWhitneyU {
         let variance =
             (self.n1 * self.n2 / 12.0) * ((n_f + 1.0) - self.tie_term / (n_f * (n_f - 1.0)));
         if variance <= 0.0 {
-            return 1.0;
+            return NO_EVIDENCE;
         }
 
         // Continuity-corrected z; `u` is the smaller statistic so `mean_u - u >= 0`.
@@ -361,7 +374,7 @@ pub fn mann_kendall(values: &[f64]) -> MannKendall {
     if n < 3 {
         return MannKendall {
             s: 0.0,
-            p_value: 1.0,
+            p_value: NO_EVIDENCE,
         };
     }
     let mut s = 0.0_f64;
@@ -385,7 +398,10 @@ pub fn mann_kendall(values: &[f64]) -> MannKendall {
         .sum();
     let variance = (n_f * (n_f - 1.0) * (2.0 * n_f + 5.0) - tie_term) / 18.0;
     if variance <= 0.0 {
-        return MannKendall { s, p_value: 1.0 };
+        return MannKendall {
+            s,
+            p_value: NO_EVIDENCE,
+        };
     }
 
     let z = if s > 0.0 {
@@ -439,14 +455,35 @@ pub fn theil_sen_line(values: &[f64]) -> Option<(f64, f64)> {
 /// Finds the largest rank `k` whose ordered p-value satisfies `p_(k) ≤ (k/m)·q`
 /// and rejects every hypothesis of rank `≤ k` (the step-up property: an
 /// intermediate rank that fails its own threshold is still rejected when a later
-/// rank passes).
+/// rank passes). Ranks are assigned within `p_values`, so rank 1 is the smallest
+/// p-value handed over.
+///
+/// `q` is the false-discovery rate targeted across the whole family of
+/// hypotheses tested, so `family_size` — the `m` of the threshold — must be the
+/// number of hypotheses examined, counting every one that produced no candidate
+/// finding. Only the caller knows that number: `p_values` carries the
+/// hypotheses whose statistic is worth ranking, which is a subset whenever the
+/// caller screens its candidates first. Passing the length of that subset
+/// controls nothing when the screen is stricter than `q`, because the loosest
+/// threshold `(m/m)·q = q` is then cleared by every p-value handed in and the
+/// whole subset is rejected unconditionally.
+///
+/// # Panics
+///
+/// Panics if `family_size` is smaller than `p_values.len()`. Every p-value is
+/// the verdict on a hypothesis the caller examined, so the family examined
+/// always contains at least the hypotheses that produced p-values; a smaller
+/// one is a miscounted census rather than a stricter correction, and correcting
+/// it here would silently restore the unconditional pass described above.
 #[must_use]
-pub fn benjamini_hochberg(p_values: &[f64], q: f64) -> Vec<bool> {
-    let m = p_values.len();
-    if m == 0 {
-        return Vec::new();
-    }
-    let m_f = count_to_f64(m);
+pub fn benjamini_hochberg(p_values: &[f64], q: f64, family_size: usize) -> Vec<bool> {
+    let tested = p_values.len();
+    assert!(
+        family_size >= tested,
+        "every p-value is the verdict on an examined hypothesis, so the examined \
+         family contains at least the hypotheses that produced these p-values"
+    );
+    let m_f = count_to_f64(family_size);
 
     let mut ordered: Vec<(usize, f64)> = p_values.iter().copied().enumerate().collect();
     // Unstable sort: equal p-values are interchangeable for the step-up cutoff (a
@@ -465,7 +502,7 @@ pub fn benjamini_hochberg(p_values: &[f64], q: f64) -> Vec<bool> {
         }
     }
 
-    let mut keep = vec![false; m];
+    let mut keep = vec![false; tested];
     for &(original_index, _) in ordered.iter().take(max_rank) {
         if let Some(slot) = keep.get_mut(original_index) {
             *slot = true;
@@ -484,13 +521,69 @@ mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
     use super::*;
+    use crate::test_util::close;
 
-    /// Asserts `actual` is within `tolerance` of `expected`.
-    fn close(actual: f64, expected: f64, tolerance: f64) {
-        assert!(
-            (actual - expected).abs() <= tolerance,
-            "expected {expected} (±{tolerance}), got {actual}"
+    /// The number of hypotheses a keep-mask rejects (i.e. reports as findings).
+    fn keep_count(keep: &[bool]) -> usize {
+        keep.iter().filter(|&&kept| kept).count()
+    }
+
+    #[test]
+    fn mean_of_hand_computed_samples() {
+        assert_eq!(mean(&[1.0, 2.0, 3.0]), Some(2.0));
+        assert_eq!(mean(&[2.5]), Some(2.5));
+        assert_eq!(mean(&[-4.0, 4.0]), Some(0.0));
+        // The mean of an even count need not be one of the values.
+        assert_eq!(mean(&[1.0, 2.0]), Some(1.5));
+        assert_eq!(mean(&[]), None);
+    }
+
+    #[test]
+    fn sample_std_dev_of_hand_computed_samples() {
+        // Deviations −2, 0, 2 about a mean of 4: 8/(3−1) = 4, so the scatter is 2.
+        assert_eq!(sample_std_dev(&[2.0, 4.0, 6.0]), Some(2.0));
+        // Deviations ±3 about a mean of 10: 18/(2−1) = 18.
+        assert_eq!(sample_std_dev(&[7.0, 13.0]), Some(18.0_f64.sqrt()));
+    }
+
+    #[test]
+    fn sample_std_dev_corrects_for_the_sample_being_a_sample() {
+        // Deviations ±1 about a mean of 2: the squared deviations sum to 4, and
+        // dividing by 4 − 1 rather than 4 is the whole difference between
+        // estimating the population behind these values and merely describing
+        // them. The population formula would report exactly 1.0.
+        assert_eq!(
+            sample_std_dev(&[1.0, 1.0, 3.0, 3.0]),
+            Some((4.0_f64 / 3.0).sqrt())
         );
+    }
+
+    #[test]
+    fn sample_std_dev_is_zero_for_identical_values() {
+        // A degenerate sample has genuinely no scatter, which the caller must be
+        // able to see rather than have papered over.
+        assert_eq!(sample_std_dev(&[4.0, 4.0, 4.0]), Some(0.0));
+    }
+
+    #[test]
+    fn sample_std_dev_needs_two_points() {
+        assert_eq!(sample_std_dev(&[]), None);
+        assert_eq!(sample_std_dev(&[42.0]), None);
+        // Two points are the smallest sample that has any scatter to estimate.
+        assert_eq!(sample_std_dev(&[41.0, 43.0]), Some(2.0_f64.sqrt()));
+    }
+
+    #[test]
+    fn sample_std_dev_keeps_its_precision_on_a_large_offset() {
+        // Values a billion wide apart by ones: the deviations about the mean are
+        // exactly −1, 0 and 1, so the scatter is exactly 1. Accumulating
+        // `E[x²] − E[x]²` instead would subtract two numbers near 1e18 that agree
+        // to sixteen digits and keep only noise.
+        assert_eq!(sample_std_dev(&[1e9, 1e9 + 1.0, 1e9 + 2.0]), Some(1.0));
+
+        // The same sample shifted to where `f64` spacing is coarser still holds,
+        // because the deviations are formed before anything is squared.
+        assert_eq!(sample_std_dev(&[1e15, 1e15 + 1.0, 1e15 + 2.0]), Some(1.0));
     }
 
     #[test]
@@ -498,19 +591,6 @@ mod tests {
         assert_eq!(median(&[3.0, 1.0, 2.0]), Some(2.0));
         assert_eq!(median(&[1.0, 2.0, 3.0, 4.0]), Some(2.5));
         assert_eq!(median(&[]), None);
-    }
-
-    #[test]
-    fn normal_cdf_at_known_points() {
-        close(normal_cdf(0.0), 0.5, 1e-6);
-        // The A&S erf approximation makes erf(0) a hair positive, so Φ(0) sits
-        // just above 0.5; this pins the sign branch in `erf` (a flipped sign would
-        // push Φ(0) below 0.5).
-        assert!(normal_cdf(0.0) > 0.5);
-        close(normal_cdf(1.96), 0.975, 1e-3);
-        close(normal_cdf(-1.96), 0.025, 1e-3);
-        // Symmetry: Φ(-z) == 1 − Φ(z).
-        close(normal_cdf(-1.0), 1.0 - normal_cdf(1.0), 1e-9);
     }
 
     #[test]
@@ -601,7 +681,7 @@ mod tests {
         // continuity-corrected p (z ≈ 2.0578) is pinned tightly so the U2,
         // tie-term, variance, and continuity arithmetic all have to be exact.
         let p = mann_whitney_u_pvalue(&[3.0, 4.0, 4.0, 5.0], &[1.0, 2.0, 2.0, 3.0]);
-        close(p, 0.039_608_571_971_576_41, 1e-9);
+        close(p, 0.039_608_704_639_759_83, 1e-9);
     }
 
     #[test]
@@ -713,7 +793,7 @@ mod tests {
         // to S = 0).
         let result = mann_kendall(&[1.0, 2.0, 3.0]);
         assert_eq!(result.s, 3.0);
-        close(result.p_value, 0.296_269_924_336_563_4, 1e-9);
+        close(result.p_value, 0.296_269_871_484_286_46, 1e-9);
     }
 
     #[test]
@@ -732,7 +812,17 @@ mod tests {
         // tie-corrected p pins the `t·(t−1)·(2t+5)` term.
         let result = mann_kendall(&[1.0, 1.0, 2.0, 3.0, 3.0]);
         assert_eq!(result.s, 8.0);
-        close(result.p_value, 0.067_577_148_830_175_5, 1e-9);
+        close(result.p_value, 0.067_577_263_055_870_57, 1e-9);
+    }
+
+    #[test]
+    fn mann_kendall_tie_correction_grows_with_group_size() {
+        // A tie group of three, where `t·(t−1)·(2t+5)` first becomes
+        // distinguishable from its neighbouring forms: pairs of tied values
+        // cannot tell `t·(t−1)` from `t/(t−1)`, nor `2t+5` from `2+t+5`.
+        let result = mann_kendall(&[1.0, 1.0, 1.0, 2.0, 3.0]);
+        assert_eq!(result.s, 7.0);
+        close(result.p_value, 0.096_092_329_455_673_28, 1e-9);
     }
 
     #[test]
@@ -770,7 +860,7 @@ mod tests {
     fn benjamini_hochberg_keeps_the_significant_prefix() {
         // sorted [0.01,0.02,0.5], q=0.1: ranks 1,2 clear k/m·q; rank 3 fails.
         assert_eq!(
-            benjamini_hochberg(&[0.01, 0.02, 0.5], 0.1),
+            benjamini_hochberg(&[0.01, 0.02, 0.5], 0.1, 3),
             vec![true, true, false]
         );
     }
@@ -780,34 +870,161 @@ mod tests {
         // sorted [0.001,0.03,0.031,0.049], q=0.05: rank 2 (0.03 > 0.025) fails its
         // own threshold, but rank 4 (0.049 ≤ 0.05) passes, so ALL are rejected.
         assert_eq!(
-            benjamini_hochberg(&[0.001, 0.03, 0.031, 0.049], 0.05),
+            benjamini_hochberg(&[0.001, 0.03, 0.031, 0.049], 0.05, 4),
             vec![true, true, true, true]
         );
     }
 
     #[test]
+    fn benjamini_hochberg_step_up_reaches_back_across_a_larger_family() {
+        // Three p-values out of a family of ten, q=0.1: thresholds are 0.01·k.
+        // Rank 2 (0.025 > 0.02) fails, yet rank 3 (0.0299 ≤ 0.03) passes, so the
+        // step-up still reaches back over the failing rank.
+        assert_eq!(
+            benjamini_hochberg(&[0.002, 0.025, 0.0299], 0.1, 10),
+            vec![true, true, true]
+        );
+    }
+
+    #[test]
     fn benjamini_hochberg_rejects_none_when_nothing_clears() {
-        assert_eq!(benjamini_hochberg(&[0.2], 0.1), vec![false]);
+        assert_eq!(benjamini_hochberg(&[0.2], 0.1, 1), vec![false]);
     }
 
     #[test]
     fn benjamini_hochberg_preserves_input_order() {
         // The single significant value is in the middle of the input.
         assert_eq!(
-            benjamini_hochberg(&[0.9, 0.001, 0.8], 0.1),
+            benjamini_hochberg(&[0.9, 0.001, 0.8], 0.1, 3),
             vec![false, true, false]
         );
     }
 
     #[test]
     fn benjamini_hochberg_handles_an_empty_family() {
-        assert_eq!(benjamini_hochberg(&[], 0.1), Vec::<bool>::new());
+        assert_eq!(benjamini_hochberg(&[], 0.1, 0), Vec::<bool>::new());
+        assert_eq!(benjamini_hochberg(&[], 0.1, 64), Vec::<bool>::new());
+    }
+
+    #[test]
+    fn benjamini_hochberg_matches_the_published_reference_family() {
+        // Benjamini & Hochberg (1995), table 1: at q=0.05 over all 15 hypotheses
+        // the procedure rejects the four smallest p-values (rank 4 clears
+        // 4/15·0.05 = 0.0133 with 0.0095; rank 5 misses 0.0167 with 0.0201).
+        let p_values = [
+            0.0001, 0.0004, 0.0019, 0.0095, 0.0201, 0.0278, 0.0298, 0.0344, 0.0459, 0.3240, 0.4262,
+            0.5719, 0.6528, 0.7590, 1.000,
+        ];
+        let mut expected = vec![false; p_values.len()];
+        for slot in expected.iter_mut().take(4) {
+            *slot = true;
+        }
+        assert_eq!(benjamini_hochberg(&p_values, 0.05, 15), expected);
+    }
+
+    #[test]
+    fn benjamini_hochberg_judges_candidates_against_the_whole_family() {
+        // Twenty candidates that all cleared a 0.05 screen, drawn from a family of
+        // 1280 hypotheses. Against the true family the thresholds are k·0.1/1280 =
+        // k·7.8125e-5, which even rank 20 (1.5625e-3) misses by more than an order
+        // of magnitude, so none survive the correction.
+        let candidates = [
+            0.0010, 0.0035, 0.0060, 0.0085, 0.0110, 0.0135, 0.0160, 0.0185, 0.0210, 0.0235, 0.0260,
+            0.0285, 0.0310, 0.0335, 0.0360, 0.0385, 0.0410, 0.0435, 0.0460, 0.0485,
+        ];
+        assert_eq!(keep_count(&benjamini_hochberg(&candidates, 0.1, 1280)), 0);
+
+        // The same candidates judged against themselves alone: every one is kept,
+        // because each already cleared a bar below the loosest threshold q.
+        assert_eq!(
+            keep_count(&benjamini_hochberg(&candidates, 0.1, candidates.len())),
+            candidates.len()
+        );
+    }
+
+    #[test]
+    fn benjamini_hochberg_keeps_the_strongest_candidates_of_a_large_family() {
+        // Two overwhelming candidates among eighteen merely-significant ones, out
+        // of a family of 1280 at q=0.1. Rank 1 clears 7.8125e-5 with 1e-5 and rank
+        // 2 clears 1.5625e-4 with 5e-5; rank 3 misses 2.34375e-4 with 0.001, and
+        // every later rank falls further behind, so exactly the two strongest
+        // survive.
+        let mut candidates = vec![1e-5, 5e-5];
+        candidates.extend((0..18).map(|index| 0.001 + 0.002 * f64::from(index)));
+        let keep = benjamini_hochberg(&candidates, 0.1, 1280);
+
+        assert_eq!(keep_count(&keep), 2);
+        assert_eq!(&keep[..2], &[true, true]);
+    }
+
+    #[test]
+    fn benjamini_hochberg_keeps_everything_when_the_family_is_only_its_own_survivors() {
+        // The degenerate case the `family_size` parameter exists to prevent: every
+        // p-value has already cleared a screen at `alpha`, and `alpha ≤ q`, so the
+        // loosest threshold `(m/m)·q = q` passes and the procedure rejects nothing
+        // however the p-values are arranged.
+        const ALPHA: f64 = 0.05;
+        const Q: f64 = 0.1;
+
+        for size in 1_usize..=12 {
+            // A spread of p-values filling (0, ALPHA], plus their reverse, so the
+            // conclusion cannot depend on the input happening to arrive sorted.
+            let ascending: Vec<f64> = (1..=size)
+                .map(|index| ALPHA * count_to_f64(index) / count_to_f64(size))
+                .collect();
+            let descending: Vec<f64> = ascending.iter().rev().copied().collect();
+
+            for family in [&ascending, &descending] {
+                assert_eq!(
+                    keep_count(&benjamini_hochberg(family, Q, family.len())),
+                    size,
+                    "family of {size} p-values below {ALPHA} at q={Q}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn benjamini_hochberg_never_keeps_more_as_the_family_grows() {
+        let candidates = [0.0001, 0.002, 0.008, 0.011, 0.03, 0.047];
+        let mut previous = candidates.len();
+
+        for family_size in candidates.len()..=64 {
+            let kept = keep_count(&benjamini_hochberg(&candidates, 0.1, family_size));
+            assert!(
+                kept <= previous,
+                "family size {family_size} kept {kept}, up from {previous}"
+            );
+            previous = kept;
+        }
+
+        // The sweep is only meaningful if it actually descends over its range.
+        assert!(previous < candidates.len());
+    }
+
+    #[test]
+    #[should_panic]
+    fn benjamini_hochberg_rejects_a_family_smaller_than_the_p_values() {
+        // A family that does not contain every hypothesis these p-values came
+        // from is a broken census, and normalising it away would restore the
+        // candidates-only correction that `family_size` exists to prevent. The
+        // accepted boundary — a family of exactly these p-values — is pinned by
+        // `benjamini_hochberg_keeps_the_significant_prefix`.
+        _ = benjamini_hochberg(&[0.01, 0.02, 0.5], 0.1, 2);
+    }
+
+    #[test]
+    fn benjamini_hochberg_keeps_a_p_value_exactly_at_its_threshold() {
+        // 1/4·0.5 = 0.125 is exact in binary, so this pins the boundary as
+        // inclusive without any rounding slack: one candidate out of four
+        // hypotheses sits precisely on its threshold.
+        assert_eq!(benjamini_hochberg(&[0.125], 0.5, 4), vec![true]);
     }
 
     #[test]
     fn two_sided_p_is_symmetric_and_bounded() {
         close(two_sided_p_from_z(1.96), 0.05, 1e-3);
-        close(two_sided_p_from_z(0.0), 1.0, 1e-6);
+        close(two_sided_p_from_z(0.0), NO_EVIDENCE, 1e-6);
         close(two_sided_p_from_z(-1.96), 0.05, 1e-3);
     }
 }

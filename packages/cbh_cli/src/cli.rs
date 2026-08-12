@@ -508,11 +508,12 @@ impl InstallCommand {
 /// Print this machine's hardware fingerprint (the machine key).
 #[derive(Args, Debug)]
 struct MachineKeyCommand {
-    /// Also emit the individual hardware components that make up the fingerprint
-    /// to standard error (processor count, memory-region count, processor models,
-    /// per-processor speed histogram, and the fingerprint version), so a change in
-    /// the key can be traced to which factor changed. The key itself always goes to
-    /// standard output.
+    /// Also emit the individual hardware factors that make up the fingerprint to
+    /// standard error (the fingerprint version, processor count, memory-region
+    /// count and processor models), so a change in the key can be traced to which
+    /// factor changed. Per-processor speeds are recorded with collected runs as
+    /// hardware provenance, but they are not factors and so are not reported here.
+    /// The key itself always goes to standard output.
     #[arg(long, help_heading = HEADING_ENV)]
     verbose: bool,
 }

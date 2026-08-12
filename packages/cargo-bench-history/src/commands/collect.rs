@@ -5,6 +5,7 @@
 //! [`tick::Clock`], so the whole flow is exercised in-process with fakes. The
 //! public [`execute`] wires the real adapters and is what the binary runs.
 
+use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -235,7 +236,8 @@ pub(crate) struct SharedContext {
     /// host triple `rustc` reports for `collect`, or an `import --target-triple`
     /// override. It feeds both the partition key and `ToolchainInfo.target_triple`.
     pub(crate) target_triple: TargetTriple,
-    /// Host hardware profile, fingerprinted into the machine key.
+    /// Host hardware profile: the factors fingerprinted into the machine key, plus
+    /// the provenance recorded beside them.
     pub(crate) hardware: HardwareProfile,
 }
 
@@ -368,6 +370,21 @@ pub(crate) struct StoreParams<'a> {
     pub(crate) skip_existing: bool,
     /// Skip storage entirely (`collect --no-store`). `import` never sets this.
     pub(crate) no_store: bool,
+}
+
+/// One engine's best-of reduction: the records to store and how many repetitions
+/// of the benchmark suite their per-metric minima were taken over.
+///
+/// The two travel together because the count is only meaningful as a description
+/// of how those records were produced, and it is recorded on the stored run as
+/// measurement-protocol provenance.
+struct Reduction {
+    /// The records to store, each metric the minimum across the repetitions.
+    records: Vec<BenchmarkResult>,
+    /// How many repetitions the reduction actually consumed. Derived from the
+    /// harvested runs rather than the requested `--best-of`, so the recorded value
+    /// can never claim a repetition that did not happen.
+    runs: usize,
 }
 
 /// The result of harvesting one engine's output.
@@ -615,7 +632,10 @@ where
             params,
             &partition,
             engine,
-            combined.results,
+            Reduction {
+                records: combined.results,
+                runs,
+            },
             run_start,
         )
         .await?;
@@ -675,12 +695,15 @@ pub(crate) fn partition_selection_summary(
     )
 }
 
-/// Builds the write-only host-hardware provenance recorded on every stored run:
-/// the fingerprint factors and the key they hash to.
+/// Builds the write-only host-hardware provenance recorded on the runs this
+/// command stores: the hardware facts the probe observed and the key the
+/// fingerprint factors among them hash to.
 ///
 /// It always records the auto-detected fingerprint (independent of any
 /// `--machine-key` override used to partition storage), so that a later change in
 /// a partition key can be traced back to the specific hardware factor that moved.
+/// The per-processor speed histogram is recorded alongside as provenance even
+/// though it does not take part in the key.
 fn machine_info(hardware: &HardwareProfile) -> MachineInfo {
     MachineInfo {
         processors: hardware.processors,
@@ -821,23 +844,24 @@ where
 
 /// Stores one engine's reduced result set (unless suppressed).
 ///
-/// The back half of collecting an engine: given the records to persist (already
-/// reduced across the `--best-of` runs) and the [`Partition`] the run writes to,
-/// it builds the run context and storage key and writes the object. `run_start` is
-/// the first run's start, which stamps the observation time and any dirty-snapshot
-/// second.
+/// The back half of collecting an engine: given the [`Reduction`] to persist
+/// (already reduced across the `--best-of` runs) and the [`Partition`] the run
+/// writes to, it builds the run context and storage key and writes the object.
+/// `run_start` is the first run's start, which stamps the observation time and any
+/// dirty-snapshot second.
 async fn store_engine<S>(
     store: &FinalizeDeps<'_, S>,
     shared: &SharedContext,
     params: &StoreParams<'_>,
     partition: &Partition,
     engine: Engine,
-    records: Vec<BenchmarkResult>,
+    reduction: Reduction,
     run_start: SystemTime,
 ) -> Result<EngineSummary, AppError>
 where
     S: Storage,
 {
+    let Reduction { records, runs } = reduction;
     let count = records.len();
 
     // An engine that produced no fresh output contributes nothing. Off Linux the
@@ -885,11 +909,25 @@ where
         },
         store.tool_version.to_owned(),
     );
-    // Record the host hardware provenance on every stored run (write-only): the
-    // fingerprint factors and the key they hash to, so a later change in a
-    // machine key can be traced to the specific factor that moved.
+    // Record the host hardware provenance on the runs this command stores
+    // (write-only): the hardware facts and the key their fingerprint factors hash
+    // to, so a later change in a machine key can be traced to the specific factor
+    // that moved.
     let mut context = context;
     context.machine = Some(machine_info(&shared.hardware));
+    // Record the measurement protocol alongside it: how many repetitions of the
+    // suite the stored minima were taken over. `NonZero::new` yields `None` only for
+    // an empty reduction, which cannot reach here — no repetitions means no records,
+    // and the zero-case early return above already took that path.
+    context.best_of = NonZero::new(runs);
+    store.reporter.note_with(|| {
+        format!(
+            "{engine}: recording best-of={runs} on the stored run; each value is the minimum \
+             of {}, and because that minimum falls as the count rises, a later reader needs \
+             the count to tell a protocol change from a code change",
+            count_noun(runs, "sample")
+        )
+    });
     let run = Run::new(context, records);
 
     // Every engine partitions its history by a machine key so only equivalent
@@ -3463,5 +3501,70 @@ mod tests {
         assert_eq!(runner.calls.lock().unwrap().len(), 1);
         let run = only_stored_run(&storage);
         assert_eq!(run.results[0].metrics[0].value, 20.0);
+    }
+
+    #[test]
+    fn the_stored_run_records_the_repetition_count_it_was_reduced_from() {
+        // The stored value is the minimum of the repetitions, and that minimum falls
+        // as the count rises, so the count is part of the measurement protocol and
+        // must travel with the run. Recorded from the repetitions that actually
+        // produced the harvests, so it can never claim a run that did not happen.
+        for count in [1_usize, 3] {
+            let runner = FakeRunner::succeeding();
+            let probe = FakeProbe::new();
+            let output = SequencedOutput::new(
+                [30.0, 10.0, 20.0]
+                    .into_iter()
+                    .take(count)
+                    .map(all_the_time_output)
+                    .collect(),
+            );
+            let storage = MemoryStorage::new();
+            let reporter = StderrReporter::new(false);
+            let options = CollectOptions {
+                best_of: best_of(count),
+                ..CollectOptions::default()
+            };
+
+            drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap();
+
+            let run = only_stored_run(&storage);
+            assert_eq!(run.context.best_of, NonZero::new(count));
+
+            // The count survives the stored representation, which is what a later
+            // reader actually parses.
+            let restored = Run::from_json(&run.to_json().unwrap()).unwrap();
+            assert_eq!(restored.context.best_of, NonZero::new(count));
+        }
+    }
+
+    #[test]
+    fn the_recorded_repetition_count_is_explained_in_the_verbose_log() {
+        // The verbose trail must state the count recorded with the run and why it is
+        // recorded, so the stored measurement protocol is reconstructable from the
+        // log rather than only from the object.
+        let runner = FakeRunner::succeeding();
+        let probe = FakeProbe::new();
+        let output =
+            SequencedOutput::new(vec![all_the_time_output(30.0), all_the_time_output(10.0)]);
+        let storage = MemoryStorage::new();
+        let reporter = RecordingReporter::new();
+        let options = CollectOptions {
+            best_of: best_of(2),
+            ..CollectOptions::default()
+        };
+
+        drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap();
+
+        assert!(
+            reporter.contains("recording best-of=2 on the stored run"),
+            "expected a note naming the recorded count, got {:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains("minimum of 2 samples"),
+            "expected the note to explain what the count means, got {:?}",
+            reporter.notes()
+        );
     }
 }

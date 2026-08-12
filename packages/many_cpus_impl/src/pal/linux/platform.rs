@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::iter::once;
 use std::mem;
 use std::sync::{Arc, OnceLock};
@@ -235,7 +236,7 @@ impl BuildTargetPlatform {
                 memory_region_id: memory_region,
                 efficiency_class,
                 relative_speed: RelativeSpeed::from_os_metric(info.bogomips),
-                model: info.model_name,
+                model: info.model,
                 is_active: is_online,
             }
         });
@@ -273,11 +274,21 @@ impl BuildTargetPlatform {
                     // throttling, leading to unreliable efficiency class detection. Bogomips
                     // provides a stable measure of processor capability that remains consistent.
                     //
+                    // These lines identify the processor model, of which any subset may be
+                    // present depending on the architecture:
+                    // model name      : AMD EPYC 9V74 80-Core Processor
+                    // CPU implementer : 0x41
+                    // CPU part        : 0xd0c
+                    //
+                    // See `synthesize_model()` for how they combine into one model.
+                    //
                     // All other lines we ignore.
 
                     let mut index = None;
                     let mut bogomips = None;
-                    let mut model_name = None;
+                    let mut model = None;
+                    let mut implementer = None;
+                    let mut part = None;
 
                     for line in lines {
                         let (key, value) = line
@@ -287,25 +298,49 @@ impl BuildTargetPlatform {
 
                         // The Linux kernel may use different casing for keys depending on the processor
                         // architecture and kernel version. We normalize to lowercase for consistent matching.
+                        //
+                        // A blank value tells us nothing that an absent field does not already tell
+                        // us, so every optional field below rejects blank values as if unset.
                         #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation, reason = "we expect small positive numbers for bogomips, which can have their integer part losslessly converted to u32")]
                         match key.to_ascii_lowercase().as_str() {
-                            "processor" => index = value.parse::<ProcessorId>().ok(),
-                            "bogomips" => {
+                            // Only the absence of this key may make us skip a record. A key that
+                            // is present but unreadable identifies a processor we failed to
+                            // understand, and dropping such a record would undercount the
+                            // processors while looking exactly like a healthy read to the caller.
+                            CPUINFO_KEY_PROCESSOR => {
+                                index = Some(value.parse::<ProcessorId>().expect(
+                                    "the kernel renders the processor index as a decimal number",
+                                ));
+                            }
+                            CPUINFO_KEY_BOGOMIPS => {
                                 bogomips = value.parse::<f32>().map(|f| f.round() as u32).ok();
                             }
-                            // The processor model. Absent on many non-x86 architectures, so it is optional.
-                            "model name" if !value.is_empty() => {
-                                model_name = Some(Arc::from(value));
+                            CPUINFO_KEY_MODEL_NAME if !value.is_empty() => {
+                                model = Some(Arc::from(value));
                             }
+                            CPUINFO_KEY_IMPLEMENTER if !value.is_empty() => {
+                                implementer = Some(value);
+                            }
+                            CPUINFO_KEY_PART if !value.is_empty() => part = Some(value),
                             _ => {}
                         }
                     }
 
+                    // Some architectures close the file with a blank-line-separated block of
+                    // machine-level facts (hardware name, board revision, serial number) that
+                    // describes no processor at all. Such a block carries no processor index,
+                    // which is how we recognize it and skip it. A record that does carry the key
+                    // has already been resolved to an index or failed loudly above, so this is
+                    // the only record we may drop.
+                    let index = index?;
+
                     Some(CpuInfo {
-                        index: index.expect("processor index not found for processor"),
+                        index,
                         bogomips: bogomips
                             .expect("processor bogomips not found for processor"),
-                        model_name,
+                        // A kernel-provided model is the most informative identification available,
+                        // so we only assemble one ourselves when the kernel provides none.
+                        model: model.or_else(|| synthesize_model(implementer, part)),
                     })
                 })
                 .collect_vec(),
@@ -447,9 +482,97 @@ struct CpuInfo {
     /// cores and any with lower bogomips are considered efficiency cores.
     bogomips: u32,
 
-    /// Best-effort model from the `model name` field, `None` when the field is absent (as it
-    /// commonly is on non-x86 architectures).
-    model_name: Option<Arc<str>>,
+    /// Best-effort model, either as reported by the kernel or synthesized from the identity
+    /// fields the kernel reports instead. `None` when the record identifies the processor in
+    /// no way we recognize.
+    model: Option<Arc<str>>,
+}
+
+// Keys of the /proc/cpuinfo fields we read, in the lowercased form we normalize keys to before
+// matching, because the kernel casing varies by architecture and kernel version.
+const CPUINFO_KEY_PROCESSOR: &str = "processor";
+const CPUINFO_KEY_BOGOMIPS: &str = "bogomips";
+const CPUINFO_KEY_MODEL_NAME: &str = "model name";
+const CPUINFO_KEY_IMPLEMENTER: &str = "cpu implementer";
+const CPUINFO_KEY_PART: &str = "cpu part";
+
+/// Marks a model string as assembled by us out of separate /proc/cpuinfo fields, as opposed to
+/// being reported as a whole by the kernel.
+const SYNTHESIZED_MODEL_PREFIX: &str = "cpuinfo";
+
+// A `model name` field is not universal: a 64-bit ARM kernel emits one only when the reading
+// process has a 32-bit personality, so a native 64-bit process sees none at all. Such kernels
+// describe the processor through numeric identity fields instead, and reading `model name` alone
+// therefore leaves us with no model on that hardware - every such machine then looks alike to
+// consumers that use the model to tell hardware apart (for example, to decide whether two
+// benchmark results describe the same silicon).
+//
+// `CPU implementer` (the vendor) and `CPU part` (the core design) are together the identity ARM
+// defines for a core and are what tools such as `lscpu` translate into a human-readable name. That
+// pair is exactly what separates one ARM core design from another, so it is what we synthesize
+// from. We do not translate the values into vendor and core names ourselves: such a mapping is a
+// large table that goes stale with every newly released core, and naming a core wrongly is worse
+// than showing its raw identity, which is always faithful and always distinguishes what needs
+// distinguishing.
+//
+// The same records also carry `CPU variant` and `CPU revision`, which we deliberately ignore. They
+// identify the stepping of an individual chip - a finer distinction than an x86 `model name` draws,
+// as an x86 model string carries no stepping. Including them would make two otherwise identical
+// machines look like different hardware and would split consumers' per-model data sets more finely
+// than the x86 equivalent does.
+/// Builds a model string from the identity fields of one /proc/cpuinfo record.
+///
+/// Returns `None` when the record carries neither field, as there is then nothing to identify the
+/// processor with. A single field is still worth reporting - partial discrimination between
+/// different hardware beats none.
+fn synthesize_model(implementer: Option<&str>, part: Option<&str>) -> Option<Arc<str>> {
+    // Values are re-rendered from the number they carry rather than copied verbatim. The kernel
+    // pads each field to a width of its own choosing, which is a formatting decision and not
+    // something it promises us; were it to change, the model would move while the hardware stood
+    // still and consumers that partition data by model would see their partitions fork. See
+    // `canonical_identity_value()`.
+    //
+    // Naming the source field of each value keeps the origin traceable back to the file. It also
+    // means the result cannot be mistaken for a kernel-provided `model name`, which is always
+    // human prose such as `AMD EPYC 9V74 80-Core Processor`.
+    let fields = [
+        (CPUINFO_KEY_IMPLEMENTER, implementer),
+        (CPUINFO_KEY_PART, part),
+    ]
+    .into_iter()
+    .filter_map(|(key, value)| {
+        value.map(|value| format!("{key}={}", canonical_identity_value(value)))
+    })
+    .join(", ");
+
+    if fields.is_empty() {
+        return None;
+    }
+
+    Some(Arc::from(format!("{SYNTHESIZED_MODEL_PREFIX}({fields})")))
+}
+
+/// Renders one identity field value in a form that depends only on the number it carries.
+///
+/// Every spelling of one value therefore yields one model string, so nothing about how the kernel
+/// chose to write the value down can reach a consumer that tells hardware apart by model. The
+/// canonical form keeps the base the kernel writes in, as that is what makes the value
+/// recognizable against the kernel's own output, and drops the padding, as the digit count is
+/// precisely the part of the rendering the kernel picks per field.
+///
+/// A value we cannot interpret is carried through as it came: an unfamiliar rendering still
+/// distinguishes one core design from another, which beats discarding it.
+fn canonical_identity_value(value: &str) -> Cow<'_, str> {
+    const HEX_PREFIX: &str = "0x";
+    const HEX_RADIX: u32 = 16;
+
+    value
+        .split_at_checked(HEX_PREFIX.len())
+        .filter(|(prefix, _)| prefix.eq_ignore_ascii_case(HEX_PREFIX))
+        .and_then(|(_, digits)| u64::from_str_radix(digits, HEX_RADIX).ok())
+        .map_or(Cow::Borrowed(value), |number| {
+            Cow::Owned(format!("{number:#x}"))
+        })
 }
 
 /// This is the relative path of the cgroup the current process belongs to (e.g. `/foo/bar`)
@@ -517,7 +640,7 @@ mod tests {
     )]
     use std::fmt::Write;
 
-    use testing::f64_diff_abs;
+    use testing::{assert_panics, f64_diff_abs};
 
     use super::*;
     use crate::pal::linux::{MockBindings, MockFilesystem};
@@ -1659,8 +1782,12 @@ CPU revision    : 1
             p0.as_target().efficiency_class,
             EfficiencyClass::Performance
         );
-        // This ARM-style cpuinfo has no `model name` field, so no model is reported.
-        assert_eq!(p0.as_target().model, None);
+        // This ARM-style cpuinfo has no `model name` field, so the model is synthesized from the
+        // vendor and core-design fields the kernel reports instead.
+        assert_eq!(
+            p0.as_target().model.as_deref(),
+            Some("cpuinfo(cpu implementer=0x41, cpu part=0xd0c)")
+        );
 
         let p1 = &processors[1];
         assert_eq!(p1.as_target().id, 1);
@@ -1672,15 +1799,259 @@ CPU revision    : 1
     }
 
     #[test]
-    fn cpuinfo_with_empty_model_name_reports_no_model() {
-        // A `model name` field that is present but blank must be treated as absent rather than
-        // surfacing an empty model string, so the guard that rejects an empty value matters.
-        let mut fs = MockFilesystem::new();
+    fn cpuinfo_with_differing_part_reports_differing_model() {
+        // Consumers use the model to tell hardware apart. Two ARM machines that differ only in
+        // their core design must therefore not collapse into one identity, which is exactly what
+        // happens if the synthesis ignores the core design or gives up when `model name` is
+        // absent.
+        let neoverse_n1 = "processor       : 0
+BogoMIPS        : 50.00
+CPU implementer : 0x41
+CPU part        : 0xd0c
+";
 
+        let cortex_a72 = "processor       : 0
+BogoMIPS        : 50.00
+CPU implementer : 0x41
+CPU part        : 0xd08
+";
+
+        let neoverse_n1_models = models_from_cpuinfo(neoverse_n1, [0]);
+        let cortex_a72_models = models_from_cpuinfo(cortex_a72, [0]);
+
+        assert!(neoverse_n1_models[0].is_some());
+        assert_ne!(neoverse_n1_models, cortex_a72_models);
+    }
+
+    #[test]
+    fn cpuinfo_with_heterogeneous_cores_reports_model_per_processor() {
+        // A big.LITTLE system reports a different core design per processor, which must survive as
+        // a different model per processor.
+        let cpuinfo = "processor       : 0
+BogoMIPS        : 50.00
+CPU implementer : 0x41
+CPU part        : 0xd0c
+
+processor       : 1
+BogoMIPS        : 50.00
+CPU implementer : 0x41
+CPU part        : 0xd03
+";
+
+        let models = models_from_cpuinfo(cpuinfo, [0, 1]);
+
+        assert!(models[0].is_some());
+        assert_ne!(models[0], models[1]);
+    }
+
+    #[test]
+    fn cpuinfo_with_only_implementer_reports_model() {
+        // Any stable discrimination beats none, so a lone identity field is still reported.
+        let cpuinfo = "processor       : 0
+BogoMIPS        : 50.00
+CPU implementer : 0x41
+";
+
+        let models = models_from_cpuinfo(cpuinfo, [0]);
+
+        assert_eq!(models[0].as_deref(), Some("cpuinfo(cpu implementer=0x41)"));
+    }
+
+    #[test]
+    fn cpuinfo_with_only_part_reports_model() {
+        let cpuinfo = "processor       : 0
+BogoMIPS        : 50.00
+CPU part        : 0xd0c
+";
+
+        let models = models_from_cpuinfo(cpuinfo, [0]);
+
+        assert_eq!(models[0].as_deref(), Some("cpuinfo(cpu part=0xd0c)"));
+    }
+
+    #[test]
+    fn cpuinfo_with_model_name_prefers_it_over_synthesis() {
+        // A kernel-provided model identifies the processor far better than raw identity numbers
+        // do, so it wins whenever both are available.
+        let cpuinfo = "processor       : 0
+bogomips        : 50.00
+model name      : Example Processor 9000
+CPU implementer : 0x41
+CPU part        : 0xd0c
+";
+
+        let models = models_from_cpuinfo(cpuinfo, [0]);
+
+        assert_eq!(models[0].as_deref(), Some("Example Processor 9000"));
+    }
+
+    #[test]
+    fn cpuinfo_with_no_identifying_fields_reports_no_model() {
+        // Nothing identifies this processor, so we report no model rather than inventing one.
+        let cpuinfo = "processor       : 0
+bogomips        : 50.00
+whatever        : 123
+";
+
+        let models = models_from_cpuinfo(cpuinfo, [0]);
+
+        assert_eq!(models[0], None);
+    }
+
+    #[test]
+    fn cpuinfo_with_blank_fields_reports_no_model() {
+        // Fields that are present but blank tell us nothing, so they must be treated as absent
+        // rather than surfacing an empty or half-empty model string.
         let cpuinfo = "processor       : 0
 bogomips        : 50.00
 model name      :
+CPU implementer :
+CPU part        :
 ";
+
+        let models = models_from_cpuinfo(cpuinfo, [0]);
+
+        assert_eq!(models[0], None);
+    }
+
+    #[test]
+    fn cpuinfo_with_blank_model_name_falls_back_to_synthesis() {
+        // A blank `model name` identifies nothing, so the identity fields still have to be used.
+        let cpuinfo = "processor       : 0
+BogoMIPS        : 50.00
+model name      :
+CPU implementer : 0x41
+CPU part        : 0xd0c
+";
+
+        let models = models_from_cpuinfo(cpuinfo, [0]);
+
+        assert_eq!(
+            models[0].as_deref(),
+            Some("cpuinfo(cpu implementer=0x41, cpu part=0xd0c)")
+        );
+    }
+
+    #[test]
+    fn cpuinfo_with_trailing_machine_block_ignores_the_block() {
+        // Some architectures append a block describing the machine rather than a processor. It
+        // carries no processor index, so it must be skipped instead of counted as a processor.
+        // The absence of the index is the whole reason we may skip it - see
+        // `cpuinfo_with_unreadable_processor_index_fails_loudly` for the record that carries the
+        // index but no readable value, which is not ours to skip.
+        let cpuinfo = "processor       : 0
+model name      : Example Processor rev 4 (v7l)
+BogoMIPS        : 38.40
+CPU implementer : 0x41
+CPU part        : 0xd08
+
+Hardware        : Example Board
+Revision        : c03111
+Serial          : 100000001b0f1a0d
+";
+
+        let models = models_from_cpuinfo(cpuinfo, [0]);
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].as_deref(), Some("Example Processor rev 4 (v7l)"));
+    }
+
+    #[test]
+    fn cpuinfo_with_unreadable_processor_index_fails_loudly() {
+        // Dropping this record would report a two-processor machine as a one-processor machine,
+        // and an undercount is invisible to consumers - a smaller machine is a perfectly
+        // plausible reading. Only a record that names no processor at all may be skipped.
+        let cpuinfo = "processor       : 0
+bogomips        : 50.00
+
+processor       : the second one
+bogomips        : 50.00
+";
+
+        let mut fs = MockFilesystem::new();
+
+        fs.expect_get_cpuinfo_contents()
+            .times(1)
+            .return_const(cpuinfo.to_string());
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(MockBindings::new()),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        assert_panics(|| platform.get_cpuinfo());
+    }
+
+    #[test]
+    fn cpuinfo_with_differently_rendered_fields_reports_one_model() {
+        // Consumers partition their data by model, so the model must follow the hardware and
+        // nothing else. These payloads describe one processor in every spelling the kernel could
+        // plausibly reach for, and all of them have to land on the same model.
+        let as_the_kernel_renders_it = "processor       : 0
+BogoMIPS        : 50.00
+CPU implementer : 0x41
+CPU part        : 0xd0c
+";
+
+        let padded_wider = "processor       : 0
+BogoMIPS        : 50.00
+CPU implementer : 0x041
+CPU part        : 0x0d0c
+";
+
+        let uppercase = "processor       : 0
+BogoMIPS        : 50.00
+CPU implementer : 0X41
+CPU part        : 0xD0C
+";
+
+        // Written with escapes because the extra spacing is on the ends of the values, where a
+        // multi-line literal would leave it at the mercy of trailing-whitespace tooling.
+        let padded_with_whitespace =
+            "processor : 0\nbogomips :  50.00 \nCPU implementer :   0x41  \nCPU part :  0xd0c \n";
+
+        for cpuinfo in [
+            as_the_kernel_renders_it,
+            padded_wider,
+            uppercase,
+            padded_with_whitespace,
+        ] {
+            let models = models_from_cpuinfo(cpuinfo, [0]);
+
+            assert_eq!(
+                models[0].as_deref(),
+                Some("cpuinfo(cpu implementer=0x41, cpu part=0xd0c)")
+            );
+        }
+    }
+
+    #[test]
+    fn cpuinfo_with_unrecognized_field_rendering_reports_it_verbatim() {
+        // A rendering we cannot read still tells one core design from another, so it is reported
+        // rather than dropped.
+        let cpuinfo = "processor       : 0
+BogoMIPS        : 50.00
+CPU implementer : ARM
+CPU part        : Neoverse-N1
+";
+
+        let models = models_from_cpuinfo(cpuinfo, [0]);
+
+        assert_eq!(
+            models[0].as_deref(),
+            Some("cpuinfo(cpu implementer=ARM, cpu part=Neoverse-N1)")
+        );
+    }
+
+    /// Loads processors from a raw `/proc/cpuinfo` payload, with all processors online, allowed
+    /// and in a single memory region. Returns the model of each processor, in processor ID order.
+    fn models_from_cpuinfo<const PROCESSOR_COUNT: usize>(
+        cpuinfo: &str,
+        processor_ids: [ProcessorId; PROCESSOR_COUNT],
+    ) -> Vec<Option<String>> {
+        const MEMORY_REGION: MemoryRegionId = 0;
+
+        let mut fs = MockFilesystem::new();
 
         fs.expect_get_cpuinfo_contents()
             .times(1)
@@ -1688,31 +2059,42 @@ model name      :
 
         fs.expect_get_numa_node_possible_contents()
             .times(1)
-            .return_const(Some("0\n".to_string()));
+            .return_const(Some(format!("{MEMORY_REGION}\n")));
+
+        let cpulist = processor_ids.iter().join(",");
 
         fs.expect_get_numa_node_cpulist_contents()
-            .withf(move |n| *n == 0)
+            .withf(|node| *node == MEMORY_REGION)
             .times(1)
-            .return_const("0\n".to_string());
+            .return_const(format!("{cpulist}\n"));
 
-        fs.expect_get_cpu_online_contents()
-            .withf(move |p| *p == 0)
-            .times(1)
-            .return_const(Some("1\n".to_string()));
+        for processor_id in processor_ids {
+            fs.expect_get_cpu_online_contents()
+                .withf(move |p| *p == processor_id)
+                .times(1)
+                .return_const(Some("1\n".to_string()));
+        }
 
         fs.expect_get_proc_self_status_contents()
             .times(1)
-            .return_const("Cpus_allowed_list: 0".to_string());
+            .return_const(format!("Cpus_allowed_list: {cpulist}"));
 
         let platform = BuildTargetPlatform::new(
             BindingsFacade::from_mock(MockBindings::new()),
             FilesystemFacade::from_mock(fs),
         );
 
-        let processors = platform.get_all_processors();
-
-        assert_eq!(processors.len(), 1);
-        assert_eq!(processors[0].as_target().model, None);
+        platform
+            .get_all_processors()
+            .into_iter()
+            .map(|processor| {
+                processor
+                    .as_target()
+                    .model
+                    .as_deref()
+                    .map(ToString::to_string)
+            })
+            .collect()
     }
 
     #[test]

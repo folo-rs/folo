@@ -302,6 +302,13 @@ measured. A run *failure* surfaces only as the red check, with no issue and no f
 because a PR failure is a transient condition, not the persistent one the issue lifecycle
 tracks.
 
+An all-clear is claimed only when the analysis actually reached a verdict. The detector judges
+a series only when it carries enough evidence to tell a change from noise, so "no findings" and
+"nothing was assessed" are different states that would otherwise render identically. The comment
+resolves them from the **series census** the report carries: a run that judged nothing, and a
+placeholder report from a total collect failure, both say so plainly instead of showing a
+checkmark. Silence is only reassuring when it is silence *about something*.
+
 Because a full benchmark run takes hours and a new push *cancels* the in-flight one (see
 Concurrency), on a PR's first push there is nothing on display yet, and on later pushes the comment
 on display can lag the PR tip by a long way with no way for a reader to tell current numbers from

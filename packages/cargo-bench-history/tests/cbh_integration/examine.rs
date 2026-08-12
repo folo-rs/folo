@@ -26,7 +26,11 @@ async fn examine_pivots_a_rising_history_into_points() {
     let sets = parsed["sets"].as_array().unwrap();
     assert_eq!(sets.len(), 1, "one comparable set: {message}");
     let points = sets[0]["points"].as_array().unwrap();
-    assert_eq!(points.len(), 6, "one point per commit: {message}");
+    assert_eq!(
+        points.len(),
+        MIN_SERIES_POINTS,
+        "one point per commit: {message}"
+    );
 
     // The values follow the seeded rising history in topology order, each paired
     // with its commit's title (the commit message the harness stamps).
@@ -34,20 +38,18 @@ async fn examine_pivots_a_rising_history_into_points() {
         .iter()
         .map(|point| point["value"].as_f64().unwrap())
         .collect();
-    assert_eq!(
-        values,
-        vec![100.0, 100.0, 100.0, 130.0, 130.0, 130.0],
-        "{message}"
-    );
-    let titles: Vec<&str> = points
-        .iter()
-        .map(|point| point["title"].as_str().unwrap())
+    let expected_values: Vec<f64> = std::iter::repeat_n(100.0, MIN_REGIME)
+        .chain(std::iter::repeat_n(130.0, MIN_REGIME))
         .collect();
-    assert_eq!(
-        titles,
-        vec!["c1", "c2", "c3", "c4", "c5", "c6"],
-        "{message}"
-    );
+    assert_eq!(values, expected_values, "{message}");
+    let titles: Vec<String> = points
+        .iter()
+        .map(|point| point["title"].as_str().unwrap().to_owned())
+        .collect();
+    let expected_titles: Vec<String> = (1..=MIN_SERIES_POINTS)
+        .map(|index| format!("c{index}"))
+        .collect();
+    assert_eq!(titles, expected_titles, "{message}");
     assert!(
         points.iter().all(|point| point["dirty"] == false),
         "every seeded run is clean: {message}"
@@ -94,12 +96,15 @@ async fn examine_renders_a_text_pivot_with_titles() {
         message.contains(&short_head),
         "short head id present: {message}"
     );
-    // Values and their titles both appear.
+    // Values and their titles both appear. The tip is checked as a whole row — its
+    // short commit paired with its value and title — with the title derived from
+    // the fixture length, so raising the evidence gate cannot leave this asserting
+    // an interior commit while the real tip goes unrendered.
     assert!(message.contains("100"), "{message}");
-    assert!(message.contains("130"), "{message}");
+    let tip_title = format!("c{MIN_SERIES_POINTS}");
     assert!(
-        message.contains("c6"),
-        "the tip's title is shown: {message}"
+        message.contains(&format!("  {short_head}  130  {tip_title}\n")),
+        "the tip's point row is shown: {message}"
     );
     // The series is charted before its data points: the rasciigraph axis marker
     // appears ahead of the first point row. Match c1's title with its leading

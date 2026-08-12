@@ -1,9 +1,9 @@
 use crate::harness::*;
 
-/// An empty history analyzes cleanly and reports nothing.
+/// An empty history analyzes cleanly and states that it tested nothing.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_empty_history_reports_no_changes() {
+async fn analyze_empty_history_reports_that_nothing_was_analyzed() {
     let workspace = Workspace::repo(&storage_only_config());
 
     let outcome = workspace.drive(&["analyze"]).await.unwrap();
@@ -16,7 +16,20 @@ async fn analyze_empty_history_reports_no_changes() {
         panic!("expected an analyzed outcome, got {outcome:?}");
     };
     assert_eq!(regressions, 0);
-    assert!(report.contains("No notable changes detected."), "{report}");
+    // An empty history judged nothing, so the report must not dress its silence as
+    // an all-clear: the verdict says nothing was analyzed, there is no coverage to
+    // state, and nothing was measured against the floor. The empty-outcome hint
+    // carries the explanation instead.
+    assert!(
+        report.contains("Nothing was analyzed, so no change could be detected."),
+        "{report}"
+    );
+    assert!(!report.contains("No notable changes detected."), "{report}");
+    assert!(!report.contains("series judged"), "{report}");
+    assert!(
+        !report.contains("none moved beyond the measurement floor"),
+        "{report}"
+    );
 }
 
 /// A rising history is flagged as a regression end to end.
@@ -50,18 +63,15 @@ async fn analyze_detects_regression_in_seeded_history() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_tolerates_legacy_metric_kinds_in_stored_history() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_callgrind_with_legacy_metric("c1", 100.0);
-    workspace.commit_dated("2024-01-02", "c2");
-    workspace.seed_callgrind_with_legacy_metric("c2", 100.0);
-    workspace.commit_dated("2024-01-03", "c3");
-    workspace.seed_callgrind_with_legacy_metric("c3", 100.0);
-    workspace.commit_dated("2024-01-04", "c4");
-    workspace.seed_callgrind_with_legacy_metric("c4", 130.0);
-    workspace.commit_dated("2024-01-05", "c5");
-    workspace.seed_callgrind_with_legacy_metric("c5", 130.0);
-    workspace.commit_dated("2024-01-06", "c6");
-    workspace.seed_callgrind_with_legacy_metric("c6", 130.0);
+    for (index, date) in sequential_dates("2024-01-01", MIN_SERIES_POINTS)
+        .into_iter()
+        .enumerate()
+    {
+        let label = format!("c{}", index + 1);
+        workspace.commit_dated(&date, &label);
+        let value = if index < MIN_REGIME { 100.0 } else { 130.0 };
+        workspace.seed_callgrind_with_legacy_metric(&label, value);
+    }
 
     let outcome = workspace.drive(&["analyze"]).await.unwrap();
     let RunOutcome::Analyzed {
@@ -75,6 +85,116 @@ async fn analyze_tolerates_legacy_metric_kinds_in_stored_history() {
     assert_eq!(regressions, 1);
     assert!(report.contains("nm::observe/pull"), "{report}");
     assert!(report.contains("instruction_count"), "{report}");
+}
+
+/// **Detector-liveness canary. Do not relax this assertion.**
+///
+/// A doubling is the largest, cleanest signal this tool can be shown: two full
+/// regimes, flat within each, an exact 2x step between them, far above every
+/// measurement floor and every practical-significance threshold. If the pipeline
+/// cannot report *this*, it cannot report anything, and the tool's silence on real
+/// history would mean nothing.
+///
+/// The gates that decide whether a series is judged at all, the family size the
+/// false-discovery correction divides by, and the correction itself are all tuned
+/// against false positives. Each tightening moves the tool toward reporting less.
+/// This test is the floor under that: it drives the whole `analyze` pipeline — data
+/// loading, selection, series reconstruction, detection, correction and rendering —
+/// and fails loudly the moment a tightening switches detection off.
+///
+/// If this test ever fails, the fix is in the detector or its gates. Weakening the
+/// assertion, seeding a larger step, or deleting the test defeats its only purpose.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn analyze_canary_an_unmistakable_step_is_always_reported() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.seed_stepped_callgrind("2024-01-01", "c", 100.0, 200.0);
+
+    let report = workspace.drive_json(&["analyze"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+
+    // The series reached the detectors: silence here would have been vacuous.
+    assert_eq!(parsed["census"]["total"], 1, "{report}");
+    assert_eq!(parsed["census"]["judged"], 1, "{report}");
+    assert_eq!(parsed["census"]["unjudged"], 0, "{report}");
+
+    // And the detectors called it.
+    assert_eq!(
+        parsed["regressions"], 1,
+        "a doubling must always be reported: {report}"
+    );
+    let finding = &parsed["findings"][0];
+    assert_eq!(finding["direction"], "regression", "{report}");
+    assert_eq!(finding["kind"], "instruction_count", "{report}");
+    // Nothing on the path from the seeded values to this field approximates: the
+    // change-point detector represents each regime by its median, which for a run
+    // of identical values is that value itself; 200 - 100 and 100 / 100 are both
+    // exact in binary floating point; and the JSON projection copies the `f64`
+    // through untouched. So the doubling is asserted exactly. A tolerance would
+    // let a wrong baseline or a wrong relative-delta formula pass unnoticed while
+    // the canary still reported green.
+    //
+    // The method is pinned because these exact values are the two-regime model's.
+    // The drift detector describes the same fixture with a fitted line, whose
+    // endpoints straddle the two levels rather than sitting on them, so it would
+    // report a materially different baseline, latest and movement. Pinning the
+    // method keeps the three assertions below anchored to the model that produces
+    // them.
+    assert_eq!(finding["method"], "change_point", "{report}");
+    assert_eq!(finding["baseline"], 100.0, "{report}");
+    assert_eq!(finding["latest"], 200.0, "{report}");
+    assert_eq!(
+        finding["relative_delta"], 1.0,
+        "the reported move must be exactly the seeded doubling: {report}"
+    );
+}
+
+/// The converse of the canary: a series the pipeline cannot judge is *accounted
+/// for*, not silently dropped. Five points is half the evidence the detectors
+/// require, so nothing is tested — and the report says exactly that instead of
+/// rendering the same "no notable changes" an all-clear would produce.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn analyze_reports_a_series_it_could_not_judge_rather_than_omitting_it() {
+    let workspace = Workspace::repo(&storage_only_config());
+    for (index, date) in sequential_dates("2024-01-01", MIN_REGIME)
+        .into_iter()
+        .enumerate()
+    {
+        let label = format!("c{}", index + 1);
+        workspace.commit_dated(&date, &label);
+        // The same doubling the canary drives, on a series too short to judge.
+        let value = if index * 2 < MIN_REGIME { 100.0 } else { 200.0 };
+        workspace.seed_callgrind(&label, value);
+    }
+
+    let report = workspace.drive_json(&["analyze"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(parsed["regressions"], 0, "{report}");
+    assert_eq!(parsed["census"]["total"], 1, "{report}");
+    assert_eq!(parsed["census"]["judged"], 0, "{report}");
+    assert_eq!(
+        parsed["census"]["reasons"][0]["reason"], "too_few_points",
+        "{report}"
+    );
+    assert_eq!(parsed["census"]["reasons"][0]["count"], 1, "{report}");
+
+    let text = workspace.drive(&["analyze"]).await.unwrap();
+    let RunOutcome::Analyzed { report, .. } = text else {
+        panic!("expected an analyzed outcome, got {text:?}");
+    };
+    assert!(
+        report.contains("in-scope series judged: 0 of 1"),
+        "{report}"
+    );
+    assert!(
+        report.contains("this silence is not evidence that nothing moved"),
+        "{report}"
+    );
+    assert!(
+        report.contains("Not judged: 1 series with too few points in the analyzed window."),
+        "{report}"
+    );
 }
 
 /// A rising Criterion `wall_time` history is flagged as a regression, proving the
@@ -354,7 +474,10 @@ async fn analyze_default_text_coexists_with_json_file() {
 }
 
 /// `--since` excludes points before the cutoff, so an early spike is dropped and
-/// the remaining flat history shows no change.
+/// the remaining flat history shows no change. The retained history is
+/// [`MIN_SERIES_POINTS`] points — long enough that the detector actually judges
+/// the series, so the "no change" result reflects a flat series rather than a
+/// series too short to analyse.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn analyze_since_filters_old_points() {
@@ -362,20 +485,23 @@ async fn analyze_since_filters_old_points() {
     // A flat recent history (no change), preceded long ago by an unrelated point.
     workspace.commit_dated("2020-01-01", "c0");
     workspace.seed_callgrind("c0", 999.0);
-    workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_callgrind("c1", 100.0);
-    workspace.commit_dated("2024-01-02", "c2");
-    workspace.seed_callgrind("c2", 100.0);
-    workspace.commit_dated("2024-01-03", "c3");
-    workspace.seed_callgrind("c3", 100.0);
+    for (index, date) in sequential_dates("2024-01-01", MIN_SERIES_POINTS)
+        .into_iter()
+        .enumerate()
+    {
+        let label = format!("c{}", index + 1);
+        workspace.commit_dated(&date, &label);
+        workspace.seed_callgrind(&label, 100.0);
+    }
 
     let report = workspace
         .drive_json(&["analyze", "--since", "2024-01-01"])
         .await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
-        parsed["runs"], 3,
-        "the pre-cutoff point is excluded: {report}"
+        parsed["runs"],
+        u64::try_from(MIN_SERIES_POINTS).unwrap(),
+        "the pre-cutoff point is excluded, leaving exactly the judged flat window: {report}"
     );
     assert_eq!(parsed["regressions"], 0, "{report}");
 }
@@ -424,18 +550,15 @@ async fn analyze_rejects_no_output_selected() {
 async fn analyze_prefix_filter_excludes_other_benchmarks() {
     let workspace = Workspace::repo(&storage_only_config());
     // `alpha` stays flat while `beta` climbs into a regression.
-    workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_two_benchmarks("c1", 100.0, 100.0);
-    workspace.commit_dated("2024-01-02", "c2");
-    workspace.seed_two_benchmarks("c2", 100.0, 100.0);
-    workspace.commit_dated("2024-01-03", "c3");
-    workspace.seed_two_benchmarks("c3", 100.0, 100.0);
-    workspace.commit_dated("2024-01-04", "c4");
-    workspace.seed_two_benchmarks("c4", 100.0, 130.0);
-    workspace.commit_dated("2024-01-05", "c5");
-    workspace.seed_two_benchmarks("c5", 100.0, 130.0);
-    workspace.commit_dated("2024-01-06", "c6");
-    workspace.seed_two_benchmarks("c6", 100.0, 130.0);
+    for (index, date) in sequential_dates("2024-01-01", MIN_SERIES_POINTS)
+        .into_iter()
+        .enumerate()
+    {
+        let label = format!("c{}", index + 1);
+        workspace.commit_dated(&date, &label);
+        let beta = if index < MIN_REGIME { 100.0 } else { 130.0 };
+        workspace.seed_two_benchmarks(&label, 100.0, beta);
+    }
 
     // Unfiltered, the `beta` climb flags as a regression.
     let RunOutcome::Analyzed { regressions, .. } = workspace.drive(&["analyze"]).await.unwrap()
@@ -454,6 +577,9 @@ async fn analyze_prefix_filter_excludes_other_benchmarks() {
         panic!("expected an analyzed outcome");
     };
     assert_eq!(regressions, 0, "the alpha series is flat: {report}");
+    // The filtered-in series was judged, so this silence is about `alpha` being flat
+    // rather than about the filter leaving nothing to test.
+    assert_history_was_judged(&report);
 }
 
 /// Two benchmarks regressing by different magnitudes produce two findings that the
@@ -464,18 +590,19 @@ async fn analyze_prefix_filter_excludes_other_benchmarks() {
 async fn analyze_ranks_findings_by_relative_move_across_benchmarks() {
     let workspace = Workspace::repo(&storage_only_config());
     // `alpha` doubles (+100%); `beta` steps up +5%.
-    workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_two_benchmarks("c1", 100.0, 100.0);
-    workspace.commit_dated("2024-01-02", "c2");
-    workspace.seed_two_benchmarks("c2", 100.0, 100.0);
-    workspace.commit_dated("2024-01-03", "c3");
-    workspace.seed_two_benchmarks("c3", 100.0, 100.0);
-    workspace.commit_dated("2024-01-04", "c4");
-    workspace.seed_two_benchmarks("c4", 200.0, 105.0);
-    workspace.commit_dated("2024-01-05", "c5");
-    workspace.seed_two_benchmarks("c5", 200.0, 105.0);
-    workspace.commit_dated("2024-01-06", "c6");
-    workspace.seed_two_benchmarks("c6", 200.0, 105.0);
+    for (index, date) in sequential_dates("2024-01-01", MIN_SERIES_POINTS)
+        .into_iter()
+        .enumerate()
+    {
+        let label = format!("c{}", index + 1);
+        workspace.commit_dated(&date, &label);
+        let (alpha, beta) = if index < MIN_REGIME {
+            (100.0, 100.0)
+        } else {
+            (200.0, 105.0)
+        };
+        workspace.seed_two_benchmarks(&label, alpha, beta);
+    }
 
     let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
@@ -505,18 +632,7 @@ async fn analyze_ranks_findings_by_relative_move_across_benchmarks() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_reports_improvement_without_regression() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_callgrind("c1", 100.0);
-    workspace.commit_dated("2024-01-02", "c2");
-    workspace.seed_callgrind("c2", 100.0);
-    workspace.commit_dated("2024-01-03", "c3");
-    workspace.seed_callgrind("c3", 100.0);
-    workspace.commit_dated("2024-01-04", "c4");
-    workspace.seed_callgrind("c4", 70.0);
-    workspace.commit_dated("2024-01-05", "c5");
-    workspace.seed_callgrind("c5", 70.0);
-    workspace.commit_dated("2024-01-06", "c6");
-    workspace.seed_callgrind("c6", 70.0);
+    workspace.seed_stepped_callgrind("2024-01-01", "c", 100.0, 70.0);
 
     let report = workspace
         .drive_json(&["analyze", "--include-improvements"])
@@ -533,24 +649,28 @@ async fn analyze_reports_improvement_without_regression() {
 /// flat produces no finding at all: the rank-sum gate finds no real separation
 /// between the regimes and the trend test finds no monotonic drift, so substantial
 /// per-point noise never manufactures a spurious regression or improvement. This is
-/// the core signal-to-noise guarantee for the noisy engine.
+/// the core signal-to-noise guarantee for the noisy engine. The series carries
+/// [`MIN_SERIES_POINTS`] points, so the detector genuinely judges it rather than
+/// skipping it as too short.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn analyze_criterion_jitter_is_not_flagged() {
     let workspace = Workspace::repo(&storage_only_config());
-    // Eight points oscillating roughly +/-15% around 20ns with no sustained shift.
-    for (date, label, value) in [
-        ("2024-02-01", "d1", 20.0),
-        ("2024-02-02", "d2", 23.0),
-        ("2024-02-03", "d3", 18.0),
-        ("2024-02-04", "d4", 21.0),
-        ("2024-02-05", "d5", 19.0),
-        ("2024-02-06", "d6", 22.0),
-        ("2024-02-07", "d7", 18.0),
-        ("2024-02-08", "d8", 20.0),
-    ] {
-        workspace.commit_dated(date, label);
-        workspace.seed_criterion(label, "mk", value);
+    // Points oscillating roughly +/-15% around 20ns with no sustained shift, one
+    // per commit, enough of them that the series clears the minimum-length gate.
+    let jitter = [20.0, 23.0, 18.0, 21.0, 19.0, 22.0, 18.0, 22.0, 19.0, 21.0];
+    assert!(
+        jitter.len() >= MIN_SERIES_POINTS,
+        "the jitter series must clear the detector's minimum length so its silence is judged"
+    );
+    for (index, (date, value)) in sequential_dates("2024-02-01", jitter.len())
+        .into_iter()
+        .zip(jitter)
+        .enumerate()
+    {
+        let label = format!("d{}", index + 1);
+        workspace.commit_dated(&date, &label);
+        workspace.seed_criterion(&label, "mk", value);
     }
 
     let report = workspace
@@ -563,6 +683,15 @@ async fn analyze_criterion_jitter_is_not_flagged() {
         ])
         .await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(
+        parsed["runs"],
+        u64::try_from(jitter.len()).unwrap(),
+        "every jittery point is loaded: {report}"
+    );
+    assert_eq!(
+        parsed["census"]["judged"], 1,
+        "the detectors reached a verdict, so this silence is one: {report}"
+    );
     assert_eq!(
         parsed["regressions"], 0,
         "jitter must not read as a regression: {report}"
@@ -582,19 +711,17 @@ async fn analyze_criterion_jitter_is_not_flagged() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_criterion_slow_drift_is_flagged_as_drift() {
     let workspace = Workspace::repo(&storage_only_config());
-    // A gentle one-nanosecond-per-commit ramp from 20ns to 27ns.
-    for (date, label, value) in [
-        ("2024-02-01", "d1", 20.0),
-        ("2024-02-02", "d2", 21.0),
-        ("2024-02-03", "d3", 22.0),
-        ("2024-02-04", "d4", 23.0),
-        ("2024-02-05", "d5", 24.0),
-        ("2024-02-06", "d6", 25.0),
-        ("2024-02-07", "d7", 26.0),
-        ("2024-02-08", "d8", 27.0),
-    ] {
-        workspace.commit_dated(date, label);
-        workspace.seed_criterion(label, "mk", value);
+    // A gentle one-nanosecond-per-commit ramp from 20ns upward across
+    // `MIN_SERIES_POINTS` commits, the minimum length the drift detector considers.
+    for (index, date) in sequential_dates("2024-02-01", MIN_SERIES_POINTS)
+        .into_iter()
+        .enumerate()
+    {
+        let label = format!("d{}", index + 1);
+        workspace.commit_dated(&date, &label);
+        // `index` spans a small fixed range; a u16 cast keeps the ramp exact.
+        let value = 20.0 + f64::from(u16::try_from(index).unwrap());
+        workspace.seed_criterion(&label, "mk", value);
     }
 
     let report = workspace
@@ -619,26 +746,25 @@ async fn analyze_criterion_slow_drift_is_flagged_as_drift() {
 /// move - is below the practical-magnitude floor every engine now shares, so it is
 /// suppressed. No engine is exact (even a CPU simulator's counts jitter run to run),
 /// and a sub-percent change is not worth a human's attention regardless of how
-/// certainly it was measured.
+/// certainly it was measured. The series carries [`MIN_SERIES_POINTS`] points, so
+/// the suppression is the floor's doing, not a series too short to judge.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn analyze_callgrind_sub_floor_step_is_suppressed() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_callgrind("c1", 1000.0);
-    workspace.commit_dated("2024-01-02", "c2");
-    workspace.seed_callgrind("c2", 1000.0);
-    workspace.commit_dated("2024-01-03", "c3");
-    workspace.seed_callgrind("c3", 1000.0);
-    workspace.commit_dated("2024-01-04", "c4");
-    workspace.seed_callgrind("c4", 1001.0);
-    workspace.commit_dated("2024-01-05", "c5");
-    workspace.seed_callgrind("c5", 1001.0);
-    workspace.commit_dated("2024-01-06", "c6");
-    workspace.seed_callgrind("c6", 1001.0);
+    workspace.seed_stepped_callgrind("2024-01-01", "c", 1000.0, 1001.0);
 
     let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(
+        parsed["runs"],
+        u64::try_from(MIN_SERIES_POINTS).unwrap(),
+        "the full series is loaded: {report}"
+    );
+    assert_eq!(
+        parsed["census"]["judged"], 1,
+        "the detectors reached a verdict, so this silence is one: {report}"
+    );
     assert_eq!(
         parsed["regressions"], 0,
         "a 0.1% step is below the practical-magnitude floor and must not flag: {report}"
@@ -659,18 +785,7 @@ async fn analyze_callgrind_sub_floor_step_is_suppressed() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_callgrind_step_above_the_practical_floor_is_flagged() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_callgrind("c1", 1000.0);
-    workspace.commit_dated("2024-01-02", "c2");
-    workspace.seed_callgrind("c2", 1000.0);
-    workspace.commit_dated("2024-01-03", "c3");
-    workspace.seed_callgrind("c3", 1000.0);
-    workspace.commit_dated("2024-01-04", "c4");
-    workspace.seed_callgrind("c4", 1050.0);
-    workspace.commit_dated("2024-01-05", "c5");
-    workspace.seed_callgrind("c5", 1050.0);
-    workspace.commit_dated("2024-01-06", "c6");
-    workspace.seed_callgrind("c6", 1050.0);
+    workspace.seed_stepped_callgrind("2024-01-01", "c", 1000.0, 1050.0);
 
     let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
@@ -690,20 +805,18 @@ async fn analyze_callgrind_step_above_the_practical_floor_is_flagged() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_alloc_tracker_step_is_flagged_as_change_point() {
     let workspace = Workspace::repo(&storage_only_config());
-    // A flat allocated-bytes baseline that steps up by 5% at the fourth commit; the
-    // allocation count stays constant throughout.
-    workspace.commit_dated("2024-03-01", "a1");
-    workspace.seed_alloc_tracker("a1", "allocate_vec", 200.0, 2.0);
-    workspace.commit_dated("2024-03-02", "a2");
-    workspace.seed_alloc_tracker("a2", "allocate_vec", 200.0, 2.0);
-    workspace.commit_dated("2024-03-03", "a3");
-    workspace.seed_alloc_tracker("a3", "allocate_vec", 200.0, 2.0);
-    workspace.commit_dated("2024-03-04", "a4");
-    workspace.seed_alloc_tracker("a4", "allocate_vec", 210.0, 2.0);
-    workspace.commit_dated("2024-03-05", "a5");
-    workspace.seed_alloc_tracker("a5", "allocate_vec", 210.0, 2.0);
-    workspace.commit_dated("2024-03-06", "a6");
-    workspace.seed_alloc_tracker("a6", "allocate_vec", 210.0, 2.0);
+    // A flat allocated-bytes baseline that steps up by 5% at the midpoint; the
+    // allocation count stays constant throughout. The series holds
+    // `MIN_SERIES_POINTS` points so the step clears the change-point persistence gate.
+    for (index, date) in sequential_dates("2024-03-01", MIN_SERIES_POINTS)
+        .into_iter()
+        .enumerate()
+    {
+        let label = format!("a{}", index + 1);
+        workspace.commit_dated(&date, &label);
+        let bytes = if index < MIN_REGIME { 200.0 } else { 210.0 };
+        workspace.seed_alloc_tracker(&label, "allocate_vec", bytes, 2.0);
+    }
 
     let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
@@ -727,12 +840,15 @@ async fn analyze_alloc_tracker_ignores_gaps_in_a_sparse_history() {
     let workspace = Workspace::repo(&storage_only_config());
     // `allocate_vec` is measured only at every other commit; the intervening
     // commits measure `free_box` instead, leaving `allocate_vec` unobserved there.
-    // Its step spans the gaps: three baseline observations, then three raised ones.
+    // Its step spans the gaps: `MIN_REGIME` baseline observations, then
+    // `MIN_REGIME` raised ones, so the observed series clears `MIN_SERIES_POINTS`.
     // The history ends on an `allocate_vec` commit so that series is present at the
     // tip and survives the ghost filter (`free_box` is the ghost here, and being
     // flat it produces no finding regardless).
+    let mut allocate_vec_bytes = vec![200.0; MIN_REGIME];
+    allocate_vec_bytes.extend(std::iter::repeat_n(260.0, MIN_REGIME));
     let mut day = 1;
-    for bytes in [200.0, 200.0, 200.0, 260.0, 260.0, 260.0] {
+    for bytes in allocate_vec_bytes {
         workspace.commit_dated(&format!("2024-04-{day:02}"), &format!("g{day}"));
         workspace.seed_alloc_tracker(&format!("g{day}"), "free_box", 8.0, 1.0);
         day += 1;
@@ -770,19 +886,17 @@ async fn analyze_alloc_tracker_ignores_gaps_in_a_sparse_history() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_all_the_time_slow_drift_is_flagged_as_drift() {
     let workspace = Workspace::repo(&storage_only_config());
-    // A gentle one-nanosecond-per-commit ramp from 20ns to 27ns.
-    for (date, label, value) in [
-        ("2024-05-01", "t1", 20.0),
-        ("2024-05-02", "t2", 21.0),
-        ("2024-05-03", "t3", 22.0),
-        ("2024-05-04", "t4", 23.0),
-        ("2024-05-05", "t5", 24.0),
-        ("2024-05-06", "t6", 25.0),
-        ("2024-05-07", "t7", 26.0),
-        ("2024-05-08", "t8", 27.0),
-    ] {
-        workspace.commit_dated(date, label);
-        workspace.seed_all_the_time(label, "mk", "read_cell", value);
+    // A gentle one-nanosecond-per-commit ramp from 20ns upward across
+    // `MIN_SERIES_POINTS` commits, the minimum length the drift detector considers.
+    for (index, date) in sequential_dates("2024-05-01", MIN_SERIES_POINTS)
+        .into_iter()
+        .enumerate()
+    {
+        let label = format!("t{}", index + 1);
+        workspace.commit_dated(&date, &label);
+        // `index` spans a small fixed range; a u16 cast keeps the ramp exact.
+        let value = 20.0 + f64::from(u16::try_from(index).unwrap());
+        workspace.seed_all_the_time(&label, "mk", "read_cell", value);
     }
 
     let report = workspace
@@ -806,24 +920,28 @@ async fn analyze_all_the_time_slow_drift_is_flagged_as_drift() {
 
 /// Per-point noise in an `all_the_time` processor-time series never manufactures a
 /// spurious finding: oscillation around a flat mean clears neither the trend test
-/// nor the change-point gate, so the noisy engine produces nothing.
+/// nor the change-point gate, so the noisy engine produces nothing. The series
+/// carries [`MIN_SERIES_POINTS`] points, so the detector genuinely judges it
+/// rather than skipping it as too short.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn analyze_all_the_time_jitter_is_not_flagged() {
     let workspace = Workspace::repo(&storage_only_config());
-    // Eight points oscillating roughly +/-15% around 20ns with no sustained shift.
-    for (date, label, value) in [
-        ("2024-06-01", "j1", 20.0),
-        ("2024-06-02", "j2", 23.0),
-        ("2024-06-03", "j3", 18.0),
-        ("2024-06-04", "j4", 21.0),
-        ("2024-06-05", "j5", 19.0),
-        ("2024-06-06", "j6", 22.0),
-        ("2024-06-07", "j7", 18.0),
-        ("2024-06-08", "j8", 20.0),
-    ] {
-        workspace.commit_dated(date, label);
-        workspace.seed_all_the_time(label, "mk", "read_cell", value);
+    // Points oscillating roughly +/-15% around 20ns with no sustained shift, one
+    // per commit, enough of them that the series clears the minimum-length gate.
+    let jitter = [20.0, 23.0, 18.0, 21.0, 19.0, 22.0, 18.0, 22.0, 19.0, 21.0];
+    assert!(
+        jitter.len() >= MIN_SERIES_POINTS,
+        "the jitter series must clear the detector's minimum length so its silence is judged"
+    );
+    for (index, (date, value)) in sequential_dates("2024-06-01", jitter.len())
+        .into_iter()
+        .zip(jitter)
+        .enumerate()
+    {
+        let label = format!("j{}", index + 1);
+        workspace.commit_dated(&date, &label);
+        workspace.seed_all_the_time(&label, "mk", "read_cell", value);
     }
 
     let report = workspace
@@ -836,6 +954,15 @@ async fn analyze_all_the_time_jitter_is_not_flagged() {
         ])
         .await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(
+        parsed["runs"],
+        u64::try_from(jitter.len()).unwrap(),
+        "every jittery point is loaded: {report}"
+    );
+    assert_eq!(
+        parsed["census"]["judged"], 1,
+        "the detectors reached a verdict, so this silence is one: {report}"
+    );
     assert_eq!(
         parsed["regressions"], 0,
         "jitter must not read as a regression: {report}"
@@ -929,6 +1056,10 @@ async fn analyze_all_the_time_step_with_overlapping_intervals_is_suppressed() {
         .await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
+        parsed["census"]["judged"], 1,
+        "the detectors reached a verdict, so this silence is one: {report}"
+    );
+    assert_eq!(
         parsed["regressions"], 0,
         "an overlapping-interval step is suppressed by the CI gate: {report}"
     );
@@ -950,32 +1081,33 @@ async fn analyze_without_a_repository_errors() {
 
 /// The official view (analyzing the default branch against itself) admits only
 /// clean runs: a dirty snapshot sitting on the tip commit is excluded, so a dirty
-/// spike does not flag and the run count covers only the clean points.
+/// spike does not flag and the run count covers only the clean points. The clean
+/// history is [`MIN_SERIES_POINTS`] points, so the series is genuinely judged (and
+/// found flat) rather than merely too short to analyse.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn analyze_official_view_excludes_dirty_runs() {
     // A clean working tree, so the base-branch dirty-tree exception does not apply.
     let workspace = Workspace::clean_repo(&storage_only_config());
-    workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_callgrind("c1", 100.0);
-    workspace.commit_dated("2024-01-02", "c2");
-    workspace.seed_callgrind("c2", 100.0);
-    workspace.commit_dated("2024-01-03", "c3");
-    workspace.seed_callgrind("c3", 100.0);
-    workspace.commit_dated("2024-01-04", "c4");
-    workspace.seed_callgrind("c4", 100.0);
+    workspace.seed_stepped_callgrind("2024-01-01", "c", 100.0, 100.0);
     // A dirty snapshot on the tip commit that would spike the series if admitted.
-    workspace.seed_dirty_callgrind("2024-01-05", "c4", 200.0);
+    let tip = format!("c{MIN_SERIES_POINTS}");
+    workspace.seed_dirty_callgrind("2024-02-01", &tip, 200.0);
 
     let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(
+        parsed["census"]["judged"], 1,
+        "the clean series is judged, so this silence is a verdict: {report}"
+    );
     assert_eq!(
         parsed["regressions"], 0,
         "the dirty spike must be excluded: {report}"
     );
     assert_eq!(
-        parsed["runs"], 4,
-        "only the four clean runs are loaded, not the dirty snapshot: {report}"
+        parsed["runs"],
+        u64::try_from(MIN_SERIES_POINTS).unwrap(),
+        "only the clean runs are loaded, not the dirty snapshot: {report}"
     );
 }
 
@@ -1024,17 +1156,21 @@ async fn analyze_hints_when_every_run_is_a_dirty_snapshot_on_the_base() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_dirty_tree_on_the_base_admits_the_tip_with_a_warning() {
     let workspace = Workspace::clean_repo(&storage_only_config());
-    workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_callgrind("c1", 100.0);
-    workspace.commit_dated("2024-01-02", "c2");
-    workspace.seed_callgrind("c2", 100.0);
-    workspace.commit_dated("2024-01-03", "c3");
-    workspace.seed_callgrind("c3", 100.0);
-    // Three dirty regression snapshots on the tip commit (c3) complete a sustained
-    // step over the clean baseline (three raised points clear the change-point gate).
-    workspace.seed_dirty_callgrind("2024-01-04", "c3", 130.0);
-    workspace.seed_dirty_callgrind("2024-01-05", "c3", 130.0);
-    workspace.seed_dirty_callgrind("2024-01-06", "c3", 130.0);
+    // A flat clean baseline of `MIN_SERIES_POINTS` commits on the base branch. A
+    // dirty tip promotes this to branch mode, whose prediction interval needs at
+    // least `MIN_SERIES_POINTS` base-side commit levels before it will judge the tip.
+    let baseline_dates = sequential_dates("2024-01-01", MIN_SERIES_POINTS);
+    for (index, date) in baseline_dates.iter().enumerate() {
+        let label = format!("c{}", index + 1);
+        workspace.commit_dated(date, &label);
+        workspace.seed_callgrind(&label, 100.0);
+    }
+    // `MIN_REGIME` dirty regression snapshots on the tip commit form the "after"
+    // cohort: a raised level the prediction interval rejects against the clean base.
+    let tip = format!("c{MIN_SERIES_POINTS}");
+    for date in sequential_dates("2024-02-01", MIN_REGIME) {
+        workspace.seed_dirty_callgrind(&date, &tip, 130.0);
+    }
     // Make the working tree genuinely dirty (an uncommitted, non-ignored file),
     // matching the "evaluating the tool" / "working on the base branch" scenario.
     workspace.make_dirty("uncommitted.txt");
@@ -1046,8 +1182,9 @@ async fn analyze_dirty_tree_on_the_base_admits_the_tip_with_a_warning() {
         "the dirty tip regression is admitted: {report}"
     );
     assert_eq!(
-        parsed["runs"], 6,
-        "the dirty tip snapshots join the three clean runs: {report}"
+        parsed["runs"],
+        u64::try_from(MIN_SERIES_POINTS + MIN_REGIME).unwrap(),
+        "the dirty tip snapshots join the clean baseline runs: {report}"
     );
     let warning = parsed["warning"].as_str().unwrap();
     assert!(
@@ -1059,8 +1196,9 @@ async fn analyze_dirty_tree_on_the_base_admits_the_tip_with_a_warning() {
     let report = workspace.drive_json(&["analyze", "--no-dirty"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
-        parsed["runs"], 3,
-        "--no-dirty drops the dirty tip snapshot: {report}"
+        parsed["runs"],
+        u64::try_from(MIN_SERIES_POINTS).unwrap(),
+        "--no-dirty drops the dirty tip snapshots: {report}"
     );
     assert!(
         parsed["warning"].is_null(),
@@ -1080,18 +1218,7 @@ async fn analyze_dirty_tree_without_recorded_dirty_runs_stays_history_mode() {
     let workspace = Workspace::clean_repo(&storage_only_config());
     // A clean base branch with a sustained upward step (a regression). No dirty
     // snapshots are recorded anywhere.
-    workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_callgrind("c1", 100.0);
-    workspace.commit_dated("2024-01-02", "c2");
-    workspace.seed_callgrind("c2", 100.0);
-    workspace.commit_dated("2024-01-03", "c3");
-    workspace.seed_callgrind("c3", 100.0);
-    workspace.commit_dated("2024-01-04", "c4");
-    workspace.seed_callgrind("c4", 130.0);
-    workspace.commit_dated("2024-01-05", "c5");
-    workspace.seed_callgrind("c5", 130.0);
-    workspace.commit_dated("2024-01-06", "c6");
-    workspace.seed_callgrind("c6", 130.0);
+    workspace.seed_stepped_callgrind("2024-01-01", "c", 100.0, 130.0);
     // Dirty the working tree, even though no dirty run was ever stored.
     workspace.make_dirty("uncommitted.txt");
 
@@ -1106,8 +1233,9 @@ async fn analyze_dirty_tree_without_recorded_dirty_runs_stays_history_mode() {
         "history mode flags the sustained clean step: {report}"
     );
     assert_eq!(
-        parsed["runs"], 6,
-        "all six clean runs participate; nothing dirty exists: {report}"
+        parsed["runs"],
+        u64::try_from(MIN_SERIES_POINTS).unwrap(),
+        "all clean runs participate; nothing dirty exists: {report}"
     );
     assert!(
         parsed["warning"].is_null(),
@@ -1122,21 +1250,25 @@ async fn analyze_dirty_tree_without_recorded_dirty_runs_stays_history_mode() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_feature_branch_admits_dirty_snapshots() {
     let workspace = Workspace::repo(&storage_only_config());
-    // A flat clean baseline on master.
-    workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_callgrind("c1", 100.0);
-    workspace.commit_dated("2024-01-02", "c2");
-    workspace.seed_callgrind("c2", 100.0);
-    workspace.commit_dated("2024-01-03", "c3");
-    workspace.seed_callgrind("c3", 100.0);
-    // Branch off master and add a clean point plus three dirty regression snapshots
-    // on it (three raised points satisfy the change-point persistence requirement).
+    // A flat clean baseline on master, long enough to give branch mode the
+    // `MIN_SERIES_POINTS` base-side commit levels its prediction interval needs.
+    for (index, date) in sequential_dates("2024-01-01", MIN_SERIES_POINTS)
+        .into_iter()
+        .enumerate()
+    {
+        let label = format!("c{}", index + 1);
+        workspace.commit_dated(&date, &label);
+        workspace.seed_callgrind(&label, 100.0);
+    }
+    // Branch off master and add a clean point plus dirty regression snapshots on it;
+    // the branch tip's dirty cohort is the "after" sample branch mode compares
+    // against the base level.
     workspace.checkout_new_branch("feature");
-    workspace.commit_dated("2024-01-04", "f1");
+    workspace.commit_dated("2024-02-01", "f1");
     workspace.seed_callgrind("f1", 100.0);
-    workspace.seed_dirty_callgrind("2024-01-05", "f1", 200.0);
-    workspace.seed_dirty_callgrind("2024-01-06", "f1", 200.0);
-    workspace.seed_dirty_callgrind("2024-01-07", "f1", 200.0);
+    workspace.seed_dirty_callgrind("2024-02-02", "f1", 200.0);
+    workspace.seed_dirty_callgrind("2024-02-03", "f1", 200.0);
+    workspace.seed_dirty_callgrind("2024-02-04", "f1", 200.0);
 
     // By default (feature is HEAD; base is the detected master) the dirty snapshot
     // on the target side is admitted, so the spike flags.
@@ -1159,6 +1291,8 @@ async fn analyze_feature_branch_admits_dirty_snapshots() {
         regressions, 0,
         "with --no-dirty only the flat clean series remains: {report}"
     );
+    // That remaining clean series was judged, so its silence is a verdict.
+    assert_history_was_judged(&report);
 }
 
 /// The series timeline follows git topology, not the runs' commit timestamps:
@@ -1168,21 +1302,17 @@ async fn analyze_feature_branch_admits_dirty_snapshots() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_orders_by_topology_not_commit_time() {
     let workspace = Workspace::repo(&storage_only_config());
-    // Topology c1 -> .. -> c6 with a sustained step at c4, but commit times
-    // strictly descend, so a commit-time ordering would reverse the step into
+    // Topology c1 -> .. -> cN with a sustained step at the midpoint, but commit
+    // times strictly descend, so a commit-time ordering would reverse the step into
     // a non-regression (a drop). A flagged regression proves topology order won.
-    workspace.commit_dated("2024-04-06", "c1");
-    workspace.seed_callgrind("c1", 100.0);
-    workspace.commit_dated("2024-04-05", "c2");
-    workspace.seed_callgrind("c2", 100.0);
-    workspace.commit_dated("2024-04-04", "c3");
-    workspace.seed_callgrind("c3", 100.0);
-    workspace.commit_dated("2024-04-03", "c4");
-    workspace.seed_callgrind("c4", 130.0);
-    workspace.commit_dated("2024-04-02", "c5");
-    workspace.seed_callgrind("c5", 130.0);
-    workspace.commit_dated("2024-04-01", "c6");
-    workspace.seed_callgrind("c6", 130.0);
+    // The chain is `MIN_SERIES_POINTS` long so the step clears the persistence gate.
+    let ascending = sequential_dates("2024-04-01", MIN_SERIES_POINTS);
+    for (index, date) in ascending.iter().rev().enumerate() {
+        let label = format!("c{}", index + 1);
+        workspace.commit_dated(date, &label);
+        let value = if index < MIN_REGIME { 100.0 } else { 130.0 };
+        workspace.seed_callgrind(&label, value);
+    }
 
     let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
@@ -1203,27 +1333,30 @@ async fn analyze_orders_by_topology_not_commit_time() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_branch_mode_reports_the_tip_commit_state() {
     let workspace = Workspace::repo(&storage_only_config());
-    // A flat clean baseline on master.
-    workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_callgrind("c1", 100.0);
-    workspace.commit_dated("2024-01-02", "c2");
-    workspace.seed_callgrind("c2", 100.0);
-    workspace.commit_dated("2024-01-03", "c3");
-    workspace.seed_callgrind("c3", 100.0);
+    // A flat clean baseline on master, long enough to give branch mode the
+    // `MIN_SERIES_POINTS` base-side commit levels its prediction interval needs.
+    for (index, date) in sequential_dates("2024-01-01", MIN_SERIES_POINTS)
+        .into_iter()
+        .enumerate()
+    {
+        let label = format!("c{}", index + 1);
+        workspace.commit_dated(&date, &label);
+        workspace.seed_callgrind(&label, 100.0);
+    }
     // The feature branch first improves (80) then regresses hard (130): the latest
     // state is what matters, so this must be reported as a regression vs the base.
     workspace.checkout_new_branch("feature");
-    workspace.commit_dated("2024-01-04", "f1");
+    workspace.commit_dated("2024-02-01", "f1");
     workspace.seed_callgrind("f1", 80.0);
-    workspace.commit_dated("2024-01-05", "f2");
+    workspace.commit_dated("2024-02-02", "f2");
     workspace.seed_callgrind("f2", 80.0);
-    workspace.commit_dated("2024-01-06", "f3");
+    workspace.commit_dated("2024-02-03", "f3");
     workspace.seed_callgrind("f3", 80.0);
-    workspace.commit_dated("2024-01-07", "f4");
+    workspace.commit_dated("2024-02-04", "f4");
     workspace.seed_callgrind("f4", 130.0);
-    workspace.commit_dated("2024-01-08", "f5");
+    workspace.commit_dated("2024-02-05", "f5");
     workspace.seed_callgrind("f5", 130.0);
-    workspace.commit_dated("2024-01-09", "f6");
+    workspace.commit_dated("2024-02-06", "f6");
     workspace.seed_callgrind("f6", 130.0);
 
     let report = workspace.drive_json(&["analyze"]).await;
@@ -1250,32 +1383,41 @@ async fn analyze_branch_mode_reports_the_tip_commit_state() {
 
 /// A feature branch that holds flat at the base level produces no finding in
 /// branch mode: with no change in the latest state there is nothing to report,
-/// and `notable` stays false so downstream automation knows to stay quiet.
+/// and `notable` stays false so downstream automation knows to stay quiet. The
+/// base carries [`MIN_SERIES_POINTS`] commit levels, so branch mode actually
+/// judges the tip against a real prediction interval rather than staying silent
+/// only because the base was too short to evaluate.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn analyze_branch_mode_stays_silent_on_a_flat_branch() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_callgrind("c1", 100.0);
-    workspace.commit_dated("2024-01-02", "c2");
-    workspace.seed_callgrind("c2", 100.0);
-    workspace.commit_dated("2024-01-03", "c3");
-    workspace.seed_callgrind("c3", 100.0);
+    for (index, date) in sequential_dates("2024-01-01", MIN_SERIES_POINTS)
+        .into_iter()
+        .enumerate()
+    {
+        let label = format!("c{}", index + 1);
+        workspace.commit_dated(&date, &label);
+        workspace.seed_callgrind(&label, 100.0);
+    }
     workspace.checkout_new_branch("feature");
-    workspace.commit_dated("2024-01-04", "f1");
+    workspace.commit_dated("2024-02-01", "f1");
     workspace.seed_callgrind("f1", 100.0);
-    workspace.commit_dated("2024-01-05", "f2");
+    workspace.commit_dated("2024-02-02", "f2");
     workspace.seed_callgrind("f2", 100.0);
-    workspace.commit_dated("2024-01-06", "f3");
+    workspace.commit_dated("2024-02-03", "f3");
     workspace.seed_callgrind("f3", 100.0);
 
     let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(parsed["mode"], "branch", "{report}");
+    assert_eq!(
+        parsed["census"]["judged"], 1,
+        "branch mode judged the tip against the base, so this silence is a verdict: {report}"
+    );
     assert_eq!(
         parsed["regressions"], 0,
         "a flat branch must not flag: {report}"
     );
-    assert_eq!(parsed["mode"], "branch", "{report}");
     assert_eq!(parsed["notable"], false, "{report}");
     assert!(
         parsed["findings"].as_array().is_some_and(Vec::is_empty),
@@ -1291,23 +1433,16 @@ async fn analyze_branch_mode_stays_silent_on_a_flat_branch() {
 async fn analyze_history_mode_suppresses_improvements_by_default() {
     let workspace = Workspace::repo(&storage_only_config());
     // A clean base branch with a sustained downward step (an improvement).
-    workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_callgrind("c1", 100.0);
-    workspace.commit_dated("2024-01-02", "c2");
-    workspace.seed_callgrind("c2", 100.0);
-    workspace.commit_dated("2024-01-03", "c3");
-    workspace.seed_callgrind("c3", 100.0);
-    workspace.commit_dated("2024-01-04", "c4");
-    workspace.seed_callgrind("c4", 70.0);
-    workspace.commit_dated("2024-01-05", "c5");
-    workspace.seed_callgrind("c5", 70.0);
-    workspace.commit_dated("2024-01-06", "c6");
-    workspace.seed_callgrind("c6", 70.0);
+    workspace.seed_stepped_callgrind("2024-01-01", "c", 100.0, 70.0);
 
     // By default history mode stays silent about the improvement.
     let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["mode"], "history", "{report}");
+    assert_eq!(
+        parsed["census"]["judged"], 1,
+        "the improvement was judged and then withheld, not left untested: {report}"
+    );
     assert_eq!(parsed["notable"], false, "{report}");
     assert_eq!(parsed["improvements"], 0, "{report}");
     assert!(
@@ -1335,27 +1470,27 @@ async fn analyze_history_mode_suppresses_improvements_by_default() {
 async fn analyze_target_triple_facet_isolates_linux_from_windows() {
     let workspace = Workspace::repo(&storage_only_config());
     // Each commit carries both a Linux point (rising into a regression) and a
-    // Windows point (flat).
-    for (date, label, linux, windows) in [
-        ("2024-01-01", "c1", 100.0, 50.0),
-        ("2024-01-02", "c2", 100.0, 50.0),
-        ("2024-01-03", "c3", 100.0, 50.0),
-        ("2024-01-04", "c4", 130.0, 50.0),
-        ("2024-01-05", "c5", 130.0, 50.0),
-        ("2024-01-06", "c6", 130.0, 50.0),
-    ] {
-        workspace.commit_dated(date, label);
+    // Windows point (flat). The chain is `MIN_SERIES_POINTS` long so both series
+    // are judged: the Linux step clears the persistence gate and the flat Windows
+    // series is genuinely evaluated rather than skipped as too short.
+    for (index, date) in sequential_dates("2024-01-01", MIN_SERIES_POINTS)
+        .into_iter()
+        .enumerate()
+    {
+        let label = format!("c{}", index + 1);
+        workspace.commit_dated(&date, &label);
+        let linux = if index < MIN_REGIME { 100.0 } else { 130.0 };
         workspace.seed_callgrind_in(
             "x86_64-unknown-linux-gnu",
             HARNESS_AUTO_MACHINE_KEY,
-            label,
+            &label,
             linux,
         );
         workspace.seed_callgrind_in(
             "x86_64-pc-windows-msvc",
             HARNESS_AUTO_MACHINE_KEY,
-            label,
-            windows,
+            &label,
+            50.0,
         );
     }
 
@@ -1382,6 +1517,9 @@ async fn analyze_target_triple_facet_isolates_linux_from_windows() {
         panic!("expected an analyzed outcome");
     };
     assert_eq!(regressions, 0, "the Windows series is flat: {report}");
+    // The Windows series was judged, so its silence is a verdict on the data rather
+    // than the facet having selected an untestable set.
+    assert_history_was_judged(&report);
 }
 
 /// From a feature checkout, `--context master` analyzes the default branch's
@@ -1391,22 +1529,11 @@ async fn analyze_target_triple_facet_isolates_linux_from_windows() {
 async fn analyze_branch_selects_official_line_from_a_feature_checkout() {
     let workspace = Workspace::repo(&storage_only_config());
     // Master carries a clean sustained regression.
-    workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_callgrind("c1", 100.0);
-    workspace.commit_dated("2024-01-02", "c2");
-    workspace.seed_callgrind("c2", 100.0);
-    workspace.commit_dated("2024-01-03", "c3");
-    workspace.seed_callgrind("c3", 100.0);
-    workspace.commit_dated("2024-01-04", "c4");
-    workspace.seed_callgrind("c4", 130.0);
-    workspace.commit_dated("2024-01-05", "c5");
-    workspace.seed_callgrind("c5", 130.0);
-    workspace.commit_dated("2024-01-06", "c6");
-    workspace.seed_callgrind("c6", 130.0);
+    workspace.seed_stepped_callgrind("2024-01-01", "c", 100.0, 130.0);
     // A feature branch with an unrelated dirty improvement that master must ignore.
     workspace.checkout_new_branch("feature");
-    workspace.commit_dated("2024-01-07", "f1");
-    workspace.seed_dirty_callgrind("2024-01-07", "f1", 10.0);
+    workspace.commit_dated("2024-02-01", "f1");
+    workspace.seed_dirty_callgrind("2024-02-01", "f1", 10.0);
 
     let report = workspace
         .drive_json(&["analyze", "--context", "master"])
@@ -1427,9 +1554,13 @@ async fn analyze_branch_selects_official_line_from_a_feature_checkout() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn analyze_official_line_follows_first_parent_across_a_merge() {
+    // The merge takes the second position on the official line, so the plain
+    // commits after it are labeled from three up to the length the detector needs.
+    const FIRST_LABEL_AFTER_MERGE: usize = 3;
+
     let workspace = Workspace::repo(&storage_only_config());
-    // master:  root - c1 - M - c3 - c4 - c5 - c6   (M merges the side branch in)
-    //                  \   /
+    // master:  root - c1 - M - c3 - c4 - .. - c{MIN_SERIES_POINTS}
+    //                  \   /            (M merges the side branch in)
     //  side:            sf1 - sf2
     workspace.commit("c1");
     workspace.checkout_new_branch("side");
@@ -1437,18 +1568,23 @@ async fn analyze_official_line_follows_first_parent_across_a_merge() {
     workspace.commit("sf2");
     workspace.checkout("master");
     workspace.merge("side", "M");
-    workspace.commit("c3");
-    workspace.commit("c4");
-    workspace.commit("c5");
-    workspace.commit("c6");
+    let after_merge: Vec<String> = (FIRST_LABEL_AFTER_MERGE..=MIN_SERIES_POINTS)
+        .map(|index| format!("c{index}"))
+        .collect();
+    for label in &after_merge {
+        workspace.commit(label);
+    }
 
-    // The first-parent line carries a clean sustained regression on its tail.
-    workspace.seed_callgrind("c1", 100.0);
-    workspace.seed_callgrind("M", 100.0);
-    workspace.seed_callgrind("c3", 100.0);
-    workspace.seed_callgrind("c4", 130.0);
-    workspace.seed_callgrind("c5", 130.0);
-    workspace.seed_callgrind("c6", 130.0);
+    // The first-parent line c1 -> M -> c3 -> .. carries a clean sustained
+    // regression on its tail: `MIN_REGIME` points at 100 then `MIN_REGIME` at 130,
+    // for `MIN_SERIES_POINTS` points in all — enough for the change-point detector.
+    let line = ["c1".to_owned(), "M".to_owned()]
+        .into_iter()
+        .chain(after_merge);
+    for (index, label) in line.enumerate() {
+        let value = if index < MIN_REGIME { 100.0 } else { 130.0 };
+        workspace.seed_callgrind(&label, value);
+    }
     // Side-branch points sit on the second-parent side and must never leak into the
     // official line; they carry wild values that would distort the series if read.
     workspace.seed_callgrind("sf1", 999.0);
@@ -1457,8 +1593,9 @@ async fn analyze_official_line_follows_first_parent_across_a_merge() {
     let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
-        parsed["runs"], 6,
-        "only the first-parent line c1 -> M -> c3 -> c4 -> c5 -> c6 is analyzed, not \
+        parsed["runs"],
+        u64::try_from(MIN_SERIES_POINTS).unwrap(),
+        "only the first-parent line c1 -> M -> c3 -> .. is analyzed, not \
          the side branch: {report}"
     );
     assert_eq!(
@@ -1527,11 +1664,11 @@ async fn analyze_feature_that_merged_master_admits_dirty_off_chain_merge_base() 
 async fn analyze_criterion_machine_keys_stay_isolated() {
     let workspace = Workspace::repo(&storage_only_config());
     // Same commits, same Windows/x86_64 triple, two distinct machine keys. `mk-flat`
-    // stays flat across the full d1..d8 history (the same commits the rising machine
+    // stays flat across the full d1.. history (the same commits the rising machine
     // uses), so it is present at the tip and never regresses.
     workspace.seed_rising_criterion_history("mk-rising");
-    for label in ["d1", "d2", "d3", "d4", "d5", "d6", "d7", "d8"] {
-        workspace.seed_criterion(label, "mk-flat", 20.0);
+    for index in 0..MIN_SERIES_POINTS {
+        workspace.seed_criterion(&format!("d{}", index + 1), "mk-flat", 20.0);
     }
 
     let report = workspace
@@ -1564,26 +1701,26 @@ async fn analyze_criterion_machine_keys_stay_isolated() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_target_triple_facet_selects_one_set() {
     let workspace = Workspace::repo(&storage_only_config());
-    for (date, label, x64, arm) in [
-        ("2024-01-01", "c1", 100.0, 50.0),
-        ("2024-01-02", "c2", 100.0, 50.0),
-        ("2024-01-03", "c3", 100.0, 50.0),
-        ("2024-01-04", "c4", 130.0, 50.0),
-        ("2024-01-05", "c5", 130.0, 50.0),
-        ("2024-01-06", "c6", 130.0, 50.0),
-    ] {
-        workspace.commit_dated(date, label);
+    // Each commit hosts a regressing x86_64 series and a flat aarch64 series; the
+    // chain is `MIN_SERIES_POINTS` long so both series are judged.
+    for (index, date) in sequential_dates("2024-01-01", MIN_SERIES_POINTS)
+        .into_iter()
+        .enumerate()
+    {
+        let label = format!("c{}", index + 1);
+        workspace.commit_dated(&date, &label);
+        let x64 = if index < MIN_REGIME { 100.0 } else { 130.0 };
         workspace.seed_callgrind_in(
             "x86_64-unknown-linux-gnu",
             HARNESS_AUTO_MACHINE_KEY,
-            label,
+            &label,
             x64,
         );
         workspace.seed_callgrind_in(
             "aarch64-unknown-linux-gnu",
             HARNESS_AUTO_MACHINE_KEY,
-            label,
-            arm,
+            &label,
+            50.0,
         );
     }
 
@@ -1608,6 +1745,9 @@ async fn analyze_target_triple_facet_selects_one_set() {
         panic!("expected an analyzed outcome");
     };
     assert_eq!(regressions, 0, "the aarch64 triple is flat: {report}");
+    // The aarch64 series was judged, so its silence is a verdict on the data rather
+    // than the facet having selected an untestable set.
+    assert_history_was_judged(&report);
 }
 
 #[tokio::test]
@@ -1615,14 +1755,12 @@ async fn analyze_target_triple_facet_selects_one_set() {
 async fn analyze_machine_key_facet_selects_one_set() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_criterion_history("mk-rising");
-    workspace.commit_dated("2024-02-01", "d1");
-    workspace.seed_criterion("d1", "mk-flat", 20.0);
-    workspace.commit_dated("2024-02-02", "d2");
-    workspace.seed_criterion("d2", "mk-flat", 20.0);
-    workspace.commit_dated("2024-02-03", "d3");
-    workspace.seed_criterion("d3", "mk-flat", 20.0);
-    workspace.commit_dated("2024-02-04", "d4");
-    workspace.seed_criterion("d4", "mk-flat", 20.0);
+    // `mk-flat` stays flat across the same d1.. commits (already created by the
+    // rising history), a full-length series so its silence is a judged verdict
+    // rather than a too-short skip.
+    for index in 0..MIN_SERIES_POINTS {
+        workspace.seed_criterion(&format!("d{}", index + 1), "mk-flat", 20.0);
+    }
 
     let RunOutcome::Analyzed { regressions, .. } = workspace
         .drive(&[
@@ -1660,6 +1798,8 @@ async fn analyze_machine_key_facet_selects_one_set() {
         regressions, 0,
         "the flat machine does not regress: {report}"
     );
+    // The flat machine's series was judged, so this silence is a verdict on it.
+    assert_history_was_judged(&report);
 }
 
 /// The dirty/feature-branch admission path works for Criterion too (not only
@@ -1669,22 +1809,30 @@ async fn analyze_machine_key_facet_selects_one_set() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_criterion_feature_branch_admits_dirty_snapshots() {
     let workspace = Workspace::repo(&storage_only_config());
-    // A flat clean Criterion baseline on master.
-    workspace.commit_dated("2024-02-01", "c1");
-    workspace.seed_criterion("c1", "mk", 20.0);
-    workspace.commit_dated("2024-02-02", "c2");
-    workspace.seed_criterion("c2", "mk", 20.0);
-    workspace.commit_dated("2024-02-03", "c3");
-    workspace.seed_criterion("c3", "mk", 20.0);
-    // Branch off master, add a clean point, then several dirty snapshots that step
-    // up — enough points on each side for the rank-sum gate to clear the noise.
+    // A clean Criterion baseline on master, long enough to give branch mode the
+    // `MIN_SERIES_POINTS` base-side commit levels its prediction interval needs. The
+    // levels alternate 19.9/20.1 ns: a wall time is a slope fitted over a run's
+    // iterations and never repeats a value, and a base window that did repeat one
+    // would carry no scatter for the tip to be judged against.
+    for (index, date) in sequential_dates("2024-02-01", MIN_SERIES_POINTS)
+        .into_iter()
+        .enumerate()
+    {
+        let label = format!("c{}", index + 1);
+        workspace.commit_dated(&date, &label);
+        let level = if index % 2 == 0 { 19.9 } else { 20.1 };
+        workspace.seed_criterion(&label, "mk", level);
+    }
+    // Branch off master, add a clean point, then dirty snapshots that step up; the
+    // branch tip's dirty cohort is the "after" sample branch mode compares against
+    // the base level.
     workspace.checkout_new_branch("feature");
-    workspace.commit_dated("2024-02-04", "f1");
+    workspace.commit_dated("2024-03-01", "f1");
     workspace.seed_criterion("f1", "mk", 20.0);
-    workspace.seed_dirty_criterion("2024-02-05", "f1", "mk", 40.0);
-    workspace.seed_dirty_criterion("2024-02-06", "f1", "mk", 40.0);
-    workspace.seed_dirty_criterion("2024-02-07", "f1", "mk", 40.0);
-    workspace.seed_dirty_criterion("2024-02-08", "f1", "mk", 40.0);
+    workspace.seed_dirty_criterion("2024-03-02", "f1", "mk", 40.0);
+    workspace.seed_dirty_criterion("2024-03-03", "f1", "mk", 40.0);
+    workspace.seed_dirty_criterion("2024-03-04", "f1", "mk", 40.0);
+    workspace.seed_dirty_criterion("2024-03-05", "f1", "mk", 40.0);
 
     let RunOutcome::Analyzed { regressions, .. } = workspace
         .drive(&[
@@ -1726,6 +1874,8 @@ async fn analyze_criterion_feature_branch_admits_dirty_snapshots() {
         regressions, 0,
         "with --no-dirty only the flat clean Criterion series remains: {report}"
     );
+    // That remaining clean series was judged, so its silence is a verdict.
+    assert_history_was_judged(&report);
 }
 
 /// `analyze` ignores "ghost" benchmarks — ones no longer present at the context
@@ -1734,22 +1884,21 @@ async fn analyze_criterion_feature_branch_admits_dirty_snapshots() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_excludes_ghost_benchmarks() {
     let workspace = Workspace::repo(&storage_only_config());
-    // `bench_000` runs flat through the tip; `bench_001` climbs into a regression but
-    // is dropped from the suite at the tip commit, so it is a ghost there.
-    for (date, label, values) in [
-        ("2024-01-01", "c1", vec![100.0, 100.0]),
-        ("2024-01-02", "c2", vec![100.0, 100.0]),
-        ("2024-01-03", "c3", vec![100.0, 100.0]),
-        ("2024-01-04", "c4", vec![100.0, 130.0]),
-        ("2024-01-05", "c5", vec![100.0, 130.0]),
-        ("2024-01-06", "c6", vec![100.0, 130.0]),
-    ] {
-        workspace.commit_dated(date, label);
-        workspace.seed_many_callgrind(label, &values);
+    // `bench_000` runs flat through the tip; `bench_001` climbs into a regression it
+    // would flag on its own (a full `MIN_SERIES_POINTS`-long step), but it is dropped
+    // from the suite at the tip commit, so it is a ghost there and excluded.
+    for (index, date) in sequential_dates("2024-01-01", MIN_SERIES_POINTS)
+        .into_iter()
+        .enumerate()
+    {
+        let label = format!("c{}", index + 1);
+        workspace.commit_dated(&date, &label);
+        let climbing = if index < MIN_REGIME { 100.0 } else { 130.0 };
+        workspace.seed_many_callgrind(&label, &[100.0, climbing]);
     }
     // The tip carries only the surviving benchmark; `bench_001` is absent here.
-    workspace.commit_dated("2024-01-07", "c7");
-    workspace.seed_many_callgrind("c7", &[100.0]);
+    workspace.commit_dated("2024-02-01", "tip");
+    workspace.seed_many_callgrind("tip", &[100.0]);
 
     // The ghost's regression is filtered out, and the JSON reports the count.
     let report = workspace.drive_json(&["analyze"]).await;
@@ -1760,6 +1909,15 @@ async fn analyze_excludes_ghost_benchmarks() {
         !report.contains("many::bench_001"),
         "the ghost benchmark must not appear: {report}"
     );
+    // Excluded is not the same as forgotten: the census still accounts for the
+    // ghost's series, so the reader can tell this silence covers one series of two.
+    assert_eq!(parsed["census"]["total"], 2, "{report}");
+    assert_eq!(parsed["census"]["judged"], 1, "{report}");
+    assert_eq!(
+        parsed["census"]["reasons"][0]["reason"], "ghost",
+        "{report}"
+    );
+    assert_eq!(parsed["census"]["reasons"][0]["count"], 1, "{report}");
 }
 
 /// The rendered chart's rows: every axis row carries a `┤` or `┼` tick and the
@@ -1791,22 +1949,27 @@ fn chart_width(report: &str) -> usize {
 #[cfg_attr(miri, ignore)]
 async fn analyze_branch_comparison_base_lag_warns_and_charts_the_gap() {
     let workspace = Workspace::repo(&storage_only_config());
-    // Base data reaches only c3; the c4 merge-base carries none, so the branch's
-    // comparison base ends one commit behind the branch point.
-    workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_callgrind("c1", 100.0);
-    workspace.commit_dated("2024-01-02", "c2");
-    workspace.seed_callgrind("c2", 100.0);
-    workspace.commit_dated("2024-01-03", "c3");
-    workspace.seed_callgrind("c3", 100.0);
-    // c4 is the merge-base and is intentionally left unseeded.
-    workspace.commit_dated("2024-01-04", "c4");
+    // Base data reaches only the last seeded base commit; the merge-base carries
+    // none, so the branch's comparison base ends one commit behind the branch point.
+    // The base has `MIN_SERIES_POINTS` seeded commit levels, which branch mode's
+    // prediction interval requires.
+    for (index, date) in sequential_dates("2024-01-01", MIN_SERIES_POINTS)
+        .into_iter()
+        .enumerate()
+    {
+        let label = format!("c{}", index + 1);
+        workspace.commit_dated(&date, &label);
+        workspace.seed_callgrind(&label, 100.0);
+    }
+    // The merge-base commit is intentionally left unseeded, so the newest base datum
+    // sits one commit behind the branch point.
+    workspace.commit_dated("2024-01-20", "mb");
     workspace.checkout_new_branch("feature");
-    workspace.commit_dated("2024-01-05", "f1");
+    workspace.commit_dated("2024-02-01", "f1");
     workspace.seed_callgrind("f1", 130.0);
-    workspace.commit_dated("2024-01-06", "f2");
+    workspace.commit_dated("2024-02-02", "f2");
     workspace.seed_callgrind("f2", 130.0);
-    workspace.commit_dated("2024-01-07", "f3");
+    workspace.commit_dated("2024-02-03", "f3");
     workspace.seed_callgrind("f3", 130.0);
 
     let RunOutcome::Analyzed {
@@ -1842,27 +2005,23 @@ async fn analyze_branch_comparison_base_lag_warns_and_charts_the_gap() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn analyze_history_no_newer_data_renders_a_trailing_gap() {
-    // Two identical seven-commit histories. `conditional_branches` steps up at c4
-    // (a sustained regression); `instruction_count` stays flat and never flags. Only
-    // the tip commit c7 differs: the full run records both metrics there while the
-    // lagging run records instruction_count alone, so the benchmark stays present at
-    // the tip (not a ghost) yet its conditional_branches series ends at c6.
-    let steps = [
-        ("2024-01-01", "c1", 100.0),
-        ("2024-01-02", "c2", 100.0),
-        ("2024-01-03", "c3", 100.0),
-        ("2024-01-04", "c4", 130.0),
-        ("2024-01-05", "c5", 130.0),
-        ("2024-01-06", "c6", 130.0),
-    ];
+    // Two identical histories of `MIN_SERIES_POINTS` commits. `conditional_branches`
+    // steps up at the midpoint (a sustained regression); `instruction_count` stays
+    // flat and never flags. Only the tip commit differs: the full run records both
+    // metrics there while the lagging run records instruction_count alone, so the
+    // benchmark stays present at the tip (not a ghost) yet its conditional_branches
+    // series ends one commit behind.
+    let dates = sequential_dates("2024-01-01", MIN_SERIES_POINTS);
 
     let full = Workspace::repo(&storage_only_config());
     let lag = Workspace::repo(&storage_only_config());
     for workspace in [&full, &lag] {
-        for (date, label, cb) in steps {
-            workspace.commit_dated(date, label);
+        for (index, date) in dates.iter().enumerate() {
+            let label = format!("c{}", index + 1);
+            let cb = if index < MIN_REGIME { 100.0 } else { 130.0 };
+            workspace.commit_dated(date, &label);
             workspace.seed_metrics(
-                label,
+                &label,
                 vec![
                     Metric::new(MetricKind::InstructionCount, 500.0),
                     Metric::new(MetricKind::ConditionalBranches, cb),
@@ -1870,18 +2029,21 @@ async fn analyze_history_no_newer_data_renders_a_trailing_gap() {
             );
         }
     }
-    // The shared tip commit c7: the full run records both metrics; the lagging run
+    // The shared tip commit: the full run records both metrics; the lagging run
     // records only the sibling, leaving conditional_branches one commit behind.
-    full.commit_dated("2024-01-07", "c7");
+    full.commit_dated("2024-02-01", "tip");
     full.seed_metrics(
-        "c7",
+        "tip",
         vec![
             Metric::new(MetricKind::InstructionCount, 500.0),
             Metric::new(MetricKind::ConditionalBranches, 130.0),
         ],
     );
-    lag.commit_dated("2024-01-07", "c7");
-    lag.seed_metrics("c7", vec![Metric::new(MetricKind::InstructionCount, 500.0)]);
+    lag.commit_dated("2024-02-01", "tip");
+    lag.seed_metrics(
+        "tip",
+        vec![Metric::new(MetricKind::InstructionCount, 500.0)],
+    );
 
     let RunOutcome::Analyzed {
         regressions: full_regressions,
@@ -1909,13 +2071,14 @@ async fn analyze_history_no_newer_data_renders_a_trailing_gap() {
         "the lagging history flags the same step even though the tip lacks the metric: {lag_report}"
     );
 
-    // The lagging series ends at c6 but its chart is filled with a trailing gap column
-    // up to the analyzed tip c7, so it spans exactly as many columns — and renders
-    // exactly as wide — as the full history's chart. Without that trailing fill the
-    // lagging chart would stop one column short of the tip and be one character
-    // narrower. (`rasciigraph` draws a trailing gap and a continued flat plateau
-    // identically — both a blank final column — so the rendered width, not the glyph
-    // content, is what proves the fill reached the tip.)
+    // The lagging series ends at the last dated commit but its chart is filled with
+    // a trailing gap column up to the analyzed tip, so it spans exactly as many
+    // columns — and renders exactly as wide — as the full history's chart. Without
+    // that trailing fill the lagging chart would stop one column short of the tip
+    // and be one character narrower. (`rasciigraph` draws a trailing gap and a
+    // continued flat plateau identically — both a blank final column — so the
+    // rendered width, not the glyph content, is what proves the fill reached the
+    // tip.)
     assert!(
         chart_width(&full_report) > 0,
         "the full history draws a chart: {full_report}"
