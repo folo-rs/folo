@@ -92,12 +92,12 @@ allocators that keep the memory around for reuse, so the next allocation is simp
 While allocator APIs are still an unstable Rust feature, there are stable-API alternatives.
 Another term for special-purpose allocators is object pools and [`infinity_pool`][infinity_pool]
 offers several of them, from basic `Vec<T>` style pinned object collections to type-agnostic object
-pools that can allocate any type of object, though it is superseded and receives maintenance only.
-While the safe-API variants come with substantial overheads compared to the unsafe-API variants,
-they both can surpass the efficiency of using the global memory allocator under many conditions.
-Your mileage may vary - measure 100 times, cut 10 times. The packages here now reach for
-[`multitude`][multitude] when many objects share a lifetime and for [`plurality`][plurality] when
-objects are individually rented and returned.
+pools that can allocate any type of object, though it receives maintenance only. While the safe-API
+variants come with substantial overheads compared to the unsafe-API variants, they both can surpass
+the efficiency of using the global memory allocator under many conditions. Your mileage may vary -
+measure 100 times, cut 10 times. To pool values of a single named type, the packages here now reach
+for [`plurality`][plurality], and where many objects share a lifetime and can be reclaimed together
+they use the [`multitude`][multitude] arena instead of a pool.
 
 A surprising source of memory allocations in high-performance code can be signaling. We are used
 to thinking of oneshot channels as cheap and efficient things and while this is true, they are
