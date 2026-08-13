@@ -11,16 +11,17 @@ every metric as noisy and never trusts a value as exact.
 History mode evaluates two finding methods for each series, and the resulting findings are
 ranked together by descending relative move:
 
-1. **Change-point (step)** — the primary finding. A single most-likely level shift is located
-   with the Pettitt nonparametric change-point test, attributing the change to the commit at
-   the start of the after-regime. Persistence is built in, so a single-commit blip cannot trip
-   it.
-2. **Monotonic drift** — a separate finding type for slow trends. A Mann–Kendall trend test
-   establishes that a monotonic trend exists and a robust Theil–Sen slope estimates its
-   magnitude.
+1. **Change-point (step)** — the primary finding. A single most-likely level shift is located,
+   attributing the change to the commit at the start of the after-regime. Persistence is built
+   in, so a single-commit blip cannot trip it.
+2. **Monotonic drift** — a separate finding type for slow trends, established by a trend test
+   and sized by an outlier-resistant slope.
 
 When both fire on one series, the better-fitting model wins, so sharp steps route to the
 change-point method and smooth ramps to drift, and the two never double-report one event.
+
+> This page is the mental model. For the mechanism — which test, which threshold, in which order,
+> with worked examples — see the [Data pipeline](../appendix/index.md) appendix.
 
 ## Noise-aware gating
 
@@ -33,23 +34,26 @@ measurement noise and to the smallest magnitude worth acting on — never to whe
 would call a cause acceptable, because a gate wide enough to hide an infrastructure step would
 hide the regressions that share its shape.
 
-A candidate change-point is reported only when several gates all hold: a Mann–Whitney rank
-test finds the two regimes distinguishable; the move clears the practical-magnitude floor; the
-move stands above the series' own residual scatter about the fitted step; and the two regimes
-are well-separated populations (an effect-size check that keeps a stationary but noisy series
-from reading as a step). Where points carry confidence intervals, interval non-overlap is an
-*additional* veto that can only suppress a candidate, never manufacture one. A change-point
-also needs a minimum run of points on **each** side, so a series too short to hold two such
-regimes is not analysed at all.
+A candidate change-point is reported only when several gates all hold: the two regimes must be
+statistically distinguishable, the move must clear a practical-magnitude floor, it must stand
+above the series' own scatter, and the two regimes must genuinely separate rather than merely
+differ on average. Where points carry confidence intervals, those act as an *additional* veto
+that can only suppress a candidate, never manufacture one. A change-point also needs a minimum
+run of points on **each** side, so a series too short to hold two such regimes is not analysed
+at all.
 
-The **practical-magnitude floor** has two parts and a move must clear both. A **relative
-floor** demands a minimum percentage. An **absolute floor**, in the metric's own units,
-demands a minimum magnitude — a handful of instructions is build layout shifting rather than
-work done, a fraction of a nanosecond is not worth acting on however confidently it was
-measured, and a fraction of an allocation cannot happen. Both apply to **every** metric:
-without the absolute floor, a benchmark whose baseline is a couple of nanoseconds turns
-scheduling jitter into a double-digit percentage "regression", and without the relative floor a
-large baseline would flag on a move that is noise at its scale.
+The **practical-magnitude floor** has two parts and a move must clear both. A **relative floor**
+demands a minimum percentage. An **absolute floor**, in the metric's own units, demands a
+minimum magnitude — a handful of instructions is build layout shifting rather than work done, a
+fraction of a nanosecond is not worth acting on however confidently it was measured, and a
+fraction of an allocation cannot happen. Both apply to **every** metric: without the absolute
+floor, a benchmark whose baseline is a couple of nanoseconds turns scheduling jitter into a
+double-digit percentage "regression", and without the relative floor a large baseline would flag
+on a move that is noise at its scale.
+
+> Each detector applies its own gates in its own order, and the thresholds differ by mode and by
+> metric. The [Noise gates](../appendix/gates.md) appendix chapter walks every one of them, with
+> the current values and worked examples.
 
 ## Judging a branch tip
 
@@ -64,40 +68,36 @@ base level moves from commit to commit?" Two properties follow from that:
   a handful of commits wherever a repository records several runs each. History mode does not
   collapse this way: it ranks the series' raw points, so a commit carrying several stored runs
   weighs on it once per run.
-- **One new observation, not a second sample.** The tip is judged against a Student-t
-  **prediction interval** for a single future observation drawn from the recent base commits,
-  so the interval accounts for both how much the base level scatters and how well those few
-  commits pin down its centre. The move the finding reports is measured from that same centre —
-  the base window's mean — so the number you read is the number the p-value tested.
-
-  The scatter estimate never falls below the metric's **quantum**, the smallest difference a
-  stored value can express: a counted metric can repeat one integer across the whole window, and
-  treating that as zero scatter would make any move look infinitely significant, so one count,
-  one byte, or one allocation stands in. A time has no quantum — it is a slope fitted over a
-  run's iterations, which resolves far below a clock tick — so a timing base with no scatter at
-  all is degenerate and yields no verdict instead of a certain one. The quantum is not the
-  absolute floor above: one guards the comparison's denominator, the other decides whether a
-  move is worth reporting.
+- **One new observation, not a second sample.** The tip is judged against a **prediction
+  interval** for a single future observation drawn from the recent base commits, so the interval
+  accounts for both how much the base level scatters and how well those few commits pin down its
+  centre. The move the finding reports is measured from that same centre, so the number you read
+  is the number that was tested.
 
 Branch mode also holds its relative floor above history's — a pull-request comment is read by
 everyone who touches the branch, so a false alarm costs more there. Where the engine reports
-per-point dispersion, the base and tip intervals must not overlap and the move must clear the
-measurement noise band as well; both are suppression-only vetoes.
+per-point dispersion, further suppression-only vetoes apply.
 
 Whichever test produced a finding also fixes its reported **confidence**, in both modes: the
-complement of that test's p-value. Confidence tells you how strong the evidence is, never
+complement of that test's chance level. Confidence tells you how strong the evidence is, never
 which threshold the finding happened to clear.
+
+> The [Detection](../appendix/detection.md) appendix chapter has the full comparison of the two
+> modes, including how the base window is narrowed when the base itself recently moved, and why
+> the bar for accepting such a boundary is higher than the bar for reporting a finding.
 
 ## Controlling false discoveries
 
 A repository has many benchmarks × metrics, so testing each independently would flood the
-report. Every candidate's p-value enters a single Benjamini–Hochberg false-discovery-rate
-procedure, and only survivors are reported. The family it corrects over is every series that
-could be judged at all — including every series that produced no candidate — because that is
-what a false-discovery rate is defined over. That family is exactly the set of series the
-report counts as [judged](#reading-a-silent-report). Every mode's verdict rests on a real
-p-value and on that one family definition, so the correction applies to a pull-request analysis
-exactly as it does to base-branch history.
+report. Every candidate enters a single false-discovery-rate procedure, and only survivors are
+reported. The family it corrects over is every series that could be judged at all — including
+every series that produced no candidate — because that is what a false-discovery rate is defined
+over. That family is exactly the set of series the report counts as
+[judged](#reading-a-silent-report).
+
+One consequence is worth knowing up front: a finding has to clear a stricter bar in a large
+repository than in a small one. See
+[Multiplicity and coverage](../appendix/coverage.md) for why that is the honest trade.
 
 ## Reading a silent report
 
