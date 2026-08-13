@@ -10,12 +10,7 @@ covered.
 
 ## Terms used here
 
-| Term | What it means |
-|---|---|
-| **chance level** | How often pure chance alone would produce a pattern at least this strong. |
-| **false-discovery family** | Every series that carried enough data to be tested; the group a finding must stand out from. |
-| **group-wide correction** | A stricter bar applied when many things are tested at once, so only a small share of what is reported is expected to be wrong. |
-| **judged** | A series the analysis actually reached a verdict on, whether or not it reported anything. |
+{{#include generated/terms-coverage.md}}
 
 ## Test enough things and something will look surprising
 
@@ -120,3 +115,4 @@ that judged nothing at all reports no findings, and a naive check reads that as 
 
 The findings, and the census. Both go to [Reporting](reporting.md) — which, as it turns out,
 gives the census the same prominence as the findings themselves, for the reasons above.
+

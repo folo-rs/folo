@@ -8,11 +8,7 @@ and why the stage exists as a stage at all.
 
 ## Terms used here
 
-| Term | What it means |
-|---|---|
-| **merge base** | The newest commit a branch and its base still share. |
-| **context** | The commit whose history is being analyzed; the tip of the analysis. |
-| **facet** | One of the three axes you can restrict the analysis to: engine, target triple, machine key. |
+{{#include generated/terms-selection.md}}
 
 ## The funnel
 
@@ -148,3 +144,4 @@ which is the signal to check your branch topology.
 
 An ordered set of eligible objects, and the topology needed to place them. Next:
 [Reconstruction](reconstruction.md).
+

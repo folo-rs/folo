@@ -160,7 +160,7 @@ against and what a user reads when a finding does not make sense.
 
 | Page | The single thing it must teach |
 |---|---|
-| Index | The five stages and the invariant each preserves; how to read the part; which chapter answers which question. |
+| Index | The stages and the invariant each preserves; how to read the part; which chapter answers which question. |
 | 1. Shape of the data | What one benchmark produces per engine, and what the stored record holds — including the storage layer the rest of the guide never mentions. |
 | 2. Collection | What `collect` and `backfill` actually do, and how runs land on commits — including the gaps a heterogeneous runner pool leaves. |
 | 3. Selection | Which stored objects are even eligible, decided from keys and topology alone; facets, `--since`, base/context, and how mode is auto-detected. |
@@ -185,3 +185,4 @@ against and what a user reads when a finding does not make sense.
   appendix cannot silently fall out of step with the tool.
 - When the appendix gains coverage of something a concept page also explains, trim the concept page
   to the mental model and link down. The two must not both carry the mechanism.
+

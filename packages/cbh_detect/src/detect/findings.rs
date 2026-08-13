@@ -1889,10 +1889,23 @@ pub fn short_commit(commit: &str) -> String {
 /// plateau is a single ordering over these values (see [`evaluate_resolved_spike`]).
 #[derive(Clone, Copy, Debug)]
 struct Plateau {
+    /// First point of the elevated window.
     start: usize,
+
+    /// One past the last point of the elevated window, so `[start, end)` is the plateau and
+    /// `end` is where the level returned.
     end: usize,
+
+    /// The window's own level, taken as its median so a stray point cannot move it.
     level: f64,
+
+    /// How far [`level`](Self::level) sits from the pre-spike baseline. This is the quantity
+    /// every gate below the search judges, and the magnitude the finding reports.
     deviation: f64,
+
+    /// The scan statistic that selected this window over the others: the total excursion from
+    /// baseline, divided by the square root of the window's length. Higher wins. It exists
+    /// only to choose between overlapping candidate windows and is never reported.
     score: f64,
 }
 
@@ -1911,9 +1924,11 @@ impl Plateau {
 /// *inactive* finding (only surfaced with `--include-inactive`): `commit` names where
 /// the level rose, `flipped_at` where it recovered, `baseline` the pre-spike level,
 /// and `latest` the spike's own level (its magnitude is what is notable). The plateau is
-/// the window that best accounts for the excursion from baseline, so the reported
-/// boundaries are the transitions themselves rather than a window that padded or clipped
-/// them. Both the
+/// the window that best accounts for the excursion from baseline, which for a spike whose
+/// transitions are abrupt is the episode itself rather than a window padded with baseline
+/// points on either side.
+///
+/// Both the
 /// rise and the recovery must be Mann–Whitney significant, the plateau must clear
 /// the practical-magnitude floor (relative, plus the metric's own absolute floor),
 /// and the deviation must stand above the rise's own
@@ -1972,16 +1987,20 @@ fn evaluate_resolved_spike(
     // at least `min` points long.
     //
     // A window is scored by the total excursion it accounts for, normalised by the square
-    // root of its own length. Both halves of that matter. Padding a plateau with baseline
-    // points adds nothing to the total while lengthening the window, so every padded
-    // window scores below the plateau itself; truncating a plateau drops real excursion
-    // from the total faster than the normaliser forgives, so every sub-window does too.
-    // Only the episode's own boundaries score highest, which is what the rest of this
-    // function needs: those boundaries become the reported `commit` and `flipped_at`, and
-    // the three segments they cut become the samples the significance and separation
-    // gates judge. Scoring a window by its median deviation instead can make neither
-    // distinction, because baseline padding to one side of the median leaves the median
-    // exactly where it was.
+    // root of its own length — the classic scan statistic. The normalisation is what makes
+    // the score discriminate at all: padding a plateau with baseline points adds nothing to
+    // the total while lengthening the window, so a padded window scores below the plateau
+    // itself. Scoring by median deviation instead cannot make that distinction, because
+    // padding to one side of the median leaves the median exactly where it was.
+    //
+    // The score is a sum, so it inherits the properties of one. A point whose deviation is
+    // small relative to the window's mean excursion can be dropped for a higher score, so a
+    // plateau whose edge ramps rather than steps is reported from where it became decisive
+    // rather than from where it began to move; and a single extreme point can outscore a
+    // genuine plateau, in which case the gates below reject the window on its median and the
+    // episode goes unreported. Both are acceptable for an opt-in inactive finding and neither
+    // is reachable without the gate chain agreeing, but a caller reasoning about which window
+    // wins should not assume the boundaries are always the transitions themselves.
     //
     // Equal scores are broken by the tightest window, a wider window at the same score
     // being the same episode plus padding, and any remaining tie by the earliest start,

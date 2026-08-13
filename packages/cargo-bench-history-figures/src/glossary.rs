@@ -1,16 +1,13 @@
 //! The appendix's glossary: every term it defines, in one place.
 //!
 //! The appendix is written for engineers rather than statisticians, so a term is defined
-//! before it is used and again on hover. Both of those, plus the glossary page itself,
-//! come from this one list — which is what stops the same term being explained two
-//! different ways in two chapters, the failure mode a hand-maintained glossary always
-//! eventually reaches.
+//! before it is used. Both the glossary page and each chapter's own "Terms used here" table
+//! are generated from this one list, which is what stops the same term being explained two
+//! different ways in two chapters — the failure mode a hand-maintained glossary always
+//! eventually reaches, and one that had already begun here before the tables were generated.
 //!
-//! A test in the `cargo-bench-history` package holds the book to this list: every
-//! `<abbr title="...">` in the appendix must carry the definition recorded here, and
-//! every term recorded here must actually be used. Adding a term therefore has a cost,
-//! which is deliberate — the cheapest way to pass is to write a sentence the reader
-//! already understands.
+//! Adding a term therefore has a cost, which is deliberate: the cheapest way to avoid it is to
+//! write a sentence the reader already understands.
 
 /// One defined term.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

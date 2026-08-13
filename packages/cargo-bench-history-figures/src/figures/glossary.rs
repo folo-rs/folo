@@ -9,10 +9,44 @@ use std::fmt::Write as _;
 use crate::assets::Asset;
 use crate::glossary::TERMS;
 
-/// The glossary table.
+/// The glossary table, plus each chapter's own list of the terms it introduces.
 #[must_use]
 pub fn assets() -> Vec<Asset> {
-    vec![Asset::new("glossary-table.md", table())]
+    let mut assets = vec![Asset::new("glossary-table.md", table())];
+    assets.extend(chapter_terms());
+    assets
+}
+
+/// One "Terms used here" table per chapter that introduces a term.
+///
+/// Generated rather than written into each chapter because the same term must not be
+/// explained two ways in two places — which is exactly what had happened while these tables
+/// were hand-written, one chapter having quietly dropped the clause that made a definition
+/// correct.
+fn chapter_terms() -> Vec<Asset> {
+    let mut chapters: Vec<&'static str> = TERMS.iter().map(|term| term.chapter).collect();
+    chapters.sort_unstable();
+    chapters.dedup();
+
+    chapters
+        .into_iter()
+        .map(|chapter| {
+            let mut terms: Vec<_> = TERMS
+                .iter()
+                .filter(|term| term.chapter == chapter)
+                .collect();
+            terms.sort_by_key(|term| term.phrase);
+
+            let mut markdown = String::from("| Term | What it means |\n|---|---|\n");
+            for term in terms {
+                writeln!(markdown, "| **{}** | {} |", term.phrase, term.definition)
+                    .expect("writing to a String never fails");
+            }
+
+            let stem = chapter.strip_suffix(".md").unwrap_or(chapter);
+            Asset::new(format!("terms-{stem}.md"), markdown)
+        })
+        .collect()
 }
 
 /// Renders the terms as a Markdown table, sorted for lookup.
@@ -102,6 +136,51 @@ mod tests {
                 term.phrase,
                 term.chapter
             );
+        }
+    }
+
+    /// A chapter's own terms table and the glossary must give the same definition, or the two
+    /// places a reader can look would disagree.
+    #[test]
+    fn a_chapter_table_carries_the_glossary_definition() {
+        let assets = chapter_terms();
+
+        for term in TERMS {
+            let stem = term.chapter.strip_suffix(".md").unwrap_or(term.chapter);
+            let expected = format!("terms-{stem}.md");
+            let asset = assets
+                .iter()
+                .find(|asset| asset.path == expected)
+                .unwrap_or_else(|| panic!("no terms table for {}", term.chapter));
+
+            assert!(
+                asset.content.contains(term.definition),
+                "'{}' is defined differently in {}",
+                term.phrase,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn a_chapter_table_holds_only_its_own_terms() {
+        for asset in chapter_terms() {
+            let stem = asset
+                .path
+                .strip_prefix("terms-")
+                .and_then(|rest| rest.strip_suffix(".md"))
+                .expect("chapter tables are named after their chapter");
+            let chapter = format!("{stem}.md");
+
+            for term in TERMS.iter().filter(|term| term.chapter != chapter) {
+                assert!(
+                    !asset.content.contains(&format!("**{}**", term.phrase)),
+                    "{} lists '{}', which belongs to {}",
+                    asset.path,
+                    term.phrase,
+                    term.chapter
+                );
+            }
         }
     }
 }

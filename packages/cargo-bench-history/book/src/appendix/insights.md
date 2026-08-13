@@ -13,10 +13,11 @@ Two entry points, depending on which problem you have:
 
 ```mermaid
 flowchart TD
-    F["A finding"] --> Q1{"Which method?"}
+    F["A finding"] --> Q0{"Which mode<br/>produced the report?"}
+    Q0 -->|"branch"| BR["It compares your tip<br/>to the base"]
+    Q0 -->|"history"| Q1{"Which method?"}
     Q1 -->|"change point"| CP["It names a commit"]
     Q1 -->|"drift"| DR["It names a window"]
-    Q1 -->|"branch"| BR["It compares your tip<br/>to the base"]
     CP --> Q2{"Did anything else move<br/>at the same commit?"}
     Q2 -->|"many series"| INFRA["Suspect the environment,<br/>not the code"]
     Q2 -->|"one or a few"| CODE["Suspect the change"]
@@ -25,6 +26,9 @@ flowchart TD
     DR --> WIN["Examine the series;<br/>look for many small increments"]
     BR --> TIP["Re-run the tip;<br/>check for a lag warning"]
 ```
+
+Note that a branch finding is labelled `change point` in the report — the method names the shape
+of the comparison, not the mode. The report's header tells you which mode ran.
 
 ### A change point
 
@@ -108,9 +112,10 @@ These are opt-in, because the event is over.
 ## Unreliable benchmarks
 
 A noisy benchmark is not merely unpleasant — it is **actively harmful to detection**. The
-[residual gate](gates.md) measures a candidate move against the series' own scatter, so a
-benchmark that wobbles by 15% needs a move larger than that before anything is reported. Noise
-does not just add false alarms; it hides real regressions.
+[residual gate](gates.md) measures a candidate move against a multiple of the series' own typical
+residual, so on a benchmark that scatters widely the move has to be several times that scatter
+before anything is reported. Noise does not just add false alarms; it hides real regressions, and
+it hides them at a threshold well above the scatter itself.
 
 **How to recognise one:**
 

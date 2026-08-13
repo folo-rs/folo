@@ -13,7 +13,7 @@ the numbers. It exists for two readers:
   does matches what it claims. Every stage below states what it computes and against which
   threshold, so you can reproduce a verdict by hand.
 
-## The five stages
+## The stages
 
 <!-- The stage names used here are the ones every chapter title repeats, so a reader who
      remembers this diagram can navigate the rest of the appendix without the sidebar. -->
@@ -61,18 +61,18 @@ partial one.
 
 Two conventions run throughout.
 
-**Terms are defined before they are used.** Every chapter that introduces a statistical
-term opens with a short list defining it in plain language. Terms also carry their
-definition on hover — <abbr title="How often a value measured after a change beats one
-measured before it, counted over every possible pairing.">like this</abbr> — and the
-[Glossary](glossary.md) collects them all in one place. Where a plain description works as
-well as the textbook name, this appendix uses the description.
+**Terms are defined before they are used.** Every chapter that introduces a term opens with a
+short table defining it in plain language, and the [Glossary](glossary.md) collects them all
+with the textbook name alongside, for when you want to read further. Where a plain description
+works as well as the technical name, this appendix uses the description.
 
-**Nothing here is typed by hand.** Every number, chart, table and report excerpt is
-generated from the same data the test suite asserts against, and regenerated whenever the
-code changes. If a figure below shows a gate declining a move by a hair, that is what the
-code actually did with that data — not an illustration of what it would do. This is also
-why the examples are small: they are meant to be checkable, not realistic.
+**The numbers are generated, not written.** Every figure, every table of values, every gate
+threshold and every report excerpt below is produced by running the code this appendix
+describes, and regenerated whenever that code changes. If a figure shows a gate declining a move
+by a hair, that is what the code actually did with that data — not an illustration of what it
+would do. A test fails if the two ever drift apart.
+
+This is also why the examples are small: they are meant to be checkable by hand, not realistic.
 
 ## Where this fits
 
@@ -84,3 +84,4 @@ why the examples are small: they are meant to be checkable, not realistic.
 | Why two results are or are not compared | [Comparability](../concepts/comparability.md) |
 | To make your benchmarks less noisy | [Measurement stability](../concepts/stability.md) |
 | The full mechanism, with numbers | this appendix |
+

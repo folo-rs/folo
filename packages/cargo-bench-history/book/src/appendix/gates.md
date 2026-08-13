@@ -9,13 +9,7 @@ what the measurement itself manufactures?** A benchmark that reports 100 ns will
 
 ## Terms used here
 
-| Term | What it means |
-|---|---|
-| **scatter** | How much a series wobbles between commits when nothing has changed. |
-| **typical residual** | How far an ordinary point sits from the level or line fitted to the series. |
-| **agreement share** | The fraction of before-and-after pairs that agree the level moved. |
-| **confidence interval** | A range the engine reports alongside a measurement, saying how precisely it pinned it down. |
-| **quantum** | The smallest step a metric can actually take, such as one whole instruction. |
+{{#include generated/terms-gates.md}}
 
 ## What the gates are, and are not
 
@@ -37,7 +31,8 @@ at a different point in their own sequence. The questions are the part worth lea
 
 | Question | Gates that ask it |
 |---|---|
-| Is there enough data to judge this at all? | `min_series_points`, `min_regime`, `min_base_commits`, `spike_search_size` |
+| Is there enough data to judge this at all? | `min_series_points`, `min_regime`, `min_base_commits` |
+| Is the history short enough to search exhaustively? | `spike_search_size` |
 | Did anything actually change? | `split_located`, `non_zero_delta`, `spike_recovered` |
 | Could chance alone have produced this pattern? | `significance`, `spike_significance` |
 | Is the move big enough to matter? | `relative_floor`, `absolute_floor` |
@@ -62,9 +57,10 @@ Two things in those tables are easy to miss:
 
 - **Branch mode uses a higher relative floor than history mode.** A branch comparison rests on a
   single tip observation, and a pull request that cries wolf gets ignored, so the bar is raised.
-- **The interval checks are not applied uniformly.** A change point checks only that the two
-  regimes' intervals are disjoint; the noise band belongs to drift and branch. A detector applies
-  an interval check only where the comparison it makes has a meaningful interval to check.
+- **The interval checks are not applied uniformly.** Disjointness is checked wherever two regimes
+  are compared — a change point, a resolved spike, a branch tip. The noise band belongs to drift
+  and branch. A detector applies an interval check only where the comparison it makes has a
+  meaningful interval to check.
 
 ## A candidate that survives
 
@@ -204,3 +200,5 @@ and [Insights](insights.md) turns it into a checklist.
 The candidates that survived, each still carrying the chance level of the test that confirmed
 it. One question remains, and it is not about any individual candidate:
 [given how many things were tested, should we believe this one?](coverage.md)
+
+

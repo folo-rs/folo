@@ -12,15 +12,7 @@ deliberately does not claim.
 Definitions in plain language. The [Glossary](glossary.md) collects them all, and every term
 carries its definition on hover wherever it appears in the prose.
 
-| Term | What it means |
-|---|---|
-| **level** | The value a series sits at over a stretch of commits, ignoring run-to-run wobble. |
-| **regime** | A stretch of commits over which a series holds one level. |
-| **change point** | The commit where a series stops holding one level and starts holding another. |
-| **drift** | A series that moves steadily in one direction rather than stepping between levels. |
-| **median** | The middle value of a sample, which a few extreme measurements cannot drag around. |
-| **chance level** | How often pure chance alone would produce a pattern at least this strong. |
-| **confidence** | How strong the evidence for a finding is; here, one minus the chance level. |
+{{#include generated/terms-detection.md}}
 
 ## What counts as a signal
 
@@ -228,3 +220,4 @@ A candidate: the series it came from, the method that found it, the direction an
 move, the commit it is attributed to, and the chance level of the confirming test.
 
 None of them is a finding yet. Next: [Noise gates](gates.md).
+

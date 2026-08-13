@@ -10,12 +10,7 @@ chapter.
 
 ## Terms used here
 
-| Term | What it means |
-|---|---|
-| **discriminant set** | The engine, target and machine a run was measured with, which together decide what it may be compared against. |
-| **benchmark identity** | The ordered name segments that identify one benchmark, rendered `a/b/c`. |
-| **metric kind** | What is being measured — wall time, instructions, bytes allocated, and so on. |
-| **run** | One engine's complete output at one commit, stored as a single immutable object. |
+{{#include generated/terms-shape.md}}
 
 ## One benchmark is not one number
 
@@ -57,9 +52,10 @@ Each adapter picks one value per metric, and the choice matters more than it loo
 - **Callgrind** takes the new side of the pair it reports.
 
 Two consequences worth knowing. The stored record does **not** say which estimator was used, so
-a Criterion benchmark that stops producing a usable slope switches to the mean silently — and
-that can read as a step. And if the slope is missing or non-finite, the whole operation is
-dropped from the run, so a benchmark can vanish from a series without an error.
+a Criterion benchmark that stops producing a usable slope falls back to the mean silently — and
+that can read as a step. And for the two operation engines, a missing or non-finite slope drops
+the whole operation from the run rather than falling back to anything, so a benchmark can vanish
+from a series without an error.
 
 ## Dispersion: what the engine tells you about its own precision
 
@@ -164,3 +160,4 @@ makes a benchmark slower, never faster. The fastest observed run is the one leas
 
 A store: immutable objects, keyed by partition and commit, each holding one engine's reduced
 output. Next: [Collection](collection.md), which is how they get there.
+

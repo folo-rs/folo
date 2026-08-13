@@ -8,11 +8,7 @@ data, which makes this the stage most often responsible for a report that surpri
 
 ## Terms used here
 
-| Term | What it means |
-|---|---|
-| **series** | One metric of one benchmark, tracked across commits. |
-| **ghost** | A benchmark that history remembers but the analyzed commit no longer measures. |
-| **blessing** | A recorded decision to treat a change as accepted, so history stops reporting it. |
+{{#include generated/terms-reconstruction.md}}
 
 ## From runs to series
 
@@ -136,3 +132,4 @@ A set of series, each an ordered sequence of points, with ghosts removed and ble
 sliced to their active window.
 
 Next: [Detection](detection.md).
+
