@@ -1,0 +1,22 @@
+[package]
+# Cargo expects dashes in tool-style crate names. Okay.
+name = "cargo-bench-history-figures"
+description = "Generates the figures, tables and report excerpts embedded in the cargo-bench-history book's data pipeline appendix"
+publish = false
+version = "0.0.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cbh_detect = { path = "../cbh_detect", default-features = false, features = [
+    "private-test-util",
+] }
+clap = { workspace = true, features = ["derive"] }
+plotters = { workspace = true }
+
+[lints]
+workspace = true

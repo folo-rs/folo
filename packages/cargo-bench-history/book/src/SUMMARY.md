@@ -25,3 +25,19 @@
 - [Comparability and partitioning](concepts/comparability.md)
 - [Measurement stability](concepts/stability.md)
 - [Analysis](concepts/analysis.md)
+
+# Appendix
+
+- [Data pipeline](appendix/index.md)
+  - [Shape of the data](appendix/shape.md)
+  - [Collection](appendix/collection.md)
+  - [Selection](appendix/selection.md)
+  - [Reconstruction](appendix/reconstruction.md)
+  - [Detection](appendix/detection.md)
+  - [Noise gates](appendix/gates.md)
+  - [Multiplicity and coverage](appendix/coverage.md)
+  - [Reporting](appendix/reporting.md)
+  - [Insights](appendix/insights.md)
+  - [Limits](appendix/limits.md)
+  - [Glossary](appendix/glossary.md)
+  - [Reference tables](appendix/reference.md)

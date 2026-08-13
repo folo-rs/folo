@@ -48,9 +48,10 @@ The teaching points that every chapter should reinforce, not just the concept ch
 
 ## Chapter map
 
-The guide is three parts: **orientation** (get it working), **command reference** (task-level
-how), and **concepts** (the mental model). Reference pages link down into concepts for the *why*;
-concept pages link up into the commands that exercise them.
+The guide is four parts: **orientation** (get it working), **command reference** (task-level how),
+**concepts** (the mental model), and an **appendix** (the full mechanism, for validation and deep
+troubleshooting). Reference pages link down into concepts for the *why*; concept pages link up into
+the commands that exercise them and down into the appendix for mechanism.
 
 ### Front matter — Introduction
 
@@ -134,6 +135,44 @@ concept pages link up into the commands that exercise them.
   auto-selected modes (tenet 7); full-history vs. bounded baseline-and-tip charts; re-baselining
   via resolved spikes and blessings; the three report formats sharing one pass and the
   advisory-finding / JSON-is-the-signal split (tenet 6); no severity classification.
+- **Boundary**: this page owns the *mental model* and stops there. Mechanism with numbers — which
+  gate computes what, against which threshold, in what order — belongs to the appendix. Where the
+  two would overlap, this page states the rule in a sentence and links down.
+
+### Part 4 — Appendix: Data pipeline
+
+A reference-grade walkthrough of the whole path from a benchmark's output file to a sentence in a
+report. Where Part 3 builds the mental model, the appendix is what a maintainer validates the tool
+against and what a user reads when a finding does not make sense.
+
+- **Audience**: a maintainer checking the tool does the right thing, and the user who has exhausted
+  the concept chapters. Not the first thing anyone reads.
+- **Voice**: plain language first, technical name second. The reader is an engineer, not a
+  statistician: every term is defined before use and again on hover, and jargon that buys the reader
+  nothing is simply not used.
+- **Evidence discipline**: every number, chart, table and report excerpt in this part is generated
+  by `cargo-bench-history-figures` from data the test suite also asserts against, and included with
+  `{{#include}}`. Nothing here is typed by hand. A regeneration that changes a figure means the
+  pipeline's behaviour changed; the diff is the review.
+- **Illustration discipline**: every stage that adds, removes, reorders, collapses or reshapes data
+  gets a before/after figure in which affected observations are marked and labelled with the reason.
+  A reader must never have to infer what a stage did.
+
+| Page | The single thing it must teach |
+|---|---|
+| Index | The five stages and the invariant each preserves; how to read the part; which chapter answers which question. |
+| 1. Shape of the data | What one benchmark produces per engine, and what the stored record holds — including the storage layer the rest of the guide never mentions. |
+| 2. Collection | What `collect` and `backfill` actually do, and how runs land on commits — including the gaps a heterogeneous runner pool leaves. |
+| 3. Selection | Which stored objects are even eligible, decided from keys and topology alone; facets, `--since`, base/context, and how mode is auto-detected. |
+| 4. Reconstruction | How runs fold into series, and the four things that change what detection sees: ordering, gaps, ghosts, blessings. |
+| 5. Detection | What a signal is, which detector establishes it, and what each mode does and does not do. |
+| 6. Noise gates | Every gate, in application order, with its computation and its threshold — and that gates short-circuit. |
+| 7. Multiplicity and coverage | Why a per-series test is not enough; what the false-discovery family is and why it includes series that raised nothing; what the report means by *judged*. |
+| 8. Reporting | Ranking, the three formats plus the lossy summary, charts, comparison-base lag, and why findings never fail a build. |
+| 9. Insights | Triage playbooks: what to do with each kind of finding, and what to do when an expected finding never arrives. |
+| 10. Limits | What the pipeline deliberately does not do, and what to do instead. |
+| Glossary | Every term the part defines, in plain language, with the technical name alongside. |
+| Reference tables | The generated lookup surface: metric kinds, engine outputs, key grammar, gate constants, evidence minimums, unjudged reasons, coverage states, JSON fields. |
 
 ## Maintenance
 
@@ -141,3 +180,8 @@ concept pages link up into the commands that exercise them.
   keep the "single thing it must teach" column honest.
 - Prefer deleting a page's detail and linking to `--help` or a design doc over letting the guide
   drift from the code.
+- The appendix's numbers are generated, so they cannot be edited in place: change the code or the
+  example data and re-run `just book-figures`. A stale checked-in asset fails the test suite, so the
+  appendix cannot silently fall out of step with the tool.
+- When the appendix gains coverage of something a concept page also explains, trim the concept page
+  to the mental model and link down. The two must not both carry the mechanism.
