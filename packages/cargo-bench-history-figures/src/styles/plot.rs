@@ -19,6 +19,7 @@ use plotters::coord::Shift;
 use plotters::drawing::DrawingArea;
 use plotters::element::{Circle, PathElement, Rectangle, Text};
 use plotters::prelude::ChartBuilder;
+use plotters::style::text_anchor::{HPos, Pos, VPos};
 use plotters::style::{Color as _, RGBColor, ShapeStyle, TextStyle};
 
 use crate::{coord, theme};
@@ -513,13 +514,17 @@ impl Plot {
             }
 
             if !rule.label.is_empty() {
-                // Nudged up off the line so the text does not sit on it, and inset from
-                // the frame so it does not collide with the value-axis labels.
+                // Right-aligned at the right edge and nudged up off the line. Rule labels
+                // sat at the left originally, where they collided with both the value-axis
+                // labels and the leading observations; the right edge is the one place a
+                // horizontal rule reliably has room, whatever the data does.
                 let offset = (high - low) * 0.02;
                 chart.draw_series(std::iter::once(Text::new(
                     rule.label.clone(),
-                    (-0.3, rule.value + offset),
-                    TextStyle::from((theme::FONT, theme::FONT_TICK)).color(&rule.color),
+                    (coord::of(self.span) - 0.6, rule.value + offset),
+                    TextStyle::from((theme::FONT, theme::FONT_TICK))
+                        .color(&rule.color)
+                        .pos(Pos::new(HPos::Right, VPos::Bottom)),
                 )))?;
             }
         }
@@ -710,3 +715,4 @@ mod tests {
         assert!(high > 120.0);
     }
 }
+

@@ -97,7 +97,9 @@ The drift detector also works in three moves, but every one of them differs.
    points happened to do.
 
 A drift is attributed to the whole window rather than to a commit, because that is what the
-evidence supports: no single commit is responsible.
+evidence supports: no single commit is responsible. The finding still names a commit — the
+newest one in the window — but that is where the drift has *got to*, not where it started.
+Do not go looking at that commit's diff.
 
 {{#include generated/detection-slow-ramp.svg}}
 
@@ -204,8 +206,9 @@ and it is easy to over-read. Four things it is not:
 - **Not the probability that the finding is correct.** It says chance is a poor explanation.
   It says nothing about whether the cause is your code or the machine.
 - **Not a dial you tune.** Every reported finding has already cleared its test, so an emitted
-  confidence is always high. It does not rank importance; the report ranks by *size of move*
-  for exactly that reason.
+  confidence is always high — and is displayed rounded, so a finding whose chance level is
+  one in a million reads as 100%. It does not rank importance; the report ranks by *size of
+  move* for exactly that reason.
 - **Not adjusted for how much was tested.** The [group-wide correction](coverage.md) runs
   afterwards and does not feed back into this number.
 - **Not comparable across modes.** History and branch confidences come from different tests

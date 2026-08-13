@@ -5,10 +5,14 @@
 
 use crate::assets::Asset;
 
+pub mod detection;
 pub mod glossary;
 
 /// Every asset, from every chapter.
 #[must_use]
 pub fn assets() -> Vec<Asset> {
-    glossary::assets()
+    let mut assets = glossary::assets();
+    assets.extend(detection::assets());
+    assets
 }
+

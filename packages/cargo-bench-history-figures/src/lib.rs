@@ -47,5 +47,7 @@ pub mod glossary;
 pub mod preview;
 pub mod styles;
 pub mod theme;
+pub mod verdict;
 
 mod coord;
+

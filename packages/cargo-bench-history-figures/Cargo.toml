@@ -15,8 +15,10 @@ rust-version.workspace = true
 cbh_detect = { path = "../cbh_detect", default-features = false, features = [
     "private-test-util",
 ] }
+cbh_model = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 plotters = { workspace = true }
 
 [lints]
 workspace = true
+
