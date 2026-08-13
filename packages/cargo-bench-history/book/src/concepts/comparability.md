@@ -5,16 +5,20 @@ everything else as metadata so the analysis can see its effect over time.**
 
 ## Discriminant sets
 
-Two results are comparable exactly when their **discriminant sets** match. A discriminant set
-is `{ project, engine, target_triple, machine_key }`:
+Two results are comparable exactly when they were measured in the same **project** and their
+**discriminant sets** match. A discriminant set is `{ engine, target_triple, machine_key }`:
 
-- **`project`** — workspace identity (configured, defaulting to the repository directory name).
 - **`engine`** — different units and semantics never mix.
 - **`target_triple`** — even simulated counts are not comparable across
   architectures.
 - **`machine_key`** — always present: a fingerprint of the host hardware the benchmark ran on.
   Every engine is partitioned by it, because every engine's numbers vary with the hardware in
   practice. See [machine-key](../commands/machine-key.md).
+
+The project — workspace identity, configured and defaulting to the repository directory name
+— partitions too, but it sits one level above: it selects *which store* is being read, so
+results from two projects never meet in the first place. That is why it is not part of the
+discriminant set proper.
 
 Deliberately **metadata, not partition** — so a change shows up as a timeline step, which is
 the whole point of the tool — are the toolchain versions, OS/libc, commit, branch, the

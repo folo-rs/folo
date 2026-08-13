@@ -511,8 +511,10 @@ branch to persist history. The exception is limited to the tip and a flag overri
 Series are ordered by git topology; runs on one commit sub-order clean-before-dirty, then
 by storage key. The `--since` cutoff drops whole runs older than it by each commit's
 committer date (decided from topology before any out-of-window body is fetched); `--since`
-defaults to a six-month look-back uniformly, so a scheduled trend watch does not silently
-widen as history accumulates. The cutoff is deliberately one-sided: `--context` already
+defaults to a six-month look-back in history mode, so a scheduled trend watch does not
+silently widen as history accumulates; branch mode applies no default, since a branch is
+judged against its base's recent commits whenever those landed and a window could only
+starve that comparison. The cutoff is deliberately one-sided: `--context` already
 anchors the newest edge of the timeline (its first-parent tip, the merge-base split, and the
 ghost-detection reference), so a symmetric `--until` would only re-trim that same edge by
 timestamp — a topology-first tool moves the tip with `--context` instead — and is therefore
