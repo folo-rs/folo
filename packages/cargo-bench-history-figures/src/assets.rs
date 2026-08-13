@@ -16,6 +16,28 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// Where the generated assets live, relative to the workspace root.
+///
+/// The appendix includes them from here, so this path is the contract between this crate and
+/// the book's Markdown. It lives in the library rather than in the binary so the freshness
+/// test can reach it: a check only the binary can perform is a check that runs when someone
+/// remembers the recipe, which is not often enough for content the book embeds verbatim.
+pub const GENERATED_ROOT: &str = "packages/cargo-bench-history/book/src/appendix/generated";
+
+/// The workspace root, located from this crate's manifest directory.
+///
+/// Tests run with an unspecified working directory, so the path to the book cannot be relative
+/// to it. The manifest directory is fixed at compile time and the crate's position under
+/// `packages/` is a property of the workspace layout, so two levels up is the root.
+#[must_use]
+pub fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap_or(Path::new("."))
+        .to_path_buf()
+}
+
 /// One generated file the book includes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Asset {
@@ -142,5 +164,18 @@ mod tests {
         let location = asset.location(Path::new("root"));
 
         assert!(location.ends_with("figures/example.svg") || location.ends_with("figures\\example.svg"));
+    }
+
+    /// The appendix embeds these files verbatim, so a stale one publishes a page that
+    /// contradicts the tool. Running the check as an ordinary test means a behaviour change
+    /// that moves a figure fails the suite, rather than waiting for someone to remember
+    /// `just book-figures-check`.
+    #[test]
+    fn the_checked_in_appendix_assets_are_current() {
+        let root = workspace_root().join(GENERATED_ROOT);
+
+        let report = check(&root).expect("reading the checked-in assets must not fail");
+
+        assert!(report.is_none(), "{}", report.unwrap_or_default());
     }
 }

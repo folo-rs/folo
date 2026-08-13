@@ -8,14 +8,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::{fs, io};
 
+use cargo_bench_history_figures::assets::GENERATED_ROOT;
 use cargo_bench_history_figures::{assets, preview};
 use clap::{Parser, Subcommand};
-
-/// Where the generated assets live, relative to the workspace root.
-///
-/// The appendix includes them from here with mdBook's `{{#include}}`, so this path is
-/// part of the contract between this generator and the book's Markdown.
-const GENERATED_ROOT: &str = "packages/cargo-bench-history/book/src/appendix/generated";
 
 /// Where the preview page is written.
 ///
@@ -100,3 +95,4 @@ fn write_preview(root: &std::path::Path) -> io::Result<()> {
     println!("Wrote preview to {}", target.display());
     Ok(())
 }
+
