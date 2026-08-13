@@ -9,6 +9,8 @@ pub mod coverage;
 pub mod detection;
 pub mod gates;
 pub mod glossary;
+pub mod pipeline;
+pub mod reporting;
 pub mod storage;
 
 /// Every asset, from every chapter.
@@ -16,9 +18,11 @@ pub mod storage;
 pub fn assets() -> Vec<Asset> {
     let mut assets = glossary::assets();
     assets.extend(storage::assets());
+    assets.extend(pipeline::assets());
     assets.extend(detection::assets());
     assets.extend(gates::assets());
     assets.extend(coverage::assets());
+    assets.extend(reporting::assets());
     assets
 }
 

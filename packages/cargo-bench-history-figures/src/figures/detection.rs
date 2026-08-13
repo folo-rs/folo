@@ -23,9 +23,82 @@ pub fn assets() -> Vec<Asset> {
     assets.extend(slow_ramp());
     assets.extend(blip());
     assets.extend(flat_noisy());
+    assets.extend(branch());
     assets.extend(minimums());
     assets
 }
+
+/// The branch-mode pair: a tip the base window does not explain, and one it does.
+///
+/// Drawn as two figures over the *same* base window so the only thing that differs between
+/// them is the tip. That is the comparison the chapter is making, and separate base windows
+/// would leave a reader unable to tell which difference produced the different verdict.
+fn branch() -> Vec<Asset> {
+    // One more base commit than the comparison needs, so the window is genuinely a window
+    // rather than the whole series, and the merge base sits where a real branch would fork.
+    let base_level = 100.0_f64;
+    let base: Vec<f64> = examples::scattered(
+        &[base_level; BASE_COMMITS],
+        examples::TIMING_NOISE_CV,
+        examples::seed_of("branch-base"),
+    );
+
+    let mut assets = Vec::new();
+    for (name, tip, reading) in [
+        (
+            "detection-branch-reported",
+            base_level * 1.30,
+            "the tip sits outside the range a further measurement was expected in",
+        ),
+        (
+            "detection-branch-quiet",
+            base_level,
+            "the tip is inside the range the base window predicts, so there is nothing to \
+             report",
+        ),
+    ] {
+        let mut values = base.clone();
+        values.push(tip);
+        let series = examples::series(name, &values, MetricKind::WallTime, 0);
+        let context = examples::branch_context(&series, BASE_COMMITS.saturating_sub(1));
+        let (finding, _) = evaluate_with_log(&series, &context);
+
+        let tip_index = values.len().saturating_sub(1);
+        let plot = Plot::new("a branch tip against its base window", values.len())
+            .value_label("ns")
+            .scattered()
+            .observations(values.iter().enumerate().map(|(index, &value)| {
+                let observation = Observation::new(index, value);
+                if index == tip_index {
+                    observation.marked(if finding.is_some() {
+                        Mark::Regression
+                    } else {
+                        Mark::Focus
+                    })
+                } else {
+                    observation
+                }
+            }))
+            .band(0, tip_index.saturating_sub(1), "base window", theme::HIGHLIGHT)
+            .split(tip_index, "the branch tip");
+
+        assets.push(Asset::new(format!("{name}.svg"), plot.render()));
+        assets.push(Asset::new(
+            format!("{name}.md"),
+            finding.as_ref().map_or_else(
+                || verdict::quiet(None, reading),
+                |found| verdict::reported(found, reading),
+            ),
+        ));
+    }
+    assets
+}
+
+/// How many base-side commits the branch figures lay out.
+///
+/// Chosen above the comparison window's own minimum so the figures show a window being
+/// selected from a longer history rather than one that happens to be the whole series.
+const BASE_COMMITS: usize = 18;
 
 /// Runs the real history-mode detector over `values` and returns the series, the verdict,
 /// and the plotted observations.
@@ -285,3 +358,4 @@ mod tests {
         assert!(finding.latest > finding.baseline);
     }
 }
+

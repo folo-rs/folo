@@ -6,6 +6,8 @@
 //! to the model appears in the book on the next regeneration, and one whose name changes
 //! cannot leave a stale name behind in the prose.
 
+use std::fmt::Write as _;
+
 #[cfg(test)]
 use cbh_model::sanitize_segment;
 use cbh_model::{DiscriminantSet, Engine, MachineKey, MetricKind, SCHEMA_VERSION, TargetTriple};
@@ -74,15 +76,17 @@ fn engine_series() -> String {
         String::from("| Engine | One benchmark yields | Which series |\n|---|---|---|\n");
     for (engine, _, kinds) in engine_kinds() {
         let names: Vec<&str> = kinds.iter().map(|kind| kind.as_str()).collect();
-        markdown.push_str(&format!(
-            "| `{engine}` | {} | {} |\n",
+        writeln!(
+            markdown,
+            "| `{engine}` | {} | {} |",
             count_of(kinds.len(), "series", "series"),
             names
                 .iter()
                 .map(|name| format!("`{name}`"))
                 .collect::<Vec<_>>()
                 .join(", "),
-        ));
+        )
+        .expect("writing to a String never fails");
     }
     markdown
 }
@@ -96,10 +100,12 @@ fn engines() -> String {
             seen.dedup();
             seen
         };
-        markdown.push_str(&format!(
-            "| `{engine}` | {measures} | {} |\n",
+        writeln!(
+            markdown,
+            "| `{engine}` | {measures} | {} |",
             units.join(", ")
-        ));
+        )
+        .expect("writing to a String never fails");
     }
     markdown
 }
@@ -361,6 +367,9 @@ mod tests {
         assert_eq!(assets(), assets());
     }
 }
+
+
+
 
 
 
