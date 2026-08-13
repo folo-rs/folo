@@ -16,6 +16,8 @@ cbh_detect = { path = "../cbh_detect", default-features = false, features = [
     "private-test-util",
 ] }
 cbh_model = { workspace = true }
+cbh_render = { workspace = true }
+cbh_stats = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 plotters = { workspace = true }
 

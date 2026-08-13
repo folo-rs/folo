@@ -59,21 +59,25 @@ fn clean_step() -> Vec<Asset> {
         "the clean_step example is asserted to report in cbh_detect's own tests, so a \
          missing verdict here means the two are reading different data",
     );
-    let split = attributed_index(&finding).unwrap_or(values.len() / 2);
+    // A finding the detector reported always names its commit, and the shared builder names
+    // commits by topological index, so the split is recoverable. Falling back to no split at
+    // all is the honest response to an unrecoverable one: better an unmarked figure than one
+    // marking a boundary the detector did not choose.
+    let split = attributed_index(&finding);
 
     let mut plot = Plot::new("a level that stepped", values.len())
         .value_label("ns")
         .values(&values)
-        .split(split, "change point")
         .rule(finding.baseline, "baseline", theme::HIGHLIGHT)
         .rule(finding.latest, "new level", theme::REGRESSION);
-    if split > 0 {
+    if let Some(split) = split.filter(|index| *index > 0 && *index < values.len()) {
         // The shading alone distinguishes the two regimes; the split marker and the two
         // level rules already say what they are, so labelling the bands as well would
         // crowd the top of the plot with three overlapping captions.
         plot = plot
-            .band(0, split - 1, "", theme::HIGHLIGHT)
-            .band(split, values.len() - 1, "", theme::REGRESSION);
+            .split(split, "change point")
+            .band(0, split.saturating_sub(1), "", theme::HIGHLIGHT)
+            .band(split, values.len().saturating_sub(1), "", theme::REGRESSION);
     }
 
     vec![

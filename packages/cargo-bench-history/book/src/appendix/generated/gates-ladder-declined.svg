@@ -1,0 +1,109 @@
+<svg style="width:100%;height:auto" viewBox="0 0 680 376" xmlns="http://www.w3.org/2000/svg">
+<text x="340" y="17" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="12.096774193548388" opacity="1" fill="currentColor">
+a step the series&apos; own scatter explains
+</text>
+<text x="345" y="364" dy="-0.5ex" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+computed value as a multiple of the gate&apos;s threshold
+</text>
+<line opacity="0.12" stroke="currentColor" stroke-width="1" x1="22" y1="333" x2="22" y2="34"/>
+<line opacity="0.12" stroke="currentColor" stroke-width="1" x1="129" y1="333" x2="129" y2="34"/>
+<line opacity="0.12" stroke="currentColor" stroke-width="1" x1="237" y1="333" x2="237" y2="34"/>
+<line opacity="0.12" stroke="currentColor" stroke-width="1" x1="344" y1="333" x2="344" y2="34"/>
+<line opacity="0.12" stroke="currentColor" stroke-width="1" x1="452" y1="333" x2="452" y2="34"/>
+<line opacity="0.12" stroke="currentColor" stroke-width="1" x1="559" y1="333" x2="559" y2="34"/>
+<line opacity="0.12" stroke="currentColor" stroke-width="1" x1="667" y1="333" x2="667" y2="34"/>
+<polyline fill="none" opacity="1" stroke="currentColor" stroke-width="1" points="21,34 21,333 "/>
+<polyline fill="none" opacity="1" stroke="currentColor" stroke-width="1" points="22,334 667,334 "/>
+<text x="22" y="344" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+0.0
+</text>
+<polyline fill="none" opacity="1" stroke="currentColor" stroke-width="1" points="22,334 22,339 "/>
+<text x="129" y="344" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+0.5
+</text>
+<polyline fill="none" opacity="1" stroke="currentColor" stroke-width="1" points="129,334 129,339 "/>
+<text x="237" y="344" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+1.0
+</text>
+<polyline fill="none" opacity="1" stroke="currentColor" stroke-width="1" points="237,334 237,339 "/>
+<text x="344" y="344" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+1.5
+</text>
+<polyline fill="none" opacity="1" stroke="currentColor" stroke-width="1" points="344,334 344,339 "/>
+<text x="452" y="344" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+2.0
+</text>
+<polyline fill="none" opacity="1" stroke="currentColor" stroke-width="1" points="452,334 452,339 "/>
+<text x="559" y="344" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+2.5
+</text>
+<polyline fill="none" opacity="1" stroke="currentColor" stroke-width="1" points="559,334 559,339 "/>
+<text x="667" y="344" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+3.0
+</text>
+<polyline fill="none" opacity="1" stroke="currentColor" stroke-width="1" points="667,334 667,339 "/>
+<rect x="237" y="34" width="0" height="299" opacity="1" fill="none" stroke="currentColor"/>
+<rect x="22" y="43" width="430" height="13" opacity="0.55" fill="#239056" stroke="none"/>
+<text x="26" y="43" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+split_located
+</text>
+<text x="26" y="54" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#239056">
+held vs must hold
+</text>
+<rect x="22" y="76" width="430" height="13" opacity="0.55" fill="#239056" stroke="none"/>
+<text x="26" y="76" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+min_regime
+</text>
+<text x="26" y="88" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#239056">
+10 points vs 5 points
+</text>
+<rect x="22" y="109" width="430" height="14" opacity="0.55" fill="#239056" stroke="none"/>
+<text x="26" y="109" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+non_zero_delta
+</text>
+<text x="26" y="121" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#239056">
+15.97 ns vs above zero
+</text>
+<rect x="22" y="142" width="645" height="14" opacity="0.55" fill="#239056" stroke="none"/>
+<text x="26" y="142" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+significance
+</text>
+<text x="26" y="154" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#239056">
+p = 0.0022 vs p &lt; 0.05
+</text>
+<rect x="22" y="176" width="645" height="13" opacity="0.55" fill="#239056" stroke="none"/>
+<text x="26" y="176" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+relative_floor
+</text>
+<text x="26" y="187" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#239056">
+15.7% vs 3.0%
+</text>
+<rect x="22" y="209" width="645" height="13" opacity="0.55" fill="#239056" stroke="none"/>
+<text x="26" y="209" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+absolute_floor
+</text>
+<text x="26" y="221" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#239056">
+15.97 ns vs 1 ns
+</text>
+<rect x="22" y="242" width="197" height="13" opacity="0.55" fill="#D64541" stroke="none"/>
+<text x="26" y="242" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+residual_noise
+</text>
+<text x="26" y="254" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#D64541">
+15.97 ns vs 17.38 ns
+</text>
+<rect x="22" y="275" width="0" height="14" opacity="0.55" fill="#969BA0" stroke="none"/>
+<text x="26" y="275" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+regime_separation
+</text>
+<text x="26" y="287" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#969BA0">
+not reached vs 0.85
+</text>
+<rect x="22" y="309" width="0" height="13" opacity="0.55" fill="#969BA0" stroke="none"/>
+<text x="26" y="309" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+interval_disjoint
+</text>
+<text x="26" y="320" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#969BA0">
+not reached vs the two intervals must not overlap
+</text>
+</svg>
