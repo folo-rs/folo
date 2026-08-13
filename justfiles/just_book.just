@@ -35,7 +35,18 @@ book-build-one NAME OUT="target/book-site":
     # mdbook resolves a relative --dest-dir against the book root, so pass an absolute path to
     # land the output under the workspace-rooted OUT directory instead.
     $destination = Join-Path (Get-Location).Path (Join-Path "{{ OUT }}" "{{ NAME }}")
-    mdbook build $bookDir --dest-dir $destination
+
+    # mdbook reports a broken include directive (and several other content faults) by logging
+    # ERROR and carrying on with a zero exit code, silently dropping the affected page from the
+    # output. A book that embeds generated fragments would then publish with holes in it and
+    # nothing would fail, so the log is inspected and any ERROR line is made fatal here.
+    $output = mdbook build $bookDir --dest-dir $destination 2>&1
+    $output | ForEach-Object { Write-Host $_ }
+    $failures = @($output | Where-Object { "$_" -match "^ERROR" })
+    if ($failures.Count -gt 0) {
+        throw "mdbook reported $($failures.Count) error(s) while building '{{ NAME }}'; the affected pages are missing from the output."
+    }
+
     Write-Host "Built book '{{ NAME }}' into $destination"
 
 # Generates the multi-book landing page (index.html) into OUT, one card per discovered book. The
