@@ -9,25 +9,31 @@
 //! `crate::detect::Finding` rather than reaching into a submodule.
 
 pub(crate) mod discriminant;
+#[cfg(any(test, feature = "private-test-util"))]
+pub mod examples;
 pub(crate) mod findings;
+pub(crate) mod gate_log;
 mod noise_gates;
 pub(crate) mod parallel;
-#[cfg(test)]
-mod recorded;
+#[cfg(any(test, feature = "private-test-util"))]
+pub(crate) mod recorded;
 pub(crate) mod run_points;
-#[cfg(test)]
-mod scatter;
+#[cfg(any(test, feature = "private-test-util"))]
+pub(crate) mod scatter;
 pub(crate) mod selection;
 pub(crate) mod series;
 #[cfg(test)]
 mod signal_validation;
 
 pub use discriminant::{DiscriminantSetQuery, FacetFilter};
+#[cfg(any(test, feature = "private-test-util"))]
+pub use findings::evaluate_with_log;
 pub use findings::{
     AnalysisConfig, AnalysisContext, AnalysisMode, Detection, Direction, Finding, FindingMethod,
     SeriesCensus, SeriesValue, Testability, UnjudgedReason, find_changes_spawned, short_commit,
     testability,
 };
+pub use gate_log::{Gate, GateLog, GateOutcome, GateStage};
 pub use parallel::{balanced_chunk_sizes, worker_count};
 pub use run_points::{MetricPoint, ResultPoints, RunPoints};
 pub use selection::{DirtyAdmission, SelectedCommit, select_commits};

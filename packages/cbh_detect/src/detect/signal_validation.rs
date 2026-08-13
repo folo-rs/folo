@@ -99,19 +99,18 @@
 #![cfg_attr(coverage_nightly, coverage(off))]
 
 use std::slice;
-use std::sync::Arc;
 
-use cbh_model::{BenchmarkId, DiscriminantSet, Engine, MetricKind};
-use nonempty::nonempty;
+use cbh_model::MetricKind;
 
+use crate::detect::examples;
 use crate::detect::findings::find_changes;
 use crate::detect::noise_gates::{MIN_REGIME, MIN_SERIES_POINTS};
 use crate::detect::recorded::{
     STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_HIGH, STATIONARY_BIMODAL_NOISE,
 };
-use crate::detect::scatter::{scattered, seed_of};
+use crate::detect::scatter::{TIMING_NOISE_CV, scattered, seed_of};
 use crate::detect::{
-    AnalysisConfig, AnalysisContext, AnalysisMode, Direction, Series, SeriesPoint, UnjudgedReason,
+    AnalysisConfig, AnalysisContext, AnalysisMode, Direction, Series, UnjudgedReason,
 };
 
 /// The analysis mode a case is evaluated under — the suite's dimension-1 lever.
@@ -319,15 +318,6 @@ impl SignalCase {
         }
     }
 }
-
-/// The coefficient of variation a curated timing series carries.
-///
-/// Wall-time benchmarks in this project's own stored history run at two to three
-/// percent between-commit scatter, and 2.5% is the middle of that band. The figure
-/// matters because it is what the noise gates are up against in production: a curated
-/// series an order of magnitude cleaner makes every "stays quiet" case trivially easy
-/// and never reproduces the false positives those gates exist to reject.
-const TIMING_NOISE_CV: f64 = 0.025;
 
 /// The coefficient of variation of a metric that re-measures identical code to
 /// identical values.
@@ -562,43 +552,6 @@ fn cases() -> Vec<SignalCase> {
     ]
 }
 
-/// Builds a series called `name` carrying `values` at topological indices starting at
-/// `topo_start`, tagged with `kind`.
-///
-/// The points carry no explicit confidence intervals: the engines these cases model
-/// report a single figure per run, so the dispersion the analysis judges is the
-/// between-commit scatter the values already carry.
-fn curated_series(name: &str, values: &[f64], kind: MetricKind, topo_start: usize) -> Series {
-    let points = values
-        .iter()
-        .enumerate()
-        .map(|(offset, &value)| {
-            let topo_index = topo_start.checked_add(offset).unwrap();
-            SeriesPoint {
-                topo_index,
-                dirty: false,
-                object_ordinal: u32::try_from(topo_index).unwrap(),
-                commit: Some(Arc::from(format!("commit{topo_index}"))),
-                value,
-                interval_low: None,
-                interval_high: None,
-            }
-        })
-        .collect();
-    Series {
-        set: DiscriminantSet {
-            engine: Engine::Callgrind,
-            target_triple: "t".into(),
-            machine_key: "m1".into(),
-        },
-        id: BenchmarkId::new(nonempty![name.to_owned(), "case".to_owned()]),
-        kind,
-        points,
-        active_start: 0,
-        blessing: None,
-    }
-}
-
 /// `count` flat companion series at `level`, laid out to enlarge the false-discovery
 /// family of a case whose merge base sits at `merge_base`.
 ///
@@ -632,7 +585,7 @@ fn companions(
         .map(|index| {
             let name = format!("companion{index}");
             let values = with_noise(&run_of(level, points), kind, seed_of(&name));
-            curated_series(&name, &values, kind, topo_start)
+            examples::series(&name, &values, kind, topo_start)
         })
         .collect()
 }
@@ -666,7 +619,7 @@ fn raises_finding(
     context: &AnalysisContext,
     crowd: usize,
 ) -> bool {
-    let curated = curated_series(CURATED_NAME, values, kind, 0);
+    let curated = examples::series(CURATED_NAME, values, kind, 0);
     let curated_id = curated.id.qualified();
     let mut batch = vec![curated];
     batch.extend(companions(
@@ -925,7 +878,7 @@ fn a_batch_of_flat_noisy_series_raises_nothing() {
         .map(|index| {
             let name = format!("flat{index}");
             let values = with_noise(&run_of(LEVEL, POINTS), kind, seed_of(&name));
-            curated_series(&name, &values, kind, 0)
+            examples::series(&name, &values, kind, 0)
         })
         .collect();
 
@@ -985,7 +938,7 @@ fn evidence_below_the_minimum_is_not_judged() {
         kind,
         seed_of("below_minimum_evidence"),
     );
-    let series = curated_series(CURATED_NAME, &values, kind, 0);
+    let series = examples::series(CURATED_NAME, &values, kind, 0);
 
     let detection = find_changes(slice::from_ref(&series), &Mode::History.context(None));
 

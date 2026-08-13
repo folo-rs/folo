@@ -136,6 +136,17 @@ pub(crate) const BRANCH_PRACTICAL_RELATIVE: f64 = 0.05;
 /// noise, independently of how the tip compares against the base level.
 pub(crate) const BRANCH_NOISE_MULTIPLE: f64 = 2.0;
 
+/// Default `drift_noise_multiple`: multiple of the per-measurement noise floor a
+/// drift's total movement must exceed where the engine reports per-point confidence
+/// intervals.
+///
+/// Serves the same role for a trend that [`BRANCH_NOISE_MULTIPLE`] serves for a
+/// branch move: it vetoes movement the engine's own dispersion cannot distinguish
+/// from noise. The two are held equal because the question each asks is the same one
+/// — whether the endpoints separate by more than the measurement wobble — and neither
+/// detector has evidence the other lacks to justify a different standard.
+pub(crate) const DRIFT_NOISE_MULTIPLE: f64 = 2.0;
+
 /// Default `residual_noise_multiple`: multiple of a series' own between-commit
 /// residual scatter a move must exceed to clear the primary noise gate.
 pub(crate) const RESIDUAL_NOISE_MULTIPLE: f64 = 3.0;

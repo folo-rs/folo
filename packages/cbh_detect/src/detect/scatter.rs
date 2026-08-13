@@ -11,6 +11,15 @@
 
 #![cfg_attr(coverage_nightly, coverage(off))]
 
+/// The coefficient of variation a timing series carries.
+///
+/// Wall-time benchmarks in this project's own stored history run at two to three
+/// percent between-commit scatter, and this is the middle of that band. The figure
+/// matters because it is what the noise gates are up against in production: a curated
+/// series an order of magnitude cleaner makes every "stays quiet" case trivially easy
+/// and never reproduces the false positives those gates exist to reject.
+pub const TIMING_NOISE_CV: f64 = 0.025;
+
 /// The increment [`NoiseSource`] advances its counter by, from the published
 /// `splitmix64` generator.
 const SPLITMIX_GAMMA: u64 = 0x9e37_79b9_7f4a_7c15;
@@ -49,7 +58,7 @@ impl NoiseSource {
         mixed ^= mixed >> 31;
         // The top half is the best-mixed one and lands in a `u32` exactly, which keeps
         // the conversion to `f64` lossless.
-        let bits = u32::try_from(mixed >> 32).unwrap();
+        let bits = u32::try_from(mixed >> 32).expect("the top half of a u64 fits a u32");
         f64::from(bits) / f64::from(u32::MAX) * 2.0 - 1.0
     }
 }
@@ -65,7 +74,8 @@ const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 /// Keying the seed to the name is what makes every series in a batch independent: each
 /// name hashes to a different seed, so a batch is a batch of distinct series rather than
 /// one series repeated.
-pub(crate) fn seed_of(name: &str) -> u64 {
+#[must_use]
+pub fn seed_of(name: &str) -> u64 {
     name.bytes().fold(FNV_OFFSET_BASIS, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(FNV_PRIME)
     })
@@ -81,7 +91,8 @@ pub(crate) fn seed_of(name: &str) -> u64 {
 ///
 /// The scatter is relative to each point's own level, so scaling a whole series scales
 /// its scatter with it. A `cv` of zero returns the values untouched.
-pub(crate) fn scattered(values: &[f64], cv: f64, seed: u64) -> Vec<f64> {
+#[must_use]
+pub fn scattered(values: &[f64], cv: f64, seed: u64) -> Vec<f64> {
     let half_width = cv * 3.0_f64.sqrt();
     let mut noise = NoiseSource::new(seed);
     values
