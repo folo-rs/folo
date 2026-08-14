@@ -11,6 +11,24 @@
 //! log, which discards every recording and never allocates; tests and the documentation
 //! figures pass a [`recording`](GateLog::recording) one. The gates themselves run
 //! identically either way.
+//!
+//! The types are compiled unconditionally because the detectors take a log by reference and
+//! so name them in their own signatures. Reaching them from outside the crate is gated on
+//! `private-test-util`, since a log is inspection machinery rather than something a consumer
+//! of the analysis acts on. Under default features the reader half is therefore dead, which
+//! the module accepts rather than splitting the type in two along a seam that exists only to
+//! satisfy a lint.
+
+#![cfg_attr(
+    not(any(test, feature = "private-test-util")),
+    expect(
+        unreachable_pub,
+        dead_code,
+        reason = "the gate types name themselves in the detectors' signatures, so they \
+                  compile in every build, while their reader half is reachable only under \
+                  `private-test-util` (see the module documentation above)"
+    )
+)]
 
 /// What a detection pass decided, gate by gate, about one series.
 ///

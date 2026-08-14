@@ -33,6 +33,11 @@ pub use findings::{
     SeriesCensus, SeriesValue, Testability, UnjudgedReason, find_changes_spawned, short_commit,
     testability,
 };
+// The gate types are compiled unconditionally because the detectors take a log by reference,
+// so they appear in production signatures. Only the re-export is gated: outside this crate
+// they are inspection machinery for the tests and the documentation figures, and nothing in
+// the shell crate's own path constructs one.
+#[cfg(any(test, feature = "private-test-util"))]
 pub use gate_log::{Gate, GateLog, GateOutcome, GateStage};
 pub use parallel::{balanced_chunk_sizes, worker_count};
 pub use run_points::{MetricPoint, ResultPoints, RunPoints};
