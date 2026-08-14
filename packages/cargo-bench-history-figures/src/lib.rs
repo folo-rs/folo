@@ -50,4 +50,3 @@ pub mod theme;
 pub mod verdict;
 
 mod coord;
-

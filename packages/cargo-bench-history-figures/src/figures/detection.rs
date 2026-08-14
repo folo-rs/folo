@@ -6,14 +6,12 @@
 //! in detection behaviour therefore changes these assets, and the freshness check turns
 //! that into a failing test rather than into prose that has quietly become wrong.
 
-use cbh_detect::examples;
-use cbh_detect::{AnalysisConfig, Finding, Series, evaluate_with_log};
+use cbh_detect::{AnalysisConfig, Finding, Series, evaluate_with_log, examples};
 use cbh_model::MetricKind;
 
 use crate::assets::Asset;
 use crate::styles::plot::{Mark, Observation, Plot};
-use crate::theme;
-use crate::verdict;
+use crate::{theme, verdict};
 
 /// Every asset the Detection chapter embeds.
 #[must_use]
@@ -79,7 +77,12 @@ fn branch() -> Vec<Asset> {
                     observation
                 }
             }))
-            .band(0, tip_index.saturating_sub(1), "base window", theme::HIGHLIGHT)
+            .band(
+                0,
+                tip_index.saturating_sub(1),
+                "base window",
+                theme::HIGHLIGHT,
+            )
             .split(tip_index, "the branch tip");
 
         assets.push(Asset::new(format!("{name}.svg"), plot.render()));
@@ -157,8 +160,11 @@ fn clean_step() -> Vec<Asset> {
         Asset::new("detection-clean-step.svg", plot.render()),
         Asset::new(
             "detection-clean-step.md",
-            verdict::reported(&finding, "the split is where the level changed, not where the \
-                                          largest single jump happened"),
+            verdict::reported(
+                &finding,
+                "the split is where the level changed, not where the \
+                                          largest single jump happened",
+            ),
         ),
     ]
 }
@@ -284,8 +290,9 @@ fn commits(count: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cbh_detect::{Direction, FindingMethod};
+
+    use super::*;
 
     #[test]
     fn every_documented_example_produces_its_asset() {
@@ -302,7 +309,10 @@ mod tests {
             "detection-flat-noisy.md",
             "detection-minimums.md",
         ] {
-            assert!(paths.iter().any(|path| path == expected), "{expected} missing");
+            assert!(
+                paths.iter().any(|path| path == expected),
+                "{expected} missing"
+            );
         }
     }
 
@@ -312,8 +322,7 @@ mod tests {
     #[test]
     fn the_worked_examples_report_the_methods_the_chapter_describes() {
         let (_, step) = judge_history("tokenize", &examples::clean_step(), MetricKind::WallTime);
-        let (_, drift) =
-            judge_history("index_build", &examples::slow_ramp(), MetricKind::WallTime);
+        let (_, drift) = judge_history("index_build", &examples::slow_ramp(), MetricKind::WallTime);
 
         assert_eq!(
             step.map(|finding| finding.method),
@@ -330,8 +339,11 @@ mod tests {
     #[test]
     fn the_quiet_examples_stay_quiet() {
         let (_, blip) = judge_history("search_exact", &examples::blip(), MetricKind::WallTime);
-        let (_, noisy) =
-            judge_history("tokenize_ascii", &examples::flat_noisy(), MetricKind::WallTime);
+        let (_, noisy) = judge_history(
+            "tokenize_ascii",
+            &examples::flat_noisy(),
+            MetricKind::WallTime,
+        );
 
         assert!(blip.is_none(), "a lone elevated point must not report");
         assert!(noisy.is_none(), "scatter around one level must not report");
@@ -339,8 +351,7 @@ mod tests {
 
     #[test]
     fn a_reported_step_is_attributed_to_a_commit_inside_the_series() {
-        let (_, finding) =
-            judge_history("tokenize", &examples::clean_step(), MetricKind::WallTime);
+        let (_, finding) = judge_history("tokenize", &examples::clean_step(), MetricKind::WallTime);
         let finding = finding.unwrap();
 
         let index = attributed_index(&finding).unwrap();
@@ -350,12 +361,10 @@ mod tests {
 
     #[test]
     fn a_reported_step_moves_in_the_direction_the_values_do() {
-        let (_, finding) =
-            judge_history("tokenize", &examples::clean_step(), MetricKind::WallTime);
+        let (_, finding) = judge_history("tokenize", &examples::clean_step(), MetricKind::WallTime);
         let finding = finding.unwrap();
 
         assert_eq!(finding.direction, Direction::Regression);
         assert!(finding.latest > finding.baseline);
     }
 }
-

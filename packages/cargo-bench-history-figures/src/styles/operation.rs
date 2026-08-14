@@ -11,11 +11,10 @@
 //! "after" because the useful caption is the *reason*: "every stored run" above,
 //! "admitted for this analysis" below.
 
-use crate::canvas;
-use crate::styles::plot::Plot;
-use crate::theme;
-
 use plotters::style::TextStyle;
+
+use crate::styles::plot::Plot;
+use crate::{canvas, theme};
 
 /// A two-pane figure: one operation, its input, and its output.
 #[derive(Clone, Debug)]
@@ -73,8 +72,8 @@ mod tests {
     use crate::styles::plot::{Mark, Observation};
 
     fn sample() -> Operation {
-        let before = Plot::new("every stored run", 6)
-            .values(&[100.0, 101.0, 99.0, 130.0, 131.0, 129.0]);
+        let before =
+            Plot::new("every stored run", 6).values(&[100.0, 101.0, 99.0, 130.0, 131.0, 129.0]);
         let after = Plot::new("admitted for this analysis", 6).observations([
             Observation::new(0, 100.0),
             Observation::new(1, 101.0),
@@ -83,7 +82,11 @@ mod tests {
             Observation::new(4, 131.0),
             Observation::new(5, 129.0),
         ]);
-        Operation::new("dirty runs are not admitted on the base side", before, after)
+        Operation::new(
+            "dirty runs are not admitted on the base side",
+            before,
+            after,
+        )
     }
 
     #[test]

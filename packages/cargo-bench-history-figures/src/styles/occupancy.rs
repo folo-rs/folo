@@ -90,7 +90,11 @@ impl Occupancy {
     /// The number of commit columns, taken from the longest row so a partition that
     /// stopped being measured still shows the commits it is missing.
     fn span(&self) -> usize {
-        self.rows.iter().map(|row| row.cells.len()).max().unwrap_or(0)
+        self.rows
+            .iter()
+            .map(|row| row.cells.len())
+            .max()
+            .unwrap_or(0)
     }
 
     /// Renders the grid.
@@ -190,11 +194,23 @@ mod tests {
         Occupancy::new("what the store holds")
             .row(
                 "criterion / machine a1b2",
-                [Cell::Clean, Cell::Clean, Cell::Absent, Cell::Clean, Cell::Dirty],
+                [
+                    Cell::Clean,
+                    Cell::Clean,
+                    Cell::Absent,
+                    Cell::Clean,
+                    Cell::Dirty,
+                ],
             )
             .row(
                 "criterion / machine c3d4",
-                [Cell::Absent, Cell::Absent, Cell::Clean, Cell::Clean, Cell::Excluded],
+                [
+                    Cell::Absent,
+                    Cell::Absent,
+                    Cell::Clean,
+                    Cell::Clean,
+                    Cell::Excluded,
+                ],
             )
     }
 
@@ -212,7 +228,11 @@ mod tests {
             .row("short", [Cell::Clean])
             .row("long", [Cell::Clean, Cell::Clean, Cell::Clean]);
 
-        assert_eq!(grid.span(), 3, "a partition that stopped must still show the commits it lacks");
+        assert_eq!(
+            grid.span(),
+            3,
+            "a partition that stopped must still show the commits it lacks"
+        );
     }
 
     #[test]

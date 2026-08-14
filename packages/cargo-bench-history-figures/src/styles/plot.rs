@@ -423,10 +423,7 @@ impl Plot {
     /// # Errors
     ///
     /// Propagates any drawing failure reported by the backend.
-    pub fn draw(
-        &self,
-        area: &DrawingArea<SVGBackend<'_>, Shift>,
-    ) -> Result<(), Box<dyn Error>> {
+    pub fn draw(&self, area: &DrawingArea<SVGBackend<'_>, Shift>) -> Result<(), Box<dyn Error>> {
         let (low, high) = self.value_range();
         // The axis runs half a column past each end so the first and last observations
         // sit inside the frame rather than on it.
@@ -565,17 +562,11 @@ impl Plot {
             if observation.mark.struck() {
                 let span = (high - low) * 0.03;
                 chart.draw_series(std::iter::once(PathElement::new(
-                    vec![
-                        (at.0 - 0.35, at.1 - span),
-                        (at.0 + 0.35, at.1 + span),
-                    ],
+                    vec![(at.0 - 0.35, at.1 - span), (at.0 + 0.35, at.1 + span)],
                     ShapeStyle::from(color).stroke_width(2),
                 )))?;
                 chart.draw_series(std::iter::once(PathElement::new(
-                    vec![
-                        (at.0 - 0.35, at.1 + span),
-                        (at.0 + 0.35, at.1 - span),
-                    ],
+                    vec![(at.0 - 0.35, at.1 + span), (at.0 + 0.35, at.1 - span)],
                     ShapeStyle::from(color).stroke_width(2),
                 )))?;
             }
@@ -615,9 +606,11 @@ mod tests {
 
     #[test]
     fn a_threshold_rule_outside_the_data_stays_on_the_axis() {
-        let plot = Plot::new("gated", 3)
-            .values(&[100.0, 100.0, 101.0])
-            .rule(140.0, "threshold", theme::REGRESSION);
+        let plot = Plot::new("gated", 3).values(&[100.0, 100.0, 101.0]).rule(
+            140.0,
+            "threshold",
+            theme::REGRESSION,
+        );
 
         let (_, high) = plot.value_range();
 
@@ -715,4 +708,3 @@ mod tests {
         assert!(high > 120.0);
     }
 }
-

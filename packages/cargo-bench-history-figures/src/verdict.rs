@@ -66,10 +66,10 @@ pub fn quiet(finding: Option<&Finding>, reading: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use cbh_detect::examples;
-    use cbh_detect::evaluate_with_log;
+    use cbh_detect::{evaluate_with_log, examples};
     use cbh_model::MetricKind;
+
+    use super::*;
 
     fn a_finding() -> Finding {
         let values = examples::clean_step();
@@ -105,4 +105,3 @@ mod tests {
         assert!(fragment.contains("diverged"));
     }
 }
-

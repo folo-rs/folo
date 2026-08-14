@@ -12,9 +12,8 @@
 //! where the book lives.
 
 use std::fmt::Write as _;
-use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 /// Where the generated assets live, relative to the workspace root.
 ///
@@ -114,7 +113,10 @@ pub fn check(root: &Path) -> io::Result<Option<String>> {
         let location = asset.location(root);
         match fs::read_to_string(&location) {
             Ok(existing) if existing == asset.content => {}
-            Ok(_) => problems.push(format!("  {} differs from the generated content", asset.path)),
+            Ok(_) => problems.push(format!(
+                "  {} differs from the generated content",
+                asset.path
+            )),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 problems.push(format!("  {} has not been generated yet", asset.path));
             }
@@ -163,7 +165,9 @@ mod tests {
 
         let location = asset.location(Path::new("root"));
 
-        assert!(location.ends_with("figures/example.svg") || location.ends_with("figures\\example.svg"));
+        assert!(
+            location.ends_with("figures/example.svg") || location.ends_with("figures\\example.svg")
+        );
     }
 
     /// The appendix embeds these files verbatim, so a stale one publishes a page that

@@ -95,4 +95,3 @@ fn write_preview(root: &std::path::Path) -> io::Result<()> {
     println!("Wrote preview to {}", target.display());
     Ok(())
 }
-

@@ -298,7 +298,10 @@ mod tests {
             "collection-machine-key.md",
             "collection-occupancy.svg",
         ] {
-            assert!(paths.iter().any(|path| path == expected), "{expected} missing");
+            assert!(
+                paths.iter().any(|path| path == expected),
+                "{expected} missing"
+            );
         }
     }
 
@@ -354,7 +357,10 @@ mod tests {
     /// partition. The chapter warns about this, so it is pinned here.
     #[test]
     fn segments_differing_only_in_case_collapse() {
-        assert_eq!(sanitize_segment("MachineKey"), sanitize_segment("machinekey"));
+        assert_eq!(
+            sanitize_segment("MachineKey"),
+            sanitize_segment("machinekey")
+        );
     }
 
     #[test]
@@ -367,9 +373,3 @@ mod tests {
         assert_eq!(assets(), assets());
     }
 }
-
-
-
-
-
-

@@ -926,8 +926,9 @@ fn commit_median() -> Panes {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cbh_detect::AnalysisMode;
+
+    use super::*;
 
     #[test]
     fn every_documented_asset_is_produced() {
@@ -1100,5 +1101,3 @@ mod tests {
         assert_eq!(assets(), assets());
     }
 }
-
-

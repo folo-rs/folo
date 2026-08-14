@@ -108,9 +108,9 @@ impl Ladder {
         // three-gate ladder would draw absurdly thick bars and a twelve-gate one would
         // crush its labels together.
         let row_height = 34_u32;
-        let height = 70_u32.saturating_add(row_height.saturating_mul(
-            u32::try_from(self.rungs.len()).unwrap_or(u32::MAX),
-        ));
+        let height = 70_u32.saturating_add(
+            row_height.saturating_mul(u32::try_from(self.rungs.len()).unwrap_or(u32::MAX)),
+        );
 
         canvas::draw(theme::WIDTH, height, |root| self.draw_into(root, height))
     }
@@ -118,7 +118,10 @@ impl Ladder {
     /// Draws the ladder into `root`.
     fn draw_into(
         &self,
-        root: &plotters::drawing::DrawingArea<plotters::backend::SVGBackend<'_>, plotters::coord::Shift>,
+        root: &plotters::drawing::DrawingArea<
+            plotters::backend::SVGBackend<'_>,
+            plotters::coord::Shift,
+        >,
         _height: u32,
     ) -> Result<(), Box<dyn Error>> {
         let rows = self.rungs.len();

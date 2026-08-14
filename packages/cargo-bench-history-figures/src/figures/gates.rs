@@ -42,11 +42,7 @@ pub fn assets() -> Vec<Asset> {
 const EXAMPLE_KIND: MetricKind = MetricKind::WallTime;
 
 /// The detectors whose gates the chapter documents, in pipeline order.
-const STAGES: [GateStage; 3] = [
-    GateStage::ChangePoint,
-    GateStage::Drift,
-    GateStage::Branch,
-];
+const STAGES: [GateStage; 3] = [GateStage::ChangePoint, GateStage::Drift, GateStage::Branch];
 
 /// The change-point detector's gates, in the order it applies them.
 ///

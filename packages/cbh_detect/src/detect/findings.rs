@@ -2186,7 +2186,6 @@ mod tests {
     use nonempty::nonempty;
 
     use super::*;
-    use crate::detect::examples;
     use crate::detect::gate_log::GateOutcome;
     use crate::detect::noise_gates::{
         COMPARE_WINDOW, DRIFT_MIN_POINTS, DRIFT_NOISE_MULTIPLE, MIN_REGIME, MIN_SERIES_POINTS,
@@ -2196,7 +2195,7 @@ mod tests {
         STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_HIGH, STATIONARY_BIMODAL_NOISE,
     };
     use crate::detect::scatter::{scattered, seed_of};
-    use crate::detect::{Blessing, SeriesPoint};
+    use crate::detect::{Blessing, SeriesPoint, examples};
 
     /// Builds a Callgrind-style series carrying `values` in topological order, with
     /// no dispersion (no confidence interval).

@@ -25,4 +25,3 @@ pub fn assets() -> Vec<Asset> {
     assets.extend(reporting::assets());
     assets
 }
-

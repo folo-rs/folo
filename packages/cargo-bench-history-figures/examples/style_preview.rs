@@ -7,12 +7,11 @@
 //! be judged without waiting on the data behind a chapter.
 
 use cargo_bench_history_figures::assets::Asset;
-use cargo_bench_history_figures::preview;
 use cargo_bench_history_figures::styles::ladder::{Ladder, Rung, Verdict};
 use cargo_bench_history_figures::styles::occupancy::{Cell, Occupancy};
 use cargo_bench_history_figures::styles::operation::Operation;
 use cargo_bench_history_figures::styles::plot::{Mark, Observation, Plot};
-use cargo_bench_history_figures::theme;
+use cargo_bench_history_figures::{preview, theme};
 
 fn main() {
     let stepped: Vec<f64> = vec![
@@ -39,12 +38,13 @@ fn main() {
 
     let gappy = Plot::new("a gap, and a tip with no recent observation", 20)
         .value_label("instructions")
-        .observations((0..8_u16).map(|index| {
-            Observation::new(usize::from(index), 1000.0 + f64::from(index))
-        }))
-        .observations((14..17_u16).map(|index| {
-            Observation::new(usize::from(index), 1009.0 + f64::from(index))
-        }));
+        .observations(
+            (0..8_u16).map(|index| Observation::new(usize::from(index), 1000.0 + f64::from(index))),
+        )
+        .observations(
+            (14..17_u16)
+                .map(|index| Observation::new(usize::from(index), 1009.0 + f64::from(index))),
+        );
 
     let ghost_before = Plot::new("series as reconstructed", 20)
         .value_label("bytes")
@@ -118,11 +118,23 @@ fn main() {
         )
         .row(
             "criterion / x86_64 / 9f8e7d6c",
-            (0..20).map(|index| if index < 12 { Cell::Absent } else { Cell::Excluded }),
+            (0..20).map(|index| {
+                if index < 12 {
+                    Cell::Absent
+                } else {
+                    Cell::Excluded
+                }
+            }),
         )
         .row(
             "callgrind / x86_64 / a1b2c3d4",
-            (0..20).map(|index| if index % 3 == 0 { Cell::Focus } else { Cell::Clean }),
+            (0..20).map(|index| {
+                if index % 3 == 0 {
+                    Cell::Focus
+                } else {
+                    Cell::Clean
+                }
+            }),
         );
 
     let assets = vec![

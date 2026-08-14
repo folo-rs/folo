@@ -102,7 +102,6 @@ use std::slice;
 
 use cbh_model::MetricKind;
 
-use crate::detect::examples;
 use crate::detect::findings::find_changes;
 use crate::detect::noise_gates::{MIN_REGIME, MIN_SERIES_POINTS};
 use crate::detect::recorded::{
@@ -110,7 +109,7 @@ use crate::detect::recorded::{
 };
 use crate::detect::scatter::{TIMING_NOISE_CV, scattered, seed_of};
 use crate::detect::{
-    AnalysisConfig, AnalysisContext, AnalysisMode, Direction, Series, UnjudgedReason,
+    AnalysisConfig, AnalysisContext, AnalysisMode, Direction, Series, UnjudgedReason, examples,
 };
 
 /// The analysis mode a case is evaluated under — the suite's dimension-1 lever.

@@ -395,11 +395,7 @@ mod tests {
         let gates: HashSet<&'static str> = Gate::ALL.iter().map(|gate| gate.label()).collect();
         assert_eq!(gates.len(), Gate::ALL.len());
 
-        let stages = [
-            GateStage::ChangePoint,
-            GateStage::Drift,
-            GateStage::Branch,
-        ];
+        let stages = [GateStage::ChangePoint, GateStage::Drift, GateStage::Branch];
         let labels: HashSet<&'static str> = stages.iter().map(|stage| stage.label()).collect();
         assert_eq!(labels.len(), stages.len());
     }

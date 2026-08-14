@@ -185,9 +185,8 @@ impl Agreement {
     pub fn render(&self) -> String {
         let rows = self.after.len();
         let columns = self.before.len();
-        let height = 90_u32.saturating_add(
-            22_u32.saturating_mul(u32::try_from(rows).unwrap_or(u32::MAX)),
-        );
+        let height =
+            90_u32.saturating_add(22_u32.saturating_mul(u32::try_from(rows).unwrap_or(u32::MAX)));
 
         canvas::draw(theme::WIDTH, height, |root| {
             let mut chart = ChartBuilder::on(root)
