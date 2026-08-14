@@ -726,7 +726,7 @@ gives; when runs enter but none carry the named `(benchmark, metric)` pair, a di
 pointing at the unmatched benchmark id or metric name.
 
 `examine` runs **no detection and no re-baselining** — it has no findings, modes, or
-blessings, which is why the analysis-only flags (improvements, inactive findings) are not
+blessings, which is why the analysis-only improvements flag is not
 part of its surface. It lists **every commit** from the earliest one at which any matching
 set carries the series through to the analyzed tip: a commit carrying data contributes a row
 per **observation** (clean run before dirty snapshots, each flagged, so a value's provenance
@@ -889,8 +889,7 @@ the residual and separation gates stand alone. The separation gate is required w
 Pettitt is trusted to identify a regime boundary: the history change-point detector uses it
 for reported findings, and branch mode uses the same effect-size gate — at a stricter floor,
 for the reasons below — when deciding whether a base-side split is strong enough to define the
-current comparison regime. The resolved-spike detector's recover-to-baseline shape does not
-arise from a stationary oscillation in the first place.
+current comparison regime.
 
 The residual pool draws only from samples long enough to describe scatter. A sample of a single
 point is its own median, so it contributes a residual of exactly zero that says nothing about the
@@ -1090,10 +1089,9 @@ testable (§8.3).
 | Tip commit vs. base (Student-t prediction interval) | — | ✅ |
 | Benjamini–Hochberg false-discovery filter | ✅ | ✅ |
 | Improvements reported | opt-in | ✅ |
-| Resolved (inactive) findings reported | opt-in | — |
 
 Modes apply to `analyze` only; `list`, `prune`, and `examine` reuse the same data-set
-*selection* but never analyze, so the mode selection and improvement/inactive flags are
+*selection* but never analyze, so the mode selection and improvements flag are
 analyze-only and not part of the selection lockstep. The **ghost filter** (§7.3) is likewise
 analyze-only and outside the lockstep: it applies in both modes, dropping — before detection
 — any benchmark absent at the context commit (the analyzed tip). In branch mode a benchmark
@@ -1101,11 +1099,9 @@ removed on the branch is a ghost and a benchmark newly
 added on the branch is present and kept; dirty snapshots at the branch tip count as present
 via the base-tip dirty exception.
 
-### 8.6 Re-baselining: blessings and resolved spikes
+### 8.6 Re-baselining: blessings
 
-History mode distinguishes a change that is **still in effect** from one that has **already
-been addressed**, so a long history does not keep re-flagging events a reviewer has handled.
-Every history-mode finding therefore carries an active flag distinguishing the two.
+A long history should not keep re-flagging an event a reviewer has already handled.
 
 Blessing is also how a *real but uninteresting* shift is disposed of. The detector reports
 that the measured level moved; whether a runner swap, a toolchain bump, or a deliberate
@@ -1113,11 +1109,6 @@ tradeoff caused it is a judgement the gates cannot make and do not try to (§8.2
 recorded here instead — once, against the commit it happened at, rather than by widening a
 threshold that would also hide real regressions.
 
-* **Resolved spikes** — when a level rose and later returned to its prior baseline, the
-  current state matches the baseline and there is nothing to act on. Such a finding is
-  **inactive**: suppressed by default and surfaced only on request, with its recovery
-  commit named. The recovered points always remain in the data set and on the chart; the
-  flag only governs whether the finding is reported.
 * **Blessings** — a blessing (see `bless`) re-baselines a series from the blessed commit
   forward: the detectors run on the **active segment only**, so the pre-blessing step is no
   longer re-flagged, while the earlier points still feed the chart and any long-range
@@ -1339,3 +1330,4 @@ simply produce no output — to collect Callgrind data, run the tool on Linux or
 Criterion and the two measurement crates run natively on all three. Target-triple
 resolution is auto-detected where the tool runs, so the golden rule is to run the tool in
 the same OS as the benches.
+

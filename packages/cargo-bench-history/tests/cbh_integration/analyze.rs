@@ -1372,10 +1372,6 @@ async fn analyze_branch_mode_reports_the_tip_commit_state() {
     assert_eq!(finding["baseline"], 100.0, "{report}");
     assert_eq!(finding["latest"], 130.0, "{report}");
     assert!(
-        finding["flipped_at"].is_null(),
-        "branch mode judges the tip commit alone, with no within-branch flip: {report}"
-    );
-    assert!(
         finding.get("series").is_none(),
         "the JSON finding mirrors the text data and omits the charting series: {report}"
     );

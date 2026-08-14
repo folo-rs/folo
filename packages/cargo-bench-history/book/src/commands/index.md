@@ -28,6 +28,8 @@ filters mean the same thing wherever they appear. Some commands also take a bare
 
 `analyze`, `list runs`, `prune`, and `examine` apply the same selection rules. You can
 therefore preview a range with `list runs`, inspect one of its series with `examine`, or
-prune it without learning a second set of filters. The analysis-only flags
-(`--include-improvements`, `--include-inactive`) and condensed Markdown summary are
-exceptions because the other commands select data but never detect findings.
+prune it without learning a second set of filters. The analysis-only flag
+`--include-improvements` and the condensed Markdown summary are exceptions because the other
+commands select data but never detect findings.
+
+

@@ -162,7 +162,6 @@ modes, auto-detected from git topology (there is no flag to force a mode):
 | Tip commit vs. base (Student-t prediction interval) | — | ✅ |
 | Benjamini–Hochberg false-discovery filter | ✅ | ✅ |
 | Improvements reported | opt-in | ✅ |
-| Resolved (inactive) findings reported | opt-in | — |
 
 - **history** — the base-branch view: long-range change-point and drift detection; reports
   regressions only by default.
@@ -190,11 +189,8 @@ never changes which findings are reported or the exit code.
 
 ## Re-baselining
 
-History mode distinguishes a change **still in effect** from one **already addressed**, so a
-long history does not keep re-flagging handled events:
+A long history should not keep re-flagging an event you have already dealt with:
 
-- **Resolved spikes** — when a level rose and later returned to its prior baseline, the finding
-  is inactive: suppressed by default and surfaced only on request.
 - **Blessings** — a [blessing](../commands/bless.md) re-baselines a series from the blessed
   commit forward, so the pre-blessing step is no longer re-flagged while earlier points still
   feed the chart.
@@ -253,3 +249,4 @@ without compressing months of history into the same chart.
 
 There is **no severity classification**: a finding's magnitude is conveyed by its
 relative-change percent, and which findings warrant action is left to human or agent judgment.
+

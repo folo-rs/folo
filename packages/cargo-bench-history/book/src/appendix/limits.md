@@ -100,13 +100,6 @@ The store records more than the analysis uses:
 future version can use them; a missing history cannot be back-filled with facts nobody wrote
 down.
 
-## Spike detection stops on long histories
 
-The search for a resolved spike — a level that rose and came back — scans every candidate
-plateau, which costs quadratic time. Above a bounded history length the pass is skipped
-entirely, with no note in the report.
-
-*What to do:* nothing, usually; resolved spikes are opt-in and inactive by definition. But do
-not read their absence from a long history as evidence there were none.
 
 

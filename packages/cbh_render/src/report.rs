@@ -297,12 +297,6 @@ struct JsonFinding<'a> {
     /// Commit the change is attributed to, if known.
     #[serde(skip_serializing_if = "Option::is_none")]
     commit: Option<&'a str>,
-    /// Whether the change is still reflected in the latest measured state.
-    active: bool,
-    /// Where, within a branch, the latest regime began (branch mode) or where the
-    /// level recovered (history + inactive). Present only when located.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    flipped_at: Option<&'a str>,
     /// Abbreviated commit of the blessing that re-baselined the series, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     blessed_at: Option<&'a str>,
@@ -325,8 +319,6 @@ impl<'a> JsonFinding<'a> {
             relative_delta: finding.relative_delta,
             confidence: finding.confidence,
             commit: finding.commit.as_deref(),
-            active: finding.active,
-            flipped_at: finding.flipped_at.as_deref(),
             blessed_at: finding.blessed_at.as_deref(),
             blessed_commit_time: finding.blessed_commit_time.as_deref(),
         }
@@ -565,7 +557,7 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
 
 /// Appends one finding as a paragraph: the benchmark id on its own line as a
 /// chapter title, then a direction-colored `percentage metric (confidence)`
-/// headline, a dimmed detail line, an optional blessing/recovery note, and a chart
+/// headline, a dimmed detail line, an optional blessing note, and a chart
 /// of the metric over commits, scoped per [`ChartScope`].
 fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, scope: ChartScope) {
     lines.push(String::new());
@@ -579,13 +571,8 @@ fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, scope: ChartSc
         Direction::Regression => percent.red().bold(),
         Direction::Improvement => percent.green().bold(),
     };
-    let status = if finding.active {
-        String::new()
-    } else {
-        format!(" {}", "(recovered)".dimmed())
-    };
     lines.push(format!(
-        "  {headline} {} ({} confidence){status}",
+        "  {headline} {} ({} confidence)",
         finding.kind.as_str(),
         format_confidence(finding.confidence),
     ));
@@ -662,28 +649,21 @@ fn runs_with_span(runs: usize, span: Option<(&str, &str)>) -> String {
 }
 
 /// The plain-text detail body shared by the text and Markdown reports: the
-/// direction, detector, the `baseline → latest` move, the attributed commit, and
-/// (when located) the flip/recovery commit. Confidence rides on the headline line
-/// instead. Carries no styling and no leading indent; each format applies its own.
+/// direction, detector, the `baseline → latest` move, and the attributed commit.
+/// Confidence rides on the headline line instead. Carries no styling and no
+/// leading indent; each format applies its own.
 fn detail_text(finding: &Finding) -> String {
-    let mut detail = format!(
+    format!(
         "{} via {} · {} → {} · @ {}",
         direction_label(finding.direction),
         method_label(finding.method),
         format_value(finding.baseline),
         format_value(finding.latest),
         finding.commit.as_deref().unwrap_or("unknown"),
-    );
-    // `flipped_at` is set only on an inactive (recovered) history-mode spike, naming
-    // the commit where the level returned to baseline; branch mode never sets it.
-    if let Some(recovered_at) = &finding.flipped_at {
-        use std::fmt::Write as _;
-        write!(detail, " · recovers at {recovered_at}").expect("writing to a String is infallible");
-    }
-    detail
+    )
 }
 
-/// The plain-text blessing/recovery note, when the series was re-baselined by a
+/// The plain-text blessing note, when the series was re-baselined by a
 /// blessing. Carries no styling and no leading indent.
 fn blessing_text(finding: &Finding) -> Option<String> {
     let blessed_at = finding.blessed_at.as_deref()?;
@@ -1109,13 +1089,8 @@ fn push_finding_markdown(
     // rather than crowding the change headline that follows.
     lines.push(format!("{heading} `{}`", describe_id(&finding.id)));
 
-    let status = if finding.active {
-        String::new()
-    } else {
-        " _(recovered)_".to_owned()
-    };
     lines.push(format!(
-        "**{}** `{}` ({} confidence){status}",
+        "**{}** `{}` ({} confidence)",
         format_percent(finding.relative_delta),
         finding.kind.as_str(),
         format_confidence(finding.confidence),
@@ -1306,8 +1281,6 @@ mod tests {
             relative_delta: 0.30,
             confidence: 1.0,
             commit: Some("deadbee".to_owned()),
-            flipped_at: None,
-            active: true,
             blessed_at: None,
             blessed_commit_time: None,
             series: Vec::new(),
@@ -2184,20 +2157,6 @@ mod tests {
     }
 
     #[test]
-    fn text_report_marks_an_inactive_recovered_finding() {
-        let set = discriminant_set();
-        let mut recovered = regression();
-        recovered.active = false;
-        recovered.flipped_at = Some("c4".to_owned());
-        let findings = vec![recovered];
-        let mut summaries = Vec::new();
-        let input = single_set_input("folo", &set, &findings, &mut summaries);
-        let report = render(&input, ReportFormat::Text, false);
-        assert!(report.contains("(recovered)"), "{report}");
-        assert!(report.contains("recovers at c4"), "{report}");
-    }
-
-    #[test]
     fn text_report_annotates_a_blessed_finding() {
         let set = discriminant_set();
         let mut blessed = regression();
@@ -2269,33 +2228,12 @@ mod tests {
         );
         // The old inline em-dash headline is gone.
         assert!(!report.contains("—"), "{report}");
-        // An active finding carries no recovered suffix.
-        assert!(!report.contains("_(recovered)_"), "{report}");
         // Confidence rides on the headline now, so the detail line drops it.
         assert!(
             report.contains("regression via change point · 100 → 130"),
             "{report}"
         );
         assert!(!report.contains("100% confidence · 100"), "{report}");
-    }
-
-    #[test]
-    fn markdown_report_marks_an_inactive_recovered_finding() {
-        let set = discriminant_set();
-        let mut recovered = regression();
-        recovered.active = false;
-        recovered.flipped_at = Some("c4".to_owned());
-        let findings = vec![recovered];
-        let mut summaries = Vec::new();
-        let input = single_set_input("folo", &set, &findings, &mut summaries);
-        let report = render(&input, ReportFormat::Markdown, false);
-        // The headline suffix flags a recovered finding; the shared detail line names
-        // the recovery commit.
-        assert!(
-            report.contains("`instruction_count` (100% confidence) _(recovered)_"),
-            "{report}"
-        );
-        assert!(report.contains("recovers at c4"), "{report}");
     }
 
     #[test]

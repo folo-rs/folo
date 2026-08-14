@@ -26,22 +26,6 @@ Each detector applies its own gates in its own order, and a candidate stops at t
 | `residual_noise` | The move against the series' own typical residual. | 3× the typical residual |
 | `interval_noise_band` | The move against the engine's own reported imprecision. | 2× the reported half-width |
 
-**`resolved_spike`** — a level that moved and came back
-
-| Gate | What it compares | Threshold |
-|---|---|---|
-| `spike_search_size` | How many points the interior search would have to scan. | at most 200 |
-| `min_series_points` | How many points the search has to work with. | 15 points |
-| `spike_recovered` | How far the level ended up from where it started. | back within 3.0% of the opening level |
-| `non_zero_delta` | Whether the two levels differ at all. | above zero |
-| `relative_floor` | The move as a fraction of the baseline. | 3.0% |
-| `absolute_floor` | The move in the metric's own units. | the metric's own floor, below |
-| `residual_noise` | The move against the series' own typical residual. | 3× the typical residual |
-| `significance` | The chance level of the rise into the spike. | p < 0.05 |
-| `spike_significance` | The chance level of the return to the opening level. | p < 0.05 |
-| `regime_separation` | The share of before-and-after pairs that agree the level moved. | 0.85 |
-| `interval_disjoint` | The two regimes' reported confidence intervals. | the two intervals must not overlap |
-
 **`branch`** — a branch tip against the base it forked from
 
 | Gate | What it compares | Threshold |

@@ -295,10 +295,6 @@ pub struct AnalyzeOptions {
     /// In history mode, also report sustained improvements (regressions only by
     /// default, since improvement over time on the base branch is expected).
     pub include_improvements: bool,
-    /// In history mode, also report inactive findings: changes that the current
-    /// state no longer reflects (a regression that later recovered). Hidden by
-    /// default since they need no action.
-    pub include_inactive: bool,
     /// Emit detailed diagnostic notes to standard error describing each step.
     pub verbose: bool,
     /// Emit per-stage wall-clock timings to standard error, independent of

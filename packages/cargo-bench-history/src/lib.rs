@@ -231,8 +231,7 @@
 //!   analyze a clean checkout of the base branch). It detects sustained
 //!   change-points and slow drifts, defaults `--since` to the last six months, and
 //!   reports only **regressions** (steady improvement over time is expected) unless
-//!   `--include-improvements` is given. A spike that has since recovered is
-//!   suppressed by default; `--include-inactive` surfaces such resolved findings.
+//!   `--include-improvements` is given.
 //! * **branch** — "how does my feature compare" (selected for a feature branch, or
 //!   a dirty base checkout). It judges the branch by its **tip commit** versus the
 //!   base — the intermediate commits are ignored, since only the tip lands in the

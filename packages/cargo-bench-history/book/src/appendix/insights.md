@@ -77,13 +77,6 @@ intermediate commits are ignored — only the tip merges.
    your branch merely matches the new level, that is worth knowing before you go looking
    through your own diff.
 
-### A resolved spike
-
-An inactive finding: a level that rose and came back before the analyzed commit. Nothing to
-fix — it is reported so that you know something disturbed the measurement, and roughly when.
-
-These are opt-in, because the event is over.
-
 ## Unreliable or inconsistent hardware
 
 **Symptoms:**
@@ -187,3 +180,4 @@ If none of these explains it, the fastest way to see exactly which check decline
 candidate is to look at the series directly with
 [`examine`](../commands/examine.md) and compare it against the gate order in
 [Noise gates](gates.md).
+

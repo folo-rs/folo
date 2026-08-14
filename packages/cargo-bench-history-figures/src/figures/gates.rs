@@ -10,8 +10,8 @@ use std::fmt::Write as _;
 use std::iter;
 
 use cbh_detect::{
-    AnalysisConfig, AnalysisContext, Finding, Gate, GateLog, GateOutcome, GateStage, Series,
-    evaluate_with_log, examples,
+    AnalysisConfig, Finding, Gate, GateLog, GateOutcome, GateStage, Series, evaluate_with_log,
+    examples,
 };
 use cbh_model::MetricKind;
 
@@ -42,10 +42,9 @@ pub fn assets() -> Vec<Asset> {
 const EXAMPLE_KIND: MetricKind = MetricKind::WallTime;
 
 /// The detectors whose gates the chapter documents, in pipeline order.
-const STAGES: [GateStage; 4] = [
+const STAGES: [GateStage; 3] = [
     GateStage::ChangePoint,
     GateStage::Drift,
-    GateStage::ResolvedSpike,
     GateStage::Branch,
 ];
 
@@ -79,21 +78,6 @@ const DRIFT_GATES: [Gate; 7] = [
     Gate::IntervalNoiseBand,
 ];
 
-/// The recovered-spike detector's gates, in the order it applies them.
-const RESOLVED_SPIKE_GATES: [Gate; 11] = [
-    Gate::SpikeSearchSize,
-    Gate::MinSeriesPoints,
-    Gate::SpikeRecovered,
-    Gate::NonZeroDelta,
-    Gate::RelativeFloor,
-    Gate::AbsoluteFloor,
-    Gate::ResidualNoise,
-    Gate::Significance,
-    Gate::SpikeSignificance,
-    Gate::RegimeSeparation,
-    Gate::IntervalDisjoint,
-];
-
 /// The branch comparison's gates, in the order it applies them.
 const BRANCH_GATES: [Gate; 10] = [
     Gate::MinBaseCommits,
@@ -113,7 +97,6 @@ fn stage_gates(stage: GateStage) -> &'static [Gate] {
     match stage {
         GateStage::ChangePoint => &CHANGE_POINT_GATES,
         GateStage::Drift => &DRIFT_GATES,
-        GateStage::ResolvedSpike => &RESOLVED_SPIKE_GATES,
         GateStage::Branch => &BRANCH_GATES,
     }
 }
@@ -123,7 +106,6 @@ fn stage_subject(stage: GateStage) -> &'static str {
     match stage {
         GateStage::ChangePoint => "a level that moved and stayed moved",
         GateStage::Drift => "a level that is moving steadily",
-        GateStage::ResolvedSpike => "a level that moved and came back",
         GateStage::Branch => "a branch tip against the base it forked from",
     }
 }
@@ -152,92 +134,45 @@ fn gates_below(stage: GateStage, gate: Gate) -> Vec<Gate> {
         .collect()
 }
 
-/// The thresholds the chapter states, gathered from the two places they live.
+/// What `stage` demands of `gate`, as the chapter states it.
 ///
-/// Almost every one is a field of [`AnalysisConfig`]. The recovered-spike search limit is
-/// not configurable — it guards a quadratic search rather than expressing a policy — so it
-/// exists only as the threshold that gate logs, and is read back from a real evaluation
-/// instead of being restated here.
-#[derive(Debug)]
-struct Demands {
-    /// The shipped defaults, which every configured threshold is read from.
-    config: AnalysisConfig,
-
-    /// The longest series the recovered-spike search will scan.
-    spike_search_limit: f64,
-}
-
-impl Demands {
-    /// The demands the shipped defaults make.
-    fn observed() -> Self {
-        let (series, context) = spike_candidate();
-        let (_, log) = evaluate_with_log(&series, &context);
-        let spike_search_limit = outcome_of(&log, GateStage::ResolvedSpike, Gate::SpikeSearchSize)
-            .and_then(|outcome| outcome.threshold)
-            .expect(
-                "the recovered-spike example is evaluated with inactive findings \
-                     included, so its search-size gate is the first thing that stage \
-                     records; a missing outcome means the example no longer reaches the \
-                     spike detector at all",
-            );
-
-        Self {
-            config: AnalysisConfig::default(),
-            spike_search_limit,
-        }
-    }
-
-    /// What `stage` demands of `gate`, as the chapter states it.
-    ///
-    /// Several gates are one policy asked by more than one detector, and three of them are
-    /// asked against a different figure depending on who is asking — which is why the
-    /// stage is a parameter rather than the gate alone deciding.
-    fn of(&self, gate: Gate, stage: GateStage) -> String {
-        let config = &self.config;
-        match gate {
-            Gate::MinSeriesPoints => match stage {
-                // The spike search needs an opening level, a plateau and a recovery, and
-                // each of those is a regime in its own right.
-                GateStage::ResolvedSpike => points(config.min_regime.saturating_mul(3)),
-                _ => points(config.drift_min_points),
-            },
-            Gate::MinBaseCommits => commits(config.min_series_points),
-            Gate::SpikeSearchSize => format!("at most {}", number(self.spike_search_limit)),
-            Gate::SplitLocated => "a split must be found".to_owned(),
-            Gate::MinRegime => points(config.min_regime),
-            Gate::SpikeRecovered => format!(
-                "back within {} of the opening level",
-                percent(config.practical_relative)
+/// Every threshold is a field of `config`, so the shipped defaults are the single source
+/// the chapter reads from. Several gates are one policy asked by more than one detector,
+/// and some of them are asked against a different figure depending on who is asking —
+/// which is why the stage is a parameter rather than the gate alone deciding.
+fn demanded(config: &AnalysisConfig, gate: Gate, stage: GateStage) -> String {
+    match gate {
+        Gate::MinSeriesPoints => points(config.drift_min_points),
+        Gate::MinBaseCommits => commits(config.min_series_points),
+        Gate::SplitLocated => "a split must be found".to_owned(),
+        Gate::MinRegime => points(config.min_regime),
+        Gate::NonZeroDelta => "above zero".to_owned(),
+        Gate::RelativeFloor => match stage {
+            GateStage::Branch => percent(config.branch_practical_relative),
+            _ => percent(config.practical_relative),
+        },
+        Gate::AbsoluteFloor => "the metric's own floor, below".to_owned(),
+        Gate::ResidualNoise => format!(
+            "{}× the typical residual",
+            number(config.residual_noise_multiple)
+        ),
+        Gate::BaseScatter => "the sample must carry some scatter".to_owned(),
+        Gate::Significance => match stage {
+            GateStage::Drift => format!("p < {}", chance(config.drift_alpha)),
+            _ => format!("p < {}", chance(config.change_alpha)),
+        },
+        Gate::RegimeSeparation => share(config.min_regime_separation),
+        Gate::IntervalDisjoint => "the two intervals must not overlap".to_owned(),
+        Gate::IntervalNoiseBand => match stage {
+            GateStage::Branch => format!(
+                "{}× the reported half-width",
+                number(config.branch_noise_multiple)
             ),
-            Gate::NonZeroDelta => "above zero".to_owned(),
-            Gate::RelativeFloor => match stage {
-                GateStage::Branch => percent(config.branch_practical_relative),
-                _ => percent(config.practical_relative),
-            },
-            Gate::AbsoluteFloor => "the metric's own floor, below".to_owned(),
-            Gate::ResidualNoise => format!(
-                "{}× the typical residual",
-                number(config.residual_noise_multiple)
+            _ => format!(
+                "{}× the reported half-width",
+                number(config.drift_noise_multiple)
             ),
-            Gate::BaseScatter => "the sample must carry some scatter".to_owned(),
-            Gate::Significance => match stage {
-                GateStage::Drift => format!("p < {}", chance(config.drift_alpha)),
-                _ => format!("p < {}", chance(config.change_alpha)),
-            },
-            Gate::SpikeSignificance => format!("p < {}", chance(config.change_alpha)),
-            Gate::RegimeSeparation => share(config.min_regime_separation),
-            Gate::IntervalDisjoint => "the two intervals must not overlap".to_owned(),
-            Gate::IntervalNoiseBand => match stage {
-                GateStage::Branch => format!(
-                    "{}× the reported half-width",
-                    number(config.branch_noise_multiple)
-                ),
-                _ => format!(
-                    "{}× the reported half-width",
-                    number(config.drift_noise_multiple)
-                ),
-            },
-        }
+        },
     }
 }
 
@@ -247,15 +182,10 @@ impl Demands {
 /// undescribed: the compiler asks for its line here before the table can be rendered.
 fn compares(gate: Gate, stage: GateStage) -> &'static str {
     match gate {
-        Gate::MinSeriesPoints => match stage {
-            GateStage::ResolvedSpike => "How many points the search has to work with.",
-            _ => "How many points the analyzed window holds.",
-        },
+        Gate::MinSeriesPoints => "How many points the analyzed window holds.",
         Gate::MinBaseCommits => "How many base-side commit levels the comparison window holds.",
-        Gate::SpikeSearchSize => "How many points the interior search would have to scan.",
         Gate::SplitLocated => "Whether a candidate split exists at all.",
         Gate::MinRegime => "How many points the shorter side of the split holds.",
-        Gate::SpikeRecovered => "How far the level ended up from where it started.",
         Gate::NonZeroDelta => "Whether the two levels differ at all.",
         Gate::RelativeFloor => "The move as a fraction of the baseline.",
         Gate::AbsoluteFloor => "The move in the metric's own units.",
@@ -266,10 +196,8 @@ fn compares(gate: Gate, stage: GateStage) -> &'static str {
                 "The chance level of the rank test comparing the two regimes."
             }
             GateStage::Drift => "The chance level of the trend test across the window.",
-            GateStage::ResolvedSpike => "The chance level of the rise into the spike.",
             GateStage::Branch => "The chance level of the tip against the base window's interval.",
         },
-        Gate::SpikeSignificance => "The chance level of the return to the opening level.",
         Gate::RegimeSeparation => "The share of before-and-after pairs that agree the level moved.",
         Gate::IntervalDisjoint => "The two regimes' reported confidence intervals.",
         Gate::IntervalNoiseBand => "The move against the engine's own reported imprecision.",
@@ -278,7 +206,7 @@ fn compares(gate: Gate, stage: GateStage) -> &'static str {
 
 /// The gates each detector applies, in the order it applies them.
 fn order_table() -> String {
-    let demands = Demands::observed();
+    let config = AnalysisConfig::default();
     let mut markdown = String::from(
         "Each detector applies its own gates in its own order, and a candidate stops at \
          the first gate that declines it. A gate several detectors share is one policy \
@@ -300,7 +228,7 @@ fn order_table() -> String {
                 "| `{}` | {} | {} |",
                 gate.label(),
                 compares(gate, stage),
-                demands.of(gate, stage)
+                demanded(&config, gate, stage)
             )
             .expect("writing to a String never fails");
         }
@@ -335,9 +263,6 @@ enum Reading {
     /// A count of points, against a minimum.
     Points,
 
-    /// A count of points, against a maximum.
-    PointCeiling,
-
     /// Nothing to measure: the gate either held or it did not.
     Boolean,
 }
@@ -346,12 +271,11 @@ enum Reading {
 fn reading(gate: Gate) -> Reading {
     match gate {
         Gate::MinSeriesPoints | Gate::MinBaseCommits | Gate::MinRegime => Reading::Points,
-        Gate::SpikeSearchSize => Reading::PointCeiling,
         Gate::SplitLocated | Gate::BaseScatter | Gate::IntervalDisjoint => Reading::Boolean,
-        Gate::SpikeRecovered | Gate::RelativeFloor => Reading::Fraction,
+        Gate::RelativeFloor => Reading::Fraction,
         Gate::NonZeroDelta => Reading::NonZero,
         Gate::AbsoluteFloor | Gate::ResidualNoise | Gate::IntervalNoiseBand => Reading::Magnitude,
-        Gate::Significance | Gate::SpikeSignificance => Reading::Chance,
+        Gate::Significance => Reading::Chance,
         Gate::RegimeSeparation => Reading::Share,
     }
 }
@@ -362,10 +286,7 @@ fn reading(gate: Gate) -> Reading {
 /// inverted; drawn as computed-over-demanded, a decisive chance level would read as a bar
 /// of almost nothing.
 fn lower_clears(gate: Gate) -> bool {
-    matches!(
-        gate,
-        Gate::Significance | Gate::SpikeSignificance | Gate::SpikeRecovered | Gate::SpikeSearchSize
-    )
+    matches!(gate, Gate::Significance)
 }
 
 /// The bar length a gate with no number to compare is drawn at when it held.
@@ -430,10 +351,6 @@ fn reading_of(outcome: &GateOutcome, kind: MetricKind) -> (String, String) {
             format!("{} points", rendered(value, number)),
             format!("{} points", rendered(threshold, number)),
         ),
-        Reading::PointCeiling => (
-            format!("{} points", rendered(value, number)),
-            format!("at most {} points", rendered(threshold, number)),
-        ),
         Reading::Boolean => (
             if outcome.passed {
                 "held".to_owned()
@@ -473,11 +390,11 @@ fn rungs(log: &GateLog, stage: GateStage, kind: MetricKind) -> Vec<Rung> {
     let Some(declining) = log.declined_by_stage(stage) else {
         return rungs;
     };
-    let demands = Demands::observed();
+    let config = AnalysisConfig::default();
     rungs.extend(gates_below(stage, declining).into_iter().map(|gate| Rung {
         gate: gate.label().to_owned(),
         value: "not reached".to_owned(),
-        threshold: demands.of(gate, stage),
+        threshold: demanded(&config, gate, stage),
         ratio: 0.0,
         verdict: Verdict::NotReached,
     }));
@@ -910,28 +827,6 @@ fn interval_overlap() -> Asset {
     Asset::new("gates-interval-overlap.svg", plot.render())
 }
 
-/// The recovered-spike example, evaluated where that detector runs at all.
-///
-/// The spike detector only contributes where inactive findings are wanted, so the
-/// evaluation that quotes its gates has to ask for them. The intervals are attached for
-/// the same reason the other examples carry them: a gate reading dispersion records
-/// nothing without one.
-fn spike_candidate() -> (Series, AnalysisContext) {
-    let series = spike_candidate_series();
-    let context = AnalysisContext {
-        include_inactive: true,
-        ..examples::history_context(&series)
-    };
-    (series, context)
-}
-
-/// The recovered-spike example's series.
-fn spike_candidate_series() -> Series {
-    let values = examples::resolved_spike();
-    let series = examples::series("flush", &values, EXAMPLE_KIND, 0);
-    examples::with_intervals(series, reported_half_width(&values))
-}
-
 /// `values` in the metric's own units.
 fn magnitude(kind: MetricKind, value: Option<f64>) -> String {
     value.map_or_else(|| "not recorded".to_owned(), |value| quantity(kind, value))
@@ -1146,13 +1041,9 @@ mod tests {
     /// is that what was recorded is a prefix of what is declared.
     #[test]
     fn every_declared_order_matches_what_the_detector_records() {
-        let cases: [(GateStage, GateLog); 4] = [
+        let cases: [(GateStage, GateLog); 3] = [
             (GateStage::ChangePoint, judge(&passing_candidate()).1),
             (GateStage::Drift, judge(&drift_candidate()).1),
-            (GateStage::ResolvedSpike, {
-                let (series, context) = spike_candidate();
-                evaluate_with_log(&series, &context).1
-            }),
             (GateStage::Branch, judge_branch().1),
         ];
 
@@ -1209,15 +1100,12 @@ mod tests {
     #[test]
     fn every_threshold_in_the_order_table_is_the_configured_one() {
         let config = AnalysisConfig::default();
-        let demands = Demands::observed();
         let table = content("gates-order.md");
 
         for expected in [
             points(config.drift_min_points),
-            points(config.min_regime.saturating_mul(3)),
             points(config.min_regime),
             commits(config.min_series_points),
-            format!("at most {}", number(demands.spike_search_limit)),
             percent(config.practical_relative),
             percent(config.branch_practical_relative),
             format!("p < {}", chance(config.change_alpha)),

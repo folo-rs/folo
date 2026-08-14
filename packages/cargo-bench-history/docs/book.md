@@ -133,7 +133,7 @@ the commands that exercise them and down into the appendix for mechanism.
   one new observation against the base's commit-to-commit scatter; that confidence reports
   evidence strength; the false-discovery family being every judged series in either mode; the two
   auto-selected modes (tenet 7); full-history vs. bounded baseline-and-tip charts; re-baselining
-  via resolved spikes and blessings; the three report formats sharing one pass and the
+  via blessings; the three report formats sharing one pass and the
   advisory-finding / JSON-is-the-signal split (tenet 6); no severity classification.
 - **Boundary**: this page owns the *mental model* and stops there. Mechanism with numbers — which
   gate computes what, against which threshold, in what order — belongs to the appendix. Where the
@@ -185,4 +185,5 @@ against and what a user reads when a finding does not make sense.
   appendix cannot silently fall out of step with the tool.
 - When the appendix gains coverage of something a concept page also explains, trim the concept page
   to the mental model and link down. The two must not both carry the mechanism.
+
 

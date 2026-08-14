@@ -273,7 +273,6 @@ fn build_options(
         json: Some(PathBuf::from(ANALYZE_REPORT_FILE)),
         markdown_summary: None,
         include_improvements: true,
-        include_inactive: false,
         verbose: false,
         timing,
     }

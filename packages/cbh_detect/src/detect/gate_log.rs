@@ -153,8 +153,6 @@ pub enum GateStage {
     ChangePoint,
     /// The slow-drift detector (history mode).
     Drift,
-    /// The recovered-spike detector (history mode, opt-in).
-    ResolvedSpike,
     /// The branch-comparison detector.
     Branch,
 }
@@ -166,7 +164,6 @@ impl GateStage {
         match self {
             Self::ChangePoint => "change_point",
             Self::Drift => "drift",
-            Self::ResolvedSpike => "resolved_spike",
             Self::Branch => "branch",
         }
     }
@@ -184,15 +181,10 @@ pub enum Gate {
     MinSeriesPoints,
     /// The base-side window holds enough commit levels for a branch comparison.
     MinBaseCommits,
-    /// The series is short enough for the quadratic recovered-spike search.
-    SpikeSearchSize,
     /// A candidate split was located at all.
     SplitLocated,
     /// Both regimes either side of the split hold enough points to be persistent.
     MinRegime,
-    /// The spike's level has returned to its baseline, which is what makes it recovered
-    /// rather than an active change.
-    SpikeRecovered,
     /// The move is non-zero.
     NonZeroDelta,
     /// The move reaches the relative practical-magnitude floor.
@@ -205,11 +197,8 @@ pub enum Gate {
     /// formed at all.
     BaseScatter,
     /// The move is statistically significant: a Mann–Whitney, Mann–Kendall, or
-    /// prediction-interval p-value against its configured alpha. For a recovered spike
-    /// this is the rise; the recovery is [`SpikeSignificance`](Self::SpikeSignificance).
+    /// prediction-interval p-value against its configured alpha.
     Significance,
-    /// A recovered spike's return to baseline is statistically significant.
-    SpikeSignificance,
     /// The two regimes separate as populations rather than interleaving — the
     /// Mann–Whitney probability of superiority against its floor.
     RegimeSeparation,
@@ -228,17 +217,14 @@ impl Gate {
         match self {
             Self::MinSeriesPoints => "min_series_points",
             Self::MinBaseCommits => "min_base_commits",
-            Self::SpikeSearchSize => "spike_search_size",
             Self::SplitLocated => "split_located",
             Self::MinRegime => "min_regime",
-            Self::SpikeRecovered => "spike_recovered",
             Self::NonZeroDelta => "non_zero_delta",
             Self::RelativeFloor => "relative_floor",
             Self::AbsoluteFloor => "absolute_floor",
             Self::ResidualNoise => "residual_noise",
             Self::BaseScatter => "base_scatter",
             Self::Significance => "significance",
-            Self::SpikeSignificance => "spike_significance",
             Self::RegimeSeparation => "regime_separation",
             Self::IntervalDisjoint => "interval_disjoint",
             Self::IntervalNoiseBand => "interval_noise_band",
@@ -247,20 +233,17 @@ impl Gate {
 
     /// Every gate, for tests that must stay exhaustive as the enum grows.
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 16] = [
+    pub(crate) const ALL: [Self; 13] = [
         Self::MinSeriesPoints,
         Self::MinBaseCommits,
-        Self::SpikeSearchSize,
         Self::SplitLocated,
         Self::MinRegime,
-        Self::SpikeRecovered,
         Self::NonZeroDelta,
         Self::RelativeFloor,
         Self::AbsoluteFloor,
         Self::ResidualNoise,
         Self::BaseScatter,
         Self::Significance,
-        Self::SpikeSignificance,
         Self::RegimeSeparation,
         Self::IntervalDisjoint,
         Self::IntervalNoiseBand,
@@ -415,7 +398,6 @@ mod tests {
         let stages = [
             GateStage::ChangePoint,
             GateStage::Drift,
-            GateStage::ResolvedSpike,
             GateStage::Branch,
         ];
         let labels: HashSet<&'static str> = stages.iter().map(|stage| stage.label()).collect();

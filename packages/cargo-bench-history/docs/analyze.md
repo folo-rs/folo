@@ -130,11 +130,11 @@ Detection has no cross-series state, so the series split into one balanced chunk
 — the same split-once, spawn, await-and-recombine pattern as the load — and the output is
 identical to a sequential pass. A single available CPU (as Miri reports) yields a single
 worker over the whole input. Per series the mode selects the detector: history runs both a
-change-point and a drift detector and keeps the better fit (plus an optional recovered-spike
-pass); branch collapses each commit's runs to one level, narrows the recent base window to
-its current regime when that window contains an unambiguous level shift — held to a stricter
-separation floor than a reported move, since narrowing discards evidence (DESIGN.md §8.2) —
-and judges the tip against that regime's prediction interval.
+change-point and a drift detector and keeps the better fit; branch collapses each commit's
+runs to one level, narrows the recent base window to its current regime when that window
+contains an unambiguous level shift — held to a stricter separation floor than a reported
+move, since narrowing discards evidence (DESIGN.md §8.2) — and judges the tip against that
+regime's prediction interval.
 
 The false-discovery filter's family is every series that was **testable**, including those that
 raised no candidate (DESIGN.md §8.3). The detect workers already evaluate that predicate to
@@ -260,3 +260,4 @@ other selection-driven commands emit the same line through one shared announceme
 the `bless` / `unbless` mutation commands name the facets and the context commit they act at
 (`bless` also names its base branch), so the wording is identical wherever auto-detection can
 surprise you.
+

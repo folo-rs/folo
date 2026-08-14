@@ -8,8 +8,7 @@
 //!
 //! The values are metric-agnostic bare levels: [`series`] builds them into a [`Series`]
 //! of whichever kind and topology a caller needs. The verdict each series' documentation
-//! claims is the one history mode reaches under the default [`AnalysisConfig`], reporting
-//! active findings only unless the series' own documentation says otherwise.
+//! claims is the one history mode reaches under the default [`AnalysisConfig`].
 //!
 //! Reproducibility is the whole point, so every series is a pure function of its own
 //! name: the scatter is drawn from [`seed_of`] applied to that name and is identical on
@@ -69,7 +68,7 @@ const RAMP_PER_POINT: f64 = 0.003;
 /// it.
 const RAMP_LENGTH: usize = 3 * REGIME;
 
-/// A step from one settled level to another: the textbook active change point.
+/// A step from one settled level to another: the textbook change point.
 ///
 /// History mode reports it as a regression by the change-point method. Both regimes carry
 /// light measurement scatter, so the step is a realistic one rather than two constants.
@@ -112,32 +111,11 @@ pub fn blip() -> Vec<f64> {
     levels
 }
 
-/// A step up that later stepped back down: the recovered spike.
-///
-/// History mode stays quiet, because nothing about the latest state is wrong. Asked for
-/// inactive findings it reports the episode as a regression, naming the commit the level
-/// rose at and the commit it recovered at — the plateau's own boundaries, since the
-/// search settles on the window that accounts for the excursion rather than one that
-/// padded or clipped it.
-#[must_use]
-pub fn resolved_spike() -> Vec<f64> {
-    iter::repeat_n(BASELINE, REGIME)
-        .chain(iter::repeat_n(ELEVATED, REGIME))
-        .chain(iter::repeat_n(BASELINE, REGIME))
-        .collect()
-}
-
 /// A stationary series carrying realistic measurement scatter.
 ///
 /// History mode stays quiet. This is the case the noise gates exist for: the scatter
 /// alone offers any split a change-point search proposes some apparent difference, and
 /// the series must nevertheless report nothing.
-///
-/// Asked for inactive findings it does report: a run of high measurements followed by a
-/// run of low ones passes every resolved-spike gate, several of them by a hair. That is
-/// the series' second lesson. Scatter alone eventually assembles something that looks
-/// like an episode, and the reason inactive findings are opt-in is that they are judged
-/// against a shape a stationary series can produce by chance.
 #[must_use]
 pub fn flat_noisy() -> Vec<f64> {
     let levels = vec![BASELINE; 3 * REGIME];
@@ -211,9 +189,7 @@ pub fn with_intervals(mut series: Series, half_width: f64) -> Series {
 /// scheduled analysis of one benchmark's stored history runs.
 ///
 /// Improvements are reported, so an example that moves in either direction is visible
-/// rather than silently filtered. Inactive findings are not, which is the reporting
-/// default; a caller that wants them overrides the one field:
-/// `AnalysisContext { include_inactive: true, ..examples::history_context(&series) }`.
+/// rather than silently filtered.
 #[must_use]
 pub fn history_context(series: &Series) -> AnalysisContext {
     AnalysisContext {
@@ -222,7 +198,6 @@ pub fn history_context(series: &Series) -> AnalysisContext {
         merge_base_index: None,
         tip_index: tip_index_of(series),
         include_improvements: true,
-        include_inactive: false,
     }
 }
 
@@ -230,7 +205,7 @@ pub fn history_context(series: &Series) -> AnalysisContext {
 /// history from branch history at `merge_base_index`.
 ///
 /// Branch mode judges the latest state against the base window, so it reports both
-/// directions and has no inactive findings to ask for.
+/// directions.
 #[must_use]
 pub fn branch_context(series: &Series, merge_base_index: usize) -> AnalysisContext {
     AnalysisContext {
@@ -239,7 +214,6 @@ pub fn branch_context(series: &Series, merge_base_index: usize) -> AnalysisConte
         merge_base_index: Some(merge_base_index),
         tip_index: tip_index_of(series),
         include_improvements: true,
-        include_inactive: false,
     }
 }
 

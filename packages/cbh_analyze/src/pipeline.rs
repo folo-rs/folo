@@ -290,7 +290,6 @@ where
         merge_base_index: dataset.merge_base_index,
         tip_index: dataset.tip_index,
         include_improvements: options.include_improvements,
-        include_inactive: options.include_inactive,
     };
     // Share the series across the detection's blocking tasks without copying; the
     // remaining per-set reporting reads them back through this same handle.

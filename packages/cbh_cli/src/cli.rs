@@ -560,13 +560,6 @@ struct AnalyzeCommand {
     #[arg(long, help_heading = HEADING_ANALYSIS)]
     include_improvements: bool,
 
-    /// In history mode, also report inactive findings: a change the current state
-    /// no longer reflects (a regression that has since recovered). Hidden by
-    /// default since they need no action. Branch mode always reports all
-    /// findings, so this flag has no effect there.
-    #[arg(long, help_heading = HEADING_ANALYSIS)]
-    include_inactive: bool,
-
     /// Also write a condensed Markdown summary — only the most significant findings
     /// — to this path (a relative path resolves against the working directory). The
     /// full `--markdown` report carries every finding; this summary is capped so a
@@ -595,7 +588,6 @@ impl AnalyzeCommand {
             json: self.output.json,
             markdown_summary: self.markdown_summary,
             include_improvements: self.include_improvements,
-            include_inactive: self.include_inactive,
             verbose: self.env.verbose,
             timing: false,
         }
@@ -1731,19 +1723,6 @@ mod tests {
         assert!(options.no_text);
         assert_eq!(options.markdown, Some(PathBuf::from("out/report.md")));
         assert_eq!(options.json, Some(PathBuf::from("out/report.json")));
-    }
-
-    #[test]
-    fn analyze_parses_include_inactive_switch() {
-        let Command::Analyze(options) = parse(&["analyze", "--include-inactive"]) else {
-            panic!("expected analyze command");
-        };
-        assert!(options.include_inactive);
-
-        let Command::Analyze(options) = parse(&["analyze"]) else {
-            panic!("expected analyze command");
-        };
-        assert!(!options.include_inactive);
     }
 
     #[test]

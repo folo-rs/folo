@@ -157,7 +157,6 @@ impl Mode {
             merge_base_index,
             tip_index: 0,
             include_improvements: self.reports_improvements(),
-            include_inactive: false,
         }
     }
 }

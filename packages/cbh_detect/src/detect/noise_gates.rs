@@ -176,7 +176,3 @@ pub(crate) const MIN_REGIME_SEPARATION: f64 = 0.85;
 /// two levels leaves several contradicting pairs in every candidate split and is
 /// rejected on that basis.
 pub(crate) const MIN_BASE_SPLIT_SEPARATION: f64 = 0.95;
-
-/// Largest interior window size resolved-spike search will scan; longer histories
-/// skip the quadratic search rather than stall.
-pub(crate) const RESOLVED_SPIKE_MAX_POINTS: usize = 200;

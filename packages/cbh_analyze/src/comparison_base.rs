@@ -346,8 +346,6 @@ mod tests {
             relative_delta: 0.3,
             confidence: 0.99,
             commit: Some("f2".to_owned()),
-            flipped_at: None,
-            active: true,
             blessed_at: None,
             blessed_commit_time: None,
             series: Vec::new(),
