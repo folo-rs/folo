@@ -302,9 +302,10 @@ jobs:
       # Attach the full Markdown and JSON reports to the run as a single artifact, so the
       # rolling issue can carry only the condensed summary (staying under GitHub's
       # 65,536-character issue-body limit) while a reader can still download the complete
-      # reports. upload-artifact always produces a zip, so both files share one
-      # artifact and one download URL; that URL stays valid while the run and artifact
-      # exist. Uploaded only when notable, matching the rolling issue.
+      # reports. The upload keeps `archive` at its default, so it always produces a
+      # zip: both files share one artifact and one download URL; that URL stays valid
+      # while the run and artifact exist. Uploaded only when notable, matching the
+      # rolling issue.
       - name: Upload full benchmark reports
         id: full_reports
         if: steps.notable.outputs.value == 'true'
