@@ -75,6 +75,7 @@ pub use pipeline::execute as analyze;
 pub(crate) use pipeline::{resolve_auto_facets, resolve_now};
 pub use prune::execute as prune;
 pub use report::RenderedReports;
+pub use window::auto_mode;
 pub(crate) use report::ReportRequest;
 pub(crate) use selection::Selection;
 pub(crate) use window::{before_since_cutoff, parse_since};

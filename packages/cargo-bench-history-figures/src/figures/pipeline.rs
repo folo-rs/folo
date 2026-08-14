@@ -13,7 +13,7 @@
 
 use std::fmt::Write as _;
 
-use cbh_detect::AnalysisMode;
+use cbh_analyze::auto_mode;
 use cbh_model::MetricKind;
 use cbh_stats::median;
 
@@ -523,21 +523,10 @@ fn describe_removal(store: &[Partition], stage: RemovedBy) -> String {
 // Selection: mode and dirty admission
 // ---------------------------------------------------------------------------------
 
-/// The mode an analysis derives from the two signals it reads.
-///
-/// Mirrors `auto_mode` in `packages/cbh_analyze/src/window.rs`, which is private to that
-/// crate and so cannot be called from here: history is the official base-branch view,
-/// where the analyzed tip is its own merge base with the base and no dirty run was
-/// admitted on that tip. Everything else is an unnamed feature branch.
-fn auto_mode(tip_is_merge_base: bool, dirty_run_on_tip: bool) -> AnalysisMode {
-    if tip_is_merge_base && !dirty_run_on_tip {
-        AnalysisMode::History
-    } else {
-        AnalysisMode::Branch
-    }
-}
-
 /// The mode truth table: every combination of the two signals, and what it selects.
+///
+/// Calls the analysis crate's own `auto_mode`, so the table is derived from the rule rather
+/// than transcribed beside it and cannot drift from it.
 fn mode_table() -> String {
     let mut markdown = String::from(
         "| Tip is its own merge base | Dirty run admitted on the tip | Mode |\n|---|---|---|\n",
@@ -938,6 +927,7 @@ fn commit_median() -> Panes {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cbh_detect::AnalysisMode;
 
     #[test]
     fn every_documented_asset_is_produced() {
@@ -1110,3 +1100,5 @@ mod tests {
         assert_eq!(assets(), assets());
     }
 }
+
+

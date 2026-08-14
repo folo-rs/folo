@@ -12,6 +12,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+cbh_analyze = { workspace = true }
 cbh_detect = { path = "../cbh_detect", default-features = false, features = [
     "private-test-util",
 ] }
@@ -23,4 +24,5 @@ plotters = { workspace = true }
 
 [lints]
 workspace = true
+
 

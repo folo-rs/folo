@@ -485,6 +485,7 @@ dependencies = [
 name = "cargo-bench-history-figures"
 version = "0.0.0"
 dependencies = [
+ "cbh_analyze",
  "cbh_detect",
  "cbh_model",
  "cbh_render",
