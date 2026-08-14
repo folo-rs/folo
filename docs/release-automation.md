@@ -133,7 +133,7 @@ publish:
     id-token: write   # crates.io Trusted Publishing (OIDC)
   timeout-minutes: 180   # generous: covers up to 3 retry attempts (see below)
   steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
         # persist-credentials stays at its default (true): release-plz pushes the
@@ -233,7 +233,7 @@ build-binaries:
   permissions:
     contents: write   # upload assets to the release
   steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         ref: refs/tags/${{ matrix.tag }}   # build the exact released code
     - uses: ./.github/actions/setup-environment

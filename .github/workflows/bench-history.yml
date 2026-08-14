@@ -97,7 +97,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         # A normal push/dispatch only benchmarks the tip, so a shallow clone is enough. A
         # recollect (recollect_commit_id set) must instead re-measure a historical commit, whose
         # objects and first-parent ancestry the `backfill` worktree needs present locally - so
@@ -161,7 +161,7 @@ jobs:
       # leg's key together (one file per platform). if-no-files-found: error catches a broken
       # key-write step loudly rather than silently dropping a key from the analysis.
       - name: Upload runner machine key
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bench-history-machine-key-${{ matrix.platform }}
           path: ${{ runner.temp }}/machine-key.txt
@@ -192,7 +192,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         # Full history: analyze walks first-parent commits to map stored runs to
         # committer timestamps; a shallow clone would hide most commits and skew it.
         with:
@@ -247,7 +247,7 @@ jobs:
       # restored-but-slightly-stale mirror is always correct - a deliberate
       # --overwrite/prune bumps the cloud marker that wipes it on the next read.
       - name: Restore benchmark-history read-through cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ steps.scratch.outputs.dir }}/cache
           key: bench-history-cache-${{ github.run_id }}
@@ -270,7 +270,7 @@ jobs:
       # artifact to the current attempt and 404s ("workflow run not found") on any older-attempt
       # artifact, leaving `analyze` impossible to green without re-running the whole matrix.
       - name: Download collected machine keys
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: bench-history-machine-key-*
           path: ${{ steps.scratch.outputs.dir }}/machine-keys
@@ -302,13 +302,13 @@ jobs:
       # Attach the full Markdown and JSON reports to the run as a single artifact, so the
       # rolling issue can carry only the condensed summary (staying under GitHub's
       # 65,536-character issue-body limit) while a reader can still download the complete
-      # reports. upload-artifact@v4 always produces a zip, so both files share one
+      # reports. upload-artifact always produces a zip, so both files share one
       # artifact and one download URL; that URL stays valid while the run and artifact
       # exist. Uploaded only when notable, matching the rolling issue.
       - name: Upload full benchmark reports
         id: full_reports
         if: steps.notable.outputs.value == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bench-history-full-report
           path: |
@@ -401,7 +401,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # Compose the failure-alert body (interpolating the failed run's URL) into the runner temp
       # dir, then file it with the same Publish-RollingIssue seam the regression path uses - one
@@ -472,7 +472,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # The alert job files exactly one rolling issue carrying $FAILURE_ISSUE_TITLE and the
       # ci-failure label; find any still-open instance and close it with an audit trail linking the

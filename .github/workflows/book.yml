@@ -44,7 +44,7 @@ jobs:
       books: ${{ steps.books.outputs.books }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Discover books
         id: books
@@ -70,7 +70,7 @@ jobs:
         book: ${{ fromJSON(needs.discover.outputs.books) }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -97,7 +97,7 @@ jobs:
           just book-build-one ${{ matrix.book }} target/book-site
 
       - name: Upload book artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: book-${{ matrix.book }}
           path: target/book-site
@@ -120,10 +120,10 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download book artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: book-*
           path: public
@@ -141,10 +141,10 @@ jobs:
           Write-Host "Wrote landing page to $path"
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: public
 
       - name: Deploy to GitHub Pages
         id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

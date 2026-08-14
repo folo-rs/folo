@@ -56,7 +56,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         # Full history so cargo-delta can diff against origin/main in a throwaway worktree (the
         # merge ref the pull_request event checks out is fine for the diff; only collect/analyze
         # need the real head SHA for branch-mode topology).
@@ -140,7 +140,7 @@ jobs:
       - name: Checkout repository
         # Default shallow checkout is enough: the commits-behind count is computed server-side by the
         # compare API, so no local history is walked here - only the module needs to be on disk.
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Signal the new run on the rolling PR comment
         shell: pwsh
@@ -226,7 +226,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         # Check out the REAL PR head commit with FULL history, NOT the default pull_request merge ref
         # (refs/pull/N/merge): that merge commit's first parent is `main`, which would corrupt
         # branch-mode topology. A full clone is required (not shallow) because cargo-bench-history
@@ -280,7 +280,7 @@ jobs:
       # leg's key together (one file per platform). if-no-files-found: error catches a broken
       # key-write step loudly rather than silently dropping a key from the analysis.
       - name: Upload runner machine key
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pr-bench-history-machine-key-${{ matrix.platform }}
           path: ${{ runner.temp }}/machine-key.txt
@@ -318,7 +318,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         # Same real-head-SHA + full-history checkout as collect: branch mode walks the head's
         # first-parent ancestry and needs origin/main (from fetch-depth 0) for the merge-base.
         with:
@@ -360,7 +360,7 @@ jobs:
       # store keeps a slightly-stale mirror harmless. The path MUST match the `--cache` directory the
       # gh-analyze-pr-bench-history recipe passes (`<scratch>/cache`).
       - name: Restore benchmark-history read-through cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ steps.scratch.outputs.dir }}/cache
           key: bench-history-cache-pr-${{ github.run_id }}
@@ -382,7 +382,7 @@ jobs:
       # artifact to the current attempt and 404s ("workflow run not found") on any older-attempt
       # artifact, leaving `analyze` impossible to green without re-running the whole matrix.
       - name: Download collected machine keys
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: pr-bench-history-machine-key-*
           path: ${{ steps.scratch.outputs.dir }}/machine-keys
@@ -423,7 +423,7 @@ jobs:
       - name: Upload full benchmark reports
         id: full_reports
         if: steps.notable.outputs.value == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pr-bench-history-full-report
           path: |
@@ -503,7 +503,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Remove stale rolling comment if present
         shell: pwsh
