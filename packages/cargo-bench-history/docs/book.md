@@ -185,5 +185,3 @@ against and what a user reads when a finding does not make sense.
   appendix cannot silently fall out of step with the tool.
 - When the appendix gains coverage of something a concept page also explains, trim the concept page
   to the mental model and link down. The two must not both carry the mechanism.
-
-

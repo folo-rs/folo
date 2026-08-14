@@ -1101,21 +1101,19 @@ via the base-tip dirty exception.
 
 ### 8.6 Re-baselining: blessings
 
-A long history should not keep re-flagging an event a reviewer has already handled.
+A long history should not keep re-flagging an event a reviewer has already handled. A blessing
+(see `bless`) re-baselines a series from the blessed commit forward: the detectors run on the
+**active segment only**, so the pre-blessing step is no longer re-flagged, while the earlier
+points still feed the chart and any long-range technique that needs context. Blessings are
+honoured **only in history mode** — branch mode judges the tip commit against the base, which is
+treated as fully blessed by construction. A re-baselined finding records the blessing's commit
+and time for provenance.
 
 Blessing is also how a *real but uninteresting* shift is disposed of. The detector reports
 that the measured level moved; whether a runner swap, a toolchain bump, or a deliberate
 tradeoff caused it is a judgement the gates cannot make and do not try to (§8.2), so it is
 recorded here instead — once, against the commit it happened at, rather than by widening a
 threshold that would also hide real regressions.
-
-* **Blessings** — a blessing (see `bless`) re-baselines a series from the blessed commit
-  forward: the detectors run on the **active segment only**, so the pre-blessing step is no
-  longer re-flagged, while the earlier points still feed the chart and any long-range
-  technique that needs context. Blessings are honoured **only in history mode** — branch
-  mode judges the tip commit against the base, which is treated as fully blessed by
-  construction. A re-baselined finding records the blessing's commit and time for
-  provenance.
 
 Charts are **topology-accurate**: a commit's column position reflects its place in
 first-parent history, not its ordinal among the observations. A finding stores only its
@@ -1330,4 +1328,3 @@ simply produce no output — to collect Callgrind data, run the tool on Linux or
 Criterion and the two measurement crates run natively on all three. Target-triple
 resolution is auto-detected where the tool runs, so the golden rule is to run the tool in
 the same OS as the benches.
-

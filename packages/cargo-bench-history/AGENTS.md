@@ -51,8 +51,7 @@ New per-series logic must be side-effect-free. Flow and rationale: [`docs/analyz
 `resolve_history`/`select_dataset`), and all four live inside the `analyze` module tree
 (`list.rs`, `prune.rs`, `examine.rs`, each `pub(crate) mod`; `bless`/`unbless` in `bless.rs`
 reuse the same facet selection). **A selection parameter added to one must be added to all
-four** unless genuinely inapplicable. The analysis-only flags
-(`--include-improvements`, `--include-inactive`) and the
+four** unless genuinely inapplicable. The analysis-only flag `--include-improvements` and the
 analyze-only condensed `--markdown-summary` output are **not** part of the lockstep —
 only `analyze` detects; `list`/`prune`/`examine` reuse the selection but never analyze.
 The always-on **ghost filter** likewise changes only *which reconstructed series are detected

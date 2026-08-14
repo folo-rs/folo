@@ -180,4 +180,3 @@ If none of these explains it, the fastest way to see exactly which check decline
 candidate is to look at the series directly with
 [`examine`](../commands/examine.md) and compare it against the gate order in
 [Noise gates](gates.md).
-

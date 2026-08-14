@@ -232,8 +232,12 @@ impl Gate {
     }
 
     /// Every gate, for tests that must stay exhaustive as the enum grows.
-    #[cfg(test)]
-    pub(crate) const ALL: [Self; 13] = [
+    ///
+    /// Reachable from the documentation generator as well as from this crate's own tests,
+    /// because the appendix names the gates in prose and a list nothing checks would fall
+    /// silently out of step the first time the set changed.
+    #[cfg(any(test, feature = "private-test-util"))]
+    pub const ALL: [Self; 13] = [
         Self::MinSeriesPoints,
         Self::MinBaseCommits,
         Self::SplitLocated,

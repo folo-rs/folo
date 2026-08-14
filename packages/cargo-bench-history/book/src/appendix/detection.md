@@ -137,6 +137,20 @@ Nothing changed here, and nothing is reported. Note what would happen without ca
 search still nominates *some* split, because it always nominates its best candidate.
 Everything downstream exists to reject it.
 
+### A level that moved and came back
+
+An excursion that has since returned to where it started is silent too, however large it was
+while it lasted.
+
+That is a deliberate narrowing rather than a gap. By the time such a series is analyzed, its
+current level already agrees with its baseline, so there is nothing to act on — and a report
+that mixes "your code is slower now" with "your code was briefly slower some time ago" makes
+the first harder to see.
+
+The measurements are still there. [`examine`](../commands/examine.md) prints every recorded
+point of a series, without judging any of them, which is where to look when you want to know
+what a benchmark has been doing rather than what it is doing now.
+
 ## Branch mode asks a different question
 
 History mode asks "did this series change at some point?". Branch mode asks something much
@@ -220,4 +234,3 @@ A candidate: the series it came from, the method that found it, the direction an
 move, the commit it is attributed to, and the chance level of the confirming test.
 
 None of them is a finding yet. Next: [Noise gates](gates.md).
-

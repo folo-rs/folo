@@ -60,6 +60,7 @@ attribution the tool refuses to guess at.
 *What to do:* read a report with many simultaneous findings as one event rather than fifty, and
 look for the common cause before investigating any of them individually. That pattern is itself
 diagnostic — see [Insights](insights.md).
+
 ## Confidence is not comparable, and not corrected
 
 A finding's confidence comes from whichever test confirmed it. History and branch findings are
@@ -99,7 +100,3 @@ The store records more than the analysis uses:
 *Why:* they cost almost nothing to record and are impossible to recover retroactively. A
 future version can use them; a missing history cannot be back-filled with facts nobody wrote
 down.
-
-
-
-

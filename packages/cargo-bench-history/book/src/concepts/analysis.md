@@ -189,15 +189,13 @@ never changes which findings are reported or the exit code.
 
 ## Re-baselining
 
-A long history should not keep re-flagging an event you have already dealt with:
+A long history should not keep re-flagging an event you have already dealt with. A
+[blessing](../commands/bless.md) re-baselines a series from the blessed commit forward, so the
+pre-blessing step is no longer re-flagged while earlier points still feed the chart.
 
-- **Blessings** — a [blessing](../commands/bless.md) re-baselines a series from the blessed
-  commit forward, so the pre-blessing step is no longer re-flagged while earlier points still
-  feed the chart.
-
-Blessing is also how you dispose of a shift that is real but not about your code — a runner
-swap, a toolchain bump, a deliberate tradeoff. The detector reports that the level moved; you
-record, once and against the commit it happened at, that you accept it.
+Blessing is how you dispose of a shift that is real but not about your code — a runner swap, a
+toolchain bump, a deliberate tradeoff. The detector reports that the level moved; you record,
+once and against the commit it happened at, that you accept it.
 
 ## Report formats
 
@@ -249,4 +247,3 @@ without compressing months of history into the same chart.
 
 There is **no severity classification**: a finding's magnitude is conveyed by its
 relative-change percent, and which findings warrant action is left to human or agent judgment.
-

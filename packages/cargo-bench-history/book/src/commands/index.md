@@ -31,5 +31,3 @@ therefore preview a range with `list runs`, inspect one of its series with `exam
 prune it without learning a second set of filters. The analysis-only flag
 `--include-improvements` and the condensed Markdown summary are exceptions because the other
 commands select data but never detect findings.
-
-

@@ -39,14 +39,14 @@ use crate::detect::{AnalysisConfig, AnalysisContext, AnalysisMode, Series, Serie
 /// head while reading a figure.
 const BASELINE: f64 = 100.0;
 
-/// The level a stepped or spiked example moves to.
+/// The level a stepped example moves to.
 ///
 /// Far enough above [`BASELINE`] to clear the relative practical-magnitude floor several
 /// times over and to stand well outside the scatter [`TIMING_NOISE_CV`] produces, so an
 /// example that is meant to report is never a marginal call.
 const ELEVATED: f64 = 130.0;
 
-/// How many points each regime of a stepped or spiked example holds.
+/// How many points each regime of a stepped example holds.
 ///
 /// Twice the persistence floor, so both regimes are comfortably above it and an example
 /// that fails to report never fails on regime length.

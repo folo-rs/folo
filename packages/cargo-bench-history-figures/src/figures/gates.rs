@@ -922,6 +922,32 @@ fn commits(count: usize) -> String {
 mod tests {
     use super::*;
 
+    /// The gates chapter names every gate in a hand-written table grouping them by the
+    /// question each asks. That table is the appendix's one list of gate identifiers that is
+    /// not itself generated, so this holds it to the enum: a gate added or removed without
+    /// the chapter following would otherwise leave the prose quietly incomplete.
+    #[test]
+    fn the_documented_stages_between_them_cover_every_gate() {
+        let mut documented: Vec<Gate> = STAGES
+            .into_iter()
+            .flat_map(|stage| stage_gates(stage).iter().copied())
+            .collect();
+        documented.sort_by_key(|gate| gate.label());
+        documented.dedup();
+
+        let mut all = Gate::ALL.to_vec();
+        all.sort_by_key(|gate| gate.label());
+
+        assert_eq!(
+            documented.len(),
+            all.len(),
+            "the chapter documents {} gates but the detectors define {}",
+            documented.len(),
+            all.len()
+        );
+        assert_eq!(documented, all);
+    }
+
     /// The gates `stage` records for a candidate, in the order it recorded them.
     fn recorded_gates(log: &GateLog, stage: GateStage) -> Vec<Gate> {
         log.entries()

@@ -199,5 +199,3 @@ and [Insights](insights.md) turns it into a checklist.
 The candidates that survived, each still carrying the chance level of the test that confirmed
 it. One question remains, and it is not about any individual candidate:
 [given how many things were tested, should we believe this one?](coverage.md)
-
-

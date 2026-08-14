@@ -2996,6 +2996,19 @@ mod tests {
         judged_but_silent(&[series_of(&values)]);
     }
 
+    /// A sustained excursion that has since returned to its opening level is silent, whatever
+    /// its magnitude, because the analysis reports what is true of the current state and the
+    /// current state matches the baseline.
+    ///
+    /// This is the property the analysis is narrowed to, so it is asserted directly rather
+    /// than left to follow from the detectors' arithmetic: a future change to the
+    /// change-point or arbitration path could start reporting such an excursion at its rise,
+    /// and nothing else in the suite would notice.
+    #[test]
+    fn an_excursion_that_returned_to_its_opening_level_is_silent() {
+        judged_but_silent(&[series_of(&three_regimes(100.0, 130.0, 100.0))]);
+    }
+
     #[test]
     fn step_in_the_final_point_fails_persistence() {
         // The shift has one point too few after it, so it is rejected even though the

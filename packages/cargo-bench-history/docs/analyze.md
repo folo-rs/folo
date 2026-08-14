@@ -260,4 +260,3 @@ other selection-driven commands emit the same line through one shared announceme
 the `bless` / `unbless` mutation commands name the facets and the context commit they act at
 (`bless` also names its base branch), so the wording is identical wherever auto-detection can
 surprise you.
-
