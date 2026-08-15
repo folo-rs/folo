@@ -241,6 +241,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
+    )]
     fn the_residual_band_is_labelled_with_what_it_represents() {
         let svg = Residuals::new("scatter about the step model", vec![1.0, -2.0, 0.5], 3.0)
             .move_size(4.0)
@@ -251,6 +255,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
+    )]
     fn a_move_beyond_the_band_stays_on_the_axis() {
         let strip = Residuals::new("dominant move", vec![0.1, -0.1], 0.2).move_size(50.0);
 
@@ -286,6 +294,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
+    )]
     fn rendering_is_reproducible() {
         let grid = Agreement::new("separated", vec![100.0, 101.0], vec![130.0, 131.0]);
 

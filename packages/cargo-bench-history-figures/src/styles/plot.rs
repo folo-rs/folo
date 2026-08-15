@@ -686,6 +686,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
+    )]
     fn rendering_is_reproducible() {
         let plot = Plot::new("series", 6).values(&[1.0, 2.0, 3.0, 2.0, 1.0, 2.0]);
 

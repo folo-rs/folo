@@ -121,6 +121,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
+    )]
     fn rendering_the_same_figure_twice_yields_identical_bytes() {
         let render = || {
             draw(120, 80, |root| {

@@ -74,6 +74,11 @@ function Get-MutantsExcludeArgument {
         # behaviour, so mutating it yields no meaningful coverage signal.
         '-e', (protect 'packages/cargo-bench-history-faker/**'),
 
+        # The appendix figure generator is unpublished book infrastructure. Mutating drawing
+        # helpers and generated-table formatters yields no production coverage signal; the
+        # lockstep tests exist to keep the book honest, not to certify plotters call sites.
+        '-e', (protect 'packages/cargo-bench-history-figures/**'),
+
         # `testing.rs` is an in-workspace test utility (gated behind the `private-test-util`
         # feature, consumed only by the shell crate's tests). It is scaffolding with no public
         # API contract, so mutating it yields no production coverage signal.

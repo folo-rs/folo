@@ -515,6 +515,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
+    )]
     fn every_documented_asset_is_produced() {
         let paths: Vec<String> = assets().into_iter().map(|asset| asset.path).collect();
 
@@ -700,6 +704,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
+    )]
     fn rendering_is_reproducible() {
         assert_eq!(assets(), assets());
     }

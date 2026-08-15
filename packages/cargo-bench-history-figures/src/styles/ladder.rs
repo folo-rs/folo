@@ -214,6 +214,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
+    )]
     fn every_gate_is_labelled_with_its_value_and_threshold() {
         let svg = sample().render();
 
@@ -225,6 +229,10 @@ mod tests {
     /// serializer escapes. The label still has to survive intact, since it is the figure's
     /// only record of what the gate actually demanded.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
+    )]
     fn a_decisive_pass_is_clamped_so_the_other_bars_stay_readable() {
         let ladder = Ladder::new("decisive").rung(Rung {
             gate: "significance".to_owned(),
@@ -249,6 +257,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
+    )]
     fn rendering_is_reproducible() {
         assert_eq!(sample().render(), sample().render());
     }

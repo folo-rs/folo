@@ -271,6 +271,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
+    )]
     fn the_staircase_renders_every_candidate() {
         let svg = staircase().render();
 
@@ -279,6 +283,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
+    )]
     fn the_staircase_is_reproducible_regardless_of_input_order() {
         let forward = staircase().render();
         let reversed = Staircase::new("twelve candidates against the rising bar")
@@ -309,6 +317,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
+    )]
     fn the_census_legend_carries_every_count() {
         let svg = Census::new("what this report judged")
             .slice("judged", 8, theme::HIGHLIGHT)
@@ -322,6 +334,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
+    )]
     fn an_empty_census_still_renders() {
         let svg = Census::new("nothing at all").render();
 

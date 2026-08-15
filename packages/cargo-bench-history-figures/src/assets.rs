@@ -144,6 +144,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
+    )]
     fn asset_paths_are_unique() {
         let assets = assets();
         let mut paths: Vec<&str> = assets.iter().map(|asset| asset.path.as_str()).collect();
@@ -155,6 +159,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
+    )]
     fn assets_are_reproducible() {
         assert_eq!(assets(), assets());
     }
@@ -175,6 +183,10 @@ mod tests {
     /// that moves a figure fails the suite, rather than waiting for someone to remember
     /// `just book-figures-check`.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
+    )]
     fn the_checked_in_appendix_assets_are_current() {
         let root = workspace_root().join(GENERATED_ROOT);
 

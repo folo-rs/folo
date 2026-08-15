@@ -35,6 +35,7 @@ Describe 'Get-MutantsExcludeArgument' {
         $values | Should -Contain 'many_cpus_benchmarking'
         $values | Should -Contain 'facade'
         $values | Should -Contain 'events'
+        $values | Should -Contain 'packages/cargo-bench-history-figures/**'
     }
 
     It 'does not exclude windows sources when running on Windows' {
@@ -65,6 +66,7 @@ Describe 'Get-MutantsExcludeArgument' {
         $values = Get-ExcludeValue (Get-MutantsExcludeArgument -IsWindowsPlatform $false -IsLinuxPlatform $true)
         $values | Should -Contain "'**/*facade.rs'"
         $values | Should -Contain "'packages/testing/**'"
+        $values | Should -Contain "'packages/cargo-bench-history-figures/**'"
         # Plain package names are still passed literally, without quoting.
         $values | Should -Contain 'many_cpus_benchmarking'
     }
