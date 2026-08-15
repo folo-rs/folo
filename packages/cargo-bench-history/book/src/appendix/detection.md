@@ -9,9 +9,6 @@ deliberately does not claim.
 
 ## Terms used here
 
-Definitions in plain language. The [Glossary](glossary.md) collects them all, and every term
-carries its definition on hover wherever it appears in the prose.
-
 {{#include generated/terms-detection.md}}
 
 ## What counts as a signal
@@ -56,8 +53,9 @@ The step detector works in three moves.
 
 1. **Locate.** A split search scans every place the series could have changed level and picks
    the single most likely one.
-2. **Test.** A rank comparison between the two sides asks how often a value from after the
-   split beats one from before it. If the two sides interleave, there is no step.
+2. **Test.** A rank comparison asks, two-sided, whether the before and after regimes
+   differ. If they do not, there is no step. This is a significance test: it asks whether
+   the sides differ, not how completely they separate.
 3. **Size.** Each side's median becomes its level, and the difference between them is the
    move. Medians rather than averages, so one outlier cannot invent a step or hide one.
 

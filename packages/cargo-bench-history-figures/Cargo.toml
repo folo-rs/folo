@@ -22,6 +22,10 @@ cbh_stats = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 plotters = { workspace = true }
 
+[dev-dependencies]
+cbh_probe = { path = "../cbh_probe", default-features = false }
+tempfile = { workspace = true }
+
 [lints]
 workspace = true
 

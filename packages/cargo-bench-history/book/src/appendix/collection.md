@@ -8,12 +8,7 @@ with.
 
 ## Terms used here
 
-| Term | What it means |
-|---|---|
-| **harvest** | Reading whatever output the benchmark engines left behind after a run. |
-| **machine key** | A fingerprint of the host hardware, used to keep incomparable results apart. |
-| **dirty run** | A measurement taken with uncommitted changes in the working tree. |
-| **partition** | One discriminant set's slice of the store. |
+{{#include generated/terms-collection.md}}
 
 ## What `collect` does
 

@@ -6,6 +6,9 @@
 //! `just book-figures-preview` instead; this example exists so a change to a *style* can
 //! be judged without waiting on the data behind a chapter.
 
+use std::fs;
+use std::path::Path;
+
 use cargo_bench_history_figures::assets::Asset;
 use cargo_bench_history_figures::styles::ladder::{Ladder, Rung, Verdict};
 use cargo_bench_history_figures::styles::occupancy::{Cell, Occupancy};
@@ -13,7 +16,9 @@ use cargo_bench_history_figures::styles::operation::Operation;
 use cargo_bench_history_figures::styles::plot::{Mark, Observation, Plot};
 use cargo_bench_history_figures::{preview, theme};
 
-fn main() {
+fn main() -> std::io::Result<()> {
+    const OUTPUT: &str = "target/style-preview.html";
+
     let stepped: Vec<f64> = vec![
         100.0, 101.5, 99.2, 100.8, 98.9, 101.1, 100.3, 99.6, 100.9, 100.2, 130.4, 131.8, 129.7,
         130.9, 131.2, 130.1, 129.8, 130.6, 131.4, 130.0,
@@ -68,42 +73,42 @@ fn main() {
             gate: "minimum regime".to_owned(),
             value: "10 and 10".to_owned(),
             threshold: "5 each".to_owned(),
-            ratio: 2.0,
+            ratio: Some(2.0),
             verdict: Verdict::Passed,
         })
         .rung(Rung {
             gate: "significance".to_owned(),
             value: "p = 0.004".to_owned(),
             threshold: "p < 0.05".to_owned(),
-            ratio: 2.6,
+            ratio: Some(2.6),
             verdict: Verdict::Passed,
         })
         .rung(Rung {
             gate: "relative floor".to_owned(),
             value: "4.1%".to_owned(),
             threshold: "3.0%".to_owned(),
-            ratio: 1.37,
+            ratio: Some(1.37),
             verdict: Verdict::Passed,
         })
         .rung(Rung {
             gate: "absolute floor".to_owned(),
             value: "4.1 ns".to_owned(),
             threshold: "1.0 ns".to_owned(),
-            ratio: 2.9,
+            ratio: Some(2.9),
             verdict: Verdict::Passed,
         })
         .rung(Rung {
             gate: "residual noise".to_owned(),
             value: "4.1 ns".to_owned(),
             threshold: "7.6 ns".to_owned(),
-            ratio: 0.54,
+            ratio: Some(0.54),
             verdict: Verdict::Declined,
         })
         .rung(Rung {
             gate: "regime separation".to_owned(),
             value: "not reached".to_owned(),
             threshold: "0.85".to_owned(),
-            ratio: 0.0,
+            ratio: None,
             verdict: Verdict::NotReached,
         });
 
@@ -146,6 +151,10 @@ fn main() {
         Asset::new("style/occupancy.svg", occupancy.render()),
     ];
 
-    std::fs::write("target/style-preview.html", preview::page(&assets)).unwrap();
-    println!("wrote target/style-preview.html");
+    if let Some(parent) = Path::new(OUTPUT).parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(OUTPUT, preview::page(&assets))?;
+    println!("wrote {OUTPUT}");
+    Ok(())
 }

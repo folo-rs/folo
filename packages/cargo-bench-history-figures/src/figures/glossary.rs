@@ -1,8 +1,8 @@
 //! The generated glossary table.
 //!
 //! The glossary page carries its own introduction; the table of terms is generated from
-//! [`crate::glossary::TERMS`] so the page, the hover definitions in the prose, and the
-//! test that holds them together all read from one list.
+//! [`crate::glossary::TERMS`] so the page, each chapter's term table, and the test that
+//! holds them together all read from one list.
 
 use std::fmt::Write as _;
 

@@ -10,17 +10,19 @@
               construction and matching"
 )]
 
-//! Generates every figure, table and report excerpt embedded in the
-//! `cargo-bench-history` book's "Data pipeline" appendix.
+//! Generates the registered figures, computed examples, configured values, and
+//! serialized excerpts embedded in the `cargo-bench-history` book's "Data pipeline"
+//! appendix.
 //!
-//! The appendix documents the tool's statistical processing end to end, and states
-//! numbers throughout: gate thresholds, series values, p-values, census tallies. None
-//! of those numbers is typed by hand. This crate renders them from the same data the
-//! appendix's tests assert against, writes the result into
-//! `packages/cargo-bench-history/book/src/appendix/generated/`, and the book includes
-//! the files verbatim. A `--check` run re-renders into memory and compares, so a
-//! change in behaviour that the appendix describes fails the build instead of quietly
-//! making the prose wrong.
+//! The appendix documents the tool's statistical processing end to end. Evidence that
+//! materially depends on executable behaviour — gate thresholds, series values,
+//! p-values, census tallies, report excerpts — is rendered from the same data the
+//! appendix's tests assert against, written into
+//! `packages/cargo-bench-history/book/src/appendix/generated/`, and included by the
+//! book verbatim. Stable explanatory Markdown stays in the chapter files. A `--check`
+//! run re-renders the generated assets into memory and compares, so a change in
+//! behaviour that those assets describe fails the build instead of quietly making
+//! the prose wrong.
 //!
 //! The crate is not published: it is book infrastructure, and it deliberately depends
 //! on the `private-test-util` surface of `cbh_detect` so a figure and the test that
@@ -35,10 +37,11 @@
 //!   a one-off drawing, so regenerating after a data change reproduces the same look.
 //! * [`figures`] — the appendix's actual figures, one module per chapter.
 //! * [`glossary`] — the terms the appendix defines, feeding both the glossary page and
-//!   the hover definitions in the prose.
+//!   each chapter's own term table.
 //! * [`assets`] — the registry of everything the book embeds, and the write/check pair
 //!   that keeps the checked-in copies honest.
-//! * [`preview`] — a development-only page showing every figure on both book themes.
+//! * [`preview`] — a development-only page showing every figure on mdBook's default
+//!   Light and Navy background/text-color pairs.
 
 pub mod assets;
 pub mod canvas;

@@ -16,7 +16,8 @@ use std::fmt::Write as _;
 use std::num::NonZero;
 
 use cbh_detect::{
-    AnalysisMode, Finding, SeriesCensus, Testability, UnjudgedReason, evaluate_with_log, examples,
+    AnalysisConfig, AnalysisContext, AnalysisMode, Detection, Finding, Series, SeriesCensus,
+    UnjudgedReason, evaluate_with_log, examples, find_changes,
 };
 use cbh_model::{DiscriminantSet, Engine, MachineKey, MetricKind, TargetTriple};
 use cbh_render::{
@@ -64,18 +65,22 @@ const FIRST_COMMIT: &str = "4d17b0c93ea25f6187de0b4c2a99f13355e8760b";
 /// a real collection rather than a toy.
 const RUNS_LOADED: usize = 128;
 
-/// How many series the worked analyses reached a verdict on.
-const JUDGED_SERIES: usize = 46;
+/// How many stationary series pad the worked suite so the false-discovery family is
+/// larger than the two findings.
+const QUIET_SERIES: usize = 3;
 
-/// How many series the ghost filter dropped: benchmarks history remembers that the
-/// analyzed commit no longer measures.
-const GHOST_SERIES: usize = 3;
-
-/// How many series were too short to judge.
+/// How many series are too short to judge.
 ///
 /// The census carries more than one reason on purpose: a breakdown with a single entry
 /// reads as a special case rather than as the account of the whole suite that it is.
-const SHORT_SERIES: usize = 5;
+const SHORT_SERIES: usize = 3;
+
+/// How many series the ghost filter dropped: benchmarks history remembers that the
+/// analyzed commit no longer measures.
+///
+/// Ghosts are dropped before detection, so they are attached to the census after the
+/// batch pass rather than being fed to it.
+const GHOST_SERIES: usize = 2;
 
 /// The discriminant set the worked analyses are attributed to.
 fn worked_set() -> DiscriminantSet {
@@ -86,19 +91,85 @@ fn worked_set() -> DiscriminantSet {
     )
 }
 
-/// The census the worked analyses account for their suite with.
+/// Attaches the ghost account after detection.
 ///
-/// Partly covered rather than fully: the coverage line exists for the case where silence
-/// covers only part of the suite, and a census that judged everything would leave the
-/// chapter's excerpt with nothing to read.
-fn worked_census() -> SeriesCensus {
-    let mut census = SeriesCensus::default();
-    for _ in 0..JUDGED_SERIES {
-        census.record(Testability::Judged);
-    }
+/// Ghosts are dropped before the detectors run, so a batch pass cannot observe them.
+/// Recording them on the returned census is the same hand-off the pipeline performs.
+fn attach_ghosts(mut census: SeriesCensus) -> SeriesCensus {
     census.record_unjudged(UnjudgedReason::Ghost, GHOST_SERIES);
-    census.record_unjudged(UnjudgedReason::TooFewPoints, SHORT_SERIES);
     census
+}
+
+/// A history-mode context whose tip reaches every series in `suite`.
+fn suite_context(suite: &[Series]) -> AnalysisContext {
+    let tip_index = suite
+        .iter()
+        .flat_map(|series| series.points.iter().map(|point| point.topo_index))
+        .max()
+        .unwrap_or(0);
+    AnalysisContext {
+        mode: AnalysisMode::History,
+        config: AnalysisConfig::default(),
+        merge_base_index: None,
+        tip_index,
+        include_improvements: false,
+    }
+}
+
+/// One series of the worked suite, attributed to the chapter's discriminant set.
+fn suite_series(name: &str, values: &[f64]) -> Series {
+    let mut series = examples::series(name, values, MetricKind::WallTime, 0);
+    series.set = worked_set();
+    series
+}
+
+/// The series a batch pass actually judges: two findings, some quiet neighbours, and
+/// some too-short series. Ghosts are not in this list.
+fn worked_suite() -> Vec<Series> {
+    let mut suite = vec![
+        suite_series("http_parse", &examples::clean_step()),
+        suite_series("index_build", &examples::slow_ramp()),
+    ];
+    for index in 0..QUIET_SERIES {
+        suite.push(suite_series(
+            &format!("steady_{index}"),
+            &examples::flat_noisy(),
+        ));
+    }
+    for index in 0..SHORT_SERIES {
+        suite.push(suite_series(&format!("short_{index}"), &[100.0, 101.0]));
+    }
+    suite
+}
+
+/// The silent excerpt's suite: quiet and short series only, so the report has a census
+/// and no findings.
+fn silent_suite() -> Vec<Series> {
+    let mut suite = Vec::new();
+    for index in 0..QUIET_SERIES {
+        suite.push(suite_series(
+            &format!("steady_{index}"),
+            &examples::flat_noisy(),
+        ));
+    }
+    for index in 0..SHORT_SERIES {
+        suite.push(suite_series(&format!("short_{index}"), &[100.0, 101.0]));
+    }
+    suite
+}
+
+/// One batch detection pass over `suite`, with ghosts accounted for after the pass.
+fn detect_suite(suite: &[Series]) -> Detection {
+    let Detection { findings, census } = find_changes(suite, &suite_context(suite));
+    Detection {
+        findings,
+        census: attach_ghosts(census),
+    }
+}
+
+/// The census the worked analyses account for their suite with.
+fn worked_census() -> SeriesCensus {
+    detect_suite(&worked_suite()).census
 }
 
 /// A worked analysis, held as the owned data a report is rendered from.
@@ -162,18 +233,6 @@ impl Analysis {
     }
 }
 
-/// Runs the real history-mode detector over `values` and returns the finding it reported.
-fn judge_history(name: &str, values: &[f64], kind: MetricKind) -> Finding {
-    let mut series = examples::series(name, values, kind, 0);
-    series.set = worked_set();
-    let context = examples::history_context(&series);
-    let (finding, _) = evaluate_with_log(&series, &context);
-    finding.expect(
-        "the shared example series are asserted to report in cbh_detect's own tests, so a \
-         missing finding here means the two are reading different data",
-    )
-}
-
 /// Runs the real branch-mode detector over `values`, forking the branch from its base
 /// where the example's level changes.
 ///
@@ -196,40 +255,28 @@ fn judge_branch(name: &str, values: &[f64], kind: MetricKind) -> Finding {
     )
 }
 
-/// The worked analysis the chapter's report excerpts are rendered from: two real findings
-/// of different kinds, so the excerpt shows the ranking as well as the shape.
+/// The worked analysis the chapter's report excerpts are rendered from: one batch
+/// detection pass, so the findings and the census are the same account.
 fn worked_analysis() -> Analysis {
-    let mut findings = vec![
-        judge_history("http_parse", &examples::clean_step(), MetricKind::WallTime),
-        judge_history("index_build", &examples::slow_ramp(), MetricKind::WallTime),
-    ];
-    // The renderer prints findings in the order it is given them; a whole-suite pass ranks
-    // them before rendering, and these come from two single-series evaluations, so the
-    // ranking is applied here. Ref: the chapter's "Ranking" section.
-    findings.sort_by(|left, right| {
-        right
-            .relative_delta
-            .abs()
-            .total_cmp(&left.relative_delta.abs())
-    });
-
+    let Detection { findings, census } = detect_suite(&worked_suite());
     Analysis {
         mode: AnalysisMode::History,
         set: worked_set(),
         findings,
         lags: Vec::new(),
-        census: worked_census(),
+        census,
     }
 }
 
-/// The same analysis with nothing to report: the case the coverage line exists for.
+/// The same kind of pass with nothing to report: the case the coverage line exists for.
 fn silent_analysis() -> Analysis {
+    let Detection { findings, census } = detect_suite(&silent_suite());
     Analysis {
         mode: AnalysisMode::History,
         set: worked_set(),
-        findings: Vec::new(),
+        findings,
         lags: Vec::new(),
-        census: worked_census(),
+        census,
     }
 }
 
@@ -323,20 +370,21 @@ fn formats() -> String {
     let summary_limit: NonZero<usize> = DEFAULT_SUMMARY_LIMIT;
 
     let mut markdown = String::from(
-        "| Output | How to request it | What it is for | Carries the whole analysis |\n\
+        "| Output | How to request it | What it is for | What it carries |\n\
          |---|---|---|---|\n",
     );
     markdown.push_str(
         "| Text | the default; `--no-text` suppresses it | Reading a report in a terminal \
-         | yes |\n",
+         | every finding; omits the per-reason census when findings exist |\n",
     );
     markdown.push_str(
-        "| Markdown | `--markdown <path>` | Pasting into a pull request or an issue | yes \
-         |\n",
+        "| Markdown | `--markdown <path>` | Pasting into a pull request or an issue | \
+         every finding; omits the per-reason census when findings exist |\n",
     );
     markdown.push_str(
-        "| JSON | `--json <path>` | Automation | yes, except the per-commit chart series, \
-         which is presentation rather than data |\n",
+        "| JSON | `--json <path>` | Automation | the complete census always, and every \
+         finding; omits the per-commit chart series, which is presentation rather than \
+         data |\n",
     );
     writeln!(
         markdown,
@@ -349,8 +397,10 @@ fn formats() -> String {
     .expect("writing to a String never fails");
 
     markdown.push_str(
-        "\nThe condensed summary is lossy by design, so it is the one output that must not \
-         be automated against: a check reading it cannot distinguish findings that were \
+        "\nJSON is the complete archival form: it always carries the full census. Text and \
+         Markdown drop the per-reason breakdown when there are findings to show. The \
+         condensed summary is lossy by design, so it is the one output that must not be \
+         automated against: a check reading it cannot distinguish findings that were \
          capped away from findings that were never made.\n",
     );
     markdown
@@ -537,6 +587,23 @@ mod tests {
         }
     }
 
+    /// Findings and census come from one pass. A glued census would let the two drift.
+    #[test]
+    fn the_worked_report_is_one_batch_detection_pass() {
+        let analysis = worked_analysis();
+        let expected_judged = 2_usize.saturating_add(QUIET_SERIES);
+
+        assert_eq!(analysis.findings.len(), 2);
+        assert_eq!(analysis.census.judged(), expected_judged);
+        assert!(
+            analysis
+                .census
+                .reasons()
+                .any(|(reason, count)| reason == UnjudgedReason::Ghost && count == GHOST_SERIES)
+        );
+        assert!(silent_analysis().findings.is_empty());
+    }
+
     /// The chapter's claim is that these are the same analysis in two forms. Rendering
     /// them from one [`Analysis`] is what makes that true; this holds the two renderings
     /// to naming the same findings.
@@ -701,6 +768,17 @@ mod tests {
             table.contains(&DEFAULT_SUMMARY_LIMIT.get().to_string()),
             "{table}"
         );
+    }
+
+    #[test]
+    fn the_formats_table_distinguishes_census_completeness() {
+        let table = formats();
+
+        assert!(
+            table.contains("omits the per-reason census when findings exist"),
+            "{table}"
+        );
+        assert!(table.contains("the complete census always"), "{table}");
     }
 
     #[test]

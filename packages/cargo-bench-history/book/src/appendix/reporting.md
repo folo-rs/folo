@@ -5,11 +5,7 @@ to read what you get.
 
 ## Terms used here
 
-| Term | What it means |
-|---|---|
-| **finding** | A move that survived detection, every gate, and the group-wide correction. |
-| **census** | The report's account of how many series it judged, and why it did not judge the rest. |
-| **comparison-base lag** | A branch comparison made against base data from several commits back. |
+{{#include generated/terms-reporting.md}}
 
 ## Ranking
 
@@ -40,8 +36,9 @@ surrounded by gaps into nothing.
 
 ## The formats
 
-The three canonical formats carry the same information. The **condensed summary** does not: it
-is capped, drops the per-set grouping, and is meant for a size-limited destination such as a
+Text and Markdown carry every finding, but omit the per-reason census when findings exist.
+**JSON always carries the complete census.** The **condensed summary** is lossy: it is
+capped, drops the per-set grouping, and is meant for a size-limited destination such as a
 pull request comment. Do not automate against it.
 
 **JSON is the machine-readable signal.** It carries each finding self-describingly, plus the
@@ -49,7 +46,8 @@ full census — including the reasons the human-readable formats print only on a
 deliberately omits the per-commit chart series; that is presentation, and
 [`examine`](../commands/examine.md) is the way to get the underlying points.
 
-Here is the same analysis in each form:
+Here is the same analysis in each form. The JSON excerpt is illustrative of the shape
+automation reads, not a complete field catalog.
 
 {{#include generated/reporting-text.md}}
 

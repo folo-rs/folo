@@ -1,11 +1,11 @@
-//! A self-contained HTML page showing every generated figure on both of the book's
-//! backgrounds.
+//! Shows every generated figure on mdBook's default Light and Navy colour pairs.
 //!
-//! The figures adapt to the reader's theme by inheriting the surrounding text colour, so
-//! "does this figure work" is a question about two renderings, not one. Checking that in
-//! the built book means rebuilding it and toggling the theme by hand for each figure;
-//! this page puts both renderings side by side and needs no book build, which is what
-//! makes it practical to check every figure rather than the one being worked on.
+//! The page uses mdBook's default Light and Navy background/text-color pairs. Figures
+//! adapt by inheriting the surrounding text colour, so "does this figure work" is a
+//! question about those two renderings, not one. Checking that in the built book means
+//! rebuilding it and toggling the theme by hand for each figure; this page puts the
+//! Light and Navy renderings side by side and needs no book build, which is what makes
+//! it practical to check every figure rather than the one being worked on.
 //!
 //! The page is a development aid and is never published: it is written to the build
 //! directory on request and is not part of the checked-in asset set.

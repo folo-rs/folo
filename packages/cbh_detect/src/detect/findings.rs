@@ -407,8 +407,12 @@ pub enum UnjudgedReason {
 
 impl UnjudgedReason {
     /// Every reason, in declaration order, so a test can cover the set exhaustively.
-    #[cfg(test)]
-    const ALL: [Self; 5] = [
+    ///
+    /// Reachable from the documentation generator as well as from this crate's own tests,
+    /// because the appendix lists every reason and a list nothing checks would fall
+    /// silently out of step the first time the set changed.
+    #[cfg(any(test, feature = "private-test-util"))]
+    pub const ALL: [Self; 5] = [
         Self::Ghost,
         Self::TooFewPoints,
         Self::TooFewPointsSinceBlessing,
@@ -1866,12 +1870,13 @@ pub fn short_commit(commit: &str) -> String {
 ///
 /// Exists only as test scaffolding — the independent oracle for
 /// `find_changes_spawned_matches_the_serial_pass` (the spawned path chunks and
-/// recombines; this one never chunks) and a spawner-free convenience for the crate's
-/// unit tests (the tests below and the `signal_validation` suite). Production
-/// detection goes through [`find_changes_spawned`].
-#[cfg(test)]
+/// recombines; this one never chunks), a spawner-free convenience for the crate's
+/// unit tests (the tests below and the `signal_validation` suite), and the
+/// documentation generator's batch entry point. Production detection goes through
+/// [`find_changes_spawned`].
+#[cfg(any(test, feature = "private-test-util"))]
 #[must_use]
-pub(super) fn find_changes(series: &[Series], context: &AnalysisContext) -> Detection {
+pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Detection {
     let (candidates, census) = detect_all(series, context);
     let findings = finalize_findings(candidates, &census, series, context);
     Detection { findings, census }
@@ -2026,7 +2031,7 @@ fn finalize_findings(
 /// Detects every series sequentially, returning the raised candidates in series
 /// order — the order [`finalize_findings`] relies on — and the census of what was
 /// judged.
-#[cfg(test)]
+#[cfg(any(test, feature = "private-test-util"))]
 fn detect_all(series: &[Series], context: &AnalysisContext) -> (Vec<Candidate>, SeriesCensus) {
     detect_range(series, 0..series.len(), context, &mut GateLog::disabled())
 }

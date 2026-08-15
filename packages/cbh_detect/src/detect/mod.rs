@@ -26,13 +26,13 @@ pub(crate) mod series;
 mod signal_validation;
 
 pub use discriminant::{DiscriminantSetQuery, FacetFilter};
-#[cfg(any(test, feature = "private-test-util"))]
-pub use findings::evaluate_with_log;
 pub use findings::{
     AnalysisConfig, AnalysisContext, AnalysisMode, Detection, Direction, Finding, FindingMethod,
     SeriesCensus, SeriesValue, Testability, UnjudgedReason, find_changes_spawned, short_commit,
     testability,
 };
+#[cfg(any(test, feature = "private-test-util"))]
+pub use findings::{evaluate_with_log, find_changes};
 // The gate types are compiled unconditionally because the detectors take a log by reference,
 // so they appear in production signatures. Only the re-export is gated: outside this crate
 // they are inspection machinery for the tests and the documentation figures, and nothing in

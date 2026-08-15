@@ -17,7 +17,7 @@
 
 use std::error::Error;
 
-use plotters::element::{Rectangle, Text};
+use plotters::element::{Circle, Rectangle, Text};
 use plotters::prelude::ChartBuilder;
 use plotters::style::{Color as _, RGBColor, ShapeStyle, TextStyle};
 
@@ -62,8 +62,9 @@ pub struct Rung {
 
     /// How far the computed value sits from the threshold, as a multiple of the
     /// threshold. One means the candidate landed exactly on the line; above one it
-    /// cleared with room to spare.
-    pub ratio: f64,
+    /// cleared with room to spare. `None` for a categorical gate that has no
+    /// value/threshold pair to ratio — those rows draw a status marker instead of a bar.
+    pub ratio: Option<f64>,
 
     /// What the gate did.
     pub verdict: Verdict,
@@ -159,23 +160,37 @@ impl Ladder {
             let bottom = top - 1.0;
             let bar_top = top - 0.25;
             let bar_bottom = bottom + 0.35;
-            let width = rung.ratio.clamp(0.0, RATIO_CEILING);
             let color = rung.verdict.color();
 
-            chart.draw_series(std::iter::once(Rectangle::new(
-                [(0.0, bar_bottom), (width, bar_top)],
-                color.mix(0.55).filled(),
-            )))?;
+            match rung.ratio {
+                Some(ratio) => {
+                    let width = ratio.clamp(0.0, RATIO_CEILING);
+                    chart.draw_series(std::iter::once(Rectangle::new(
+                        [(0.0, bar_bottom), (width, bar_top)],
+                        color.mix(0.55).filled(),
+                    )))?;
+                }
+                None => {
+                    // Off the ratio scale: a categorical gate has no value/threshold pair,
+                    // so a bar would invent a magnitude it does not have.
+                    let mid = (bar_top + bar_bottom) / 2.0;
+                    chart.draw_series(std::iter::once(Circle::new(
+                        (0.15, mid),
+                        theme::POINT_RADIUS,
+                        color.filled(),
+                    )))?;
+                }
+            }
 
             chart.draw_series(std::iter::once(Text::new(
                 rung.gate.clone(),
-                (0.02, bar_top),
+                (0.25, bar_top),
                 TextStyle::from((theme::FONT, theme::FONT_TICK)).color(&theme::INK),
             )))?;
 
             chart.draw_series(std::iter::once(Text::new(
                 format!("{} vs {}", rung.value, rung.threshold),
-                (0.02, bar_bottom + 0.05),
+                (0.25, bar_bottom + 0.05),
                 TextStyle::from((theme::FONT, theme::FONT_TICK)).color(&color),
             )))?;
         }
@@ -194,22 +209,22 @@ mod tests {
                 gate: "significance".to_owned(),
                 value: "p = 0.004".to_owned(),
                 threshold: "p < 0.05".to_owned(),
-                ratio: 2.4,
+                ratio: Some(2.4),
                 verdict: Verdict::Passed,
             })
             .rung(Rung {
                 gate: "residual noise".to_owned(),
                 value: "2.1 ns".to_owned(),
                 threshold: "3.9 ns".to_owned(),
-                ratio: 0.54,
+                ratio: Some(0.54),
                 verdict: Verdict::Declined,
             })
             .rung(Rung {
-                gate: "regime separation".to_owned(),
-                value: "not computed".to_owned(),
-                threshold: "0.85".to_owned(),
-                ratio: 0.0,
-                verdict: Verdict::NotReached,
+                gate: "split located".to_owned(),
+                value: "held".to_owned(),
+                threshold: "must hold".to_owned(),
+                ratio: None,
+                verdict: Verdict::Passed,
             })
     }
 
@@ -223,6 +238,15 @@ mod tests {
 
         assert!(svg.contains("residual noise"));
         assert!(svg.contains("2.1 ns vs 3.9 ns"));
+        assert!(svg.contains("split located"));
+        assert!(svg.contains("held vs must hold"));
+    }
+
+    /// A categorical row must not acquire a bar on the ratio scale; a numeric row must.
+    #[test]
+    fn a_categorical_row_and_a_ratio_row_are_distinct_shapes() {
+        assert!(sample().rungs.iter().any(|rung| rung.ratio.is_some()));
+        assert!(sample().rungs.iter().any(|rung| rung.ratio.is_none()));
     }
 
     /// A gate's threshold is often written with a comparison sign, which the SVG
@@ -238,7 +262,7 @@ mod tests {
             gate: "significance".to_owned(),
             value: "p = 1e-9".to_owned(),
             threshold: "p < 0.05".to_owned(),
-            ratio: 5_000_000.0,
+            ratio: Some(5_000_000.0),
             verdict: Verdict::Passed,
         });
 

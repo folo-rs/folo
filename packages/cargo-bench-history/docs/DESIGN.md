@@ -43,10 +43,10 @@ every engine is partitioned by machine key (see §3).
 * **`alloc_tracker`** — heap allocations (bytes and counts). Not deterministic: warmup and
   buffer-resize allocations are amortized over a Criterion-chosen iteration count, so the
   per-iteration figures jitter, and they too vary with the host's library code paths. It
-  prefers a warmup-robust slope and records a bootstrap confidence interval over its
-  measured spans when its output carries one.
-* **`all_the_time`** — processor (CPU) time. Hardware-dependent and noisy, carrying a
-  bootstrap confidence interval like Criterion.
+  prefers a warmup-robust slope and records a bootstrap confidence interval only when the
+  operation was measured over several spans.
+* **`all_the_time`** — processor (CPU) time. Hardware-dependent and noisy. It records a
+  bootstrap confidence interval only when the operation was measured over several spans.
 
 The two workspace-local crates (`alloc_tracker`, `all_the_time`) each auto-emit one flat
 JSON file per operation on drop, so they need no opt-in and the operation name alone
@@ -95,8 +95,11 @@ flowchart LR
   never copied onto the run, so a rebase or amended date can never leave a stale
   timestamp behind. There is deliberately no "effective timestamp" concept and no
   timestamp override.
-* **Discriminant set** — the partition under which a series accumulates. Two results are
-  comparable exactly when their discriminant sets match.
+* **Discriminant set** — `{ engine, target_triple, machine_key }`. Two results are
+  comparable exactly when they were measured in the same project and their discriminant
+  sets match. The project (workspace identity, configured and defaulting to the
+  repository directory name) selects which store is being read, so results from two
+  projects never meet; it is not a member of the discriminant set.
 * **Machine key** — a stable hardware fingerprint that partitions every engine's data by
   the host it ran on.
 
@@ -105,15 +108,20 @@ flowchart LR
 The central tenet: **partition only by what makes results fundamentally incomparable;
 record everything else as metadata so the analysis can see its effect over time.**
 
-A discriminant set is `{ project, engine, target_triple, machine_key }`:
+Two results are comparable exactly when they were measured in the same **project** and
+their **discriminant sets** match. A discriminant set is `{ engine, target_triple,
+machine_key }`:
 
-* `project` — workspace identity (configured, defaulting to the repository directory
-  name).
 * `engine` — different units and semantics never mix.
 * `target_triple` — even simulated counts are not comparable across
   architectures (`…-windows-msvc` and `…-windows-gnu` are genuinely different binaries).
 * `machine_key` — a stable fingerprint of the host the benchmark ran on; every engine is
   partitioned by it, because every engine's numbers vary with the hardware in practice.
+
+The project — workspace identity, configured and defaulting to the repository directory
+name — partitions too, but it sits one level above: it selects which store is being read,
+so results from two projects never meet in the first place. That is why it is not part of
+the discriminant set.
 
 Deliberately **metadata, not partition** — so a change shows up as a timeline step, which
 is the whole point of the tool — are the toolchain versions, OS/libc, commit, branch, and
@@ -144,11 +152,13 @@ shape is:
     dirty-<observation_unix>.json # 0..N snapshots taken on top of this base commit
 ```
 
-Data objects live under a per-project `objects/` subtree so project-level metadata (today
-the cache-invalidation marker; perhaps an index later) can sit as a **sibling** without a
-layout migration and a data listing can never pick it up.
+The project segment selects the enclosing store. Data objects live under that project's
+`objects/` subtree so project-level metadata (today the cache-invalidation marker; perhaps
+an index later) can sit as a **sibling** without a layout migration and a data listing can
+never pick it up.
 
-The segment above the commit is the discriminant set; the commit is a directory, and
+The segments above the commit — `engine / target_triple / machine` — are the discriminant
+set; the commit is a directory, and
 **clean vs. dirty is filename semantics** within it. This is dictated by how `analyze`
 selects data: storage is not a pre-assembled timeline but is pieced together at query time
 by resolving git history into an ordered set of commits and reading each commit's
@@ -817,10 +827,12 @@ stored `Run` written before this policy that still lists them is read leniently,
 now-unknown metric kinds rather than failing.
 
 Engines differ only in *how much* dispersion they expose, and the gating adapts per point
-rather than per engine. Most points carry an explicit bootstrap confidence interval:
-Criterion, `all_the_time`, and `alloc_tracker` all record one on every operation they emit.
-Only single-figure engines (Callgrind, and any legacy mean-only file the adapter still
-tolerates) report a point without an interval. An interval, when present, is read as an
+rather than per engine. Criterion records a bootstrap confidence interval on every
+measurement. The two operation engines (`all_the_time`, `alloc_tracker`) record one only
+when the operation was measured over several spans; a single-span operation records its
+value alone. Callgrind, and any legacy mean-only file the adapter still tolerates, report
+a point without an interval. A point without bounds follows the interval-free gate path;
+the other across-commit gates still apply. An interval, when present, is read as an
 additional veto that can only *suppress* a candidate the other gates would report (never
 create one); the gates' *primary* noise check needs no interval at all: it is the series' own
 residual scatter about its fitted model, which covers every engine uniformly.

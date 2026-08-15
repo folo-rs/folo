@@ -1,4 +1,4 @@
-| Tip is its own merge base | Dirty run admitted on the tip | Mode |
+| Context tip equals the merge base | Dirty run admitted on the context tip | Mode |
 |---|---|---|
 | yes | no | `history` |
 | yes | yes | `branch` |

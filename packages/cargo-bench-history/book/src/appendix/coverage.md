@@ -45,8 +45,8 @@ that raised nothing at all.
 
 One consequence follows immediately, and it is the honest cost of the design: **a finding has
 to clear a stricter bar in a large repository than in a small one.** The same benchmark, the
-same regression, the same data — reported in a store of twenty series, and possibly not in a
-store of two thousand.
+same regression, the same data — reported in a family of twenty series, and possibly not in a
+family of two thousand.
 
 {{#include generated/coverage-family-size.svg}}
 

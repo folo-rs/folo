@@ -48,7 +48,7 @@ shape of the whole:
 | [Collection](collection.md) | Every stored run is a permanent, complete record of one engine's output at one commit. |
 | [Selection](selection.md) | Only runs that are *comparable to each other* reach the analysis, decided without reading any of them. |
 | [Reconstruction](reconstruction.md) | A series is ordered by git topology, never by when it was measured. |
-| [Detection](detection.md) | A finding names a level that moved. It never claims to know why. |
+| [Detection](detection.md) | A candidate names a level that moved. It never claims to know why. |
 | [Noise gates](gates.md) | A reported move is larger than what the measurement itself manufactures. |
 | [Multiplicity control](coverage.md) | A reported move is unlikely to be an accident of how many things were tested. |
 | [Reporting](reporting.md) | What was *not* judged is disclosed as prominently as what was. |
@@ -66,11 +66,12 @@ short table defining it in plain language, and the [Glossary](glossary.md) colle
 with the textbook name alongside, for when you want to read further. Where a plain description
 works as well as the technical name, this appendix uses the description.
 
-**The numbers are generated, not written.** Every figure, every table of values, every gate
-threshold and every report excerpt below is produced by running the code this appendix
-describes, and regenerated whenever that code changes. If a figure shows a gate declining a move
-by a hair, that is what the code actually did with that data — not an illustration of what it
-would do. A test fails if the two ever drift apart.
+**Generated evidence is computed, not invented.** The registered figures, computed examples,
+configured values, and serialized excerpts that depend on executable behaviour are produced by
+running the code this appendix describes, and regenerated whenever that code changes. If a
+figure shows a gate declining a move by a hair, that is what the code actually did with that
+data — not an illustration of what it would do. A test fails if those generated assets drift
+from the code. Stable explanatory tables and prose stay ordinary Markdown.
 
 This is also why the examples are small: they are meant to be checkable by hand, not realistic.
 

@@ -18,8 +18,9 @@ use cbh_detect::{SeriesCensus, UnjudgedReason};
 /// one lumped "blind" state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CoverageState {
-    /// The analysis accounted for no series whatsoever: nothing was collected, or
-    /// nothing survived loading. Remedy: look at collection, not at the gates.
+    /// The analysis accounted for no series: the selected partition was empty, every
+    /// matching run was excluded, or nothing survived loading. The empty-outcome hint
+    /// names which of those happened; this variant does not.
     NoSeries,
     /// Series were accounted for, but every one of them was a ghost, so nothing was
     /// in scope at the analyzed tip commit. Remedy: check that the benchmarks still
@@ -36,6 +37,18 @@ pub enum CoverageState {
 }
 
 impl CoverageState {
+    /// Every coverage state, in order of how much of the suite the verdict reaches.
+    ///
+    /// The appendix lists every state, so the inventory lives next to the type rather
+    /// than being restated beside the table.
+    pub const ALL: [Self; 5] = [
+        Self::NoSeries,
+        Self::NothingInScope,
+        Self::NothingJudged,
+        Self::Partial,
+        Self::Full,
+    ];
+
     /// The stable `snake_case` wire name of the state, as the JSON report carries it
     /// and downstream automation matches on it.
     #[must_use]
@@ -479,14 +492,10 @@ mod tests {
 
     #[test]
     fn state_wire_names_are_distinct_and_stable() {
-        let states = [
-            CoverageState::NoSeries,
-            CoverageState::NothingInScope,
-            CoverageState::NothingJudged,
-            CoverageState::Partial,
-            CoverageState::Full,
-        ];
-        let names: Vec<&str> = states.iter().map(|state| state.as_str()).collect();
+        let names: Vec<&str> = CoverageState::ALL
+            .iter()
+            .map(|state| state.as_str())
+            .collect();
         assert_eq!(
             names,
             vec![

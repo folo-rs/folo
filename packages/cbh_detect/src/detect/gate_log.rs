@@ -1,11 +1,17 @@
-//! Observation of the gates detection applies: which ran, what each computed, what it
-//! compared that against, and which one declined the candidate.
+//! Observation of the detector gates: which ran, what each computed, what it compared
+//! that against, and which one declined a candidate inside a detector.
 //!
 //! A verdict says only that a series was reported or was not. That is enough to act on
 //! but not enough to explain, and an unexplained silence is indistinguishable from a
-//! broken detector. A [`GateLog`] is the explanation: the detectors record every gate
-//! decision into one as they make it, from the same expression the decision is branched
-//! on, so a log describes what detection actually did rather than a reconstruction of it.
+//! broken detector. A [`GateLog`] is the detector half of the explanation: each detector
+//! records every gate decision into one as it makes it, from the same expression the
+//! decision is branched on, so a log describes what that detector actually did rather
+//! than a reconstruction of it.
+//!
+//! It is not the whole evaluation. Eligibility ([`crate::detect::testability`]) is
+//! decided before any detector runs, and a candidate that survives every recorded gate
+//! can still be dropped by arbitration, the false-discovery filter, or the direction
+//! filter. An empty log with no finding is therefore not "declined by a gate".
 //!
 //! Recording is opt-in per evaluation. Production passes a [`disabled`](GateLog::disabled)
 //! log, which discards every recording and never allocates; tests and the documentation
@@ -30,13 +36,15 @@
     )
 )]
 
-/// What a detection pass decided, gate by gate, about one series.
+/// What the detectors decided, gate by gate, about one series.
 ///
-/// The log is the observable form of the gate chain described in `docs/design.md`
-/// ("Analysis") — the ordered sequence of independent checks a candidate must survive.
-/// Each check appends one [`GateOutcome`] as it is made, so
-/// [`entries`](Self::entries) reads as the narrative of an evaluation and
-/// [`declined_by`](Self::declined_by) names its conclusion.
+/// The log is the observable form of the detector gate chain described in
+/// `docs/design.md` ("Analysis") — the ordered sequence of independent checks a
+/// candidate must survive inside a detector. Each check appends one [`GateOutcome`]
+/// as it is made, so [`entries`](Self::entries) reads as that detector narrative.
+/// [`declined_by_stage`](Self::declined_by_stage) names one detector's first
+/// decline; [`declined_by`](Self::declined_by) is the first decline across stages
+/// and is not the evaluation's final disposition.
 ///
 /// Gates short-circuit: the first one to decline ends its detector's evaluation, so a log
 /// ends at that gate and says nothing about the gates that would have followed. This is
@@ -102,10 +110,15 @@ impl GateLog {
         self.entries.as_deref().unwrap_or_default()
     }
 
-    /// The first gate that declined, across every stage.
+    /// The first recorded gate that declined, across every stage.
     ///
-    /// `None` means no recorded gate declined, which for a recording log is how a
-    /// reported finding looks.
+    /// This is not the evaluation's conclusion. History mode records both detectors
+    /// before arbitration, so a decline here can belong to a stage that was not
+    /// selected; a later filter can also drop a candidate whose recorded gates all
+    /// passed. `None` means no *detector gate* declined, which is also how an
+    /// unjudged series and a post-detector silence look. Prefer
+    /// [`declined_by_stage`](Self::declined_by_stage) when asking one detector's
+    /// question.
     #[must_use]
     pub fn declined_by(&self) -> Option<Gate> {
         self.entries()

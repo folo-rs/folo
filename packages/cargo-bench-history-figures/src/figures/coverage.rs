@@ -194,7 +194,7 @@ const MARGINAL_SERIES: &str = "tokenize";
 
 /// The large family the same candidate is judged against.
 ///
-/// A store of a couple of thousand series, which is the scale the chapter contrasts a
+/// A family of a couple of thousand series, which is the scale the chapter contrasts a
 /// small one with, and far enough above the small family that the marginal candidate's bar
 /// moves by more than a rounding.
 const LARGE_FAMILY: usize = 2000;
@@ -229,7 +229,7 @@ fn families() -> Vec<Asset> {
     writeln!(
         table,
         "\nThe same series, the same measurements, the same chance level — judged against \
-         a bar that is {} as strict in the larger store.",
+         a bar that is {} as strict in the larger family.",
         times(small.marginal().bar / large.marginal().bar)
     )
     .expect("writing to a String never fails");
@@ -269,7 +269,7 @@ impl FamilyCase {
 /// Judges the family-size candidates against a family of `family`.
 fn family_size_case(family: usize) -> FamilyCase {
     let judged = judge(&FAMILY_SIZE_CANDIDATES, family);
-    let figure = staircase_figure(format!("in a store of {family} judged series"), &judged);
+    let figure = staircase_figure(format!("in a family of {family} judged series"), &judged);
     FamilyCase {
         family,
         judged,
@@ -416,20 +416,6 @@ fn census_bar() -> Asset {
     Asset::new("coverage-census.svg", bar.render())
 }
 
-/// Every reason a series can go unjudged, in the order a report breaks them down.
-///
-/// Declared rather than read from the type, because the exhaustive set is not public. The
-/// describing functions below match exhaustively, so a reason added to the detector fails
-/// to compile here rather than quietly vanishing from the chapter's account, and a test
-/// checks this list against what those functions accept.
-const REASONS: [UnjudgedReason; 5] = [
-    UnjudgedReason::Ghost,
-    UnjudgedReason::TooFewPoints,
-    UnjudgedReason::TooFewPointsSinceBlessing,
-    UnjudgedReason::NotMeasuredOnBranch,
-    UnjudgedReason::TooFewBaseCommits,
-];
-
 /// How the census bar names `reason`.
 fn reason_label(reason: UnjudgedReason) -> &'static str {
     match reason {
@@ -485,7 +471,7 @@ fn reason_remedy(reason: UnjudgedReason) -> &'static str {
 /// Every reason a series goes unjudged, what it means, and what to do about it.
 fn reasons_table() -> String {
     let mut table = String::from("| Reason | What it means | What to do |\n|---|---|---|\n");
-    for reason in REASONS {
+    for reason in UnjudgedReason::ALL {
         writeln!(
             table,
             "| `{}` | A series {}. | {} |",
@@ -498,26 +484,11 @@ fn reasons_table() -> String {
     table
 }
 
-/// Every coverage state, in order of how much of the suite the verdict reaches.
-///
-/// Declared rather than read from the type, because the exhaustive set is not public. The
-/// describing function below matches exhaustively, so a state added to the renderer fails
-/// to compile here, and a test checks that every declared state is one a real census can
-/// produce.
-const STATES: [CoverageState; 5] = [
-    CoverageState::NoSeries,
-    CoverageState::NothingInScope,
-    CoverageState::NothingJudged,
-    CoverageState::Partial,
-    CoverageState::Full,
-];
-
 /// How much of a run's suite the state's verdict reaches.
 fn state_reach(state: CoverageState) -> &'static str {
     match state {
         CoverageState::NoSeries => {
-            "Nothing at all. The run is a collection failure, not a result: treat it as a \
-             broken run rather than as an all-clear."
+            "Nothing at all. No series entered analysis; look at the empty-outcome hint."
         }
         CoverageState::NothingInScope => {
             "Nothing. Every series the store holds was measured somewhere other than the \
@@ -564,7 +535,7 @@ fn census_in(state: CoverageState) -> SeriesCensus {
 fn states_table() -> String {
     let mut table = String::from("| State | Verdict on a silent run | What the silence covers |\n");
     table.push_str("|---|---|---|\n");
-    for state in STATES {
+    for state in CoverageState::ALL {
         let coverage = Coverage::from_census(&census_in(state));
         writeln!(
             table,
@@ -849,7 +820,7 @@ mod tests {
     fn every_reason_is_listed_with_a_meaning_and_a_remedy() {
         let table = content("coverage-reasons.md");
 
-        for reason in REASONS {
+        for reason in UnjudgedReason::ALL {
             assert!(
                 table.contains(&format!("| `{}` |", reason.as_str())),
                 "{} is missing",
@@ -864,7 +835,7 @@ mod tests {
     /// documents a state that cannot happen.
     #[test]
     fn every_declared_reason_is_one_a_census_can_record() {
-        for reason in REASONS {
+        for reason in UnjudgedReason::ALL {
             let mut census = SeriesCensus::default();
             census.record(Testability::Unjudged(reason));
 
@@ -881,7 +852,7 @@ mod tests {
     fn every_state_is_listed_with_the_verdict_the_renderer_produces() {
         let table = content("coverage-states.md");
 
-        for state in STATES {
+        for state in CoverageState::ALL {
             let coverage = Coverage::from_census(&census_in(state));
             assert_eq!(
                 coverage.state(),
@@ -903,7 +874,7 @@ mod tests {
     /// whose silence is an unqualified all-clear.
     #[test]
     fn only_the_full_state_covers_the_whole_in_scope_suite() {
-        let complete: Vec<CoverageState> = STATES
+        let complete: Vec<CoverageState> = CoverageState::ALL
             .into_iter()
             .filter(|&state| {
                 let coverage = Coverage::from_census(&census_in(state));

@@ -3,7 +3,7 @@
 a step measured against what the series does anyway
 </text>
 <text x="12" y="114" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor" transform="rotate(270, 12, 114)">
-distance from the fitted model
+signed residual from the fitted model
 </text>
 <text x="371" y="228" dy="-0.5ex" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
 commit position

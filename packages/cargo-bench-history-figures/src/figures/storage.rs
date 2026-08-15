@@ -227,9 +227,9 @@ fn conflicts() -> String {
 fn machine_key() -> String {
     String::from(
         "| Hashed | Not hashed |\n|---|---|\n\
-         | Processor count and topology | Clock speeds — they vary with thermal state and \
+         | Processor count | Clock speeds — they vary with thermal state and \
          power policy on one machine |\n\
-         | Memory region layout | Hostname — a renamed machine keeps its history |\n\
+         | Memory-region count | Hostname — a renamed machine keeps its history |\n\
          | Processor models | Installed memory size |\n",
     )
 }
@@ -370,6 +370,53 @@ mod tests {
     #[test]
     fn the_run_shape_names_the_current_schema_version() {
         assert!(run_shape().contains(&SCHEMA_VERSION.to_string()));
+    }
+
+    /// The hashed column names the fingerprint factors, not a broader hardware picture.
+    /// The keys come from `cbh_probe::describe_fingerprint_components`, so a new hashed
+    /// factor fails here until the table names it, and the labels cannot drift back to
+    /// topology or layout.
+    #[test]
+    fn the_machine_key_table_names_the_fingerprint_factors() {
+        let profile = cbh_probe::HardwareProfile {
+            processors: 8,
+            memory_regions: 1,
+            processor_models: vec!["CPU".to_owned()],
+            processor_speeds: vec![(1000, 8)],
+        };
+        let described = cbh_probe::describe_fingerprint_components(&profile);
+        let keys: Vec<&str> = described
+            .split(", ")
+            .filter_map(|part| part.split('=').next())
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "version",
+                "processors",
+                "memory_regions",
+                "processor_models"
+            ],
+            "{described}"
+        );
+
+        let table = machine_key();
+        // Version is a fingerprint tag, not a hardware factor, so it is not a row.
+        // The remaining keys are the hashed hardware factors.
+        for (factor, label) in [
+            ("processors", "Processor count"),
+            ("memory_regions", "Memory-region count"),
+            ("processor_models", "Processor models"),
+        ] {
+            assert!(
+                described.contains(&format!("{factor}=")),
+                "{factor} is a fingerprint component"
+            );
+            assert!(
+                table.contains(&format!("| {label} |")),
+                "{factor} must appear as {label}: {table}"
+            );
+        }
     }
 
     #[test]

@@ -117,7 +117,8 @@ that oscillates between two levels: split it anywhere and the two sides differ, 
 points a significance test will happily call that difference real.
 
 So the tool asks a second, different question: **of every possible before-and-after pairing,
-what share agree the level moved?**
+what share agree the level moved?** That pairwise directional frequency is the agreement
+share — a direction-aware effect size, not another significance test.
 
 {{#include generated/gates-agreement-separated.svg}}
 
@@ -137,7 +138,7 @@ which more data estimates more precisely rather than inflating.
 ## Does the engine's own precision explain it?
 
 Where the engine reports a confidence interval, further checks apply. Both can only ever **take a
-finding away** — no interval ever creates one or relaxes another gate.
+candidate away** — no interval ever creates one or relaxes another gate.
 
 **Disjointness.** If the two regimes' intervals overlap, the engine is telling you it cannot
 distinguish these levels.

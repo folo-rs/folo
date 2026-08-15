@@ -124,8 +124,9 @@ book-figures-check:
 
     cargo run --package cargo-bench-history-figures --bin cbh-figures -- check
 
-# Writes a page showing every appendix figure on both of the book's themes, for checking legibility
-# without building and re-theming the whole book.
+# Writes a page showing every appendix figure on mdBook's default Light and Navy
+# background/text-color pairs, for checking legibility without building and re-theming
+# the whole book.
 [group('book')]
 [script]
 book-figures-preview:

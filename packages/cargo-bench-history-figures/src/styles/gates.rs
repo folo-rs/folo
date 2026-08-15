@@ -7,11 +7,13 @@
 //! strip is about spread around a model, an agreement grid is about pairings, and an
 //! interval plot is about overlap.
 
+use std::cmp::Ordering;
 use std::error::Error;
 
+use cbh_stats::MannWhitneyU;
 use plotters::element::{Circle, PathElement, Rectangle, Text};
 use plotters::prelude::ChartBuilder;
-use plotters::style::{Color as _, ShapeStyle, TextStyle};
+use plotters::style::{Color as _, RGBColor, ShapeStyle, TextStyle};
 
 use crate::{canvas, coord, theme};
 
@@ -24,19 +26,19 @@ use crate::{canvas, coord, theme};
 #[derive(Clone, Debug)]
 pub struct Residuals {
     caption: String,
-    distances: Vec<f64>,
+    residuals: Vec<f64>,
     band: f64,
     move_size: Option<f64>,
 }
 
 impl Residuals {
-    /// A residual strip captioned `caption`, with each observation's distance from the
-    /// fitted model and the band the gate considers ordinary.
+    /// A residual strip captioned `caption`, with each observation's signed residual
+    /// from the fitted model and the band the gate considers ordinary.
     #[must_use]
-    pub fn new(caption: impl Into<String>, distances: Vec<f64>, band: f64) -> Self {
+    pub fn new(caption: impl Into<String>, residuals: Vec<f64>, band: f64) -> Self {
         Self {
             caption: caption.into(),
-            distances,
+            residuals,
             band,
             move_size: None,
         }
@@ -55,14 +57,14 @@ impl Residuals {
     pub fn render(&self) -> String {
         canvas::draw(theme::WIDTH, 240, |root| {
             let extent = self
-                .distances
+                .residuals
                 .iter()
-                .map(|distance| distance.abs())
+                .map(|residual| residual.abs())
                 .chain(std::iter::once(self.band))
                 .chain(self.move_size.map(f64::abs))
                 .fold(0.0_f64, f64::max)
                 .max(f64::MIN_POSITIVE);
-            let count = self.distances.len();
+            let count = self.residuals.len();
 
             let mut chart = ChartBuilder::on(root)
                 .caption(
@@ -83,7 +85,7 @@ impl Residuals {
                 .bold_line_style(theme::INK.mix(theme::GRID_OPACITY))
                 .axis_style(theme::INK)
                 .x_desc("commit position")
-                .y_desc("distance from the fitted model")
+                .y_desc("signed residual from the fitted model")
                 .label_style((theme::FONT, theme::FONT_TICK, &theme::INK))
                 .draw()?;
 
@@ -97,10 +99,10 @@ impl Residuals {
                 TextStyle::from((theme::FONT, theme::FONT_TICK)).color(&theme::MUTED),
             )))?;
 
-            for (index, &residual) in self.distances.iter().enumerate() {
+            for (index, &residual) in self.residuals.iter().enumerate() {
                 let at = coord::of(index);
                 // Drawn as a stem from zero rather than as a bare point, because the
-                // quantity is a distance and a point alone reads as a value.
+                // quantity is a signed residual and a point alone reads as a value.
                 chart.draw_series(std::iter::once(PathElement::new(
                     vec![(at, 0.0), (at, residual)],
                     ShapeStyle::from(theme::HIGHLIGHT).stroke_width(1),
@@ -155,29 +157,23 @@ impl Agreement {
 
     /// The share of pairings that agree the level rose.
     ///
-    /// A tie counts as half, matching how the rank comparison itself treats one.
+    /// Read from [`MannWhitneyU::superiority`], so the caption and the detector's
+    /// regime-separation statistic cannot drift apart. A tie counts as half.
     #[must_use]
     pub fn share(&self) -> f64 {
-        let pairs = self.before.len().saturating_mul(self.after.len());
-        if pairs == 0 {
-            return 0.0;
-        }
-        let agreeing: f64 = self
-            .before
-            .iter()
-            .flat_map(|earlier| {
-                self.after.iter().map(move |later| {
-                    if later > earlier {
-                        1.0
-                    } else if (later - earlier).abs() < f64::EPSILON {
-                        0.5
-                    } else {
-                        0.0
-                    }
-                })
-            })
-            .sum();
-        agreeing / coord::of(pairs)
+        MannWhitneyU::new(&self.before, &self.after)
+            .map(|test| test.superiority())
+            .unwrap_or(0.0)
+    }
+
+    /// How each pairing classifies under exact comparison, in draw order (later row,
+    /// earlier column).
+    fn classifications(&self) -> impl Iterator<Item = PairClass> + '_ {
+        self.after.iter().flat_map(|later| {
+            self.before
+                .iter()
+                .map(move |earlier| PairClass::of(*earlier, *later))
+        })
     }
 
     /// Renders the grid.
@@ -186,9 +182,11 @@ impl Agreement {
         let rows = self.after.len();
         let columns = self.before.len();
         let height =
-            90_u32.saturating_add(22_u32.saturating_mul(u32::try_from(rows).unwrap_or(u32::MAX)));
+            110_u32.saturating_add(22_u32.saturating_mul(u32::try_from(rows).unwrap_or(u32::MAX)));
 
         canvas::draw(theme::WIDTH, height, |root| {
+            let columns_f = coord::of(columns.max(1));
+            let rows_f = coord::of(rows.max(1));
             let mut chart = ChartBuilder::on(root)
                 .caption(
                     self.caption.as_str(),
@@ -197,10 +195,7 @@ impl Agreement {
                 .margin(12)
                 .x_label_area_size(34)
                 .y_label_area_size(70)
-                .build_cartesian_2d(
-                    0.0_f64..coord::of(columns.max(1)),
-                    0.0_f64..coord::of(rows.max(1)),
-                )?;
+                .build_cartesian_2d(0.0_f64..columns_f, -0.55_f64..rows_f)?;
 
             chart
                 .configure_mesh()
@@ -213,26 +208,118 @@ impl Agreement {
                 .y_labels(0)
                 .draw()?;
 
-            for (row, later) in self.after.iter().enumerate() {
-                for (column, earlier) in self.before.iter().enumerate() {
-                    let agrees = later > earlier;
-                    let color = if agrees {
-                        theme::REGRESSION
-                    } else {
-                        theme::MUTED
-                    };
-                    chart.draw_series(std::iter::once(Rectangle::new(
-                        [
-                            (coord::of(column) + 0.08, coord::of(row) + 0.08),
-                            (coord::of(column) + 0.92, coord::of(row) + 0.92),
-                        ],
-                        color.mix(if agrees { 0.7 } else { 0.35 }).filled(),
-                    )))?;
+            debug_assert!(
+                {
+                    let pairs = columns.saturating_mul(rows);
+                    pairs == 0 || {
+                        let credits: f64 = self.classifications().map(PairClass::credit).sum();
+                        let share = credits / f64::from(u32::try_from(pairs).unwrap_or(u32::MAX));
+                        (share - self.share()).abs() < f64::EPSILON
+                    }
+                },
+                "rendered pair credits must equal MannWhitneyU::superiority"
+            );
+
+            for (index, class) in self.classifications().enumerate() {
+                let column = index
+                    .checked_rem(columns.max(1))
+                    .expect("columns is non-zero after max(1)");
+                let row = index
+                    .checked_div(columns.max(1))
+                    .expect("columns is non-zero after max(1)");
+                let left = coord::of(column) + 0.08;
+                let right = coord::of(column) + 0.92;
+                let bottom = coord::of(row) + 0.08;
+                let top = coord::of(row) + 0.92;
+                match class {
+                    PairClass::Greater => {
+                        chart.draw_series(std::iter::once(Rectangle::new(
+                            [(left, bottom), (right, top)],
+                            theme::REGRESSION.mix(0.7).filled(),
+                        )))?;
+                    }
+                    PairClass::Less => {
+                        chart.draw_series(std::iter::once(Rectangle::new(
+                            [(left, bottom), (right, top)],
+                            theme::MUTED.mix(0.35).filled(),
+                        )))?;
+                    }
+                    PairClass::Equal => {
+                        // Half-credit: only the left half is filled, so a tie cannot
+                        // be read as either a full agreement or a full disagreement.
+                        let mid = (left + right) / 2.0;
+                        chart.draw_series(std::iter::once(Rectangle::new(
+                            [(left, bottom), (mid, top)],
+                            theme::HIGHLIGHT.mix(0.7).filled(),
+                        )))?;
+                        chart.draw_series(std::iter::once(Rectangle::new(
+                            [(mid, bottom), (right, top)],
+                            ShapeStyle::from(theme::HIGHLIGHT).stroke_width(1),
+                        )))?;
+                    }
                 }
+            }
+
+            let classes = [PairClass::Greater, PairClass::Equal, PairClass::Less];
+            let width = columns_f / coord::of(classes.len());
+            for (index, class) in classes.into_iter().enumerate() {
+                let left = coord::of(index) * width + 0.08;
+                let swatch_right = left + 0.22;
+                chart.draw_series(std::iter::once(Rectangle::new(
+                    [(left, -0.45), (swatch_right, -0.15)],
+                    class.color().mix(0.7).filled(),
+                )))?;
+                chart.draw_series(std::iter::once(Text::new(
+                    class.label().to_owned(),
+                    (swatch_right + 0.05, -0.45),
+                    TextStyle::from((theme::FONT, theme::FONT_TICK)).color(&theme::INK),
+                )))?;
             }
 
             Ok::<(), Box<dyn Error>>(())
         })
+    }
+}
+
+/// How one before/after pairing classifies under exact comparison.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PairClass {
+    Greater,
+    Equal,
+    Less,
+}
+
+impl PairClass {
+    fn of(earlier: f64, later: f64) -> Self {
+        match later.partial_cmp(&earlier) {
+            Some(Ordering::Greater) => Self::Greater,
+            Some(Ordering::Equal) => Self::Equal,
+            Some(Ordering::Less) | None => Self::Less,
+        }
+    }
+
+    fn credit(self) -> f64 {
+        match self {
+            Self::Greater => 1.0,
+            Self::Equal => 0.5,
+            Self::Less => 0.0,
+        }
+    }
+
+    fn color(self) -> RGBColor {
+        match self {
+            Self::Greater => theme::REGRESSION,
+            Self::Equal => theme::HIGHLIGHT,
+            Self::Less => theme::MUTED,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Greater => "later greater",
+            Self::Equal => "tie (half)",
+            Self::Less => "later less",
+        }
     }
 }
 
@@ -252,6 +339,7 @@ mod tests {
 
         assert!(svg.contains("what this series does anyway"));
         assert!(svg.contains("the move being judged"));
+        assert!(svg.contains("signed residual from the fitted model"));
     }
 
     #[test]
@@ -291,6 +379,29 @@ mod tests {
         let grid = Agreement::new("empty", Vec::new(), vec![1.0]);
 
         assert!((grid.share() - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn a_pair_classifies_by_exact_ordering() {
+        assert_eq!(PairClass::of(1.0, 2.0), PairClass::Greater);
+        assert_eq!(PairClass::of(2.0, 2.0), PairClass::Equal);
+        assert_eq!(PairClass::of(3.0, 2.0), PairClass::Less);
+    }
+
+    /// The caption aggregate is the production statistic, so the cells that produce it
+    /// must credit the same way: greater = 1, equal = ½, less = 0.
+    #[test]
+    fn rendered_classifications_sum_to_the_production_aggregate() {
+        let grid = Agreement::new("ties", vec![100.0, 110.0], vec![100.0, 120.0]);
+        let credits: f64 = grid.classifications().map(PairClass::credit).sum();
+        let pairs = grid.classifications().count();
+        let share = credits / f64::from(u32::try_from(pairs).expect("a figure holds few pairs"));
+
+        assert!((share - grid.share()).abs() < f64::EPSILON);
+        assert!(
+            grid.classifications()
+                .any(|class| class == PairClass::Equal)
+        );
     }
 
     #[test]

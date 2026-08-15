@@ -64,8 +64,8 @@ Some engines report a confidence interval alongside the value.
 {{#include generated/shape-dispersion.md}}
 
 The rule that matters is the same everywhere it appears in this appendix: **a confidence
-interval can only ever take a finding away.** No gate uses one to create or strengthen a
-finding. So an engine that reports none is not held to a weaker standard — it is judged on its
+interval can only ever take a candidate away.** No gate uses one to create or strengthen a
+candidate. So an engine that reports none is not held to a weaker standard — it is judged on its
 own between-commit scatter instead, which is arguably the more relevant quantity anyway.
 
 `std_dev` is a special case: Criterion reports it, the tool stores it, and nothing reads it

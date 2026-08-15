@@ -9,7 +9,7 @@
 | **one-way-trend check** | A test for whether a series mostly moves in one direction, which counts rises against falls rather than fitting a line. |
 | **outlier-resistant slope** | A trend line fitted from the middle of all the pairwise slopes, so a few odd measurements cannot tilt it. |
 | **prediction interval** | The range a single further measurement is expected to land in, given what the previous ones did. |
-| **rank comparison** | How often a value measured after a change beats one measured before it, counted over every possible pairing. |
+| **rank comparison** | Rank-based evidence that the before and after regimes differ, tested two-sided. |
 | **regime** | A stretch of commits over which a series holds one level. |
 | **scatter** | How much a series wobbles between commits when nothing has changed. |
 | **split search** | A scan for the single most likely place a series changed level. |

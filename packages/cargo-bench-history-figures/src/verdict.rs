@@ -8,15 +8,20 @@
 //! chapter. That is the one part a generator cannot derive: the figures show what happened,
 //! and the surrounding prose is what makes it mean something.
 
-use cbh_detect::{Direction, Finding, FindingMethod};
+use cbh_detect::{AnalysisMode, Direction, Finding, FindingMethod};
 
 /// The fragment describing a finding the detector reported.
 #[must_use]
-pub fn reported(finding: &Finding, reading: &str) -> String {
-    let direction = match finding.direction {
-        Direction::Regression => "regression",
-        Direction::Improvement => "improvement",
-    };
+pub fn reported(finding: &Finding, reading: &str, mode: AnalysisMode) -> String {
+    match mode {
+        AnalysisMode::History => history_reported(finding, reading),
+        AnalysisMode::Branch => branch_reported(finding, reading),
+    }
+}
+
+/// History mode: a change point or a drift over the analyzed window.
+fn history_reported(finding: &Finding, reading: &str) -> String {
+    let direction = direction_of(finding);
     let method = match finding.method {
         FindingMethod::ChangePoint => "change point",
         FindingMethod::Drift => "drift",
@@ -45,6 +50,33 @@ pub fn reported(finding: &Finding, reading: &str) -> String {
         finding.baseline,
         finding.latest,
     )
+}
+
+/// Branch mode: the tip against the base prediction interval.
+///
+/// The detector still records a [`FindingMethod`] because both modes share one finding
+/// type; the branch comparison is not a change point, so the fragment must not borrow
+/// history-mode wording.
+fn branch_reported(finding: &Finding, reading: &str) -> String {
+    let direction = direction_of(finding);
+
+    format!(
+        "> **Reported.** A {direction} of {:+.2}% at the branch tip against the base \
+         prediction interval, at {:.0}% confidence.\n>\n\
+         > The tip is {:.2} against a base of {:.2}.\n>\n\
+         > {reading}.\n",
+        finding.relative_delta * 100.0,
+        finding.confidence * 100.0,
+        finding.latest,
+        finding.baseline,
+    )
+}
+
+fn direction_of(finding: &Finding) -> &'static str {
+    match finding.direction {
+        Direction::Regression => "regression",
+        Direction::Improvement => "improvement",
+    }
 }
 
 /// The fragment describing a series the detector left alone.
@@ -78,13 +110,46 @@ mod tests {
         evaluate_with_log(&series, &context).0.unwrap()
     }
 
+    fn a_branch_finding() -> Finding {
+        let values = examples::clean_step();
+        let series = examples::series("bench", &values, MetricKind::WallTime, 0);
+        let merge_base = values
+            .len()
+            .checked_div(2)
+            .and_then(|half| half.checked_sub(1))
+            .expect("the example series holds more than one point");
+        let context = examples::branch_context(&series, merge_base);
+        evaluate_with_log(&series, &context).0.unwrap()
+    }
+
     #[test]
     fn a_reported_fragment_carries_the_move_and_the_confidence() {
-        let fragment = reported(&a_finding(), "because the level changed");
+        let fragment = reported(
+            &a_finding(),
+            "because the level changed",
+            AnalysisMode::History,
+        );
 
         assert!(fragment.contains("Reported."));
         assert!(fragment.contains("confidence"));
         assert!(fragment.contains("because the level changed."));
+    }
+
+    /// Branch mode compares the tip to the base interval. History-mode phrasing would
+    /// describe a split that the branch detector never locates.
+    #[test]
+    fn a_branch_fragment_describes_a_tip_against_the_base_interval() {
+        let fragment = reported(
+            &a_branch_finding(),
+            "the tip sits outside the predicted range",
+            AnalysisMode::Branch,
+        );
+
+        assert!(fragment.contains("branch tip"));
+        assert!(fragment.contains("base prediction interval"));
+        assert!(!fragment.contains("via change point"));
+        assert!(!fragment.contains("first seen"));
+        assert!(!fragment.contains("the level moved"));
     }
 
     #[test]

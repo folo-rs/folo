@@ -148,12 +148,14 @@ against and what a user reads when a finding does not make sense.
 - **Audience**: a maintainer checking the tool does the right thing, and the user who has exhausted
   the concept chapters. Not the first thing anyone reads.
 - **Voice**: plain language first, technical name second. The reader is an engineer, not a
-  statistician: every term is defined before use and again on hover, and jargon that buys the reader
+  statistician: every term is defined before use, and jargon that buys the reader
   nothing is simply not used.
-- **Evidence discipline**: every number, chart, table and report excerpt in this part is generated
-  by `cargo-bench-history-figures` from data the test suite also asserts against, and included with
-  `{{#include}}`. Nothing here is typed by hand. A regeneration that changes a figure means the
-  pipeline's behaviour changed; the diff is the review.
+- **Evidence discipline**: generated evidence is the registered figures, computed examples,
+  configured values, and serialized excerpts that materially depend on executable behaviour.
+  Those are produced by `cargo-bench-history-figures` from data the test suite also asserts
+  against, and included with `{{#include}}`. Stable explanatory Markdown stays ordinary Markdown.
+  A regeneration that changes a generated asset means the pipeline's behaviour changed; the
+  diff is the review.
 - **Illustration discipline**: every stage that adds, removes, reorders, collapses or reshapes data
   gets a before/after figure in which affected observations are marked and labelled with the reason.
   A reader must never have to infer what a stage did.
@@ -172,7 +174,7 @@ against and what a user reads when a finding does not make sense.
 | 9. Insights | Triage playbooks: what to do with each kind of finding, and what to do when an expected finding never arrives. |
 | 10. Limits | What the pipeline deliberately does not do, and what to do instead. |
 | Glossary | Every term the part defines, in plain language, with the technical name alongside. |
-| Reference tables | The generated lookup surface: metric kinds, engine outputs, key grammar, gate constants, evidence minimums, unjudged reasons, coverage states, JSON fields. |
+| Reference tables | The generated lookup surface: metric kinds, engine outputs, key grammar, gate constants, evidence minimums, unjudged reasons, coverage states. |
 
 ## Maintenance
 
@@ -180,8 +182,8 @@ against and what a user reads when a finding does not make sense.
   keep the "single thing it must teach" column honest.
 - Prefer deleting a page's detail and linking to `--help` or a design doc over letting the guide
   drift from the code.
-- The appendix's numbers are generated, so they cannot be edited in place: change the code or the
-  example data and re-run `just book-figures`. A stale checked-in asset fails the test suite, so the
-  appendix cannot silently fall out of step with the tool.
+- Generated evidence cannot be edited in place: change the code or the example data and re-run
+  `just book-figures`. A stale checked-in asset fails the test suite. Ordinary explanatory Markdown
+  is edited in the chapter files themselves.
 - When the appendix gains coverage of something a concept page also explains, trim the concept page
   to the mental model and link down. The two must not both carry the mechanism.

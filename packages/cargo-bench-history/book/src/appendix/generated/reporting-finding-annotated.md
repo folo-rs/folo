@@ -4,10 +4,10 @@ A finding, as the text report prints it:
 http_parse/case
   +29.57% wall_time (100% confidence)
     regression via change point · 100.4 → 130.1 · @ commit10
- 135 ┤           ╭─╮╭─╮╭╮ 
- 126 ┤         ╭─╯ ╰╯ ╰╯╰ 
- 116 ┤         │          
- 106 ┤ ╭╮ ╭─╮╭─╯          
+ 135 ┤           ╭─╮╭─╮╭╮           
+ 126 ┤         ╭─╯ ╰╯ ╰╯╰─          
+ 116 ┤         │                    
+ 106 ┤ ╭╮ ╭─╮╭─╯                    
   97 ┼─╯╰─╯ ╰╯
 ```
 

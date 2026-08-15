@@ -488,10 +488,12 @@ dependencies = [
  "cbh_analyze",
  "cbh_detect",
  "cbh_model",
+ "cbh_probe",
  "cbh_render",
  "cbh_stats",
  "clap",
  "plotters",
+ "tempfile",
 ]
 
 [[package]]

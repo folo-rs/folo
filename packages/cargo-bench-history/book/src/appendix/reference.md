@@ -104,7 +104,8 @@ See [Multiplicity and coverage](coverage.md#reading-a-silent-report).
 
 ### Output formats
 
-See [Reporting](reporting.md#the-formats).
+See [Reporting](reporting.md#the-formats). The JSON excerpt there is illustrative of
+the report shape, not a complete field catalog.
 
 {{#include generated/reporting-formats.md}}
 

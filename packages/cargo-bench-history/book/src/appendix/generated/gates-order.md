@@ -32,7 +32,7 @@ Each detector applies its own gates in its own order, and a candidate stops at t
 |---|---|---|
 | `min_base_commits` | How many base-side commit levels the comparison window holds. | 10 commit levels |
 | `non_zero_delta` | Whether the two levels differ at all. | above zero |
-| `min_regime` | How many points the shorter side of the split holds. | 5 points |
+| `min_regime` | How many retained base-side commit levels the comparison holds. | 5 commit levels |
 | `relative_floor` | The move as a fraction of the baseline. | 5.0% |
 | `absolute_floor` | The move in the metric's own units. | the metric's own floor, below |
 | `residual_noise` | The move against the series' own typical residual. | 3× the typical residual |

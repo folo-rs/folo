@@ -3,8 +3,10 @@
 //!
 //! The guiding rule (see the *Comparability & storage partitioning* section of
 //! `DESIGN.md`) is to partition only by what makes results *fundamentally*
-//! incomparable — project, engine, target triple, and a machine key — and to
-//! record everything else as metadata so its effect stays visible in the timeline.
+//! incomparable. The project selects the enclosing store, so results from two
+//! projects never meet. Inside a project, a [`DiscriminantSet`] is engine, target
+//! triple, and machine key. Everything else is recorded as metadata so its effect
+//! stays visible in the timeline.
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -31,9 +33,11 @@ pub enum Engine {
     Callgrind,
     /// `alloc_tracker` allocation counts and bytes: not deterministic — warmup and
     /// buffer-resize allocations jitter the per-iteration figure, which is amortized
-    /// over a Criterion-chosen iteration count.
+    /// over a Criterion-chosen iteration count. A confidence interval is present
+    /// only when the operation was measured over several spans.
     AllocTracker,
-    /// `all_the_time` processor-time measurements: noisy, with a confidence interval.
+    /// `all_the_time` processor-time measurements: noisy. A confidence interval is
+    /// present only when the operation was measured over several spans.
     AllTheTime,
 }
 

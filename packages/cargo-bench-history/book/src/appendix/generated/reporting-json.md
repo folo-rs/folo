@@ -8,24 +8,24 @@
   "mode": "history",
   "notable": true,
   "runs": 128,
-  "series": 51,
+  "series": 8,
   "regressions": 2,
   "improvements": 0,
-  "ghosts_excluded": 3,
+  "ghosts_excluded": 2,
   "census": {
-    "total": 54,
-    "in_scope": 51,
-    "judged": 46,
-    "unjudged": 8,
+    "total": 10,
+    "in_scope": 8,
+    "judged": 5,
+    "unjudged": 5,
     "coverage": "partial",
     "reasons": [
       {
         "reason": "ghost",
-        "count": 3
+        "count": 2
       },
       {
         "reason": "too_few_points",
-        "count": 5
+        "count": 3
       }
     ]
   },
@@ -71,7 +71,7 @@
       "target_triple": "x86_64-unknown-linux-gnu",
       "machine_key": "a1b2c3d4",
       "runs": 128,
-      "series": 51,
+      "series": 8,
       "regressions": 2,
       "improvements": 0
     }

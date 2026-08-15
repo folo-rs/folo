@@ -141,7 +141,12 @@ fn demanded(config: &AnalysisConfig, gate: Gate, stage: GateStage) -> String {
         Gate::MinSeriesPoints => points(config.drift_min_points),
         Gate::MinBaseCommits => commits(config.min_series_points),
         Gate::SplitLocated => "a split must be found".to_owned(),
-        Gate::MinRegime => points(config.min_regime),
+        Gate::MinRegime => match stage {
+            // Branch mode counts retained base-side commit levels, not the tip sample
+            // and not the shorter side of a split. Ref: docs/design.md, branch comparison.
+            GateStage::Branch => commits(config.min_regime),
+            GateStage::ChangePoint | GateStage::Drift => points(config.min_regime),
+        },
         Gate::NonZeroDelta => "above zero".to_owned(),
         Gate::RelativeFloor => match stage {
             GateStage::Branch => percent(config.branch_practical_relative),
@@ -181,7 +186,12 @@ fn compares(gate: Gate, stage: GateStage) -> &'static str {
         Gate::MinSeriesPoints => "How many points the analyzed window holds.",
         Gate::MinBaseCommits => "How many base-side commit levels the comparison window holds.",
         Gate::SplitLocated => "Whether a candidate split exists at all.",
-        Gate::MinRegime => "How many points the shorter side of the split holds.",
+        Gate::MinRegime => match stage {
+            GateStage::ChangePoint | GateStage::Drift => {
+                "How many points the shorter side of the split holds."
+            }
+            GateStage::Branch => "How many retained base-side commit levels the comparison holds.",
+        },
         Gate::NonZeroDelta => "Whether the two levels differ at all.",
         Gate::RelativeFloor => "The move as a fraction of the baseline.",
         Gate::AbsoluteFloor => "The move in the metric's own units.",
@@ -285,49 +295,34 @@ fn lower_clears(gate: Gate) -> bool {
     matches!(gate, Gate::Significance)
 }
 
-/// The bar length a gate with no number to compare is drawn at when it held.
-///
-/// A boolean-shaped gate still needs a bar, and any length implies a magnitude it does not
-/// have. This one is far enough past the line to read as cleared and short enough not to
-/// look like a decisive margin.
-const HELD_RATIO: f64 = 2.0;
-
-/// The bar length a gate with no number to compare is drawn at when it did not hold.
-const FAILED_RATIO: f64 = 0.4;
-
 /// How far a gate's computed value sits from its threshold, as the multiple the ladder
 /// draws the bar at.
-fn ratio_of(outcome: &GateOutcome) -> f64 {
-    let boolean_ratio = if outcome.passed {
-        HELD_RATIO
-    } else {
-        FAILED_RATIO
-    };
+///
+/// `None` when the gate has no value/threshold pair to ratio: a boolean hold, a
+/// not-reached row, or a comparison against zero. Those rows are drawn as a status
+/// marker rather than a fabricated bar.
+fn ratio_of(outcome: &GateOutcome) -> Option<f64> {
     let (Some(value), Some(threshold)) = (outcome.value, outcome.threshold) else {
-        return boolean_ratio;
+        return None;
     };
 
     let ratio = if lower_clears(outcome.gate) {
         if value <= 0.0 {
             // A value of zero clears any positive threshold by an unbounded margin, which
             // is a division the bar cannot express and does not need to.
-            return boolean_ratio;
+            return None;
         }
         threshold / value
     } else {
         if threshold <= 0.0 {
             // The non-zero-delta gate demands nothing but a difference, so there is no
             // margin to draw.
-            return boolean_ratio;
+            return None;
         }
         value / threshold
     };
 
-    if ratio.is_finite() {
-        ratio
-    } else {
-        boolean_ratio
-    }
+    ratio.is_finite().then_some(ratio)
 }
 
 /// What a gate's outcome computed, and what it demanded, rendered for the page.
@@ -391,7 +386,7 @@ fn rungs(log: &GateLog, stage: GateStage, kind: MetricKind) -> Vec<Rung> {
         gate: gate.label().to_owned(),
         value: "not reached".to_owned(),
         threshold: demanded(&config, gate, stage),
-        ratio: 0.0,
+        ratio: None,
         verdict: Verdict::NotReached,
     }));
     rungs
@@ -491,7 +486,7 @@ fn ladders() -> Vec<Asset> {
 /// demonstrate, so a candidate that starts falling somewhere else renames the sentence
 /// instead of leaving the chapter asserting a decision the detector no longer makes.
 fn declined_fragment(log: &GateLog, kind: MetricKind) -> String {
-    let Some(gate) = log.declined_by() else {
+    let Some(gate) = log.declined_by_stage(GateStage::ChangePoint) else {
         return "> **Reported**, unexpectedly. This example is documented as being \
                 declined, so this fragment means the two have diverged.\n"
             .to_owned();
@@ -1001,7 +996,7 @@ mod tests {
         let series = declined_candidate();
         let (finding, log) = judge(&series);
         let declining = log
-            .declined_by()
+            .declined_by_stage(GateStage::ChangePoint)
             .expect("the declined example must not report");
 
         let rungs = rungs(&log, GateStage::ChangePoint, series.kind);
@@ -1025,7 +1020,9 @@ mod tests {
     fn the_declined_fragment_names_the_gate_from_the_log() {
         let series = declined_candidate();
         let (_, log) = judge(&series);
-        let declining = log.declined_by().expect("the example must not report");
+        let declining = log
+            .declined_by_stage(GateStage::ChangePoint)
+            .expect("the example must not report");
 
         let fragment = content("gates-ladder-declined.md");
 
@@ -1041,7 +1038,7 @@ mod tests {
         let rungs = rungs(&log, GateStage::ChangePoint, series.kind);
 
         assert!(finding.is_some(), "the passing example must report");
-        assert_eq!(log.declined_by(), None);
+        assert_eq!(log.declined_by_stage(GateStage::ChangePoint), None);
         assert!(!rungs.is_empty());
         assert!(
             rungs.iter().all(|rung| rung.verdict == Verdict::Passed),
@@ -1062,9 +1059,9 @@ mod tests {
         );
     }
 
-    /// The declared order is what the chapter publishes, so it must be the order the
-    /// detectors actually apply. Each example reaches a different depth, so the assertion
-    /// is that what was recorded is a prefix of what is declared.
+    /// The declared order is what the chapter publishes, so it must be the complete
+    /// sequence the detectors actually apply. A prefix would leave optional trailing
+    /// gates unchecked against the table.
     #[test]
     fn every_declared_order_matches_what_the_detector_records() {
         let cases: [(GateStage, GateLog); 3] = [
@@ -1075,15 +1072,9 @@ mod tests {
 
         for (stage, log) in cases {
             let recorded = recorded_gates(&log, stage);
-            let declared = stage_gates(stage);
-            assert!(
-                !recorded.is_empty(),
-                "{} recorded no gates at all",
-                stage.label()
-            );
             assert_eq!(
-                Some(recorded.as_slice()),
-                declared.get(..recorded.len()),
+                recorded,
+                stage_gates(stage),
                 "{} applies its gates in a different order than the chapter declares",
                 stage.label()
             );
@@ -1366,7 +1357,7 @@ mod tests {
 
         assert_eq!(value, "held");
         assert_eq!(threshold, "must hold");
-        assert!((ratio_of(&outcome) - HELD_RATIO).abs() < f64::EPSILON);
+        assert_eq!(ratio_of(&outcome), None);
     }
 
     /// A gate cleared by coming in under its threshold must still draw as cleared.
@@ -1378,7 +1369,10 @@ mod tests {
             .expect("the passing example reaches the significance gate");
 
         assert!(outcome.passed);
-        assert!(ratio_of(&outcome) > 1.0);
+        assert!(
+            ratio_of(&outcome).is_some_and(|ratio| ratio > 1.0),
+            "a gate cleared from below must draw past the line"
+        );
     }
 
     #[test]

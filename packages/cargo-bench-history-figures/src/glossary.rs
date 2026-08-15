@@ -12,12 +12,12 @@
 /// One defined term.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Term {
-    /// The phrase as it appears in the prose. This is what an `<abbr>` wraps, so it is
-    /// written the way it reads in a sentence rather than as a dictionary headword.
+    /// The phrase as it appears in the prose. Written the way it reads in a sentence
+    /// rather than as a dictionary headword.
     pub phrase: &'static str,
 
-    /// The plain-language definition, which is both the hover text and the glossary
-    /// entry. One sentence, no notation, and no term that is itself only defined here.
+    /// The plain-language definition. One sentence, no notation, and no term that is
+    /// itself only defined here.
     pub definition: &'static str,
 
     /// The name a statistics text would use, where knowing it helps the reader search for
@@ -84,8 +84,8 @@ pub const TERMS: &[Term] = &[
     },
     Term {
         phrase: "rank comparison",
-        definition: "How often a value measured after a change beats one measured before \
-                     it, counted over every possible pairing.",
+        definition: "Rank-based evidence that the before and after regimes differ, \
+                     tested two-sided.",
         formal_name: "Mann-Whitney U test",
         chapter: "detection.md",
     },
@@ -194,18 +194,59 @@ pub const TERMS: &[Term] = &[
         chapter: "shape.md",
     },
     Term {
+        phrase: "harvest",
+        definition: "Reading whatever output the benchmark engines left behind after a \
+                     run.",
+        formal_name: "",
+        chapter: "collection.md",
+    },
+    Term {
+        phrase: "machine key",
+        definition: "A fingerprint of the host hardware, used to keep incomparable \
+                     results apart.",
+        formal_name: "",
+        chapter: "collection.md",
+    },
+    Term {
+        phrase: "dirty run",
+        definition: "A measurement taken with uncommitted changes in the working tree.",
+        formal_name: "",
+        chapter: "collection.md",
+    },
+    Term {
+        phrase: "partition",
+        definition: "One discriminant set's slice of the store.",
+        formal_name: "",
+        chapter: "collection.md",
+    },
+    Term {
         phrase: "merge base",
         definition: "The newest commit a branch and its base still share.",
         formal_name: "",
         chapter: "selection.md",
     },
+    Term {
+        phrase: "finding",
+        definition: "A move that survived detection, every gate, and the group-wide \
+                     correction.",
+        formal_name: "",
+        chapter: "reporting.md",
+    },
+    Term {
+        phrase: "census",
+        definition: "The report's account of how many series it judged, and why it did \
+                     not judge the rest.",
+        formal_name: "",
+        chapter: "reporting.md",
+    },
+    Term {
+        phrase: "comparison-base lag",
+        definition: "A branch comparison made against base data from several commits \
+                     back.",
+        formal_name: "",
+        chapter: "reporting.md",
+    },
 ];
-
-/// The term recorded for `phrase`, if any.
-#[must_use]
-pub fn lookup(phrase: &str) -> Option<&'static Term> {
-    TERMS.iter().find(|term| term.phrase == phrase)
-}
 
 #[cfg(test)]
 mod tests {
@@ -237,19 +278,6 @@ mod tests {
         }
     }
 
-    /// Definitions are hover text as well as glossary entries, and a tooltip the reader
-    /// has to study is worse than no tooltip. This is a blunt proxy for "one sentence".
-    #[test]
-    fn definitions_stay_short_enough_to_read_in_a_tooltip() {
-        for term in TERMS {
-            assert!(
-                term.definition.len() <= 140,
-                "the definition of '{}' is too long to work as hover text",
-                term.phrase
-            );
-        }
-    }
-
     #[test]
     fn every_term_names_a_chapter_that_introduces_it() {
         for term in TERMS {
@@ -259,11 +287,5 @@ mod tests {
                 term.phrase
             );
         }
-    }
-
-    #[test]
-    fn a_defined_phrase_can_be_looked_up() {
-        assert!(lookup("rank comparison").is_some());
-        assert!(lookup("not a term the appendix defines").is_none());
     }
 }

@@ -6,7 +6,7 @@
 //! in detection behaviour therefore changes these assets, and the freshness check turns
 //! that into a failing test rather than into prose that has quietly become wrong.
 
-use cbh_detect::{AnalysisConfig, Finding, Series, evaluate_with_log, examples};
+use cbh_detect::{AnalysisConfig, AnalysisMode, Finding, Series, evaluate_with_log, examples};
 use cbh_model::MetricKind;
 
 use crate::assets::Asset;
@@ -90,7 +90,7 @@ fn branch() -> Vec<Asset> {
             format!("{name}.md"),
             finding.as_ref().map_or_else(
                 || verdict::quiet(None, reading),
-                |found| verdict::reported(found, reading),
+                |found| verdict::reported(found, reading, AnalysisMode::Branch),
             ),
         ));
     }
@@ -164,6 +164,7 @@ fn clean_step() -> Vec<Asset> {
                 &finding,
                 "the split is where the level changed, not where the \
                                           largest single jump happened",
+                AnalysisMode::History,
             ),
         ),
     ]
@@ -191,6 +192,7 @@ fn slow_ramp() -> Vec<Asset> {
             verdict::reported(
                 &finding,
                 "no single commit is responsible, so the finding names the window",
+                AnalysisMode::History,
             ),
         ),
     ]
