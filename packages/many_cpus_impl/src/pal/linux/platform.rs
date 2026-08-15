@@ -203,11 +203,7 @@ impl BuildTargetPlatform {
         // be slower than any other, so it is never demoted on that basis - a kernel that discloses
         // none at all therefore reports a machine of a single efficiency class, which is what a
         // uniform machine looks like in any case.
-        let max_bogomips = cpu_infos
-            .iter()
-            .map(|info| info.bogomips)
-            .max()
-            .expect("must have at least one processor in NonEmpty");
+        let max_bogomips = cpu_infos.iter().filter_map(|info| info.bogomips).max();
 
         let mut processors = cpu_infos.map(|info| {
             let memory_region = numa_nodes
@@ -221,12 +217,16 @@ impl BuildTargetPlatform {
                 })
                 .expect("processor not found in any NUMA node");
 
-            let efficiency_class =
-                if info.bogomips != BOGOMIPS_WHEN_ABSENT && info.bogomips < max_bogomips {
-                    EfficiencyClass::Efficiency
-                } else {
-                    EfficiencyClass::Performance
-                };
+            let is_slower_than_the_fastest = info
+                .bogomips
+                .zip(max_bogomips)
+                .is_some_and(|(bogomips, max_bogomips)| bogomips < max_bogomips);
+
+            let efficiency_class = if is_slower_than_the_fastest {
+                EfficiencyClass::Efficiency
+            } else {
+                EfficiencyClass::Performance
+            };
 
             // Some Linux flavors do not report this, so just assume online by default.
             // Sometimes this is also omitted for a specific processor because... it just is.
@@ -238,8 +238,12 @@ impl BuildTargetPlatform {
             ProcessorImpl {
                 id: info.index,
                 memory_region_id: memory_region,
+                // An undisclosed metric is exactly what `UNDETERMINED` exists to report, matching
+                // what Windows reports for a processor whose frequency it withholds.
+                relative_speed: info
+                    .bogomips
+                    .map_or(RelativeSpeed::UNDETERMINED, RelativeSpeed::from_os_metric),
                 efficiency_class,
-                relative_speed: RelativeSpeed::from_os_metric(info.bogomips),
                 model: info.model,
                 is_active: is_online,
             }
@@ -342,7 +346,7 @@ impl BuildTargetPlatform {
 
                     Some(CpuInfo {
                         index,
-                        bogomips: bogomips.unwrap_or(BOGOMIPS_WHEN_ABSENT),
+                        bogomips,
                         // A kernel-provided model is the most informative identification available,
                         // so we only assemble one ourselves when the kernel provides none.
                         model: model.or_else(|| synthesize_model(implementer, part)),
@@ -484,9 +488,12 @@ struct CpuInfo {
 
     /// CPU bogomips value, rounded to nearest integer. We use this to identify efficiency versus
     /// performance cores, where the processors with max bogomips are considered performance
-    /// cores and any with lower bogomips are considered efficiency cores. A record that carries
-    /// no readable value for it gets `BOGOMIPS_WHEN_ABSENT` instead.
-    bogomips: u32,
+    /// cores and any with lower bogomips are considered efficiency cores. `None` when the kernel
+    /// discloses no readable value - the field is a Linux convenience whose presence depends on
+    /// the processor architecture, and it feeds nothing but heuristics about relative core speed,
+    /// so refusing to enumerate a machine over its absence would deny the caller every capability
+    /// of the package to protect one heuristic.
+    bogomips: Option<u32>,
 
     /// Best-effort model, either as reported by the kernel or synthesized from the identity
     /// fields the kernel reports instead. `None` when the record identifies the processor in
@@ -501,16 +508,6 @@ const CPUINFO_KEY_BOGOMIPS: &str = "bogomips";
 const CPUINFO_KEY_MODEL_NAME: &str = "model name";
 const CPUINFO_KEY_IMPLEMENTER: &str = "cpu implementer";
 const CPUINFO_KEY_PART: &str = "cpu part";
-
-/// Substituted for a processor whose /proc/cpuinfo record carries no readable `bogomips` field.
-/// The field is a Linux convenience whose presence depends on the processor architecture, and it
-/// feeds nothing but heuristics about relative core speed - refusing to enumerate a machine over
-/// its absence would deny the caller every capability of the package to protect one heuristic.
-///
-/// The chosen value is the one `RelativeSpeed::from_os_metric()` reads as a metric the operating
-/// system did not disclose, so such a processor reports an undetermined relative speed instead of
-/// a fabricated one, matching what Windows reports for a processor whose frequency it withholds.
-const BOGOMIPS_WHEN_ABSENT: u32 = 0;
 
 /// Marks a model string as assembled by us out of separate /proc/cpuinfo fields, as opposed to
 /// being reported as a whole by the kernel.
