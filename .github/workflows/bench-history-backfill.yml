@@ -84,7 +84,7 @@ jobs:
         # Full history: the tool benchmarks each historical commit in a throwaway `git worktree`,
         # and the range selection walks `main`'s first-parent history by date. Neither works on the
         # default shallow clone.
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 

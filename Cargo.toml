@@ -12,7 +12,7 @@ rust-version = "1.93.1"
 [workspace.dependencies]
 all_the_time = { version = "0.6.1", path = "packages/all_the_time", default-features = false }
 alloc_tracker = { version = "0.7.0", path = "packages/alloc_tracker", default-features = false }
-anyspawn = { version = "0.6.0", default-features = false }
+anyspawn = { version = "0.7.0", default-features = false }
 arc-swap = { version = "1.7.0", default-features = false }
 async-trait = { version = "0.1.89", default-features = false }
 awaiter_set = { version = "0.1.10", path = "packages/awaiter_set", default-features = false }
@@ -20,7 +20,7 @@ axum = { version = "0.8.0", default-features = false }
 azure_core = { version = "1.0.0", default-features = false }
 azure_identity = { version = "1.0.0", default-features = false }
 azure_storage_blob = { version = "1.0.0", default-features = false }
-base64 = { version = "0.22.1", default-features = false, features = ["std"] }
+base64 = { version = "0.23.1", default-features = false, features = ["std"] }
 cargo-freeze-deps = { version = "0.1.4", path = "packages/cargo-freeze-deps", default-features = false }
 cbh_analyze = { version = "=0.0.9", path = "packages/cbh_analyze", default-features = false }
 cbh_cli = { version = "=0.0.9", path = "packages/cbh_cli", default-features = false }
@@ -37,7 +37,7 @@ cbh_render = { version = "=0.0.9", path = "packages/cbh_render", default-feature
 cbh_stats = { version = "=0.0.9", path = "packages/cbh_stats", default-features = false }
 cbh_storage = { version = "=0.0.9", path = "packages/cbh_storage", default-features = false }
 clap = { version = "4.6.1", default-features = false, features = ["default"] }
-colored = { version = "2.2.0", default-features = false }
+colored = { version = "3.1.1", default-features = false }
 cpu-time = { version = "1.0.0", default-features = false }
 cpulist = { version = "1.1.5", path = "packages/cpulist", default-features = false }
 criterion = { version = "0.8.2", default-features = false }
@@ -95,7 +95,7 @@ nm_otel_impl = { version = "=0.4.15", path = "packages/nm_otel_impl", default-fe
 nonempty = { version = "0.12.0", default-features = false }
 num-integer = { version = "0.1.46", default-features = false }
 num-traits = { version = "0.2.19", default-features = false }
-ohno = { version = "0.3.0", default-features = false }
+ohno = { version = "0.4.0", default-features = false }
 oneshot = { version = "0.2.1", default-features = false, features = [
     "std",
     "async",
@@ -118,16 +118,16 @@ semver = { version = "1.0.28", default-features = false, features = ["std"] }
 seq-macro = { version = "0.3.0", default-features = false }
 serde = { version = "1.0.228", default-features = false, features = ["std"] }
 serde_json = { version = "1.0.150", default-features = false, features = ["std"] }
-serial_test = { version = "3.2.0", default-features = false }
+serial_test = { version = "4.0.1", default-features = false }
 sha2 = { version = "0.11.0", default-features = false }
 simple-mermaid = { version = "0.2.0", default-features = false }
 smallvec = { version = "1.15.0", default-features = false }
 static_assertions = { version = "1.1.0", default-features = false }
-syn = { version = "2.0.117", default-features = false }
+syn = { version = "3.0.3", default-features = false }
 tempfile = { version = "3.20.0", default-features = false }
-thread_aware = { version = "0.8.0", default-features = false }
+thread_aware = { version = "0.9.0", default-features = false }
 threadpool = { version = "1.8.1", default-features = false }
-tick = { version = "0.4.0", default-features = false }
+tick = { version = "0.5.0", default-features = false }
 tokio = { version = "1.49.0", default-features = false }
 toml = { version = "1.1.2", default-features = false }
 toml_edit = { version = "0.25.12", default-features = false }
