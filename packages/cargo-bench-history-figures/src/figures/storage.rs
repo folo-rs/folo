@@ -191,9 +191,9 @@ fn key_grammar() -> String {
          | `v1` | Storage layout version |\n\
          | `wordcount` | Project — which store this is |\n\
          | `objects` | Fixed; separates records from any future sibling namespace |\n\
-         | `callgrind` | Engine |\n\
-         | `x86_64-unknown-linux-gnu` | Target triple |\n\
-         | `a1b2c3d4e5f60718` | Machine key |\n\
+         | `callgrind` | Discriminant set field: engine |\n\
+         | `x86_64-unknown-linux-gnu` | Discriminant set field: target triple |\n\
+         | `a1b2c3d4e5f60718` | Discriminant set field: machine key |\n\
          | `4f2a1c9…` | The commit |\n\
          | `clean.json` | Which kind of object |\n"
     )
@@ -354,7 +354,7 @@ mod tests {
             8,
             "the grammar table describes an eight-segment key"
         );
-        assert!(markdown.contains("| `callgrind` | Engine |"));
+        assert!(markdown.contains("| `callgrind` | Discriminant set field: engine |"));
     }
 
     /// Sanitisation lowercases, so two keys differing only in case collapse into one

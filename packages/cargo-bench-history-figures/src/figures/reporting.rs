@@ -339,9 +339,10 @@ fn finding_annotated() -> String {
     markdown.push_str("\n| Part | What it carries |\n|---|---|\n");
     writeln!(
         markdown,
-        "| `{identity}` | The benchmark identity: every segment of the qualified name, \
-         joined by `/`. This is the string a blessing prefix matches against, and the one \
-         [`examine`](../commands/examine.md) takes. |"
+        "| `{identity}` | The benchmark identity: every benchmark-ID segment joined by `/`. \
+         This slash-rendered identity is the string accepted by \
+         [`examine`](../commands/examine.md) and matched by the benchmark-ID prefix supplied \
+         to [`bless`](../commands/bless.md). |"
     )
     .expect("writing to a String never fails");
     writeln!(
@@ -548,7 +549,7 @@ fn describe_reason(reason: ComparisonBaseLagReason) -> &'static str {
     match reason {
         ComparisonBaseLagReason::DiscriminantSetMismatch => {
             "Newer base data exists, but it was measured under a different machine key. \
-             Counts are never compared across machine keys, so the comparison reached back \
+             Measurements are never compared across machine keys, so the comparison reached back \
              to the newest base commit this partition covers. A rotating CI pool is the \
              usual cause."
         }

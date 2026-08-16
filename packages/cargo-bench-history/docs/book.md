@@ -156,6 +156,13 @@ against and what a user reads when a finding does not make sense.
   against, and included with `{{#include}}`. Stable explanatory Markdown stays ordinary Markdown.
   A regeneration that changes a generated asset means the pipeline's behaviour changed; the
   diff is the review.
+  The generated-evidence boundary is owned by `cargo-bench-history-figures`: it manages the asset
+  registry, write/check reconciliation, rendering, and preview for appendix evidence. Its
+  dependencies are one-way from the generator to narrow production-owned projections such as
+  `cbh_analyze::auto_mode`, the `cbh_detect` `private-test-util` inspection surface,
+  `cbh_render::CoverageState::ALL`, and `UnjudgedReason::ALL`; the generator is book
+  infrastructure and is not shipped with the application. Component ownership detail lives in the
+  [implementation guide](implementation.md#ownership-map).
 - **Illustration discipline**: every stage that adds, removes, reorders, collapses or reshapes data
   gets a before/after figure in which affected observations are marked and labelled with the reason.
   A reader must never have to infer what a stage did.
@@ -183,7 +190,7 @@ against and what a user reads when a finding does not make sense.
 - Prefer deleting a page's detail and linking to `--help` or a design doc over letting the guide
   drift from the code.
 - Generated evidence cannot be edited in place: change the code or the example data and re-run
-  `just book-figures`. A stale checked-in asset fails the test suite. Ordinary explanatory Markdown
-  is edited in the chapter files themselves.
+  `just book-figures`. The figures package owns the reconciliation check; ordinary explanatory
+  Markdown is edited in the chapter files themselves.
 - When the appendix gains coverage of something a concept page also explains, trim the concept page
   to the mental model and link down. The two must not both carry the mechanism.

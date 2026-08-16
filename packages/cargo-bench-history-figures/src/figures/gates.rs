@@ -1,7 +1,7 @@
 //! Figures and worked examples for the Noise gates chapter.
 //!
 //! Every figure here is a rendering of a real [`GateLog`]: the module runs the detector
-//! over an example series and draws the decisions it recorded, gate by gate. No threshold
+//! over an example series and draws the decisions it recorded gate by gate. No threshold
 //! is written down — each one is read from [`AnalysisConfig::default`] or from the outcome
 //! a gate logged — so a change in the gating policy rewrites the chapter rather than
 //! leaving its numbers behind, and the freshness check turns that into a failing test.
@@ -143,7 +143,9 @@ fn demanded(config: &AnalysisConfig, gate: Gate, stage: GateStage) -> String {
         Gate::SplitLocated => "a split must be found".to_owned(),
         Gate::MinRegime => match stage {
             // Branch mode counts retained base-side commit levels, not the tip sample
-            // and not the shorter side of a split. Ref: docs/design.md, branch comparison.
+            // and not the shorter side of a split. Ref:
+            // packages/cargo-bench-history/docs/DESIGN.md, "Judging a branch tip",
+            // section 8.2, noise-aware gating.
             GateStage::Branch => commits(config.min_regime),
             GateStage::ChangePoint | GateStage::Drift => points(config.min_regime),
         },
@@ -157,7 +159,11 @@ fn demanded(config: &AnalysisConfig, gate: Gate, stage: GateStage) -> String {
             "{}× the typical residual",
             number(config.residual_noise_multiple)
         ),
-        Gate::BaseScatter => "the sample must carry some scatter".to_owned(),
+        Gate::BaseScatter => concat!(
+            "observed scatter, or one count, byte, or allocation of scale; ",
+            "flat timings have no quantum"
+        )
+        .to_owned(),
         Gate::Significance => match stage {
             GateStage::Drift => format!("p < {}", chance(config.drift_alpha)),
             _ => format!("p < {}", chance(config.change_alpha)),
@@ -196,7 +202,9 @@ fn compares(gate: Gate, stage: GateStage) -> &'static str {
         Gate::RelativeFloor => "The move as a fraction of the baseline.",
         Gate::AbsoluteFloor => "The move in the metric's own units.",
         Gate::ResidualNoise => "The move against the series' own typical residual.",
-        Gate::BaseScatter => "Whether the base window carries enough scatter to form an interval.",
+        Gate::BaseScatter => {
+            "Whether observed base scatter or a metric quantum can scale the base prediction."
+        }
         Gate::Significance => match stage {
             GateStage::ChangePoint => {
                 "The chance level of the rank test comparing the two regimes."
@@ -288,25 +296,27 @@ fn reading(gate: Gate) -> Reading {
 
 /// Whether `gate` is cleared by coming in *under* its threshold.
 ///
-/// The ladder draws a bar past the line as a gate cleared, so these gates' bars are
-/// inverted; drawn as computed-over-demanded, a decisive chance level would read as a bar
-/// of almost nothing.
-fn lower_clears(gate: Gate) -> bool {
+/// The ladder draws a clearance multiple, so these gates invert value and threshold. Drawn
+/// as computed-over-demanded, a decisive chance level would read as a bar of almost
+/// nothing.
+fn clears_from_below(gate: Gate) -> bool {
     matches!(gate, Gate::Significance)
 }
 
-/// How far a gate's computed value sits from its threshold, as the multiple the ladder
-/// draws the bar at.
+/// How far a gate cleared or missed, as the direction-adjusted multiple the ladder draws.
 ///
-/// `None` when the gate has no value/threshold pair to ratio: a boolean hold, a
+/// A value above one means the gate cleared. Gates that clear from below invert value and
+/// threshold, so a smaller p-value produces a larger clearance multiple.
+///
+/// `None` when the gate has no value/threshold pair to compare: a boolean hold, a
 /// not-reached row, or a comparison against zero. Those rows are drawn as a status
 /// marker rather than a fabricated bar.
-fn ratio_of(outcome: &GateOutcome) -> Option<f64> {
+fn clearance_multiple_of(outcome: &GateOutcome) -> Option<f64> {
     let (Some(value), Some(threshold)) = (outcome.value, outcome.threshold) else {
         return None;
     };
 
-    let ratio = if lower_clears(outcome.gate) {
+    let multiple = if clears_from_below(outcome.gate) {
         if value <= 0.0 {
             // A value of zero clears any positive threshold by an unbounded margin, which
             // is a division the bar cannot express and does not need to.
@@ -322,7 +332,7 @@ fn ratio_of(outcome: &GateOutcome) -> Option<f64> {
         value / threshold
     };
 
-    ratio.is_finite().then_some(ratio)
+    multiple.is_finite().then_some(multiple)
 }
 
 /// What a gate's outcome computed, and what it demanded, rendered for the page.
@@ -365,7 +375,7 @@ fn rungs(log: &GateLog, stage: GateStage, kind: MetricKind) -> Vec<Rung> {
                 gate: outcome.gate.label().to_owned(),
                 value,
                 threshold,
-                ratio: ratio_of(outcome),
+                clearance_multiple: clearance_multiple_of(outcome),
                 verdict: if outcome.passed {
                     Verdict::Passed
                 } else {
@@ -386,7 +396,7 @@ fn rungs(log: &GateLog, stage: GateStage, kind: MetricKind) -> Vec<Rung> {
         gate: gate.label().to_owned(),
         value: "not reached".to_owned(),
         threshold: demanded(&config, gate, stage),
-        ratio: None,
+        clearance_multiple: None,
         verdict: Verdict::NotReached,
     }));
     rungs
@@ -706,7 +716,7 @@ fn residual_strip() -> Asset {
     );
 
     let strip = Residuals::new(
-        "a step measured against what the series does anyway",
+        "a step measured against the series' typical residual",
         step_residuals(&values, split_of(&values)),
         outcome.threshold.unwrap_or_default(),
     )
@@ -1357,7 +1367,7 @@ mod tests {
 
         assert_eq!(value, "held");
         assert_eq!(threshold, "must hold");
-        assert_eq!(ratio_of(&outcome), None);
+        assert_eq!(clearance_multiple_of(&outcome), None);
     }
 
     /// A gate cleared by coming in under its threshold must still draw as cleared.
@@ -1370,7 +1380,7 @@ mod tests {
 
         assert!(outcome.passed);
         assert!(
-            ratio_of(&outcome).is_some_and(|ratio| ratio > 1.0),
+            clearance_multiple_of(&outcome).is_some_and(|multiple| multiple > 1.0),
             "a gate cleared from below must draw past the line"
         );
     }

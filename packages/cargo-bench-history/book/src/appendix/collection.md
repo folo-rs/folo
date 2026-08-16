@@ -36,8 +36,12 @@ that did not run this time contributes nothing, rather than contributing a lie.
 
 The consequence is worth stating: **an engine that produced no output stores nothing, silently.**
 There is no error, because "this workspace has no Callgrind benchmarks" and "the Callgrind
-benchmarks all failed" look identical from here. The report's coverage line is where a missing
-engine eventually shows up.
+benchmarks all failed" look identical from here. Coverage can expose missing output only for
+series already present in history, where earlier observations can reconstruct as ghosts or
+unjudged series. A never-recorded engine is invisible to coverage because collection has no
+object, no series, and no way to distinguish "no benchmarks" from "a failed engine". If every
+expected engine must be verified, that is a separate collection-time check, not an analysis
+coverage guarantee.
 
 ## Collisions: what happens when a run already exists
 

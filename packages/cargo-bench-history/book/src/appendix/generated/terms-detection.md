@@ -11,5 +11,5 @@
 | **prediction interval** | The range a single further measurement is expected to land in, given what the previous ones did. |
 | **rank comparison** | Rank-based evidence that the before and after regimes differ, tested two-sided. |
 | **regime** | A stretch of commits over which a series holds one level. |
-| **scatter** | How much a series wobbles between commits when nothing has changed. |
+| **scatter** | Between-commit variation in a series when nothing has changed. |
 | **split search** | A scan for the single most likely place a series changed level. |

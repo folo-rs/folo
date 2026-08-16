@@ -432,8 +432,8 @@ fn survivors(store: &[Partition]) -> usize {
 /// The store with the objects the query kept set apart from the objects it excluded.
 ///
 /// Every exclusion is drawn the same way; which stage made it is the accounting table's
-/// job, and a grid that shaded five stages differently would be a legend to decode rather
-/// than a picture to read.
+/// job, and a grid that shaded each exclusion stage differently would be a legend to
+/// decode rather than a picture to read.
 fn funnel_figure() -> String {
     store()
         .iter()
@@ -487,8 +487,8 @@ fn funnel_table() -> String {
     markdown.push_str(
         "\nThe grid draws the analyzed first-parent line, so the runs the on-history stage \
          removed have no column in it — having no place on that line is exactly why they \
-         were removed. Partitions are labelled `engine / target triple / machine key`, with \
-         the triples shortened to fit.\n",
+         were removed. Partitions are labelled by engine, target triple, and machine key, \
+         with the triples shortened to fit.\n",
     );
     markdown
 }

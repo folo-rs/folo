@@ -1,4 +1,4 @@
-| Order | Candidate | Rank | Chance level | Bar to clear | Outcome |
+| Order | Candidate | Rank | Chance level | Threshold at rank | Outcome |
 |---|---|---:|---:|---:|---|
 | correct, then filter | `checksum` (improvement) | 1 | 0.001 | 0.01 | kept |
 | correct, then filter | `tokenize` (regression) | 2 | 0.015 | 0.02 | kept |

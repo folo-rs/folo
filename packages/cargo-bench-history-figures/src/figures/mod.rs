@@ -1,7 +1,8 @@
 //! The figures, tables and excerpts embedded in each appendix chapter.
 //!
-//! One module per chapter, so a chapter's evidence and its prose stay easy to keep in
-//! step. A module exposes a single `assets` function; [`assets`] concatenates them.
+//! Each module owns one chapter or a cohesive group of related chapters, so the evidence
+//! and its prose stay easy to keep in step. A module exposes a single `assets` function;
+//! [`assets`] concatenates them.
 
 use crate::assets::Asset;
 

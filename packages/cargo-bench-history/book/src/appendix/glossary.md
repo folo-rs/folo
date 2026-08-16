@@ -7,6 +7,10 @@ works as well as the textbook name, the description is what the prose uses — b
 textbook name is recorded here too, because it is what you need if you want to read further
 about a method.
 
+Terminology is deliberately narrow here: **dispersion** is the engine-reported precision attached
+to one point, while **scatter** is the between-commit variation of a reconstructed series. The
+terms are not aliases.
+
 {{#include generated/glossary-table.md}}
 
 ## A note on what these are not

@@ -1,7 +1,7 @@
 //! Figures and worked examples for the Multiplicity and coverage chapter.
 //!
-//! The chapter makes two arithmetic claims — that the bar a finding must clear rises with
-//! the size of the family, and that correcting before filtering the display is the more
+//! The chapter makes two arithmetic claims — that the rank threshold tightens with the
+//! size of the family, and that correcting before filtering the display is the more
 //! sensitive of the two possible orders — and one accounting claim, that every series an
 //! analysis did not judge is named. Each figure here is the arithmetic itself: the
 //! step-up decisions come from the real [`benjamini_hochberg`](cbh_stats::benjamini_hochberg)
@@ -37,9 +37,9 @@ pub fn assets() -> Vec<Asset> {
 /// it.
 ///
 /// The procedure answers in a keep-or-drop mask over the candidates it was given, which
-/// leaves the rank and the bar each candidate faced implicit. Recovering them once here is
-/// what lets the figure and the table beside it state the same numbers by construction
-/// rather than by two agreeing derivations.
+/// leaves each candidate's rank and associated threshold implicit. Recovering them once
+/// here is what lets the figure and the table beside it state the same numbers by
+/// construction rather than by two agreeing derivations.
 #[derive(Clone, Debug)]
 struct Judged {
     /// How the appendix names the series.
@@ -51,8 +51,8 @@ struct Judged {
     /// How often chance alone would produce a pattern at least this strong.
     chance_level: f64,
 
-    /// The bar its rank had to clear.
-    bar: f64,
+    /// The threshold associated with this rank.
+    threshold: f64,
 
     /// Whether the procedure kept it.
     kept: bool,
@@ -66,7 +66,7 @@ impl Judged {
 }
 
 /// Runs the real step-up procedure over `candidates` against a family of `family_size`,
-/// and recovers the rank and bar each candidate faced.
+/// and recovers each candidate's rank and associated threshold.
 ///
 /// `candidates` are labelled chance levels in any order; the result is sorted, which is
 /// the order the procedure itself works in.
@@ -90,34 +90,34 @@ fn judge(candidates: &[(&str, f64)], family_size: usize) -> Vec<Judged> {
                 label: label.to_owned(),
                 rank,
                 chance_level,
-                bar: bar_at(rank, family_size),
+                threshold: threshold_at(rank, family_size),
                 kept: kept.get(index).copied().unwrap_or_default(),
             }
         })
         .collect()
 }
 
-/// The share of reported findings the correction is willing to have be wrong.
+/// The target expected false-discovery proportion for reported findings.
 fn fdr_q() -> f64 {
     AnalysisConfig::default().fdr_q
 }
 
-/// The bar the candidate at `rank` must clear in a family of `family_size`.
+/// The threshold associated with `rank` in a family of `family_size`.
 ///
-/// The arithmetic mirrors the step-up procedure the tool applies: the keep-or-drop
-/// decision comes from the real implementation, and this recovers the per-rank line that
-/// implementation compares against so the figure can draw it.
-fn bar_at(rank: usize, family_size: usize) -> f64 {
+/// The keep-or-drop decision comes from the real implementation. This recovers the
+/// per-rank line that implementation uses to find the largest passing rank; that rank
+/// keeps the preceding prefix.
+fn threshold_at(rank: usize, family_size: usize) -> f64 {
     crate::coord::of(rank) / crate::coord::of(family_size.max(1)) * fdr_q()
 }
 
 /// The staircase's worked family: a run where several series raised a candidate and the
 /// procedure kept most of them.
 ///
-/// Chosen so the figure shows the one thing a per-candidate reading of the bar would get
-/// wrong — a candidate that fails its own rank's bar and is kept anyway, because a weaker
-/// one below it cleared its own. Any set without that case would leave a reader believing
-/// the procedure is a row-by-row comparison.
+/// Chosen so the figure shows the one thing a per-candidate threshold reading would get
+/// wrong — a candidate that exceeds its own rank's threshold and is kept anyway, because
+/// the largest passing rank keeps the prefix above it. Any set without that case would
+/// leave a reader believing the procedure is a row-by-row comparison.
 const STAIRCASE_CANDIDATES: [(&str, f64); 5] = [
     ("parse_headers", 0.002),
     ("tokenize", 0.011),
@@ -132,13 +132,14 @@ fn staircase() -> Vec<Asset> {
     let judged = judge(&STAIRCASE_CANDIDATES, family);
     let figure = staircase_figure(
         format!(
-            "{} candidates against the bar for a family of {family}",
+            "{} candidates against rank thresholds in a family of {family}",
             judged.len()
         ),
         &judged,
     );
 
-    let mut table = String::from("| Rank | Series | Chance level | Bar to clear | Outcome |\n");
+    let mut table =
+        String::from("| Rank | Series | Chance level | Threshold at rank | Outcome |\n");
     table.push_str("|---:|---|---:|---:|---|\n");
     for candidate in &judged {
         writeln!(
@@ -147,15 +148,16 @@ fn staircase() -> Vec<Asset> {
             candidate.rank,
             candidate.label,
             chance(candidate.chance_level),
-            chance(candidate.bar),
+            chance(candidate.threshold),
             candidate.outcome()
         )
         .expect("writing to a String never fails");
     }
     writeln!(
         table,
-        "\nThe family is the {family} series this run judged, and the bar at rank *k* is \
-         *k* / {family} of the {} the correction is willing to have be wrong.",
+        "\nThe family is the {family} series this run judged. The threshold at rank *k* \
+         is *k* / {family} of the target expected false-discovery proportion, {}, and \
+         the largest passing rank keeps the preceding prefix.",
         percent(fdr_q())
     )
     .expect("writing to a String never fails");
@@ -174,7 +176,7 @@ fn staircase_figure(caption: impl Into<String>, judged: &[Judged]) -> String {
             staircase.candidate(Candidate {
                 label: candidate.label.clone(),
                 chance_level: candidate.chance_level,
-                threshold: candidate.bar,
+                threshold: candidate.threshold,
                 kept: candidate.kept,
             })
         })
@@ -194,9 +196,9 @@ const MARGINAL_SERIES: &str = "tokenize";
 
 /// The large family the same candidate is judged against.
 ///
-/// A family of a couple of thousand series, which is the scale the chapter contrasts a
-/// small one with, and far enough above the small family that the marginal candidate's bar
-/// moves by more than a rounding.
+/// A family at the scale the chapter contrasts a small one with. Chance alone is likely
+/// to produce low chance levels somewhere in a family this large, so the marginal
+/// candidate's threshold moves by more than a rounding.
 const LARGE_FAMILY: usize = 2000;
 
 /// The same marginal candidate judged in a small family and a large one.
@@ -211,7 +213,7 @@ fn families() -> Vec<Asset> {
     let figure = format!("{}\n{}", small.figure, large.figure);
 
     let mut table =
-        String::from("| Family size | Rank | Chance level | Bar to clear | Outcome |\n");
+        String::from("| Family size | Rank | Chance level | Threshold at rank | Outcome |\n");
     table.push_str("|---:|---:|---:|---:|---|\n");
     for case in [&small, &large] {
         let candidate = case.marginal();
@@ -221,16 +223,17 @@ fn families() -> Vec<Asset> {
             case.family,
             candidate.rank,
             chance(candidate.chance_level),
-            chance(candidate.bar),
+            chance(candidate.threshold),
             candidate.outcome()
         )
         .expect("writing to a String never fails");
     }
     writeln!(
         table,
-        "\nThe same series, the same measurements, the same chance level — judged against \
-         a bar that is {} as strict in the larger family.",
-        times(small.marginal().bar / large.marginal().bar)
+        "\nThe same series, the same measurements, the same chance level. A larger \
+         family is more likely to produce chance candidates somewhere in the set, so this \
+         rank threshold is {} as strict.",
+        times(small.marginal().threshold / large.marginal().threshold)
     )
     .expect("writing to a String never fails");
 
@@ -282,7 +285,7 @@ fn family_size_case(family: usize) -> FamilyCase {
 ///
 /// The direction-order example is stated over its own family rather than the census's,
 /// because the point it makes is about rank rather than about scale: two candidates in a
-/// family this size land on bars a reader can check by hand.
+/// family this size land on thresholds a reader can check by hand.
 const DIRECTION_FAMILY: usize = 10;
 
 /// The improvement's chance level.
@@ -293,7 +296,7 @@ const IMPROVEMENT_CHANCE: f64 = 0.001;
 
 /// The regression's chance level.
 ///
-/// Between the bars for the first and second rank in this family, which is exactly the
+/// Between the thresholds for the first and second rank in this family, which is exactly the
 /// range where the two orders disagree.
 const REGRESSION_CHANCE: f64 = 0.015;
 
@@ -319,7 +322,7 @@ fn direction_order_table() -> String {
     let filtered_first = judge(&[(REGRESSION_SERIES, REGRESSION_CHANCE)], DIRECTION_FAMILY);
 
     let mut table =
-        String::from("| Order | Candidate | Rank | Chance level | Bar to clear | Outcome |\n");
+        String::from("| Order | Candidate | Rank | Chance level | Threshold at rank | Outcome |\n");
     table.push_str("|---|---|---:|---:|---:|---|\n");
     for (order, judged) in [
         ("correct, then filter", &corrected_first),
@@ -337,7 +340,7 @@ fn direction_order_table() -> String {
                 candidate.label,
                 candidate.rank,
                 chance(candidate.chance_level),
-                chance(candidate.bar),
+                chance(candidate.threshold),
                 candidate.outcome()
             )
             .expect("writing to a String never fails");
@@ -503,8 +506,8 @@ fn state_reach(state: CoverageState) -> &'static str {
              makes no claim about the rest."
         }
         CoverageState::Full => {
-            "The whole in-scope suite. This is the only state in which silence is an \
-             unqualified all-clear."
+            "The whole in-scope suite. This is the only silent state with no coverage \
+             qualification; the verdict remains no notable changes detected."
         }
     }
 }
@@ -618,14 +621,14 @@ mod tests {
     }
 
     /// The staircase's lesson is the step-up rescue, which only exists if one candidate
-    /// misses its own rank's bar and is kept anyway.
+    /// exceeds its own rank's threshold and is kept anyway.
     #[test]
-    fn the_staircase_keeps_a_candidate_that_misses_its_own_bar() {
+    fn the_staircase_keeps_a_candidate_that_exceeds_its_own_threshold() {
         let judged = judge(&STAIRCASE_CANDIDATES, family_size_of_run());
 
         let rescued = judged
             .iter()
-            .filter(|candidate| candidate.kept && candidate.chance_level > candidate.bar)
+            .filter(|candidate| candidate.kept && candidate.chance_level > candidate.threshold)
             .count();
 
         assert!(
@@ -649,7 +652,7 @@ mod tests {
     /// The table beside the figure is the same decisions in words, so every candidate the
     /// procedure judged has to appear in it.
     #[test]
-    fn the_staircase_table_states_every_rank_and_bar() {
+    fn the_staircase_table_states_every_rank_and_threshold() {
         let judged = judge(&STAIRCASE_CANDIDATES, family_size_of_run());
         let table = content("coverage-staircase.md");
 
@@ -660,8 +663,8 @@ mod tests {
                 candidate.label
             );
             assert!(
-                table.contains(&chance(candidate.bar)),
-                "the bar for rank {} is missing from:\n{table}",
+                table.contains(&chance(candidate.threshold)),
+                "the threshold for rank {} is missing from:\n{table}",
                 candidate.rank
             );
         }
@@ -677,24 +680,24 @@ mod tests {
         assert!(family_size_of_run() >= STAIRCASE_CANDIDATES.len());
     }
 
-    /// The bar is the step-up procedure's own line, so it must be the one the real
-    /// implementation compares against: every candidate at or below its rank's bar is kept.
+    /// The threshold is the step-up procedure's own line, so it must be the one the real
+    /// implementation uses: every candidate at or below its rank's threshold is kept.
     #[test]
-    fn every_candidate_under_its_bar_is_kept() {
+    fn every_candidate_under_its_threshold_is_kept() {
         let judged = judge(&STAIRCASE_CANDIDATES, family_size_of_run());
 
         for candidate in &judged {
-            if candidate.chance_level <= candidate.bar {
+            if candidate.chance_level <= candidate.threshold {
                 assert!(
                     candidate.kept,
-                    "rank {} clears its bar but was dropped",
+                    "rank {} is at or below its threshold but was dropped",
                     candidate.rank
                 );
             }
         }
     }
 
-    /// The figure's whole subject is the bar moving with the size of the family.
+    /// The figure's whole subject is the threshold moving with the size of the family.
     #[test]
     fn the_marginal_candidate_survives_the_small_family_and_not_the_large_one() {
         let small = family_size_case(family_size_of_run());
@@ -703,8 +706,8 @@ mod tests {
         assert!(small.marginal().kept, "the small family must keep it");
         assert!(!large.marginal().kept, "the large family must drop it");
         assert!(
-            large.marginal().bar < small.marginal().bar,
-            "the bar must tighten as the family grows"
+            large.marginal().threshold < small.marginal().threshold,
+            "the threshold must tighten as the family grows"
         );
     }
 
@@ -751,8 +754,8 @@ mod tests {
         assert_eq!(corrected.rank, 2);
         assert_eq!(filtered.rank, 1);
         assert!(
-            filtered.bar < corrected.bar,
-            "the earlier rank must carry the stricter bar"
+            filtered.threshold < corrected.threshold,
+            "the earlier rank must carry the stricter threshold"
         );
     }
 
@@ -786,16 +789,16 @@ mod tests {
         assert!(table.contains(&chance(REGRESSION_CHANCE)));
     }
 
-    /// The bar is only worth drawing if the tool would actually apply it, which means the
-    /// share it derives from is the configured one.
+    /// The threshold is only worth drawing if the tool would actually apply it, which means
+    /// the share it derives from is the configured one.
     #[test]
-    fn every_bar_derives_from_the_configured_false_discovery_share() {
+    fn every_threshold_derives_from_the_configured_false_discovery_share() {
         let config = AnalysisConfig::default();
 
         assert!((fdr_q() - config.fdr_q).abs() < f64::EPSILON);
         assert!(
-            (bar_at(1, 1) - config.fdr_q).abs() < f64::EPSILON,
-            "the last rank's bar in a family of one is the share itself"
+            (threshold_at(1, 1) - config.fdr_q).abs() < f64::EPSILON,
+            "the last rank's threshold in a family of one is the share itself"
         );
         assert!(content("coverage-staircase.md").contains(&percent(config.fdr_q)));
     }
@@ -870,10 +873,10 @@ mod tests {
         }
     }
 
-    /// Only one state covers the whole in-scope suite, which is what makes it the only one
-    /// whose silence is an unqualified all-clear.
+    /// Only one state judges the whole in-scope suite, which is what makes it the only
+    /// silent state with no coverage qualification.
     #[test]
-    fn only_the_full_state_covers_the_whole_in_scope_suite() {
+    fn only_the_full_state_has_no_coverage_qualification() {
         let complete: Vec<CoverageState> = CoverageState::ALL
             .into_iter()
             .filter(|&state| {

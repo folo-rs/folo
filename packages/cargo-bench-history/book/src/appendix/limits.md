@@ -43,21 +43,21 @@ slope or the mean.
 *What to do:* keep benchmark names unique across the workspace. See
 [Shape of the data](shape.md#benchmark-identity).
 
-## One change touching fifty benchmarks produces fifty findings
+## One shared change can produce many findings
 
-There is no cross-series aggregation. A change that slows down a shared allocator surfaces
-once per affected series, independently judged.
+There is no cross-series aggregation. A change that slows down shared code or shared runtime
+behavior surfaces once per affected series, independently judged.
 
 The [group-wide correction](coverage.md) has a consequence here that runs against intuition. It
-compares each candidate against a bar that **rises with its rank**, so fifty co-occurring
-findings are judged against far more generous bars than a single isolated one would be. Many
+compares each candidate against a bar that **rises with its rank**, so co-occurring findings are
+judged against more generous bars than a single isolated one would be. Many
 simultaneous findings are therefore *easier* to report, which means a wall of findings is weaker
 per-finding evidence than its length suggests, not stronger.
 
 *Why:* aggregating would require knowing which series share a cause, which is exactly the
 attribution the tool refuses to guess at.
 
-*What to do:* read a report with many simultaneous findings as one event rather than fifty, and
+*What to do:* read a report with many simultaneous findings as one event rather than a count, and
 look for the common cause before investigating any of them individually. That pattern is itself
 diagnostic — see [Insights](insights.md).
 

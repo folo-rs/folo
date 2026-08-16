@@ -9,4 +9,4 @@
 
 32 runs removed and 22 runs account for all 54 objects the store held. Only those survivors are fetched and parsed; every other object was decided on its storage key and the commit's place in the topology alone.
 
-The grid draws the analyzed first-parent line, so the runs the on-history stage removed have no column in it — having no place on that line is exactly why they were removed. Partitions are labelled `engine / target triple / machine key`, with the triples shortened to fit.
+The grid draws the analyzed first-parent line, so the runs the on-history stage removed have no column in it — having no place on that line is exactly why they were removed. Partitions are labelled by engine, target triple, and machine key, with the triples shortened to fit.

@@ -458,7 +458,8 @@ writing, for dry runs). A clean point writes the deterministic clean key, refuse
 default if it exists (overwrite to replace, or skip-existing to treat it as a success and
 write nothing — the append-only mode CI uses). A dirty snapshot coexists with prior
 snapshots. An engine that harvests zero cases stores nothing, since an empty set carries no
-comparable data.
+comparable data. Analysis can account only for series that already exist in history; verifying
+that every expected engine produced output is a separate collection-time check.
 
 Scope flags (`--workspace`, `--package`, `--exclude`, `--bench`) and cargo feature flags
 translate directly to `cargo bench` arguments, and everything after `--` is forwarded
@@ -863,14 +864,15 @@ level shift too, so it reports as a change-point; the difference is which test e
 
 ### 8.2 Noise-aware gating
 
-The gates exist to suppress **noise** — movement the measurement itself manufactures — and
-nothing else. They are deliberately *not* a filter for changes a reader might find
-uninteresting. A level shift caused by a runner swap, a toolchain bump, or a hardware refresh
-is a genuine move of the measured level and **is reported**; deciding that its cause makes it
-acceptable is a human judgement, recorded with a blessing (§8.6). Every floor is therefore
-tuned to the **measurement floor** — the magnitude below which a metric stops carrying
-information about the code — rather than to what someone might call important, because a gate
-wide enough to hide an infrastructure step would hide the regressions that share its shape.
+Detection applies two kinds of gates. The practical relative and absolute floors are an explicit
+actionability check: a move below them stays silent even when the statistics establish that the
+measured level moved, because it is not worth a human's attention. The remaining statistical gates
+— significance, residual scatter, population separation, and interval vetoes — suppress **noise**:
+movement manufactured by measurement or insufficient evidence. They are deliberately *not* a
+cause filter. A level shift caused by a runner swap, a toolchain bump, or a hardware refresh is a
+genuine move of the measured level and **is reported** when it clears the same evidence and
+actionability checks; deciding that its cause makes it acceptable is a human judgement, recorded
+with a blessing (§8.6).
 
 The same gates run for every engine; only their inputs differ. A change-point needs a minimum
 number of points on **each** side of the split, so a one-off blip on the newest point cannot
@@ -1246,13 +1248,14 @@ Every report states **how many series it judged, out of how many it could have j
 the reason for each series it did not judge. Without that, silence is ambiguous: the identical
 "no notable changes" is printed when every series was judged and none moved, when every series
 was too short to test, when the benchmarks stopped being collected, and when a mis-set gate
-switched detection off. Only the first of those is an all-clear, and a monitoring tool that
-cannot distinguish them can go blind without anyone noticing.
+switched detection off. Only the first of those has no coverage qualification, and a monitoring
+tool that cannot distinguish them can go blind without anyone noticing.
 
 The claim a silent report makes is therefore narrow and stated outright: *these N series were
-judged and none of them moved beyond the measurement floor*. It says nothing about the series it
-could not judge — and, where a level did move, nothing about **why** it moved: the detector
-reports that a measured level changed and leaves the cause to a human (§8.2, §8.6).
+judged and none produced a reportable move*. It says nothing about series that collection never
+recorded or series it could not judge — and, where a level did move, nothing about **why** it
+moved: the detector reports that a measured level changed and leaves the cause to a human
+(§8.2, §8.6).
 
 The accounting unit is the **series**, the unit the detectors judge, and it covers every series
 the analysis reconstructed, including those dropped before detection. Each unjudged series
@@ -1287,10 +1290,11 @@ on:
 * `partial` — some, but not all, of the in-scope suite was judged.
 * `full` — the whole in-scope suite was judged.
 
-Only `full` makes an empty findings list an unqualified all-clear; under every other state the
-silence is partly or wholly an absence of evidence. The states that judged nothing stay distinct
-because their remedies differ: look at collection, at the analyzed commit, or at the evidence the
-gates require.
+Only `full` removes the coverage qualification from a silent report: the whole in-scope suite was
+judged. The verdict remains "no notable changes detected" for those judged series, not proof that
+nothing regressed. Under every other state the silence is partly or wholly an absence of evidence.
+The states that judged nothing stay distinct because their remedies differ: look at collection, at
+the analyzed commit, or at the evidence the gates require.
 
 The set of judged series is exactly the false-discovery family (§8.3), so what a report counts as
 judged is the same set the correction is computed over and the two cannot drift apart. The

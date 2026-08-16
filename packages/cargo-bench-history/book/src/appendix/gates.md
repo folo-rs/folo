@@ -65,9 +65,10 @@ Two things in those tables are easy to miss:
 
 {{#include generated/gates-ladder-pass.svg}}
 
-Each bar shows what the gate computed against what it demanded, scaled so the demand sits at the
-same place on every row. The raw figures are printed alongside, because a chance level, a
-percentage and a nanosecond count cannot honestly share an axis.
+Each bar shows the direction-adjusted clearance multiple, scaled so the demand sits at the same
+place on every row and values above it cleared. Lower-is-better gates invert the computed value
+and threshold, so a stronger p-value extends past the line. The raw figures are printed alongside,
+because a chance level, a percentage and a nanosecond count cannot honestly share an axis.
 
 ## Is the move big enough to matter?
 

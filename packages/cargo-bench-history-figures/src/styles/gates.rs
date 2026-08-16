@@ -21,8 +21,8 @@ use crate::{canvas, coord, theme};
 /// the residual gate treats as ordinary.
 ///
 /// This is the figure that answers "how big does a move have to be before it stands out
-/// from what this series does anyway?" — which is the question the residual gate exists to
-/// ask, and the one readers most often expect a percentage to answer.
+/// from the series' typical residual?" — which is the question the residual gate exists
+/// to ask, and the one readers most often expect a percentage to answer.
 #[derive(Clone, Debug)]
 pub struct Residuals {
     caption: String,
@@ -94,7 +94,7 @@ impl Residuals {
                 theme::MUTED.mix(theme::BAND_OPACITY).filled(),
             )))?;
             chart.draw_series(std::iter::once(Text::new(
-                "what this series does anyway".to_owned(),
+                "typical-residual band".to_owned(),
                 (-0.3, self.band),
                 TextStyle::from((theme::FONT, theme::FONT_TICK)).color(&theme::MUTED),
             )))?;
@@ -200,7 +200,7 @@ impl Agreement {
                 .disable_mesh()
                 .axis_style(theme::INK)
                 .x_desc("each observation from before the change")
-                .y_desc("and after")
+                .y_desc("each observation from after the change")
                 .label_style((theme::FONT, theme::FONT_TICK, &theme::INK))
                 .x_labels(0)
                 .y_labels(0)
@@ -335,7 +335,7 @@ mod tests {
             .move_size(4.0)
             .render();
 
-        assert!(svg.contains("what this series does anyway"));
+        assert!(svg.contains("typical-residual band"));
         assert!(svg.contains("the move being judged"));
         assert!(svg.contains("signed residual from the fitted model"));
     }

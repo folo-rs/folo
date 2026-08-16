@@ -3,7 +3,7 @@
 a step the series&apos; own scatter explains
 </text>
 <text x="345" y="364" dy="-0.5ex" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
-computed value as a multiple of the gate&apos;s threshold
+direction-adjusted clearance multiple
 </text>
 <line opacity="0.12" stroke="currentColor" stroke-width="1" x1="22" y1="333" x2="22" y2="34"/>
 <line opacity="0.12" stroke="currentColor" stroke-width="1" x1="129" y1="333" x2="129" y2="34"/>

@@ -9,7 +9,7 @@
 | confidence | How strong the evidence for a finding is, on a scale where higher means chance is a worse explanation. |  | [Detection](detection.md) |
 | confidence interval | A range the benchmark engine reports alongside a measurement to say how precisely it pinned it down. |  | [Noise gates](gates.md) |
 | dirty run | A measurement taken with uncommitted changes in the working tree. |  | [Collection](collection.md) |
-| discriminant set | The engine, target and machine a run was measured with, which together decide what it may be compared against. |  | [Shape of the data](shape.md) |
+| discriminant set | The engine, target triple, and machine key a run was measured with, which together decide what it may be compared against. |  | [Shape of the data](shape.md) |
 | drift | A series that moves steadily in one direction rather than stepping between levels. | monotonic trend | [Detection](detection.md) |
 | false-discovery family | Every series that carried enough data to be tested, which is the group a finding has to stand out from. |  | [Multiplicity and coverage](coverage.md) |
 | finding | A move that survived detection, every gate, and the group-wide correction. |  | [Reporting](reporting.md) |
@@ -27,7 +27,7 @@
 | quantum | The smallest step a metric can actually take, such as one whole instruction. |  | [Noise gates](gates.md) |
 | rank comparison | Rank-based evidence that the before and after regimes differ, tested two-sided. | Mann-Whitney U test | [Detection](detection.md) |
 | regime | A stretch of commits over which a series holds one level. |  | [Detection](detection.md) |
-| scatter | How much a series wobbles between commits when nothing has changed. | dispersion | [Detection](detection.md) |
+| scatter | Between-commit variation in a series when nothing has changed. |  | [Detection](detection.md) |
 | series | One metric of one benchmark, tracked across commits. |  | [Reconstruction](reconstruction.md) |
 | split search | A scan for the single most likely place a series changed level. | Pettitt test | [Detection](detection.md) |
 | typical residual | How far an ordinary point sits from the level or line fitted to the series. | median absolute residual | [Noise gates](gates.md) |

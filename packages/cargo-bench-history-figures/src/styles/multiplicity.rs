@@ -1,8 +1,8 @@
 //! Figures for the multiplicity chapter: the step-up staircase and the census bar.
 //!
 //! Both exist to make a group-level argument visible. A reader can follow "test enough
-//! things and something will look surprising" as a sentence, but not act on it; seeing
-//! twelve candidates sorted against a rising bar, with the cut falling where it does,
+//! things and something is likely to look surprising" as a sentence, but not act on it;
+//! seeing candidates sorted against rank thresholds, with the cut falling where it does,
 //! turns it into a rule they can apply to their own report.
 
 use std::error::Error;
@@ -22,14 +22,14 @@ pub struct Candidate {
     /// The candidate's chance level.
     pub chance_level: f64,
 
-    /// The bar this candidate's rank had to clear.
+    /// The threshold associated with this candidate's rank.
     pub threshold: f64,
 
     /// Whether the procedure kept it.
     pub kept: bool,
 }
 
-/// The step-up staircase: candidates sorted by chance level against the rising bar.
+/// The step-up staircase: candidates sorted by chance level against rank thresholds.
 #[derive(Clone, Debug)]
 pub struct Staircase {
     caption: String,
@@ -92,17 +92,16 @@ impl Staircase {
                 .label_style((theme::FONT, theme::FONT_TICK, &theme::INK))
                 .draw()?;
 
-            // The bar rises with rank: the strongest candidate must clear the strictest
-            // bar, and each one after it a slightly looser one. Drawing it as a line
-            // rather than as per-point marks is what makes the "staircase" shape — and
-            // the point where the candidates cross it — legible at a glance.
-            let bar: Vec<(f64, f64)> = sorted
+            // Thresholds rise with rank, and the largest passing rank keeps the prefix
+            // before it. Drawing them as a line rather than as per-point marks is what
+            // makes the "staircase" shape — and the cut point — legible at a glance.
+            let threshold_line: Vec<(f64, f64)> = sorted
                 .iter()
                 .enumerate()
                 .map(|(index, candidate)| (coord::of(index) + 1.0, candidate.threshold))
                 .collect();
             chart.draw_series(std::iter::once(PathElement::new(
-                bar,
+                threshold_line,
                 ShapeStyle::from(theme::INK).stroke_width(2),
             )))?;
 
@@ -249,7 +248,7 @@ mod tests {
     use super::*;
 
     fn staircase() -> Staircase {
-        Staircase::new("twelve candidates against the rising bar")
+        Staircase::new("candidates against rank thresholds")
             .candidate(Candidate {
                 label: "a".to_owned(),
                 chance_level: 0.001,
@@ -289,7 +288,7 @@ mod tests {
     )]
     fn the_staircase_is_reproducible_regardless_of_input_order() {
         let forward = staircase().render();
-        let reversed = Staircase::new("twelve candidates against the rising bar")
+        let reversed = Staircase::new("candidates against rank thresholds")
             .candidate(Candidate {
                 label: "c".to_owned(),
                 chance_level: 0.040,

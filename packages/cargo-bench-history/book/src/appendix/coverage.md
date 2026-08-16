@@ -40,13 +40,13 @@ candidate. If the tool fed the correction only the candidates that survived the 
 would be dividing by a number that already excludes everything that came out quiet — and the
 correction would be almost inert.
 
-So the family is **every series the analysis was able to judge**, including the great majority
-that raised nothing at all.
+So the family is **every series the analysis judged**, including the great majority that raised
+nothing at all.
 
 One consequence follows immediately, and it is the honest cost of the design: **a finding has
-to clear a stricter bar in a large repository than in a small one.** The same benchmark, the
-same regression, the same data — reported in a family of twenty series, and possibly not in a
-family of two thousand.
+to clear a stricter bar for a large judged family than for a small one.** The same benchmark,
+the same regression, the same data may report when this analysis judged a small family and stay
+silent when it judged a large one. The report's judged count is the denominator.
 
 {{#include generated/coverage-family-size.svg}}
 
@@ -96,7 +96,9 @@ large that qualification is.
 
 {{#include generated/coverage-states.md}}
 
-Only **full** is an unqualified all-clear.
+**Full** is the only silent state with no coverage qualification: every in-scope series was
+judged. The verdict remains "no notable changes detected" for those judged series; it is not proof
+that nothing regressed.
 
 This is why automation should gate on coverage rather than on an empty findings list. A run
 that judged nothing at all reports no findings, and a naive check reads that as success.
@@ -115,4 +117,3 @@ that judged nothing at all reports no findings, and a naive check reads that as 
 
 The findings, and the census. Both go to [Reporting](reporting.md) — which, as it turns out,
 gives the census the same prominence as the findings themselves, for the reasons above.
-

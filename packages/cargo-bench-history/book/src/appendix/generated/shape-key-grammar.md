@@ -7,8 +7,8 @@ v1/wordcount/objects/callgrind/x86_64-unknown-linux-gnu/a1b2c3d4e5f60718/4f2a1c9
 | `v1` | Storage layout version |
 | `wordcount` | Project — which store this is |
 | `objects` | Fixed; separates records from any future sibling namespace |
-| `callgrind` | Engine |
-| `x86_64-unknown-linux-gnu` | Target triple |
-| `a1b2c3d4e5f60718` | Machine key |
+| `callgrind` | Discriminant set field: engine |
+| `x86_64-unknown-linux-gnu` | Discriminant set field: target triple |
+| `a1b2c3d4e5f60718` | Discriminant set field: machine key |
 | `4f2a1c9…` | The commit |
 | `clean.json` | Which kind of object |

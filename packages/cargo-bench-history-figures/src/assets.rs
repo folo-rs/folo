@@ -25,20 +25,6 @@ use std::{fs, io};
 /// remembers the recipe, which is not often enough for content the book embeds verbatim.
 pub const GENERATED_ROOT: &str = "packages/cargo-bench-history/book/src/appendix/generated";
 
-/// The workspace root, located from this crate's manifest directory.
-///
-/// Tests run with an unspecified working directory, so the path to the book cannot be relative
-/// to it. The manifest directory is fixed at compile time and the crate's position under
-/// `packages/` is a property of the workspace layout, so two levels up is the root.
-#[must_use]
-pub fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf()
-}
-
 /// One generated file the book includes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Asset {
@@ -266,6 +252,14 @@ fn wrap_io(error: &io::Error, operation: &str, path: &Path) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn workspace_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf()
+    }
 
     #[test]
     #[cfg_attr(

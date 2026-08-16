@@ -90,14 +90,14 @@ which threshold the finding happened to clear.
 
 A repository has many benchmarks × metrics, so testing each independently would flood the
 report. Every candidate enters a single false-discovery-rate procedure, and only survivors are
-reported. The family it corrects over is every series that could be judged at all — including
-every series that produced no candidate — because that is what a false-discovery rate is defined
-over. That family is exactly the set of series the report counts as
+reported. The family it corrects over is every series this analysis judged — including every
+series that produced no candidate — because that is what a false-discovery rate is defined over.
+That family is exactly the set of series the report counts as
 [judged](#reading-a-silent-report).
 
-One consequence is worth knowing up front: a finding has to clear a stricter bar in a large
-repository than in a small one. See
-[Multiplicity and coverage](../appendix/coverage.md) for why that is the honest trade.
+One consequence is worth knowing up front: a finding has to clear a stricter bar for a large
+judged family than for a small one. The report's judged count is the denominator to inspect.
+See [Multiplicity and coverage](../appendix/coverage.md) for why that is the honest trade.
 
 ## Reading a silent report
 
@@ -228,8 +228,9 @@ list:
 
 `coverage` is the verdict's reach as a single stable token — `no_series`, `nothing_in_scope`,
 `nothing_judged`, `partial` or `full` — so automation can gate on it without re-deriving the
-ratio and reaching a different conclusion than the report it accompanies. Only `full` is an
-unqualified all-clear.
+ratio and reaching a different conclusion than the report it accompanies. Only `full` has no
+coverage qualification: every in-scope series was judged, while the verdict still means "no
+notable changes detected" for judged series.
 
 `--verbose` goes further, naming each unjudged series individually with the evidence it carried
 and the gate rule that declined it.

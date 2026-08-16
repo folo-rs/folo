@@ -12,8 +12,9 @@
 //! because the quantities are incommensurable: a p-value, a percentage, a nanosecond
 //! count and a probability of superiority cannot share an axis. What the figure compares
 //! is therefore always the same thing — how far the computed value sits from the line the
-//! gate draws — and the raw numbers are printed alongside so nothing is lost to the
-//! normalisation.
+//! gate draws. Lower-clearing gates invert value and threshold, so the axis is a
+//! direction-adjusted clearance multiple; the raw numbers are printed alongside so nothing
+//! is lost to the normalisation.
 
 use std::error::Error;
 
@@ -60,11 +61,13 @@ pub struct Rung {
     /// What the gate required, rendered the same way.
     pub threshold: String,
 
-    /// How far the computed value sits from the threshold, as a multiple of the
-    /// threshold. One means the candidate landed exactly on the line; above one it
-    /// cleared with room to spare. `None` for a categorical gate that has no
-    /// value/threshold pair to ratio — those rows draw a status marker instead of a bar.
-    pub ratio: Option<f64>,
+    /// The direction-adjusted clearance multiple.
+    ///
+    /// One means the candidate landed exactly on the line; above one means it cleared.
+    /// Lower-clearing gates invert value and threshold. `None` for a categorical gate
+    /// that has no value/threshold pair to compare — those rows draw a status marker
+    /// instead of a bar.
+    pub clearance_multiple: Option<f64>,
 
     /// What the gate did.
     pub verdict: Verdict,
@@ -77,13 +80,13 @@ pub struct Ladder {
     rungs: Vec<Rung>,
 }
 
-/// The widest ratio a bar is drawn at.
+/// The widest clearance multiple a bar is drawn at.
 ///
 /// A candidate can clear a gate by orders of magnitude — a decisive p-value against its
 /// alpha, say — and drawing that to scale would squash every other bar into
 /// invisibility. Bars are clamped here and the true figure stays in the printed value,
 /// so an outlier costs the reader nothing.
-const RATIO_CEILING: f64 = 3.0;
+const CLEARANCE_CEILING: f64 = 3.0;
 
 impl Ladder {
     /// An empty ladder captioned `caption`.
@@ -134,7 +137,7 @@ impl Ladder {
             .margin(12)
             .x_label_area_size(30)
             .y_label_area_size(10)
-            .build_cartesian_2d(0.0_f64..RATIO_CEILING, 0.0_f64..coord::of(rows))?;
+            .build_cartesian_2d(0.0_f64..CLEARANCE_CEILING, 0.0_f64..coord::of(rows))?;
 
         chart
             .configure_mesh()
@@ -142,7 +145,7 @@ impl Ladder {
             .light_line_style(theme::INK.mix(0.0))
             .bold_line_style(theme::INK.mix(theme::GRID_OPACITY))
             .axis_style(theme::INK)
-            .x_desc("computed value as a multiple of the gate's threshold")
+            .x_desc("direction-adjusted clearance multiple")
             .label_style((theme::FONT, theme::FONT_TICK, &theme::INK))
             .y_labels(0)
             .draw()?;
@@ -162,17 +165,17 @@ impl Ladder {
             let bar_bottom = bottom + 0.35;
             let color = rung.verdict.color();
 
-            match rung.ratio {
-                Some(ratio) => {
-                    let width = ratio.clamp(0.0, RATIO_CEILING);
+            match rung.clearance_multiple {
+                Some(clearance_multiple) => {
+                    let width = clearance_multiple.clamp(0.0, CLEARANCE_CEILING);
                     chart.draw_series(std::iter::once(Rectangle::new(
                         [(0.0, bar_bottom), (width, bar_top)],
                         color.mix(0.55).filled(),
                     )))?;
                 }
                 None => {
-                    // Off the ratio scale: a categorical gate has no value/threshold pair,
-                    // so a bar would invent a magnitude it does not have.
+                    // Off the clearance scale: a categorical gate has no value/threshold
+                    // pair, so a bar would invent a magnitude it does not have.
                     let mid = f64::midpoint(bar_top, bar_bottom);
                     chart.draw_series(std::iter::once(Circle::new(
                         (0.15, mid),
@@ -209,21 +212,21 @@ mod tests {
                 gate: "significance".to_owned(),
                 value: "p = 0.004".to_owned(),
                 threshold: "p < 0.05".to_owned(),
-                ratio: Some(2.4),
+                clearance_multiple: Some(2.4),
                 verdict: Verdict::Passed,
             })
             .rung(Rung {
                 gate: "residual noise".to_owned(),
                 value: "2.1 ns".to_owned(),
                 threshold: "3.9 ns".to_owned(),
-                ratio: Some(0.54),
+                clearance_multiple: Some(0.54),
                 verdict: Verdict::Declined,
             })
             .rung(Rung {
                 gate: "split located".to_owned(),
                 value: "held".to_owned(),
                 threshold: "must hold".to_owned(),
-                ratio: None,
+                clearance_multiple: None,
                 verdict: Verdict::Passed,
             })
     }
@@ -242,11 +245,21 @@ mod tests {
         assert!(svg.contains("held vs must hold"));
     }
 
-    /// A categorical row must not acquire a bar on the ratio scale; a numeric row must.
+    /// A categorical row must not acquire a bar on the clearance scale; a numeric row must.
     #[test]
-    fn a_categorical_row_and_a_ratio_row_are_distinct_shapes() {
-        assert!(sample().rungs.iter().any(|rung| rung.ratio.is_some()));
-        assert!(sample().rungs.iter().any(|rung| rung.ratio.is_none()));
+    fn a_categorical_row_and_a_clearance_row_are_distinct_shapes() {
+        assert!(
+            sample()
+                .rungs
+                .iter()
+                .any(|rung| rung.clearance_multiple.is_some())
+        );
+        assert!(
+            sample()
+                .rungs
+                .iter()
+                .any(|rung| rung.clearance_multiple.is_none())
+        );
     }
 
     /// A gate's threshold is often written with a comparison sign, which the SVG
@@ -262,7 +275,7 @@ mod tests {
             gate: "significance".to_owned(),
             value: "p = 1e-9".to_owned(),
             threshold: "p < 0.05".to_owned(),
-            ratio: Some(5_000_000.0),
+            clearance_multiple: Some(5_000_000.0),
             verdict: Verdict::Passed,
         });
 

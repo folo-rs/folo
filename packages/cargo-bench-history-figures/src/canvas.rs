@@ -57,6 +57,12 @@ where
 ///
 /// Kept separate from [`draw`] so the rewriting rules can be tested directly against a
 /// known input rather than only through a rendered figure.
+///
+/// # Panics
+///
+/// Panics when the input does not have the `plotters` SVG root shape this crate emits.
+/// This is the generator's in-memory boundary for the responsive-SVG contract, so a
+/// shape the rewrite cannot handle is a figure defect rather than pass-through content.
 #[must_use]
 pub fn to_svg(raw: &str) -> String {
     let themed = raw.replace(theme::INK_HEX, "currentColor");
@@ -65,15 +71,15 @@ pub fn to_svg(raw: &str) -> String {
     // narrow viewport and force sideways scrolling. Dropping them in favour of the
     // `viewBox` that `plotters` already emits lets the figure take the width of the
     // content column and derive its height from the aspect ratio.
-    let Some(rest) = themed.strip_prefix("<svg width=") else {
-        return themed;
-    };
-    let Some(view_box_start) = rest.find("viewBox=") else {
-        return themed;
-    };
-    let Some(tail) = rest.get(view_box_start..) else {
-        return themed;
-    };
+    let rest = themed
+        .strip_prefix("<svg width=")
+        .expect("plotters SVG output must begin with a width-bearing root element");
+    let view_box_start = rest
+        .find("viewBox=")
+        .expect("plotters SVG output must carry a viewBox on the root element");
+    let tail = rest
+        .get(view_box_start..)
+        .expect("viewBox starts at an ASCII token boundary");
     format!("<svg style=\"width:100%;height:auto\" {tail}")
 }
 
@@ -114,10 +120,19 @@ mod tests {
     }
 
     #[test]
-    fn an_unrecognized_root_element_passes_through_unchanged() {
-        let raw = "<not-an-svg/>";
+    #[should_panic]
+    fn an_svg_without_the_plotters_width_prefix_panics() {
+        let raw = "<svg viewBox=\"0 0 10 10\"><g/></svg>";
 
-        assert_eq!(to_svg(raw), raw);
+        _ = to_svg(raw);
+    }
+
+    #[test]
+    #[should_panic]
+    fn an_svg_without_a_view_box_panics() {
+        let raw = "<svg width=\"10\" height=\"10\"><g/></svg>";
+
+        _ = to_svg(raw);
     }
 
     #[test]

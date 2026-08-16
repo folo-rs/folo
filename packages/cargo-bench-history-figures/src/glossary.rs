@@ -51,8 +51,8 @@ pub const TERMS: &[Term] = &[
     },
     Term {
         phrase: "scatter",
-        definition: "How much a series wobbles between commits when nothing has changed.",
-        formal_name: "dispersion",
+        definition: "Between-commit variation in a series when nothing has changed.",
+        formal_name: "",
         chapter: "detection.md",
     },
     Term {
@@ -188,7 +188,7 @@ pub const TERMS: &[Term] = &[
     },
     Term {
         phrase: "discriminant set",
-        definition: "The engine, target and machine a run was measured with, which \
+        definition: "The engine, target triple, and machine key a run was measured with, which \
                      together decide what it may be compared against.",
         formal_name: "",
         chapter: "shape.md",

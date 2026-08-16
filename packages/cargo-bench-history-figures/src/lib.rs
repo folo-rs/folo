@@ -27,6 +27,9 @@
 //! The crate is not published: it is book infrastructure, and it deliberately depends
 //! on the `private-test-util` surface of `cbh_detect` so a figure and the test that
 //! pins it read from one definition of the example data.
+//! Its generator contract and ownership are described in
+//! `packages/cargo-bench-history/docs/implementation.md` and
+//! `packages/cargo-bench-history/docs/book.md`.
 //!
 //! # Layout
 //!
@@ -35,7 +38,8 @@
 //!   determinism guarantees the `--check` run depends on.
 //! * [`styles`] — the figure catalogue. Each style is a reusable primitive rather than
 //!   a one-off drawing, so regenerating after a data change reproduces the same look.
-//! * [`figures`] — the appendix's actual figures, one module per chapter.
+//! * [`figures`] — the appendix's actual figures, where each module owns one chapter
+//!   or a cohesive group of related chapters.
 //! * [`glossary`] — the terms the appendix defines, feeding both the glossary page and
 //!   each chapter's own term table.
 //! * [`assets`] — the registry of everything the book embeds, and the write/check pair

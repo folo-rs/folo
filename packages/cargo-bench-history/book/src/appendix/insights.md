@@ -19,9 +19,10 @@ flowchart TD
     Q1 -->|"change point"| CP["It names a commit"]
     Q1 -->|"drift"| DR["It names a window"]
     CP --> Q2{"Did anything else move<br/>at the same commit?"}
-    Q2 -->|"many series"| INFRA["Suspect the environment,<br/>not the code"]
-    Q2 -->|"one or a few"| CODE["Suspect the change"]
-    INFRA --> ACC["Confirm, then bless"]
+    Q2 -->|"many series"| SHARED["Look for a shared cause:<br/>code or environment"]
+    Q2 -->|"one or a few"| CODE["Suspect the local change"]
+    SHARED --> CORR["Correlate metrics with<br/>the diff and run metadata"]
+    CORR --> ACC["Fix, or bless if intended"]
     CODE --> FIX["Fix, or bless if intended"]
     DR --> WIN["Examine the series;<br/>look for many small increments"]
     BR --> TIP["Re-run the tip;<br/>check for a lag warning"]
@@ -40,9 +41,10 @@ gap before it.
    point. The chart in the report is a summary; this is the data.
 2. **Check whether the attributed commit has a neighbour gap.** If the previous observation is
    twenty commits back, your suspect list is those twenty commits, not one.
-3. **Check what else moved.** If a dozen unrelated benchmarks stepped at the same commit, the
-   cause is almost certainly not code — see [unreliable
-   hardware](#unreliable-or-inconsistent-hardware).
+3. **Check what else moved.** Many simultaneous steps suggest a shared cause, not a specific
+   one. The cause may be shared code such as an allocator, runtime or dependency, or an
+   environment change such as the toolchain, runner, or hardware. Correlate the affected metrics
+   with the commit diff and run metadata before attributing it.
 4. **Decide.** Fix it, or accept it with [`bless`](../commands/bless.md), which re-baselines
    the series so it stops being re-reported.
 
@@ -81,7 +83,7 @@ intermediate commits are ignored — only the tip merges.
 
 **Symptoms:**
 
-- Many unrelated benchmarks step at the same commit.
+- Many unrelated benchmarks step at the same commit without a corresponding shared-code change.
 - A series oscillates between two levels rather than wandering around one.
 - Findings appear and disappear between runs with no code changes.
 - The report's coverage drops, or comparison-base lag warnings appear.
@@ -168,9 +170,9 @@ Work down this list. Each step names the chapter that explains it.
 5. **Is the series too noisy?** Compare the move against the series' own scatter on the chart.
    If it sits inside the band, that is your answer — and the benchmark, not the tool, is what
    needs work. → [Noise gates](gates.md)
-6. **Is the family large?** In a store of thousands of series, a marginal finding must clear a
-   stricter bar than the same finding in a small store. → [Multiplicity and
-   coverage](coverage.md)
+6. **Is the judged family large?** Read the report's judged count. A marginal finding must clear
+   a stricter bar for an analysis that judged many series than for one that judged few.
+   → [Multiplicity and coverage](coverage.md)
 7. **Was it an improvement in history mode?** Improvements are detected and corrected, but not
    displayed by default. → [Reporting](reporting.md)
 8. **Was it blessed?** A blessing re-baselines the series, so moves before the blessed commit

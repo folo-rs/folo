@@ -9,6 +9,7 @@
 //! and the surrounding prose is what makes it mean something.
 
 use cbh_detect::{AnalysisMode, Direction, Finding, FindingMethod};
+use cbh_render::format_value;
 
 /// The fragment describing a finding the detector reported.
 #[must_use]
@@ -39,16 +40,16 @@ fn history_reported(finding: &Finding, reading: &str) -> String {
             format!("accumulated across the window ending at `{commit}`")
         }
     };
+    let baseline = format_value(finding.baseline);
+    let latest = format_value(finding.latest);
 
     format!(
         "> **Reported.** A {direction} of {:+.2}% via {method}, {attribution}, at {:.0}% \
          confidence.\n>\n\
-         > The level moved from {:.2} to {:.2}.\n>\n\
+         > The level moved from {baseline} to {latest}.\n>\n\
          > {reading}.\n",
         finding.relative_delta * 100.0,
         finding.confidence * 100.0,
-        finding.baseline,
-        finding.latest,
     )
 }
 
@@ -59,16 +60,16 @@ fn history_reported(finding: &Finding, reading: &str) -> String {
 /// history-mode wording.
 fn branch_reported(finding: &Finding, reading: &str) -> String {
     let direction = direction_of(finding);
+    let baseline = format_value(finding.baseline);
+    let latest = format_value(finding.latest);
 
     format!(
         "> **Reported.** A {direction} of {:+.2}% at the branch tip against the base \
          prediction interval, at {:.0}% confidence.\n>\n\
-         > The tip is {:.2} against a base of {:.2}.\n>\n\
+         > The tip is {latest} against a base level of {baseline}.\n>\n\
          > {reading}.\n",
         finding.relative_delta * 100.0,
         finding.confidence * 100.0,
-        finding.latest,
-        finding.baseline,
     )
 }
 
