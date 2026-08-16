@@ -18,14 +18,15 @@ Each gate-passing candidate cleared a test at a chance level below some threshol
 threshold literally: it is the rate at which *unchanged* series are expected to produce a
 candidate anyway.
 
-A store with a thousand series will therefore produce candidates from series where nothing
-happened, every single run, no matter how good the gates are. Not because anything is broken
-— because that is what the threshold means.
+A large unchanged store is therefore likely to produce chance candidates even when the gates
+are working. As the judged family grows, the expected number of false candidates grows, and so
+does the probability of seeing at least one.
 
 So a per-series check is not enough. The tool applies a **group-wide correction**: sort every
 candidate by chance level, and require the strongest to clear a strict bar, the next a
-slightly looser one, and so on down. What survives is a set where only a small expected share
-is wrong.
+slightly looser one, and so on down. Benjamini-Hochberg targets an expected false-discovery
+proportion across repeated analyses; it does not cap the realized wrong share in any one
+report.
 
 {{#include generated/coverage-staircase.svg}}
 
@@ -52,10 +53,11 @@ silent when it judged a large one. The report's judged count is the denominator.
 
 {{#include generated/coverage-family-size.md}}
 
-That is not a defect to be worked around. It is what "a small share of what I report is
-wrong" costs when you are testing thousands of things at once. The alternative — a fixed
-per-series bar — is a report where the number of false alarms grows with the size of your
-suite, which is precisely the failure that makes people stop reading benchmark reports.
+That is not a defect to be worked around. It is the cost of controlling the expected
+false-discovery proportion across repeated analyses when you are testing thousands of things
+at once. The alternative — a fixed per-series bar — is a report where the expected number of
+false alarms grows with the size of your suite, which is precisely the failure that makes
+people stop reading benchmark reports.
 
 ## Why improvements are corrected too
 
@@ -90,15 +92,15 @@ A series that was not judged is always accounted for with a reason — never sil
 
 ## Reading a silent report
 
-"No notable changes" is not the same statement as "nothing regressed". It means *nothing
-regressed among the series this run was able to judge*, and the coverage line tells you how
-large that qualification is.
+"No notable changes" is not the same statement as "nothing regressed". It means the judged
+series produced no reportable move, and the coverage line tells you how much of the
+accounted-for data was in scope and judged.
 
 {{#include generated/coverage-states.md}}
 
 **Full** is the only silent state with no coverage qualification: every in-scope series was
-judged. The verdict remains "no notable changes detected" for those judged series; it is not proof
-that nothing regressed.
+judged. The verdict remains "no notable changes detected" for those judged series: no
+reportable move survived the gates.
 
 This is why automation should gate on coverage rather than on an empty findings list. A run
 that judged nothing at all reports no findings, and a naive check reads that as success.

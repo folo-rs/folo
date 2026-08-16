@@ -910,10 +910,10 @@ fn regime_intervals_are_disjoint(
 /// engine reports dispersion.
 ///
 /// The noise floor is the median confidence-interval half-width across `points` (see
-/// [`median_half_width`]): the wobble a single measurement carries. A move inside that
-/// band is indistinguishable from jitter however the rest of the evidence reads, so this
-/// is a one-way veto like [`regime_intervals_are_disjoint`], and it abstains — recording
-/// nothing — on an engine that reports no dispersion.
+/// [`median_half_width`]): the per-point dispersion a single measurement carries. A move
+/// inside that band is indistinguishable from that dispersion however the rest of the
+/// evidence reads, so this is a one-way veto like [`regime_intervals_are_disjoint`], and
+/// it abstains — recording nothing — on an engine that reports no dispersion.
 fn exceeds_noise_band(
     delta: f64,
     points: &[SeriesPoint],
@@ -2712,6 +2712,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "asserts a strict `<` at the exact recorded p-value, which needs bit-identical \
+                  recomputation of the rank statistic; Miri's float nondeterminism perturbs it"
+    )]
     fn change_point_significance_is_a_strict_boundary() {
         // The rank-test gate is a strict `<`: a candidate whose p-value lands exactly on
         // the threshold is rejected. Rather than hard-code that p, take it from the
@@ -4022,6 +4027,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "asserts a strict `<` at the exact recorded p-value, which needs bit-identical \
+                  recomputation of the rank statistic; Miri's float nondeterminism perturbs it"
+    )]
     fn compare_samples_significance_is_a_strict_boundary() {
         // Branch significance is a strict `<` against the prediction-interval p-value.
         // Take that p from the detector's own recording at the default alpha, then set
@@ -4209,6 +4219,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "asserts a strict `<` at the exact recorded p-value, which needs bit-identical \
+                  recomputation of the rank statistic; Miri's float nondeterminism perturbs it"
+    )]
     fn drift_significance_is_a_strict_boundary() {
         // The Mann–Kendall gate is a strict `<`: a trend whose p-value lands exactly on
         // `drift_alpha` is rejected. Take that p from the detector's own recording at the

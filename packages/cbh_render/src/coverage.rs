@@ -61,6 +61,39 @@ impl CoverageState {
             Self::Full => "full",
         }
     }
+
+    /// How far a silent run's verdict reaches, in coverage terms only.
+    ///
+    /// A silent verdict states that nothing crossed the reporting threshold; it never
+    /// proves that nothing moved. This describes *how much of the suite* that statement
+    /// covers for each state, in the same `accounted for` / `in scope` / `judged`
+    /// vocabulary the rest of [`Coverage`] uses, so every surface that explains coverage
+    /// extent — the report and the book's state table — reads one description rather than
+    /// a parallel copy.
+    #[must_use]
+    pub fn reach(self) -> &'static str {
+        match self {
+            Self::NoSeries => {
+                "Nothing: no series was accounted for. The empty-outcome hint explains why."
+            }
+            Self::NothingInScope => {
+                "Nothing at the analyzed commit: every accounted series was measured elsewhere."
+            }
+            Self::NothingJudged => {
+                "Nothing: in-scope series existed but none could be judged; the breakdown \
+                 says which evidence floor they fell short of."
+            }
+            Self::Partial => {
+                "The judged series only: no reportable move among them, and no claim about \
+                 the in-scope series that went unjudged."
+            }
+            Self::Full => {
+                "The whole in-scope suite: every in-scope series was judged, so this is the \
+                 only silent state with no coverage qualification. The verdict stays no \
+                 notable changes detected."
+            }
+        }
+    }
 }
 
 /// What an analysis judged, projected from a [`SeriesCensus`] into the account every
@@ -505,6 +538,39 @@ mod tests {
                 "partial",
                 "full"
             ]
+        );
+    }
+
+    #[test]
+    fn every_state_states_a_distinct_reach_that_does_not_overclaim() {
+        let reaches: Vec<&str> = CoverageState::ALL
+            .iter()
+            .map(|state| state.reach())
+            .collect();
+        for reach in &reaches {
+            assert!(!reach.is_empty(), "a state must describe its reach");
+        }
+        let mut unique = reaches.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), reaches.len(), "each reach must be distinct");
+
+        // A silent partial run must not read as proof that the judged series did not
+        // move; it states only that none crossed the reporting threshold.
+        assert!(
+            CoverageState::Partial
+                .reach()
+                .contains("no reportable move"),
+            "{}",
+            CoverageState::Partial.reach()
+        );
+        // Full is the one state whose silence carries no coverage qualification.
+        assert!(
+            CoverageState::Full
+                .reach()
+                .contains("no coverage qualification"),
+            "{}",
+            CoverageState::Full.reach()
         );
     }
 }

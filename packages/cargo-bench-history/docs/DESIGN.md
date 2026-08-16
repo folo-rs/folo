@@ -544,7 +544,7 @@ If a set has no runs at the context commit at all (`HEAD` was never collected or
 failed), every benchmark is a ghost and the set analyzes empty with a dedicated
 hint — an empty outcome the tool explains rather than guesses
 around. Because it changes only which reconstructed series are detected on (not which runs
-are selected), the ghost filter is analyze-only and outside the selection lockstep (§8.5).
+are selected), the ghost filter is analyze-only and outside the shared selection model (§8.5).
 
 Output toggles select which renderings one analysis pass emits — text to stdout by default,
 with file output flags that compose so a single pass can also write Markdown and JSON to
@@ -637,13 +637,13 @@ backfill can apply the same min-of-N noise reduction (§7.1) uniformly across th
 
 ### 7.5 `list`
 
-`list` **previews the exact data set an `analyze` pass would consume**, without running the
-analysis, letting a user confirm the commit range and discriminant sets first. For the
-`runs` and `blessings` subjects it **mirrors `analyze`'s data-set-selection parameters
-exactly** through the same shared selection pipeline, and the two must stay in lockstep — a
-selection parameter added to one is added to the other. It omits only the analysis-only
-flags. `list runs` reports, per discriminant set, the run / series / per-commit counts of
-the selected runs (each commit's clean/dirty split), oldest-first by topology.
+`list runs` **previews the exact data set an `analyze` pass would consume**, without running
+the analysis, letting a user confirm the commit range and discriminant sets first. The query
+commands share selection option meanings through the same pipeline, but not every subject or
+command uses identical defaults or admission policies. Selection parameters that are common
+to analysis-style data selection stay aligned, and `list` omits only the analysis-only
+flags. `list runs` reports, per discriminant set, the run / series / per-commit counts of the
+selected runs (each commit's clean/dirty split), oldest-first by topology.
 
 `list discriminants` is a different view: a **discovery catalog** of the sets present in
 storage, which requires **no repository** and so ignores the timeline and data-filtering
@@ -655,18 +655,20 @@ blessings (below).
 ### 7.6 `prune`
 
 `prune` **deletes a chosen portion of the stored data set** — to reclaim storage, discard a
-bad run, or drop the ephemeral uncommitted-tree snapshots that evaluation runs leave
-behind. It reuses `analyze`'s selection pipeline (keeping the three commands in lockstep)
-and then removes the selected objects rather than reporting on them.
+bad run, or drop the ephemeral uncommitted-tree snapshots that evaluation runs leave behind.
+It uses the shared selection option meanings and pipeline, then applies prune-specific
+defaults and admission rules before removing the selected objects. `prune --dry-run` is
+therefore the exact preview of a deletion plan; `list runs` is an analysis preview, not a
+prune preview.
 
 A deletion **action is required** — remove clean runs, dirty snapshots, or both, and/or
 delete blessing sidecars with `--include-blessings` — so a bare `prune` is an error that
-names them. Pruning never touches base-branch history: it walks the selected commits from
-the context back to the merge-base with the base and deletes only the context branch's own
-commits, preserving the shared base. Deleting the base branch's own data set (context
-resolves onto the base) wipes the mainline every feature analysis compares against, so it is
-refused unless a confirming flag is passed. The one intentional divergence from `analyze` /
-`list` is that the base tip's dirty snapshots are admitted **unconditionally**, so a dirty
+names them. Pruning never touches base-branch history: it walks the selected commits from the
+context back to the merge-base with the base and deletes only the context branch's own
+commits, preserving the shared base. The prune range is unbounded by default unless `--since`
+is supplied. Deleting the base branch's own data set (context resolves onto the base) wipes
+the mainline every feature analysis compares against, so it is refused unless a confirming
+flag is passed. The base tip's dirty snapshots are admitted **unconditionally**, so a dirty
 prune can reclaim ephemeral base-branch snapshots regardless of the current tree state.
 Pruning runs never removes a blessing; `--include-blessings` deletes every blessing sidecar
 in the selected range — including an orphan on a commit with no recorded run — and may be
@@ -718,11 +720,12 @@ with what that commit changed.
 
 It is a **drill-down sibling of `list runs`**: both are read-only previews over `analyze`'s
 exact data-set selection that never analyze, so `examine` reuses that selection pipeline
-unchanged and stays in the same lockstep — a selection parameter added to `analyze` is added
-to `list`, `prune`, and `examine` alike. Like `analyze` it requires a resolvable repository
-(it needs first-parent topology to enumerate and order the listed commits and each commit's
-title to label them) and repeats the pivot once **per matching discriminant set**, since the
-same series can exist under several triples or machine keys.
+unchanged. The shared selection options keep the same meanings across `analyze`, `list`,
+`prune`, and `examine`, while command-specific defaults and admission policies remain
+documented with each command. Like `analyze` it requires a resolvable repository (it needs
+first-parent topology to enumerate and order the listed commits and each commit's title to
+label them) and repeats the pivot once **per matching discriminant set**, since the same
+series can exist under several triples or machine keys.
 
 Two required options name the series, and they are the one place a command names a
 **metric**: `--benchmark <qualified-id>` selects exactly one benchmark identity and
@@ -1104,12 +1107,12 @@ testable (§8.3).
 | Benjamini–Hochberg false-discovery filter | ✅ | ✅ |
 | Improvements reported | opt-in | ✅ |
 
-Modes apply to `analyze` only; `list`, `prune`, and `examine` reuse the same data-set
-*selection* but never analyze, so the mode selection and improvements flag are
-analyze-only and not part of the selection lockstep. The **ghost filter** (§7.3) is likewise
-analyze-only and outside the lockstep: it applies in both modes, dropping — before detection
-— any benchmark absent at the context commit (the analyzed tip). In branch mode a benchmark
-removed on the branch is a ghost and a benchmark newly
+Modes apply to `analyze` only; `list`, `prune`, and `examine` reuse the shared selection
+options and pipeline but never analyze, so the mode selection and improvements flag are
+analyze-only and not part of the shared option model. The **ghost filter** (§7.3) is likewise
+analyze-only and outside that shared selection model: it applies in both modes, dropping —
+before detection — any benchmark absent at the context commit (the analyzed tip). In branch
+mode a benchmark removed on the branch is a ghost and a benchmark newly
 added on the branch is present and kept; dirty snapshots at the branch tip count as present
 via the base-tip dirty exception.
 
@@ -1290,11 +1293,11 @@ on:
 * `partial` — some, but not all, of the in-scope suite was judged.
 * `full` — the whole in-scope suite was judged.
 
-Only `full` removes the coverage qualification from a silent report: the whole in-scope suite was
-judged. The verdict remains "no notable changes detected" for those judged series, not proof that
-nothing regressed. Under every other state the silence is partly or wholly an absence of evidence.
-The states that judged nothing stay distinct because their remedies differ: look at collection, at
-the analyzed commit, or at the evidence the gates require.
+Only `full` removes the coverage qualification from a silent report: the whole in-scope suite
+was judged. The verdict remains "no notable changes detected" for those judged series: no
+reportable move survived the gates. Under every other state, some or all in-scope series were
+not judged. The states that judged nothing stay distinct because their remedies differ: look
+at collection, at the analyzed commit, or at the evidence the gates require.
 
 The set of judged series is exactly the false-discovery family (§8.3), so what a report counts as
 judged is the same set the correction is computed over and the two cannot drift apart. The

@@ -149,8 +149,9 @@ Two details follow from "per metric kind":
 - The winning metric is kept whole, so its confidence interval travels with the value it
   belongs to. Intervals are never merged or recomputed.
 
-The minimum is the right statistic here because measurement noise is one-sided: interference
-makes a benchmark slower, never faster. The fastest observed run is the one least disturbed.
+The minimum is a useful heuristic here because shared-runner contention commonly adds delay.
+Keeping the smallest observed value reduces the influence of transient positive interference,
+without guaranteeing that the chosen value is disturbance-free.
 
 > **`--best-of` is a protocol, not a flag.** The stored value depends on `N`, so changing it
 > shifts every series at once and reads as a suite-wide step. See
@@ -160,4 +161,3 @@ makes a benchmark slower, never faster. The fastest observed run is the one leas
 
 A store: immutable objects, keyed by partition and commit, each holding one engine's reduced
 output. Next: [Collection](collection.md), which is how they get there.
-

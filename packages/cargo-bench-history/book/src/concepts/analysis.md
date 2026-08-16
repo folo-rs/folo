@@ -101,18 +101,19 @@ See [Multiplicity and coverage](../appendix/coverage.md) for why that is the hon
 
 ## Reading a silent report
 
-"No notable changes detected" is a claim about the series that were actually **judged**, so
+"No notable changes detected" applies only to the series that were actually **judged**, so
 every report states how many that was, in its header:
 
 ```text
   runs: 240 (a1b2c3d → e4f5a6b)  in-scope series judged: 12 of 13  regressions: 0
 ```
 
-A silent report then says exactly what that silence covers, and what it does not:
+A silent report then states which accounted-for series were in scope and judged, and which
+were not:
 
 ```text
 No notable changes detected among the series that were judged.
-  Judged 12 of 13 in-scope series; none moved beyond the measurement floor.
+  Judged 12 of 13 in-scope series; no reportable move survived the gates.
   Not judged: 1 series not measured at the analyzed tip commit; 1 series with too few points
   in the analyzed window.
 ```
@@ -130,12 +131,12 @@ the gates require:
 - **too few base-branch commits to compare against** — branch mode has a tip measurement but
   too little base history to compare it with.
 
-`Judged 0 of N` is the case to watch: nothing was tested, so the silence is not evidence that
-nothing moved. The report says so outright. It usually means history is still accumulating, or
-that the benchmarks stopped being collected at the tip commit. When nothing was in scope at all
-there is no ratio to print, and the report says instead that nothing it accounted for is
-measured at the analyzed commit; with no series reconstructed at all it leads with the fact that
-nothing was analyzed.
+`Judged 0 of N` is the case to watch: nothing was tested, so the no-reportable-move line is
+not evidence that every measured level stayed flat. The report says so outright. It usually
+means history is still accumulating, or that the benchmarks stopped being collected at the tip
+commit. When nothing was in scope at all there is no ratio to print, and the report says
+instead that none of the accounted-for series is in scope at the analyzed commit; with no
+series reconstructed at all it leads with the fact that nothing was analyzed.
 
 The denominator is the series that *could* have been judged, which excludes ghosts — and the
 verdict above it is decided against the same denominator, so the headline and the ratio cannot
@@ -171,8 +172,9 @@ modes, auto-detected from git topology (there is no flag to force a mode):
 
 ## Comparison-base lag
 
-Branch mode compares the tip against the recent base-side points of the **same** discriminant
-set — same project, engine, target triple, and [machine key](../commands/machine-key.md).
+Branch mode compares the tip against the recent base-side points for the **same project** and
+the **same** discriminant set — same engine, target triple, and
+[machine key](../commands/machine-key.md).
 Measurements are never compared across machine keys, so on rotating CI pools, where the newest
 base commits may have run on a different machine, the branch runner's key can have usable base
 data only a few commits behind the merge-base. The comparison quietly reaches back in history.

@@ -24,10 +24,11 @@ filters mean the same thing wherever they appear. Some commands also take a bare
 `runs|discriminants|blessings` for `list`, benchmark prefixes for `bless`, commits for
 `prune`, and range endpoints for `backfill`.
 
-## Selection lockstep
+## Shared selection options
 
-`analyze`, `list runs`, `prune`, and `examine` apply the same selection rules. You can
-therefore preview a range with `list runs`, inspect one of its series with `examine`, or
-prune it without learning a second set of filters. The analysis-only flag
+`analyze`, `list runs`, `prune`, and `examine` share selection option meanings, but not every
+default or admission policy is identical. Use `list runs` to preview the data set an
+`analyze` pass would consume, `examine` to inspect one series from that selection, and
+`prune --dry-run` to preview the exact deletion plan. The analysis-only flag
 `--include-improvements` and the condensed Markdown summary are exceptions because the other
 commands select data but never detect findings.

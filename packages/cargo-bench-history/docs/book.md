@@ -88,9 +88,10 @@ the commands that exercise them and down into the appendix for mechanism.
 
 ### Part 2 — Command reference
 
-- **Overview page**: the command set at a glance; shared option groups; the selection-lockstep
-  tenet (`analyze`/`list`/`prune`/`examine` share one selection pipeline); subjects are bare
-  positional words, not flags. Point at `<command> --help` for the exhaustive flag list.
+- **Overview page**: the command set at a glance; shared option groups; the selection option
+  meanings shared by `analyze`/`list`/`prune`/`examine`, while defaults and admission policies
+  can differ; subjects are bare positional words, not flags. Point at `<command> --help` for
+  the exhaustive flag list, and at `prune --dry-run` for the exact deletion preview.
 - Each command page: *problem it solves* → minimal invocation → the one or two rules that matter →
   links to the relevant concept.
 
@@ -101,8 +102,8 @@ the commands that exercise them and down into the appendix for mechanism.
 | `backfill` | Reconstructs history over a first-parent commit range in an isolated worktree; resumable and idempotent. |
 | `analyze` | Reconstructs series from topology and reports regressions/drift; target/base/mode auto-selection; findings never set the exit code. |
 | `examine` | Drill-down from a finding to the raw per-commit points of one `(benchmark, metric)` series; no detection, no judgment. |
-| `list` | Preview the exact data set `analyze` would consume (`runs` / `discriminants` / `blessings`) without analyzing. |
-| `prune` | Delete a chosen scope of stored data; never touches base-branch history without an explicit confirm. |
+| `list` | Preview the runs `analyze` would consume, catalog discriminants, or audit blessings without analyzing. |
+| `prune` | Delete a chosen scope of stored data; `--dry-run` previews the exact deletion plan, and base-branch history needs an explicit confirm. |
 | `bless` / `unbless` | Manually accept an intentional change so history stops re-flagging it; per-benchmark; honored only in history mode. |
 | `machine-key` | Print the hardware fingerprint that all history is partitioned by; it hashes hardware identity only, and `--verbose` explains the factors. |
 
@@ -163,9 +164,11 @@ against and what a user reads when a finding does not make sense.
   `cbh_render::CoverageState::ALL`, and `UnjudgedReason::ALL`; the generator is book
   infrastructure and is not shipped with the application. Component ownership detail lives in the
   [implementation guide](implementation.md#ownership-map).
-- **Illustration discipline**: every stage that adds, removes, reorders, collapses or reshapes data
-  gets a before/after figure in which affected observations are marked and labelled with the reason.
-  A reader must never have to infer what a stage did.
+- **Illustration discipline**: a reader must never have to infer what a stage did.
+  Transformations whose effect would otherwise be ambiguous get a stage-specific before/after
+  figure with affected observations marked and labelled. Selection may use a composite funnel,
+  such as an occupancy grid with stage accounting, when that communicates the filter path more
+  clearly than a separate figure per step.
 
 | Page | The single thing it must teach |
 |---|---|

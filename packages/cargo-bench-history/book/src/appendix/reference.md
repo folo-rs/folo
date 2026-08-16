@@ -1,10 +1,9 @@
 # Reference tables
 
-Everything the appendix states as a fact, gathered for lookup. Every table here is generated
-from the code, so it cannot drift from the tool's behaviour.
+Key generated facts from the appendix, gathered for lookup. The owning chapters hold the
+complete explanations; this page is a reference, not a substitute for the reasoning.
 
-Each entry links back to the chapter that explains it — this page is a reference, not a
-substitute for the reasoning.
+Every table here is generated from the code, so it cannot drift from the tool's behaviour.
 
 ## Data
 

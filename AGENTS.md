@@ -40,6 +40,12 @@ directly:
   ownership boundaries, and implementation tenets belong in the package's
   `docs/implementation.md`. If a fact is trivia that does not change how an agent
   works, leave it out. Point at the appropriate document instead of repeating it.
+* **The `cbh_*` crates are internal implementation partitions of
+  `cargo-bench-history`, not independent products.** Their user-visible behavior is
+  owned and documented by the parent application (`packages/cargo-bench-history/docs/DESIGN.md`);
+  a `cbh_*` crate's own `docs/implementation.md` describes only its local
+  ownership boundaries and links back to the parent. Do not add a separate design
+  document to a `cbh_*` crate.
 
 ## Chapters
 

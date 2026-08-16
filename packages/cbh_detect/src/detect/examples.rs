@@ -126,7 +126,7 @@ pub fn flat_noisy() -> Vec<f64> {
 /// starting at `topo_start`, tagged with `kind`.
 ///
 /// The points carry no explicit confidence intervals: the engines these examples model
-/// report a single figure per run, so the dispersion the analysis judges is the
+/// report a single figure per run, so the variation the analysis judges is the
 /// between-commit scatter the values already carry. An example that must exercise a gate
 /// reading engine-reported dispersion adds it with [`with_intervals`].
 ///

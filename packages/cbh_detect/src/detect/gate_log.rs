@@ -38,11 +38,11 @@
 
 /// What the detectors decided, gate by gate, about one series.
 ///
-/// The log is the observable form of the detector gate chain described in
-/// `docs/design.md` ("Analysis") — the ordered sequence of independent checks a
-/// candidate must survive inside a detector. Each check appends one [`GateOutcome`]
-/// as it is made, so [`entries`](Self::entries) reads as that detector narrative.
-/// [`declined_by_stage`](Self::declined_by_stage) names one detector's first
+/// The log is the observable form of the detector gate chain described in the
+/// `cargo-bench-history` design (`DESIGN.md`, "Analysis") — the ordered sequence of
+/// independent checks a candidate must survive inside a detector. Each check appends one
+/// [`GateOutcome`] as it is made, so [`entries`](Self::entries) reads as that detector
+/// narrative. [`declined_by_stage`](Self::declined_by_stage) names one detector's first
 /// decline; [`declined_by`](Self::declined_by) is the first decline across stages
 /// and is not the evaluation's final disposition.
 ///

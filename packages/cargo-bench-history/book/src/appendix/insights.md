@@ -37,8 +37,9 @@ The finding names the **first commit that already shows the new level**. That is
 necessarily the commit that caused it — if collection is sparse, the cause is somewhere in the
 gap before it.
 
-1. **Look at the series.** `cargo bench-history examine <benchmark>` prints every stored
-   point. The chart in the report is a summary; this is the data.
+1. **Look at the series.** `cargo bench-history examine --benchmark <qualified-id> --metric <name>`
+   prints every stored point. Both values come from the finding. The chart in the report is a
+   summary; this is the data.
 2. **Check whether the attributed commit has a neighbour gap.** If the previous observation is
    twenty commits back, your suspect list is those twenty commits, not one.
 3. **Check what else moved.** Many simultaneous steps suggest a shared cause, not a specific

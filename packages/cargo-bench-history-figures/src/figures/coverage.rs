@@ -487,31 +487,6 @@ fn reasons_table() -> String {
     table
 }
 
-/// How much of a run's suite the state's verdict reaches.
-fn state_reach(state: CoverageState) -> &'static str {
-    match state {
-        CoverageState::NoSeries => {
-            "Nothing at all. No series entered analysis; look at the empty-outcome hint."
-        }
-        CoverageState::NothingInScope => {
-            "Nothing. Every series the store holds was measured somewhere other than the \
-             analyzed commit, so the run says nothing about that commit."
-        }
-        CoverageState::NothingJudged => {
-            "Nothing. Series were in scope and every one of them fell short of an evidence \
-             floor; the breakdown says which."
-        }
-        CoverageState::Partial => {
-            "The judged part only. Silence here rules out change among those series and \
-             makes no claim about the rest."
-        }
-        CoverageState::Full => {
-            "The whole in-scope suite. This is the only silent state with no coverage \
-             qualification; the verdict remains no notable changes detected."
-        }
-    }
-}
-
 /// A census that lands in `state`, so the table quotes a verdict the renderer really
 /// produces for it.
 ///
@@ -545,7 +520,7 @@ fn states_table() -> String {
             "| `{}` | {} | {} |",
             state.as_str(),
             coverage.verdict(),
-            state_reach(state)
+            state.reach()
         )
         .expect("writing to a String never fails");
     }
@@ -869,7 +844,7 @@ mod tests {
                 state.as_str()
             );
             assert!(table.contains(coverage.verdict()));
-            assert!(table.contains(state_reach(state)));
+            assert!(table.contains(state.reach()));
         }
     }
 

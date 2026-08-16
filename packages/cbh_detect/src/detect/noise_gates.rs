@@ -143,7 +143,7 @@ pub(crate) const BRANCH_NOISE_MULTIPLE: f64 = 2.0;
 /// Serves the same role for a trend that [`BRANCH_NOISE_MULTIPLE`] serves for a
 /// branch move: it vetoes movement the engine's own dispersion cannot distinguish
 /// from noise. The two are held equal because the question each asks is the same one
-/// — whether the endpoints separate by more than the measurement wobble — and neither
+/// — whether the endpoints separate by more than the per-point dispersion — and neither
 /// detector has evidence the other lacks to justify a different standard.
 pub(crate) const DRIFT_NOISE_MULTIPLE: f64 = 2.0;
 
@@ -163,7 +163,7 @@ pub(crate) const MIN_REGIME_SEPARATION: f64 = 0.85;
 /// costs. Reporting a move makes a claim that a human then checks. Accepting a
 /// boundary *discards evidence*: the comparison sample shrinks to the trailing
 /// regime and the scatter estimate is rebuilt from it alone, so a wrong boundary can
-/// collapse a noisy window's dispersion to near zero and make any subsequent tip
+/// collapse a noisy window's scatter to near zero and make any subsequent tip
 /// read as certain. A boundary that throws data away must therefore be unambiguous,
 /// which is a higher standard than merely reporting a move.
 ///
