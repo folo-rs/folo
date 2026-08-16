@@ -84,6 +84,14 @@ function Get-MutantsExcludeArgument {
         # API contract, so mutating it yields no production coverage signal.
         '-e', (protect 'packages/cbh_detect/src/testing.rs'),
 
+        # `examples.rs` and `scatter.rs` are the shared example-series fixtures (gated behind
+        # `private-test-util`): the curated data sets the appendix figures and detector tests
+        # draw from, plus the deterministic noise source that scatters them. They are fixture
+        # scaffolding with no production behaviour, so mutating a generated data point yields
+        # no coverage signal - the tests assert on detector verdicts, not on fixture contents.
+        '-e', (protect 'packages/cbh_detect/src/detect/examples.rs'),
+        '-e', (protect 'packages/cbh_detect/src/detect/scatter.rs'),
+
         # Some of our systems are single-processor, yet the code may only be meaningfully testable
         # on multi-processor systems. As a "good enough" approximation, we skip mutation testing
         # of code that is only testable in a multi-processor system.

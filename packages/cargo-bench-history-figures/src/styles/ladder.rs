@@ -173,7 +173,7 @@ impl Ladder {
                 None => {
                     // Off the ratio scale: a categorical gate has no value/threshold pair,
                     // so a bar would invent a magnitude it does not have.
-                    let mid = (bar_top + bar_bottom) / 2.0;
+                    let mid = f64::midpoint(bar_top, bar_bottom);
                     chart.draw_series(std::iter::once(Circle::new(
                         (0.15, mid),
                         theme::POINT_RADIUS,

@@ -36,6 +36,8 @@ Describe 'Get-MutantsExcludeArgument' {
         $values | Should -Contain 'facade'
         $values | Should -Contain 'events'
         $values | Should -Contain 'packages/cargo-bench-history-figures/**'
+        $values | Should -Contain 'packages/cbh_detect/src/detect/examples.rs'
+        $values | Should -Contain 'packages/cbh_detect/src/detect/scatter.rs'
     }
 
     It 'does not exclude windows sources when running on Windows' {

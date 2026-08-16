@@ -110,15 +110,16 @@ pub fn check(root: &Path) -> io::Result<Option<String>> {
 fn write_registry(root: &Path, assets: &[Asset]) -> io::Result<usize> {
     let registered = registered_paths(assets)?;
     for (_relative, extra) in extra_files(root, &registered)? {
-        fs::remove_file(&extra).map_err(|error| wrap_io(error, "delete", &extra))?;
+        fs::remove_file(&extra).map_err(|error| wrap_io(&error, "delete", &extra))?;
     }
     for asset in assets {
         let location = asset.location(root);
         if let Some(parent) = location.parent() {
             fs::create_dir_all(parent)
-                .map_err(|error| wrap_io(error, "create directory", parent))?;
+                .map_err(|error| wrap_io(&error, "create directory", parent))?;
         }
-        fs::write(&location, &asset.content).map_err(|error| wrap_io(error, "write", &location))?;
+        fs::write(&location, &asset.content)
+            .map_err(|error| wrap_io(&error, "write", &location))?;
     }
     Ok(assets.len())
 }
@@ -139,7 +140,7 @@ fn check_registry(root: &Path, assets: &[Asset]) -> io::Result<Option<String>> {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 problems.push(format!("  {} has not been generated yet", asset.path));
             }
-            Err(error) => return Err(wrap_io(error, "read", &location)),
+            Err(error) => return Err(wrap_io(&error, "read", &location)),
         }
     }
 
@@ -211,15 +212,15 @@ fn collect_extras(
         Err(error) if error.kind() == io::ErrorKind::NotFound && dir == root => {
             return Ok(());
         }
-        Err(error) => return Err(wrap_io(error, "read directory", dir)),
+        Err(error) => return Err(wrap_io(&error, "read directory", dir)),
     };
 
     for entry in entries {
-        let entry = entry.map_err(|error| wrap_io(error, "read directory", dir))?;
+        let entry = entry.map_err(|error| wrap_io(&error, "read directory", dir))?;
         let path = entry.path();
         let file_type = entry
             .file_type()
-            .map_err(|error| wrap_io(error, "inspect", &path))?;
+            .map_err(|error| wrap_io(&error, "inspect", &path))?;
         if file_type.is_dir() {
             debug_assert!(
                 path.starts_with(dir) && path != dir,
@@ -255,7 +256,7 @@ fn relative_posix(root: &Path, path: &Path) -> Option<String> {
 }
 
 /// Attaches the attempted operation and path to a filesystem failure.
-fn wrap_io(error: io::Error, operation: &str, path: &Path) -> io::Error {
+fn wrap_io(error: &io::Error, operation: &str, path: &Path) -> io::Error {
     io::Error::new(
         error.kind(),
         format!("failed to {operation} {}: {error}", path.display()),
@@ -305,7 +306,7 @@ mod tests {
     fn a_parent_segment_is_rejected() {
         let asset = Asset::new("../escape.txt", "no");
 
-        let check = check_registry(Path::new("root"), &[asset.clone()]);
+        let check = check_registry(Path::new("root"), std::slice::from_ref(&asset));
         let write = write_registry(Path::new("root"), &[asset]);
 
         assert_eq!(check.unwrap_err().kind(), io::ErrorKind::InvalidInput);
@@ -317,7 +318,7 @@ mod tests {
     fn check_reports_an_unregistered_file() {
         let root = tempfile::tempdir().unwrap();
         let asset = Asset::new("kept.txt", "kept\n");
-        write_registry(root.path(), &[asset.clone()]).unwrap();
+        write_registry(root.path(), std::slice::from_ref(&asset)).unwrap();
         fs::create_dir_all(root.path().join("nested")).unwrap();
         fs::write(root.path().join("nested/stale.txt"), "leftover").unwrap();
 
@@ -331,11 +332,11 @@ mod tests {
     fn write_deletes_an_unregistered_file() {
         let root = tempfile::tempdir().unwrap();
         let asset = Asset::new("kept.txt", "kept\n");
-        write_registry(root.path(), &[asset.clone()]).unwrap();
+        write_registry(root.path(), std::slice::from_ref(&asset)).unwrap();
         fs::create_dir_all(root.path().join("nested")).unwrap();
         fs::write(root.path().join("nested/stale.txt"), "leftover").unwrap();
 
-        write_registry(root.path(), &[asset.clone()]).unwrap();
+        write_registry(root.path(), std::slice::from_ref(&asset)).unwrap();
 
         assert!(!root.path().join("nested/stale.txt").exists());
         assert_eq!(
@@ -351,7 +352,7 @@ mod tests {
         write_registry(root.path(), &[Asset::new("old.txt", "same\n")]).unwrap();
         let renamed = Asset::new("new.txt", "same\n");
 
-        let report = check_registry(root.path(), &[renamed.clone()])
+        let report = check_registry(root.path(), std::slice::from_ref(&renamed))
             .unwrap()
             .unwrap();
         assert!(report.contains("old.txt"));
@@ -371,7 +372,7 @@ mod tests {
     fn check_reports_a_stale_registered_file() {
         let root = tempfile::tempdir().unwrap();
         let asset = Asset::new("kept.txt", "fresh\n");
-        write_registry(root.path(), &[asset.clone()]).unwrap();
+        write_registry(root.path(), std::slice::from_ref(&asset)).unwrap();
         fs::write(root.path().join("kept.txt"), "stale\n").unwrap();
 
         let report = check_registry(root.path(), &[asset]).unwrap().unwrap();
@@ -384,7 +385,7 @@ mod tests {
     fn check_accepts_a_matching_registry() {
         let root = tempfile::tempdir().unwrap();
         let asset = Asset::new("kept.txt", "fresh\n");
-        write_registry(root.path(), &[asset.clone()]).unwrap();
+        write_registry(root.path(), std::slice::from_ref(&asset)).unwrap();
 
         assert!(check_registry(root.path(), &[asset]).unwrap().is_none());
     }

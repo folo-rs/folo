@@ -26,7 +26,7 @@ use crate::{canvas, coord, theme};
 #[derive(Clone, Debug)]
 pub struct Residuals {
     caption: String,
-    residuals: Vec<f64>,
+    values: Vec<f64>,
     band: f64,
     move_size: Option<f64>,
 }
@@ -38,7 +38,7 @@ impl Residuals {
     pub fn new(caption: impl Into<String>, residuals: Vec<f64>, band: f64) -> Self {
         Self {
             caption: caption.into(),
-            residuals,
+            values: residuals,
             band,
             move_size: None,
         }
@@ -57,14 +57,14 @@ impl Residuals {
     pub fn render(&self) -> String {
         canvas::draw(theme::WIDTH, 240, |root| {
             let extent = self
-                .residuals
+                .values
                 .iter()
                 .map(|residual| residual.abs())
                 .chain(std::iter::once(self.band))
                 .chain(self.move_size.map(f64::abs))
                 .fold(0.0_f64, f64::max)
                 .max(f64::MIN_POSITIVE);
-            let count = self.residuals.len();
+            let count = self.values.len();
 
             let mut chart = ChartBuilder::on(root)
                 .caption(
@@ -99,7 +99,7 @@ impl Residuals {
                 TextStyle::from((theme::FONT, theme::FONT_TICK)).color(&theme::MUTED),
             )))?;
 
-            for (index, &residual) in self.residuals.iter().enumerate() {
+            for (index, &residual) in self.values.iter().enumerate() {
                 let at = coord::of(index);
                 // Drawn as a stem from zero rather than as a bare point, because the
                 // quantity is a signed residual and a point alone reads as a value.
@@ -161,9 +161,7 @@ impl Agreement {
     /// regime-separation statistic cannot drift apart. A tie counts as half.
     #[must_use]
     pub fn share(&self) -> f64 {
-        MannWhitneyU::new(&self.before, &self.after)
-            .map(|test| test.superiority())
-            .unwrap_or(0.0)
+        MannWhitneyU::new(&self.before, &self.after).map_or(0.0, |test| test.superiority())
     }
 
     /// How each pairing classifies under exact comparison, in draw order (later row,
@@ -247,7 +245,7 @@ impl Agreement {
                     PairClass::Equal => {
                         // Half-credit: only the left half is filled, so a tie cannot
                         // be read as either a full agreement or a full disagreement.
-                        let mid = (left + right) / 2.0;
+                        let mid = f64::midpoint(left, right);
                         chart.draw_series(std::iter::once(Rectangle::new(
                             [(left, bottom), (mid, top)],
                             theme::HIGHLIGHT.mix(0.7).filled(),

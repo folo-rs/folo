@@ -1256,7 +1256,7 @@ fn evaluate_drift(
     let baseline = intercept;
     let latest = intercept + slope * span;
     let delta = latest - baseline;
-    if !log.numeric(Gate::NonZeroDelta, delta.abs(), 0.0, delta.abs() > 0.0) {
+    if !log.numeric(Gate::NonZeroDelta, delta.abs(), 0.0, delta != 0.0) {
         return None;
     }
     let relative_delta = relative_delta_of(delta, baseline);
@@ -1670,7 +1670,7 @@ fn compare_samples(
     let baseline = stats::mean(&before_values)?;
     let latest = stats::median(&after_values)?;
     let delta = latest - baseline;
-    if !log.numeric(Gate::NonZeroDelta, delta.abs(), 0.0, delta.abs() > 0.0) {
+    if !log.numeric(Gate::NonZeroDelta, delta.abs(), 0.0, delta != 0.0) {
         return None;
     }
     let relative_delta = relative_delta_of(delta, baseline);
@@ -2708,6 +2708,43 @@ mod tests {
                 &mut GateLog::disabled()
             )
             .is_none()
+        );
+    }
+
+    #[test]
+    fn change_point_significance_is_a_strict_boundary() {
+        // The rank-test gate is a strict `<`: a candidate whose p-value lands exactly on
+        // the threshold is rejected. Rather than hard-code that p, take it from the
+        // detector's own recording at the default alpha, then set alpha to it — so a
+        // `<`->`<=` slip that admits the boundary turns this reported step silent.
+        let series = series_of(&[
+            100.0, 104.0, 100.0, 104.0, 102.0, 130.0, 134.0, 130.0, 134.0, 132.0,
+        ]);
+        let mut log = GateLog::recording();
+        assert!(
+            evaluate_change_point(
+                &series,
+                &values_of(&series),
+                &AnalysisConfig::default(),
+                &mut log
+            )
+            .is_some(),
+            "the fixture must report at the default alpha"
+        );
+        let (p, _) = gate_value(&log, Gate::Significance).expect("the significance gate ran");
+        let at_boundary = AnalysisConfig {
+            change_alpha: p,
+            ..AnalysisConfig::default()
+        };
+        assert!(
+            evaluate_change_point(
+                &series,
+                &values_of(&series),
+                &at_boundary,
+                &mut GateLog::disabled()
+            )
+            .is_none(),
+            "a p-value exactly at alpha must be rejected by the strict gate"
         );
     }
 
@@ -3985,6 +4022,52 @@ mod tests {
     }
 
     #[test]
+    fn compare_samples_significance_is_a_strict_boundary() {
+        // Branch significance is a strict `<` against the prediction-interval p-value.
+        // Take that p from the detector's own recording at the default alpha, then set
+        // alpha to it: a `<`->`<=` slip that admits the exact boundary turns this
+        // reported tip silent.
+        let series = wall_series(&[100.0], 1.0);
+        let before = base_window(100.0, 0.5);
+        let after = pts(&[(108.0, 0.5)]);
+        let before_refs: Vec<&SeriesPoint> = before.iter().collect();
+        let after_refs: Vec<&SeriesPoint> = after.iter().collect();
+
+        let mut log = GateLog::recording();
+        assert!(
+            compare_samples(
+                &series,
+                &before_refs,
+                &after_refs,
+                &AnalysisConfig::default(),
+                0.03,
+                None,
+                &mut log,
+            )
+            .is_some(),
+            "the 8% move must report at the default alpha"
+        );
+        let (p, _) = gate_value(&log, Gate::Significance).expect("the significance gate ran");
+        let at_boundary = AnalysisConfig {
+            change_alpha: p,
+            ..AnalysisConfig::default()
+        };
+        assert!(
+            compare_samples(
+                &series,
+                &before_refs,
+                &after_refs,
+                &at_boundary,
+                0.03,
+                None,
+                &mut GateLog::disabled(),
+            )
+            .is_none(),
+            "a p-value exactly at alpha must be rejected by the strict gate"
+        );
+    }
+
+    #[test]
     fn compare_samples_accepts_a_minimal_trailing_regime() {
         // Once branch mode has established that the full base window has enough
         // evidence, an accepted current regime of `min_regime` levels is a valid
@@ -4123,6 +4206,41 @@ mod tests {
         assert_eq!(candidate.finding.method, FindingMethod::Drift);
         assert_eq!(candidate.finding.relative_delta, config.practical_relative);
         assert!(candidate.finding.confidence < 1.0);
+    }
+
+    #[test]
+    fn drift_significance_is_a_strict_boundary() {
+        // The Mann–Kendall gate is a strict `<`: a trend whose p-value lands exactly on
+        // `drift_alpha` is rejected. Take that p from the detector's own recording at the
+        // default alpha, then set alpha to it — so a `<`->`<=` slip that admits the
+        // boundary turns this reported ramp silent.
+        let series = series_of(&ramp(100.0, 4.0, MIN_SERIES_POINTS));
+        let mut log = GateLog::recording();
+        assert!(
+            evaluate_drift(
+                &series,
+                &values_of(&series),
+                &AnalysisConfig::default(),
+                &mut log
+            )
+            .is_some(),
+            "the ramp must report drift at the default alpha"
+        );
+        let (p, _) = gate_value(&log, Gate::Significance).expect("the significance gate ran");
+        let at_boundary = AnalysisConfig {
+            drift_alpha: p,
+            ..AnalysisConfig::default()
+        };
+        assert!(
+            evaluate_drift(
+                &series,
+                &values_of(&series),
+                &at_boundary,
+                &mut GateLog::disabled()
+            )
+            .is_none(),
+            "a trend p-value exactly at drift_alpha must be rejected"
+        );
     }
 
     #[test]

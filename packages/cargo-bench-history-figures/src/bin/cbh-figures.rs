@@ -90,16 +90,16 @@ fn check(root: &Path) -> ExitCode {
 fn write_preview(root: &Path) -> io::Result<()> {
     let target = root.join(PREVIEW_PATH);
     if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent).map_err(|error| wrap_io(error, "create directory", parent))?;
+        fs::create_dir_all(parent).map_err(|error| wrap_io(&error, "create directory", parent))?;
     }
     fs::write(&target, preview::page(&assets::assets()))
-        .map_err(|error| wrap_io(error, "write", &target))?;
+        .map_err(|error| wrap_io(&error, "write", &target))?;
     println!("Wrote preview to {}", target.display());
     Ok(())
 }
 
 /// Attaches the attempted operation and path to a filesystem failure.
-fn wrap_io(error: io::Error, operation: &str, path: &Path) -> io::Error {
+fn wrap_io(error: &io::Error, operation: &str, path: &Path) -> io::Error {
     io::Error::new(
         error.kind(),
         format!("failed to {operation} {}: {error}", path.display()),
