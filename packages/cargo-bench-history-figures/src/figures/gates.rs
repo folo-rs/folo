@@ -198,7 +198,11 @@ fn compares(gate: Gate, stage: GateStage) -> &'static str {
             }
             GateStage::Branch => "How many retained base-side commit levels the comparison holds.",
         },
-        Gate::NonZeroDelta => "Whether the two levels differ at all.",
+        Gate::NonZeroDelta => match stage {
+            GateStage::ChangePoint => "Whether the two regime levels differ at all.",
+            GateStage::Drift => "Whether the fitted line moved across the window.",
+            GateStage::Branch => "Whether the tip differs from the base level at all.",
+        },
         Gate::RelativeFloor => "The move as a fraction of the baseline.",
         Gate::AbsoluteFloor => "The move in the metric's own units.",
         Gate::ResidualNoise => "The move against the series' own typical residual.",
@@ -213,7 +217,12 @@ fn compares(gate: Gate, stage: GateStage) -> &'static str {
             GateStage::Branch => "The chance level of the tip against the base window's interval.",
         },
         Gate::RegimeSeparation => "The share of before-and-after pairs that agree the level moved.",
-        Gate::IntervalDisjoint => "The two regimes' reported confidence intervals.",
+        Gate::IntervalDisjoint => match stage {
+            GateStage::Branch => "The base sample's and the tip's reported confidence intervals.",
+            GateStage::ChangePoint | GateStage::Drift => {
+                "The two regimes' reported confidence intervals."
+            }
+        },
         Gate::IntervalNoiseBand => "The move against the engine's own reported imprecision.",
     }
 }
@@ -716,7 +725,7 @@ fn residual_strip() -> Asset {
     );
 
     let strip = Residuals::new(
-        "a step measured against the series' typical residual",
+        "a step against the series' typical residual and the gate threshold it must clear",
         step_residuals(&values, split_of(&values)),
         outcome.threshold.unwrap_or_default(),
     )

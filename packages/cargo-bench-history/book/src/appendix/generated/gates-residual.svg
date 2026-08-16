@@ -1,6 +1,6 @@
 <svg style="width:100%;height:auto" viewBox="0 0 680 240" xmlns="http://www.w3.org/2000/svg">
 <text x="340" y="17" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="12.096774193548388" opacity="1" fill="currentColor">
-a step measured against the series&apos; typical residual
+a step against the series&apos; typical residual and the gate threshold it must clear
 </text>
 <text x="12" y="114" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor" transform="rotate(270, 12, 114)">
 signed residual from the fitted model
@@ -107,7 +107,7 @@ commit position
 <polyline fill="none" opacity="1" stroke="currentColor" stroke-width="1" points="622,194 622,199 "/>
 <rect x="74" y="48" width="593" height="132" opacity="0.15" fill="#969BA0" stroke="none"/>
 <text x="79" y="48" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#969BA0">
-typical-residual band
+residual-noise gate threshold
 </text>
 <polyline fill="none" opacity="1" stroke="#306EC8" stroke-width="1" points="88,114 88,116 "/>
 <circle cx="88" cy="116" r="2" opacity="1" fill="#306EC8" stroke="none" stroke-width="1"/>

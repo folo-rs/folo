@@ -16,7 +16,7 @@
 | ghost | A benchmark that history remembers but the analyzed commit no longer measures. |  | [Reconstruction](reconstruction.md) |
 | group-wide correction | A stricter bar applied when many things are tested at once, so that only a small share of what is reported is expected to be wrong. | Benjamini-Hochberg false discovery rate control | [Multiplicity and coverage](coverage.md) |
 | harvest | Reading whatever output the benchmark engines left behind after a run. |  | [Collection](collection.md) |
-| level | The value a series sits at over a stretch of commits, ignoring run-to-run wobble. |  | [Detection](detection.md) |
+| level | The value a series sits at over a stretch of commits, ignoring run-to-run scatter. |  | [Detection](detection.md) |
 | machine key | A fingerprint of the host hardware, used to keep incomparable results apart. |  | [Collection](collection.md) |
 | median | The middle value of a sample, which a few extreme measurements cannot drag around. |  | [Detection](detection.md) |
 | merge base | The newest commit a branch and its base still share. |  | [Selection](selection.md) |

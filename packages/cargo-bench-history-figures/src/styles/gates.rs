@@ -94,7 +94,7 @@ impl Residuals {
                 theme::MUTED.mix(theme::BAND_OPACITY).filled(),
             )))?;
             chart.draw_series(std::iter::once(Text::new(
-                "typical-residual band".to_owned(),
+                "residual-noise gate threshold".to_owned(),
                 (-0.3, self.band),
                 TextStyle::from((theme::FONT, theme::FONT_TICK)).color(&theme::MUTED),
             )))?;
@@ -335,7 +335,7 @@ mod tests {
             .move_size(4.0)
             .render();
 
-        assert!(svg.contains("typical-residual band"));
+        assert!(svg.contains("residual-noise gate threshold"));
         assert!(svg.contains("the move being judged"));
         assert!(svg.contains("signed residual from the fitted model"));
     }

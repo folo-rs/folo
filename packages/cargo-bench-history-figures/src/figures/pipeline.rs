@@ -118,14 +118,14 @@ const LEVEL: f64 = 100.0;
 /// A fixed short cycle rather than a random draw: the figures must render identically on
 /// every platform and every run, because the freshness check compares the rendered bytes
 /// against the copies the book includes. Expressed relatively so a series drawn at any
-/// level carries the same visible jitter.
-const WOBBLE: [f64; 5] = [0.0, 0.014, -0.009, 0.006, -0.012];
+/// level carries the same visible scatter.
+const SCATTER: [f64; 5] = [0.0, 0.014, -0.009, 0.006, -0.012];
 
 /// `levels` carrying the scatter a real measurement of them would.
 fn scattered(levels: &[f64]) -> Vec<f64> {
     levels
         .iter()
-        .zip(WOBBLE.iter().copied().cycle())
+        .zip(SCATTER.iter().copied().cycle())
         .map(|(level, offset)| level * (1.0 + offset))
         .collect()
 }
@@ -407,7 +407,7 @@ fn store() -> Vec<Partition> {
     ]
 }
 
-/// Every object the worked store holds.
+/// Every run object the worked store holds.
 fn candidates(store: &[Partition]) -> usize {
     store.iter().map(Partition::objects).sum()
 }
@@ -420,7 +420,7 @@ fn removals(store: &[Partition], stage: RemovedBy) -> usize {
         .sum()
 }
 
-/// Every object the worked store hands on to be fetched and parsed.
+/// Every run object the worked store hands on to be fetched and parsed.
 fn survivors(store: &[Partition]) -> usize {
     store
         .iter()
@@ -453,8 +453,11 @@ fn funnel_table() -> String {
         "| Stage | What it removes from this store | Objects removed | Still eligible |\n\
          |---|---|--:|--:|\n",
     );
-    writeln!(markdown, "| Every object in the store | | | {candidates} |")
-        .expect("writing to a String never fails");
+    writeln!(
+        markdown,
+        "| Every run object in this store | | | {candidates} |"
+    )
+    .expect("writing to a String never fails");
 
     let mut eligible = candidates;
     for stage in RemovedBy::IN_ORDER {
@@ -477,13 +480,19 @@ fn funnel_table() -> String {
 
     writeln!(
         markdown,
-        "\n{} removed and {} account for all {candidates} objects the store held. Only \
-         those survivors are fetched and parsed; every other object was decided on its \
+        "\n{} removed and {} account for all {candidates} run objects this store held. Only \
+         those survivors are fetched and parsed; every other run was decided on its \
          storage key and the commit's place in the topology alone.",
         runs(candidates.saturating_sub(survivors(&store))),
         runs(survivors(&store)),
     )
     .expect("writing to a String never fails");
+    markdown.push_str(
+        "\nThis worked store holds only runs. A matching blessing sidecar is a separate \
+         object kind: it is set apart during facet selection and follows its own path, \
+         so it never enters the run-only topology, dirty-admission, and window stages \
+         counted here.\n",
+    );
     markdown.push_str(
         "\nThe grid draws the analyzed first-parent line, so the runs the on-history stage \
          removed have no column in it — having no place on that line is exactly why they \

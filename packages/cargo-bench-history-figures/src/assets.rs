@@ -141,9 +141,10 @@ fn check_registry(root: &Path, assets: &[Asset]) -> io::Result<Option<String>> {
     }
 
     let mut report = String::from(
-        "The generated appendix assets are out of date. Run `just book-figures` to \
-         regenerate them, then review the diff — a change here means the pipeline's \
-         behaviour no longer matches what the appendix describes.\n",
+        "The generated appendix assets are out of date: a checked-in copy differs from what \
+         the generator now produces. Run `just book-figures` to regenerate them, then review \
+         the diff — for a behaviour-derived asset a change means the pipeline changed, while a \
+         presentation-only asset may simply have been restyled.\n",
     );
     for problem in problems {
         writeln!(report, "{problem}").expect("writing to a String never fails");

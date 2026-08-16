@@ -45,7 +45,7 @@ pub const TERMS: &[Term] = &[
     Term {
         phrase: "level",
         definition: "The value a series sits at over a stretch of commits, ignoring \
-                     run-to-run wobble.",
+                     run-to-run scatter.",
         formal_name: "",
         chapter: "detection.md",
     },

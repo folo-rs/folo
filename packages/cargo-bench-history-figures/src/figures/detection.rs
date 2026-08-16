@@ -32,34 +32,9 @@ pub fn assets() -> Vec<Asset> {
 /// them is the tip. That is the comparison the chapter is making, and separate base windows
 /// would leave a reader unable to tell which difference produced the different verdict.
 fn branch() -> Vec<Asset> {
-    // One more base commit than the comparison needs, so the window is genuinely a window
-    // rather than the whole series, and the merge base sits where a real branch would fork.
-    let base_level = 100.0_f64;
-    let base: Vec<f64> = examples::scattered(
-        &[base_level; BASE_COMMITS],
-        examples::TIMING_NOISE_CV,
-        examples::seed_of("branch-base"),
-    );
-
     let mut assets = Vec::new();
-    for (name, tip, reading) in [
-        (
-            "detection-branch-reported",
-            base_level * 1.30,
-            "the tip sits outside the range a further measurement was expected in",
-        ),
-        (
-            "detection-branch-quiet",
-            base_level,
-            "the tip is inside the range the base window predicts, so there is nothing to \
-             report",
-        ),
-    ] {
-        let mut values = base.clone();
-        values.push(tip);
-        let series = examples::series(name, &values, MetricKind::WallTime, 0);
-        let context = examples::branch_context(&series, BASE_COMMITS.saturating_sub(1));
-        let (finding, _) = evaluate_with_log(&series, &context);
+    for (name, tip, reading) in BRANCH_CASES {
+        let (values, finding) = branch_finding(name, tip);
 
         let tip_index = values.len().saturating_sub(1);
         let plot = Plot::new("a branch tip against its base window", values.len())
@@ -95,6 +70,43 @@ fn branch() -> Vec<Asset> {
         ));
     }
     assets
+}
+
+/// The level the branch figures' base window sits at.
+const BRANCH_BASE_LEVEL: f64 = 100.0;
+
+/// The two branch figures: a tip the base window does not explain, and one it does. The
+/// tip levels are what make one report and the other stay quiet, which the accompanying
+/// test pins against the real detector so a policy change cannot silently reverse a
+/// lesson while keeping the asset names.
+const BRANCH_CASES: [(&str, f64, &str); 2] = [
+    (
+        "detection-branch-reported",
+        BRANCH_BASE_LEVEL * 1.30,
+        "the tip sits outside the range a further measurement was expected in",
+    ),
+    (
+        "detection-branch-quiet",
+        BRANCH_BASE_LEVEL,
+        "the tip is inside the range the base window predicts, so there is nothing to report",
+    ),
+];
+
+/// Runs the real branch detector over the shared base window with `tip` appended, and
+/// returns the laid-out values and the verdict it reached.
+fn branch_finding(name: &str, tip: f64) -> (Vec<f64>, Option<Finding>) {
+    // One more base commit than the comparison needs, so the window is genuinely a window
+    // rather than the whole series, and the merge base sits where a real branch would fork.
+    let mut values: Vec<f64> = examples::scattered(
+        &[BRANCH_BASE_LEVEL; BASE_COMMITS],
+        examples::TIMING_NOISE_CV,
+        examples::seed_of("branch-base"),
+    );
+    values.push(tip);
+    let series = examples::series(name, &values, MetricKind::WallTime, 0);
+    let context = examples::branch_context(&series, BASE_COMMITS.saturating_sub(1));
+    let (finding, _) = evaluate_with_log(&series, &context);
+    (values, finding)
 }
 
 /// How many base-side commits the branch figures lay out.
@@ -295,6 +307,24 @@ mod tests {
     use cbh_detect::{Direction, FindingMethod};
 
     use super::*;
+
+    #[test]
+    fn the_branch_examples_report_the_outcomes_the_chapter_teaches() {
+        // The chapter presents `detection-branch-reported` as a tip that reports and
+        // `detection-branch-quiet` as a tip the base window explains. Pin both against the
+        // real detector so a policy change fails this test rather than silently reversing a
+        // lesson while keeping the asset names. Runs the detector, not the renderer, so it
+        // needs no SVG budget.
+        let (_, reported) = branch_finding("detection-branch-reported", BRANCH_BASE_LEVEL * 1.30);
+        let (_, quiet) = branch_finding("detection-branch-quiet", BRANCH_BASE_LEVEL);
+
+        let reported = reported.expect("the reported example must yield a branch finding");
+        assert_eq!(reported.direction, Direction::Regression);
+        assert!(
+            quiet.is_none(),
+            "the quiet example must yield no finding, got {quiet:?}"
+        );
+    }
 
     #[test]
     #[cfg_attr(
