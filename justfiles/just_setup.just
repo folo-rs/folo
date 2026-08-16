@@ -30,6 +30,12 @@ install-tools:
     Install-RustupToolchain -Channel $env:RUST_NIGHTLY `
         -Component @('miri', 'rustfmt', 'rust-src', 'llvm-tools-preview')
 
+    # Dedicated nightly for `just check-external-types` (see constants.env,
+    # RUST_NIGHTLY_EXTERNAL_TYPES, for why it must be separate from RUST_NIGHTLY). The minimal
+    # profile is enough: the check only drives rustdoc, which ships with the rustc component - it
+    # needs neither miri/rustfmt nor rust-src.
+    Install-RustupToolchain -Channel $env:RUST_NIGHTLY_EXTERNAL_TYPES -InstallProfile minimal
+
     # Every tool is pinned to an explicit version from constants.env (dotenv, configured in the
     # root justfile, exposes each `FOO_VERSION` as `$env:FOO_VERSION`). This is deliberate: a plain
     # `cargo install <crate>` never upgrades an already-installed crate - it prints "already
@@ -52,6 +58,19 @@ install-tools:
         cargo-sort-derives@$env:CARGO_SORT_DERIVES_VERSION `
         cargo-udeps@$env:CARGO_UDEPS_VERSION `
         release-plz@$env:RELEASE_PLZ_VERSION `
+        --locked
+
+    # cargo-check-external-types powers `just check-external-types`. It is installed from a git
+    # commit rather than the pinned `@version` block above because the latest crates.io release
+    # lacks the multi-target/workspace support this repo needs; see constants.env
+    # (CARGO_CHECK_EXTERNAL_TYPES_GIT / CARGO_CHECK_EXTERNAL_TYPES_REV) for the full rationale and
+    # the condition for switching back to a crates.io pin. `--locked` builds against the commit's
+    # own Cargo.lock so the result is reproducible, and cargo replaces an install built from a
+    # different rev (a fast no-op when the rev already matches), so bumping the tool is just editing
+    # the rev in constants.env.
+    cargo install cargo-check-external-types `
+        --git $env:CARGO_CHECK_EXTERNAL_TYPES_GIT `
+        --rev $env:CARGO_CHECK_EXTERNAL_TYPES_REV `
         --locked
 
     # cargo-mutants transitively depends on `winapi 0.2.8`, which only defines its

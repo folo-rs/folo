@@ -63,6 +63,30 @@ and Miri passes, `clippy-release`, `careful`) carries a whole-job `github.event_
 Ubuntu-dropping `miri-x64`) selects its platform list with a `fromJSON` conditional matrix
 keyed on the same event. Both reduce to "the full set on push, the pruned set on a PR".
 
+## External type surface
+
+A dedicated job fails validation when a library exposes an external type — one that is
+neither a standard-library type nor defined by the crate itself (a type from another crate,
+first-party or not) — in its public API without that type being listed in the crate's
+allow-list. The intent is to catch *accidental* additions to the external surface (a leaked
+dependency type, a forgotten `pub`), not to prohibit external types outright; an intentional
+exposure is admitted by adding it to the crate's
+`[package.metadata.cargo_check_external_types]`. The user-facing principle and the allow-list
+mechanics live in `docs/external-types.md`.
+
+The check drives nightly rustdoc's unstable JSON output, which pins an exact schema version,
+so it runs on its own pinned nightly (`RUST_NIGHTLY_EXTERNAL_TYPES`) held separate from the
+general nightly and bumped only in lockstep with the tool. Like the other package jobs it is
+delta-scoped, iterating the affected crates one manifest at a time and leaving the tool's
+`--skip-unsupported` flag to pass over crates it cannot document (proc-macro and binary-only).
+Because a public API can differ by platform through cfg-gated items, the surface is verified
+on both a Unix and a Windows target, so a Windows-only or Unix-only leak cannot slip through.
+Two targets suffice because platform-variant public surface here is gated only on
+`cfg(windows)`/`cfg(unix)` (Linux stands in for macOS) or hidden behind a platform abstraction
+layer with an identical public facade, and nothing public is `target_arch`-gated;
+`docs/external-types.md` records the assumption and when the matrix must grow.
+
+
 ## Concurrency
 
 Commit-driven and PR-driven workflows cancel superseded runs, keyed on the ref, so pushing

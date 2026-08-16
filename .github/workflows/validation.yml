@@ -149,6 +149,30 @@ jobs:
       - name: Run default-features-check
         run: just default-features-check
 
+  # Fails when a library's public API exposes an external type that is not on its allow-list, so an
+  # accidental addition to the external surface is caught in review. Modelled on `machete`: a
+  # ubuntu + windows matrix, because the public surface is platform-dependent (cfg-gated items) and
+  # macOS (also cfg(unix)) is redundant with ubuntu here. Delta-scoped like the other package jobs.
+  check-external-types:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run check-external-types on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" check-external-types
+
   clippy-dev:
     needs: [delta]
     if: needs.delta.outputs.skip_all != 'true'
@@ -937,6 +961,7 @@ jobs:
       - validate-workflows
       - format-check
       - default-features-check
+      - check-external-types
       - clippy-dev
       - test-x64
       - test-docs

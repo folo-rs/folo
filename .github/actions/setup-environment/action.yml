@@ -124,12 +124,12 @@ runs:
       run: git lfs install
     
     - name: Cache Rust toolchains
-      # Restored BEFORE the toolchain is installed so the pinned stable, the MSRV and the
-      # pinned nightly (whose profile pulls rust-src, llvm-tools-preview and miri) are all
-      # served from cache, turning every `rustup toolchain install` - the install step below
-      # and the ones inside `just install-tools` - into a no-op on a hit. rust-cache below
-      # caches ~/.cargo and ./target but never ~/.rustup, so re-installing these toolchains is
-      # the single largest uncached cost of this composite.
+      # Restored BEFORE the toolchain is installed so the pinned stable, the MSRV, the general
+      # pinned nightly (whose profile pulls rust-src, llvm-tools-preview and miri) and the dedicated
+      # external-types nightly (minimal profile) are all served from cache, turning every
+      # `rustup toolchain install` - the install step below and the ones inside `just install-tools` -
+      # into a no-op on a hit. rust-cache below caches ~/.cargo and ./target but never ~/.rustup, so
+      # re-installing these toolchains is the single largest uncached cost of this composite.
       #
       # It also means every toolchain is already present when Swatinem/rust-cache runs, so its
       # shared `prerequisites` key (which enumerates `rustup toolchain list`) reflects the
