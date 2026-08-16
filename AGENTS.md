@@ -40,6 +40,11 @@ directly:
   ownership boundaries, and implementation tenets belong in the package's
   `docs/implementation.md`. If a fact is trivia that does not change how an agent
   works, leave it out. Point at the appropriate document instead of repeating it.
+  The private `cbh_*` crates are implementation partitions of
+  `cargo-bench-history`: their user-visible behavioral contracts belong in the
+  parent application's design and API documentation, while partition-local
+  documentation covers only implementation ownership and boundaries and links to
+  the parent.
 
 ## Chapters
 
