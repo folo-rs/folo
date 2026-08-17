@@ -3,7 +3,7 @@
 name = "cargo-bench-history"
 description = "A Cargo tool that maintains a long-lived history of benchmark results and analyzes it for trends"
 publish = true
-version = "0.0.9"
+version = "0.2.0"
 
 authors.workspace = true
 edition.workspace = true
@@ -33,12 +33,9 @@ cbh_git = { workspace = true }
 cbh_model = { workspace = true }
 cbh_probe = { workspace = true }
 cbh_storage = { workspace = true }
-futures = { workspace = true }
 jiff = { workspace = true, features = ["serde"] }
 mimalloc = { workspace = true }
-nonempty = { workspace = true }
 ohno = { workspace = true, features = ["app-err"] }
-serde_json = { workspace = true }
 tick = { workspace = true, features = ["tokio"] }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thread"] }
 
@@ -66,7 +63,9 @@ cbh_git = { path = "../cbh_git", features = ["private-test-util"] }
 cbh_storage = { path = "../cbh_storage", features = ["private-test-util"] }
 futures = { workspace = true, features = ["executor"] }
 mutants = { workspace = true }
+nonempty = { workspace = true }
 reqwest = { workspace = true, features = ["gzip", "rustls"] }
+serde_json = { workspace = true }
 serial_test = { workspace = true }
 static_assertions = { workspace = true }
 tempfile = { workspace = true }

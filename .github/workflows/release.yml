@@ -50,7 +50,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         # Full history so release-plz can resolve tags/commits; default persist-credentials
         # (true) leaves the token in git config so release-plz can push the release tags.
         with:
@@ -97,7 +97,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -131,7 +131,7 @@ jobs:
 
     steps:
       - name: Checkout released tag
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         # Build the exact released code, not the branch tip.
         with:
           ref: refs/tags/${{ matrix.tag }}

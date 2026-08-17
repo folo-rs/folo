@@ -2,7 +2,7 @@
 name = "region_local"
 description = "Isolated variable storage per memory region, similar to `thread_local_rc!`"
 publish = true
-version = "1.0.29"
+version = "1.0.30"
 
 authors.workspace = true
 edition.workspace = true
@@ -21,7 +21,6 @@ arc-swap = { workspace = true }
 derive_more = { workspace = true, features = ["debug"] }
 linked = { workspace = true }
 many_cpus = { workspace = true }
-new_zealand = { workspace = true }
 rsevents = { workspace = true }
 scopeguard = { workspace = true }
 simple-mermaid = { workspace = true }
@@ -31,6 +30,7 @@ axum = { workspace = true, features = ["http1", "tokio"] }
 criterion = { workspace = true }
 many_cpus = { path = "../many_cpus", features = ["test-util"] }
 mutants = { workspace = true }
+new_zealand = { path = "../new_zealand" }
 par_bench = { path = "../par_bench", features = ["criterion"] }
 static_assertions = { workspace = true }
 testing = { path = "../testing" }

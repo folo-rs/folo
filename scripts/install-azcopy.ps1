@@ -55,17 +55,17 @@ Import-Module (Join-Path $PSScriptRoot 'utility' 'Retry.psm1') -Force
 
 # The pinned azcopy release. Keep $AzCopyVersion and the per-platform digests in
 # $AzCopyBuilds in sync - both come from one GitHub release of azure-storage-azcopy.
-$script:AzCopyVersion = '10.32.4'
+$script:AzCopyVersion = '10.32.7'
 
 # One entry per supported OS/architecture: the release asset name, the archive format
 # it ships as, the binary inside it, and the asset's published lowercase SHA-256.
 $script:AzCopyBuilds = @{
-    'windows-amd64' = @{ Asset = "azcopy_windows_amd64_$($script:AzCopyVersion).zip"; Kind = 'zip'; Binary = 'azcopy.exe'; Sha256 = 'f3a91ff981095077540254e1681de07eddb3c7179475c542612464cbdaa30275' }
-    'windows-arm64' = @{ Asset = "azcopy_windows_arm64_$($script:AzCopyVersion).zip"; Kind = 'zip'; Binary = 'azcopy.exe'; Sha256 = 'c48447f0a65ece9f78d7bcbc75c4fe431aa5dff0b9a3e08d747ecc7c7855e9bc' }
-    'linux-amd64'   = @{ Asset = "azcopy_linux_amd64_$($script:AzCopyVersion).tar.gz"; Kind = 'tar.gz'; Binary = 'azcopy'; Sha256 = '8f859a0dbbc117660c249fb3569694fc8a0f33b68701f5b2b92ccc001ee50784' }
-    'linux-arm64'   = @{ Asset = "azcopy_linux_arm64_$($script:AzCopyVersion).tar.gz"; Kind = 'tar.gz'; Binary = 'azcopy'; Sha256 = 'c614777841277ab2c53eecc9ecca5704fd697375c2ffaf4a407058891f00f673' }
-    'mac-amd64'     = @{ Asset = "azcopy_darwin_amd64_$($script:AzCopyVersion).zip"; Kind = 'zip'; Binary = 'azcopy'; Sha256 = 'b4325d4d20a830270a2b00890aa15e238728778774fc1b3539bf2ddfc8093a66' }
-    'mac-arm64'     = @{ Asset = "azcopy_darwin_arm64_$($script:AzCopyVersion).zip"; Kind = 'zip'; Binary = 'azcopy'; Sha256 = '7563ceaa5f0cf2fa822df142c1a1a62e7236183d36eb87cc159c8b09f85afe0f' }
+    'windows-amd64' = @{ Asset = "azcopy_windows_amd64_$($script:AzCopyVersion).zip"; Kind = 'zip'; Binary = 'azcopy.exe'; Sha256 = '7a7e572ea75445acf856cba53e8985374e46ecd3db6324042fc1911c5e27e30a' }
+    'windows-arm64' = @{ Asset = "azcopy_windows_arm64_$($script:AzCopyVersion).zip"; Kind = 'zip'; Binary = 'azcopy.exe'; Sha256 = 'e8961b448460e3ae5e2e6ceacf8f0fa3a92704eb3b9faae9fa1cf91813b3d55e' }
+    'linux-amd64'   = @{ Asset = "azcopy_linux_amd64_$($script:AzCopyVersion).tar.gz"; Kind = 'tar.gz'; Binary = 'azcopy'; Sha256 = '771dabec5bd8034223010d6f5186956203649e1013ed1d9e6b533fc09ed4a9ee' }
+    'linux-arm64'   = @{ Asset = "azcopy_linux_arm64_$($script:AzCopyVersion).tar.gz"; Kind = 'tar.gz'; Binary = 'azcopy'; Sha256 = '71072ff9609123e0f3ff70215303c15ab3e52ae4ad9d2ea5022db19f48204782' }
+    'mac-amd64'     = @{ Asset = "azcopy_darwin_amd64_$($script:AzCopyVersion).zip"; Kind = 'zip'; Binary = 'azcopy'; Sha256 = '233069680b3c3a1d7d67d58750c4d3eaf85b97cf4d68b9bc9dabddf502c4ccda' }
+    'mac-arm64'     = @{ Asset = "azcopy_darwin_arm64_$($script:AzCopyVersion).zip"; Kind = 'zip'; Binary = 'azcopy'; Sha256 = '9ff234c4e0eed47d74b112320a0774326da213feee603caa93da35f9d09b7d1c' }
 }
 
 function Get-PlatformKey {

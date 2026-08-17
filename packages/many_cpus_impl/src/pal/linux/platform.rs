@@ -199,12 +199,11 @@ impl BuildTargetPlatform {
 
         // We identify efficiency cores by comparing the bogomips of each processor to the maximum
         // bogomips of all processors. If the bogomips is less than the maximum, we consider it an
-        // efficiency core.
-        let max_bogomips = cpu_infos
-            .iter()
-            .map(|info| info.bogomips)
-            .max()
-            .expect("must have at least one processor in NonEmpty");
+        // efficiency core. A processor whose bogomips the kernel does not disclose is not known to
+        // be slower than any other, so it is never demoted on that basis - a kernel that discloses
+        // none at all therefore reports a machine of a single efficiency class, which is what a
+        // uniform machine looks like in any case.
+        let max_bogomips = cpu_infos.iter().filter_map(|info| info.bogomips).max();
 
         let mut processors = cpu_infos.map(|info| {
             let memory_region = numa_nodes
@@ -218,7 +217,12 @@ impl BuildTargetPlatform {
                 })
                 .expect("processor not found in any NUMA node");
 
-            let efficiency_class = if info.bogomips < max_bogomips {
+            let is_slower_than_the_fastest = info
+                .bogomips
+                .zip(max_bogomips)
+                .is_some_and(|(bogomips, max_bogomips)| bogomips < max_bogomips);
+
+            let efficiency_class = if is_slower_than_the_fastest {
                 EfficiencyClass::Efficiency
             } else {
                 EfficiencyClass::Performance
@@ -234,8 +238,12 @@ impl BuildTargetPlatform {
             ProcessorImpl {
                 id: info.index,
                 memory_region_id: memory_region,
+                // An undisclosed metric is exactly what `UNDETERMINED` exists to report, matching
+                // what Windows reports for a processor whose frequency it withholds.
+                relative_speed: info
+                    .bogomips
+                    .map_or(RelativeSpeed::UNDETERMINED, RelativeSpeed::from_os_metric),
                 efficiency_class,
-                relative_speed: RelativeSpeed::from_os_metric(info.bogomips),
                 model: info.model,
                 is_active: is_online,
             }
@@ -273,6 +281,8 @@ impl BuildTargetPlatform {
                     // dynamic frequency which fluctuates due to power management and thermal
                     // throttling, leading to unreliable efficiency class detection. Bogomips
                     // provides a stable measure of processor capability that remains consistent.
+                    // The field is architecture-dependent and some kernels emit none at all, so
+                    // its absence describes a machine we can still enumerate, not a failure.
                     //
                     // These lines identify the processor model, of which any subset may be
                     // present depending on the architecture:
@@ -336,8 +346,7 @@ impl BuildTargetPlatform {
 
                     Some(CpuInfo {
                         index,
-                        bogomips: bogomips
-                            .expect("processor bogomips not found for processor"),
+                        bogomips,
                         // A kernel-provided model is the most informative identification available,
                         // so we only assemble one ourselves when the kernel provides none.
                         model: model.or_else(|| synthesize_model(implementer, part)),
@@ -479,8 +488,12 @@ struct CpuInfo {
 
     /// CPU bogomips value, rounded to nearest integer. We use this to identify efficiency versus
     /// performance cores, where the processors with max bogomips are considered performance
-    /// cores and any with lower bogomips are considered efficiency cores.
-    bogomips: u32,
+    /// cores and any with lower bogomips are considered efficiency cores. `None` when the kernel
+    /// discloses no readable value - the field is a Linux convenience whose presence depends on
+    /// the processor architecture, and it feeds nothing but heuristics about relative core speed,
+    /// so refusing to enumerate a machine over its absence would deny the caller every capability
+    /// of the package to protect one heuristic.
+    bogomips: Option<u32>,
 
     /// Best-effort model, either as reported by the kernel or synthesized from the identity
     /// fields the kernel reports instead. `None` when the record identifies the processor in
@@ -2043,12 +2056,113 @@ CPU part        : Neoverse-N1
         );
     }
 
+    #[test]
+    fn cpuinfo_without_bogomips_reports_a_uniform_machine() {
+        // The `bogomips` field is architecture-dependent and some kernels emit none at all. Such a
+        // machine still has processors to enumerate - it merely discloses nothing about how they
+        // compare, which is what a machine of identical processors looks like in any case.
+        let cpuinfo = "processor       : 0
+model name      : Example Processor 9000
+isa             : rv64imafdch
+
+processor       : 1
+model name      : Example Processor 9000
+isa             : rv64imafdch
+";
+
+        let processors = processors_from_cpuinfo(cpuinfo, [0, 1]);
+
+        assert_eq!(processors.len(), 2);
+
+        for processor in &processors {
+            assert_eq!(
+                processor.as_target().efficiency_class,
+                EfficiencyClass::Performance
+            );
+            assert_eq!(
+                processor.as_target().relative_speed,
+                RelativeSpeed::UNDETERMINED
+            );
+        }
+    }
+
+    #[test]
+    fn cpuinfo_with_unreadable_bogomips_still_reports_the_processor() {
+        // A value we cannot read discloses no speed, exactly as an absent field discloses none,
+        // and neither is reason to lose the processor - the caller would then be told about a
+        // smaller machine than it has.
+        let cpuinfo = "processor       : 0
+bogomips        : ludicrous speed
+model name      : Example Processor 9000
+";
+
+        let processors = processors_from_cpuinfo(cpuinfo, [0]);
+
+        assert_eq!(processors.len(), 1);
+        assert_eq!(
+            processors[0].as_target().relative_speed,
+            RelativeSpeed::UNDETERMINED
+        );
+    }
+
+    #[test]
+    fn cpuinfo_with_bogomips_on_only_some_processors_demotes_nobody() {
+        // A kernel that discloses the metric for one processor and not another says nothing about
+        // how the two compare, and an undisclosed speed is no evidence of a slower processor.
+        // Demoting it would misdirect callers that place work by efficiency class.
+        let cpuinfo = "processor       : 0
+bogomips        : 50.00
+model name      : Example Processor 9000
+
+processor       : 1
+model name      : Example Processor 9000
+";
+
+        let processors = processors_from_cpuinfo(cpuinfo, [0, 1]);
+
+        assert_eq!(processors.len(), 2);
+
+        for processor in &processors {
+            assert_eq!(
+                processor.as_target().efficiency_class,
+                EfficiencyClass::Performance
+            );
+        }
+
+        assert_eq!(
+            processors[0].as_target().relative_speed,
+            RelativeSpeed::from_os_metric(50)
+        );
+        assert_eq!(
+            processors[1].as_target().relative_speed,
+            RelativeSpeed::UNDETERMINED
+        );
+    }
+
     /// Loads processors from a raw `/proc/cpuinfo` payload, with all processors online, allowed
     /// and in a single memory region. Returns the model of each processor, in processor ID order.
     fn models_from_cpuinfo<const PROCESSOR_COUNT: usize>(
         cpuinfo: &str,
         processor_ids: [ProcessorId; PROCESSOR_COUNT],
     ) -> Vec<Option<String>> {
+        processors_from_cpuinfo(cpuinfo, processor_ids)
+            .into_iter()
+            .map(|processor| {
+                processor
+                    .as_target()
+                    .model
+                    .as_deref()
+                    .map(ToString::to_string)
+            })
+            .collect()
+    }
+
+    /// Loads processors from a raw `/proc/cpuinfo` payload, with all processors online, allowed
+    /// and in a single memory region. Returns the processors in processor ID order.
+    fn processors_from_cpuinfo<const PROCESSOR_COUNT: usize>(
+        cpuinfo: &str,
+        processor_ids: [ProcessorId; PROCESSOR_COUNT],
+    ) -> NonEmpty<ProcessorFacade> {
         const MEMORY_REGION: MemoryRegionId = 0;
 
         let mut fs = MockFilesystem::new();
@@ -2084,17 +2198,7 @@ CPU part        : Neoverse-N1
             FilesystemFacade::from_mock(fs),
         );
 
-        platform
-            .get_all_processors()
-            .into_iter()
-            .map(|processor| {
-                processor
-                    .as_target()
-                    .model
-                    .as_deref()
-                    .map(ToString::to_string)
-            })
-            .collect()
+        platform.get_all_processors()
     }
 
     #[test]
