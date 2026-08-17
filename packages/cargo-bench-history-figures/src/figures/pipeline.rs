@@ -448,6 +448,14 @@ fn funnel_table() -> String {
     let candidates = candidates(&store);
 
     let mut markdown = String::from(
+        "The funnel below traces one worked query — a host-local `analyze` — against this store. \
+         Two of its inputs drive the removals that would otherwise look arbitrary: the \
+         **discriminant filters** resolve to this host's own partitions, so a foreign partition \
+         measured on another machine is dropped; and **`--since`** resolves to a cutoff date part \
+         way through the history, dropping everything committed before it. Each row is one \
+         selection stage and what it removed.\n\n",
+    );
+    markdown.push_str(
         "| Stage | What it removes from this store | Objects removed | Still eligible |\n\
          |---|---|--:|--:|\n",
     );
@@ -486,10 +494,12 @@ fn funnel_table() -> String {
     )
     .expect("writing to a String never fails");
     markdown.push_str(
-        "\nThis worked store holds only runs. A matching blessing sidecar is a separate \
-         object kind: it is set apart during discriminant selection and follows its own path, \
-         so it never enters the run-only topology, dirty-admission, and window stages \
-         counted here.\n",
+        "\nThe store in this worked example holds only **runs** — stored benchmark measurements \
+         (see [Shape of the data](shape.md#what-a-stored-run-holds)). A **blessing**, a recorded \
+         acceptance of a change (see [Reconstruction](reconstruction.md#blessings)), is a \
+         separate object kind stored alongside them: it is set apart during discriminant \
+         selection and follows its own path, so it never enters the run-only topology, \
+         dirty-admission, and window stages counted here.\n",
     );
     markdown.push_str(
         "\nThe grid draws the analyzed first-parent line, so the runs the on-history stage \
