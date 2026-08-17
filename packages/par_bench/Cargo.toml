@@ -13,6 +13,20 @@ rust-version.workspace = true
 [package.metadata.docs.rs]
 all-features = true
 
+# Baseline of external types intentionally exposed in the public API. Any new
+# external type here trips the check so accidental exposures are caught.
+# Ref: docs/external-types.md.
+[package.metadata.cargo_check_external_types]
+allowed_external_types = [
+    "all_the_time::report::Report",
+    "all_the_time::session::Session",
+    "alloc_tracker::report::Report",
+    "alloc_tracker::session::Session",
+    "criterion::benchmark_group::BenchmarkGroup",
+    "criterion::measurement::WallTime",
+    "many_cpus_impl::processor_set::ProcessorSet",
+]
+
 [features]
 default = []
 all_the_time = ["dep:all_the_time"]

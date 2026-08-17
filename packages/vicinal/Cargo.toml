@@ -13,6 +13,13 @@ rust-version.workspace = true
 [package.metadata.docs.rs]
 all-features = true
 
+# Baseline of external types intentionally exposed in the public API. Cross-crate
+# first-party types are listed individually by their canonical defining crate
+# (many_cpus re-exports `SystemHardware` from its `many_cpus_impl` partition).
+# Ref: docs/external-types.md.
+[package.metadata.cargo_check_external_types]
+allowed_external_types = ["many_cpus_impl::system_hardware::SystemHardware"]
+
 [features]
 default = []
 
