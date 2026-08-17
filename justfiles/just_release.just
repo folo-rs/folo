@@ -56,6 +56,46 @@ verify-semver-checks:
         exit 1
     }
 
+# Verifies the checked-in Cargo.lock is consistent with the workspace manifests, WITHOUT
+# modifying it. `cargo metadata --locked` resolves the dependency graph against the committed
+# lockfile and exits non-zero if the lock would need to change - the classic trigger being a
+# manifest version bumped without its Cargo.lock entry updated to match. The whole workspace
+# shares one lockfile, so a single stale entry breaks every `--locked` build, which means a
+# release tagged with an inconsistent lock fails all `build-binaries` jobs at once (they check
+# out the tag and build `--locked`). The release `publish` job runs this gate before anything is
+# published or tagged, turning that latent, workspace-wide failure into an early, actionable
+# abort; run it locally after a manual version edit to catch the problem before pushing. It only
+# reads the lockfile - the fix for a stale lock is to regenerate it locally and commit it, never
+# to regenerate it inside a workflow.
+[group('release')]
+[script]
+verify-lockfile:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    Write-Verbose "Verifying that the checked-in Cargo.lock is consistent with the workspace manifests" -Verbose
+
+    try {
+        # Full-graph resolve (no --no-deps) so --locked actually validates the lockfile; the JSON
+        # on stdout is discarded, only the exit status matters. Any error message from cargo (e.g.
+        # "cannot update the lock file ... because --locked was passed") surfaces above.
+        cargo metadata --locked --format-version 1 1> $null
+    }
+    catch {
+        Write-Host ""
+        Write-Host "ERROR: the checked-in Cargo.lock is out of date with the workspace manifests (see the error above)." -ForegroundColor Red
+        Write-Host ""
+        Write-Host "A manifest version was almost certainly changed (e.g. a manual version bump) without updating" -ForegroundColor Red
+        Write-Host "the matching Cargo.lock entry. Because the whole workspace shares one lockfile, this makes every" -ForegroundColor Red
+        Write-Host "'--locked' build fail, including all release binary builds." -ForegroundColor Red
+        Write-Host ""
+        Write-Host "Fix: run 'cargo update --workspace' (or 'cargo build') locally to sync Cargo.lock, commit the" -ForegroundColor Red
+        Write-Host "result, and re-push. Never regenerate the lockfile inside a workflow - workflows must build the" -ForegroundColor Red
+        Write-Host "checked-in lockfile verbatim." -ForegroundColor Red
+        exit 1
+    }
+
 # Warns about publishable crates that crates.io has never seen. Trusted Publishing cannot
 # perform a crate's first-ever publish (it can only be configured on a crate that already
 # exists), so a brand-new crate's first release must be done by hand (cargo publish), after
