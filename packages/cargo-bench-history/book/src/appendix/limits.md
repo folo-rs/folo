@@ -26,13 +26,16 @@ ninety-nine of a hundred commits, but not the tip, contributes nothing.
 census names ghosts, so the report always tells you this happened. See
 [Reconstruction](reconstruction.md#ghost-elimination).
 
-## Findings never fail a build, and are not classified by severity
+## Analysis does not fail because it found something
 
-The exit code reflects whether analysis *ran*. Findings are ranked by size of move and nothing
-else.
+The exit code reflects whether the analysis **ran**, not what it found: a report full of
+regressions still exits successfully. Whether a finding should fail a build is a decision for the
+automation that reads the report — nothing about a finding makes it fail one on its own, and the
+tool does not signal analysis failure merely because findings exist. Findings carry no severity
+classification either; they are ranked by size of move and nothing else.
 
-*What to do:* read the JSON report, and gate on coverage as well as on findings. See
-[Reporting](reporting.md#findings-never-fail-the-build).
+*What to do:* read the JSON report and decide in your own automation, gating on coverage as well
+as on findings. See [Reporting](reporting.md#findings-never-fail-the-build).
 
 ## Benchmark identity can collide, and the estimator is invisible
 

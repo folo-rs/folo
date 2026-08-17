@@ -36,7 +36,7 @@ Each detector applies its own gates in its own order, and a candidate stops at t
 | `relative_floor` | The move as a fraction of the baseline. | 5.0% |
 | `absolute_floor` | The move in the metric's own units. | the metric's own floor, below |
 | `residual_noise` | The move against the series' own typical residual. | 3× the typical residual |
-| `base_scatter` | Whether observed base scatter or a metric quantum can scale the base prediction. | observed scatter, or one count, byte, or allocation of scale; flat timings have no quantum |
+| `base_scatter` | Whether the base window has any dispersion — measured scatter, or an integer metric's quantum — to build a prediction interval from; with none, the tip cannot be judged and the candidate is dropped. | observed scatter, or one count, byte, or allocation of scale; flat timings have no quantum |
 | `significance` | The chance level of the tip against the base window's interval. | p < 0.05 |
 | `interval_disjoint` | The base sample's and the tip's reported confidence intervals. | the two intervals must not overlap |
 | `interval_noise_band` | The move against the engine's own reported imprecision. | 2× the reported half-width |

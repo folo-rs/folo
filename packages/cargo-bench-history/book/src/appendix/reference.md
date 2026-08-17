@@ -3,7 +3,7 @@
 Key generated facts from the appendix, gathered for lookup. The owning chapters hold the
 complete explanations; this page is a reference, not a substitute for the reasoning.
 
-Every table here is generated from the code, so it cannot drift from the tool's behaviour.
+Every table here is generated from the code, so it cannot drift from the tool's behavior.
 
 ## Data
 

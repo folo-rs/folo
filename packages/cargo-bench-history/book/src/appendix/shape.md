@@ -91,7 +91,7 @@ One run is one engine's whole output at one commit, written as a single object.
 
 {{#include generated/shape-run.md}}
 
-The context is provenance. Only some of it drives behaviour:
+The context is provenance. Only some of it drives behavior:
 
 | Context item | Role |
 |---|---|

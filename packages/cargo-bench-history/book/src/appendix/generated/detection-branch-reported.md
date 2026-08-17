@@ -2,4 +2,4 @@
 >
 > The tip is 130 against a base level of 99.67.
 >
-> the tip sits outside the range a further measurement was expected in.
+> The tip sits outside the range a further measurement was expected in.

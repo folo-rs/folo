@@ -4,8 +4,10 @@
 which of them are worth your attention.
 
 Every gate answers the same underlying question in a different way: **is this move larger than
-what the measurement itself manufactures?** A benchmark that reports 100 ns will not report
-100 ns again. The gates exist to keep that fact from becoming a stream of false alarms.
+what could be explained by measurement process noise?** A benchmark that reports 100 ns will
+typically not report exactly 100 ns the next time. The gates exist to keep that fact from
+becoming a stream of false alarms — and every one of them is a *filter*: a gate can only ever
+remove a candidate, never create one or strengthen another.
 
 ## Terms used here
 
@@ -31,14 +33,14 @@ at a different point in their own sequence. The questions are the part worth lea
 
 | Question | Gates that ask it |
 |---|---|
-| Is there enough data to judge this at all? | `min_series_points`, `min_regime`, `min_base_commits` |
+| Is there enough data to judge a candidate at all? | `min_series_points`, `min_regime`, `min_base_commits` |
 | Did anything actually change? | `split_located`, `non_zero_delta` |
-| Could chance alone have produced this pattern? | `significance` |
+| Could chance alone have produced the candidate? | `significance` |
 | Is the move big enough to matter? | `relative_floor`, `absolute_floor` |
 | Is it bigger than what this series does anyway? | `residual_noise` |
-| Do the two sides genuinely separate? | `regime_separation` |
-| Does the engine's own precision explain it? | `interval_disjoint`, `interval_noise_band` |
-| Can the comparison even be formed? | `base_scatter` |
+| Do the two before-and-after sides genuinely separate? | `regime_separation` |
+| Does the engine's own precision explain the move? | `interval_disjoint`, `interval_noise_band` |
+| Can the base comparison even be formed? | `base_scatter` |
 
 ## Each detector has its own sequence
 
@@ -61,16 +63,7 @@ Two things in those tables are easy to miss:
   and branch. A detector applies an interval check only where the comparison it makes has a
   meaningful interval to check.
 
-## A candidate that survives
-
-{{#include generated/gates-ladder-pass.svg}}
-
-Each bar shows the direction-adjusted clearance multiple, scaled so the demand sits at the same
-place on every row and values above it cleared. Lower-is-better gates invert the computed value
-and threshold, so a stronger p-value extends past the line. The raw figures are printed alongside,
-because a chance level, a percentage and a nanosecond count cannot honestly share an axis.
-
-## Is the move big enough to matter?
+## Gate logic: is the move big enough to matter? (`relative_floor`, `absolute_floor`)
 
 Two floors, and a candidate must clear **both**.
 
@@ -90,13 +83,14 @@ The floors differ per metric because the reasons differ:
 This pair is also what makes the tool behave sensibly across scales: the same proportional move
 on a benchmark a thousand times larger clears the absolute floor easily, and is reported.
 
-## Is it bigger than what this series does anyway?
+## Gate logic: is it bigger than what this series does anyway? (`residual_noise`)
 
 This is the primary noise check, and the one that does the most work. It needs nothing from the
 engine — no confidence interval, no repeat runs — because it measures the series against itself.
 
-The tool fits the candidate's own model to the series (a step, or a line), then measures how far
-an ordinary point sits from that model. The move must be several times that distance.
+The tool fits the candidate's own model to the series (a step for a change point or branch
+comparison, a line for a drift), then measures how far a typical point sits from that model. The
+move must be several times that distance.
 
 {{#include generated/gates-residual.svg}}
 
@@ -111,9 +105,9 @@ series being itself.
 This gate is also why a noisy benchmark is worth fixing rather than tolerating: it widens the
 band, and the band is what real moves have to clear. See [Insights](insights.md).
 
-## Do the two sides genuinely separate?
+## Gate logic: do the two sides genuinely separate? (`regime_separation`)
 
-A candidate can pass a significance test and still be an artefact. The classic case is a series
+A candidate can pass a significance test and still be an artifact. The classic case is a series
 that oscillates between two levels: split it anywhere and the two sides differ, and with enough
 points a significance test will happily call that difference real.
 
@@ -136,7 +130,7 @@ test gets easier to pass with more data, because more data makes a smaller diffe
 detectable. An agreement share does not: it measures how completely the two sides separate,
 which more data estimates more precisely rather than inflating.
 
-## Does the engine's own precision explain it?
+## Gate logic: does the engine's own precision explain the move? (`interval_disjoint`, `interval_noise_band`)
 
 Where the engine reports a confidence interval, further checks apply. Both can only ever **take a
 candidate away** — no interval ever creates one or relaxes another gate.
@@ -149,9 +143,9 @@ distinguish these levels.
 **Noise band.** The move must exceed a multiple of the engine's own reported imprecision,
 independently of how the two levels compare.
 
-Engines that report no interval — Callgrind always, and the operation engines for a single-span
-measurement — simply skip these. They are not held to a weaker standard: the residual check
-already judged them against their own between-commit scatter, which is the more relevant
+Engines that report no interval — Callgrind always, and `alloc_tracker` or `all_the_time` for a
+single-span measurement — simply skip these. They are not held to a weaker standard: the residual
+check already judged them against their own between-commit scatter, which is the more relevant
 quantity anyway.
 
 ## The quantum is not a floor
@@ -187,13 +181,27 @@ suppress findings on exactly the sparse series a user is least likely to be watc
 does mean a candidate can reach the report with fewer gates actually applied than its ladder
 suggests.
 
-## A candidate that is declined
+## Reading a gate ladder
+
+Each detector's gates form a **ladder**: the candidate meets them in order and stops at the first
+that declines it. The figures below plot a ladder as one bar per gate, each bar showing how far
+the candidate cleared — or fell short of — that gate's demand. The demand sits at the same place
+on every row, so a bar reaching past the line cleared and a bar short of it did not, and the raw
+figures are printed alongside because a chance level, a percentage and a nanosecond count cannot
+honestly share an axis. Lower-is-better gates such as a p-value are inverted, so "further past the
+line" always reads as "cleared by more".
+
+A candidate that clears every gate:
+
+{{#include generated/gates-ladder-pass.svg}}
+
+And one that is declined — the short bar is the gate that stopped it, and nothing below it ran:
 
 {{#include generated/gates-ladder-declined.svg}}
 
 {{#include generated/gates-ladder-declined.md}}
 
-Reading a ladder like this is the fastest way to answer "why was my regression not reported?" —
+Reading a declined ladder is the fastest way to answer "why was my regression not reported?" —
 and [Insights](insights.md) turns it into a checklist.
 
 ## What the gates hand on

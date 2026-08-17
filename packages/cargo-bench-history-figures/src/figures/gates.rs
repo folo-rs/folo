@@ -207,7 +207,9 @@ fn compares(gate: Gate, stage: GateStage) -> &'static str {
         Gate::AbsoluteFloor => "The move in the metric's own units.",
         Gate::ResidualNoise => "The move against the series' own typical residual.",
         Gate::BaseScatter => {
-            "Whether observed base scatter or a metric quantum can scale the base prediction."
+            "Whether the base window has any dispersion — measured scatter, or an integer \
+             metric's quantum — to build a prediction interval from; with none, the tip cannot \
+             be judged and the candidate is dropped."
         }
         Gate::Significance => match stage {
             GateStage::ChangePoint => {
@@ -660,7 +662,7 @@ fn floor_reason(kind: MetricKind) -> &'static str {
         MetricKind::InstructionCount
         | MetricKind::ConditionalBranches
         | MetricKind::IndirectBranches => {
-            "Code layout shifts these counts by a few units between builds of identical \
+            "Code layout can shift these counts by a few units between builds of identical \
              source, so a handful of them says nothing about what the code costs."
         }
         MetricKind::AllocatedBytes | MetricKind::AllocationCount => {

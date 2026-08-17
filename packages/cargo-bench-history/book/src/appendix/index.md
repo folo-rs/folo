@@ -66,13 +66,13 @@ short table defining it in plain language, and the [Glossary](glossary.md) colle
 with the textbook name alongside, for when you want to read further. Where a plain description
 works as well as the technical name, this appendix uses the description.
 
-**Generated evidence is computed, not invented.** Every behaviour-bearing table, figure,
+**Generated evidence is computed, not invented.** Every behavior-bearing table, figure,
 computed example, configured value, and serialized excerpt is produced by
 `cargo-bench-history-figures` from the production type, key builder, adapter fixture, or
-`private-test-util` inspection surface that owns the behaviour. Completeness and derivation
+`private-test-util` inspection surface that owns the behavior. Completeness and derivation
 tests pin those links — enum `ALL` coverage, exhaustive matches, real key-builder assertions,
 and fixture-backed adapter checks — and freshness tests fail if the checked-in includes drift
-from regenerated output. Genuinely explanatory, non-behavioural prose stays ordinary Markdown.
+from regenerated output. Genuinely explanatory, non-behavioral prose stays ordinary Markdown.
 
 This is also why the examples are small: they are meant to be checkable by hand, not realistic.
 

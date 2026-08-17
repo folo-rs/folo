@@ -494,7 +494,7 @@ fn funnel_table() -> String {
     markdown.push_str(
         "\nThe grid draws the analyzed first-parent line, so the runs the on-history stage \
          removed have no column in it — having no place on that line is exactly why they \
-         were removed. Partitions are labelled by engine, target triple, and machine key, \
+         were removed. Partitions are labeled by engine, target triple, and machine key, \
          with the triples shortened to fit.\n",
     );
     markdown

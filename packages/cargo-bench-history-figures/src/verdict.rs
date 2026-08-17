@@ -22,6 +22,7 @@ pub fn reported(finding: &Finding, reading: &str, mode: AnalysisMode) -> String 
 
 /// History mode: a change point or a drift over the analyzed window.
 fn history_reported(finding: &Finding, reading: &str) -> String {
+    let reading = capitalized(reading);
     let direction = direction_of(finding);
     let method = match finding.method {
         FindingMethod::ChangePoint => "change point",
@@ -29,16 +30,17 @@ fn history_reported(finding: &Finding, reading: &str) -> String {
     };
 
     // A change point names the commit the new level starts at, which is a claim about
-    // where something happened. A drift names the newest commit in its window, which is
-    // not — the movement is spread across the whole window. Rendering both as "attributed
-    // to" would invite the reader to go looking at one commit's diff for a drift, which is
-    // exactly the wrong thing to do with one.
+    // where something happened. A drift belongs to its whole window rather than one commit,
+    // so it names the range it accumulated over. Rendering a drift as a single commit would
+    // invite the reader to go looking at one commit's diff, which is exactly the wrong thing
+    // to do with one.
     let attribution = match (finding.method, finding.commit.as_deref()) {
         (_, None) => "across the analyzed window".to_owned(),
         (FindingMethod::ChangePoint, Some(commit)) => format!("first seen at `{commit}`"),
-        (FindingMethod::Drift, Some(commit)) => {
-            format!("accumulated across the window ending at `{commit}`")
-        }
+        (FindingMethod::Drift, Some(commit)) => match finding.window_start_commit.as_deref() {
+            Some(start) => format!("accumulated from `{start}` to `{commit}`"),
+            None => format!("accumulated across the window ending at `{commit}`"),
+        },
     };
     let baseline = format_value(finding.baseline);
     let latest = format_value(finding.latest);
@@ -59,6 +61,7 @@ fn history_reported(finding: &Finding, reading: &str) -> String {
 /// type; the branch comparison is not a change point, so the fragment must not borrow
 /// history-mode wording.
 fn branch_reported(finding: &Finding, reading: &str) -> String {
+    let reading = capitalized(reading);
     let direction = direction_of(finding);
     let baseline = format_value(finding.baseline);
     let latest = format_value(finding.latest);
@@ -80,6 +83,16 @@ fn direction_of(finding: &Finding) -> &'static str {
     }
 }
 
+/// Capitalizes the first character of a caption, so a lowercase source string reads as a
+/// sentence in the rendered blockquote.
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
 /// The fragment describing a series the detector left alone.
 ///
 /// Takes the finding rather than a bare flag so a case that unexpectedly starts reporting
@@ -87,7 +100,7 @@ fn direction_of(finding: &Finding) -> &'static str {
 #[must_use]
 pub fn quiet(finding: Option<&Finding>, reading: &str) -> String {
     match finding {
-        None => format!("> **Nothing reported.** {reading}.\n"),
+        None => format!("> **Nothing reported.** {}.\n", capitalized(reading)),
         Some(found) => format!(
             "> **Reported**, unexpectedly: {:+.2}% at {:.0}% confidence. This example is \
              documented as staying quiet, so this fragment means the two have diverged.\n",
@@ -133,7 +146,7 @@ mod tests {
 
         assert!(fragment.contains("Reported."));
         assert!(fragment.contains("confidence"));
-        assert!(fragment.contains("because the level changed."));
+        assert!(fragment.contains("Because the level changed."));
     }
 
     /// Branch mode compares the tip to the base interval. History-mode phrasing would
@@ -158,7 +171,7 @@ mod tests {
         let fragment = quiet(None, "one point is not a level");
 
         assert!(fragment.contains("Nothing reported."));
-        assert!(fragment.contains("one point is not a level."));
+        assert!(fragment.contains("One point is not a level."));
     }
 
     /// A quiet example that starts reporting must say so in the book rather than keep

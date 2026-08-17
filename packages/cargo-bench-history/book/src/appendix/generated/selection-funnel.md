@@ -11,4 +11,4 @@
 
 This worked store holds only runs. A matching blessing sidecar is a separate object kind: it is set apart during discriminant selection and follows its own path, so it never enters the run-only topology, dirty-admission, and window stages counted here.
 
-The grid draws the analyzed first-parent line, so the runs the on-history stage removed have no column in it — having no place on that line is exactly why they were removed. Partitions are labelled by engine, target triple, and machine key, with the triples shortened to fit.
+The grid draws the analyzed first-parent line, so the runs the on-history stage removed have no column in it — having no place on that line is exactly why they were removed. Partitions are labeled by engine, target triple, and machine key, with the triples shortened to fit.

@@ -9,7 +9,7 @@ to read what you get.
 
 ## Ranking
 
-Findings are ordered by **descending relative move**, then by method, then by a stable
+Findings are ordered by **descending relative move**, then by analysis method, then by a stable
 identity tie-break so two runs over the same data produce the same order.
 
 There is deliberately **no severity classification**. Whether a 4% regression in a hot path
@@ -36,15 +36,22 @@ surrounded by gaps into nothing.
 
 ## The formats
 
-Text and Markdown carry every finding, but omit the per-reason census when findings exist.
-**JSON always carries the complete census.** The **condensed summary** is lossy: it is
-capped, drops the per-set grouping, and is meant for a size-limited destination such as a
-pull request comment. Do not automate against it.
+The tool emits its findings in four forms, each requested independently:
 
-**JSON is the machine-readable signal.** It carries each finding self-describingly, plus the
-full census — including the reasons the human-readable formats print only on a silent report. It
-deliberately omits the per-commit chart series; that is presentation, and
-[`examine`](../commands/examine.md) is the way to get the underlying points.
+- **Text** — the default terminal report.
+- **Markdown** (`--markdown <path>`) — the same content, for a pull request or an issue.
+- **JSON** (`--json <path>`) — the complete machine-readable result.
+- **Condensed summary** (`--markdown-summary <path>`, `analyze` only) — a short, capped Markdown
+  digest for a size-limited destination such as a pull request comment.
+
+Text and Markdown carry every finding but omit the per-reason census when findings exist. **JSON
+always carries the complete census**, which makes it the machine-readable signal: each finding
+self-describing, plus every unjudged reason the human formats print only on a silent report. It
+deliberately omits the per-commit chart series — that is presentation, and
+[`examine`](../commands/examine.md) is the way to get the underlying points. The **condensed
+summary** is lossy by design — capped, and flattened so the per-set grouping is dropped — so it is
+the one output you must not automate against. The full table is under
+[Where output goes](#where-output-goes).
 
 Here is the same analysis in each form. The JSON excerpt is illustrative of the shape
 automation reads, not a complete field catalog.

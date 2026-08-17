@@ -24,9 +24,11 @@ does the probability of seeing at least one.
 
 So a per-series check is not enough. The tool applies a **group-wide correction**: sort every
 candidate by chance level, and require the strongest to clear a strict bar, the next a
-slightly looser one, and so on down. Benjamini-Hochberg targets an expected false-discovery
-proportion across repeated analyses; it does not cap the realized wrong share in any one
-report.
+slightly looser one, and so on down. What Benjamini-Hochberg controls is the false-discovery
+rate *averaged over many analyses* — the expected share of reported findings that are wrong is
+held below the target. It is not a promise about any single report: one report can still carry a
+higher wrong share than the target, and only across many analyses does the average settle back
+to it.
 
 {{#include generated/coverage-staircase.svg}}
 
@@ -82,7 +84,9 @@ The same definition that builds the family also drives the report's coverage lin
 purpose: the number the correction divided by and the number the report claims to have
 covered cannot drift apart, because they are the same number.
 
-Every report states it:
+Every report states it — the coverage line in the text and Markdown output, and the full census
+in the JSON, on every `analyze` run. How each format presents it is the
+[Reporting](reporting.md) chapter's subject.
 
 {{#include generated/coverage-census.svg}}
 

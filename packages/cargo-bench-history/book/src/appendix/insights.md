@@ -28,7 +28,7 @@ flowchart TD
     BR --> TIP["Re-run the tip;<br/>check for a lag warning"]
 ```
 
-Note that a branch finding is labelled `change point` in the report — the method names the shape
+Note that a branch finding is labeled `change point` in the report — the method names the shape
 of the comparison, not the mode. The report's header tells you which mode ran.
 
 ### A change point
@@ -40,7 +40,7 @@ gap before it.
 1. **Look at the series.** `cargo bench-history examine --benchmark <qualified-id> --metric <name>`
    prints every stored point. Both values come from the finding. The chart in the report is a
    summary; this is the data.
-2. **Check whether the attributed commit has a neighbour gap.** If the previous observation is
+2. **Check whether the attributed commit has a neighbor gap.** If the previous observation is
    twenty commits back, your suspect list is those twenty commits, not one.
 3. **Check what else moved.** Many simultaneous steps suggest a shared cause, not a specific
    one. The cause may be shared code such as an allocator, runtime or dependency, or an
@@ -107,7 +107,7 @@ residual, so on a benchmark that scatters widely the move has to be several time
 before anything is reported. Noise does not just add false alarms; it hides real regressions, and
 it hides them at a threshold well above the scatter itself.
 
-**How to recognise one:**
+**How to recognize one:**
 
 - The series oscillates between two levels instead of varying around one. Usually a code path
   that gets taken sometimes: a cache that sometimes hits, an allocation that sometimes
@@ -115,6 +115,9 @@ it hides them at a threshold well above the scatter itself.
 - Occasional points far from the rest. Usually the operating system — a scheduler decision,
   a page fault, another process.
 - Drift that tracks nothing in your code. Often a data structure that grows across iterations.
+- Values that differ run to run with no code or environment change. Usually **unseeded
+  randomness** — most often the hashers behind `HashMap`/`HashSet`, whose seed is randomized per
+  process, but also any randomized algorithm or sampled input — reshuffling the work each time.
 
 **Fixes, roughly in order of effect:**
 
@@ -126,6 +129,9 @@ it hides them at a threshold well above the scatter itself.
 3. **Use `--best-of N`** to take the minimum of several runs. Note the caveat below.
 4. **Remove the variable path** from the benchmark itself: pre-warm caches, pre-size buffers,
    fix the input.
+5. **Seed all randomness.** Every random choice a benchmark makes must come from a fixed seed,
+   including the hashers behind `HashMap` and `HashSet` (their default seed is randomized per
+   process) — otherwise each run measures a subtly different workload.
 
 > **`--best-of` is a protocol, not a flag.** The stored value depends on how many repetitions
 > you ran, so changing `N` shifts every series at once and reads as a suite-wide step. Pick a
@@ -133,8 +139,7 @@ it hides them at a threshold well above the scatter itself.
 
 ### Multithreaded and OS-waiting benchmarks
 
-These deserve their own mention because they are the worst case and the most commonly
-attempted.
+These deserve their own mention because they are the worst case.
 
 A benchmark that waits on another thread, a lock, the filesystem, or the network is measuring
 the operating system's scheduling decisions at least as much as your code. The scatter is
@@ -145,7 +150,7 @@ enormous moves clear it. The benchmark still runs, still records, still looks li
 the census — and detects almost nothing.
 
 *What to do instead:* measure the single-threaded work directly, and test concurrency
-behaviour with something other than a benchmark. If you must measure a concurrent path,
+behavior with something other than a benchmark. If you must measure a concurrent path,
 instruction counts degrade far more gracefully than wall time.
 
 ## I expected a finding and got none

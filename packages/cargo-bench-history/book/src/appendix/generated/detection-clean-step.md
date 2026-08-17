@@ -2,4 +2,4 @@
 >
 > The level moved from 100.4 to 130.1.
 >
-> the split is where the level changed, not where the largest single jump happened.
+> The split is where the level changed, not where the largest single jump happened.

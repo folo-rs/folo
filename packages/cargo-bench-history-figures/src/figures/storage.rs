@@ -251,7 +251,7 @@ fn object_kinds() -> String {
 /// What happens when a run already exists at a commit.
 fn conflicts() -> String {
     String::from(
-        "| Policy | Behaviour | When to use it |\n|---|---|---|\n\
+        "| Policy | Behavior | When to use it |\n|---|---|---|\n\
          | default | Refuses, leaving the stored run untouched | Always, unless you have a \
          reason not to |\n\
          | `--skip-existing` | Leaves the stored run and reports success | Re-running a \

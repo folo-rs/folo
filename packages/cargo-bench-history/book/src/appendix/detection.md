@@ -19,7 +19,7 @@ estimator that a few odd measurements cannot throw off.
 That definition is narrow on purpose, and three exclusions follow from it.
 
 - **A signal is not a cause.** The tool reports that a level moved. Why it moved — a code
-  change, a compiler upgrade, a noisy neighbour on the build machine — is your judgment,
+  change, a compiler upgrade, a noisy neighbor on the build machine — is your judgment,
   recorded with [`bless`](../commands/bless.md).
 - **A signal is not one surprising measurement.** A level has to persist to be a level.
 - **A signal is not yet a finding.** Everything this chapter produces is a *candidate*. The
@@ -170,7 +170,7 @@ That difference in question drives every difference in method.
 | Window | The whole analyzed history | A fixed number of recent base commits |
 | Test | Rank comparison, or trend check | Did the tip land inside the range a further measurement was expected in? |
 | Reports | Regressions only, by default | Regressions and improvements |
-| Blessings | Honoured | Ignored |
+| Blessings | Honored | Ignored |
 
 The branch's own intermediate commits are discarded. Only the tip merges into the base, so
 only the tip is judged.
@@ -198,12 +198,18 @@ both would produce a range so wide that nothing could fall outside it.
 So branch mode first checks its own window for a shift, and on finding an unambiguous one,
 discards everything before it and predicts from the newer regime alone.
 
-The bar for accepting such a boundary is deliberately **higher than the bar for reporting a
-finding**, which looks backwards until you see why. Reporting a move makes a claim that a
-human then checks. Accepting a boundary *throws evidence away*: the comparison sample
-shrinks, and its scatter is re-estimated from what remains. A wrong boundary can collapse a
-noisy window's scatter to almost nothing and make the next tip read as certain. A decision
-that discards data has to be more certain than one that merely reports something.
+Accepting such a boundary is deliberately harder than reporting a finding. It is not a single
+higher number — the split has to qualify as a **full change point in its own right**: located by
+the split search, with each side long enough to meet the minimum regime length, significant under
+the rank comparison, well separated, and clearing the same relative and absolute floors a
+reported move must. Merely *reporting* a branch move asks for none of that extra structure, only
+that the tip fall outside the interval.
+
+The asymmetry looks backwards until you see why. Reporting a move makes a claim that a human then
+checks. Accepting a boundary *throws evidence away*: the comparison sample shrinks, and its
+scatter is re-estimated from what remains. A wrong boundary can collapse a noisy window's scatter
+to almost nothing and make the next tip read as certain. A decision that discards data has to be
+more certain than one that merely reports something.
 
 ## Confidence, and what it is not
 
@@ -231,6 +237,13 @@ stated reason rather than silently skipped — see
 [Multiplicity and coverage](coverage.md).
 
 {{#include generated/detection-minimums.md}}
+
+The minimum exists because a handful of points cannot tell a real level shift from ordinary
+scatter: with too few observations every test is dominated by chance, and any "finding" from
+them would be noise dressed as signal. So the bar is a deliberate judgment — a floor chosen to
+refuse data too sparse to trust — rather than a value the statistics derive on their own. Set it
+too low and the report fills with accidents; the thresholds here are picked to keep that from
+happening while still judging any series with a genuine history behind it.
 
 ## What detection hands on
 

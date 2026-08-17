@@ -391,8 +391,8 @@ fn formats() -> String {
         markdown,
         "| Condensed summary | `--markdown-summary <path>` (`analyze` only) | A \
          size-limited destination, such as a pull request comment or a rolling issue body \
-         | no — capped at the {} findings of greatest magnitude, and flattened so the \
-         per-set grouping is dropped |",
+         | at most the {} findings of greatest magnitude, flattened so the \
+         per-set grouping is dropped — lossy by design |",
         summary_limit.get(),
     )
     .expect("writing to a String never fails");
