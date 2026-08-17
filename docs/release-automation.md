@@ -57,6 +57,15 @@ fail *before* any version or changelog is touched:
 * **never-published warning** (`check-never-published`, a post-step). See
   [Manual publishing](#manual-publishing) below.
 
+After `release-plz update` bumps the manifests and changelogs, `prepare-release`
+runs `cargo update --workspace` to re-sync the shared `Cargo.lock` with the
+bumped manifests. On a *major* bump release-plz can leave a package's lockfile
+entry at a patch bump while its manifest jumped to the major version; because the
+workspace shares one lockfile, that single stale entry breaks every
+`cargo build --locked` on `main` and in the release binary builds. `--workspace`
+touches only the workspace members' own versions and leaves registry
+dependencies pinned, so the committed release carries a consistent lockfile.
+
 ## What ships a binary (derived, never hardcoded)
 
 The set of published binary crates is **derived**, so new tools are covered
@@ -218,6 +227,20 @@ on **every** platform (`tar: none`, `zip: all`) — `.zip` is universally
 extractable, and a single format keeps the `[package.metadata.binstall]` blocks
 free of per-OS overrides.
 
+**Lockfile reconciliation before the `--locked` build.** A `cargo update
+--workspace` step runs between checkout and the build. The build uses
+`locked: true` for reproducibility, but a release-plz *major* bump can tag a
+commit whose committed `Cargo.lock` still records a package at a patch bump
+(e.g. `0.0.10`) while its manifest jumped to the major version (e.g. `0.2.0`).
+Because the workspace shares one `Cargo.lock`, that single stale entry fails the
+`--locked` build of **every** binary crate. `cargo update --workspace` re-syncs
+only the workspace members' own versions in the lockfile — registry dependencies
+already present stay pinned, so reproducibility is preserved — and is a no-op
+when the tag's lockfile is already consistent. `prepare-release` performs the
+same reconciliation (see [Preflights](#preflights-around-release-plz-update)), so
+new releases carry a consistent lockfile; this step tolerates already-created
+tags that predate that fix.
+
 ```yaml
 # Illustrative.
 build-binaries:
@@ -237,6 +260,7 @@ build-binaries:
       with:
         ref: refs/tags/${{ matrix.tag }}   # build the exact released code
     - uses: ./.github/actions/setup-environment
+    - run: cargo update --workspace   # re-sync workspace-member versions a stale tag lockfile may lag
     - uses: taiki-e/upload-rust-binary-action@v1
       with:
         bin: ${{ matrix.name }}
