@@ -510,7 +510,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-detect-package"
-version = "1.0.26"
+version = "1.0.27"
 dependencies = [
  "clap",
  "mimalloc",
@@ -525,7 +525,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-freeze-deps"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "clap",
  "mimalloc",
