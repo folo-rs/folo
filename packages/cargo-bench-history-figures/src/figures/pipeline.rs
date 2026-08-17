@@ -582,6 +582,12 @@ const DIRTY_EXCURSION: f64 = 1.15;
 /// can take the dirty-tree exception.
 const ADMISSION_DIRTY: [usize; 2] = [12, SPAN - 1];
 
+/// How far above the excluded dirty run its label is placed.
+///
+/// The label belongs to the point but must clear the strike-through mark, so it is lifted
+/// slightly without moving into the chart title.
+const DIRTY_EXCLUDED_NOTE_OFFSET: f64 = 1.03;
+
 /// Every stored run in the admission figure, and whether it came from a dirty tree.
 ///
 /// Ordered as reconstruction orders points — by commit position, then clean before dirty
@@ -605,6 +611,13 @@ fn admission_runs() -> Vec<(Observation, bool)> {
 /// tip is admitted, and only because the working tree is currently dirty.
 fn dirty_admission() -> Panes {
     let runs = admission_runs();
+    let base_side_dirty_position = ADMISSION_DIRTY[0];
+    let base_side_dirty_value = runs
+        .iter()
+        .find_map(|&(observation, dirty)| {
+            (dirty && observation.position == base_side_dirty_position).then_some(observation.value)
+        })
+        .expect("the admission figure has one base-side dirty run");
     let ancestry: Vec<String> = (0..SPAN).map(|position| format!("{position}")).collect();
     let tip = ancestry
         .last()
@@ -642,7 +655,13 @@ fn dirty_admission() -> Panes {
                 observation.marked(Mark::Removed)
             }
         }))
-        .split(SPAN.saturating_sub(1), "analyzed tip");
+        .split(SPAN.saturating_sub(1), "analyzed tip")
+        .note(
+            base_side_dirty_position,
+            base_side_dirty_value * DIRTY_EXCLUDED_NOTE_OFFSET,
+            "dirty, base-side → excluded",
+            theme::REGRESSION,
+        );
 
     Panes {
         title: "a dirty run at the analyzed tip is admitted while the tree is dirty; \
@@ -785,9 +804,12 @@ fn gap() -> Panes {
     // Then the detector's input: the same values as a bare sequence, with no notion of a commit
     // it holds no observation for. The straight climb now reads as uneven steps, because the gaps
     // it cannot see are exactly where the biggest jumps happened.
-    let after = Plot::new("what the detector receives: a gapless sequence", GAP_OBSERVATIONS)
-        .value_label("ns")
-        .values(&values);
+    let after = Plot::new(
+        "what the detector receives: a gapless sequence",
+        GAP_OBSERVATIONS,
+    )
+    .value_label("ns")
+    .values(&values);
 
     Panes {
         title: "the same series as the history holds it, then as the detector receives it",
@@ -1027,6 +1049,17 @@ mod tests {
             }),
             "{positions:?}"
         );
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
+    )]
+    fn the_admission_figure_labels_the_excluded_base_side_dirty_run() {
+        let svg = dirty_admission().render();
+
+        assert!(svg.contains("dirty, base-side → excluded"));
     }
 
     /// The table is the chapter's statement of the rule, so it is held to the rule rather

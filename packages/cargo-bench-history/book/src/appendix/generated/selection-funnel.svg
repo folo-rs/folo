@@ -1,4 +1,4 @@
-<svg style="width:100%;height:auto" viewBox="0 0 680 184" xmlns="http://www.w3.org/2000/svg">
+<svg style="width:100%;height:auto" viewBox="0 0 680 218" xmlns="http://www.w3.org/2000/svg">
 <text x="340" y="17" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="12.096774193548388" opacity="1" fill="currentColor">
 one store, one query: what survived and what did not
 </text>
@@ -145,4 +145,21 @@ criterion / macos-arm64 / 7c6d
 <rect x="632" y="113" width="14" height="21" opacity="1" fill="none" stroke="#D64541"/>
 <rect x="650" y="113" width="14" height="21" opacity="0.75" fill="#969BA0" stroke="none"/>
 <rect x="650" y="113" width="14" height="21" opacity="1" fill="none" stroke="#D64541"/>
+<rect x="16" y="192" width="12" height="12" opacity="0.75" fill="#306EC8" stroke="none"/>
+<text x="34" y="204" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+clean run
+</text>
+<rect x="186" y="192" width="12" height="12" opacity="0.75" fill="#9664BE" stroke="none"/>
+<text x="204" y="204" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+dirty run
+</text>
+<rect x="356" y="192" width="12" height="12" opacity="0.75" fill="#969BA0" stroke="none"/>
+<rect x="356" y="192" width="12" height="12" opacity="1" fill="none" stroke="#D64541"/>
+<text x="374" y="204" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+excluded run
+</text>
+<rect x="526" y="192" width="12" height="12" opacity="0.25" fill="none" stroke="currentColor"/>
+<text x="544" y="204" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor">
+no run
+</text>
 </svg>

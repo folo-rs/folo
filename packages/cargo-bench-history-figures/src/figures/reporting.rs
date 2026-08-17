@@ -26,6 +26,8 @@ use cbh_render::{
 };
 
 use crate::assets::Asset;
+use crate::styles::plot::{Mark, Observation, Plot};
+use crate::theme;
 
 /// Every asset the Reporting chapter embeds.
 #[must_use]
@@ -36,6 +38,7 @@ pub fn assets() -> Vec<Asset> {
         Asset::new("reporting-text.md", text()),
         Asset::new("reporting-json.md", json()),
         Asset::new("reporting-census.md", census()),
+        Asset::new("reporting-lag.svg", lag_figure()),
         Asset::new("reporting-lag.md", lag()),
     ]
 }
@@ -495,6 +498,43 @@ const LAG_DISTANCES: [(usize, ComparisonBaseLagReason); 2] = [
     (1, ComparisonBaseLagReason::NoRecentBaseData),
 ];
 
+/// The comparison base position in the lag illustration.
+///
+/// Set far enough behind the tip to leave a visible run of commits without same-key base data.
+const LAG_FIGURE_BASE: usize = 3;
+
+/// The branch tip position in the lag illustration.
+const LAG_FIGURE_TIP: usize = 10;
+
+/// The level measured at the older matching base commit.
+const LAG_FIGURE_BASE_LEVEL: f64 = 100.0;
+
+/// The level measured at the branch tip.
+const LAG_FIGURE_TIP_LEVEL: f64 = 130.0;
+
+/// The topology shape behind a comparison-base lag warning.
+fn lag_figure() -> String {
+    Plot::new(
+        "same machine key: the comparison reaches back to older base data",
+        LAG_FIGURE_TIP.saturating_add(1),
+    )
+    .value_label("ns")
+    .scattered()
+    .observations([
+        Observation::new(LAG_FIGURE_BASE, LAG_FIGURE_BASE_LEVEL).marked(Mark::Focus),
+        Observation::new(LAG_FIGURE_TIP, LAG_FIGURE_TIP_LEVEL).marked(Mark::Regression),
+    ])
+    .band(
+        LAG_FIGURE_BASE.saturating_add(1),
+        LAG_FIGURE_TIP.saturating_sub(1),
+        "no same-key base data",
+        theme::MUTED,
+    )
+    .split(LAG_FIGURE_BASE, "comparison base")
+    .split(LAG_FIGURE_TIP, "branch tip")
+    .render()
+}
+
 /// What each comparison-base lag reason means for a branch finding.
 fn lag() -> String {
     let mut markdown =
@@ -582,6 +622,7 @@ mod tests {
             "reporting-text.md",
             "reporting-json.md",
             "reporting-census.md",
+            "reporting-lag.svg",
             "reporting-lag.md",
         ] {
             assert!(
@@ -589,6 +630,19 @@ mod tests {
                 "{expected} missing"
             );
         }
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
+    )]
+    fn the_lag_figure_names_the_base_tip_and_gap() {
+        let svg = lag_figure();
+
+        assert!(svg.contains("comparison base"));
+        assert!(svg.contains("branch tip"));
+        assert!(svg.contains("no same-key base data"));
     }
 
     /// Findings and census come from one pass. A glued census would let the two drift.

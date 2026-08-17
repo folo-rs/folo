@@ -73,6 +73,13 @@ Here is a series that steps, and the detector's own answer for it.
 
 {{#include generated/detection-clean-step.md}}
 
+A series can contain more than one visible step. The split search still chooses one boundary,
+and later gates judge that single candidate.
+
+{{#include generated/detection-multi-step.svg}}
+
+{{#include generated/detection-multi-step.md}}
+
 ### Finding a drift
 
 The drift detector also works in three moves, but every one of them differs.
@@ -146,6 +153,10 @@ Everything downstream exists to reject it.
 An excursion that has since returned to where it started is silent too, however large it was
 while it lasted.
 
+{{#include generated/detection-blip-returned.svg}}
+
+{{#include generated/detection-blip-returned.md}}
+
 That is a deliberate narrowing rather than a gap. By the time such a series is analyzed, its
 current level already agrees with its baseline, so there is nothing to act on — and a report
 that mixes "your code is slower now" with "your code was briefly slower some time ago" makes
@@ -180,6 +191,10 @@ out the range a single further measurement was expected to land in, and asks whe
 landed outside it. That is a different question from "are these two groups different" —
 there is only one tip observation, not a group.
 
+In the figures below, the shaded value band is that predicted range. The base window itself
+is the recent base-side commit sample for the same discriminant set, capped by the branch
+comparison window.
+
 {{#include generated/detection-branch-reported.svg}}
 
 {{#include generated/detection-branch-reported.md}}
@@ -197,6 +212,10 @@ both would produce a range so wide that nothing could fall outside it.
 
 So branch mode first checks its own window for a shift, and on finding an unambiguous one,
 discards everything before it and predicts from the newer regime alone.
+
+{{#include generated/detection-branch-base-moved.svg}}
+
+{{#include generated/detection-branch-base-moved.md}}
 
 Accepting such a boundary is deliberately harder than reporting a finding. It is not a single
 higher number — the split has to qualify as a **full change point in its own right**: located by
@@ -217,7 +236,20 @@ Every finding carries a confidence, and it is **one minus the chance level of wh
 confirmed it**.
 
 That makes it a statement about evidence strength — how poorly chance explains the pattern —
-and it is easy to over-read. Four things it is not:
+and it is easy to over-read.
+
+{{#include generated/detection-confidence-high.svg}}
+
+{{#include generated/detection-confidence-high.md}}
+
+{{#include generated/detection-confidence-lower.svg}}
+
+{{#include generated/detection-confidence-lower.md}}
+
+Both are accepted findings. The lower number is still high; it comes from the minimum
+regime length, where even a clean split has fewer ranks to compare.
+
+Four things it is not:
 
 - **Not the probability that the finding is correct.** It says chance is a poor explanation.
   It says nothing about whether the cause is your code or the machine.

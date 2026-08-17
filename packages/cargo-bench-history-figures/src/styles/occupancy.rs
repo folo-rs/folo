@@ -12,6 +12,9 @@
 
 use std::error::Error;
 
+use plotters::backend::SVGBackend;
+use plotters::coord::Shift;
+use plotters::drawing::DrawingArea;
 use plotters::element::{Rectangle, Text};
 use plotters::prelude::ChartBuilder;
 use plotters::style::{Color as _, RGBColor, ShapeStyle, TextStyle};
@@ -38,6 +41,15 @@ pub enum Cell {
 }
 
 impl Cell {
+    /// Cells in the stable order their legend uses.
+    const LEGEND_ORDER: [Self; 5] = [
+        Self::Clean,
+        Self::Dirty,
+        Self::Excluded,
+        Self::Focus,
+        Self::Absent,
+    ];
+
     /// The colour the cell is filled with.
     fn color(self) -> Option<RGBColor> {
         match self {
@@ -46,6 +58,17 @@ impl Cell {
             Self::Dirty => Some(theme::ALTERNATE),
             Self::Excluded => Some(theme::MUTED),
             Self::Focus => Some(theme::IMPROVEMENT),
+        }
+    }
+
+    /// How the legend names this cell role.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Absent => "no run",
+            Self::Clean => "clean run",
+            Self::Dirty => "dirty run",
+            Self::Excluded => "excluded run",
+            Self::Focus => "highlighted run",
         }
     }
 }
@@ -101,11 +124,23 @@ impl Occupancy {
     #[must_use]
     pub fn render(&self) -> String {
         let row_height = 36_u32;
-        let height = 76_u32.saturating_add(
+        let grid_height = 76_u32.saturating_add(
             row_height.saturating_mul(u32::try_from(self.rows.len()).unwrap_or(u32::MAX)),
         );
+        let legend = self.legend_cells();
+        let height = grid_height.saturating_add(if legend.is_empty() {
+            0
+        } else {
+            OCCUPANCY_LEGEND_HEIGHT
+        });
 
         canvas::draw(theme::WIDTH, height, |root| {
+            let (grid_area, legend_area) = if legend.is_empty() {
+                (root.clone(), None)
+            } else {
+                let (grid_area, legend_area) = root.split_vertically(grid_height);
+                (grid_area, Some(legend_area))
+            };
             let span = self.span();
             let rows = self.rows.len();
             // Partition names are long, and `plotters` puts value-axis labels at tick
@@ -114,7 +149,7 @@ impl Occupancy {
             // commit axis to the left of zero. Negative positions are suppressed from the
             // tick labels so the gutter reads as margin rather than as commit -8.
             let gutter = (coord::of(span) * 0.45).max(4.0);
-            let mut chart = ChartBuilder::on(root)
+            let mut chart = ChartBuilder::on(&grid_area)
                 .caption(
                     self.caption.as_str(),
                     (theme::FONT, theme::FONT_TITLE, &theme::INK),
@@ -181,9 +216,87 @@ impl Occupancy {
                 }
             }
 
+            if let Some(legend_area) = legend_area {
+                draw_occupancy_legend(&legend_area, &legend)?;
+            }
+
             Ok::<(), Box<dyn Error>>(())
         })
     }
+
+    /// The cell roles present in this grid, ordered for a stable legend.
+    fn legend_cells(&self) -> Vec<Cell> {
+        Cell::LEGEND_ORDER
+            .into_iter()
+            .filter(|cell| {
+                self.rows
+                    .iter()
+                    .any(|row| row.cells.iter().any(|present| present == cell))
+            })
+            .collect()
+    }
+}
+
+/// Height reserved below an occupancy grid for the role legend.
+///
+/// Keeping the legend in its own strip avoids shrinking the commit columns or competing
+/// with the row labels drawn inside the grid.
+const OCCUPANCY_LEGEND_HEIGHT: u32 = 34;
+
+/// Pixel inset from the legend strip's left edge.
+const OCCUPANCY_LEGEND_LEFT: i32 = 16;
+
+/// Pixel inset from the legend strip's top edge.
+const OCCUPANCY_LEGEND_TOP: i32 = 8;
+
+/// Width and height of one legend swatch.
+const OCCUPANCY_LEGEND_SWATCH: i32 = 12;
+
+/// Gap between a legend swatch and its label.
+const OCCUPANCY_LEGEND_TEXT_GAP: i32 = 6;
+
+/// Draws the legend for the cell roles present in an occupancy grid.
+fn draw_occupancy_legend(
+    area: &DrawingArea<SVGBackend<'_>, Shift>,
+    cells: &[Cell],
+) -> Result<(), Box<dyn Error>> {
+    if cells.is_empty() {
+        return Ok(());
+    }
+
+    let (width, _) = area.dim_in_pixel();
+    let column_width = i32::try_from(width).unwrap_or(i32::MAX)
+        / i32::try_from(cells.len()).expect("the legend cell count fits in i32");
+    for (index, cell) in cells.iter().copied().enumerate() {
+        let index = i32::try_from(index).expect("the legend cell count fits in i32");
+        let left = OCCUPANCY_LEGEND_LEFT + index.saturating_mul(column_width);
+        let swatch_right = left + OCCUPANCY_LEGEND_SWATCH;
+        let swatch_bottom = OCCUPANCY_LEGEND_TOP + OCCUPANCY_LEGEND_SWATCH;
+        let swatch = [(left, OCCUPANCY_LEGEND_TOP), (swatch_right, swatch_bottom)];
+        if let Some(color) = cell.color() {
+            area.draw(&Rectangle::new(swatch, color.mix(0.75).filled()))?;
+        } else {
+            area.draw(&Rectangle::new(
+                swatch,
+                ShapeStyle::from(theme::INK.mix(0.25)).stroke_width(1),
+            ))?;
+        }
+        if cell == Cell::Excluded {
+            area.draw(&Rectangle::new(
+                swatch,
+                ShapeStyle::from(theme::REGRESSION).stroke_width(2),
+            ))?;
+        }
+        area.draw(&Text::new(
+            cell.label().to_owned(),
+            (
+                swatch_right + OCCUPANCY_LEGEND_TEXT_GAP,
+                OCCUPANCY_LEGEND_TOP + OCCUPANCY_LEGEND_SWATCH,
+            ),
+            TextStyle::from((theme::FONT, theme::FONT_TICK)).color(&theme::INK),
+        ))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -224,6 +337,21 @@ mod tests {
 
         assert!(svg.contains("criterion / machine a1b2"));
         assert!(svg.contains("criterion / machine c3d4"));
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
+    )]
+    fn the_legend_names_the_cell_roles_present_in_the_grid() {
+        let svg = sample().render();
+
+        assert!(svg.contains("clean run"));
+        assert!(svg.contains("dirty run"));
+        assert!(svg.contains("excluded run"));
+        assert!(svg.contains("no run"));
+        assert!(!svg.contains("highlighted run"));
     }
 
     #[test]

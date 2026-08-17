@@ -94,6 +94,10 @@ Branch mode compares your tip against the base's recent commits **within the sam
 set**. On a rotating CI pool, the newest base commits may only carry data under a different
 machine key — so your runner compares against base data from several commits back.
 
+{{#include generated/reporting-lag.svg}}
+
+The empty stretch is the lag: commits that exist on the base, but not for the tip's machine key.
+
 The report says so, naming how far behind and which of two reasons applies:
 
 {{#include generated/reporting-lag.md}}

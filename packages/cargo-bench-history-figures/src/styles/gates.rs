@@ -11,6 +11,9 @@ use std::cmp::Ordering;
 use std::error::Error;
 
 use cbh_stats::MannWhitneyU;
+use plotters::backend::SVGBackend;
+use plotters::coord::Shift;
+use plotters::drawing::DrawingArea;
 use plotters::element::{Circle, PathElement, Rectangle, Text};
 use plotters::prelude::ChartBuilder;
 use plotters::style::{Color as _, RGBColor, ShapeStyle, TextStyle};
@@ -179,13 +182,15 @@ impl Agreement {
     pub fn render(&self) -> String {
         let rows = self.after.len();
         let columns = self.before.len();
-        let height =
+        let chart_height =
             110_u32.saturating_add(22_u32.saturating_mul(u32::try_from(rows).unwrap_or(u32::MAX)));
+        let height = chart_height.saturating_add(AGREEMENT_LEGEND_HEIGHT);
 
         canvas::draw(theme::WIDTH, height, |root| {
+            let (plot_area, legend_area) = root.split_vertically(chart_height);
             let columns_f = coord::of(columns.max(1));
             let rows_f = coord::of(rows.max(1));
-            let mut chart = ChartBuilder::on(root)
+            let mut chart = ChartBuilder::on(&plot_area)
                 .caption(
                     self.caption.as_str(),
                     (theme::FONT, theme::FONT_TITLE, &theme::INK),
@@ -193,7 +198,7 @@ impl Agreement {
                 .margin(12)
                 .x_label_area_size(34)
                 .y_label_area_size(70)
-                .build_cartesian_2d(0.0_f64..columns_f, -0.55_f64..rows_f)?;
+                .build_cartesian_2d(0.0_f64..columns_f, 0.0_f64..rows_f)?;
 
             chart
                 .configure_mesh()
@@ -258,25 +263,56 @@ impl Agreement {
                 }
             }
 
-            let classes = [PairClass::Greater, PairClass::Equal, PairClass::Less];
-            let width = columns_f / coord::of(classes.len());
-            for (index, class) in classes.into_iter().enumerate() {
-                let left = coord::of(index) * width + 0.08;
-                let swatch_right = left + 0.22;
-                chart.draw_series(std::iter::once(Rectangle::new(
-                    [(left, -0.45), (swatch_right, -0.15)],
-                    class.color().mix(0.7).filled(),
-                )))?;
-                chart.draw_series(std::iter::once(Text::new(
-                    class.label().to_owned(),
-                    (swatch_right + 0.05, -0.45),
-                    TextStyle::from((theme::FONT, theme::FONT_TICK)).color(&theme::INK),
-                )))?;
-            }
+            draw_agreement_legend(&legend_area)?;
 
             Ok::<(), Box<dyn Error>>(())
         })
     }
+}
+
+/// Height reserved below an agreement grid for its legend.
+///
+/// The legend is kept out of the chart coordinate space so it cannot overlap the axis
+/// line or the chart frame when row counts change.
+const AGREEMENT_LEGEND_HEIGHT: u32 = 34;
+
+/// Pixel inset from the legend strip's left edge.
+const AGREEMENT_LEGEND_LEFT: i32 = 16;
+
+/// Pixel inset from the legend strip's top edge.
+const AGREEMENT_LEGEND_TOP: i32 = 8;
+
+/// Width and height of one legend swatch.
+const AGREEMENT_LEGEND_SWATCH: i32 = 12;
+
+/// Gap between a legend swatch and its label.
+const AGREEMENT_LEGEND_TEXT_GAP: i32 = 6;
+
+/// Draws the agreement legend in a strip separate from the chart axes.
+fn draw_agreement_legend(area: &DrawingArea<SVGBackend<'_>, Shift>) -> Result<(), Box<dyn Error>> {
+    let classes = [PairClass::Greater, PairClass::Equal, PairClass::Less];
+    let (width, _) = area.dim_in_pixel();
+    let column_width = i32::try_from(width).unwrap_or(i32::MAX)
+        / i32::try_from(classes.len()).expect("the legend class count fits in i32");
+    for (index, class) in classes.into_iter().enumerate() {
+        let index = i32::try_from(index).expect("the legend class count fits in i32");
+        let left = AGREEMENT_LEGEND_LEFT + index.saturating_mul(column_width);
+        let swatch_right = left + AGREEMENT_LEGEND_SWATCH;
+        let swatch_bottom = AGREEMENT_LEGEND_TOP + AGREEMENT_LEGEND_SWATCH;
+        area.draw(&Rectangle::new(
+            [(left, AGREEMENT_LEGEND_TOP), (swatch_right, swatch_bottom)],
+            class.color().mix(0.7).filled(),
+        ))?;
+        area.draw(&Text::new(
+            class.label().to_owned(),
+            (
+                swatch_right + AGREEMENT_LEGEND_TEXT_GAP,
+                AGREEMENT_LEGEND_TOP + AGREEMENT_LEGEND_SWATCH,
+            ),
+            TextStyle::from((theme::FONT, theme::FONT_TICK)).color(&theme::INK),
+        ))?;
+    }
+    Ok(())
 }
 
 /// How one before/after pairing classifies under exact comparison.
@@ -358,6 +394,19 @@ mod tests {
         let grid = Agreement::new("separated", vec![100.0, 101.0], vec![130.0, 131.0]);
 
         assert!((grid.share() - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
+    )]
+    fn agreement_legend_labels_every_pair_class() {
+        let svg = Agreement::new("separated", vec![100.0, 101.0], vec![130.0, 131.0]).render();
+
+        assert!(svg.contains("later greater"));
+        assert!(svg.contains("tie (half)"));
+        assert!(svg.contains("later less"));
     }
 
     #[test]

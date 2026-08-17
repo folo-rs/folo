@@ -8,6 +8,8 @@
 
 use cbh_detect::{AnalysisConfig, AnalysisMode, Finding, Series, evaluate_with_log, examples};
 use cbh_model::MetricKind;
+use cbh_stats::{mean, sample_std_dev};
+use plotters::style::RGBColor;
 
 use crate::assets::Asset;
 use crate::styles::plot::{Mark, Observation, Plot};
@@ -18,10 +20,14 @@ use crate::{theme, verdict};
 pub fn assets() -> Vec<Asset> {
     let mut assets = Vec::new();
     assets.extend(clean_step());
+    assets.extend(multi_step());
     assets.extend(slow_ramp());
     assets.extend(blip());
+    assets.extend(returned_excursion());
     assets.extend(flat_noisy());
     assets.extend(branch());
+    assets.extend(branch_base_moved());
+    assets.extend(confidence_examples());
     assets.extend(minimums());
     assets
 }
@@ -37,6 +43,11 @@ fn branch() -> Vec<Asset> {
         let (values, finding) = branch_finding(name, tip);
 
         let tip_index = values.len().saturating_sub(1);
+        let prediction = branch_prediction_band(
+            values
+                .get(..tip_index)
+                .expect("the branch figure always has base-side values before its tip"),
+        );
         let plot = Plot::new("a branch tip against its base window", values.len())
             .value_label("ns")
             .scattered()
@@ -57,6 +68,13 @@ fn branch() -> Vec<Asset> {
                 tip_index.saturating_sub(1),
                 "base window",
                 theme::HIGHLIGHT,
+            )
+            .value_band(
+                0,
+                tip_index,
+                prediction,
+                "predicted range",
+                theme::ALTERNATE,
             )
             .split(tip_index, "the branch tip");
 
@@ -92,6 +110,22 @@ const BRANCH_CASES: [(&str, f64, &str); 2] = [
     ),
 ];
 
+/// How wide the branch figures draw their illustrative prediction range.
+///
+/// The detector records the p-value, not a plotted cutoff. This multiple makes the range
+/// visibly cover ordinary base scatter while keeping the reporting tip outside it.
+const BRANCH_PREDICTION_SIGMAS: f64 = 3.0;
+
+/// The value interval the branch figures shade as the base window's prediction.
+fn branch_prediction_band(values: &[f64]) -> (f64, f64) {
+    let centre = mean(values).expect("the branch figure's base window is not empty");
+    let scatter = sample_std_dev(values)
+        .expect("the branch figure's base window has enough points to estimate scatter");
+    let sample_count = crate::coord::of(values.len());
+    let half_width = scatter * (1.0 + 1.0 / sample_count).sqrt() * BRANCH_PREDICTION_SIGMAS;
+    (centre - half_width, centre + half_width)
+}
+
 /// Runs the real branch detector over the shared base window with `tip` appended, and
 /// returns the laid-out values and the verdict it reached.
 fn branch_finding(name: &str, tip: f64) -> (Vec<f64>, Option<Finding>) {
@@ -107,6 +141,201 @@ fn branch_finding(name: &str, tip: f64) -> (Vec<f64>, Option<Finding>) {
     let context = examples::branch_context(&series, BASE_COMMITS.saturating_sub(1));
     let (finding, _) = evaluate_with_log(&series, &context);
     (values, finding)
+}
+
+/// The older base level in the branch-base-moved figure.
+///
+/// Lower than the current base by enough to qualify as a trusted base-side boundary.
+const MOVED_BASE_OLD_LEVEL: f64 = 100.0;
+
+/// The current base level in the branch-base-moved figure.
+const MOVED_BASE_CURRENT_LEVEL: f64 = 130.0;
+
+/// The branch tip in the branch-base-moved figure.
+///
+/// Chosen outside the current regime's prediction band so the generated verdict proves
+/// that the comparison was formed from the newer base level.
+const MOVED_BASE_TIP_LEVEL: f64 = 145.0;
+
+/// How many commits each base regime occupies in the branch-base-moved figure.
+///
+/// Equal halves fill the default comparison window while satisfying the stricter evidence
+/// floor for accepting a base-side regime boundary.
+const MOVED_BASE_REGIME: usize = 8;
+
+/// Builds the branch-base-moved example and returns its values and detector verdict.
+fn branch_base_moved_finding() -> (Vec<f64>, Option<Finding>) {
+    let base_levels: Vec<f64> = std::iter::repeat_n(MOVED_BASE_OLD_LEVEL, MOVED_BASE_REGIME)
+        .chain(std::iter::repeat_n(
+            MOVED_BASE_CURRENT_LEVEL,
+            MOVED_BASE_REGIME,
+        ))
+        .collect();
+    let mut values = examples::scattered(
+        &base_levels,
+        examples::TIMING_NOISE_CV,
+        examples::seed_of("branch_base_moved"),
+    );
+    values.push(MOVED_BASE_TIP_LEVEL);
+    let series = examples::series("branch_base_moved", &values, MetricKind::WallTime, 0);
+    let context = examples::branch_context(&series, base_levels.len().saturating_sub(1));
+    let (finding, _) = evaluate_with_log(&series, &context);
+    (values, finding)
+}
+
+/// A branch base that changed recently, so the older base level is discarded.
+fn branch_base_moved() -> Vec<Asset> {
+    let (values, finding) = branch_base_moved_finding();
+    let finding = finding.expect(
+        "the moved-base example places the tip outside the current regime's prediction \
+         band, so it must report if the detector uses the newer regime",
+    );
+    let tip_index = values.len().saturating_sub(1);
+    let current_start = MOVED_BASE_REGIME;
+    let current_values = values
+        .get(current_start..tip_index)
+        .expect("the moved-base example has a current base regime before the tip");
+    let prediction = branch_prediction_band(current_values);
+
+    let plot = Plot::new("a branch tip after the base level moved", values.len())
+        .value_label("ns")
+        .scattered()
+        .observations(values.iter().enumerate().map(|(index, &value)| {
+            let observation = Observation::new(index, value);
+            if index < current_start {
+                observation.marked(Mark::Removed)
+            } else if index == tip_index {
+                observation.marked(Mark::Regression)
+            } else {
+                observation
+            }
+        }))
+        .band(
+            0,
+            current_start.saturating_sub(1),
+            "discarded older base level",
+            theme::MUTED,
+        )
+        .value_band(
+            current_start,
+            tip_index,
+            prediction,
+            "predicted range from current base",
+            theme::ALTERNATE,
+        )
+        .split(current_start, "current-base boundary");
+
+    vec![
+        Asset::new("detection-branch-base-moved.svg", plot.render()),
+        Asset::new(
+            "detection-branch-base-moved.md",
+            verdict::reported(
+                &finding,
+                "the prediction is centered on the newer base regime, not on the whole \
+                 mixed window",
+                AnalysisMode::Branch,
+            ),
+        ),
+    ]
+}
+
+/// The baseline for the lower-confidence step.
+///
+/// High enough that the absolute floor is irrelevant, leaving the example about the
+/// amount of evidence for an accepted relative move rather than about metric units.
+const LOWER_CONFIDENCE_BASELINE: f64 = 1_000.0;
+
+/// Relative size of the minimum-length confidence example's step.
+///
+/// Chosen large enough that practical floors and residual scatter are not what limits
+/// confidence; only the number of rank comparisons is.
+const LOWER_CONFIDENCE_STEP_RELATIVE: f64 = 0.30;
+
+/// Within-regime spacing for the minimum-length confidence example.
+///
+/// The regimes stay fully separated, but individual values do not tie, so the rank
+/// test demonstrates the confidence cap from having only the minimum number of points.
+const LOWER_CONFIDENCE_INTRA_REGIME_SPACING: f64 = 1.0;
+
+/// A fully separated step with the minimum allowed regime length on each side.
+fn lower_confidence_step_values() -> Vec<f64> {
+    let config = AnalysisConfig::default();
+    let elevated = LOWER_CONFIDENCE_BASELINE * (1.0 + LOWER_CONFIDENCE_STEP_RELATIVE);
+    let midpoint = (crate::coord::of(config.min_regime) - 1.0) / 2.0;
+    (0..config.min_regime)
+        .map(|index| {
+            LOWER_CONFIDENCE_BASELINE
+                + (crate::coord::of(index) - midpoint) * LOWER_CONFIDENCE_INTRA_REGIME_SPACING
+        })
+        .chain((0..config.min_regime).map(|index| {
+            elevated + (crate::coord::of(index) - midpoint) * LOWER_CONFIDENCE_INTRA_REGIME_SPACING
+        }))
+        .collect()
+}
+
+/// History-mode examples whose accepted findings carry different confidence values.
+fn confidence_examples() -> Vec<Asset> {
+    let high_values = examples::clean_step();
+    let (_, high) = judge_history("confidence_high", &high_values, MetricKind::WallTime);
+    let high = high.expect("the clean-step confidence example must report");
+
+    let lower_values = lower_confidence_step_values();
+    let (_, lower) = judge_history("confidence_lower", &lower_values, MetricKind::WallTime);
+    let lower = lower.expect("the lower-confidence example must still report");
+
+    vec![
+        Asset::new(
+            "detection-confidence-high.svg",
+            confidence_plot(
+                "a cleanly separated step",
+                &high_values,
+                &high,
+                theme::REGRESSION,
+            )
+            .render(),
+        ),
+        Asset::new(
+            "detection-confidence-high.md",
+            verdict::reported(
+                &high,
+                "a clean split with extra evidence rounds to a very high confidence",
+                AnalysisMode::History,
+            ),
+        ),
+        Asset::new(
+            "detection-confidence-lower.svg",
+            confidence_plot(
+                "a minimum-length clean step",
+                &lower_values,
+                &lower,
+                theme::ALTERNATE,
+            )
+            .render(),
+        ),
+        Asset::new(
+            "detection-confidence-lower.md",
+            verdict::reported(
+                &lower,
+                "the split is clean, but the minimum-length regimes cap the confidence",
+                AnalysisMode::History,
+            ),
+        ),
+    ]
+}
+
+/// A confidence example with the detector's chosen split and fitted levels.
+fn confidence_plot(caption: &str, values: &[f64], finding: &Finding, color: RGBColor) -> Plot {
+    let split = attributed_index(finding);
+    let mut plot = Plot::new(caption, values.len())
+        .value_label("ns")
+        .base_color(color)
+        .values(values)
+        .rule(finding.baseline, "baseline", theme::HIGHLIGHT)
+        .rule(finding.latest, "latest", theme::REGRESSION);
+    if let Some(split) = split.filter(|index| *index > 0 && *index < values.len()) {
+        plot = plot.split(split, "change point");
+    }
+    plot
 }
 
 /// How many base-side commits the branch figures lay out.
@@ -182,6 +411,67 @@ fn clean_step() -> Vec<Asset> {
     ]
 }
 
+/// How many persistence floors each regime in the multiple-step example occupies.
+///
+/// The point of the figure is split selection rather than minimum evidence, so every
+/// visible level gets comfortable support on both sides of its boundary.
+const MULTI_STEP_REGIME_MULTIPLE: usize = 2;
+
+/// Levels used by the multiple-step figure.
+///
+/// The first jump is deliberately larger than the later one, so the single boundary the
+/// detector reports is stable and visually explainable without marking the later step.
+const MULTI_STEP_LEVELS: [f64; 3] = [100.0, 140.0, 160.0];
+
+/// A series with several steps, where the detector still reports one boundary.
+fn multi_step() -> Vec<Asset> {
+    let regime = AnalysisConfig::default()
+        .min_regime
+        .saturating_mul(MULTI_STEP_REGIME_MULTIPLE);
+    let levels: Vec<f64> = MULTI_STEP_LEVELS
+        .into_iter()
+        .flat_map(|level| std::iter::repeat_n(level, regime))
+        .collect();
+    let values = examples::scattered(
+        &levels,
+        examples::TIMING_NOISE_CV,
+        examples::seed_of("multi_step"),
+    );
+    let (_, finding) = judge_history("json_decode", &values, MetricKind::WallTime);
+    let finding = finding.expect(
+        "the multiple-step example has sustained, separated regimes, so a missing verdict \
+         means the figure no longer demonstrates split selection",
+    );
+    let split = attributed_index(&finding);
+
+    let mut plot = Plot::new("several steps, one reported boundary", values.len())
+        .value_label("ns")
+        .values(&values)
+        .rule(finding.baseline, "fitted before", theme::HIGHLIGHT)
+        .rule(finding.latest, "fitted after", theme::REGRESSION);
+    if let Some(split) = split.filter(|index| *index > 0 && *index < values.len()) {
+        plot = plot.split(split, "change point").band(
+            split,
+            values.len().saturating_sub(1),
+            "single after-side model",
+            theme::REGRESSION,
+        );
+    }
+
+    vec![
+        Asset::new("detection-multi-step.svg", plot.render()),
+        Asset::new(
+            "detection-multi-step.md",
+            verdict::reported(
+                &finding,
+                "the split search chooses one boundary even though another step remains \
+                 visible",
+                AnalysisMode::History,
+            ),
+        ),
+    ]
+}
+
 /// A drift, with the fitted movement the trend detector reports.
 fn slow_ramp() -> Vec<Asset> {
     let values = examples::slow_ramp();
@@ -240,6 +530,89 @@ fn blip() -> Vec<Asset> {
             verdict::quiet(
                 finding.as_ref(),
                 "a level has to persist; one point is an event, not a level",
+            ),
+        ),
+    ]
+}
+
+/// How many persistence floors each stretch of the returned-excursion example occupies.
+///
+/// The elevated part is long enough to read as a real level while it lasted, so the figure
+/// is distinct from the single-point blip above it.
+const RETURNED_EXCURSION_REGIME_MULTIPLE: usize = 2;
+
+/// The level the returned-excursion example visits before returning to baseline.
+///
+/// Far enough above the baseline that the excursion is visually unmistakable without
+/// needing a large plotted sample.
+const RETURNED_EXCURSION_LEVEL: f64 = 140.0;
+
+/// The settled level before and after the returned excursion.
+///
+/// Kept at the same round baseline as the other detection examples so percentages and
+/// chart positions read consistently across the chapter.
+const RETURNED_EXCURSION_BASELINE: f64 = 100.0;
+
+/// The returned-excursion values, shared by the figure and its lockstep test.
+fn returned_excursion_values() -> Vec<f64> {
+    let regime = AnalysisConfig::default()
+        .min_regime
+        .saturating_mul(RETURNED_EXCURSION_REGIME_MULTIPLE);
+    let levels: Vec<f64> = [
+        RETURNED_EXCURSION_BASELINE,
+        RETURNED_EXCURSION_LEVEL,
+        RETURNED_EXCURSION_BASELINE,
+    ]
+    .into_iter()
+    .flat_map(|level| std::iter::repeat_n(level, regime))
+    .collect();
+    let values = examples::scattered(
+        &levels,
+        examples::TIMING_NOISE_CV,
+        examples::seed_of("returned_excursion"),
+    );
+    values
+}
+
+/// A sustained excursion that has already returned to its original level.
+fn returned_excursion() -> Vec<Asset> {
+    let values = returned_excursion_values();
+    let (_, finding) = judge_history("regex_cache", &values, MetricKind::WallTime);
+    let regime = AnalysisConfig::default()
+        .min_regime
+        .saturating_mul(RETURNED_EXCURSION_REGIME_MULTIPLE);
+    let elevated_start = regime;
+    let elevated_end = regime.saturating_mul(2).saturating_sub(1);
+
+    let plot = Plot::new("a sustained excursion that returned", values.len())
+        .value_label("ns")
+        .observations(values.iter().enumerate().map(|(index, &value)| {
+            let observation = Observation::new(index, value);
+            if (elevated_start..=elevated_end).contains(&index) {
+                observation.marked(Mark::Focus)
+            } else {
+                observation
+            }
+        }))
+        .band(
+            elevated_start,
+            elevated_end,
+            "temporary level",
+            theme::HIGHLIGHT,
+        )
+        .rule(
+            RETURNED_EXCURSION_BASELINE,
+            "baseline and current level",
+            theme::MUTED,
+        );
+
+    vec![
+        Asset::new("detection-blip-returned.svg", plot.render()),
+        Asset::new(
+            "detection-blip-returned.md",
+            verdict::quiet(
+                finding.as_ref(),
+                "the current level has already returned to the baseline",
             ),
         ),
     ]
@@ -327,6 +700,54 @@ mod tests {
     }
 
     #[test]
+    fn the_moved_base_example_uses_the_current_base_regime() {
+        let (_, finding) = branch_base_moved_finding();
+        let finding = finding.expect("the moved-base example must yield a branch finding");
+
+        assert!(
+            finding.baseline > MOVED_BASE_OLD_LEVEL,
+            "the older base regime must not anchor the comparison: {finding:?}"
+        );
+        assert!(
+            (finding.baseline - MOVED_BASE_CURRENT_LEVEL).abs()
+                < (finding.baseline - MOVED_BASE_OLD_LEVEL).abs(),
+            "the comparison must be closer to the current regime than the discarded one"
+        );
+    }
+
+    #[test]
+    fn accepted_confidence_examples_are_not_all_the_same_value() {
+        let (_, high) = judge_history(
+            "confidence_high",
+            &examples::clean_step(),
+            MetricKind::WallTime,
+        );
+        let (_, lower) = judge_history(
+            "confidence_lower",
+            &lower_confidence_step_values(),
+            MetricKind::WallTime,
+        );
+        let high = high.expect("the clean-step confidence example must report");
+        let lower = lower.expect("the lower-confidence example must report");
+        let displayed_high = format!("{:.0}", high.confidence * 100.0);
+        let displayed_lower = format!("{:.0}", lower.confidence * 100.0);
+
+        assert!(high.confidence > lower.confidence);
+        assert!(
+            lower.confidence < 1.0,
+            "the lower-confidence example must not be exact internal certainty"
+        );
+        assert_eq!(
+            displayed_high, "100",
+            "the high-confidence example must display as rounded certainty"
+        );
+        assert_ne!(
+            displayed_lower, "100",
+            "the lower-confidence example must display below rounded certainty"
+        );
+    }
+
+    #[test]
     #[cfg_attr(
         miri,
         ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
@@ -337,12 +758,26 @@ mod tests {
         for expected in [
             "detection-clean-step.svg",
             "detection-clean-step.md",
+            "detection-multi-step.svg",
+            "detection-multi-step.md",
             "detection-slow-ramp.svg",
             "detection-slow-ramp.md",
             "detection-blip.svg",
             "detection-blip.md",
+            "detection-blip-returned.svg",
+            "detection-blip-returned.md",
             "detection-flat-noisy.svg",
             "detection-flat-noisy.md",
+            "detection-branch-reported.svg",
+            "detection-branch-reported.md",
+            "detection-branch-quiet.svg",
+            "detection-branch-quiet.md",
+            "detection-branch-base-moved.svg",
+            "detection-branch-base-moved.md",
+            "detection-confidence-high.svg",
+            "detection-confidence-high.md",
+            "detection-confidence-lower.svg",
+            "detection-confidence-lower.md",
             "detection-minimums.md",
         ] {
             assert!(
@@ -375,6 +810,8 @@ mod tests {
     #[test]
     fn the_quiet_examples_stay_quiet() {
         let (_, blip) = judge_history("search_exact", &examples::blip(), MetricKind::WallTime);
+        let returned_values = returned_excursion_values();
+        let (_, returned) = judge_history("regex_cache", &returned_values, MetricKind::WallTime);
         let (_, noisy) = judge_history(
             "tokenize_ascii",
             &examples::flat_noisy(),
@@ -382,6 +819,10 @@ mod tests {
         );
 
         assert!(blip.is_none(), "a lone elevated point must not report");
+        assert!(
+            returned.is_none(),
+            "a sustained excursion that returned to baseline must not report"
+        );
         assert!(noisy.is_none(), "scatter around one level must not report");
     }
 
