@@ -139,22 +139,6 @@ jobs:
       - name: Setup environment
         uses: ./.github/actions/setup-environment
 
-      - name: Reconcile Cargo.lock with the released manifests
-        shell: bash
-        # A release-plz major bump can tag a commit whose committed Cargo.lock lags the bumped
-        # manifests: the manifest goes to the major version (e.g. cargo-bench-history 0.0.9 ->
-        # 0.2.0) while the lockfile entry for that package is only patch-bumped (-> 0.0.10). The
-        # whole workspace shares one Cargo.lock, so that single stale entry makes the `--locked`
-        # build below fail for *every* binary crate ("cannot update the lock file ... because
-        # --locked was passed"). `--workspace` re-syncs only the workspace members' own versions
-        # in the lockfile - registry dependencies already present in the lockfile stay pinned, so
-        # the build stays reproducible - letting a tag whose lockfile release-plz left inconsistent
-        # still build. `--offline` is deliberately omitted: setup-environment warms only the tool
-        # dependencies' index entries, not the whole workspace's, so an offline resolve could miss
-        # a cached index entry; the online resolve fetches index metadata but changes no pinned
-        # dependency version. This is a no-op when the tag's lockfile is already consistent.
-        run: cargo update --workspace
-
       - name: Build, package, checksum and upload
         uses: taiki-e/upload-rust-binary-action@v1
         with:
