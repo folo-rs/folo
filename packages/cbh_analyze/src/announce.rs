@@ -13,7 +13,7 @@ use cbh_detect::DiscriminantSetQuery;
 use cbh_diag::{Reporter, ReporterExt};
 use jiff::Timestamp;
 
-use super::facets::describe_effective_facets;
+use super::discriminants::describe_effective_discriminants;
 
 /// Emits the always-on effective-selection `summary`.
 ///
@@ -49,17 +49,20 @@ pub(crate) struct AnnouncedSince<'a> {
 
 /// Builds the always-on, one-line effective-selection announcement.
 ///
-/// Leads with the discriminant partition (always, naming auto-detected facets) and
+/// Leads with the discriminant partition (always, naming auto-detected discriminant values) and
 /// appends whichever of the base branch, context commit, and `--since` window the
 /// command resolved — each marked when auto-detected or defaulted — so the caller
 /// passes only the segments that apply to it.
 pub(crate) fn selection_announcement(
-    facets: &DiscriminantSetQuery,
+    discriminants: &DiscriminantSetQuery,
     base: Option<AnnouncedBase<'_>>,
     context: Option<AnnouncedContext<'_>>,
     since: Option<AnnouncedSince<'_>>,
 ) -> String {
-    let mut segments = vec![format!("selection: {}", describe_effective_facets(facets))];
+    let mut segments = vec![format!(
+        "selection: {}",
+        describe_effective_discriminants(discriminants)
+    )];
     if let Some(base) = base {
         segments.push(if base.auto {
             format!("base={} (auto-detected)", base.name)
@@ -88,22 +91,22 @@ pub(crate) fn selection_announcement(
 
 #[cfg(test)]
 mod tests {
-    use cbh_detect::FacetFilter;
+    use cbh_detect::DiscriminantFilter;
     use nonempty::nonempty;
 
     use super::*;
 
-    fn auto_facets() -> DiscriminantSetQuery {
+    fn auto_discriminants() -> DiscriminantSetQuery {
         DiscriminantSetQuery {
-            engine: FacetFilter::All,
-            target_triple: FacetFilter::Auto("x86_64-pc-windows-msvc".to_owned()),
-            machine_key: FacetFilter::Auto("abcd".to_owned()),
+            engine: DiscriminantFilter::All,
+            target_triple: DiscriminantFilter::Auto("x86_64-pc-windows-msvc".to_owned()),
+            machine_key: DiscriminantFilter::Auto("abcd".to_owned()),
         }
     }
 
     #[test]
-    fn facets_only_line_names_just_the_partition() {
-        let line = selection_announcement(&auto_facets(), None, None, None);
+    fn discriminants_only_line_names_just_the_partition() {
+        let line = selection_announcement(&auto_discriminants(), None, None, None);
         assert_eq!(
             line,
             "selection: engine=all, target-triple=x86_64-pc-windows-msvc (auto-detected), \
@@ -114,7 +117,7 @@ mod tests {
     #[test]
     fn base_segment_marks_auto_and_explicit() {
         let auto = selection_announcement(
-            &auto_facets(),
+            &auto_discriminants(),
             Some(AnnouncedBase {
                 name: "main",
                 auto: true,
@@ -125,7 +128,7 @@ mod tests {
         assert!(auto.contains("; base=main (auto-detected)"), "{auto}");
 
         let explicit = selection_announcement(
-            &auto_facets(),
+            &auto_discriminants(),
             Some(AnnouncedBase {
                 name: "release",
                 auto: false,
@@ -140,7 +143,7 @@ mod tests {
     #[test]
     fn context_segment_marks_defaulted_head_and_explicit() {
         let defaulted = selection_announcement(
-            &auto_facets(),
+            &auto_discriminants(),
             None,
             Some(AnnouncedContext {
                 short: "a1b2c3d4",
@@ -154,7 +157,7 @@ mod tests {
         );
 
         let explicit = selection_announcement(
-            &auto_facets(),
+            &auto_discriminants(),
             None,
             Some(AnnouncedContext {
                 short: "a1b2c3d4",
@@ -170,7 +173,7 @@ mod tests {
     fn since_segment_renders_cutoff_and_none_with_reason() {
         let cutoff = Timestamp::from_second(1_700_000_000).unwrap();
         let with_cutoff = selection_announcement(
-            &auto_facets(),
+            &auto_discriminants(),
             None,
             None,
             Some(AnnouncedSince {
@@ -184,7 +187,7 @@ mod tests {
         );
 
         let no_cutoff = selection_announcement(
-            &auto_facets(),
+            &auto_discriminants(),
             None,
             None,
             Some(AnnouncedSince {
@@ -199,15 +202,15 @@ mod tests {
     }
 
     #[test]
-    fn segments_appear_in_facets_base_context_since_order() {
+    fn segments_appear_in_discriminants_base_context_since_order() {
         let cutoff = Timestamp::from_second(1_700_000_000).unwrap();
-        let facets = DiscriminantSetQuery {
-            engine: FacetFilter::Explicit(nonempty!["criterion".to_owned()]),
-            target_triple: FacetFilter::All,
-            machine_key: FacetFilter::All,
+        let discriminants = DiscriminantSetQuery {
+            engine: DiscriminantFilter::Explicit(nonempty!["criterion".to_owned()]),
+            target_triple: DiscriminantFilter::All,
+            machine_key: DiscriminantFilter::All,
         };
         let line = selection_announcement(
-            &facets,
+            &discriminants,
             Some(AnnouncedBase {
                 name: "main",
                 auto: false,

@@ -14,12 +14,12 @@
 //!   the base branch's first-parent history (for example after a fast-forward), so
 //!   this warns and proceeds rather than refusing.
 //! * **No stored result at the commit** — a blessing may be recorded *before* data
-//!   is captured. With a run present, the sidecar lands in every facet-selected set
-//!   that has a stored result there. With no run present, the target sets are
-//!   synthesized from the resolved facets (all four engines when `--engine` is
-//!   omitted, under the resolved target triple and machine key), so whichever
-//!   engine's data is captured later at that commit is accepted. This warns,
-//!   because a typo'd commit id is the likelier cause.
+//!   is captured. With a run present, the sidecar lands in every set selected by
+//!   discriminant filters that has a stored result there. With no run present,
+//!   the target sets are synthesized from the resolved discriminant filters (all
+//!   four engines when `--engine` is omitted, under the resolved target triple and
+//!   machine key), so whichever engine's data is captured later at that commit is
+//!   accepted. This warns, because a typo'd commit id is the likelier cause.
 //!
 //! When blessing `HEAD`, a dirty working tree is allowed — the blessing applies to
 //! the committed `clean.json` recorded at `HEAD`, which the local edits do not
@@ -37,7 +37,7 @@ use cbh_config::{
     Config, load_config, resolve_config_path, resolve_local_path, resolve_project_id, resolve_repo,
     storage_env,
 };
-use cbh_detect::{DiscriminantSetQuery, FacetFilter};
+use cbh_detect::{DiscriminantFilter, DiscriminantSetQuery};
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
 use cbh_model::{BlessingRecord, DiscriminantSet, Engine, MachineKey, StorageKey, TargetTriple};
@@ -50,8 +50,8 @@ use super::announce::{
 };
 use super::history::resolve_base;
 use super::{
-    AutoFacets, Selection, facet_filtered_candidates, resolve_auto_facets, resolve_facets,
-    resolve_now,
+    AutoDiscriminants, Selection, discriminant_filtered_candidates, resolve_auto_discriminants,
+    resolve_discriminants, resolve_now,
 };
 use crate::{
     AnalyzeError, BlessBaseRequiredError, BlessDiscriminantsRequiredError,
@@ -67,7 +67,7 @@ use crate::{
 /// while tests inject a frozen clock (`Clock::new_frozen_at`) so the recorded time
 /// is deterministic.
 // Thin real-adapter wiring: loads config from disk, builds the configured storage,
-// and shells out via `SystemGitHistory`/`detect_auto_facets` before delegating every
+// and shells out via `SystemGitHistory`/`detect_auto_discriminants` before delegating every
 // decision to the mutation-tested `bless_with`. In-crate tests cannot drive these real
 // adapters deterministically; the binary's integration tests cover this edge.
 #[cfg_attr(test, mutants::skip)]
@@ -75,7 +75,7 @@ pub async fn bless(
     options: &BlessOptions,
     workspace_dir: &Path,
     clock_override: Option<Clock>,
-    auto_override: Option<AutoFacets>,
+    auto_override: Option<AutoDiscriminants>,
 ) -> Result<String, AnalyzeError> {
     let reporter = StderrReporter::new(options.verbose);
 
@@ -88,7 +88,7 @@ pub async fn bless(
     let storage = build_storage(local.as_deref(), &config, workspace_dir, None)?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
-    let auto = resolve_auto_facets(auto_override).await?;
+    let auto = resolve_auto_discriminants(auto_override).await?;
 
     let now = resolve_now(clock_override);
     let result = bless_with(
@@ -117,14 +117,14 @@ pub async fn bless(
 /// The real `unbless`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
 // Thin real-adapter wiring: loads config from disk, builds the configured storage,
-// and shells out via `SystemGitHistory`/`detect_auto_facets` before delegating every
+// and shells out via `SystemGitHistory`/`detect_auto_discriminants` before delegating every
 // decision to the mutation-tested `unbless_with`. In-crate tests cannot drive these
 // real adapters deterministically; the binary's integration tests cover this edge.
 #[cfg_attr(test, mutants::skip)]
 pub async fn unbless(
     options: &UnblessOptions,
     workspace_dir: &Path,
-    auto_override: Option<AutoFacets>,
+    auto_override: Option<AutoDiscriminants>,
 ) -> Result<String, AnalyzeError> {
     let reporter = StderrReporter::new(options.verbose);
 
@@ -137,7 +137,7 @@ pub async fn unbless(
     let storage = build_storage(local.as_deref(), &config, workspace_dir, None)?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
-    let auto = resolve_auto_facets(auto_override).await?;
+    let auto = resolve_auto_discriminants(auto_override).await?;
 
     let result = unbless_with(
         &git,
@@ -158,7 +158,7 @@ pub async fn unbless(
 }
 
 /// Storage- and git-generic `bless`: validate the preconditions, then write a
-/// blessing sidecar into every facet-selected set that has a clean result at the
+/// blessing sidecar into every set selected by discriminant filters that has a clean result at the
 /// current commit.
 #[expect(
     clippy::too_many_arguments,
@@ -170,7 +170,7 @@ pub(crate) async fn bless_with<G, S>(
     project_id: &str,
     config: &Config,
     options: &BlessOptions,
-    auto: &AutoFacets,
+    auto: &AutoDiscriminants,
     now: Timestamp,
     tool_version: &str,
     reporter: &dyn Reporter,
@@ -203,7 +203,7 @@ where
         .ok_or_else(BlessBaseRequiredError::new)?;
 
     let selection = Selection::from_bless(options);
-    let facets = resolve_facets(&selection, Some(auto))?;
+    let discriminants = resolve_discriminants(&selection, Some(auto))?;
 
     // The always-on effective-selection announcement: one line, printed regardless
     // of `--verbose`, naming the resolved (possibly auto-detected) partition, base
@@ -211,7 +211,7 @@ where
     announce_selection(
         reporter,
         &selection_announcement(
-            &facets,
+            &discriminants,
             Some(AnnouncedBase {
                 name: &base.name,
                 auto: options.base.is_none(),
@@ -261,7 +261,8 @@ where
             .map_err(WorkingTreeProbeFailedError::caused_by)?;
 
     let issued_unix = now.as_second();
-    let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
+    let candidates =
+        discriminant_filtered_candidates(storage, project_id, &discriminants, reporter).await?;
     let clean_at_head: Vec<StorageKey> = candidates
         .into_iter()
         .filter(|(_, parsed)| parsed.commit == head && parsed.is_clean())
@@ -270,7 +271,7 @@ where
 
     // Each target is a `(discriminant set, sidecar key)` pair. With a run present the
     // sidecars land beside the stored results at the commit; with no run present they
-    // are synthesized from the resolved facets so a pre-emptive blessing still has a
+    // are synthesized from the resolved discriminant filters so a pre-emptive blessing still has a
     // concrete home for whichever engine's data is captured there later.
     let targets: Vec<(DiscriminantSet, String)> = if clean_at_head.is_empty() {
         warnings.push(format!(
@@ -278,7 +279,7 @@ where
              double-check the commit id. The blessing takes effect once a run is captured at this \
              commit in a matching discriminant set."
         ));
-        let sets = synthesize_target_sets(&facets);
+        let sets = synthesize_target_sets(&discriminants);
         if sets.is_empty() {
             return Err(BlessDiscriminantsRequiredError::new(short).into());
         }
@@ -332,14 +333,14 @@ where
 }
 
 /// Storage- and git-generic `unbless`: delete every blessing recorded at the
-/// current commit in the facet-selected sets.
+/// current commit in the sets selected by discriminant filters.
 pub(crate) async fn unbless_with<G, S>(
     git: &G,
     storage: &S,
     project_id: &str,
     _config: &Config,
     options: &UnblessOptions,
-    auto: &AutoFacets,
+    auto: &AutoDiscriminants,
     reporter: &dyn Reporter,
 ) -> Result<String, AnalyzeError>
 where
@@ -351,7 +352,7 @@ where
     let short = short_commit_id(&head);
 
     let selection = Selection::from_unbless(options);
-    let facets = resolve_facets(&selection, Some(auto))?;
+    let discriminants = resolve_discriminants(&selection, Some(auto))?;
 
     // The always-on effective-selection announcement: one line, printed regardless
     // of `--verbose`, naming the resolved (possibly auto-detected) partition and the
@@ -360,7 +361,7 @@ where
     announce_selection(
         reporter,
         &selection_announcement(
-            &facets,
+            &discriminants,
             None,
             Some(AnnouncedContext {
                 short,
@@ -370,7 +371,8 @@ where
         ),
     );
 
-    let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
+    let candidates =
+        discriminant_filtered_candidates(storage, project_id, &discriminants, reporter).await?;
     let blessings_at_head: Vec<String> = candidates
         .into_iter()
         .filter(|(_, parsed)| parsed.commit == head && parsed.is_bless())
@@ -423,26 +425,26 @@ fn short_commit_id(commit_id: &str) -> &str {
 ///
 /// Analysis matches a blessing to a series by an *exact* [`DiscriminantSet`], so a
 /// pre-emptive blessing must already occupy the set a future run will land in. The
-/// targets are the cartesian product of the resolved facets' concrete values: an
+/// targets are the cartesian product of the resolved discriminant filters' concrete values: an
 /// omitted `--engine` expands to every [`Engine`] (there is no host default), so
 /// whichever engine's data is captured later is accepted, while the target triple and
 /// machine key default to the current host. The product is empty only when the triple
-/// or machine-key facet is unconstrained (`all`) and so cannot be enumerated.
+/// or machine-key filter is unconstrained (`all`) and so cannot be enumerated.
 ///
-/// Repeated facet values (for example `--engine callgrind --engine callgrind`) or
+/// Repeated discriminant values (for example `--engine callgrind --engine callgrind`) or
 /// values that sanitize to the same segment collapse to one set, so the caller writes
 /// each sidecar key once and reports an honest count.
-fn synthesize_target_sets(facets: &DiscriminantSetQuery) -> Vec<DiscriminantSet> {
-    let engines: Vec<Engine> = match &facets.engine {
-        FacetFilter::All => Engine::ALL.to_vec(),
-        FacetFilter::Auto(value) => Engine::from_name(value).into_iter().collect(),
-        FacetFilter::Explicit(values) => values
+fn synthesize_target_sets(discriminants: &DiscriminantSetQuery) -> Vec<DiscriminantSet> {
+    let engines: Vec<Engine> = match &discriminants.engine {
+        DiscriminantFilter::All => Engine::ALL.to_vec(),
+        DiscriminantFilter::Auto(value) => Engine::from_name(value).into_iter().collect(),
+        DiscriminantFilter::Explicit(values) => values
             .iter()
             .filter_map(|value| Engine::from_name(value))
             .collect(),
     };
-    let triples = concrete_facet_values(&facets.target_triple);
-    let machines = concrete_facet_values(&facets.machine_key);
+    let triples = concrete_discriminant_values(&discriminants.target_triple);
+    let machines = concrete_discriminant_values(&discriminants.machine_key);
 
     let mut sets = Vec::new();
     let mut seen = HashSet::new();
@@ -463,13 +465,13 @@ fn synthesize_target_sets(facets: &DiscriminantSetQuery) -> Vec<DiscriminantSet>
     sets
 }
 
-/// The concrete values a non-engine facet resolves to, or empty when it is
+/// The concrete values a non-engine discriminant filter resolves to, or empty when it is
 /// unconstrained (`all`) and so cannot be enumerated.
-fn concrete_facet_values(filter: &FacetFilter) -> Vec<String> {
+fn concrete_discriminant_values(filter: &DiscriminantFilter) -> Vec<String> {
     match filter {
-        FacetFilter::All => Vec::new(),
-        FacetFilter::Auto(value) => vec![value.clone()],
-        FacetFilter::Explicit(values) => values.iter().cloned().collect(),
+        DiscriminantFilter::All => Vec::new(),
+        DiscriminantFilter::Auto(value) => vec![value.clone()],
+        DiscriminantFilter::Explicit(values) => values.iter().cloned().collect(),
     }
 }
 
@@ -494,9 +496,9 @@ mod tests {
         Config::default()
     }
 
-    /// The auto-detected facets the tests seed their default partition under.
-    fn auto() -> AutoFacets {
-        AutoFacets {
+    /// The auto-detected discriminant values the tests seed their default partition under.
+    fn auto() -> AutoDiscriminants {
+        AutoDiscriminants {
             triple: "x86_64-unknown-linux-gnu".to_owned(),
             machine_key: "m1".into(),
         }
@@ -871,7 +873,7 @@ mod tests {
     }
 
     #[test]
-    fn bless_without_data_dedupes_repeated_engine_facets() {
+    fn bless_without_data_dedupes_repeated_engine_discriminants() {
         let storage = MemoryStorage::new();
         // A repeated `--engine` value must not write the same sidecar key twice or
         // over-report the discriminant-set count.
@@ -894,7 +896,7 @@ mod tests {
     #[test]
     fn bless_without_data_and_unconstrained_machine_is_an_error() {
         let storage = MemoryStorage::new();
-        // No data at the commit and the machine-key facet is `all`, so no concrete
+        // No data at the commit and the machine-key filter is `all`, so no concrete
         // discriminant set can be synthesized to anchor the blessing.
         let options = BlessOptions {
             machine_key: vec!["all".to_owned()],
@@ -911,18 +913,18 @@ mod tests {
     }
 
     #[test]
-    fn synthesize_expands_an_auto_engine_and_explicit_facets() {
+    fn synthesize_expands_an_auto_engine_and_explicit_discriminants() {
         // An auto-detected engine resolves to that single engine, while explicit
-        // multi-value facets expand across each concrete value.
-        let facets = DiscriminantSetQuery {
-            engine: FacetFilter::Auto("callgrind".to_owned()),
-            target_triple: FacetFilter::Explicit(nonempty![
+        // multi-value discriminants expand across each concrete value.
+        let discriminants = DiscriminantSetQuery {
+            engine: DiscriminantFilter::Auto("callgrind".to_owned()),
+            target_triple: DiscriminantFilter::Explicit(nonempty![
                 "x86_64-unknown-linux-gnu".to_owned(),
                 "aarch64-apple-darwin".to_owned(),
             ]),
-            machine_key: FacetFilter::Auto("m1".to_owned()),
+            machine_key: DiscriminantFilter::Auto("m1".to_owned()),
         };
-        let sets = synthesize_target_sets(&facets);
+        let sets = synthesize_target_sets(&discriminants);
         // One engine × two triples × one machine = two sets.
         assert_eq!(sets.len(), 2, "{sets:?}");
         assert!(

@@ -14,7 +14,7 @@ and why the stage exists as a stage at all.
 
 ```mermaid
 flowchart TD
-    A["Every object in the store"] --> B["Facet filter<br/>engine · target triple · machine key"]
+    A["Every object in the store"] --> B["Discriminant filter<br/>engine · target triple · machine key"]
     B --> C["On the analyzed history?<br/>first-parent ancestry of the context"]
     C --> D["Dirty admission<br/>which side of the merge base?"]
     D --> E["--since cutoff<br/>by committer date"]
@@ -91,14 +91,14 @@ commit, not by naming a date.
 > A `--since` shorter than your collection cadence will quietly turn a healthy store into a
 > report full of unjudged series. The report's coverage line is where that shows up.
 
-## Facets
+## Discriminant filters
 
-Three axes restrict which discriminant sets participate: `--engine`, `--target-triple`,
-`--machine-key`. Each is repeatable and unioned.
+Three discriminant filters restrict which discriminant sets participate: `--engine`,
+`--target-triple`, and `--machine-key`. Each is repeatable and unioned.
 
 Omitting one auto-detects from the host — except `--engine`, which defaults to all of them,
 since a machine can produce output from several engines at once. The literal `all` disables a
-facet entirely.
+filter entirely.
 
 Because auto-detection means the same command can search different data on different machines,
 every query prints a one-line **effective selection summary** to stderr, naming what was
@@ -118,7 +118,7 @@ report diffable and a regression in the tool itself detectable.
 `analyze`, `list runs`, and `examine` run this same selection pipeline, so `list` genuinely
 previews what `analyze` would consume. The divergences are real, though, and worth knowing:
 
-| | Facets, window, dirty rules | Benchmark prefixes | Ghost filter | Blessings |
+| | Discriminant filters, window, dirty rules | Benchmark prefixes | Ghost filter | Blessings |
 |---|---|---|---|---|
 | `analyze` | yes | yes | yes | yes (history mode) |
 | `examine` | yes | yes | no | no |
@@ -144,4 +144,3 @@ which is the signal to check your branch topology.
 
 An ordered set of eligible objects, and the topology needed to place them. Next:
 [Reconstruction](reconstruction.md).
-

@@ -9,7 +9,7 @@ async fn backfill_stores_one_clean_object_per_commit_and_restores_checkout() {
     let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
     let workspace = Workspace::clean_repo(&storage_only_config())
         .with_bench(&["--callgrind", &bench])
-        .with_real_auto_facets();
+        .with_real_auto_discriminants();
     let c1 = workspace.commit("c1");
     let c2 = workspace.commit("c2");
     let branch_before = workspace.current_branch();

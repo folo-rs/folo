@@ -252,14 +252,14 @@ struct CacheArg {
     cache: Option<Option<PathBuf>>,
 }
 
-/// The repeatable, `all`-aware discriminant facets used by every query command.
+/// The repeatable, `all`-aware discriminant filters used by every query command.
 ///
-/// Each facet auto-detects the current machine when omitted (`--engine` has no
-/// machine-derived value, so it auto-detects to every engine); repeating a facet
+/// Each filter auto-detects the current machine when omitted (`--engine` has no
+/// machine-derived value, so it auto-detects to every engine); repeating a filter
 /// unions its values; the literal `all` removes the filter for that dimension.
 #[derive(Args, Debug)]
 #[command(next_help_heading = HEADING_DISCRIMINANT)]
-struct QueryFacetArgs {
+struct QueryDiscriminantArgs {
     /// Restrict to these engines, e.g. `criterion`/`callgrind` (repeatable; `all`
     /// matches every engine; default: every engine).
     #[arg(long, value_name = "NAME")]
@@ -545,7 +545,7 @@ struct AnalyzeCommand {
     output: OutputArgs,
 
     #[command(flatten)]
-    facets: QueryFacetArgs,
+    discriminants: QueryDiscriminantArgs,
 
     #[command(flatten)]
     timeline: TimelineArgs,
@@ -579,9 +579,9 @@ impl AnalyzeCommand {
             base: self.timeline.base,
             no_dirty: self.no_dirty,
             since: self.timeline.since,
-            engine: self.facets.engine,
-            target_triple: self.facets.target_triple,
-            machine_key: self.facets.machine_key,
+            engine: self.discriminants.engine,
+            target_triple: self.discriminants.target_triple,
+            machine_key: self.discriminants.machine_key,
             prefixes: self.prefixes,
             no_text: self.output.no_text,
             markdown: self.output.markdown,
@@ -601,7 +601,7 @@ enum ListSubjectArg {
     Runs,
     /// Every discriminant set present in storage (no repository required); a
     /// discovery catalog that lists all partitions regardless of the current
-    /// machine. Pass a facet to narrow it.
+    /// machine. Pass a discriminant filter to narrow it.
     Discriminants,
     /// The blessings recorded at the current commit (or, with `--all`, across the
     /// whole analysis window).
@@ -635,7 +635,7 @@ struct ListCommand {
     output: OutputArgs,
 
     #[command(flatten)]
-    facets: QueryFacetArgs,
+    discriminants: QueryDiscriminantArgs,
 
     #[command(flatten)]
     timeline: TimelineArgs,
@@ -663,9 +663,9 @@ impl ListCommand {
             base: self.timeline.base,
             no_dirty: self.no_dirty,
             since: self.timeline.since,
-            engine: self.facets.engine,
-            target_triple: self.facets.target_triple,
-            machine_key: self.facets.machine_key,
+            engine: self.discriminants.engine,
+            target_triple: self.discriminants.target_triple,
+            machine_key: self.discriminants.machine_key,
             no_text: self.output.no_text,
             markdown: self.output.markdown,
             json: self.output.json,
@@ -696,7 +696,7 @@ struct ExamineCommand {
     output: OutputArgs,
 
     #[command(flatten)]
-    facets: QueryFacetArgs,
+    discriminants: QueryDiscriminantArgs,
 
     #[command(flatten)]
     timeline: TimelineArgs,
@@ -727,9 +727,9 @@ impl ExamineCommand {
             base: self.timeline.base,
             no_dirty: self.no_dirty,
             since: self.timeline.since,
-            engine: self.facets.engine,
-            target_triple: self.facets.target_triple,
-            machine_key: self.facets.machine_key,
+            engine: self.discriminants.engine,
+            target_triple: self.discriminants.target_triple,
+            machine_key: self.discriminants.machine_key,
             benchmark: self.benchmark,
             metric: self.metric,
             no_text: self.output.no_text,
@@ -786,7 +786,7 @@ struct PruneCommand {
     output: OutputArgs,
 
     #[command(flatten)]
-    facets: QueryFacetArgs,
+    discriminants: QueryDiscriminantArgs,
 
     #[command(flatten)]
     commit_selection: PruneCommitArgs,
@@ -843,9 +843,9 @@ impl PruneCommand {
             base: self.commit_selection.base,
             commit: self.commit,
             since: self.commit_selection.since,
-            engine: self.facets.engine,
-            target_triple: self.facets.target_triple,
-            machine_key: self.facets.machine_key,
+            engine: self.discriminants.engine,
+            target_triple: self.discriminants.target_triple,
+            machine_key: self.discriminants.machine_key,
             clean,
             dirty,
             include_blessings: self.include_blessings,
@@ -988,7 +988,7 @@ struct BlessCommand {
     base: Option<String>,
 
     #[command(flatten)]
-    facets: QueryFacetArgs,
+    discriminants: QueryDiscriminantArgs,
 }
 
 impl BlessCommand {
@@ -999,9 +999,9 @@ impl BlessCommand {
             local: local_selection(self.env.local),
             context: self.context,
             base: self.base,
-            engine: self.facets.engine,
-            target_triple: self.facets.target_triple,
-            machine_key: self.facets.machine_key,
+            engine: self.discriminants.engine,
+            target_triple: self.discriminants.target_triple,
+            machine_key: self.discriminants.machine_key,
             prefixes: self.prefixes,
             all: self.all,
             verbose: self.env.verbose,
@@ -1029,7 +1029,7 @@ struct UnblessCommand {
     base: Option<String>,
 
     #[command(flatten)]
-    facets: QueryFacetArgs,
+    discriminants: QueryDiscriminantArgs,
 }
 
 impl UnblessCommand {
@@ -1040,9 +1040,9 @@ impl UnblessCommand {
             local: local_selection(self.env.local),
             context: self.context,
             base: self.base,
-            engine: self.facets.engine,
-            target_triple: self.facets.target_triple,
-            machine_key: self.facets.machine_key,
+            engine: self.discriminants.engine,
+            target_triple: self.discriminants.target_triple,
+            machine_key: self.discriminants.machine_key,
             verbose: self.env.verbose,
         }
     }
@@ -1617,7 +1617,7 @@ mod tests {
     }
 
     #[test]
-    fn analyze_collects_topology_and_repeatable_facets() {
+    fn analyze_collects_topology_and_repeatable_discriminants() {
         let command = parse(&[
             "analyze",
             "--repo",
@@ -1655,7 +1655,7 @@ mod tests {
     }
 
     #[test]
-    fn analyze_facets_default_to_empty() {
+    fn analyze_discriminants_default_to_empty() {
         let Command::Analyze(options) = parse(&["analyze"]) else {
             panic!("expected analyze command");
         };
@@ -1884,7 +1884,7 @@ mod tests {
     }
 
     #[test]
-    fn bless_collects_prefixes_facets_and_context() {
+    fn bless_collects_prefixes_discriminants_and_context() {
         let command = parse(&[
             "bless",
             "--engine",
@@ -1942,7 +1942,7 @@ mod tests {
     }
 
     #[test]
-    fn unbless_parses_facets() {
+    fn unbless_parses_discriminants() {
         let command = parse(&[
             "unbless",
             "--context",

@@ -42,8 +42,8 @@ use serde::Serialize;
 use tick::Clock;
 
 use super::{
-    AutoFacets, ReportFormat, Selection, Series, SeriesFilter, chart_series,
-    dirty_base_exception_warning, empty_history_hint, format_value, resolve_auto_facets,
+    AutoDiscriminants, ReportFormat, Selection, Series, SeriesFilter, chart_series,
+    dirty_base_exception_warning, empty_history_hint, format_value, resolve_auto_discriminants,
     resolve_now, select_dataset,
 };
 use crate::{
@@ -66,7 +66,7 @@ const NO_DATA: &str = "n/a";
 /// "now" to (see [`analyze`](super::analyze)); production passes `None` for the
 /// runtime wall clock.
 // Thin real-adapter wiring: loads config from disk, builds the configured storage,
-// and shells out via `SystemGitHistory`/`detect_auto_facets` before delegating every
+// and shells out via `SystemGitHistory`/`detect_auto_discriminants` before delegating every
 // decision to the mutation-tested `examine_with`. In-crate tests cannot drive these
 // real adapters deterministically; the binary's integration tests cover this edge.
 #[cfg_attr(test, mutants::skip)]
@@ -75,7 +75,7 @@ pub async fn execute(
     workspace_dir: &Path,
     clock_override: Option<Clock>,
     storage_override: Option<StorageFacade>,
-    auto_override: Option<AutoFacets>,
+    auto_override: Option<AutoDiscriminants>,
 ) -> Result<RenderedReports, AnalyzeError> {
     let reporter = StderrReporter::new(options.verbose);
 
@@ -97,7 +97,7 @@ pub async fn execute(
     storage.synchronize_cache(&project_id, &reporter).await?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
-    let auto = resolve_auto_facets(auto_override).await?;
+    let auto = resolve_auto_discriminants(auto_override).await?;
 
     let now = resolve_now(clock_override);
     // The object-load work shares the ambient Tokio worker threads (mirrors
@@ -132,7 +132,7 @@ pub(crate) async fn examine_with<G, S>(
     project_id: &str,
     config: &Config,
     options: &ExamineOptions,
-    auto: &AutoFacets,
+    auto: &AutoDiscriminants,
     now: Timestamp,
     reporter: &dyn Reporter,
     spawner: &Spawner,
@@ -194,7 +194,7 @@ where
             dataset.candidate_count,
             &dataset.target_ref,
             dataset.tally,
-            &dataset.facets,
+            &dataset.discriminants,
         )
     } else {
         Some(unmatched_series_hint(
@@ -738,9 +738,9 @@ mod tests {
         Config::default()
     }
 
-    /// The auto-detected facets the tests seed their default partition under.
-    fn auto() -> AutoFacets {
-        AutoFacets {
+    /// The auto-detected discriminant values the tests seed their default partition under.
+    fn auto() -> AutoDiscriminants {
+        AutoDiscriminants {
             triple: "x86_64-unknown-linux-gnu".to_owned(),
             machine_key: "m1".into(),
         }

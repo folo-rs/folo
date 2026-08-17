@@ -361,7 +361,7 @@ async fn analyze_markdown_summary_renders_a_flat_report() {
         !summary.contains("## callgrind"),
         "the summary must be flat, without per-set headings: {summary}"
     );
-    // Each flat finding instead carries the facet flags of its partition as a footer,
+    // Each flat finding instead carries the discriminant flags of its partition as a footer,
     // so a reader who loses the per-set grouping still knows how to query the exact set.
     assert!(
         summary.contains(
@@ -514,7 +514,7 @@ async fn analyze_engine_filters_partition() {
     workspace.commit_dated("2024-01-01", "c1");
     workspace.seed_callgrind("c1", 100.0);
     // A criterion-partition object that the callgrind filter must skip. Its commit
-    // segment is never read because the engine facet excludes it from listing.
+    // segment is never read because the engine discriminant excludes it from listing.
     workspace.seed(
         "v1/testproj/objects/criterion/x86_64-pc-windows-msvc/m1/abc123/clean.json",
         &ir_result_set(1, "c1", 100.0),
@@ -1463,7 +1463,7 @@ async fn analyze_history_mode_suppresses_improvements_by_default() {
 /// triple selection sees only its own.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_target_triple_facet_isolates_linux_from_windows() {
+async fn analyze_target_triple_discriminant_isolates_linux_from_windows() {
     let workspace = Workspace::repo(&storage_only_config());
     // Each commit carries both a Linux point (rising into a regression) and a
     // Windows point (flat). The chain is `MIN_SERIES_POINTS` long so both series
@@ -1514,7 +1514,7 @@ async fn analyze_target_triple_facet_isolates_linux_from_windows() {
     };
     assert_eq!(regressions, 0, "the Windows series is flat: {report}");
     // The Windows series was judged, so its silence is a verdict on the data rather
-    // than the facet having selected an untestable set.
+    // than the discriminant having selected an untestable set.
     assert_history_was_judged(&report);
 }
 
@@ -1695,7 +1695,7 @@ async fn analyze_criterion_machine_keys_stay_isolated() {
 /// only its own.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_target_triple_facet_selects_one_set() {
+async fn analyze_target_triple_discriminant_selects_one_set() {
     let workspace = Workspace::repo(&storage_only_config());
     // Each commit hosts a regressing x86_64 series and a flat aarch64 series; the
     // chain is `MIN_SERIES_POINTS` long so both series are judged.
@@ -1742,13 +1742,13 @@ async fn analyze_target_triple_facet_selects_one_set() {
     };
     assert_eq!(regressions, 0, "the aarch64 triple is flat: {report}");
     // The aarch64 series was judged, so its silence is a verdict on the data rather
-    // than the facet having selected an untestable set.
+    // than the discriminant having selected an untestable set.
     assert_history_was_judged(&report);
 }
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_machine_key_facet_selects_one_set() {
+async fn analyze_machine_key_discriminant_selects_one_set() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_criterion_history("mk-rising");
     // `mk-flat` stays flat across the same d1.. commits (already created by the

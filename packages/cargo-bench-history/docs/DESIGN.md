@@ -181,31 +181,32 @@ because the commit-centric grouping co-locates a commit's clean run, dirty snaps
 blessing sidecars under one directory, which is exactly what lets `prune` drop a commit's
 whole set and keeps a blessing adjacent to the run it baselines.
 
-### 3.3 Discriminant sets and query facets
+### 3.3 Discriminant sets and discriminant filters
 
-A series is only ever built within one discriminant set. Three facets select which sets a
-query operates on: engine, target triple, and machine key. (Earlier drafts also exposed
-derived OS / architecture facets; they were removed because duplicating the target-triple
-dimension confused users — filter on the triple directly.)
+A series is only ever built within one discriminant set. Discriminant filters restrict which
+sets a query operates on by matching the engine, target triple, and machine key fields.
+(Earlier drafts also exposed derived OS / architecture filters; they were removed because
+duplicating the target-triple dimension confused users — filter on the triple directly.)
 
-Each facet is repeatable, unions its values, and accepts the literal `all` to widen past a
-dimension. Omitting a facet **auto-detects the current machine**: the triple defaults to
-the host triple and the machine key to the host fingerprint, so a bare query reports *this*
-machine's data; engine has no machine-derived value, so it defaults to all engines. Every
-engine is partitioned by machine key, so a bare query scopes every engine uniformly to
-*this* host's fingerprint — nothing rides along across machines, and no set is exempt from
-the machine-key facet. A facet that matches several sets yields one report per set —
-parallel data sets analyzed individually.
+Each discriminant filter is repeatable, unions its values, and accepts the literal `all` to
+widen past a dimension. Omitting a filter **auto-detects the current machine**: the triple
+defaults to the host triple and the machine key to the host fingerprint, so a bare query
+reports *this* machine's data; engine has no machine-derived value, so it defaults to all
+engines. Every engine is partitioned by machine key, so a bare query scopes every engine
+uniformly to *this* host's fingerprint — nothing rides along across machines, and no set is
+exempt from the machine-key filter. A filter that matches several sets yields one report per
+set — parallel data sets analyzed individually.
 
-Facet identity is **case-insensitive**: engine names and every key segment are normalized to
-lowercase, so `Callgrind`, `callgrind`, and `CALLGRIND` name the same engine, and a triple or
-machine key differing only in case resolves to one set rather than silently splitting into two.
+Discriminant-filter matching is **case-insensitive**: engine names and every key segment are
+normalized to lowercase, so `Callgrind`, `callgrind`, and `CALLGRIND` name the same engine,
+and a triple or machine key differing only in case resolves to one set rather than silently
+splitting into two.
 
 The commands divide into **create** and **query** roles. `collect` and `backfill` record
-new data into exactly one machine's reality, so they auto-detect every facet and accept
-only a machine-key override (for a stable CI-pool key); they reject engine or triple
-selection and the `all` keyword. Every other command queries existing data and uses the
-full repeatable, `all`-aware, auto-detecting facet model.
+new data into exactly one machine's reality, so they auto-detect their discriminant values
+and accept only a machine-key override (for a stable CI-pool key); they reject engine or
+triple selection and the `all` keyword. Every other command queries existing data and uses
+the full repeatable, `all`-aware, auto-detecting discriminant-filter model.
 
 ## 4. Machine key
 
@@ -553,7 +554,7 @@ renderings, `analyze` offers one **derived** output — a condensed Markdown *su
 downstream consumer
 whose body has a hard size limit (the workflow posts it as a rolling GitHub issue, capped at
 65,536 characters). The summary keeps only the most significant findings and drops the
-per-facet grouping, so it is intentionally lossy; it is analyze-only because truncating a
+per-discriminant grouping, so it is intentionally lossy; it is analyze-only because truncating a
 ranked list is meaningless for the enumerating commands, and it never displaces the full
 reports, which the workflow attaches alongside it. **Findings never affect the exit code**:
 the process exits non-zero only when the analysis fails to *run*. A finding is advisory, and
@@ -562,17 +563,17 @@ regression watch, a PR comment bot) reads that rather than the exit status.
 
 Regardless of `--verbose`, every query run (`analyze`, `list`, `prune`, `examine`) prints a
 one-line **effective-selection** summary to stderr — the engine, target-triple, and
-machine-key facets (each marked when auto-detected), the resolved base branch, and the
-`--since` cutoff — so the user always sees what was actually searched, not just
-what they typed. The `bless` / `unbless` mutation commands print the same line, naming the
-facets and the context commit they act at (defaulted to `HEAD` unless `--context` is given;
-`bless` also names its base branch), so a manual acceptance states exactly which partition
-and commit it touched. Two empty outcomes also explain themselves in the stdout report without
-verbose diagnostics: when facet-matching runs were stored but none entered the analysis the
-hint breaks down why, and when the effective (possibly auto-detected) partition holds no
-runs at all the hint names that partition and suggests widening it. A zero-run outcome is
-thus never mistaken for "no data", and an auto-detected partition that quietly missed is
-never mistaken for an empty project.
+machine-key discriminant filters (each marked when auto-detected), the resolved base branch,
+and the `--since` cutoff — so the user always sees what was actually searched, not just what
+they typed. The `bless` / `unbless` mutation commands print the same line, naming the
+discriminant filters and the context commit they act at (defaulted to `HEAD` unless
+`--context` is given; `bless` also names its base branch), so a manual acceptance states
+exactly which partition and commit it touched. Two empty outcomes also explain themselves in
+the stdout report without verbose diagnostics: when discriminant-matching runs were stored
+but none entered the analysis the hint breaks down why, and when the effective (possibly
+auto-detected) partition holds no runs at all the hint names that partition and suggests
+widening it. A zero-run outcome is thus never mistaken for "no data", and an auto-detected
+partition that quietly missed is never mistaken for an empty project.
 
 ### 7.4 `backfill`
 
@@ -648,9 +649,9 @@ selected runs (each commit's clean/dirty split), oldest-first by topology.
 `list discriminants` is a different view: a **discovery catalog** of the sets present in
 storage, which requires **no repository** and so ignores the timeline and data-filtering
 groups. Because it is a catalog, it is the one query view that does *not* default omitted
-facets to the current machine — with no facets it lists every stored partition, so a user
-can find triples and machine keys they do not already know. `list blessings` audits
-blessings (below).
+discriminant filters to the current machine — with no discriminant filters it lists every
+stored partition, so a user can find triples and machine keys they do not already know. `list
+blessings` audits blessings (below).
 
 ### 7.6 `prune`
 
@@ -693,13 +694,13 @@ the blessing only takes effect once the commit joins the base branch's first-par
 (for example after a fast-forward), so a fast-forward merge workflow can legitimately bless a
 commit already on a feature branch. Blessing a commit with **no recorded run** also warns
 (the commit id is worth double-checking) and synthesizes the target discriminant sets from
-the resolved facets — all four engines when `--engine` is omitted, under the resolved target
-triple and machine key — so an intentional change can be accepted *before* its data is
-captured; whichever engine's data lands there later is then accepted. This synthesis needs a
-concrete target triple and machine key, so a no-data blessing whose triple or machine-key
-facet is unconstrained (`all`) is a hard error. The remaining hard errors are an unresolvable
-context ref, an undeterminable base branch, and no prefixes without `--all`. A dirty working
-tree is allowed (the blessing targets the committed run) but warns.
+the resolved discriminant filters — all four engines when `--engine` is omitted, under the
+resolved target triple and machine key — so an intentional change can be accepted *before*
+its data is captured; whichever engine's data lands there later is then accepted. This
+synthesis needs a concrete target triple and machine key, so a no-data blessing whose triple
+or machine-key filter is unconstrained (`all`) is a hard error. The remaining hard errors
+are an unresolvable context ref, an undeterminable base branch, and no prefixes without
+`--all`. A dirty working tree is allowed (the blessing targets the committed run) but warns.
 
 A blessing is an **append-only sidecar** in each targeted set's commit directory (which need
 not yet hold a run), so narrowing one means unbless-then-re-bless the subset to keep.
@@ -1176,7 +1177,7 @@ percent with the metric and its confidence, a dimmed detail line, and a small li
 of the series — the whole series in history mode, only the bounded baseline-and-tail
 comparison in branch mode — the chart itself always uncolored, with headline color
 enabled only when stdout is a terminal and not disabled by environment. The text and Markdown reports
-group findings under a per-set header, which also states the **facet-filter flags** that
+group findings under a per-set header, which also states the **discriminant-filter flags** that
 reproduce exactly that partition, so a reader who spots a change can drill into it without
 reconstructing the query by hand. Markdown is that data with
 Markdown formatting (the id as a heading with the per-finding block nested beneath it, not
@@ -1197,10 +1198,10 @@ on the absence of findings.
 
 Separate from those three canonical formats, `analyze` can also render a condensed Markdown
 **summary** — a single derived view for a size-limited consumer. It reuses the Markdown
-finding blocks but keeps only the top findings by magnitude and drops the per-facet grouping,
+finding blocks but keeps only the top findings by magnitude and drops the per-discriminant grouping,
 so it is deliberately **not** "same data": it is a lossy excerpt that names how many of the
 total it shows and leaves the full reports to be consulted separately. Because it drops the
-grouping, each retained finding instead carries its set's facet-filter flags as a trailing
+grouping, each retained finding instead carries its set's discriminant-filter flags as a trailing
 footer — reference material for a follow-up query rather than a headline — so the summary
 stays investigable and blocks for the same benchmark in different sets remain distinguishable.
 Because it exists to

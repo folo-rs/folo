@@ -39,7 +39,7 @@ fn run_faker_binary(target_dir: &Path, args: &[&str]) {
 ///
 /// The run is keyed under [`HARNESS_AUTO_TRIPLE`]/[`HARNESS_AUTO_MACHINE_KEY`] via
 /// `--target-triple`/`--machine-key` so the imported callgrind set matches the
-/// target-triple and machine-key facets a reporting drive injects. That makes the
+/// target-triple and machine-key filters a reporting drive injects. That makes the
 /// round-trip host-independent (the real host triple and fingerprint would only
 /// match on the collecting host), rather than relying on the probed toolchain host.
 async fn import_for_commit(workspace: &Workspace, target_dir: &Path, commit: &str) -> String {

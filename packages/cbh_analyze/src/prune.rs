@@ -39,9 +39,9 @@ use tick::Clock;
 
 use super::announce::{AnnouncedBase, AnnouncedSince, announce_selection, selection_announcement};
 use super::{
-    AutoFacets, DirtyTipPolicy, ReportFormat, ResolvedHistory, Selection, before_since_cutoff,
-    facet_filtered_candidates, parse_since, resolve_auto_facets, resolve_facets, resolve_history,
-    resolve_now,
+    AutoDiscriminants, DirtyTipPolicy, ReportFormat, ResolvedHistory, Selection,
+    before_since_cutoff, discriminant_filtered_candidates, parse_since, resolve_auto_discriminants,
+    resolve_discriminants, resolve_history, resolve_now,
 };
 use crate::{
     AnalyzeError, PruneBaseConfirmationRequiredError, PruneSelectionRequiredError, RenderedReports,
@@ -108,7 +108,7 @@ fn prune_since_reason(explicit: bool) -> &'static str {
 /// `--since` bound (see [`resolve_now`](super::resolve_now)); production
 /// passes `None` for the runtime wall clock.
 // Thin real-adapter wiring: loads config from disk, builds the configured storage,
-// and shells out via `SystemGitHistory`/`detect_auto_facets` before delegating every
+// and shells out via `SystemGitHistory`/`detect_auto_discriminants` before delegating every
 // decision to the mutation-tested `prune_with`. In-crate tests cannot drive these real
 // adapters deterministically; the binary's integration tests cover this edge.
 #[cfg_attr(test, mutants::skip)]
@@ -117,7 +117,7 @@ pub async fn execute(
     workspace_dir: &Path,
     clock_override: Option<Clock>,
     storage_override: Option<StorageFacade>,
-    auto_override: Option<AutoFacets>,
+    auto_override: Option<AutoDiscriminants>,
 ) -> Result<RenderedReports, AnalyzeError> {
     let reporter = StderrReporter::new(options.verbose);
 
@@ -139,7 +139,7 @@ pub async fn execute(
     storage.synchronize_cache(&project_id, &reporter).await?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
-    let auto = resolve_auto_facets(auto_override).await?;
+    let auto = resolve_auto_discriminants(auto_override).await?;
 
     let now = resolve_now(clock_override);
     let result = prune_with(
@@ -168,7 +168,7 @@ pub async fn execute(
 /// (`--dry-run`) or delete them.
 #[expect(
     clippy::too_many_arguments,
-    reason = "prune orchestration wires several injected ports alongside its options and facets"
+    reason = "prune orchestration wires several injected ports alongside its options and discriminants"
 )]
 pub(crate) async fn prune_with<G, S>(
     git: &G,
@@ -176,7 +176,7 @@ pub(crate) async fn prune_with<G, S>(
     project_id: &str,
     config: &Config,
     options: &PruneOptions,
-    auto: &AutoFacets,
+    auto: &AutoDiscriminants,
     now: Timestamp,
     reporter: &dyn Reporter,
 ) -> Result<RenderedReports, AnalyzeError>
@@ -193,8 +193,9 @@ where
     let scope = Scope::from_options(options)?;
     let selection = Selection::from_prune(options);
 
-    let facets = resolve_facets(&selection, Some(auto))?;
-    let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
+    let discriminants = resolve_discriminants(&selection, Some(auto))?;
+    let candidates =
+        discriminant_filtered_candidates(storage, project_id, &discriminants, reporter).await?;
 
     let ResolvedHistory {
         target_ref,
@@ -215,7 +216,7 @@ where
     announce_selection(
         reporter,
         &selection_announcement(
-            &facets,
+            &discriminants,
             Some(AnnouncedBase {
                 name: &base_name,
                 auto: options.base.is_none(),
@@ -780,9 +781,9 @@ mod tests {
         Config::default()
     }
 
-    /// The auto-detected facets the tests seed their default partition under.
-    fn auto() -> AutoFacets {
-        AutoFacets {
+    /// The auto-detected discriminant values the tests seed their default partition under.
+    fn auto() -> AutoDiscriminants {
+        AutoDiscriminants {
             triple: "x86_64-unknown-linux-gnu".to_owned(),
             machine_key: "m1".into(),
         }
@@ -1546,7 +1547,7 @@ mod tests {
     }
 
     #[test]
-    fn engine_facet_restricts_removal() {
+    fn engine_discriminant_restricts_removal() {
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("f1"), &set("f1"));
         store(&storage, &dirty_key("f1", 200), &set("f1"));

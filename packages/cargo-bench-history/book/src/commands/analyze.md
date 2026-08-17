@@ -95,5 +95,5 @@ fails to *run*. A finding is advisory; the machine-readable signal lives in the 
 which downstream automation should read rather than the exit status.
 
 Every query run also prints a one-line effective-selection summary to stderr (engine,
-target-triple, and machine-key facets, the resolved base branch, and the `--since` cutoff),
-so you always see what was actually searched.
+target-triple, and machine-key discriminant filters, the resolved base branch, and the
+`--since` cutoff), so you always see what was actually searched.

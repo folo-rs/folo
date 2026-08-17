@@ -2,7 +2,7 @@
 //!
 //! Each mode is run through the real public [`run_with_overrides`] entry point, so
 //! the measured path is exactly production data-loading and detection — only the
-//! data underneath is synthetic. The facet filters are forced to `all` because the
+//! data underneath is synthetic. The discriminant filters are forced to `all` because the
 //! seeded triples and the seeded machine key never match the host the harness runs
 //! on; without that every object would be filtered out.
 
@@ -107,8 +107,8 @@ pub(crate) async fn measure(
     logger.step(&format!("analyzing in {} mode", mode.keyword()));
     logger.detail_with(|| {
         format!(
-            "context={}, base={}, facets forced to all (seeded triples and the seeded machine key \
-         never match the host), repeats={repeat}",
+            "context={}, base={}, discriminant filters forced to all \
+             (seeded triples and the seeded machine key never match the host), repeats={repeat}",
             options.context.as_deref().unwrap_or(""),
             options.base.as_deref().unwrap_or(""),
         )
@@ -286,7 +286,7 @@ fn overrides(workspace: &Path, anchor: Timestamp) -> Overrides {
         bench_command: None,
         clock: Some(Clock::new_frozen_at(anchor)),
         storage_override: None,
-        auto_facets: None,
+        auto_discriminants: None,
     }
 }
 

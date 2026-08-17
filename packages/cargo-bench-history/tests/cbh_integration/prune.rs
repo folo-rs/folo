@@ -100,7 +100,7 @@ async fn prune_dry_run_reports_without_deleting() {
     assert_eq!(parsed["totals"]["runs"], 1, "{message}");
 }
 
-/// An engine facet scopes the prune: a callgrind-scoped `prune --dirty` leaves a
+/// An engine discriminant scopes the prune: a callgrind-scoped `prune --dirty` leaves a
 /// dirty criterion snapshot on the same commit untouched.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
@@ -147,12 +147,12 @@ async fn prune_dirty_scopes_by_engine() {
     assert_eq!(parsed["sets"][0]["engine"], "criterion", "{message}");
 }
 
-/// A target-triple facet scopes the prune just like it scopes `analyze`/`list`:
+/// A target-triple filter scopes the prune just like it scopes `analyze`/`list`:
 /// the same target commit hosts a dirty Linux (callgrind) run and a dirty Windows
 /// (criterion) run, and `--target-triple <linux>` removes only the former.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn prune_dirty_scopes_by_target_triple_facet() {
+async fn prune_dirty_scopes_by_target_triple_discriminant() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.commit_dated("2024-01-01", "c1");
     workspace.seed_callgrind("c1", 100.0);
@@ -179,7 +179,7 @@ async fn prune_dirty_scopes_by_target_triple_facet() {
     assert_eq!(parsed["sets"][0]["engine"], "callgrind", "{message}");
 
     // The Windows (criterion) dirty run survives: a Windows-triple pass still finds
-    // it once the machine facet is widened to its non-host machine key.
+    // it once the machine discriminant is widened to its non-host machine key.
     let message = workspace
         .drive_json(&[
             "prune",
@@ -218,7 +218,7 @@ async fn prune_dirty_removes_runs_across_multiple_discriminant_sets() {
     workspace.seed_dirty_criterion("2024-01-02", "f1", "m1", 20.0);
 
     // Text format exercises the plural "discriminant sets" summary branch. The
-    // facets widen to every triple/machine so the callgrind set (under the harness
+    // discriminants widen to every triple/machine so the callgrind set (under the harness
     // machine key) and the `m1`-keyed criterion set are both in scope regardless of
     // host.
     let RunOutcome::Completed { message } = workspace

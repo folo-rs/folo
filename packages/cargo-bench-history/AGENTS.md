@@ -47,11 +47,12 @@ New per-series logic must be side-effect-free. Flow and rationale: [`docs/analyz
 ## Selection lockstep (analyze / list / prune / examine)
 
 `analyze`, `list`, `prune`, and `examine` share one **data-set-selection pipeline** in
-`analyze/mod.rs` (`Selection` + `parsed_facets` + `facet_filtered_candidates` +
-`resolve_history`/`select_dataset`), and all four live inside the `analyze` module tree
-(`list.rs`, `prune.rs`, `examine.rs`, each `pub(crate) mod`; `bless`/`unbless` in `bless.rs`
-reuse the same facet selection). **A selection parameter added to one must be added to all
-four** unless genuinely inapplicable. The analysis-only flag `--include-improvements` and the
+`analyze/mod.rs` (`Selection` + `resolve_discriminants` +
+`discriminant_filtered_candidates` + `resolve_history`/`select_dataset`), and all four live
+inside the `analyze` module tree (`list.rs`, `prune.rs`, `examine.rs`, each
+`pub(crate) mod`; `bless`/`unbless` in `bless.rs` reuse the same discriminant-filter
+selection). **A selection parameter added to one must be added to all four** unless
+genuinely inapplicable. The analysis-only flag `--include-improvements` and the
 analyze-only condensed `--markdown-summary` output are **not** part of the lockstep —
 only `analyze` detects; `list`/`prune`/`examine` reuse the selection but never analyze.
 The always-on **ghost filter** likewise changes only *which reconstructed series are detected
@@ -114,7 +115,7 @@ always-on channel).
   file the adapter still tolerates). An interval is only ever an extra veto that can suppress
   a candidate finding, never create one. `collect`/`backfill` invoke `cargo bench` (once, or
   `--best-of N` times keeping the per-metric minimum) and harvest whatever ran; `--engine` is
-  an `analyze` facet, not a collect flag. Details: DESIGN §1, §7.1.
+  an `analyze` discriminant filter, not a collect flag. Details: DESIGN §1, §7.1.
 
 ## Testing
 

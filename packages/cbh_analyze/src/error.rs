@@ -251,7 +251,7 @@ impl RefUnwindSafe for BlessBaseRequiredError {}
 #[ohno::error]
 #[display(
     "bless cannot target a discriminant set: no stored result exists at the context commit \
-     {commit}, and the target-triple or machine-key facet is unconstrained; pass --target-triple \
+     {commit}, and the target-triple or machine-key filter is unconstrained; pass --target-triple \
      and --machine-key (or record a run at the commit first)"
 )]
 pub(crate) struct BlessDiscriminantsRequiredError {

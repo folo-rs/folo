@@ -216,8 +216,8 @@ enum Holding {
 /// object from being counted twice.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RemovedBy {
-    /// The query's facets do not name the object's discriminant set.
-    Facets,
+    /// The query's discriminant filters do not name the object's discriminant set.
+    Discriminants,
 
     /// The object was recorded at a commit that is not on the analyzed first-parent line.
     OffHistory,
@@ -232,10 +232,10 @@ enum RemovedBy {
 impl RemovedBy {
     /// The funnel stages in the order the loader applies them.
     ///
-    /// Ref: `packages/cbh_analyze/src/dataset.rs`, whose first pass tests facets, then
-    /// first-parent membership, then dirty admission, then the window.
+    /// Ref: `packages/cbh_analyze/src/dataset.rs`, whose first pass tests discriminant
+    /// filters, then first-parent membership, then dirty admission, then the window.
     const IN_ORDER: [Self; 4] = [
-        Self::Facets,
+        Self::Discriminants,
         Self::OffHistory,
         Self::DirtyAdmission,
         Self::Since,
@@ -244,7 +244,7 @@ impl RemovedBy {
     /// How the chapter names the stage.
     fn name(self) -> &'static str {
         match self {
-            Self::Facets => "Facet filter",
+            Self::Discriminants => "Discriminant filter",
             Self::OffHistory => "On the analyzed history",
             Self::DirtyAdmission => "Dirty admission",
             Self::Since => "`--since`",
@@ -258,8 +258,8 @@ struct Partition {
     /// machine key` to what fits a row label.
     label: &'static str,
 
-    /// Whether the query's facets name this partition.
-    matches_facets: bool,
+    /// Whether the query's discriminant filters name this partition.
+    matches_discriminants: bool,
 
     /// What the store holds at each commit position on the analyzed line, oldest first.
     holdings: Vec<Holding>,
@@ -291,8 +291,8 @@ impl Partition {
     /// Ordered as the loader orders its filters, so an object is attributed to the first
     /// stage that takes it out and never to a later one that would also have.
     fn removed_by(&self, position: usize, holding: Holding) -> Option<RemovedBy> {
-        if !self.matches_facets {
-            return Some(RemovedBy::Facets);
+        if !self.matches_discriminants {
+            return Some(RemovedBy::Discriminants);
         }
         if holding == Holding::Dirty && position <= MERGE_BASE {
             return Some(RemovedBy::DirtyAdmission);
@@ -305,8 +305,8 @@ impl Partition {
 
     /// How many of this partition's objects `stage` removes.
     fn removals(&self, stage: RemovedBy) -> usize {
-        if !self.matches_facets {
-            return if stage == RemovedBy::Facets {
+        if !self.matches_discriminants {
+            return if stage == RemovedBy::Discriminants {
                 self.objects()
             } else {
                 0
@@ -347,8 +347,8 @@ impl Partition {
 ///
 /// Three partitions, chosen so that each stage of the funnel has something to remove: a
 /// dense per-commit partition carrying dirty runs on both sides of the merge base, a
-/// sparse one the facets also name, and one measured on another machine that the facets do
-/// not.
+/// sparse one the discriminant filters also name, and one measured on another machine that the
+/// filters do not.
 fn store() -> Vec<Partition> {
     let dense = (0..SPAN)
         .map(|position| {
@@ -388,19 +388,19 @@ fn store() -> Vec<Partition> {
     vec![
         Partition {
             label: "criterion / linux-x64 / a1b2",
-            matches_facets: true,
+            matches_discriminants: true,
             holdings: dense,
             off_line: OFF_LINE_RUNS,
         },
         Partition {
             label: "callgrind / linux-x64 / a1b2",
-            matches_facets: true,
+            matches_discriminants: true,
             holdings: nightly,
             off_line: 0,
         },
         Partition {
             label: "criterion / macos-arm64 / 7c6d",
-            matches_facets: false,
+            matches_discriminants: false,
             holdings: foreign,
             off_line: 0,
         },
@@ -424,7 +424,7 @@ fn removals(store: &[Partition], stage: RemovedBy) -> usize {
 fn survivors(store: &[Partition]) -> usize {
     store
         .iter()
-        .filter(|partition| partition.matches_facets)
+        .filter(|partition| partition.matches_discriminants)
         .map(Partition::survivors)
         .sum()
 }
@@ -489,7 +489,7 @@ fn funnel_table() -> String {
     .expect("writing to a String never fails");
     markdown.push_str(
         "\nThis worked store holds only runs. A matching blessing sidecar is a separate \
-         object kind: it is set apart during facet selection and follows its own path, \
+         object kind: it is set apart during discriminant selection and follows its own path, \
          so it never enters the run-only topology, dirty-admission, and window stages \
          counted here.\n",
     );
@@ -505,14 +505,14 @@ fn funnel_table() -> String {
 /// What `stage` took out of the worked store, in the reader's terms.
 fn describe_removal(store: &[Partition], stage: RemovedBy) -> String {
     match stage {
-        RemovedBy::Facets => {
+        RemovedBy::Discriminants => {
             let excluded: Vec<&str> = store
                 .iter()
-                .filter(|partition| !partition.matches_facets)
+                .filter(|partition| !partition.matches_discriminants)
                 .map(|partition| partition.label)
                 .collect();
             format!(
-                "every object of `{}`, a partition the query's facets do not name",
+                "every object of `{}`, a partition the query's discriminant filters do not name",
                 excluded.join("`, `"),
             )
         }

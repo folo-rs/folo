@@ -428,8 +428,8 @@ fn set_label(set: &DiscriminantSet) -> String {
     set.to_string()
 }
 
-/// The `analyze` facet flags that select exactly this discriminant set, ready to
-/// paste into a follow-up query. Naming every facet explicitly pins the one set, so a
+/// The `analyze` discriminant-filter flags that select exactly this discriminant set, ready to
+/// paste into a follow-up query. Naming every filter explicitly pins the one set, so a
 /// reader who spots a finding can drill into that partition without having to guess
 /// which engine / triple / machine it came from.
 fn set_filter_flags(set: &DiscriminantSet) -> String {
@@ -1474,7 +1474,7 @@ mod tests {
 
     #[test]
     fn markdown_summary_footers_each_finding_with_its_set_filter() {
-        // The summary drops the per-set grouping, so each finding carries the facet
+        // The summary drops the per-set grouping, so each finding carries the discriminant-filter
         // flags that isolate its partition as a trailing footer — enough to query that
         // exact set without leading the block.
         let findings = vec![named_regression("mover_a", 0.50)];
@@ -2051,7 +2051,7 @@ mod tests {
             report.contains("callgrind/x86_64-unknown-linux-gnu/m1"),
             "the set heading drops the redundant `Set ` prefix: {report}"
         );
-        // The set header names the facet flags that reproduce exactly this partition,
+        // The set header names the discriminant-filter flags that reproduce exactly this partition,
         // so a reader who spots a finding knows how to query it directly.
         assert!(
             report.contains(
@@ -2207,7 +2207,7 @@ mod tests {
         );
         // The per-set tally mirrors the JSON metadata and the text header.
         assert!(report.contains("- Regressions: 1"), "{report}");
-        // The set header names the facet flags that reproduce exactly this partition.
+        // The set header names the discriminant-filter flags that reproduce exactly this partition.
         assert!(
             report.contains(
                 "- Filter: `--engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key m1`"

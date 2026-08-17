@@ -528,7 +528,7 @@ async fn collect_then_analyze_round_trips_a_sanitizing_project_id() {
     let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
     let workspace = Workspace::clean_repo(&storage_only_config_with_id("my proj/sub"))
         .with_bench(&["--callgrind", &bench])
-        .with_real_auto_facets();
+        .with_real_auto_discriminants();
 
     workspace.drive(&["collect"]).await.unwrap();
 
@@ -563,7 +563,7 @@ async fn collect_then_analyze_round_trips_a_sanitizing_project_id() {
 async fn collect_then_analyze_preserves_unusual_identity_characters() {
     let workspace = Workspace::clean_repo(&storage_only_config())
         .with_bench(&["--criterion", "time.capture|mide tiempo|tamaño 4=18.5"])
-        .with_real_auto_facets();
+        .with_real_auto_discriminants();
 
     workspace
         .drive(&["collect", "--machine-key", "pool"])

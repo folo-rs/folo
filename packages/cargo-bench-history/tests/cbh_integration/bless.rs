@@ -231,7 +231,7 @@ async fn bless_before_capture_applies_once_the_data_lands() {
     }
 
     // Pre-emptively accept the tip before any run exists there. With no data to
-    // anchor to, the target sets are synthesized from the resolved facets (every
+    // anchor to, the target sets are synthesized from the resolved discriminant filters (every
     // engine on this host).
     let RunOutcome::Completed { message } = workspace.drive(&["bless", "--all"]).await.unwrap()
     else {

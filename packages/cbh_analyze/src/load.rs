@@ -8,7 +8,8 @@ use std::time::Instant;
 
 use anyspawn::Spawner;
 use cbh_detect::{
-    DiscriminantSetQuery, FacetFilter, RunPoints, SeriesBuilder, balanced_chunk_sizes, worker_count,
+    DiscriminantFilter, DiscriminantSetQuery, RunPoints, SeriesBuilder, balanced_chunk_sizes,
+    worker_count,
 };
 use cbh_diag::{Reporter, ReporterExt, count_noun};
 use cbh_model::{
@@ -17,7 +18,7 @@ use cbh_model::{
 use cbh_storage::{Storage, project_objects_prefix};
 use futures::{StreamExt as _, TryStreamExt as _};
 
-use super::facets::describe_facets;
+use super::discriminants::describe_discriminants;
 use crate::{AnalyzeError, InvalidResultSetError, InvalidStoredUtf8Error};
 
 /// One commit's run tally within a discriminant set, the granularity the report
@@ -160,50 +161,50 @@ impl RunIndex {
 /// The recognized objects a single project listing produced.
 ///
 /// A large history is listed once (a single [`Storage::list`] round-trip); this
-/// splits its keys into the facet-selected candidates and, when requested, the
+/// splits its keys into the candidates selected by discriminant filters and, when requested, the
 /// machine-relaxed clean-run siblings used to explain a lagging branch comparison
 /// base.
 pub(crate) struct CandidateListing {
-    /// Objects whose discriminant set matches every facet filter — the selection the
+    /// Objects whose discriminant set matches every discriminant filter — the selection the
     /// analysis (or listing) operates on.
     pub(crate) selected: Vec<(String, StorageKey)>,
     /// Potential sibling observations for branch-mode comparison-base lag
     /// classification: exact `clean.json` objects that match the engine and
-    /// target-triple facets but whose machine key the selection does not cover. Empty
+    /// target-triple filters but whose machine key the selection does not cover. Empty
     /// unless siblings were requested (`collect_siblings`).
     pub(crate) siblings: Vec<(String, StorageKey)>,
 }
 
 /// Lists the stored objects under the project's partition and keeps the ones whose
-/// discriminant set matches the facet filters. Shared by the topology-aware
+/// discriminant set matches the discriminant filters. Shared by the topology-aware
 /// selection and the discriminant listing (which needs no repository).
-pub(crate) async fn facet_filtered_candidates<S: Storage>(
+pub(crate) async fn discriminant_filtered_candidates<S: Storage>(
     storage: &S,
     project_id: &str,
-    facets: &DiscriminantSetQuery,
+    discriminants: &DiscriminantSetQuery,
     reporter: &dyn Reporter,
 ) -> Result<Vec<(String, StorageKey)>, AnalyzeError> {
     Ok(
-        list_candidates(storage, project_id, facets, false, reporter)
+        list_candidates(storage, project_id, discriminants, false, reporter)
             .await?
             .selected,
     )
 }
 
 /// Lists the project's stored objects once and partitions the recognized keys into
-/// the facet-selected candidates and, when `collect_siblings` is set, the
+/// the candidates selected by discriminant filters and, when `collect_siblings` is set, the
 /// machine-relaxed clean-run siblings (same engine and target triple, under a machine
 /// key the selection does not cover).
 ///
-/// Sibling discovery relaxes only the machine-key facet, so it never widens the
-/// selection: the selected set is exactly what [`facet_filtered_candidates`] returns.
+/// Sibling discovery relaxes only the machine-key filter, so it never widens the
+/// selection: the selected set is exactly what [`discriminant_filtered_candidates`] returns.
 /// It exists solely to let branch-mode analysis discover whether a newer base-side run
 /// for a lagging finding exists under a different machine key, without a second list
 /// round-trip.
 pub(crate) async fn list_candidates<S: Storage>(
     storage: &S,
     project_id: &str,
-    facets: &DiscriminantSetQuery,
+    discriminants: &DiscriminantSetQuery,
     collect_siblings: bool,
     reporter: &dyn Reporter,
 ) -> Result<CandidateListing, AnalyzeError> {
@@ -219,7 +220,10 @@ pub(crate) async fn list_candidates<S: Storage>(
             "project id: {project_id} (storage segment: {project})"
         ));
         notes.note(&format!("listing stored objects under prefix {prefix}"));
-        notes.note(&format!("facet filters: {}", describe_facets(facets)));
+        notes.note(&format!(
+            "discriminant filters: {}",
+            describe_discriminants(discriminants)
+        ));
     });
 
     let list_started = Instant::now();
@@ -227,13 +231,13 @@ pub(crate) async fn list_candidates<S: Storage>(
     reporter.timing("storage.list(prefix) round-trip", list_started.elapsed());
     reporter.note_with(|| format!("storage returned {}", count_noun(keys.len(), "object key")));
 
-    // Sibling discovery keeps the engine and target-triple facets but relaxes the
+    // Sibling discovery keeps the engine and target-triple filters but relaxes the
     // machine key, so a run under any machine key that shares the comparable axes can
     // surface as a potential newer base-side observation.
     let sibling_query = collect_siblings.then(|| DiscriminantSetQuery {
-        engine: facets.engine.clone(),
-        target_triple: facets.target_triple.clone(),
-        machine_key: FacetFilter::All,
+        engine: discriminants.engine.clone(),
+        target_triple: discriminants.target_triple.clone(),
+        machine_key: DiscriminantFilter::All,
     });
 
     let mut selected: Vec<(String, StorageKey)> = Vec::new();
@@ -249,7 +253,7 @@ pub(crate) async fn list_candidates<S: Storage>(
             });
             continue;
         };
-        let matches_selection = facets.matches(&parsed.set);
+        let matches_selection = discriminants.matches(&parsed.set);
         // A sibling is a clean run the selection does not cover but that shares the
         // comparable axes — the only base-side evidence that could explain a lagging
         // comparison base by machine-key rotation. `--machine-key all` selects every
@@ -272,7 +276,7 @@ pub(crate) async fn list_candidates<S: Storage>(
         } else {
             reporter.note_with(|| {
                 format!(
-                    "skipping {key}: discriminant {} does not match the facet filters",
+                    "skipping {key}: discriminant {} does not match the discriminant filters",
                     parsed.set
                 )
             });
@@ -280,7 +284,7 @@ pub(crate) async fn list_candidates<S: Storage>(
     }
     reporter.note_with(|| {
         format!(
-            "{} match the facet filters",
+            "{} match the discriminant filters",
             count_noun(selected.len(), "object")
         )
     });
@@ -644,30 +648,35 @@ mod tests {
     /// A discriminant-set query pinned to one engine/triple and machine key.
     fn query(engine: &str, triple: &str, machine: &str) -> DiscriminantSetQuery {
         DiscriminantSetQuery {
-            engine: FacetFilter::Auto(engine.to_owned()),
-            target_triple: FacetFilter::Auto(triple.to_owned()),
-            machine_key: FacetFilter::Auto(machine.to_owned()),
+            engine: DiscriminantFilter::Auto(engine.to_owned()),
+            target_triple: DiscriminantFilter::Auto(triple.to_owned()),
+            machine_key: DiscriminantFilter::Auto(machine.to_owned()),
         }
     }
 
     /// Lists candidates and siblings from `storage`, unwrapping the result.
     fn list(
         storage: &cbh_storage::MemoryStorage,
-        facets: &DiscriminantSetQuery,
+        discriminants: &DiscriminantSetQuery,
     ) -> CandidateListing {
-        list_reported(storage, facets).0
+        list_reported(storage, discriminants).0
     }
 
     /// Lists candidates and siblings, returning the recording reporter so a test can
     /// inspect the per-key diagnostics.
     fn list_reported(
         storage: &cbh_storage::MemoryStorage,
-        facets: &DiscriminantSetQuery,
+        discriminants: &DiscriminantSetQuery,
     ) -> (CandidateListing, cbh_diag::RecordingReporter) {
         let reporter = cbh_diag::RecordingReporter::new();
-        let listing =
-            futures::executor::block_on(list_candidates(storage, "folo", facets, true, &reporter))
-                .unwrap();
+        let listing = futures::executor::block_on(list_candidates(
+            storage,
+            "folo",
+            discriminants,
+            true,
+            &reporter,
+        ))
+        .unwrap();
         (listing, reporter)
     }
 
@@ -697,7 +706,7 @@ mod tests {
     fn a_retained_sibling_is_not_diagnosed_as_skipped() {
         // A machine-relaxed sibling is kept for lag classification, so its verbose note
         // must say it was retained, never that it was skipped for not matching the
-        // facets. A genuinely non-matching key (a dirty run) still reads as skipped.
+        // discriminants. A genuinely non-matching key (a dirty run) still reads as skipped.
         let storage = cbh_storage::MemoryStorage::new();
         let put = |key: &str| {
             futures::executor::block_on(storage.put(key, b"{}")).unwrap();

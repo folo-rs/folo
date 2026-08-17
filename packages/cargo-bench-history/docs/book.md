@@ -102,7 +102,7 @@ the commands that exercise them and down into the appendix for mechanism.
 | `backfill` | Reconstructs history over a first-parent commit range in an isolated worktree; resumable and idempotent. |
 | `analyze` | Reconstructs series from topology and reports regressions/drift; target/base/mode auto-selection; findings never set the exit code. |
 | `examine` | Drill-down from a finding to the raw per-commit points of one `(benchmark, metric)` series; no detection, no judgment. |
-| `list` | Preview the runs `analyze` would consume, catalog discriminants, or audit blessings without analyzing. |
+| `list` | Preview the runs `analyze` would consume, catalog discriminant sets, or audit blessings without analyzing. |
 | `prune` | Delete a chosen scope of stored data; `--dry-run` previews the exact deletion plan, and base-branch history needs an explicit confirm. |
 | `bless` / `unbless` | Manually accept an intentional change so history stops re-flagging it; per-benchmark; honored only in history mode. |
 | `machine-key` | Print the hardware fingerprint that all history is partitioned by; it hashes hardware identity only, and `--verbose` explains the factors. |
@@ -178,7 +178,7 @@ against and what a user reads when a finding does not make sense.
 | Index | The stages and the invariant each preserves; how to read the part; which chapter answers which question. |
 | 1. Shape of the data | What one benchmark produces per engine, and what the stored record holds — including the storage layer the rest of the guide never mentions. |
 | 2. Collection | What `collect` and `backfill` actually do, and how runs land on commits — including the gaps a heterogeneous runner pool leaves. |
-| 3. Selection | Which stored objects are even eligible, decided from keys and topology alone; facets, `--since`, base/context, and how mode is auto-detected. |
+| 3. Selection | Which stored objects are even eligible, decided from keys and topology alone; discriminant filters, `--since`, base/context, and how mode is auto-detected. |
 | 4. Reconstruction | How runs fold into series, and the four things that change what detection sees: ordering, gaps, ghosts, blessings. |
 | 5. Detection | What a signal is, which detector establishes it, and what each mode does and does not do. |
 | 6. Noise gates | Every gate, in application order, with its computation and its threshold — and that gates short-circuit. |

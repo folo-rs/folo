@@ -54,7 +54,7 @@ in [`DESIGN.md`](DESIGN.md).
 ```mermaid
 flowchart TD
   subgraph P1["Phase 1 — key-only filtering (no payload fetched)"]
-    L["list keys (one round-trip)"] --> KF["parse key + facet match"]
+    L["list keys (one round-trip)"] --> KF["parse key + discriminant match"]
     KF --> WF["history / dirty / since filter\n(commit time + topology)"]
     WF --> SK["sort survivors by storage key\n→ assign each a global ordinal"]
   end
@@ -158,11 +158,11 @@ After detection, branch mode discloses when a finding's comparison base lags the
 second listing:
 
 * **Phase 1 already retained the candidates.** The single project listing splits its keys into
-  the facet-selected candidates *and* the machine-relaxed clean-run siblings — exact `clean.json`
-  objects sharing the engine and triple under a machine key the selection does not cover. The
-  sibling keys pass the same on-history, base-side, and `--since` admission as the selection, so
-  classification starts from a compact, already-vetted key list without a second `list`
-  round-trip.
+  the candidates selected by discriminant filters *and* the machine-relaxed clean-run siblings —
+  exact `clean.json` objects sharing the engine and triple under a machine key the selection does
+  not cover. The sibling keys pass the same on-history, base-side, and `--since` admission as the
+  selection, so classification starts from a compact, already-vetted key list without a second
+  `list` round-trip.
 * **Evidence comes from loaded data first.** A lagging finding is a machine-key mismatch if a
   newer base-side clean point for its benchmark and metric exists under a sibling key. Under
   `--machine-key all` every key is already resident, so this is answered from the loaded series
@@ -243,9 +243,9 @@ keeping its own measurement clean.
 ## Seeing what was searched, always
 
 A third reporter channel runs **regardless of `--verbose`**: a single **effective-selection**
-line to standard error naming the facets actually queried — engine, target triple, and
-machine key, each tagged when it was auto-detected rather than typed — plus the resolved base
-branch and the `--since` cutoff. Auto-detection is convenient but invisible, and
+line to standard error naming the discriminant filters actually applied — engine, target
+triple, and machine key, each tagged when it was auto-detected rather than typed — plus the
+resolved base branch and the `--since` cutoff. Auto-detection is convenient but invisible, and
 this line makes it legible so a surprising result can be traced to *what* was searched before
 suspecting the data. It is one line by construction, so it neither buries the verbose notes
 nor perturbs the timing channel, and like both of them it stays on stderr to keep stdout a
@@ -254,9 +254,10 @@ clean stream of reports.
 The line is most valuable when a query comes back empty. When the effective — possibly
 auto-detected — partition holds no stored runs at all, the stdout report's hint names that
 partition and suggests widening it (for instance `--target-triple all`), so an
-auto-detected facet that quietly missed is distinguished from a genuinely empty project. The
+auto-detected filter that quietly missed is distinguished from a genuinely empty project. The
 other selection-driven commands emit the same line through one shared announcement builder:
-`list`, `prune`, and `examine` name the same facets, base branch, and `--since` cutoff, while
-the `bless` / `unbless` mutation commands name the facets and the context commit they act at
+`list`, `prune`, and `examine` name the same discriminant filters, base branch, and `--since`
+cutoff, while the `bless` / `unbless` mutation commands name the discriminant filters and the
+context commit they act at
 (`bless` also names its base branch), so the wording is identical wherever auto-detection can
 surprise you.

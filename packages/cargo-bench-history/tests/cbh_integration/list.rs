@@ -73,12 +73,12 @@ async fn list_previews_the_analyzed_data_set() {
     );
 }
 
-/// `list` mirrors `analyze`'s facet selection: with two comparable sets present, a
+/// `list` mirrors `analyze`'s discriminant selection: with two comparable sets present, a
 /// `--target-triple` filter previews only the matching set, exactly as `analyze`
 /// would scope it.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn list_facet_selection_mirrors_analyze() {
+async fn list_discriminant_selection_mirrors_analyze() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.commit_dated("2024-01-01", "c1");
     workspace.seed_callgrind_in(

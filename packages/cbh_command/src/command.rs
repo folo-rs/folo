@@ -584,7 +584,7 @@ impl Default for BackfillOptions {
 
 /// Options for the `bless` command.
 ///
-/// The data-set-selection options mirror the facet subset of [`AnalyzeOptions`]
+/// The data-set-selection options mirror the discriminant subset of [`AnalyzeOptions`]
 /// (engine, target triple, and machine key) so a `bless` writes its sidecars into
 /// exactly the discriminant sets a matching `analyze` would consume. It always
 /// acts at the current commit (`HEAD`), so it has no `context` / `since` /
@@ -626,7 +626,7 @@ pub struct BlessOptions {
 
 /// Options for the `unbless` command.
 ///
-/// Mirrors [`BlessOptions`]' selection facets but takes no prefixes: an unbless
+/// Mirrors [`BlessOptions`]' discriminant filters but takes no prefixes: an unbless
 /// removes every blessing recorded at the current commit in the selected sets
 /// (sidecars are immutable, so editing a blessing means unblessing then
 /// re-blessing the subset to keep).
