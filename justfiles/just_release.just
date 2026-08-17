@@ -12,6 +12,16 @@ prepare-release: verify-semver-checks && check-never-published
     Write-Verbose "Bumping versions and changelogs via 'release-plz update'" -Verbose
     release-plz update
 
+    # release-plz bumps each manifest to its computed next version, but on a *major* bump it can
+    # leave the shared Cargo.lock's entry for that package at a patch bump (e.g. manifest -> 0.2.0
+    # while the lockfile records 0.0.10). The whole workspace shares one Cargo.lock, so that single
+    # stale entry breaks every `cargo build --locked` on main and in the release binary builds.
+    # `cargo update --workspace` re-syncs only the workspace members' own versions in the lockfile;
+    # registry dependencies already present stay pinned, so this reconciles the manifests and the
+    # lockfile without churning third-party versions.
+    Write-Verbose "Reconciling Cargo.lock with the bumped manifests via 'cargo update --workspace'" -Verbose
+    cargo update --workspace
+
 # Preflight for `just prepare-release`: proves that `cargo semver-checks` can actually run on
 # this machine before `release-plz update` starts trusting it. release-plz runs
 # cargo-semver-checks to decide whether a bumped version needs to be a *major* bump, but when the
