@@ -184,20 +184,16 @@ suggests.
 ## Reading a gate ladder
 
 Each detector's gates form a **ladder**: the candidate meets them in order and stops at the first
-that declines it. The figures below plot a ladder as one bar per gate, each bar showing how far
-the candidate cleared — or fell short of — that gate's demand. The demand sits at the same place
-on every row, so a bar reaching past the line cleared and a bar short of it did not, and the raw
-figures are printed alongside because a chance level, a percentage and a nanosecond count cannot
-honestly share an axis. Lower-is-better gates such as a p-value are inverted, so "further past the
-line" always reads as "cleared by more".
+that declines it. The tables below show one row per gate, in the order the detector applies them.
+The demand is what the gate required, the computed value is what the candidate supplied, and the
+verdict states the outcome. A numeric gate passes when the computed value clears the demand. A
+boolean gate must simply hold. Once a gate declines, the rows below it show `not run`.
 
 A candidate that clears every gate:
 
-{{#include generated/gates-ladder-pass.svg}}
+{{#include generated/gates-ladder-pass.md}}
 
-And one that is declined — the short bar is the gate that stopped it, and nothing below it ran:
-
-{{#include generated/gates-ladder-declined.svg}}
+And one that is declined:
 
 {{#include generated/gates-ladder-declined.md}}
 

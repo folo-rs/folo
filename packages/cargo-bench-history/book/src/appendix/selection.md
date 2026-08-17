@@ -42,16 +42,19 @@ flowchart LR
     b0["·"] --> b1["·"] --> MB["merge base"]
     MB --> t1["·"] --> T["context = HEAD"]
     MB -. "base branch continues" .-> B["base tip"]
-    subgraph baseside["base-side — at or before the merge base"]
+    subgraph baseside["base-side"]
         b0
         b1
         MB
     end
-    subgraph targetside["target-side — after the merge base"]
+    subgraph targetside["target-side"]
         t1
         T
     end
 ```
+
+Everything in the left box is base-side (at or before the merge base); everything in the right
+box is target-side (after it).
 
 If the base cannot be resolved, or shares no ancestor with the context, that is a **hard
 error** — not a silent fallback. The usual cause is a shallow CI clone; fetch full history, or

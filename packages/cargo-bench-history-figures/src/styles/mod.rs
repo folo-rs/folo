@@ -5,11 +5,10 @@
 //! same visual language it had before — which is only true because no figure is drawn
 //! ad hoc.
 //!
-//! Most data figures compose [`plot::Plot`]; the styles that do not (a gate ladder, a
-//! stacked census bar) are shapes a value-against-position plot cannot express.
+//! Most data figures compose [`plot::Plot`]; the styles that do not are shapes a
+//! value-against-position plot cannot express.
 
 pub mod gates;
-pub mod ladder;
 pub mod multiplicity;
 pub mod occupancy;
 pub mod operation;

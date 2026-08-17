@@ -17,7 +17,6 @@ use cbh_model::MetricKind;
 
 use crate::assets::Asset;
 use crate::styles::gates::{Agreement, Residuals};
-use crate::styles::ladder::{Ladder, Rung, Verdict};
 use crate::styles::operation::Operation;
 use crate::styles::plot::{Mark, Observation, Plot};
 use crate::theme;
@@ -292,6 +291,46 @@ enum Reading {
     Boolean,
 }
 
+/// What a gate did with the candidate in a rendered gate-ladder row.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Verdict {
+    /// The candidate cleared the gate and moved on to the next one.
+    Passed,
+
+    /// The gate declined the candidate; nothing below it ran.
+    Declined,
+
+    /// The gate never ran because an earlier gate declined the candidate.
+    NotReached,
+}
+
+impl Verdict {
+    /// The word the table uses for this outcome.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Passed => "pass",
+            Self::Declined => "**declined**",
+            Self::NotReached => "not run",
+        }
+    }
+}
+
+/// One gate's row in a gate-ladder table.
+#[derive(Clone, Debug)]
+struct Rung {
+    /// The gate's identifier, as the appendix refers to it.
+    gate: String,
+
+    /// What the gate computed from the candidate.
+    value: String,
+
+    /// What the gate required.
+    threshold: String,
+
+    /// What the gate did.
+    verdict: Verdict,
+}
+
 /// How `gate` reads on the page.
 fn reading(gate: Gate) -> Reading {
     match gate {
@@ -303,47 +342,6 @@ fn reading(gate: Gate) -> Reading {
         Gate::Significance => Reading::Chance,
         Gate::RegimeSeparation => Reading::Share,
     }
-}
-
-/// Whether `gate` is cleared by coming in *under* its threshold.
-///
-/// The ladder draws a clearance multiple, so these gates invert value and threshold. Drawn
-/// as computed-over-demanded, a decisive chance level would read as a bar of almost
-/// nothing.
-fn clears_from_below(gate: Gate) -> bool {
-    matches!(gate, Gate::Significance)
-}
-
-/// How far a gate cleared or missed, as the direction-adjusted multiple the ladder draws.
-///
-/// A value above one means the gate cleared. Gates that clear from below invert value and
-/// threshold, so a smaller p-value produces a larger clearance multiple.
-///
-/// `None` when the gate has no value/threshold pair to compare: a boolean hold, a
-/// not-reached row, or a comparison against zero. Those rows are drawn as a status
-/// marker rather than a fabricated bar.
-fn clearance_multiple_of(outcome: &GateOutcome) -> Option<f64> {
-    let (Some(value), Some(threshold)) = (outcome.value, outcome.threshold) else {
-        return None;
-    };
-
-    let multiple = if clears_from_below(outcome.gate) {
-        if value <= 0.0 {
-            // A value of zero clears any positive threshold by an unbounded margin, which
-            // is a division the bar cannot express and does not need to.
-            return None;
-        }
-        threshold / value
-    } else {
-        if threshold <= 0.0 {
-            // The non-zero-delta gate demands nothing but a difference, so there is no
-            // margin to draw.
-            return None;
-        }
-        value / threshold
-    };
-
-    multiple.is_finite().then_some(multiple)
 }
 
 /// What a gate's outcome computed, and what it demanded, rendered for the page.
@@ -386,7 +384,6 @@ fn rungs(log: &GateLog, stage: GateStage, kind: MetricKind) -> Vec<Rung> {
                 gate: outcome.gate.label().to_owned(),
                 value,
                 threshold,
-                clearance_multiple: clearance_multiple_of(outcome),
                 verdict: if outcome.passed {
                     Verdict::Passed
                 } else {
@@ -396,7 +393,7 @@ fn rungs(log: &GateLog, stage: GateStage, kind: MetricKind) -> Vec<Rung> {
         })
         .collect();
 
-    // Only the gates below the veto are drawn as not reached. A gate the detector skipped
+    // Only the gates below the veto are rendered as not run. A gate the detector skipped
     // for want of an input — an interval gate on an engine that reports none — was not cut
     // off by anything, and drawing it here would claim a short-circuit that never happened.
     let Some(declining) = log.declined_by_stage(stage) else {
@@ -405,17 +402,28 @@ fn rungs(log: &GateLog, stage: GateStage, kind: MetricKind) -> Vec<Rung> {
     let config = AnalysisConfig::default();
     rungs.extend(gates_below(stage, declining).into_iter().map(|gate| Rung {
         gate: gate.label().to_owned(),
-        value: "not reached".to_owned(),
+        value: "not run".to_owned(),
         threshold: demanded(&config, gate, stage),
-        clearance_multiple: None,
         verdict: Verdict::NotReached,
     }));
     rungs
 }
 
-/// A ladder captioned `caption` over `rungs`.
-fn ladder(caption: &str, rungs: Vec<Rung>) -> Ladder {
-    rungs.into_iter().fold(Ladder::new(caption), Ladder::rung)
+/// A gate ladder rendered as a Markdown table.
+fn ladder_table(rungs: &[Rung]) -> String {
+    let mut markdown = String::from("| Gate | Demand | Computed | Verdict |\n|---|---|---|---|\n");
+    for rung in rungs {
+        writeln!(
+            markdown,
+            "| `{}` | {} | {} | {} |",
+            rung.gate,
+            rung.threshold,
+            rung.value,
+            rung.verdict.label()
+        )
+        .expect("writing to a String never fails");
+    }
+    markdown
 }
 
 /// The confidence-interval half-width an engine measuring `values` would report.
@@ -470,7 +478,7 @@ fn declined_candidate() -> Series {
     );
     let series = examples::series("parse_headers", &values, EXAMPLE_KIND, 0);
     // The interval gates sit below the gate that declines this candidate, so the ladder
-    // draws them as not reached — which is only honest if the series carries intervals for
+    // table marks them as not run — which is only honest if the series carries intervals for
     // them to have read.
     examples::with_intervals(series, reported_half_width(&values))
 }
@@ -479,24 +487,17 @@ fn declined_candidate() -> Series {
 fn ladders() -> Vec<Asset> {
     let passing = passing_candidate();
     let (_, passing_log) = judge(&passing);
-    let passing_ladder = ladder(
-        "a step that clears every gate",
-        rungs(&passing_log, GateStage::ChangePoint, passing.kind),
-    );
+    let passing_rungs = rungs(&passing_log, GateStage::ChangePoint, passing.kind);
 
     let declined = declined_candidate();
     let (_, declined_log) = judge(&declined);
-    let declined_ladder = ladder(
-        "a step the series' own scatter explains",
-        rungs(&declined_log, GateStage::ChangePoint, declined.kind),
-    );
+    let declined_rungs = rungs(&declined_log, GateStage::ChangePoint, declined.kind);
 
     vec![
-        Asset::new("gates-ladder-pass.svg", passing_ladder.render()),
-        Asset::new("gates-ladder-declined.svg", declined_ladder.render()),
+        Asset::new("gates-ladder-pass.md", ladder_table(&passing_rungs)),
         Asset::new(
             "gates-ladder-declined.md",
-            declined_fragment(&declined_log, declined.kind),
+            declined_fragment(&declined_log, declined.kind, &declined_rungs),
         ),
     ]
 }
@@ -506,7 +507,7 @@ fn ladders() -> Vec<Asset> {
 /// The gate is read from the log rather than from what the example was built to
 /// demonstrate, so a candidate that starts falling somewhere else renames the sentence
 /// instead of leaving the chapter asserting a decision the detector no longer makes.
-fn declined_fragment(log: &GateLog, kind: MetricKind) -> String {
+fn declined_fragment(log: &GateLog, kind: MetricKind, rungs: &[Rung]) -> String {
     let Some(gate) = log.declined_by_stage(GateStage::ChangePoint) else {
         return "> **Reported**, unexpectedly. This example is documented as being \
                 declined, so this fragment means the two have diverged.\n"
@@ -520,12 +521,10 @@ fn declined_fragment(log: &GateLog, kind: MetricKind) -> String {
             format!("The detector computed {value}, against a demand of {threshold}.")
         },
     );
-
     format!(
-        "> **Declined** by `{}`.\n>\n\
-         > {detail}\n>\n\
-         > The gates below it never ran, which is why the ladder stops where it does.\n",
+        "**Declined** by `{}`. {detail} The gates below it never ran.\n\n{}",
         gate.label(),
+        ladder_table(rungs)
     )
 }
 
@@ -974,10 +973,9 @@ mod tests {
     }
 
     /// Every asset the chapter includes, by the name it includes it under.
-    const EMBEDDED: [&str; 10] = [
+    const EMBEDDED: [&str; 9] = [
         "gates-order.md",
-        "gates-ladder-pass.svg",
-        "gates-ladder-declined.svg",
+        "gates-ladder-pass.md",
         "gates-ladder-declined.md",
         "gates-absolute-floor.svg",
         "gates-floors.md",
@@ -1013,7 +1011,7 @@ mod tests {
     }
 
     #[test]
-    fn the_declined_ladder_stops_at_the_gate_the_detector_declined_at() {
+    fn the_declined_ladder_marks_gates_below_the_decline_as_not_run() {
         let series = declined_candidate();
         let (finding, log) = judge(&series);
         let declining = log
@@ -1032,6 +1030,14 @@ mod tests {
             declined.first().map(|rung| rung.gate.as_str()),
             Some(declining.label())
         );
+        assert!(
+            rungs
+                .iter()
+                .skip_while(|rung| rung.verdict != Verdict::Declined)
+                .skip(1)
+                .all(|rung| rung.verdict == Verdict::NotReached),
+            "every rung below the decline must be marked not run: {rungs:?}"
+        );
     }
 
     /// The fragment is the chapter's only prose statement of why the candidate fell, so it
@@ -1049,14 +1055,16 @@ mod tests {
 
         assert!(fragment.contains(declining.label()), "{fragment}");
         assert!(fragment.contains("Declined"));
+        assert!(fragment.contains("| Gate | Demand | Computed | Verdict |"));
     }
 
     #[test]
-    fn the_passing_ladder_shows_every_gate_passing() {
+    fn the_passing_ladder_table_shows_every_gate_passing() {
         let series = passing_candidate();
         let (finding, log) = judge(&series);
 
         let rungs = rungs(&log, GateStage::ChangePoint, series.kind);
+        let table = content("gates-ladder-pass.md");
 
         assert!(finding.is_some(), "the passing example must report");
         assert_eq!(log.declined_by_stage(GateStage::ChangePoint), None);
@@ -1065,6 +1073,15 @@ mod tests {
             rungs.iter().all(|rung| rung.verdict == Verdict::Passed),
             "every rung must read as passed: {rungs:?}"
         );
+        for rung in rungs {
+            assert!(
+                table.contains(&format!(
+                    "| `{}` | {} | {} | pass |",
+                    rung.gate, rung.threshold, rung.value
+                )),
+                "{table}"
+            );
+        }
     }
 
     /// The passing candidate is the chapter's complete-shape ladder, so it has to reach
@@ -1378,22 +1395,6 @@ mod tests {
 
         assert_eq!(value, "held");
         assert_eq!(threshold, "must hold");
-        assert_eq!(clearance_multiple_of(&outcome), None);
-    }
-
-    /// A gate cleared by coming in under its threshold must still draw as cleared.
-    #[test]
-    fn a_gate_cleared_from_below_draws_past_the_line() {
-        let series = passing_candidate();
-        let (_, log) = judge(&series);
-        let outcome = outcome_of(&log, GateStage::ChangePoint, Gate::Significance)
-            .expect("the passing example reaches the significance gate");
-
-        assert!(outcome.passed);
-        assert!(
-            clearance_multiple_of(&outcome).is_some_and(|multiple| multiple > 1.0),
-            "a gate cleared from below must draw past the line"
-        );
     }
 
     #[test]

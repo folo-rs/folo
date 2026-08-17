@@ -498,40 +498,62 @@ const LAG_DISTANCES: [(usize, ComparisonBaseLagReason); 2] = [
     (1, ComparisonBaseLagReason::NoRecentBaseData),
 ];
 
-/// The comparison base position in the lag illustration.
+/// The base-side measurements available for the tip's machine key.
 ///
-/// Set far enough behind the tip to leave a visible run of commits without same-key base data.
-const LAG_FIGURE_BASE: usize = 3;
+/// Light variation keeps the figure reading as real measured history while staying close
+/// enough to one level that the branch tip is the visible move.
+const LAG_FIGURE_BASE_VALUES: [f64; 8] = [99.8, 100.3, 99.9, 100.2, 99.7, 100.1, 100.4, 100.0];
+
+/// How many base-side commits have no data for the tip's machine key.
+const LAG_FIGURE_GAP_COMMITS: usize = 4;
+
+/// The newest base commit that carries same-key data.
+fn lag_figure_base_position() -> usize {
+    LAG_FIGURE_BASE_VALUES.len().saturating_sub(1)
+}
 
 /// The branch tip position in the lag illustration.
-const LAG_FIGURE_TIP: usize = 10;
-
-/// The level measured at the older matching base commit.
-const LAG_FIGURE_BASE_LEVEL: f64 = 100.0;
+fn lag_figure_tip_position() -> usize {
+    LAG_FIGURE_BASE_VALUES
+        .len()
+        .saturating_add(LAG_FIGURE_GAP_COMMITS)
+}
 
 /// The level measured at the branch tip.
 const LAG_FIGURE_TIP_LEVEL: f64 = 130.0;
 
 /// The topology shape behind a comparison-base lag warning.
 fn lag_figure() -> String {
+    let comparison_base = lag_figure_base_position();
+    let tip = lag_figure_tip_position();
+    let base_observations = LAG_FIGURE_BASE_VALUES
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let observation = Observation::new(index, value);
+            if index == comparison_base {
+                observation.marked(Mark::Focus)
+            } else {
+                observation
+            }
+        });
+    let tip_observation = Observation::new(tip, LAG_FIGURE_TIP_LEVEL).marked(Mark::Regression);
+
     Plot::new(
         "same machine key: the comparison reaches back to older base data",
-        LAG_FIGURE_TIP.saturating_add(1),
+        tip.saturating_add(1),
     )
     .value_label("ns")
     .scattered()
-    .observations([
-        Observation::new(LAG_FIGURE_BASE, LAG_FIGURE_BASE_LEVEL).marked(Mark::Focus),
-        Observation::new(LAG_FIGURE_TIP, LAG_FIGURE_TIP_LEVEL).marked(Mark::Regression),
-    ])
+    .observations(base_observations.chain(std::iter::once(tip_observation)))
     .band(
-        LAG_FIGURE_BASE.saturating_add(1),
-        LAG_FIGURE_TIP.saturating_sub(1),
+        comparison_base.saturating_add(1),
+        tip.saturating_sub(1),
         "no same-key base data",
         theme::MUTED,
     )
-    .split(LAG_FIGURE_BASE, "comparison base")
-    .split(LAG_FIGURE_TIP, "branch tip")
+    .split(comparison_base, "comparison base")
+    .split(tip, "branch tip")
     .render()
 }
 
