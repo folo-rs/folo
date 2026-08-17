@@ -547,17 +547,17 @@ fn describe_removal(store: &[Partition], stage: RemovedBy) -> String {
 /// than transcribed beside it and cannot drift from it.
 fn mode_table() -> String {
     let mut markdown = String::from(
-        "| Context tip equals the merge base | Dirty run admitted on the context tip | \
+        "| Context commit equals the merge base | Dirty run admitted on the context commit | \
          Mode |\n|---|---|---|\n",
     );
-    for tip_is_merge_base in [true, false] {
-        for dirty_run_on_tip in [false, true] {
+    for context_is_merge_base in [true, false] {
+        for dirty_run_on_context in [false, true] {
             writeln!(
                 markdown,
                 "| {} | {} | `{}` |",
-                yes_no(tip_is_merge_base),
-                yes_no(dirty_run_on_tip),
-                auto_mode(tip_is_merge_base, dirty_run_on_tip).as_str(),
+                yes_no(context_is_merge_base),
+                yes_no(dirty_run_on_context),
+                auto_mode(context_is_merge_base, dirty_run_on_context).as_str(),
             )
             .expect("writing to a String never fails");
         }
@@ -578,8 +578,8 @@ fn yes_no(signal: bool) -> &'static str {
 const DIRTY_EXCURSION: f64 = 1.15;
 
 /// Where the admission figure's dirty runs sit: one ordinary base-side commit, and
-/// the analyzed tip. Official view treats every commit as base-side, so only the tip
-/// can take the dirty-tree exception.
+/// the analyzed context commit. Official view treats every commit as base-side, so
+/// only the context commit can take the dirty-tree exception.
 const ADMISSION_DIRTY: [usize; 2] = [12, SPAN - 1];
 
 /// How far above the excluded dirty run its label is placed.
@@ -607,8 +607,9 @@ fn admission_runs() -> Vec<(Observation, bool)> {
     runs
 }
 
-/// Official-view admission: the merge base is the tip, so only a dirty run at that
-/// tip is admitted, and only because the working tree is currently dirty.
+/// Official-view admission: the merge base is the context commit, so only a dirty
+/// run at that commit is admitted, and only because the working tree is currently
+/// dirty.
 fn dirty_admission() -> Panes {
     let runs = admission_runs();
     let base_side_dirty_position = ADMISSION_DIRTY[0];
@@ -619,13 +620,14 @@ fn dirty_admission() -> Panes {
         })
         .expect("the admission figure has one base-side dirty run");
     let ancestry: Vec<String> = (0..SPAN).map(|position| format!("{position}")).collect();
-    let tip = ancestry
+    let context_commit = ancestry
         .last()
         .expect("the admission figure covers more than one commit")
         .clone();
-    // Official view: merge base is the tip. The working tree is dirty, so the tip's
-    // dirty observation is the in-flight exception [`select_commits`] already encodes.
-    let selected = select_commits(&ancestry, Some(tip.as_str()), true, true);
+    // Official view: merge base is the context commit. The working tree is dirty, so
+    // that commit's dirty observation is the in-flight exception [`select_commits`]
+    // already encodes.
+    let selected = select_commits(&ancestry, Some(context_commit.as_str()), true, true);
 
     let before = Plot::new("every stored run", SPAN)
         .value_label("ns")
@@ -637,7 +639,7 @@ fn dirty_admission() -> Panes {
                 observation
             }
         }))
-        .split(SPAN.saturating_sub(1), "analyzed tip");
+        .split(SPAN.saturating_sub(1), "analyzed context commit");
 
     let after = Plot::new("admitted for this analysis", SPAN)
         .value_label("ns")
@@ -655,7 +657,7 @@ fn dirty_admission() -> Panes {
                 observation.marked(Mark::Removed)
             }
         }))
-        .split(SPAN.saturating_sub(1), "analyzed tip")
+        .split(SPAN.saturating_sub(1), "analyzed context commit")
         .note(
             base_side_dirty_position,
             base_side_dirty_value * DIRTY_EXCLUDED_NOTE_OFFSET,
@@ -664,8 +666,8 @@ fn dirty_admission() -> Panes {
         );
 
     Panes {
-        title: "a dirty run at the analyzed tip is admitted while the tree is dirty; \
-                earlier base-side dirty runs are not",
+        title: "a dirty run at the analyzed context commit is admitted while the tree is \
+                dirty; earlier base-side dirty runs are not",
         before,
         after,
     }
@@ -678,8 +680,8 @@ fn dirty_admission() -> Panes {
 /// How many commits of history the reconstruction figures cover.
 const RECONSTRUCTION_SPAN: usize = 16;
 
-/// The analyzed commit in those figures: the tip whose presence or absence decides what
-/// survives.
+/// The analyzed commit in those figures: the context commit whose presence or
+/// absence decides what survives.
 const RECONSTRUCTION_TIP: usize = 15;
 
 /// The levels the three series of one Callgrind benchmark sit at in the fold figure.
@@ -819,7 +821,7 @@ fn gap() -> Panes {
 }
 
 /// The last commit at which the ghost figure's benchmark was measured, leaving the
-/// analyzed tip without an observation.
+/// analyzed context commit without an observation.
 const GHOST_LAST_MEASURED: usize = 11;
 
 /// A benchmark absent at the analyzed commit, losing every one of its series.
@@ -1004,19 +1006,20 @@ mod tests {
         assert_eq!(kept, stated, "the grid and the table must agree");
     }
 
-    /// Official view admits a dirty run only at the tip, and only while the tree is dirty.
-    /// An absolute "never at or before the merge base" would hide that exception.
+    /// Official view admits a dirty run only at the context commit, and only while the
+    /// tree is dirty. An absolute "never at or before the merge base" would hide that
+    /// exception.
     #[test]
-    fn the_admission_figure_admits_only_the_dirty_tip_exception() {
+    fn the_admission_figure_admits_only_the_dirty_context_exception() {
         let ancestry: Vec<String> = (0..SPAN).map(|position| format!("{position}")).collect();
-        let tip = ancestry
+        let context_commit = ancestry
             .last()
             .expect("the admission figure covers more than one commit")
             .clone();
-        let selected = select_commits(&ancestry, Some(tip.as_str()), true, true);
+        let selected = select_commits(&ancestry, Some(context_commit.as_str()), true, true);
 
         let mid = ADMISSION_DIRTY[0];
-        let tip_position = ADMISSION_DIRTY[1];
+        let context_position = ADMISSION_DIRTY[1];
         assert!(
             !selected
                 .get(mid)
@@ -1025,9 +1028,9 @@ mod tests {
         );
         assert!(
             selected
-                .get(tip_position)
+                .get(context_position)
                 .is_some_and(|commit| commit.dirty.is_base_exception()),
-            "the tip dirty run is admitted only as the working-tree exception"
+            "the context dirty run is admitted only as the working-tree exception"
         );
         assert!(!dirty_admission().title.contains("never at or before"));
     }
@@ -1068,13 +1071,13 @@ mod tests {
     fn the_mode_table_matches_the_rule_for_every_combination() {
         let table = mode_table();
 
-        for tip_is_merge_base in [true, false] {
-            for dirty_run_on_tip in [false, true] {
-                let expected = auto_mode(tip_is_merge_base, dirty_run_on_tip);
+        for context_is_merge_base in [true, false] {
+            for dirty_run_on_context in [false, true] {
+                let expected = auto_mode(context_is_merge_base, dirty_run_on_context);
                 let row = format!(
                     "| {} | {} | `{}` |",
-                    yes_no(tip_is_merge_base),
-                    yes_no(dirty_run_on_tip),
+                    yes_no(context_is_merge_base),
+                    yes_no(dirty_run_on_context),
                     expected.as_str(),
                 );
 

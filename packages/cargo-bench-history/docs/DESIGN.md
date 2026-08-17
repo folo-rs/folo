@@ -487,25 +487,30 @@ resolvable git repository (the current checkout by default, or an explicit path)
 repo it errors rather than guessing an order. Analyzing a foreign project's data means
 checking out that project's repo and pointing `analyze` at it.
 
-Two refs frame the analysis: a **target** (`--context`, default `HEAD`) whose history is
-analyzed, and a **base** (`--base`, default the detected default branch). `analyze`
-resolves the first-parent ancestry of the target and splits it at the merge-base with the
-base: commits in the base ancestry contribute **clean points only**, while commits unique
-to the target contribute **clean and dirty** points (a flag drops the dirty ones). This
-single rule covers both use cases — an official view is `--context <default>` (everything
-is base, so clean-only), and the "how does my feature fit in" view is the default (clean
-base baseline plus the branch's own clean and dirty snapshots). Membership is purely
+Two refs frame the analysis: a **target** (`--context`, default `HEAD`) whose first-parent
+history is analyzed, and a **base** (`--base`, default the detected default branch). The
+target line is ordered independently because it is the line that `list`, `examine`, and
+`prune` display or maintain. When the merge-base lies on that target line, commits at or
+before it contribute **clean points only**, while commits unique to the target contribute
+**clean and dirty** points (a flag drops the dirty ones). When the base was merged into the
+target and the merge-base is off the target first-parent line, that split point is absent
+from the target line; branch mode still obtains its baseline from the base ref's own
+first-parent history. An official view remains `--context <default>` (everything is base,
+so clean-only), and the "how does my feature fit in" view remains the default (clean base
+baseline plus the branch's own clean and dirty snapshots). Membership is purely
 topological, so a dirty snapshot taken on a shared base commit is excluded from an official
 view until it is committed.
 
-Because that split is topological, the merge-base must be knowable. If the base ref cannot
-be resolved (no `--base`, no configured or detected default branch), or it shares no common
-ancestor with the target — typically a **shallow clone** whose fetched depth stops short of
-the branch point, or a checkout that never fetched the base branch — `analyze` **errors**
+Because the target/base relationship is topological, the merge-base must be knowable. If the
+base ref cannot be resolved (no `--base`, no configured or detected default branch), or it shares
+no common ancestor with the target — typically a **shallow clone** whose fetched depth stops short
+of the branch point, or a checkout that never fetched the base branch — `analyze` **errors**
 and points at the fix (deepen the clone with `git fetch --unshallow` / `fetch-depth: 0`, or
 pass an explicit `--base`) rather than silently treating the incomplete history as a
 base-branch view. The tool has no requirement to support shallow or otherwise anomalous
-history; an unknown topology is reported, not guessed around.
+history; an unknown topology is reported, not guessed around. A merge-base that is resolved
+but sits off the target first-parent line is supported in branch mode; the shared-history
+check succeeds, and the base ref supplies the comparison window directly.
 
 There is one carve-out to the clean-only base rule, for the common "first impressions"
 case where a user runs `analyze` on the base branch with uncommitted changes (for instance
@@ -520,12 +525,12 @@ by storage key. The `--since` cutoff drops whole runs older than it by each comm
 committer date (decided from topology before any out-of-window body is fetched); `--since`
 defaults to a six-month look-back in history mode, so a scheduled trend watch does not
 silently widen as history accumulates; branch mode applies no default, since a branch is
-judged against its base's recent commits whenever those landed and a window could only
+judged against its base ref's recent commits whenever those landed and a window could only
 starve that comparison. The cutoff is deliberately one-sided: `--context` already
-anchors the newest edge of the timeline (its first-parent tip, the merge-base split, and the
+anchors the newest edge of the timeline (its first-parent context commit and the
 ghost-detection reference), so a symmetric `--until` would only re-trim that same edge by
-timestamp — a topology-first tool moves the tip with `--context` instead — and is therefore
-omitted. Positional prefix subjects scope the analysis to benchmarks
+timestamp — a topology-first tool moves the context with `--context` instead — and is
+therefore omitted. Positional prefix subjects scope the analysis to benchmarks
 whose id starts with a prefix; there is no metric filter, since metrics are an internal
 detail users are not expected to know.
 
@@ -738,7 +743,7 @@ pointing at the unmatched benchmark id or metric name.
 `examine` runs **no detection and no re-baselining** — it has no findings, modes, or
 blessings, which is why the analysis-only improvements flag is not
 part of its surface. It lists **every commit** from the earliest one at which any matching
-set carries the series through to the analyzed tip: a commit carrying data contributes a row
+set carries the series through to the analyzed context commit: a commit carrying data contributes a row
 per **observation** (clean run before dirty snapshots, each flagged, so a value's provenance
 is unambiguous), and a commit carrying none is marked `n/a`. That opening is a union across
 the sets, so every set lists the same commits and two of them can be read side by side.
@@ -906,7 +911,7 @@ current comparison regime.
 The residual pool draws only from samples long enough to describe scatter. A sample of a single
 point is its own median, so it contributes a residual of exactly zero that says nothing about the
 dispersion the point was drawn from and only pulls the pooled median down. Leaving it out keeps
-the gate at full strength where it is otherwise weakest: branch mode compares one tip commit
+the gate at full strength where it is otherwise weakest: branch mode compares one context commit
 against a trailing regime that may be as short as the minimum regime size.
 
 Drift mirrors this: Mann–Kendall establishes the trend, Theil–Sen sizes it, and the total
@@ -914,15 +919,17 @@ movement must clear the practical floor and exceed the residual scatter about th
 line; the confidence-interval-width gate is applied additionally when intervals are present,
 again only able to suppress a candidate and never to create one.
 
-**Judging a branch tip.** Branch mode asks a different question — not "did this series change
-somewhere" but "is one new commit at this level surprising, given how much the base level
-moves from commit to commit?" — so it needs its own statistic. Two properties shape it:
+**Judging a context commit.** Branch mode asks a different question — not "did this series
+change somewhere" but "is one new commit at this level surprising, given how much the base
+ref's level moves from commit to commit?" — so it needs its own statistic. Two properties
+shape it:
 
 * **A commit is one observation.** Several stored runs at one commit are re-measurements of a
   single build on a single runner, not independent evidence about the base level, so each
   commit's runs collapse to that commit's median before anything is compared. What remains is
   the *between-commit* scatter, which is the only dispersion a new commit can be judged
-  against. The comparison window is counted in **commits** for the same reason: a
+  against. The base window is taken from the base ref's own first-parent history, anchored
+  at the base ref, and is counted in **commits** for the same reason: a
   run-counted window would shrink to a handful of commits on any repository that records
   several runs each, and would mean a different thing on every repository.
 
@@ -934,7 +941,7 @@ moves from commit to commit?" — so it needs its own statistic. Two properties 
   replicates it was given. On a store that records one run per commit, which is the shape
   continuous integration produces, the two modes see the same data and the asymmetry does not
   arise.
-* **One new observation, not a second sample.** The tip's level is judged against a
+* **One new observation, not a second sample.** The context commit's level is judged against a
   **Student-t prediction interval** for a single future observation drawn from the current base
   regime, so the interval carries the scatter of that regime's levels *plus* the uncertainty in
   their mean and widens correctly when the regime is short. The centre it measures from is that
@@ -954,15 +961,16 @@ moves from commit to commit?" — so it needs its own statistic. Two properties 
   interval at all — a timing regime that repeats one level exactly, so it carries neither observed
   scatter nor a quantum to stand in for one. Narrowing exists to move the comparison onto the
   level the branch merges into, not to withdraw it, so where the narrowed sample would be
-  unjudgeable the whole window stands and the tip is still compared.
+  unjudgeable the whole window stands and the context commit is still compared.
 
   That separation floor is held **above** the one a reported change point must clear, because the
   two decisions carry asymmetric costs. Reporting a move makes a claim a human then checks;
   accepting a boundary *discards evidence*, shrinking the comparison sample and rebuilding the
   scatter estimate from the trailing regime alone. A boundary drawn through a stationary
   oscillation can therefore collapse that estimate to a fraction of the window's true dispersion
-  and make the next ordinary tip read as a large, near-certain move — a far more damaging error
-  than a single over-eager report. A boundary that throws data away must be unambiguous. The
+  and make the next ordinary context run read as a large, near-certain move — a far more
+  damaging error than a single over-eager report. A boundary that throws data away must be
+  unambiguous. The
   statistic is coarse at these sample sizes (with the minimum regime on both sides its
   probability of superiority moves in steps of one twenty-fifth), so the floor is read as
   "essentially no pair of levels across the boundary may contradict it" rather than as a precise
@@ -981,8 +989,8 @@ moves from commit to commit?" — so it needs its own statistic. Two properties 
   Within whichever regime is selected, both the centre and the scale are deliberately
   non-robust. A settled base-side step moves them together onto one regime. Making only the scale
   robust while the centre stayed a mixed-window mean would be strictly worse: the mean would sit
-  between two levels and a tip agreeing exactly with the current level would read as displaced
-  from it.
+  between two levels and a context run agreeing exactly with the current level would read as
+  displaced from it.
 
   The scatter estimate is bounded below by the metric's **quantum** — the smallest difference a
   stored value can express. A counted metric moves in whole units, so a base window can repeat
@@ -1002,8 +1010,8 @@ Branch mode holds its **relative** floor above history's — a pull-request comm
 everyone who touches the branch, so a false alarm there costs more than a missed marginal
 move. That same relative floor applies to base-window regime splits: a base-side step too small
 to justify a branch finding is too small to justify discarding history. Where the engine reports
-per-point dispersion, two further vetoes apply: the base and tip intervals must not overlap, and
-the move must clear a multiple of the measurement noise band. Like every interval-derived check,
+per-point dispersion, two further vetoes apply: the base and context intervals must not overlap,
+and the move must clear a multiple of the measurement noise band. Like every interval-derived check,
 both can only *suppress* a candidate the other gates would report.
 
 Whichever test produces a finding also fixes its reported **confidence**, in both modes: the
@@ -1076,17 +1084,17 @@ it, selects branch mode — only while the tree is currently dirty. Auto-detecti
 known merge-base: an undeterminable one is a hard error (see the base-resolution rule above),
 never a silent fall-through to history.
 
-* **history** — the base-branch view: auto-selected when the analyzed tip *is* the
+* **history** — the base-branch view: auto-selected when the analyzed context commit *is* the
   merge-base with the base and no dirty run is recorded on top of it. It applies the
   long-range change-point and drift techniques, and reports regressions
   only by default (steady improvement on the base branch is expected; a flag opts into
   improvements).
-* **branch** — auto-selected otherwise (commits past the merge-base, or a dirty run
-  admitted on the base tip by the exception above). It judges the branch by its **tip
-  commit** against the recent base level — a branch's intermediate commits say nothing
-  about what merging it into the base will do, since only the tip lands there, so the
-  branch's own history is discarded and only the newest commit's runs are compared —
-  reporting both directions.
+* **branch** — auto-selected otherwise (commits past the merge-base, a context line whose
+  merge-base is off first-parent because the base was merged into the branch, or a dirty run
+  admitted on the base tip by the exception above). It judges the analyzed context commit
+  against the recent base-ref level — a branch's intermediate commits say nothing about the
+  state being evaluated, so the branch's own history is discarded and only the context
+  commit's newest runs are compared — reporting both directions.
 
 The two driving scenarios are a scheduled base-branch regression watch (history) and a
 per-PR feature-branch evaluation (branch). Long-range trend analysis is meaningless on one
@@ -1098,7 +1106,7 @@ testable (§8.3).
 |---|---|---|
 | Change-point (Pettitt + engine gating) | ✅ | — |
 | Monotonic drift (Mann–Kendall + Theil–Sen) | ✅ | — |
-| Tip commit vs. base (Student-t prediction interval) | — | ✅ |
+| Context commit vs. base (Student-t prediction interval) | — | ✅ |
 | Benjamini–Hochberg false-discovery filter | ✅ | ✅ |
 | Improvements reported | opt-in | ✅ |
 
@@ -1106,9 +1114,9 @@ Modes apply to `analyze` only; `list`, `prune`, and `examine` reuse the shared s
 options and pipeline but never analyze, so the mode selection and improvements flag are
 analyze-only and not part of the shared option model. The **ghost filter** (§7.3) is likewise
 analyze-only and outside that shared selection model: it applies in both modes, dropping —
-before detection — any benchmark absent at the context commit (the analyzed tip). In branch
+before detection — any benchmark absent at the context commit. In branch
 mode a benchmark removed on the branch is a ghost and a benchmark newly
-added on the branch is present and kept; dirty snapshots at the branch tip count as present
+added on the branch is present and kept; dirty snapshots at the context commit count as present
 via the base-tip dirty exception.
 
 ### 8.6 Re-baselining: blessings
@@ -1117,7 +1125,7 @@ A long history should not keep re-flagging an event a reviewer has already handl
 (see `bless`) re-baselines a series from the blessed commit forward: the detectors run on the
 **active segment only**, so the pre-blessing step is no longer re-flagged, while the earlier
 points still feed the chart and any long-range technique that needs context. Blessings are
-honoured **only in history mode** — branch mode judges the tip commit against the base, which is
+honoured **only in history mode** — branch mode judges the context commit against the base, which is
 treated as fully blessed by construction. A re-baselined finding records the blessing's commit
 and time for provenance.
 
@@ -1134,20 +1142,20 @@ materializes one column per commit from the first observation onward and draws a
 data-less commit as a **gap** (a broken line), so five missing commits read as five empty
 columns rather than collapsing into one. Leading gaps are trimmed — the line always opens
 on the first observation — while interior gaps are kept. A **trailing gap** from the last
-observation up to the analyzed tip is kept too: it is the visual form of the "no newer
+observation up to the analyzed context commit is kept too: it is the visual form of the "no newer
 data" disclosure, showing at a glance that the benchmark has not been measured on the most
 recent commits.
 
 The history-mode chart plots the whole series this way, so the long-range trend the finding
 is about stays visible alongside the earlier context kept for continuity. Branch mode charts
-differently: it judges only the **tip commit**, so it plots the detector's comparison
-baseline followed by the recent per-commit tail ending at the tip rather than the whole
-history, dropping the interior branch commits and representing the tip by a single column at
-its judged latest value. The gap between the newest base observation and that tip column is
-exactly the comparison-base lag (§8.8), drawn as empty interior columns. Charting the full,
-possibly months-long series would shrink the one commit that matters to an indistinct edge
-column; the bounded comparison chart keeps both the base level and the tip legible and
-unaliased.
+differently: it judges only the **context commit**, so it plots the detector's comparison
+baseline followed by the recent per-commit base-ref tail ending at the context commit rather
+than the whole history, dropping the interior branch commits and representing the context
+commit by a single column at its judged latest value. The gap between the newest base
+observation and that context column is exactly the comparison-base lag (§8.8), drawn as empty
+interior columns. Charting the full, possibly months-long series would shrink the one commit
+that matters to an indistinct edge column; the bounded comparison chart keeps both the base
+level and the context commit legible and unaliased.
 
 Both charts bin their columns to at most the fixed chart width **before** plotting: the
 underlying plotter resamples a series to its width with linear interpolation *before*
@@ -1162,7 +1170,7 @@ can attenuate an extreme falling inside it — the one detail binning gives up.
 ### 8.7 Report formats
 
 The three report formats carry the **same data** and differ only in presentation; the text
-layout is canonical. Each report names the **analyzed tip commit** — the commit whose line
+layout is canonical. Each report names the **analyzed context commit** — the commit whose line
 of history the findings describe — annotated `+ uncommitted changes` when the working tree
 was dirty, so a reader (or the auto-filed regression issue) can tie the report to an exact
 commit. Text goes to stdout as one paragraph per finding — the benchmark id on its own
@@ -1204,27 +1212,27 @@ never by the enumerating commands, and the retained-count is a fixed policy of t
 
 ### 8.8 Comparison-base lag (branch mode)
 
-Branch mode compares the tip against the recent base-side points of the *same* discriminant set.
-On rotating CI machine pools (§4) the newest base commits may carry data only under a different
-machine key, so the branch runner's key has usable base data only several commits behind the
-merge-base — the comparison silently reaches back in history. Counts are never compared across
-machine keys, so the tool cannot bridge that gap; it only **discloses** it.
+Branch mode compares the context commit against the recent base-ref first-parent points of the
+*same* discriminant set. On rotating CI machine pools (§4) the newest base-ref commits may carry
+data only under a different machine key, so the context run's key has usable base data only
+several commits behind the base ref — the comparison silently reaches back in history. Counts are
+never compared across machine keys, so the tool cannot bridge that gap; it only **discloses** it.
 
-Each surviving branch finding records the first-parent index of the newest base-side point it was
-actually compared against — its **comparison base**. A finding whose comparison base sits behind
-the merge-base *lags*, by the first-parent distance between the two. History mode has no single
-comparison base and never lags. The lag is measured from the detector's real comparison point, not
-from raw run occupancy: a partial run can be newer than the point a particular series was compared
-against, so occupancy would overstate coverage.
+Each surviving branch finding records the base-ref first-parent index of the newest base point it
+was actually compared against — its **comparison base**. A finding whose comparison base sits
+behind the base ref *lags*, by the first-parent distance between the two. History mode has no
+single comparison base and never lags. The lag is measured from the detector's real comparison
+point, not from raw run occupancy: a partial run can be newer than the point a particular series
+was compared against, so occupancy would overstate coverage.
 
 A lag is classified by *why* the newer base commits were unusable:
 
-* **discriminant set mismatch** — a newer base-side clean run for the same benchmark and metric
+* **discriminant set mismatch** — a newer base-ref clean run for the same benchmark and metric
   exists, but under a different machine key: pool rotation, not missing measurements.
-* **no base data at more recent commits** — no newer base-side run for that series exists at all.
+* **no base data at more recent commits** — no newer base-ref run for that series exists at all.
 
 Mismatch evidence is satisfied from the already-loaded series first (the whole story under
-`--machine-key all`, where every key is resident) and otherwise from the base-side clean runs under
+`--machine-key all`, where every key is resident) and otherwise from the base-ref clean runs under
 other machine keys found in the same partition listing, fetched lazily and only when a lagging
 finding could use them. Raw storage occupancy is only a discovery index — a partial run may omit the
 affected benchmark or metric — so a mismatch is asserted only from a parsed payload that actually
@@ -1259,14 +1267,14 @@ The accounting unit is the **series**, the unit the detectors judge, and it cove
 the analysis reconstructed, including those dropped before detection. Each unjudged series
 carries exactly one reason — the first that applies in pipeline order:
 
-* **not measured at the analyzed tip commit** — the ghost filter (§8.5) dropped it: the
-  benchmark is no longer part of the suite at the analyzed commit.
+* **not measured at the analyzed context commit** — the ghost filter (§8.5) dropped it: the
+  benchmark is no longer part of the suite at the analyzed context commit.
 * **too few points in the analyzed window** — shorter than the minimum the mode's detector
   evaluates (§8.2).
 * **too few points since its blessing** — long enough overall, but its active segment (§8.6)
   is not.
-* **not measured on the branch** — branch mode has no tip-side observation to judge.
-* **too few base-branch commits to compare against** — branch mode has a tip observation but
+* **not measured on the branch** — branch mode has no context observation to judge.
+* **too few base-ref commits to compare against** — branch mode has a context observation but
   too few base levels to build a prediction interval from.
 
 Ghosts are excluded from the denominator, so what a report takes its ratio against — and
@@ -1292,7 +1300,7 @@ Only `full` removes the coverage qualification from a silent report: the whole i
 was judged. The verdict remains "no notable changes detected" for those judged series: no
 reportable move survived the gates. Under every other state, some or all in-scope series were
 not judged. The states that judged nothing stay distinct because their remedies differ: look
-at collection, at the analyzed commit, or at the evidence the gates require.
+at collection, at the analyzed context commit, or at the evidence the gates require.
 
 The set of judged series is exactly the false-discovery family (§8.3), so what a report counts as
 judged is the same set the correction is computed over and the two cannot drift apart. The

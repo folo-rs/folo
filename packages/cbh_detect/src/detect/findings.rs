@@ -73,7 +73,7 @@ use serde::Serialize;
 
 use crate::detect::gate_log::{Gate, GateLog, GateStage, StageLog};
 use crate::detect::parallel::{balanced_chunk_sizes, worker_count};
-use crate::detect::{Series, SeriesPoint, noise_gates};
+use crate::detect::{BaseLevel, Series, SeriesPoint, noise_gates};
 
 /// Tunable parameters of the engine-aware analysis.
 ///
@@ -264,8 +264,8 @@ pub struct AnalysisConfig {
     /// Reporting a move makes a claim a human then checks; accepting a boundary
     /// *discards evidence*, shrinking the comparison sample to the trailing regime and
     /// rebuilding the scatter estimate from it alone — so a wrong boundary can collapse
-    /// a noisy window's dispersion to near zero and make any subsequent tip read as
-    /// certain. A boundary that throws data away must be unambiguous.
+    /// a noisy window's dispersion to near zero and make any subsequent context run
+    /// read as certain. A boundary that throws data away must be unambiguous.
     ///
     /// The statistic is coarse at these sample sizes, so at the default this reads as
     /// "essentially no crossing pair may contradict the boundary" rather than as a
@@ -304,18 +304,18 @@ impl Default for AnalysisConfig {
 /// Which analysis a [`find_changes_spawned`] pass performs.
 ///
 /// The mode is auto-detected by the caller from git topology and the admitted data
-/// set (a base branch whose tip is its own merge-base with no dirty run admitted on
-/// that tip is [`History`](AnalysisMode::History); commits — or an admitted dirty run
-/// — on top of the base make it [`Branch`](AnalysisMode::Branch)). The working tree
-/// affects the choice only indirectly, through the exception that admits a base-tip
-/// dirty run while the tree is dirty.
+/// set (a base ref whose context commit is its own merge-base with no dirty run
+/// admitted on that commit is [`History`](AnalysisMode::History); commits — or an
+/// admitted dirty run — on top of the base make it [`Branch`](AnalysisMode::Branch)).
+/// The working tree affects the choice only indirectly, through the exception that
+/// admits a dirty run at the context commit while the tree is dirty.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AnalysisMode {
     /// Long-range trend and change-point analysis over a base branch's history.
     History,
-    /// Latest-commit comparison of a feature branch's tip against its base,
-    /// ignoring the intermediate commits the branch passed through.
+    /// Latest context-run comparison against the base ref, ignoring the
+    /// intermediate commits the branch passed through.
     Branch,
 }
 
@@ -332,22 +332,26 @@ impl AnalysisMode {
 
 /// The context a [`find_changes_spawned`] pass runs in.
 ///
-/// Carries which analysis to perform, the tuned parameters, where the branch forks
-/// from its base (branch mode only), and whether improvements are reported
-/// alongside regressions.
+/// Carries which analysis to perform, the tuned parameters, the topology anchors
+/// the mode needs, and whether improvements are reported alongside regressions.
 #[derive(Clone, Copy, Debug)]
 pub struct AnalysisContext {
     /// The analysis to perform.
     pub mode: AnalysisMode,
     /// The tuned analysis parameters.
     pub config: AnalysisConfig,
-    /// First-parent topological index of the merge-base commit, splitting base-side
-    /// history from the branch. `None` means no split is known (every point is
-    /// treated as branch-side). Consulted only in [`AnalysisMode::Branch`].
+    /// First-parent topological index of the merge-base on the context line, when it
+    /// lies there. Branch detection does not derive its base window from this split;
+    /// it compares against [`Series::base_window`], which is loaded from the base ref.
     pub merge_base_index: Option<usize>,
-    /// First-parent topological index of the analyzed tip commit (the resolved
+    /// First-parent topological index of the base ref's resolved commit.
+    ///
+    /// Branch mode uses this base-ref coordinate to measure comparison-base lag and
+    /// to place the context commit just after the base ref in comparison charts.
+    pub base_ref_index: Option<usize>,
+    /// First-parent topological index of the analyzed context commit (the resolved
     /// `--context`/HEAD). History-mode chart building uses it as the trailing-fill
-    /// target so a series that stops short of the tip renders the data-less commits
+    /// target so a series that stops short of the context renders the data-less commits
     /// after its last observation as a gap. Consulted only in [`AnalysisMode::History`].
     pub tip_index: usize,
     /// Whether improvements are reported. History mode defaults to regressions only
@@ -383,7 +387,7 @@ impl AnalysisContext {
 /// silent report can say how much of the suite its silence covers.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum UnjudgedReason {
-    /// The benchmark carries no measurement at the analyzed tip commit, so it is no
+    /// The benchmark carries no measurement at the analyzed context commit, so it is no
     /// longer part of the suite and was dropped before detection.
     Ghost,
     /// History mode: the series carries fewer than
@@ -394,11 +398,11 @@ pub enum UnjudgedReason {
     /// measured since, so the evidence the blessing left standing is too thin to
     /// judge.
     TooFewPointsSinceBlessing,
-    /// Branch mode: the branch measured nothing for this series, so there is no
-    /// branch state to compare against the base.
+    /// Branch mode: the context commit measured nothing for this series, so there is no
+    /// context state to compare against the base.
     NotMeasuredOnBranch,
     /// Branch mode: the recent base window holds fewer than
-    /// [`min_series_points`](AnalysisConfig::min_series_points) base-side commit
+    /// [`min_series_points`](AnalysisConfig::min_series_points) base-ref commit
     /// levels, so there is not enough base evidence to judge the branch. A later
     /// regime split may compare against a shorter trailing regime, but only after
     /// this full-window evidence floor is met.
@@ -437,11 +441,11 @@ impl UnjudgedReason {
     #[must_use]
     pub fn describe(self) -> &'static str {
         match self {
-            Self::Ghost => "not measured at the analyzed tip commit",
+            Self::Ghost => "not measured at the analyzed context commit",
             Self::TooFewPoints => "with too few points in the analyzed window",
             Self::TooFewPointsSinceBlessing => "with too few points since being blessed",
             Self::NotMeasuredOnBranch => "not measured on the branch",
-            Self::TooFewBaseCommits => "with too few base-branch commits to compare against",
+            Self::TooFewBaseCommits => "with too few base-ref commits to compare against",
         }
     }
 }
@@ -622,8 +626,8 @@ pub struct Finding {
     /// confirmed the move).
     pub confidence: f64,
     /// Commit the change is attributed to, if known. For a change point this is the
-    /// first commit of the new level; for a branch comparison it is the tip; for a
-    /// drift it is the newest commit the trend reached (paired with
+    /// first commit of the new level; for a branch comparison it is the context
+    /// commit; for a drift it is the newest commit the trend reached (paired with
     /// [`window_start_commit`](Self::window_start_commit) to name the accumulation
     /// range, since a drift belongs to the whole window rather than one commit).
     pub commit: Option<String>,
@@ -639,21 +643,22 @@ pub struct Finding {
     /// Markdown reports can draw a chart; it is not part of the machine-readable JSON
     /// contract.
     pub series: Vec<SeriesValue>,
-    /// First-parent topological index of the newest base-side point in the comparison
-    /// sample — the series' *comparison base*. Set only in branch mode (`None` in history
-    /// mode, where there is no single comparison base). When branch mode discards stale
-    /// levels before an accepted base-side step, this remains the newest point of the
-    /// trailing regime, because lag classification answers how current the compared base
-    /// state is. Internal cross-crate analysis metadata that lets the analysis measure
-    /// how far the comparison base sits behind the merge-base; it is not part of the JSON
-    /// finding contract.
+    /// Base-ref first-parent index of the newest base datum in the comparison sample.
+    ///
+    /// Set only in branch mode (`None` in history mode, where there is no single
+    /// comparison base). When branch mode discards stale levels before an accepted
+    /// base-side step, this remains the newest point of the trailing regime, because
+    /// lag classification answers how current the compared base state is. Internal
+    /// cross-crate analysis metadata that lets the analysis measure how far the
+    /// comparison base sits behind the base ref; it is not part of the JSON finding
+    /// contract.
     pub comparison_base_index: Option<usize>,
     /// Trailing-fill target for the chart: the first-parent index the charted series
     /// extends to when its last observation stops short of it. `Some(tip_index)` in
     /// history mode, so the data-less commits between the last observation and the
-    /// analyzed tip render as a gap; `None` in branch mode, where the tip is the
-    /// always-present last column. Chart-only — like [`Finding::series`] it is not part
-    /// of the JSON finding contract.
+    /// analyzed context commit render as a gap; `None` in branch mode, where the
+    /// context commit is the always-present last column. Chart-only — like
+    /// [`Finding::series`] it is not part of the JSON finding contract.
     pub chart_base_ref: Option<usize>,
 }
 
@@ -714,9 +719,9 @@ fn series_value_of(point: &SeriesPoint) -> SeriesValue {
 /// `Series.points`, never this series.
 ///
 /// History mode maps every source point 1:1 and returns `Some(context.tip_index)` as
-/// the trailing-fill target, so a series that stops short of the analyzed tip renders
-/// the intervening commits as the "no newer data" gap. Branch mode collapses the series
-/// (see [`branch_chart_series`]).
+/// the trailing-fill target, so a series that stops short of the analyzed context
+/// commit renders the intervening commits as the "no newer data" gap. Branch mode
+/// collapses the series (see [`branch_chart_series`]).
 fn build_chart_series(
     source: &Series,
     finding: &Finding,
@@ -733,18 +738,16 @@ fn build_chart_series(
 
 /// The branch-collapsed chart series and its (absent) trailing-fill target.
 ///
-/// Branch mode judges the branch's tip commit alone, so the chart keeps the base-side
-/// points at their real `topo_index`, including any stale pre-step base levels that
-/// detection deliberately ignored, drops every interior branch commit, and represents
-/// the tip by a single point carrying the finding's judged `latest` value at
-/// `merge_base_index + 1`. The chart is context rather than the comparison sample; when
-/// the detector narrows to a trailing base regime, the older base points remain visible
-/// so the base-side shift is understandable. The trailing-fill target is `None` — the
-/// tip is the always-present last column. The gap between the last base point (at the
-/// comparison base) and the tip therefore spans exactly
-/// `merge_base - comparison_base` (`commits_behind`) columns.
+/// Branch mode judges the context commit alone, so the chart keeps the base ref's
+/// comparison-window levels at their real base-ref `topo_index`, including any stale
+/// pre-step base levels that detection deliberately ignored, drops every interior
+/// context commit, and represents the context by a single point just after the base
+/// ref. The chart is context rather than the comparison sample; when the detector
+/// narrows to a trailing base regime, the older base points remain visible so the
+/// base-side shift is understandable. The trailing-fill target is `None` — the
+/// context is the always-present last column.
 ///
-/// A real branch finding always carries a known merge-base and comparison base; the
+/// A real branch finding always carries a known base ref and comparison base; the
 /// fallback to a plain whole-series chart is defensive (never a panic) for a finding
 /// that somehow lacks either.
 fn branch_chart_series(
@@ -753,21 +756,28 @@ fn branch_chart_series(
     context: &AnalysisContext,
 ) -> (Vec<SeriesValue>, Option<usize>) {
     debug_assert!(
-        context.merge_base_index.is_some() && finding.comparison_base_index.is_some(),
-        "a branch finding always carries a known merge-base and comparison base",
+        context.base_ref_index.is_some() && finding.comparison_base_index.is_some(),
+        "a branch finding always carries a known base ref and comparison base",
     );
-    let (Some(merge_base_index), Some(_)) =
-        (context.merge_base_index, finding.comparison_base_index)
-    else {
+    let Some(base_ref_index) = context.base_ref_index else {
         return (source.points.iter().map(series_value_of).collect(), None);
     };
-    let (base, branch) = split_at_merge_base(&source.points, Some(merge_base_index));
-    let mut series: Vec<SeriesValue> = base.iter().copied().map(series_value_of).collect();
+    let mut series: Vec<SeriesValue> = source
+        .base_window
+        .iter()
+        .map(|level| SeriesValue {
+            commit: None,
+            value: level.value,
+            dirty: false,
+            topo_index: level.topo_index,
+        })
+        .collect();
+    let latest = latest_context_run(&source.points, context.tip_index);
     series.push(SeriesValue {
         commit: finding.commit.clone(),
         value: finding.latest,
-        dirty: branch.last().is_some_and(|point| point.dirty),
-        topo_index: merge_base_index.saturating_add(1),
+        dirty: latest.last().is_some_and(|point| point.dirty),
+        topo_index: base_ref_index.saturating_add(1),
     });
     (series, None)
 }
@@ -914,6 +924,43 @@ fn regime_intervals_are_disjoint(
     )
 }
 
+/// Whether a branch base window's interval stands apart from the context run.
+///
+/// Branch mode collapses each base-ref commit before comparison, so the base-side
+/// interval is reconstructed from those per-commit intervals rather than from raw
+/// points. Like [`regime_intervals_are_disjoint`], this is a one-way veto: if either
+/// side lacks interval evidence the gate abstains, because absent dispersion cannot
+/// prove overlap.
+fn base_intervals_are_disjoint(
+    before: &[BaseLevel],
+    after: &[&SeriesPoint],
+    log: &mut StageLog<'_>,
+) -> bool {
+    let (Some(before_ci), Some(after_ci)) = (base_interval(before), regime_interval(after)) else {
+        return true;
+    };
+    log.boolean(
+        Gate::IntervalDisjoint,
+        intervals_disjoint(before_ci, after_ci),
+    )
+}
+
+/// The representative confidence interval of a collapsed base-ref comparison window.
+fn base_interval(levels: &[BaseLevel]) -> Option<(f64, f64)> {
+    let mut lows: Vec<f64> = levels
+        .iter()
+        .filter_map(|level| level.interval.map(|(low, _)| low))
+        .collect();
+    let mut highs: Vec<f64> = levels
+        .iter()
+        .filter_map(|level| level.interval.map(|(_, high)| high))
+        .collect();
+    Some((
+        stats::median_in_place(&mut lows)?,
+        stats::median_in_place(&mut highs)?,
+    ))
+}
+
 /// Whether a move exceeds `multiple` times the per-measurement noise floor, where the
 /// engine reports dispersion.
 ///
@@ -940,20 +987,60 @@ fn exceeds_noise_band(
     )
 }
 
+/// Branch-mode measurement-noise veto over the base levels and context run together.
+///
+/// The branch baseline is collapsed to one [`BaseLevel`] per base-ref commit before
+/// comparison, but those levels still carry their representative confidence interval.
+/// The noise band therefore uses the median half-width across the compared base commits
+/// plus the context run, preserving the raw-regime behaviour branch mode had before the
+/// base-ref window was loaded separately.
+fn exceeds_branch_noise_band(
+    delta: f64,
+    before: &[BaseLevel],
+    after: &[&SeriesPoint],
+    multiple: f64,
+    log: &mut StageLog<'_>,
+) -> bool {
+    let mut halves: Vec<f64> = before
+        .iter()
+        .filter_map(|level| level.interval.map(interval_half_width))
+        .chain(after.iter().filter_map(|point| point_half_width(point)))
+        .collect();
+    let Some(half_width) = median_half_widths(&mut halves) else {
+        return true;
+    };
+    let band = multiple * half_width;
+    log.numeric(
+        Gate::IntervalNoiseBand,
+        delta.abs(),
+        band,
+        delta.abs() > band,
+    )
+}
+
 /// The median confidence-interval half-width across `points`, when the engine
 /// reports dispersion. Used as the per-measurement noise floor for noisy drift.
 fn median_half_width(points: &[SeriesPoint]) -> Option<f64> {
-    let mut halves: Vec<f64> = points
-        .iter()
-        .filter_map(|point| match (point.interval_low, point.interval_high) {
-            (Some(low), Some(high)) => Some((high - low) / 2.0),
-            _ => None,
-        })
-        .collect();
+    let mut halves: Vec<f64> = points.iter().filter_map(point_half_width).collect();
+    median_half_widths(&mut halves)
+}
+
+fn median_half_widths(halves: &mut [f64]) -> Option<f64> {
     if halves.is_empty() {
         return None;
     }
-    stats::median_in_place(&mut halves)
+    stats::median_in_place(halves)
+}
+
+fn point_half_width(point: &SeriesPoint) -> Option<f64> {
+    match (point.interval_low, point.interval_high) {
+        (Some(low), Some(high)) => Some(interval_half_width((low, high))),
+        _ => None,
+    }
+}
+
+fn interval_half_width((low, high): (f64, f64)) -> f64 {
+    (high - low) / 2.0
 }
 
 /// The median absolute residual of the two-regime (step) model: each point's
@@ -987,7 +1074,7 @@ fn line_model_residual(values: &[f64], slope: f64, intercept: f64) -> Option<f64
 /// A sample of a single point is its own median, so it contributes one residual of
 /// exactly zero and nothing at all about the scatter it was drawn from. Pooling that zero
 /// with a real sample's residuals only pulls the median down and weakens the gate, so a
-/// single-point sample is left out. Branch mode compares against a single tip commit, and
+/// single-point sample is left out. Branch mode compares against a single context commit, and
 /// its comparison sample can be as short as `min_regime`, which is exactly where a diluted
 /// residual would be least affordable.
 fn sample_step_residual(before: &[f64], after: &[f64]) -> Option<f64> {
@@ -1336,6 +1423,7 @@ fn evaluate_drift(
 ///
 /// `points` is sorted by `(topo_index, dirty, object_ordinal)`, so each group is
 /// contiguous and the window is a suffix slice.
+#[cfg(test)]
 fn recent_commits<'a>(points: &[&'a SeriesPoint], window: usize) -> Vec<&'a SeriesPoint> {
     let mut start = points.len();
     let mut commits = 0_usize;
@@ -1357,45 +1445,24 @@ fn recent_commits<'a>(points: &[&'a SeriesPoint], window: usize) -> Vec<&'a Seri
         .unwrap_or_default()
 }
 
-/// Splits a series' points into `(base_side, branch_side)` at the merge-base.
+/// The context commit's single latest run.
 ///
-/// A point is branch-side when its commit sits past the merge-base, or when it is
-/// a dirty snapshot exactly at the merge-base (the dirty-base-tip exception, where
-/// the merge-base *is* the tip). With no merge-base every point is branch-side.
-fn split_at_merge_base(
-    points: &[SeriesPoint],
-    merge_base_index: Option<usize>,
-) -> (Vec<&SeriesPoint>, Vec<&SeriesPoint>) {
-    let Some(merge_base) = merge_base_index else {
-        return (Vec::new(), points.iter().collect());
-    };
-    let mut base = Vec::new();
-    let mut branch = Vec::new();
-    for point in points {
-        if point.topo_index > merge_base || (point.topo_index == merge_base && point.dirty) {
-            branch.push(point);
-        } else {
-            base.push(point);
-        }
-    }
-    (base, branch)
-}
-
-/// The branch tip's single latest run.
-///
-/// A feature branch's own history says nothing about what merging it into the base
-/// will do — only its tip commit lands there — so branch mode judges the newest
-/// commit's latest run, not a reconstructed within-branch regime and not a cohort of
-/// several runs at that commit. `branch` is sorted by
+/// Branch mode judges the newest context state, not a reconstructed within-branch
+/// regime and not a cohort of several runs at that commit. `points` is sorted by
 /// `(topo_index, dirty, object_ordinal)`, so the latest run is simply the last point:
-/// the tip's committed (clean) run, or — when the working tree is dirty — the newest
-/// dirty snapshot taken on top of it, which supersedes the clean run as the newer
-/// state. Any earlier run at the tip (an older dirty snapshot, or the clean run
-/// beneath a dirty one) is not the state a merge would land, so it is discarded. This
-/// keeps the comparison to one target-side observation, matching the prediction
-/// interval it is judged against. An empty branch yields no point.
-fn latest_commit_points<'a>(branch: &[&'a SeriesPoint]) -> Vec<&'a SeriesPoint> {
-    branch.last().map(|&point| vec![point]).unwrap_or_default()
+/// the context's committed (clean) run, or — when the working tree is dirty — the
+/// newest dirty snapshot taken on top of it, which supersedes the clean run as the
+/// newer state. Any earlier run at the same commit is not the state a merge would
+/// land, so it is discarded. This keeps the comparison to one target observation,
+/// matching the prediction interval it is judged against. An empty series yields no
+/// point. A series whose newest observation stops before `context_index` was not
+/// measured at the context commit and yields no point.
+fn latest_context_run(points: &[SeriesPoint], context_index: usize) -> Vec<&SeriesPoint> {
+    points
+        .last()
+        .filter(|point| point.topo_index == context_index)
+        .map(|point| vec![point])
+        .unwrap_or_default()
 }
 
 /// A commit group's level and where that group starts in the source point slice.
@@ -1410,6 +1477,7 @@ struct CommitLevel {
 /// base window to its trailing regime. The grouping is identical to [`commit_levels`]:
 /// clean and dirty measurements at the same topological commit are different states,
 /// while repeated runs of the same state collapse to their median.
+#[cfg(test)]
 fn commit_level_spans(points: &[&SeriesPoint]) -> Vec<CommitLevel> {
     let mut spans = Vec::new();
     let mut group: Vec<f64> = Vec::new();
@@ -1433,6 +1501,15 @@ fn commit_level_spans(points: &[&SeriesPoint]) -> Vec<CommitLevel> {
     spans
 }
 
+/// One span per already-collapsed base-window level.
+fn level_spans(levels: &[f64]) -> Vec<CommitLevel> {
+    levels
+        .iter()
+        .enumerate()
+        .map(|(start, &level)| CommitLevel { start, level })
+        .collect()
+}
+
 /// The per-commit levels of `points`, oldest first.
 ///
 /// Several stored runs can share one commit — repeated dirty snapshots re-measure
@@ -1445,6 +1522,7 @@ fn commit_level_spans(points: &[&SeriesPoint]) -> Vec<CommitLevel> {
 /// is different source than the commit it sits at, so the two are not replicates of
 /// each other. `points` is sorted by `(topo_index, dirty, object_ordinal)`, so every
 /// group is contiguous.
+#[cfg(test)]
 fn commit_levels(points: &[&SeriesPoint]) -> Vec<f64> {
     commit_level_spans(points)
         .into_iter()
@@ -1602,8 +1680,8 @@ fn regime_supports_prediction(series: &Series, levels: &[f64], config: &Analysis
 /// handles a settled base-side step by moving both onto the trailing regime before this
 /// function is called. That keeps the prediction interval coherent: making only the
 /// scale robust while the centre stayed the mixed-window mean would put the centre
-/// between two levels and make a tip agreeing exactly with the newer level read as
-/// displaced from it.
+/// between two levels and make a context run agreeing exactly with the newer level read
+/// as displaced from it.
 ///
 /// `scatter_floor` is a lower bound on the standard deviation, in the metric's own
 /// units: the smallest scatter the metric can express (see
@@ -1630,14 +1708,12 @@ fn prediction_interval_p(base: &[f64], latest: f64, scatter_floor: f64) -> Optio
     Some(stats::student_t_two_sided_p(t, n_f - 1.0))
 }
 
-/// Compares a `before` sample against an `after` sample on the same series and, if
-/// the noise-aware gates pass, returns a change-point [`Candidate`].
+/// Compares base levels against a context run and returns a branch [`Candidate`].
 ///
-/// `before` is the selected base-side comparison sample and `after` the branch tip's
-/// runs. Both collapse to per-commit levels first (see [`commit_levels`]), so the
-/// comparison is one new commit's level against the base's commit-to-commit
-/// distribution; the tip's repeated runs share a build and a runner and so cannot
-/// count as independent evidence.
+/// `before` is the selected base-ref comparison sample, already collapsed to one
+/// level per clean base commit. `after` is the context commit's latest run. The
+/// comparison is therefore one new context level against the base ref's commit-to-commit
+/// distribution.
 ///
 /// The caller verifies that the full recent base window contains at least
 /// `min_series_points` levels before this function runs. The comparison sample may be
@@ -1655,13 +1731,12 @@ fn prediction_interval_p(base: &[f64], latest: f64, scatter_floor: f64) -> Optio
 /// The relative move must clear `practical_floor` and the metric's absolute floor,
 /// stand above the comparison sample's own residual scatter, and then be significant as
 /// a Student-t prediction interval. Where the engine reports per-point confidence
-/// intervals the two samples' intervals must also be disjoint and the move must
-/// clear the measurement noise band; both are extra vetoes that can only *suppress*
-/// a candidate the other gates would have reported — they never turn a non-finding
-/// into a finding.
-fn compare_samples(
+/// intervals the base sample and context measurement must also clear their combined
+/// measurement noise band — an extra veto that can only *suppress* a candidate the
+/// other gates would have reported, never turn a non-finding into a finding.
+fn compare_branch_levels(
     series: &Series,
-    before: &[&SeriesPoint],
+    before: &[BaseLevel],
     after: &[&SeriesPoint],
     config: &AnalysisConfig,
     practical_floor: f64,
@@ -1669,7 +1744,7 @@ fn compare_samples(
     log: &mut GateLog,
 ) -> Option<Candidate> {
     let mut log = log.stage(GateStage::Branch);
-    let before_values = commit_levels(before);
+    let before_values: Vec<f64> = before.iter().map(|level| level.value).collect();
     let after_values: Vec<f64> = after.iter().map(|point| point.value).collect();
     let baseline = stats::mean(&before_values)?;
     let latest = stats::median(&after_values)?;
@@ -1721,17 +1796,12 @@ fn compare_samples(
     ) {
         return None;
     }
-    if !regime_intervals_are_disjoint(before, after, &mut log) {
+    if !base_intervals_are_disjoint(before, after, &mut log) {
         return None;
     }
     // Where per-point confidence intervals exist, require the move to also clear the
     // measurement noise band — a veto that can only suppress this candidate.
-    let points: Vec<SeriesPoint> = before
-        .iter()
-        .chain(after.iter())
-        .map(|point| (*point).clone())
-        .collect();
-    if !exceeds_noise_band(delta, &points, config.branch_noise_multiple, &mut log) {
+    if !exceeds_branch_noise_band(delta, before, after, config.branch_noise_multiple, &mut log) {
         return None;
     }
 
@@ -1762,32 +1832,82 @@ fn compare_samples(
     })
 }
 
-/// Evaluates a series in *branch* mode: compares the branch's tip commit against
-/// the recent base level, in either direction.
+/// Test adapter for the branch sample comparison before base windows are collapsed.
+#[cfg(test)]
+fn compare_samples(
+    series: &Series,
+    before: &[&SeriesPoint],
+    after: &[&SeriesPoint],
+    config: &AnalysisConfig,
+    practical_floor: f64,
+    _comparison_base_index: Option<usize>,
+    log: &mut GateLog,
+) -> Option<Candidate> {
+    let before_levels = test_base_levels(before);
+    let commit = after.last().and_then(|point| owned_commit(point));
+    compare_branch_levels(
+        series,
+        &before_levels,
+        after,
+        config,
+        practical_floor,
+        commit,
+        log,
+    )
+}
+
+#[cfg(test)]
+fn test_base_levels(points: &[&SeriesPoint]) -> Vec<BaseLevel> {
+    let spans = commit_level_spans(points);
+    spans
+        .iter()
+        .enumerate()
+        .filter_map(|(index, span)| {
+            let end = spans
+                .get(index.saturating_add(1))
+                .map_or(points.len(), |next| next.start);
+            let group = points.get(span.start..end)?;
+            let topo_index = group.first()?.topo_index;
+            Some(BaseLevel {
+                topo_index,
+                value: span.level,
+                interval: regime_interval(group),
+            })
+        })
+        .collect()
+}
+
+/// Evaluates a series in branch mode against the recent base-ref level.
 ///
-/// The branch's intermediate commits are ignored — only its newest commit's runs
-/// matter (see [`latest_commit_points`]), since that is the state a merge lands in
-/// the base. A new benchmark introduced on the branch (no base-side points) or an
-/// empty branch yields nothing, since there is no baseline to compare.
+/// The context's intermediate first-parent commits are ignored — only its newest
+/// run matters (see [`latest_context_run`]), since that is the state a merge lands
+/// in the base. A new benchmark introduced on the context (no base-ref points) or
+/// an empty context yields nothing, since there is no baseline to compare.
 ///
 /// The recent base window is first collapsed to per-commit levels and checked for
 /// enough evidence as a whole. If that window contains a genuine level shift, located
 /// with Pettitt and accepted only by the same Mann–Whitney significance, separation,
 /// relative-floor, and absolute-floor gates that make such a split trustworthy, the
 /// stale prefix before the newest accepted split is discarded. The prediction interval
-/// then compares the branch tip against the trailing regime, moving its centre and
-/// scatter together onto the base level the branch would merge into.
+/// then compares the context run against the trailing regime, moving its centre and
+/// scatter together onto the base level the context would merge into.
 fn evaluate_branch(
     series: &Series,
     config: &AnalysisConfig,
-    merge_base_index: Option<usize>,
+    context_index: usize,
     log: &mut GateLog,
 ) -> Option<Candidate> {
-    let (base, branch) = split_at_merge_base(&series.points, merge_base_index);
-    // An empty base or branch yields nothing: `compare_samples` returns `None` once
-    // either sample's median is absent, so no explicit emptiness guard is needed.
-    let base_window = recent_commits(&base, config.compare_window);
-    let base_spans = commit_level_spans(&base_window);
+    let base_window = if series.base_window.len() > config.compare_window {
+        let start = series
+            .base_window
+            .len()
+            .saturating_sub(config.compare_window);
+        series.base_window.get(start..).unwrap_or_default()
+    } else {
+        &series.base_window[..]
+    };
+    let levels: Vec<f64> = base_window.iter().map(|level| level.value).collect();
+    let base_spans = level_spans(&levels);
     if !log.stage(GateStage::Branch).numeric(
         Gate::MinBaseCommits,
         count_to_f64(base_spans.len()),
@@ -1802,20 +1922,17 @@ fn evaluate_branch(
         config,
         config.branch_practical_relative,
     );
-    let comparison_base: Vec<&SeriesPoint> = base_window
-        .get(comparison_start..)
-        .map(<[&SeriesPoint]>::to_vec)
-        .unwrap_or_default();
-    let latest_points = latest_commit_points(&branch);
-    let commit = branch.last().and_then(|&point| owned_commit(point));
-    // The newest base-side point in the selected comparison sample is this series'
+    let comparison_base = base_window.get(comparison_start..).unwrap_or_default();
+    let latest_points = latest_context_run(&series.points, context_index);
+    let commit = latest_points.last().and_then(|point| owned_commit(point));
+    // The newest base-ref point in the selected comparison sample is this series'
     // comparison base. Truncating stale levels changes the sample's start, not this
-    // newest point, so lag classification still measures freshness against the state
-    // the branch would merge into.
-    let comparison_base_index = comparison_base.last().map(|point| point.topo_index);
-    let mut candidate = compare_samples(
+    // newest point, so lag classification still measures freshness against the base
+    // state the context would merge into.
+    let comparison_base_index = comparison_base.last().map(|level| level.topo_index);
+    let mut candidate = compare_branch_levels(
         series,
-        &comparison_base,
+        comparison_base,
         &latest_points,
         config,
         config.branch_practical_relative,
@@ -1846,6 +1963,7 @@ fn active_view(series: &Series) -> Series {
         id: series.id.clone(),
         kind: series.kind,
         points,
+        base_window: series.base_window.clone(),
         active_start: 0,
         blessing: None,
     }
@@ -1946,8 +2064,7 @@ pub fn testability(series: &Series, context: &AnalysisContext) -> Testability {
             }
         }
         AnalysisMode::Branch => {
-            let (base, branch) = split_at_merge_base(&series.points, context.merge_base_index);
-            if latest_commit_points(&branch).is_empty() {
+            if latest_context_run(&series.points, context.tip_index).is_empty() {
                 return Testability::Unjudged(UnjudgedReason::NotMeasuredOnBranch);
             }
             // Testability asks whether the full recent base window contains enough
@@ -1955,9 +2072,8 @@ pub fn testability(series: &Series, context: &AnalysisContext) -> Testability {
             // a `min_regime`-sized trailing regime after an accepted base-side shift;
             // that does not make this census reason untruthful, because the evidence
             // floor was met before any history was discarded.
-            if commit_levels(&recent_commits(&base, config.compare_window)).len()
-                < config.min_series_points
-            {
+            let base_points = series.base_window.len().min(config.compare_window);
+            if base_points < config.min_series_points {
                 return Testability::Unjudged(UnjudgedReason::TooFewBaseCommits);
             }
             Testability::Judged
@@ -2146,7 +2262,7 @@ fn detect_one(
                 candidate
             })
         }
-        AnalysisMode::Branch => evaluate_branch(one, config, context.merge_base_index, log),
+        AnalysisMode::Branch => evaluate_branch(one, config, context.tip_index, log),
     };
     candidate.map(|mut candidate| {
         candidate.source_index = index;
@@ -2250,6 +2366,7 @@ mod tests {
             id: BenchmarkId::new(nonempty!["group".to_owned(), "case".to_owned()]),
             kind,
             points,
+            base_window: Vec::new(),
             active_start: 0,
             blessing: None,
         }
@@ -2372,7 +2489,7 @@ mod tests {
         }
     }
 
-    /// The largest `topo_index` across every point of `series`, the realistic tip
+    /// The largest `topo_index` across every point of `series`, the realistic context
     /// index for a history-mode [`AnalysisContext`] over this test fixture. Zero when
     /// there are no points.
     fn max_topo_index(series: &[Series]) -> usize {
@@ -2382,6 +2499,22 @@ mod tests {
             .map(|point| point.topo_index)
             .max()
             .unwrap_or(0)
+    }
+
+    /// Runs the branch-mode detector for one fixture, using the fixture's newest
+    /// topological point as the context commit.
+    fn evaluate_branch(
+        series: &Series,
+        config: &AnalysisConfig,
+        log: &mut GateLog,
+    ) -> Option<Candidate> {
+        let context_index = max_topo_index(slice::from_ref(series));
+        if series.base_window.is_empty() {
+            let mut series = series.clone();
+            attach_test_base_windows(slice::from_mut(&mut series), context_index.checked_sub(1));
+            return super::evaluate_branch(&series, config, context_index, log);
+        }
+        super::evaluate_branch(series, config, context_index, log)
     }
 
     /// Runs the history-mode detector with default config, reporting both
@@ -2396,6 +2529,7 @@ mod tests {
             mode: AnalysisMode::History,
             config: AnalysisConfig::default(),
             merge_base_index: None,
+            base_ref_index: None,
             tip_index: max_topo_index(series),
             include_improvements: true,
         }
@@ -2449,6 +2583,7 @@ mod tests {
             mode: AnalysisMode::History,
             config: AnalysisConfig::default(),
             merge_base_index: None,
+            base_ref_index: None,
             tip_index: max_topo_index(&series),
             include_improvements: true,
         };
@@ -3295,6 +3430,7 @@ mod tests {
             id: BenchmarkId::new(nonempty!["group".to_owned(), "case".to_owned()]),
             kind,
             points,
+            base_window: Vec::new(),
             active_start: 0,
             blessing: None,
         }
@@ -3308,7 +3444,9 @@ mod tests {
 
     /// Runs the branch-mode detector with default config and the given merge-base.
     fn branch_changes(series: &[Series], merge_base_index: Option<usize>) -> Vec<Finding> {
-        find_changes(series, &branch_context(series, merge_base_index)).findings
+        let mut series = series.to_vec();
+        attach_test_base_windows(&mut series, merge_base_index);
+        find_changes(&series, &branch_context(&series, merge_base_index)).findings
     }
 
     /// The branch-mode [`AnalysisContext`] the [`branch_changes`] helper runs under.
@@ -3317,8 +3455,26 @@ mod tests {
             mode: AnalysisMode::Branch,
             config: AnalysisConfig::default(),
             merge_base_index,
+            base_ref_index: merge_base_index,
             tip_index: max_topo_index(series),
             include_improvements: false,
+        }
+    }
+
+    /// Gives branch-mode fixtures the base-ref window production loads separately.
+    fn attach_test_base_windows(series: &mut [Series], merge_base_index: Option<usize>) {
+        let Some(merge_base_index) = merge_base_index else {
+            return;
+        };
+        let config = AnalysisConfig::default();
+        for one in series {
+            let base: Vec<&SeriesPoint> = one
+                .points
+                .iter()
+                .filter(|point| !point.dirty && point.topo_index <= merge_base_index)
+                .collect();
+            let base = recent_commits(&base, config.compare_window);
+            one.base_window = test_base_levels(&base);
         }
     }
 
@@ -3336,7 +3492,9 @@ mod tests {
             (0..branch_points)
                 .map(|offset| (MIN_SERIES_POINTS.saturating_add(offset), branch, false)),
         );
-        placed_series_of_kind(&points, kind)
+        let mut series = placed_series_of_kind(&points, kind);
+        attach_test_base_windows(slice::from_mut(&mut series), Some(base_merge_base()));
+        series
     }
 
     /// A branch-mode fixture on an instruction count: a [`base_run`] at `base` followed
@@ -3347,16 +3505,21 @@ mod tests {
     }
 
     /// A branch fixture whose base window contains an old level followed by the
-    /// current one, then one branch tip point.
-    fn branch_after_base_shift(old: f64, current: f64, current_len: usize, tip: f64) -> Series {
+    /// current one, then one context run point.
+    fn branch_after_base_shift(old: f64, current: f64, current_len: usize, context: f64) -> Series {
         let old_len = COMPARE_WINDOW.checked_sub(current_len).unwrap();
         let mut points: Vec<(usize, f64, bool)> =
             (0..old_len).map(|index| (index, old, false)).collect();
         points.extend(
             (0..current_len).map(|offset| (old_len.checked_add(offset).unwrap(), current, false)),
         );
-        points.push((COMPARE_WINDOW, tip, false));
-        placed_series(&points)
+        points.push((COMPARE_WINDOW, context, false));
+        let mut series = placed_series(&points);
+        attach_test_base_windows(
+            slice::from_mut(&mut series),
+            Some(shifted_base_merge_base()),
+        );
+        series
     }
 
     /// The merge-base for [`branch_after_base_shift`].
@@ -3366,11 +3529,15 @@ mod tests {
 
     /// Where the branch detector starts comparing a shifted base fixture.
     fn shifted_base_regime_start(series: &Series) -> usize {
-        let borrowed: Vec<&SeriesPoint> = series.points.iter().collect();
-        let base = recent_commits(&borrowed[..COMPARE_WINDOW], COMPARE_WINDOW);
-        let spans = commit_level_spans(&base);
+        let mut series = series.clone();
+        attach_test_base_windows(
+            slice::from_mut(&mut series),
+            Some(shifted_base_merge_base()),
+        );
+        let levels: Vec<f64> = series.base_window.iter().map(|level| level.value).collect();
+        let spans = level_spans(&levels);
         let config = AnalysisConfig::default();
-        current_base_regime_start(series, &spans, &config, config.branch_practical_relative)
+        current_base_regime_start(&series, &spans, &config, config.branch_practical_relative)
     }
 
     /// A base-branch run of [`MIN_SERIES_POINTS`] commits whose levels alternate
@@ -3402,9 +3569,9 @@ mod tests {
     }
 
     #[test]
-    fn branch_mode_reports_the_tip_state_after_an_intermediate_change() {
-        // The branch first improved (80) then regressed (130): only the tip commit
-        // lands in the base, so we report the tip state (worse than the 100 base)
+    fn branch_mode_reports_the_context_state_after_an_intermediate_change() {
+        // The branch first improved (80) then regressed (130): only the context commit
+        // lands in the base, so we report the context state (worse than the 100 base)
         // and attribute nothing to the branch's own intermediate history.
         let mut points = base_run(100.0);
         points.extend([
@@ -3439,7 +3606,7 @@ mod tests {
 
     #[test]
     fn branch_mode_below_the_absolute_floor_is_suppressed() {
-        // A quantized branch tip 4 counts above a small base (60 -> 64) clears the 5%
+        // A quantized context run 4 counts above a small base (60 -> 64) clears the 5%
         // branch relative floor (6.7%) and the residual gate, but not the absolute
         // floor of 5, so it is suppressed. Without the gate this single-quantum-scale
         // move would flag on the pull request. Dropping the floor far below the move
@@ -3449,7 +3616,6 @@ mod tests {
             evaluate_branch(
                 &series,
                 &AnalysisConfig::default(),
-                Some(base_merge_base()),
                 &mut GateLog::disabled()
             )
             .is_none()
@@ -3458,15 +3624,7 @@ mod tests {
             practical_absolute_count: 0.1,
             ..AnalysisConfig::default()
         };
-        assert!(
-            evaluate_branch(
-                &series,
-                &permissive,
-                Some(base_merge_base()),
-                &mut GateLog::disabled()
-            )
-            .is_some()
-        );
+        assert!(evaluate_branch(&series, &permissive, &mut GateLog::disabled()).is_some());
     }
 
     #[test]
@@ -3483,28 +3641,12 @@ mod tests {
             "the base window must be perfectly flat for this to test the floor"
         );
         let series = branch_over_base(100.0, 130.0, 1);
-        assert!(
-            evaluate_branch(
-                &series,
-                &config,
-                Some(base_merge_base()),
-                &mut GateLog::disabled()
-            )
-            .is_some()
-        );
+        assert!(evaluate_branch(&series, &config, &mut GateLog::disabled()).is_some());
         let without_quantum = AnalysisConfig {
             scatter_floor_count: 0.0,
             ..config
         };
-        assert!(
-            evaluate_branch(
-                &series,
-                &without_quantum,
-                Some(base_merge_base()),
-                &mut GateLog::disabled()
-            )
-            .is_none()
-        );
+        assert!(evaluate_branch(&series, &without_quantum, &mut GateLog::disabled()).is_none());
     }
 
     #[test]
@@ -3513,18 +3655,14 @@ mod tests {
         // window is ten commits of exactly zero, so its scatter is zero and only the
         // one-byte quantum keeps the move judgeable. It is a full-scale move against a
         // zero baseline, 48 bytes clears the one-byte absolute floor, and the floored
-        // scatter puts the tip 45.8 standard errors out (48 / (1 * sqrt(1 + 1/10))),
-        // so it is reported decisively. Removing the quantum silences it, which is
-        // exactly the regression shape this floor exists for.
+        // scatter puts the context run 45.8 standard errors out
+        // (48 / (1 * sqrt(1 + 1/10))), so it is reported decisively. Removing the
+        // quantum silences it, which is exactly the regression shape this floor exists
+        // for.
         let series = branch_over_base_of_kind(0.0, 48.0, 1, MetricKind::AllocatedBytes);
         let config = AnalysisConfig::default();
-        let candidate = evaluate_branch(
-            &series,
-            &config,
-            Some(base_merge_base()),
-            &mut GateLog::disabled(),
-        )
-        .expect("48 bytes is a move");
+        let candidate = evaluate_branch(&series, &config, &mut GateLog::disabled())
+            .expect("48 bytes is a move");
         assert_eq!(candidate.finding.direction, Direction::Regression);
         assert_eq!(candidate.finding.latest, 48.0);
         assert!(candidate.bh_p < config.change_alpha, "{}", candidate.bh_p);
@@ -3532,133 +3670,81 @@ mod tests {
             scatter_floor_alloc: 0.0,
             ..config
         };
-        assert!(
-            evaluate_branch(
-                &series,
-                &without_quantum,
-                Some(base_merge_base()),
-                &mut GateLog::disabled()
-            )
-            .is_none()
-        );
+        assert!(evaluate_branch(&series, &without_quantum, &mut GateLog::disabled()).is_none());
     }
 
     #[test]
     fn branch_mode_is_silent_when_a_timing_base_carries_no_scatter() {
         // Time has no quantum — a stored time is a regression slope over a run's
         // iterations, not a counted unit — so a base window that repeats one value
-        // leaves nothing to place the tip against and the standard error is degenerate.
-        // A doubling from 20 ns to 40 ns clears every floor and is still not reported:
-        // the degenerate case fails silent rather than manufacturing certainty. The
-        // same move against a base that does scatter is reported, so the flat base is
-        // the sole reason for the silence.
+        // leaves nothing to place the context run against and the standard error is
+        // degenerate. A doubling from 20 ns to 40 ns clears every floor and is still not
+        // reported: the degenerate case fails silent rather than manufacturing
+        // certainty. The same move against a base that does scatter is reported, so the
+        // flat base is the sole reason for the silence.
         let flat = branch_over_base_of_kind(20.0, 40.0, 1, MetricKind::WallTime);
         let config = AnalysisConfig::default();
-        assert!(
-            evaluate_branch(
-                &flat,
-                &config,
-                Some(base_merge_base()),
-                &mut GateLog::disabled()
-            )
-            .is_none()
-        );
+        assert!(evaluate_branch(&flat, &config, &mut GateLog::disabled()).is_none());
 
         let mut points = wobbling_base_run(20.0, 0.2);
         points.push((MIN_SERIES_POINTS, 40.0, false));
         let scattering = placed_series_of_kind(&points, MetricKind::WallTime);
-        assert!(
-            evaluate_branch(
-                &scattering,
-                &config,
-                Some(base_merge_base()),
-                &mut GateLog::disabled()
-            )
-            .is_some()
-        );
+        assert!(evaluate_branch(&scattering, &config, &mut GateLog::disabled()).is_some());
     }
 
     #[test]
     fn branch_mode_is_silent_for_a_sub_nanosecond_timing_move() {
-        // A benchmark measuring 2.49 ns an iteration whose tip reads 3.12 ns. That is a
-        // 25% move on a base scattering by only 0.05 ns, so every statistical gate
-        // passes decisively (the tip sits 11.4 standard errors out) — yet the move
-        // itself spans 0.63 ns, under the one-nanosecond floor below which a timing
-        // move is not worth acting on, so nothing is reported. Lowering that floor
-        // admits it, which pins the absolute floor as the sole reason for the silence.
+        // A benchmark measuring 2.49 ns an iteration whose context run reads 3.12 ns.
+        // That is a 25% move on a base scattering by only 0.05 ns, so every statistical
+        // gate passes decisively (the context run sits 11.4 standard errors out) — yet
+        // the move itself spans 0.63 ns, under the one-nanosecond floor below which a
+        // timing move is not worth acting on, so nothing is reported. Lowering that
+        // floor admits it, which pins the absolute floor as the sole reason for the
+        // silence.
         let mut points = wobbling_base_run(2.49, 0.05);
         points.push((MIN_SERIES_POINTS, 3.12, false));
         let series = placed_series_of_kind(&points, MetricKind::WallTime);
         let config = AnalysisConfig::default();
-        assert!(
-            evaluate_branch(
-                &series,
-                &config,
-                Some(base_merge_base()),
-                &mut GateLog::disabled()
-            )
-            .is_none()
-        );
+        assert!(evaluate_branch(&series, &config, &mut GateLog::disabled()).is_none());
         let permissive = AnalysisConfig {
             practical_absolute_time: 0.1,
             ..config
         };
-        assert!(
-            evaluate_branch(
-                &series,
-                &permissive,
-                Some(base_merge_base()),
-                &mut GateLog::disabled()
-            )
-            .is_some()
-        );
+        assert!(evaluate_branch(&series, &permissive, &mut GateLog::disabled()).is_some());
     }
 
     #[test]
     fn branch_mode_reports_a_small_timing_regression_a_one_nanosecond_scatter_floor_would_hide() {
         // A 20 ns benchmark whose base scatters by 0.2 ns from commit to commit,
-        // regressing by 8% (1.6 ns). Against its own scatter the tip sits 7.2 standard
-        // errors out (1.6 / (0.2108 * sqrt(1 + 1/10))) and the move clears the
-        // one-nanosecond absolute floor, so it is reported. Flooring the scatter at
-        // that same nanosecond instead would put the tip only 1.5 standard errors out
-        // — p = 0.16, comfortably inside the interval — and hide the regression
-        // entirely, which is what makes the quantum and the magnitude floor separate
-        // quantities.
+        // regressing by 8% (1.6 ns). Against its own scatter the context run sits 7.2
+        // standard errors out (1.6 / (0.2108 * sqrt(1 + 1/10))) and the move clears the
+        // one-nanosecond absolute floor, so it is reported. Flooring the scatter at that
+        // same nanosecond instead would put the context run only 1.5 standard errors out
+        // — p = 0.16, comfortably inside the interval — and hide the regression entirely,
+        // which is what makes the quantum and the magnitude floor separate quantities.
         let mut points = wobbling_base_run(20.0, 0.2);
         points.push((MIN_SERIES_POINTS, 21.6, false));
         let series = placed_series_of_kind(&points, MetricKind::WallTime);
         let config = AnalysisConfig::default();
-        let candidate = evaluate_branch(
-            &series,
-            &config,
-            Some(base_merge_base()),
-            &mut GateLog::disabled(),
-        )
-        .expect("an 8% move on a quiet base is detectable");
+        let candidate = evaluate_branch(&series, &config, &mut GateLog::disabled())
+            .expect("an 8% move on a quiet base is detectable");
         assert_eq!(candidate.finding.direction, Direction::Regression);
         assert!(candidate.bh_p < config.change_alpha, "{}", candidate.bh_p);
         let floored = AnalysisConfig {
             scatter_floor_time: config.practical_absolute_time,
             ..config
         };
-        assert!(
-            evaluate_branch(
-                &series,
-                &floored,
-                Some(base_merge_base()),
-                &mut GateLog::disabled()
-            )
-            .is_none()
-        );
+        assert!(evaluate_branch(&series, &floored, &mut GateLog::disabled()).is_none());
     }
 
     #[test]
     fn branch_finding_reports_the_move_from_the_centre_its_test_used() {
-        // The prediction interval places the tip against the base window's *mean*, so
-        // the magnitude the finding reports must be measured from that same centre. A
-        // window of nine commits at 100 and one at 140 has a mean of 104 and a median
-        // of 100, which a tip at 200 turns into a reported move of 96 (92.3%) rather
-        // than 100 (100%) — the median would describe a move the p-value never tested.
+        // The prediction interval places the context run against the base window's
+        // *mean*, so the magnitude the finding reports must be measured from that same
+        // centre. A window of nine commits at 100 and one at 140 has a mean of 104 and
+        // a median of 100, which a context run at 200 turns into a reported move of 96
+        // (92.3%) rather than 100 (100%) — the median would describe a move the p-value
+        // never tested.
         let mut points = base_run(100.0);
         points[MIN_SERIES_POINTS - 1] = (MIN_SERIES_POINTS - 1, 140.0, false);
         points.push((MIN_SERIES_POINTS, 200.0, false));
@@ -3675,7 +3761,6 @@ mod tests {
         let candidate = evaluate_branch(
             &series,
             &AnalysisConfig::default(),
-            Some(base_merge_base()),
             &mut GateLog::disabled(),
         )
         .expect("a doubling against a settled base is a finding");
@@ -3696,8 +3781,8 @@ mod tests {
     }
 
     #[test]
-    fn branch_mode_admits_a_dirty_snapshot_at_the_merge_base_tip() {
-        // The merge-base is the branch tip; a dirty snapshot there is the branch
+    fn branch_mode_admits_a_dirty_snapshot_at_the_merge_base_context() {
+        // The merge-base is the context run; a dirty snapshot there is the branch
         // side, while the clean runs at the same and earlier commits are the base.
         let mut points = base_run(100.0);
         points.extend([
@@ -3711,6 +3796,49 @@ mod tests {
         ));
         assert_eq!(finding.direction, Direction::Regression);
         assert_eq!(finding.latest, 130.0);
+    }
+
+    #[test]
+    fn branch_mode_interval_disjoint_uses_base_window_intervals() {
+        let series = wall_branch_series_with_intervals(130.0, 20.0, 20.0);
+        let mut log = GateLog::recording();
+
+        assert!(evaluate_branch(&series, &AnalysisConfig::default(), &mut log).is_none());
+        assert_eq!(
+            log.declined_by_stage(GateStage::Branch),
+            Some(Gate::IntervalDisjoint)
+        );
+    }
+
+    #[test]
+    fn branch_mode_noise_band_uses_base_window_intervals() {
+        let series = wall_branch_series_with_intervals(130.0, 20.0, 0.1);
+        let mut log = GateLog::recording();
+
+        assert!(evaluate_branch(&series, &AnalysisConfig::default(), &mut log).is_none());
+        assert_eq!(
+            log.declined_by_stage(GateStage::Branch),
+            Some(Gate::IntervalNoiseBand)
+        );
+        assert_eq!(
+            gate_value(&log, Gate::IntervalNoiseBand),
+            Some((30.0, 40.0))
+        );
+    }
+
+    fn wall_branch_series_with_intervals(
+        context: f64,
+        base_half_width: f64,
+        context_half_width: f64,
+    ) -> Series {
+        let mut values: Vec<f64> = wobbling_base_run(100.0, BASE_WOBBLE)
+            .into_iter()
+            .map(|(_, value, _)| value)
+            .collect();
+        values.push(context);
+        let mut intervals = vec![base_half_width; MIN_SERIES_POINTS];
+        intervals.push(context_half_width);
+        series_with(&values, MetricKind::WallTime, &intervals)
     }
 
     #[test]
@@ -3758,10 +3886,11 @@ mod tests {
     }
 
     #[test]
-    fn history_chart_series_maps_every_observation_and_targets_the_tip() {
+    fn history_chart_series_maps_every_observation_and_targets_the_context() {
         // History mode keeps the series compact and 1:1 — every observation becomes one
-        // chart point carrying its real topo index — and stamps the analyzed tip as the
-        // trailing-fill target so a lagging series can render its "no newer data" gap.
+        // chart point carrying its real topo index — and stamps the analyzed context
+        // commit as the trailing-fill target so a lagging series can render its "no newer
+        // data" gap.
         let values = step_values(100.0, 130.0);
         let series = series_of(&values);
         let finding = only(changes(slice::from_ref(&series)));
@@ -3803,15 +3932,16 @@ mod tests {
     }
 
     #[test]
-    fn history_chart_base_ref_is_the_analyzed_tip_beyond_the_last_observation() {
+    fn history_chart_base_ref_is_the_analyzed_context_beyond_the_last_observation() {
         // When analysis reaches commits newer than the last observation, the
-        // trailing-fill target is that tip, so the chart shows the lag as a trailing gap
-        // — the visual form of the "lagged history" warning.
+        // trailing-fill target is that context commit, so the chart shows the lag as a
+        // trailing gap — the visual form of the "lagged history" warning.
         let series = series_of(&step_values(100.0, 130.0));
         let context = AnalysisContext {
             mode: AnalysisMode::History,
             config: AnalysisConfig::default(),
             merge_base_index: None,
+            base_ref_index: None,
             tip_index: 20,
             include_improvements: true,
         };
@@ -3820,7 +3950,7 @@ mod tests {
     }
 
     /// The chart series a branch fixture built by [`branch_over_base`] must collapse
-    /// to: every base column, then one tip column at `merge_base + 1`.
+    /// to: every base column, then one context column at `merge_base + 1`.
     fn expected_branch_chart(base: f64, branch: f64) -> Vec<(usize, f64)> {
         let mut expected: Vec<(usize, f64)> =
             (0..MIN_SERIES_POINTS).map(|index| (index, base)).collect();
@@ -3829,24 +3959,27 @@ mod tests {
     }
 
     #[test]
-    fn branch_chart_series_collapses_interior_commits_onto_the_tip() {
+    fn branch_chart_series_collapses_interior_commits_onto_the_context() {
         // Branch mode drops every interior branch commit and represents the branch by a
-        // single tip column at merge_base + 1 carrying the judged latest.
+        // single context column at merge_base + 1 carrying the judged latest.
         let series = branch_over_base(100.0, 130.0, 3);
         let finding = only(branch_changes(&[series], Some(base_merge_base())));
         assert_eq!(
             finding.chart_base_ref, None,
-            "the tip is the always-present last column, so no trailing fill"
+            "the context commit is the always-present last column, so no trailing fill"
         );
         assert_eq!(chart_pairs(&finding), expected_branch_chart(100.0, 130.0));
-        let tip = finding.series.last().expect("the tip column is present");
+        let context = finding
+            .series
+            .last()
+            .expect("the context column is present");
         assert_eq!(
-            tip.topo_index, MIN_SERIES_POINTS,
-            "the tip is remapped to merge_base + 1"
+            context.topo_index, MIN_SERIES_POINTS,
+            "the context commit is remapped to merge_base + 1"
         );
         assert_eq!(
-            tip.value, finding.latest,
-            "the tip column carries the judged latest, not a raw observation"
+            context.value, finding.latest,
+            "the context column carries the judged latest, not a raw observation"
         );
     }
 
@@ -3854,7 +3987,8 @@ mod tests {
     fn branch_chart_series_is_unchanged_by_extra_interior_branch_commits() {
         // Interior branch commits contribute zero columns, so a branch that detoured
         // (improved, then regressed) collapses to the same compact chart series as one
-        // that went straight to the tip value — the base and tip state being equal.
+        // that went straight to the context value — the base and context state being
+        // equal.
         let straight = branch_over_base(100.0, 130.0, 1);
         let mut detour_points = base_run(100.0);
         detour_points.extend([
@@ -3882,7 +4016,7 @@ mod tests {
     fn branch_chart_series_keeps_stale_base_context_after_regime_narrowing() {
         // Detection compares against only the current base regime after the split, but
         // the chart remains historical context: the stale 200-level base commits are
-        // still present before the current 100-level regime and the branch tip.
+        // still present before the current 100-level regime and the context run.
         let series = branch_after_base_shift(200.0, 100.0, MIN_REGIME, 130.0);
         let finding = only(branch_changes(&[series], Some(shifted_base_merge_base())));
         let mut expected: Vec<(usize, f64)> = (0..(COMPARE_WINDOW - MIN_REGIME))
@@ -3991,9 +4125,9 @@ mod tests {
     ///
     /// The [`compare_with`] fixtures run on a wall-time series, whose scatter is not
     /// floored at all (time has no quantum), so a base window repeating one value
-    /// leaves the prediction interval no distribution to place the tip in. Real timing
-    /// series never repeat a value, so the window alternates by this much instead. A
-    /// full window's sample standard deviation is then
+    /// leaves the prediction interval no distribution to place the context run in. Real
+    /// timing series never repeat a value, so the window alternates by this much instead.
+    /// A full window's sample standard deviation is then
     /// `BASE_WOBBLE * sqrt(n / (n - 1))`, far below every move these tests exercise.
     const BASE_WOBBLE: f64 = 0.2;
 
@@ -4042,7 +4176,7 @@ mod tests {
         // Branch significance is a strict `<` against the prediction-interval p-value.
         // Take that p from the detector's own recording at the default alpha, then set
         // alpha to it: a `<`->`<=` slip that admits the exact boundary turns this
-        // reported tip silent.
+        // reported context run silent.
         let series = wall_series(&[100.0], 1.0);
         let before = base_window(100.0, 0.5);
         let after = pts(&[(108.0, 0.5)]);
@@ -4097,7 +4231,33 @@ mod tests {
             (100.0, 0.5),
         ]);
         let after = pts(&[(130.0, 0.5)]);
-        assert!(compare(&before, &after, 0.05).is_some());
+        let series = wall_series(&[100.0], 1.0);
+        let before_refs: Vec<&SeriesPoint> = before.iter().collect();
+        let after_refs: Vec<&SeriesPoint> = after.iter().collect();
+        let mut log = GateLog::recording();
+
+        assert!(
+            compare_samples(
+                &series,
+                &before_refs,
+                &after_refs,
+                &AnalysisConfig::default(),
+                0.05,
+                None,
+                &mut log,
+            )
+            .is_some()
+        );
+
+        let outcome = log
+            .entries()
+            .iter()
+            .find(|entry| entry.stage == GateStage::Branch && entry.gate == Gate::IntervalDisjoint)
+            .expect("the interval-disjoint gate must run when both sides carry intervals");
+        assert!(
+            outcome.passed,
+            "disjoint intervals must pass the branch veto"
+        );
     }
 
     #[test]
@@ -4108,7 +4268,33 @@ mod tests {
         // through.
         let before = base_window(100.0, 2.0);
         let after = pts(&[(130.0, 60.0); 5]);
-        assert!(compare(&before, &after, 0.05).is_none());
+        let series = wall_series(&[100.0], 1.0);
+        let before_refs: Vec<&SeriesPoint> = before.iter().collect();
+        let after_refs: Vec<&SeriesPoint> = after.iter().collect();
+        let mut log = GateLog::recording();
+
+        assert!(
+            compare_samples(
+                &series,
+                &before_refs,
+                &after_refs,
+                &AnalysisConfig::default(),
+                0.05,
+                None,
+                &mut log,
+            )
+            .is_none()
+        );
+
+        let outcome = log
+            .entries()
+            .iter()
+            .find(|entry| entry.stage == GateStage::Branch && entry.gate == Gate::IntervalDisjoint)
+            .expect("the interval-disjoint gate must run when both sides carry intervals");
+        assert!(
+            !outcome.passed,
+            "overlapping intervals must suppress the branch move"
+        );
     }
 
     #[test]
@@ -4128,25 +4314,50 @@ mod tests {
 
     #[test]
     fn compare_samples_at_the_measurement_noise_floor_is_suppressed() {
-        // Delta 8 == 2 * 4, the median confidence half-width across both samples: the
-        // strict `>` noise-floor gate rejects it. A `>`->`>=`/`==`, the `*`->`+`/`/`
-        // arithmetic, or an always-true guard would each flag it instead. The branch
-        // side carries a tight interval so the interval-disjointness veto does not
-        // pre-empt this one.
-        let before = base_window(100.0, 4.0);
-        assert!(compare(&before, &pts(&[(108.0, 0.1); 5]), 0.05).is_none());
-        // Half a unit more clears the band and is reported.
-        assert!(compare(&before, &pts(&[(108.5, 0.1); 5]), 0.05).is_some());
+        // The branch noise band uses the median half-width across the base window and
+        // context run together. The base window supplies the majority half-width here,
+        // so a context-only implementation would let this through.
+        let before = base_window(100.0, 20.0);
+        let after = pts(&[(130.0, 0.1); 5]);
+        let series = wall_series(&[100.0], 1.0);
+        let before_refs: Vec<&SeriesPoint> = before.iter().collect();
+        let after_refs: Vec<&SeriesPoint> = after.iter().collect();
+        let mut log = GateLog::recording();
+
+        assert!(
+            compare_samples(
+                &series,
+                &before_refs,
+                &after_refs,
+                &AnalysisConfig::default(),
+                0.05,
+                None,
+                &mut log,
+            )
+            .is_none()
+        );
+        assert_eq!(
+            log.declined_by_stage(GateStage::Branch),
+            Some(Gate::IntervalNoiseBand)
+        );
+        assert_eq!(
+            gate_value(&log, Gate::IntervalNoiseBand),
+            Some((30.0, 40.0))
+        );
+
+        // Half a unit beyond the base-derived band clears it and is reported.
+        let after = pts(&[(140.5, 0.1); 5]);
+        assert!(compare(&before, &after, 0.05).is_some());
     }
 
     #[test]
-    fn compare_samples_suppresses_a_tip_inside_a_bimodal_base() {
+    fn compare_samples_suppresses_a_context_run_inside_a_bimodal_base() {
         // A base that alternates between two levels (~10 and ~30) from commit to
-        // commit. A branch tip landing on the upper level moves the median by 10, but
+        // commit. A context run landing on the upper level moves the median by 10, but
         // that is well inside the base's own commit-to-commit scatter, so the
         // prediction interval refuses it — even with every scatter-based veto
         // relaxed, which pins the prediction interval as the sole reason for the
-        // silence. A tip clear of *both* levels is reported.
+        // silence. A context run clear of *both* levels is reported.
         let mut specs = Vec::new();
         for _ in 0..MIN_REGIME {
             specs.push((10.0, 0.5));
@@ -4165,20 +4376,19 @@ mod tests {
     }
 
     #[test]
-    fn latest_commit_points_returns_only_the_newest_commit_run() {
+    fn latest_context_run_returns_only_the_newest_commit_run() {
         // Two branch commits (topo 3 and topo 5). Only the newest commit's latest
-        // run is returned — the tip is what a merge lands in the base, and a series
-        // carries at most one run per commit.
+        // run is returned — the context commit is what a merge lands in the base, and a
+        // series carries at most one run per commit.
         let series = placed_series(&[(3, 100.0, false), (5, 130.0, false)]);
-        let branch: Vec<&SeriesPoint> = series.points.iter().collect();
-        let latest = latest_commit_points(&branch);
+        let latest = latest_context_run(&series.points, 5);
         assert_eq!(latest.len(), 1);
         assert_eq!(latest[0].topo_index, 5);
     }
 
     #[test]
-    fn latest_commit_points_prefers_the_newest_dirty_snapshot_over_the_clean_tip() {
-        // The tip commit (topo 5) has a committed clean run plus two dirty snapshots
+    fn latest_context_run_prefers_the_newest_dirty_snapshot_over_the_clean_context_run() {
+        // The context commit (topo 5) has a committed clean run plus two dirty snapshots
         // taken on top of it. Only the newest dirty snapshot is returned: it is the
         // single state a merge would land, and mixing runs would blur states.
         let series = placed_series(&[
@@ -4187,8 +4397,7 @@ mod tests {
             (5, 131.0, true),
             (5, 132.0, true),
         ]);
-        let branch: Vec<&SeriesPoint> = series.points.iter().collect();
-        let latest = latest_commit_points(&branch);
+        let latest = latest_context_run(&series.points, 5);
         assert_eq!(latest.len(), 1);
         assert_eq!(latest[0].topo_index, 5);
         assert!(latest[0].dirty);
@@ -4196,8 +4405,8 @@ mod tests {
     }
 
     #[test]
-    fn latest_commit_points_of_an_empty_branch_is_empty() {
-        assert!(latest_commit_points(&[]).is_empty());
+    fn latest_context_run_of_an_empty_branch_is_empty() {
+        assert!(latest_context_run(&[], 0).is_empty());
     }
 
     #[test]
@@ -4448,6 +4657,7 @@ mod tests {
             mode: AnalysisMode::History,
             config: AnalysisConfig::default(),
             merge_base_index: None,
+            base_ref_index: None,
             tip_index: 0,
             include_improvements,
         };
@@ -4463,6 +4673,7 @@ mod tests {
             mode,
             config: AnalysisConfig::default(),
             merge_base_index: None,
+            base_ref_index: None,
             tip_index: 0,
             include_improvements,
         };
@@ -4647,8 +4858,8 @@ mod tests {
         let mut points: Vec<(usize, f64, bool)> = Vec::new();
         for commit in 0..base_commits {
             for _ in 0..RUNS_PER_COMMIT {
-                // Repeated dirty snapshots of one tree: several stored runs, one level.
-                points.push((commit, 100.0, true));
+                // Repeated clean measurements of one tree: several stored runs, one level.
+                points.push((commit, 100.0, false));
             }
         }
         points.push((base_commits, 130.0, false));
@@ -4712,7 +4923,7 @@ mod tests {
         // The base is compared over its last `compare_window` commits, not its whole
         // history: an older, higher regime beyond that window must not drag the
         // baseline up. Here the recent window sits at 100 and the older half at 200,
-        // so a branch tip at 130 is a regression against the recent level; judged
+        // so a context run at 130 is a regression against the recent level; judged
         // against the whole base it would read as an improvement instead.
         let mut points: Vec<(usize, f64, bool)> = (0..COMPARE_WINDOW)
             .map(|index| (index, 200.0, false))
@@ -4727,9 +4938,9 @@ mod tests {
 
     #[test]
     fn branch_mode_compares_against_the_current_base_regime_after_a_shift() {
-        // The recent base window itself spans a real 200 -> 100 level shift. The branch
-        // tip is a clear regression against the current 100 level; judging the mixed
-        // window as one population would inflate the scatter and hide it.
+        // The recent base window itself spans a real 200 -> 100 level shift. The
+        // context run is a clear regression against the current 100 level; judging the
+        // mixed window as one population would inflate the scatter and hide it.
         let series = branch_after_base_shift(200.0, 100.0, MIN_REGIME, 130.0);
         assert_eq!(
             shifted_base_regime_start(&series),
@@ -4744,8 +4955,9 @@ mod tests {
     #[test]
     fn branch_mode_uses_the_most_recent_qualifying_base_split() {
         // The base window contains two real shifts, 100 -> 200 -> 100. The current
-        // regime is the final 100-level tail, so a tip at 130 is a regression against
-        // that tail rather than an improvement against the older 200-level regime.
+        // regime is the final 100-level tail, so a context run at 130 is a regression
+        // against that tail rather than an improvement against the older 200-level
+        // regime.
         let mut points: Vec<(usize, f64, bool)> =
             (0..MIN_REGIME).map(|index| (index, 100.0, false)).collect();
         points.extend(
@@ -4769,7 +4981,7 @@ mod tests {
     #[test]
     fn branch_mode_does_not_split_a_stationary_bimodal_base_window() {
         // The recorded bimodal series, cut where its recent base window happens to end
-        // on five consecutive low-mode commits, with a branch tip at the high mode the
+        // on five consecutive low-mode commits, with a context run at the high mode the
         // series reaches on roughly half of its commits. A change-point search over that
         // window proposes the split at the start of those five, and the trailing regime's
         // standard deviation is a fraction of the mixed window's — so accepting the split
@@ -4788,13 +5000,7 @@ mod tests {
             min_base_split_separation: AnalysisConfig::default().min_regime_separation,
             ..AnalysisConfig::default()
         };
-        let manufactured = evaluate_branch(
-            &series,
-            &permissive,
-            Some(merge_base),
-            &mut GateLog::disabled(),
-        )
-        .unwrap();
+        let manufactured = evaluate_branch(&series, &permissive, &mut GateLog::disabled()).unwrap();
         assert_eq!(manufactured.finding.direction, Direction::Regression);
         assert!(
             manufactured.finding.relative_delta > 0.5,
@@ -4871,7 +5077,7 @@ mod tests {
         // A timing series whose base window steps up partway and then holds exactly
         // flat. Narrowing onto that trailing regime would leave the prediction interval
         // without scatter or quantum and silence the series entirely, so the window stays
-        // whole and the elevated tip is still reported.
+        // whole and the elevated context run is still reported.
         let mut points: Vec<(usize, f64, bool)> = (0..(COMPARE_WINDOW - MIN_REGIME - 2))
             .map(|i| (i, 100.0, false))
             .collect();
@@ -4938,12 +5144,12 @@ mod tests {
     fn branch_mode_recovers_at_the_minimum_trailing_regime() {
         // With `min_regime = 5`, five current-level base commits are enough to form the
         // comparison regime, while four are not enough to accept the split and still
-        // leave the mixed window too unsettled to report the same tip. Both a halving of
-        // the base level and a much shallower step recover at the same commit, so the
-        // recovery lag is set by the regime floor rather than by the size of the base
-        // step.
-        for (old, current, tip) in [(200.0, 100.0, 130.0), (120.0, 100.0, 115.0)] {
-            let exactly_enough = branch_after_base_shift(old, current, MIN_REGIME, tip);
+        // leave the mixed window too unsettled to report the same context run. Both a
+        // halving of the base level and a much shallower step recover at the same
+        // commit, so the recovery lag is set by the regime floor rather than by the size
+        // of the base step.
+        for (old, current, context) in [(200.0, 100.0, 130.0), (120.0, 100.0, 115.0)] {
+            let exactly_enough = branch_after_base_shift(old, current, MIN_REGIME, context);
             assert_eq!(
                 shifted_base_regime_start(&exactly_enough),
                 COMPARE_WINDOW - MIN_REGIME,
@@ -4959,7 +5165,7 @@ mod tests {
                 "old={old} current={current}"
             );
 
-            let one_short = branch_after_base_shift(old, current, MIN_REGIME - 1, tip);
+            let one_short = branch_after_base_shift(old, current, MIN_REGIME - 1, context);
             assert_eq!(
                 shifted_base_regime_start(&one_short),
                 0,
@@ -4976,7 +5182,7 @@ mod tests {
     fn branch_mode_does_not_split_a_noise_only_base_window() {
         // A realistic 2-3% deterministic wobble is not a regime boundary. The helper
         // returning zero proves no suffix was accepted as a current-regime split, and a
-        // tip that stays inside the same wobble remains silent.
+        // context run that stays inside the same wobble remains silent.
         let mut points = vec![
             (0, 100.0, false),
             (1, 102.0, false),
@@ -5004,9 +5210,9 @@ mod tests {
     #[test]
     fn branch_mode_pure_noise_batch_produces_no_findings() {
         // Forty independently seeded branch-mode series: a stationary wall-time level with
-        // realistic scatter in the base window, and a tip drawn from that same distribution.
-        // Nothing changed in any of them, so none may become a finding — and in particular
-        // none may become one through a base split drawn across noise.
+        // realistic scatter in the base window, and a context run drawn from that same
+        // distribution. Nothing changed in any of them, so none may become a finding — and
+        // in particular none may become one through a base split drawn across noise.
         //
         // The scatter is wide enough, relative to the branch floors, that a base split can
         // clear them: the controls below manufacture findings out of this very data by
@@ -5050,7 +5256,7 @@ mod tests {
                 noise_regime_start(series, &config),
                 0,
                 "narrowing fired on pure-noise window {index}, where a narrowed base sample \
-                 clears the branch floors and turns the tip into a finding"
+                 clears the branch floors and turns the context run into a finding"
             );
         }
 
@@ -5060,15 +5266,7 @@ mod tests {
         // failure this fixture stands guard over.
         let candidates = batch
             .iter()
-            .filter(|series| {
-                evaluate_branch(
-                    series,
-                    &config,
-                    Some(NOISE_MERGE_BASE),
-                    &mut GateLog::disabled(),
-                )
-                .is_some()
-            })
+            .filter(|series| evaluate_branch(series, &config, &mut GateLog::disabled()).is_some())
             .count();
         assert_eq!(candidates, 0);
 
@@ -5083,13 +5281,7 @@ mod tests {
         let manufactured = batch
             .iter()
             .filter(|series| {
-                evaluate_branch(
-                    series,
-                    &permissive,
-                    Some(NOISE_MERGE_BASE),
-                    &mut GateLog::disabled(),
-                )
-                .is_some()
+                evaluate_branch(series, &permissive, &mut GateLog::disabled()).is_some()
             })
             .count();
         assert!(
@@ -5132,7 +5324,7 @@ mod tests {
     const NOISE_SPLIT_SHARE: usize = 8;
 
     /// Forty stationary wall-time series, each with its own scatter sequence, laid out as
-    /// a full base window followed by a single branch tip.
+    /// a full base window followed by a single context run.
     fn pure_noise_branch_batch() -> Vec<Series> {
         const BATCH: usize = 40;
 
@@ -5147,6 +5339,7 @@ mod tests {
                     .map(|(offset, &value)| (offset, value, false))
                     .collect();
                 let mut series = placed_series_of_kind(&points, MetricKind::WallTime);
+                attach_test_base_windows(slice::from_mut(&mut series), Some(NOISE_MERGE_BASE));
                 series.id = BenchmarkId::new(nonempty![name, "case".to_owned()]);
                 series
             })
@@ -5162,20 +5355,20 @@ mod tests {
     }
 
     /// Whether some trailing slice of a [`pure_noise_branch_batch`] base window, short of the
-    /// whole window, turns the tip into a reported move.
+    /// whole window, turns the context run into a reported move.
     ///
     /// This is what an implementation that split at an arbitrary index would be doing, so a
     /// window for which this holds is one the split gate has to decline.
     fn a_narrowed_split_would_report(series: &Series, config: &AnalysisConfig) -> bool {
         let borrowed: Vec<&SeriesPoint> = series.points.iter().collect();
         let base = recent_commits(borrowed.get(..COMPARE_WINDOW).unwrap(), COMPARE_WINDOW);
-        let tip = borrowed.get(COMPARE_WINDOW..).unwrap().to_vec();
+        let context = borrowed.get(COMPARE_WINDOW..).unwrap().to_vec();
         (1..=base.len().saturating_sub(MIN_REGIME)).any(|start| {
             let narrowed = base.get(start..).unwrap().to_vec();
             compare_samples(
                 series,
                 &narrowed,
-                &tip,
+                &context,
                 config,
                 config.branch_practical_relative,
                 None,
@@ -5196,10 +5389,10 @@ mod tests {
     }
 
     #[test]
-    fn branch_mode_is_silent_when_the_tip_matches_the_current_base_regime() {
+    fn branch_mode_is_silent_when_context_matches_the_current_base_regime() {
         // The detector narrows the base to the current 100-level regime, but a branch
-        // tip that agrees with it has no move to report. The unsettled mixed window must
-        // not manufacture a finding.
+        // context run that agrees with it has no move to report. The unsettled mixed
+        // window must not manufacture a finding.
         let series = branch_after_base_shift(200.0, 100.0, MIN_REGIME, 100.0);
         assert_eq!(
             shifted_base_regime_start(&series),
@@ -5211,7 +5404,7 @@ mod tests {
     #[test]
     fn branch_mode_reports_an_improvement_against_the_current_base_regime() {
         // The same base-regime narrowing works in the improvement direction: the recent
-        // base has moved up to 200 and the branch tip improves it to 150.
+        // base has moved up to 200 and the context run improves it to 150.
         let series = branch_after_base_shift(100.0, 200.0, MIN_REGIME, 150.0);
         assert_eq!(
             shifted_base_regime_start(&series),
@@ -5310,7 +5503,10 @@ mod tests {
         // judge it against; either shortfall leaves the series unjudged for its own
         // reason, and detection stays silent in step with that.
         let no_branch_side = [placed_series(&base_run(100.0))];
-        let context = branch_context(&no_branch_side, Some(base_merge_base()));
+        let context = AnalysisContext {
+            tip_index: base_merge_base().saturating_add(1),
+            ..branch_context(&no_branch_side, Some(base_merge_base()))
+        };
         assert_eq!(
             testability(&no_branch_side[0], &context),
             Testability::Unjudged(UnjudgedReason::NotMeasuredOnBranch)
@@ -5903,7 +6099,10 @@ mod tests {
         // merge base is the only thing that distinguishes the two.
         let mut values = vec![100.0; MIN_SERIES_POINTS];
         values.push(130.0);
-        let series = examples::series("branch", &values, MetricKind::InstructionCount, 0);
+        let series = examples::with_base_window(
+            examples::series("branch", &values, MetricKind::InstructionCount, 0),
+            MIN_SERIES_POINTS - 1,
+        );
         let context = examples::branch_context(&series, MIN_SERIES_POINTS - 1);
         let finding = only(find_changes(slice::from_ref(&series), &context).findings);
         assert_eq!(finding.direction, Direction::Regression);

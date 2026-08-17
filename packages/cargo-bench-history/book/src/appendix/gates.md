@@ -57,10 +57,10 @@ a gate ladder is often short. That is an accurate picture, not a truncated one.
 Two things in those tables are easy to miss:
 
 - **Branch mode uses a higher relative floor than history mode.** A branch comparison rests on a
-  single tip observation, and a pull request that cries wolf gets ignored, so the bar is raised.
+  single context observation, and a pull request that cries wolf gets ignored, so the bar is raised.
 - **The interval checks are not applied uniformly.** Disjointness is checked wherever two regimes
-  are compared — a change point, or a branch tip against its base. The noise band belongs to drift
-  and branch. A detector applies an interval check only where the comparison it makes has a
+  are compared — a change point, or a context commit against its base. The noise band belongs to
+  drift and branch. A detector applies an interval check only where the comparison it makes has a
   meaningful interval to check.
 
 ## Gate logic: is the move big enough to matter? (`relative_floor`, `absolute_floor`)

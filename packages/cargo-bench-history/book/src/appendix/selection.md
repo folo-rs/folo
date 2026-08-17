@@ -67,7 +67,7 @@ the rest of the pipeline will answer about the series. There are two, and later 
 detection above all — branch on the one selection chose:
 
 - **History mode** — does a level move somewhere in an official branch's own history?
-- **Branch mode** — is a feature branch's tip off the base it would merge into?
+- **Branch mode** — is the analyzed context commit off the base it would merge into?
 
 There is no flag to force the choice. The tool reads two signals:
 
@@ -161,17 +161,17 @@ recorded data, and hiding points there would defeat its purpose. `prune` is a ma
 command with its own selection rules — notably no default `--since` — because deleting data
 by accident is much worse than analyzing too little.
 
-## An off-chain merge base is a hard error
+## A base merged into the branch is supported
 
-The merge base must lie on the context's first-parent line. If it resolves but sits off that
-line — which happens when the base was merged *into* the branch rather than the branch being
-rebased onto it — there is no point at which to split the branch from its base, and so no
-baseline to compare against. That is as un-analyzable as a merge base that cannot be resolved at
-all, so it stops the operation with an error rather than silently analyzing a topology it cannot
-compare.
+Branch mode builds its comparison window from the base ref's own recent first-parent history,
+anchored at the base ref. The context commit's first-parent line is still the line that `list`,
+`examine`, and `prune` display or maintain, but it is not split to obtain branch mode's baseline.
+Whether the branch was rebased onto the base, the base was merged into the branch, or both
+happened during development does not change the comparison window.
 
-Rebase the branch onto its base, or analyze a `--context` whose first-parent history reaches the
-merge base.
+The merge base is consulted only as a shared-history check. If no merge base can be resolved at
+all, the repository checkout is too shallow or the refs are disjoint, and selection stops with the
+existing merge-base-unavailable error.
 
 ## What selection hands on
 

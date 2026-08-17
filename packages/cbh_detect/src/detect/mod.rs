@@ -43,6 +43,6 @@ pub use parallel::{balanced_chunk_sizes, worker_count};
 pub use run_points::{MetricPoint, ResultPoints, RunPoints};
 pub use selection::{DirtyAdmission, SelectedCommit, select_commits};
 pub use series::{
-    Blessing, BlessingPlacement, LoadedObject, Series, SeriesBuilder, SeriesFilter, SeriesPoint,
-    apply_blessings, build_series, retain_present_at_context,
+    BaseLevel, Blessing, BlessingPlacement, LoadedObject, Series, SeriesBuilder, SeriesFilter,
+    SeriesPoint, apply_blessings, attach_base_windows, build_series, retain_present_at_context,
 };

@@ -90,7 +90,7 @@ comparison base
 </text>
 <polyline fill="none" opacity="1" stroke="#D64541" stroke-width="2" points="621,253 621,34 "/>
 <text x="621" y="34" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#D64541">
-branch tip
+context commit
 </text>
 <circle cx="96" cy="228" r="3" opacity="1" fill="#306EC8" stroke="none" stroke-width="1"/>
 <circle cx="142" cy="225" r="3" opacity="1" fill="#306EC8" stroke="none" stroke-width="1"/>

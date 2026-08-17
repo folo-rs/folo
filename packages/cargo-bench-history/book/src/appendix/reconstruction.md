@@ -125,10 +125,10 @@ with **dirty snapshots** — repeated measurements of an uncommitted working tre
 admitted only on the target side (see [Selection](selection.md#dirty-admission)).
 
 History mode admits no dirty runs, so every commit it reconstructs contributes exactly one
-point. Branch mode judges only the branch tip, and only the tip's **latest** run: its clean
-run, or the newest dirty snapshot taken on top of it. An earlier run at the tip is a superseded
-state, not what a merge would land, so it takes no part. Either way the tip is a single
-observation, judged against a base that is itself one clean point per commit.
+point. Branch mode judges only the context commit, and only that commit's **latest** run: its clean
+run, or the newest dirty snapshot taken on top of it. An earlier run at the context commit is a
+superseded state, not what is being evaluated, so it takes no part. Either way the context is a
+single observation, judged against a base that is itself one clean point per commit.
 
 ## What reconstruction hands on
 
@@ -136,4 +136,3 @@ A set of series, each an ordered sequence of points, with ghosts removed and ble
 sliced to their active window.
 
 Next: [Detection](detection.md).
-

@@ -13,9 +13,8 @@ use jiff::Timestamp;
 use super::selection::Selection;
 use crate::{
     AnalyzeError, BaseBranchUnavailableError, DefaultBranchProbeFailedError,
-    FirstParentWalkFailedError, MergeBaseFailedError, MergeBaseOffFirstParentError,
-    MergeBaseUnavailableError, ResolveRefFailedError, UnresolvedRefError,
-    WorkingTreeProbeFailedError,
+    FirstParentWalkFailedError, MergeBaseFailedError, MergeBaseUnavailableError,
+    ResolveRefFailedError, UnresolvedRefError, WorkingTreeProbeFailedError,
 };
 
 /// How the base-branch dirty-tip exception is gated.
@@ -45,13 +44,15 @@ pub(crate) struct ResolvedHistory {
     /// for the effective-selection summary. Always present: `resolve_history`
     /// refuses to build a `ResolvedHistory` when no base can be resolved.
     pub(crate) base_name: String,
-    /// The full commit ID the target ref resolved to — the analyzed tip commit, carried
-    /// into the report so it names the exact commit the findings describe.
+    /// The full commit ID the base ref resolved to.
+    pub(crate) base_commit: String,
+    /// The full commit ID the target ref resolved to — the analyzed context commit,
+    /// carried into the report so it names the exact commit the findings describe.
     pub(crate) tip_commit: String,
     /// Whether the working tree carried uncommitted changes when the topology was
     /// resolved. Probed only under [`DirtyTipPolicy::WhenWorkingTreeDirty`] (and
-    /// not under `--no-dirty`); `false` otherwise. The report annotates the tip
-    /// `+ uncommitted changes` when set.
+    /// not under `--no-dirty`); `false` otherwise. The report annotates the context
+    /// commit `+ uncommitted changes` when set.
     pub(crate) tip_dirty: bool,
     /// First-parent position of each selected commit, for series ordering. An
     /// object whose commit is absent is outside the analyzed history.
@@ -74,12 +75,10 @@ pub(crate) struct ResolvedHistory {
     /// Whether a commit's dirty runs are admitted *only* by the base-branch
     /// dirty-tree exception, which triggers the ephemeral-data warning.
     pub(crate) dirty_base_exception: HashMap<String, bool>,
-    /// First-parent topological index of the merge-base, used by branch mode to
-    /// split base-side history from the branch's own commits. `resolve_history`
-    /// always populates it: both an unresolvable merge-base and one off the target's
-    /// first-parent line are hard errors, so a resolved history always has a split
-    /// point. The `Option` is retained for the downstream consumers that predate the
-    /// off-chain hard error.
+    /// First-parent topological index of the merge-base on the context line, when it
+    /// lies there. `None` is normal for a branch that merged the base ref into itself:
+    /// the context-line consumers still keep their own first-parent order, while
+    /// branch analysis loads the base ref's own first-parent window separately.
     pub(crate) merge_base_index: Option<usize>,
     /// Whether the target's tip *is* its own merge-base with the base: the signal
     /// that this is an official base-branch view rather than a feature branch.
@@ -122,11 +121,10 @@ where
         .into());
     };
 
-    // A base branch is required: the analysis splits the target's first-parent line
-    // at its merge-base with the base, so a run with no resolvable base has no
-    // topology to split on. Refuse before walking the ancestry rather than carrying
-    // an unresolved base through. The usual cause is a shallow clone or a checkout
-    // that never fetched the base branch.
+    // A base branch is required: mode detection, branch comparisons, and base-branch
+    // dirty-run admission all need a resolved base ref. Refuse before walking the
+    // ancestry rather than carrying an unresolved base through. The usual cause is a
+    // shallow clone or a checkout that never fetched the base branch.
     let Some(ResolvedBase {
         name: base_name,
         commit: base_commit_id,
@@ -176,13 +174,12 @@ where
         ));
     });
 
-    // The analysis is a comparison against the base branch: it splits the target's
-    // first-parent line at the merge-base. A merge-base we cannot determine leaves
-    // no topology to split on, and guessing a mode from the incomplete history would
-    // silently mislead — so refuse and say how to supply the missing history. The
-    // base resolved (checked above), so the only remaining cause is a shallow clone
-    // whose depth stops short of the branch point, or a checkout that never fetched
-    // the base branch.
+    // The target and base must share history. A merge-base we cannot determine leaves
+    // no reliable branch relationship, and guessing a mode from the incomplete history
+    // would silently mislead — so refuse and say how to supply the missing history.
+    // The base resolved (checked above), so the only remaining cause is a shallow
+    // clone whose depth stops short of the branch point, or a checkout that never
+    // fetched the base branch.
     let Some(merge_base) = merge_base else {
         // The base resolved, but shares no common ancestor with the target. By far
         // the usual cause is a shallow clone whose depth stops short of the branch
@@ -254,23 +251,11 @@ where
         .map(|one| (one.commit.clone(), one.dirty.is_base_exception()))
         .collect();
 
-    // The merge-base's topological position (when it is on the analyzed chain)
-    // splits base-side history from the branch's own commits in branch mode. A
-    // merge-base that resolved but is not on the target's first-parent line leaves no
-    // split point: the branch cannot be separated from its base, so a comparison would
-    // find an empty base and silently report nothing. That is as un-analyzable as an
-    // unresolvable merge-base, so it is a hard error rather than a quiet degenerate run.
-    // The usual cause is the base having been merged into the branch instead of the
-    // branch being rebased onto the base.
-    let Some(merge_base_index) = order.get(&merge_base).copied() else {
-        return Err(MergeBaseOffFirstParentError::new(
-            target_ref,
-            &target_commit_id,
-            &base_commit_id,
-            &merge_base,
-        )
-        .into());
-    };
+    // The context-line consumers keep their own first-parent order. When the base ref
+    // was merged into a feature branch, the merge-base is the base ref and is not on
+    // the context's first-parent line; branch analysis handles that by walking the
+    // base ref separately, so the context-line split is simply absent.
+    let merge_base_index = order.get(&merge_base).copied();
     // The target's tip is its own merge-base exactly when this is an official
     // base-branch view rather than a feature branch.
     let tip_is_merge_base = merge_base == target_commit_id;
@@ -278,6 +263,7 @@ where
     Ok(ResolvedHistory {
         target_ref: target_ref.to_owned(),
         base_name,
+        base_commit: base_commit_id,
         tip_commit: target_commit_id,
         tip_dirty: working_tree_dirty,
         order,
@@ -286,7 +272,7 @@ where
         commit_subjects,
         admit_dirty,
         dirty_base_exception,
-        merge_base_index: Some(merge_base_index),
+        merge_base_index,
         tip_is_merge_base,
     })
 }

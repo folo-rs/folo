@@ -135,17 +135,15 @@ impl Mode {
         matches!(self, Self::Branch)
     }
 
-    /// The analysis context this mode is evaluated under. `merge_base_index` is consulted
-    /// only by branch mode; history ignores it.
+    /// The analysis context this mode is evaluated under. `merge_base_index` and
+    /// `tip_index` are consulted only by branch mode; history ignores them.
     ///
     /// `include_improvements` is set from [`reports_improvements`](Self::reports_improvements)
     /// so the context matches the mode's intended reporting semantics: branch (which
     /// reports both directions) opts in, history opts out. Branch mode ignores the
     /// flag today, but pinning it consistently keeps the context correct if that changes.
     ///
-    /// `tip_index` feeds only the chart's trailing gap, which these detection-outcome
-    /// cases never inspect, so it is pinned to zero.
-    fn context(self, merge_base_index: Option<usize>) -> AnalysisContext {
+    fn context(self, merge_base_index: Option<usize>, tip_index: usize) -> AnalysisContext {
         let mode = match self {
             Self::History => AnalysisMode::History,
             Self::Branch => AnalysisMode::Branch,
@@ -154,7 +152,8 @@ impl Mode {
             mode,
             config: AnalysisConfig::default(),
             merge_base_index,
-            tip_index: 0,
+            base_ref_index: merge_base_index,
+            tip_index,
             include_improvements: self.reports_improvements(),
         }
     }
@@ -308,6 +307,18 @@ impl SignalCase {
         self.base.len().checked_sub(1)
     }
 
+    /// The context commit index for branch mode: the newest declared point.
+    fn tip_index(&self) -> usize {
+        if self.branch.is_empty() {
+            return self.base.len();
+        }
+        self.base
+            .len()
+            .checked_add(self.branch.len())
+            .and_then(|points| points.checked_sub(1))
+            .unwrap_or(0)
+    }
+
     /// The outcome `mode` is expected to see in this case.
     fn expected_outcome(&self, mode: Mode) -> Outcome {
         match mode {
@@ -363,7 +374,7 @@ fn run_of(value: f64, count: usize) -> Vec<f64> {
 /// The count is bounded on both sides by the cases themselves, and both bounds are
 /// measured rather than predicted. The deliberately marginal case survives up to seven
 /// companions and falls silent at eight, so eight is the floor below which dimension 3
-/// stops discriminating anything. The weakest genuine case — the branch tip above a
+/// stops discriminating anything. The weakest genuine case — the context run above a
 /// freshly shifted base, whose branch-side evidence is a single point — survives up to
 /// 309 companions and falls silent at 310, so 309 is the ceiling above which the suite
 /// starts denying real signals. Neither edge is a place to sit, so the crowd is the
@@ -442,7 +453,7 @@ fn cases() -> Vec<SignalCase> {
             .base(STATIONARY_BIMODAL_NOISE.to_vec())
             .recorded(),
         // The same recording judged by branch mode, which reads only the recent base
-        // window and one tip commit. The window is cut where the recording happens to
+        // window and one context commit. The window is cut where the recording happens to
         // end on five consecutive low-mode commits, and the tip sits at the high mode the
         // series reaches on roughly half of its commits — an entirely ordinary value.
         // Accepting that trailing run as the current base regime would discard the rest
@@ -501,7 +512,7 @@ fn cases() -> Vec<SignalCase> {
         .expects(Outcome::Rise, Outcome::Quiet)
         .crowded_out(),
         // Matched pair, part one. The base branch itself stepped down recently, and the
-        // branch tip sits above the level it stepped down to. Branch mode narrows its
+        // context run sits above the level it stepped down to. Branch mode narrows its
         // comparison to the current base regime and reports the rise; measured against
         // the whole stale window the tip would be lost under the old high level. History
         // reads the series as one large fall — an improvement it does not report.
@@ -512,7 +523,7 @@ fn cases() -> Vec<SignalCase> {
         .base([run_of(200.0, 11), run_of(100.0, MIN_REGIME)].concat())
         .branch(run_of(130.0, 1))
         .expects(Outcome::Fall, Outcome::Rise),
-        // Matched pair, part two: the same freshly shifted base, with a branch tip that
+        // Matched pair, part two: the same freshly shifted base, with a context run that
         // agrees with the current base regime. Branch mode must stay quiet. Together the
         // pair states that narrowing the comparison to the current base regime restores
         // sensitivity without manufacturing findings on branches that changed nothing —
@@ -572,18 +583,25 @@ fn companions(
     kind: MetricKind,
     level: f64,
     merge_base: Option<usize>,
+    tip_index: usize,
 ) -> Vec<Series> {
     let branch_start = merge_base.map_or(0, |index| index.checked_add(1).unwrap());
     let base_points = branch_start.min(MIN_SERIES_POINTS);
     let topo_start = branch_start.checked_sub(base_points).unwrap();
-    let branch_points = MIN_SERIES_POINTS.saturating_sub(base_points).max(1);
+    let branch_points = merge_base.map_or(MIN_SERIES_POINTS, |index| {
+        tip_index.saturating_sub(index).max(1)
+    });
     let points = base_points.checked_add(branch_points).unwrap();
 
     (0..count)
         .map(|index| {
             let name = format!("companion{index}");
             let values = with_noise(&run_of(level, points), kind, seed_of(&name));
-            examples::series(&name, &values, kind, topo_start)
+            let series = examples::series(&name, &values, kind, topo_start);
+            match merge_base {
+                Some(base_ref) => examples::with_base_window(series, base_ref),
+                None => series,
+            }
         })
         .collect()
 }
@@ -618,6 +636,10 @@ fn raises_finding(
     crowd: usize,
 ) -> bool {
     let curated = examples::series(CURATED_NAME, values, kind, 0);
+    let curated = match (context.mode, context.merge_base_index) {
+        (AnalysisMode::Branch, Some(base_ref)) => examples::with_base_window(curated, base_ref),
+        _ => curated,
+    };
     let curated_id = curated.id.qualified();
     let mut batch = vec![curated];
     batch.extend(companions(
@@ -625,6 +647,7 @@ fn raises_finding(
         kind,
         mean_of(values),
         context.merge_base_index,
+        context.tip_index,
     ));
 
     let detection = find_changes(&batch, context);
@@ -682,7 +705,7 @@ fn curated_signals_match_expected_verdicts() {
         let values = case.values();
         let kind = case.kind;
         for mode in Mode::ALL {
-            let context = mode.context(case.merge_base_index());
+            let context = mode.context(case.merge_base_index(), case.tip_index());
             let expected = case.expected_outcome(mode).is_finding(mode);
 
             // Dimension 1: the as-is verdict under this mode matches the hand-picked
@@ -754,7 +777,7 @@ fn scaling_a_quantized_move_can_clear_the_absolute_floor() {
     let scaled_values = scaled(&values, SCALE_MULTIPLE);
 
     for mode in Mode::ALL {
-        let context = mode.context(Some(FLOOR_MERGE_BASE));
+        let context = mode.context(Some(FLOOR_MERGE_BASE), values.len().saturating_sub(1));
         assert!(!raises_finding(&values, kind, &context, ALONE));
         assert!(raises_finding(&scaled_values, kind, &context, ALONE));
     }
@@ -785,7 +808,7 @@ fn scaling_a_sub_nanosecond_move_can_clear_the_absolute_floor() {
     let scaled_values = scaled(&values, SCALE_MULTIPLE);
 
     for mode in Mode::ALL {
-        let context = mode.context(Some(FLOOR_MERGE_BASE));
+        let context = mode.context(Some(FLOOR_MERGE_BASE), values.len().saturating_sub(1));
         assert!(!raises_finding(&values, kind, &context, ALONE));
         assert!(raises_finding(&scaled_values, kind, &context, ALONE));
     }
@@ -808,9 +831,15 @@ fn companion_crowds_report_nothing_of_their_own() {
         let values = case.values();
         for scale in [1.0, SCALE_MULTIPLE] {
             let level = mean_of(&scaled(&values, scale));
-            let crowd = companions(CROWD_COMPANIONS, case.kind, level, case.merge_base_index());
+            let crowd = companions(
+                CROWD_COMPANIONS,
+                case.kind,
+                level,
+                case.merge_base_index(),
+                case.tip_index(),
+            );
             for mode in Mode::ALL {
-                let context = mode.context(case.merge_base_index());
+                let context = mode.context(case.merge_base_index(), case.tip_index());
                 let detection = find_changes(&crowd, &context);
                 assert!(
                     detection.findings.is_empty(),
@@ -822,7 +851,7 @@ fn companion_crowds_report_nothing_of_their_own() {
 
                 let both_directions = AnalysisContext {
                     include_improvements: true,
-                    ..mode.context(case.merge_base_index())
+                    ..mode.context(case.merge_base_index(), case.tip_index())
                 };
                 for finding in find_changes(&crowd, &both_directions).findings {
                     assert_eq!(
@@ -876,12 +905,12 @@ fn a_batch_of_flat_noisy_series_raises_nothing() {
         .map(|index| {
             let name = format!("flat{index}");
             let values = with_noise(&run_of(LEVEL, POINTS), kind, seed_of(&name));
-            examples::series(&name, &values, kind, 0)
+            examples::with_base_window(examples::series(&name, &values, kind, 0), MERGE_BASE)
         })
         .collect();
 
     for mode in Mode::ALL {
-        let context = mode.context(Some(MERGE_BASE));
+        let context = mode.context(Some(MERGE_BASE), POINTS.saturating_sub(1));
         let detection = find_changes(&batch, &context);
         assert_eq!(
             detection.census.judged(),
@@ -938,7 +967,10 @@ fn evidence_below_the_minimum_is_not_judged() {
     );
     let series = examples::series(CURATED_NAME, &values, kind, 0);
 
-    let detection = find_changes(slice::from_ref(&series), &Mode::History.context(None));
+    let detection = find_changes(
+        slice::from_ref(&series),
+        &Mode::History.context(None, values.len().saturating_sub(1)),
+    );
 
     assert!(detection.findings.is_empty());
     assert_eq!(detection.census.judged(), 0);

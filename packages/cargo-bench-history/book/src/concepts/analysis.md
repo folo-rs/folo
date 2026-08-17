@@ -55,11 +55,11 @@ on a move that is noise at its scale.
 > metric. The [Noise gates](../appendix/gates.md) appendix chapter walks every one of them, with
 > the current values and worked examples.
 
-## Judging a branch tip
+## Judging a context commit
 
 [Branch mode](#analysis-modes) asks a different question from history mode — not "did this
 series change somewhere" but "is one new commit at this level surprising, given how much the
-base level moves from commit to commit?" Two properties follow from that:
+base ref's level moves from commit to commit?" Two properties follow from that:
 
 - **A commit is one observation.** Several stored runs at one commit are re-measurements of a
   single build on a single runner, not independent evidence about the base level, so each
@@ -68,11 +68,11 @@ base level moves from commit to commit?" Two properties follow from that:
   a handful of commits wherever a repository records several runs each. History mode does not
   collapse this way: it ranks the series' raw points, so a commit carrying several stored runs
   weighs on it once per run.
-- **One new observation, not a second sample.** The tip is judged against a **prediction
-  interval** for a single future observation drawn from the recent base commits, so the interval
-  accounts for both how much the base level scatters and how well those few commits pin down its
-  centre. The move the finding reports is measured from that same centre, so the number you read
-  is the number that was tested.
+- **One new observation, not a second sample.** The context commit is judged against a
+  **prediction interval** for a single future observation drawn from the recent base-ref commits,
+  so the interval accounts for both how much the base level scatters and how well those few
+  commits pin down its centre. The move the finding reports is measured from that same centre, so
+  the number you read is the number that was tested.
 
 Branch mode also holds its relative floor above history's — a pull-request comment is read by
 everyone who touches the branch, so a false alarm costs more there. Where the engine reports
@@ -114,28 +114,28 @@ were not:
 ```text
 No notable changes detected among the series that were judged.
   Judged 12 of 13 in-scope series; no reportable move survived the gates.
-  Not judged: 1 series not measured at the analyzed tip commit; 1 series with too few points
+  Not judged: 1 series not measured at the analyzed context commit; 1 series with too few points
   in the analyzed window.
 ```
 
 A series is not judged when it was dropped before detection or could not clear the evidence
 the gates require:
 
-- **not measured at the analyzed tip commit** — the benchmark is no longer part of the suite
-  at the commit being analysed, so a change on it is history, not news.
+- **not measured at the analyzed context commit** — the benchmark is no longer part of the suite
+  at the context commit being analysed, so a change on it is history, not news.
 - **too few points in the analyzed window** — the series is shorter than the minimum the mode's
   detector evaluates.
 - **too few points since its blessing** — long enough overall, but its
   [active segment](#re-baselining) is not.
-- **not measured on the branch** — branch mode has no tip-side measurement to judge.
-- **too few base-branch commits to compare against** — branch mode has a tip measurement but
-  too little base history to compare it with.
+- **not measured on the branch** — branch mode has no context measurement to judge.
+- **too few base-ref commits to compare against** — branch mode has a context measurement but
+  too little base-ref history to compare it with.
 
 `Judged 0 of N` is the case to watch: nothing was tested, so the no-reportable-move line is
 not evidence that every measured level stayed flat. The report says so outright. It usually
-means history is still accumulating, or that the benchmarks stopped being collected at the tip
+means history is still accumulating, or that the benchmarks stopped being collected at the context
 commit. When nothing was in scope at all there is no ratio to print, and the report says
-instead that none of the accounted-for series is in scope at the analyzed commit; with no
+instead that none of the accounted-for series is in scope at the analyzed context commit; with no
 series reconstructed at all it leads with the fact that nothing was analyzed.
 
 The denominator is the series that *could* have been judged, which excludes ghosts — and the
@@ -160,33 +160,32 @@ modes, auto-detected from git topology (there is no flag to force a mode):
 |---|---|---|
 | Change-point (Pettitt + engine gating) | ✅ | — |
 | Monotonic drift (Mann–Kendall + Theil–Sen) | ✅ | — |
-| Tip commit vs. base (Student-t prediction interval) | — | ✅ |
+| Context commit vs. base (Student-t prediction interval) | — | ✅ |
 | Benjamini–Hochberg false-discovery filter | ✅ | ✅ |
 | Improvements reported | opt-in | ✅ |
 
 - **history** — the base-branch view: long-range change-point and drift detection; reports
   regressions only by default.
-- **branch** — the feature-branch view: judges the tip commit's latest state against the
-  base, reporting both directions. Only the tip commit lands in the base on merge, so the
-  branch's own intermediate history is ignored.
+- **branch** — the feature-branch view: judges the context commit's latest state against the
+  base ref, reporting both directions. The branch's own intermediate history is ignored.
 
 ## Comparison-base lag
 
-Branch mode compares the tip against the recent base-side points for the **same project** and
-the **same** discriminant set — same engine, target triple, and machine key.
+Branch mode compares the context commit against the recent base-ref points for the **same
+project** and the **same** discriminant set — same engine, target triple, and machine key.
 Measurements are never compared across machine keys, so on rotating CI pools, where the newest
-base commits may have run on a different machine, the branch runner's key can have usable base
-data only a few commits behind the merge-base. The comparison quietly reaches back in history.
+base-ref commits may have run on a different machine, the context run's key can have usable base
+data only a few commits behind the base ref. The comparison quietly reaches back in history.
 
 `analyze` discloses this per affected discriminant set, naming how far behind the comparison
 base is and why:
 
-- **discriminant set mismatch** — a newer base run for the benchmark and metric exists, but
+- **discriminant set mismatch** — a newer base-ref run for the benchmark and metric exists, but
   under a different machine key. This is pool rotation, not a gap in coverage.
-- **no base data at more recent commits** — no newer base run exists for that series at all.
+- **no base data at more recent commits** — no newer base-ref run exists for that series at all.
 
-The warning is advisory metadata: it explains *what the tip was actually compared against* and
-never changes which findings are reported or the exit code.
+The warning is advisory metadata: it explains *what the context commit was actually compared
+against* and never changes which findings are reported or the exit code.
 
 ## Re-baselining
 
@@ -239,13 +238,13 @@ and the gate rule that declined it.
 Human-readable findings include a compact, **topology-accurate** chart: one column per
 first-parent commit from the first observation onward, so a commit with no measurement
 renders as a gap (a broken line) rather than being collapsed away. Leading gaps are trimmed
-and interior gaps kept, and a trailing gap up to the analyzed tip is the visual form of the
-"no newer data" disclosure — a benchmark not measured on the most recent commits. History
+and interior gaps kept, and a trailing gap up to the analyzed context commit is the visual form of
+the "no newer data" disclosure — a benchmark not measured on the most recent commits. History
 mode shows the full selected series, including pre-blessing context; branch mode shows the
-comparison baseline and a bounded recent tail ending at the tip, dropping the interior branch
-commits and drawing the [comparison-base lag](#comparison-base-lag) as the empty columns
-between the newest base observation and the tip, so the commit being judged remains visible
-without compressing months of history into the same chart.
+comparison baseline and a bounded recent tail ending at the context commit, dropping the interior
+branch commits and drawing the [comparison-base lag](#comparison-base-lag) as the empty columns
+between the newest base observation and the context commit, so the commit being judged remains
+visible without compressing months of history into the same chart.
 
 There is **no severity classification**: a finding's magnitude is conveyed by its
 relative-change percent, and which findings warrant action is left to human or agent judgment.

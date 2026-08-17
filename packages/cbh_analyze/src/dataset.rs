@@ -7,7 +7,10 @@ use std::time::Instant;
 
 use anyspawn::Spawner;
 use cbh_config::Config;
-use cbh_detect::{AnalysisMode, BlessingPlacement, DiscriminantSetQuery, Series, SeriesFilter};
+use cbh_detect::{
+    AnalysisConfig, AnalysisMode, BlessingPlacement, DiscriminantSetQuery, Series, SeriesFilter,
+    attach_base_windows,
+};
 use cbh_diag::{Reporter, ReporterExt, count_noun};
 use cbh_git::GitHistory;
 use cbh_model::{BenchmarkIdPrefix, BlessingRecord, DiscriminantSet, StorageKey};
@@ -26,7 +29,9 @@ use super::load::{
 };
 use super::selection::Selection;
 use super::window::{auto_mode, before_since_cutoff, resolve_since, since_cutoff_reason};
-use crate::{AnalyzeError, InvalidBlessingError, InvalidStoredUtf8Error};
+use crate::{
+    AnalyzeError, FirstParentWalkFailedError, InvalidBlessingError, InvalidStoredUtf8Error,
+};
 
 /// The data an analysis (or listing) draws on, plus the bookkeeping needed to
 /// explain an empty outcome and warn about ephemeral data.
@@ -71,27 +76,33 @@ pub(crate) struct SelectedDataSet {
     pub(crate) tip_dirty: bool,
     /// The resolved analysis mode, auto-detected from the git topology.
     pub(crate) mode: AnalysisMode,
-    /// First-parent topological index of the merge-base, used by branch mode to
-    /// split base-side history from the branch's own commits.
+    /// First-parent topological index of the merge-base on the context line, when it
+    /// lies there. List, prune, and examine use the context line exactly as resolved;
+    /// branch analysis loads the base-ref comparison window separately.
     pub(crate) merge_base_index: Option<usize>,
+    /// First-parent topological index of the resolved base ref on its own history.
+    ///
+    /// Present in branch mode when detection requested base-ref windows. The detector
+    /// and lag classifier use this base-ref coordinate independently of the context
+    /// ref's first-parent line.
+    pub(crate) base_ref_index: Option<usize>,
     /// Blessings recorded on in-window commits, grouped by discriminant set. Each
     /// entry pairs the blessed commit's first-parent topological index and its
     /// committer date (from topology, for the report anchor) with the record;
     /// history-mode re-baselining picks, per series, the latest matching blessing.
     /// Empty in branch mode (it ignores blessings).
     pub(crate) blessings: HashMap<DiscriminantSet, Vec<BlessingPlacement>>,
-    /// Base-side clean-run observations under machine keys the selection does not
-    /// cover, retained (branch mode only) so the analysis can classify why a finding's
-    /// comparison base lags the merge-base. Empty in history mode and when the
-    /// selection already spans every machine key (`--machine-key all`). Each entry
-    /// carries the storage key, discriminant set, and first-parent topological index;
-    /// the payload is fetched lazily by the pipeline only when a lagging finding needs
-    /// it.
+    /// Base-ref clean-run observations retained (branch mode only) so the analysis can
+    /// classify why a finding's comparison base lags the base ref. Entries may come
+    /// from selected candidates or machine-relaxed sibling candidates; the classifier
+    /// keeps only observations under a different machine key from the finding it is
+    /// explaining. Empty in history mode. Each entry carries the storage key,
+    /// discriminant set, and first-parent topological index; the payload is fetched
+    /// lazily by the pipeline only when a lagging finding needs it.
     pub(crate) sibling_observations: Vec<SiblingObservation>,
 }
 
-/// A base-side clean run under a machine key the selection does not cover, retained
-/// for branch-mode comparison-base lag classification.
+/// A base-ref clean run retained for branch-mode comparison-base lag classification.
 #[derive(Clone, Debug)]
 pub(crate) struct SiblingObservation {
     /// The object's storage key, for the lazy payload fetch.
@@ -118,6 +129,7 @@ pub(crate) async fn select_dataset<G, S>(
     config: &Config,
     selection: &Selection<'_>,
     filter: SeriesFilter<'_>,
+    load_branch_base_windows: bool,
     auto: &AutoDiscriminants,
     now: Timestamp,
     reporter: &dyn Reporter,
@@ -132,7 +144,14 @@ where
     let CandidateListing {
         selected: candidates,
         siblings: sibling_candidates,
-    } = list_candidates(storage, project_id, &discriminants, true, reporter).await?;
+    } = list_candidates(
+        storage,
+        project_id,
+        &discriminants,
+        load_branch_base_windows,
+        reporter,
+    )
+    .await?;
     reporter.timing(
         "candidate listing + discriminant filter (includes storage.list)",
         listing_started.elapsed(),
@@ -157,6 +176,7 @@ where
     let ResolvedHistory {
         target_ref,
         base_name,
+        base_commit,
         tip_commit,
         tip_dirty,
         order,
@@ -228,17 +248,44 @@ where
         )
     });
 
+    let base_ref_history = if mode == AnalysisMode::Branch && load_branch_base_windows {
+        Some(resolve_base_ref_history(git, &base_commit, reporter).await?)
+    } else {
+        None
+    };
+    let base_ref_index = base_ref_history
+        .as_ref()
+        .and_then(|history| history.tip_index);
+    let base_series = if let Some(history) = base_ref_history.as_ref() {
+        let load_started = Instant::now();
+        let series = load_branch_base_series(
+            storage,
+            spawner,
+            &candidates,
+            history,
+            since,
+            filter,
+            reporter,
+        )
+        .await?;
+        reporter.timing(
+            "branch base-ref window load (filter + fetch + parse + fold)",
+            load_started.elapsed(),
+        );
+        series
+    } else {
+        Vec::new()
+    };
+
     // Retain the base-side sibling observations branch mode uses to explain a lagging
-    // comparison base. Only clean runs up to the merge-base can serve as a comparison
-    // base, and the same on-history and `--since` admission the selection uses applies.
+    // comparison base. Only clean runs on the base ref can serve as a comparison
+    // base, and the same `--since` admission the selection uses applies.
     // History mode has no single comparison base, so it keeps none. This is key-only
     // work (no fetches); the payloads are read lazily only if a finding actually lags.
-    let sibling_observations = admit_sibling_observations(
-        sibling_candidates,
+    let sibling_observations = admit_comparison_base_observations(
+        candidates.iter().cloned().chain(sibling_candidates),
         mode,
-        merge_base_index,
-        &order,
-        &commit_times,
+        base_ref_history.as_ref(),
         since,
         reporter,
     );
@@ -379,7 +426,14 @@ where
         }
     }
     let finish_started = Instant::now();
-    let series = builder.finish();
+    let mut series = builder.finish();
+    if !base_series.is_empty() {
+        attach_base_windows(
+            &mut series,
+            &base_series,
+            AnalysisConfig::default().compare_window,
+        );
+    }
     reporter.timing(
         "series build finalization (builder.finish: assemble + serial point sort)",
         finish_started.elapsed(),
@@ -482,51 +536,169 @@ where
         tip_dirty,
         mode,
         merge_base_index,
+        base_ref_index,
         blessings,
         sibling_observations,
     })
 }
 
-/// Admits the base-side sibling observations branch mode uses to explain a lagging
-/// comparison base, applying the same on-history and `--since` admission the
-/// selection uses. Key-only work — no payloads are fetched. History mode, or an
-/// unknown merge-base, yields none: neither has a single comparison base to lag.
-fn admit_sibling_observations(
-    candidates: Vec<(String, StorageKey)>,
-    mode: AnalysisMode,
-    merge_base_index: Option<usize>,
-    order: &HashMap<String, usize>,
-    commit_times: &HashMap<String, Timestamp>,
-    since: Option<Timestamp>,
+/// The base ref's own first-parent topology.
+struct BaseRefHistory {
+    /// First-parent position of each base-ref commit.
+    order: HashMap<String, usize>,
+    /// Committer timestamp of each base-ref commit that reported one.
+    commit_times: HashMap<String, Timestamp>,
+    /// First-parent position of the resolved base ref commit.
+    tip_index: Option<usize>,
+}
+
+async fn resolve_base_ref_history<G>(
+    git: &G,
+    base_commit: &str,
     reporter: &dyn Reporter,
-) -> Vec<SiblingObservation> {
-    let (AnalysisMode::Branch, Some(merge_base)) = (mode, merge_base_index) else {
-        return Vec::new();
-    };
-    let mut observations = Vec::new();
+) -> Result<BaseRefHistory, AnalyzeError>
+where
+    G: GitHistory,
+{
+    let first_parent_started = Instant::now();
+    let first_parent = git
+        .first_parent(base_commit)
+        .await
+        .map_err(|error| FirstParentWalkFailedError::caused_by(base_commit, error))?;
+    reporter.timing(
+        "git.first_parent ancestry walk (base ref's first-parent line)",
+        first_parent_started.elapsed(),
+    );
+
+    let commit_count = first_parent.len();
+    let mut order = HashMap::with_capacity(commit_count);
+    let mut commit_times = HashMap::new();
+    for (index, commit) in first_parent.into_iter().enumerate() {
+        if let Some(time) = commit.committer_time {
+            commit_times.insert(commit.commit_id.clone(), time);
+        }
+        order.insert(commit.commit_id, index);
+    }
+    reporter.note_with(|| {
+        format!(
+            "base ref first-parent line contributes {} for branch comparison windows",
+            count_noun(commit_count, "commit")
+        )
+    });
+    Ok(BaseRefHistory {
+        order,
+        commit_times,
+        tip_index: commit_count.checked_sub(1),
+    })
+}
+
+async fn load_branch_base_series<S>(
+    storage: &S,
+    spawner: &Spawner,
+    candidates: &[(String, StorageKey)],
+    history: &BaseRefHistory,
+    since: Option<Timestamp>,
+    filter: SeriesFilter<'_>,
+    reporter: &dyn Reporter,
+) -> Result<Vec<Series>, AnalyzeError>
+where
+    S: Storage + Clone + 'static,
+{
+    let mut excluded_outside_base = 0_usize;
+    let mut excluded_dirty = 0_usize;
+    let mut excluded_since = 0_usize;
+    let mut to_fetch = Vec::new();
     for (key, parsed) in candidates {
-        let Some(&topo_index) = order.get(&parsed.commit) else {
-            reporter.note_with(|| {
-                format!(
-                    "skipping sibling {key}: commit {} is not on the analyzed history",
-                    parsed.commit
-                )
-            });
+        if !parsed.is_clean() {
+            excluded_dirty = excluded_dirty.saturating_add(1);
             continue;
-        };
-        if topo_index > merge_base {
+        }
+        if !history.order.contains_key(&parsed.commit) {
+            excluded_outside_base = excluded_outside_base.saturating_add(1);
             reporter.note_with(|| {
                 format!(
-                    "skipping sibling {key}: commit {} is on the branch side of the merge-base",
+                    "excluding {key} from the branch base window: commit {} is not on the \
+                     base ref's first-parent history",
                     parsed.commit
                 )
             });
             continue;
         }
-        if before_since_cutoff(commit_times.get(&parsed.commit).copied(), since) {
+        if before_since_cutoff(history.commit_times.get(&parsed.commit).copied(), since) {
+            excluded_since = excluded_since.saturating_add(1);
             reporter.note_with(|| {
                 format!(
-                    "skipping sibling {key}: commit {} is before the --since cutoff",
+                    "excluding {key} from the branch base window: commit {} is before the \
+                     --since cutoff",
+                    parsed.commit
+                )
+            });
+            continue;
+        }
+        to_fetch.push((key.clone(), parsed.clone()));
+    }
+    reporter.note_with(|| {
+        format!(
+            "{} enter the branch base-ref window load ({excluded_outside_base} outside base, \
+             {excluded_dirty} dirty, {excluded_since} before --since)",
+            count_noun(to_fetch.len(), "clean-run object")
+        )
+    });
+
+    to_fetch.sort_by(|left, right| left.0.cmp(&right.0));
+    let ranked: Vec<(usize, String, StorageKey)> = to_fetch
+        .into_iter()
+        .enumerate()
+        .map(|(rank, (key, parsed))| (rank, key, parsed))
+        .collect();
+    let prefixes: Arc<[BenchmarkIdPrefix]> = Arc::from(filter.prefixes);
+    let order = Arc::new(history.order.clone());
+    let empty_dirty_exceptions = Arc::new(HashMap::new());
+    let WorkerFold { builder, .. } = fold_runs_chunked(
+        storage,
+        spawner,
+        ranked,
+        &order,
+        &empty_dirty_exceptions,
+        prefixes,
+    )
+    .await?;
+    Ok(builder.finish())
+}
+
+/// Admits the base-ref observations branch mode uses to explain a lagging
+/// comparison base, applying the same `--since` admission the selection uses.
+/// Key-only work — no payloads are fetched. History mode, or an unavailable base-ref
+/// history, yields none: neither has a single comparison base to lag.
+fn admit_comparison_base_observations(
+    candidates: impl IntoIterator<Item = (String, StorageKey)>,
+    mode: AnalysisMode,
+    base_ref_history: Option<&BaseRefHistory>,
+    since: Option<Timestamp>,
+    reporter: &dyn Reporter,
+) -> Vec<SiblingObservation> {
+    let (AnalysisMode::Branch, Some(history)) = (mode, base_ref_history) else {
+        return Vec::new();
+    };
+    let mut observations = Vec::new();
+    for (key, parsed) in candidates {
+        if !parsed.is_clean() {
+            continue;
+        }
+        let Some(&topo_index) = history.order.get(&parsed.commit) else {
+            reporter.note_with(|| {
+                format!(
+                    "skipping comparison-base evidence {key}: commit {} is not on the base \
+                     ref's history",
+                    parsed.commit
+                )
+            });
+            continue;
+        };
+        if before_since_cutoff(history.commit_times.get(&parsed.commit).copied(), since) {
+            reporter.note_with(|| {
+                format!(
+                    "skipping comparison-base evidence {key}: commit {} is before the --since cutoff",
                     parsed.commit
                 )
             });
@@ -541,7 +713,7 @@ fn admit_sibling_observations(
     reporter.note_with(|| {
         format!(
             "retained {} for comparison-base classification",
-            count_noun(observations.len(), "base-side sibling observation")
+            count_noun(observations.len(), "base-ref clean-run observation")
         )
     });
     observations
@@ -855,33 +1027,35 @@ mod tests {
         (key, parsed)
     }
 
-    /// The first-parent order and committer times for a `c0..c3` line.
-    fn topology() -> (HashMap<String, usize>, HashMap<String, Timestamp>) {
+    /// The first-parent order and committer times for a `c0..c3` base-ref line.
+    fn topology() -> BaseRefHistory {
         let mut order = HashMap::new();
-        let mut times = HashMap::new();
+        let mut commit_times = HashMap::new();
         for index in 0..=3 {
             let commit = format!("c{index}");
             order.insert(commit.clone(), index);
-            times.insert(
+            commit_times.insert(
                 commit,
                 Timestamp::from_second(i64::try_from(index).unwrap()).unwrap(),
             );
         }
-        (order, times)
+        BaseRefHistory {
+            order,
+            commit_times,
+            tip_index: Some(3),
+        }
     }
 
     #[test]
-    fn sibling_admission_keeps_on_history_base_side_commits() {
-        // c2 is on-history and at/before the c3 merge-base, so it is admitted with its
-        // topological index; c3 (the merge-base itself) is also base-side and kept.
-        let (order, times) = topology();
+    fn comparison_base_admission_keeps_base_ref_history_commits() {
+        // c2 is on the base ref's first-parent history, so it is admitted with its
+        // topological index; c3 (the base ref itself) is also kept.
+        let history = topology();
         let candidates = vec![sibling_key("c2"), sibling_key("c3")];
-        let observations = admit_sibling_observations(
+        let observations = admit_comparison_base_observations(
             candidates,
             AnalysisMode::Branch,
-            Some(3),
-            &order,
-            &times,
+            Some(&history),
             None,
             &cbh_diag::RecordingReporter::new(),
         );
@@ -890,45 +1064,36 @@ mod tests {
     }
 
     #[test]
-    fn sibling_admission_drops_off_history_and_branch_side_commits() {
-        // An unknown commit is off the analyzed history; a commit past the merge-base
-        // is branch-side. Neither can serve as a base-side comparison point.
-        let (mut order, times) = topology();
-        order.insert("f1".to_owned(), 4);
+    fn comparison_base_admission_drops_commits_off_the_base_ref_history() {
+        // Unknown commits and feature-branch commits are absent from the base ref's own
+        // first-parent history. Neither can serve as a base-ref comparison point.
+        let history = topology();
         let candidates = vec![
             sibling_key("unknown-commit"),
             sibling_key("c2"),
             sibling_key("f1"),
         ];
-        let observations = admit_sibling_observations(
+        let observations = admit_comparison_base_observations(
             candidates,
             AnalysisMode::Branch,
-            Some(3),
-            &order,
-            &times,
+            Some(&history),
             None,
             &cbh_diag::RecordingReporter::new(),
         );
         let indices: Vec<usize> = observations.iter().map(|obs| obs.topo_index).collect();
-        assert_eq!(
-            indices,
-            vec![2],
-            "only the on-history base-side c2 survives"
-        );
+        assert_eq!(indices, vec![2], "only the on-history base-ref c2 survives");
     }
 
     #[test]
-    fn sibling_admission_drops_commits_before_the_since_cutoff() {
+    fn comparison_base_admission_drops_commits_before_the_since_cutoff() {
         // A `--since` cutoff excludes commits committed before it, exactly as the
         // selection's own admission does.
-        let (order, times) = topology();
+        let history = topology();
         let candidates = vec![sibling_key("c0"), sibling_key("c2")];
-        let observations = admit_sibling_observations(
+        let observations = admit_comparison_base_observations(
             candidates,
             AnalysisMode::Branch,
-            Some(3),
-            &order,
-            &times,
+            Some(&history),
             Some(Timestamp::from_second(2).unwrap()),
             &cbh_diag::RecordingReporter::new(),
         );
@@ -937,16 +1102,14 @@ mod tests {
     }
 
     #[test]
-    fn sibling_admission_is_empty_outside_branch_mode_or_without_a_merge_base() {
-        let (order, times) = topology();
+    fn comparison_base_admission_is_empty_outside_branch_mode_or_without_base_ref_history() {
+        let history = topology();
         let reporter = cbh_diag::RecordingReporter::new();
         assert!(
-            admit_sibling_observations(
+            admit_comparison_base_observations(
                 vec![sibling_key("c2")],
                 AnalysisMode::History,
-                Some(3),
-                &order,
-                &times,
+                Some(&history),
                 None,
                 &reporter,
             )
@@ -954,17 +1117,15 @@ mod tests {
             "history mode has no single comparison base"
         );
         assert!(
-            admit_sibling_observations(
+            admit_comparison_base_observations(
                 vec![sibling_key("c2")],
                 AnalysisMode::Branch,
                 None,
-                &order,
-                &times,
                 None,
                 &reporter,
             )
             .is_empty(),
-            "an unknown merge-base cannot anchor a lag"
+            "an unavailable base-ref history cannot anchor a lag"
         );
     }
 }

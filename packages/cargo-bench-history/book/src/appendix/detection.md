@@ -39,7 +39,7 @@ flowchart TD
     H2 --> A
     A -->|"yes"| B["Keep whichever model<br/>fits the series better"]
     A -->|"only one"| C["Keep it"]
-    M -->|"branch"| D["Compare the branch tip against<br/>the base's current level"]
+    M -->|"branch"| D["Compare the context commit against<br/>the base ref's current level"]
 ```
 
 A **step** is the common case: something changed at one commit, and every commit after it
@@ -169,31 +169,31 @@ what a benchmark has been doing rather than what it is doing now.
 ## Branch mode asks a different question
 
 History mode asks "did this series change at some point?". Branch mode asks something much
-narrower: **is the branch's tip off the base's current level?**
+narrower: **is the analyzed context commit off the base ref's current level?**
 
 That difference in question drives every difference in method.
 
 | | History mode | Branch mode |
 |---|---|---|
-| Question | Did the level move, anywhere in the window? | Is the tip off the base's current level? |
-| Evidence | Every point in the series | The base's recent commits, plus the tip |
-| Dirty snapshots | Never admitted | Only the tip's newest is judged |
-| Window | The whole analyzed history | A fixed number of recent base commits |
-| Test | Rank comparison, or trend check | Did the tip land inside the range a further measurement was expected in? |
+| Question | Did the level move, anywhere in the window? | Is the context commit off the base ref's current level? |
+| Evidence | Every point in the series | The base ref's recent commits, plus the context run |
+| Dirty snapshots | Never admitted | Only the context commit's newest snapshot is judged |
+| Window | The whole analyzed history | A fixed number of recent base-ref commits |
+| Test | Rank comparison, or trend check | Did the context run land inside the range a further measurement was expected in? |
 | Reports | Regressions only, by default | Regressions and improvements |
 | Blessings | Honored | Ignored |
 
-The branch's own intermediate commits are discarded. Only the tip merges into the base, so
-only the tip is judged.
+The branch's own intermediate commits are discarded. Only the analyzed context commit is the
+state being evaluated, so only that commit is judged.
 
 The comparison is a **prediction interval**: from the base window's commits, the tool works
-out the range a single further measurement was expected to land in, and asks whether the tip
+out the range a single further measurement was expected to land in, and asks whether the context run
 landed outside it. That is a different question from "are these two groups different" —
-there is only one tip observation, not a group.
+there is only one context observation, not a group.
 
 In the figures below, the shaded value band is that predicted range. The base window itself
-is the recent base-side commit sample for the same discriminant set, capped by the branch
-comparison window.
+is the recent base-ref first-parent commit sample for the same discriminant set, capped by the
+branch comparison window. It is anchored at the base ref, not at the merge base.
 
 {{#include generated/detection-branch-reported.svg}}
 

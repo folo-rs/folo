@@ -90,14 +90,15 @@ carries the full breakdown, which is another reason to read it rather than the t
 
 ## Comparison-base lag
 
-Branch mode compares your tip against the base's recent commits **within the same discriminant
-set**. On a rotating CI pool, the newest base commits may only carry data under a different
-machine key — so your runner compares against base data from several commits back.
+Branch mode compares the analyzed context commit against the base ref's recent commits **within
+the same discriminant set**. On a rotating CI pool, the newest base-ref commits may only carry
+data under a different machine key — so your runner compares against base data from several
+commits back.
 
 {{#include generated/reporting-lag.svg}}
 
-The empty stretch after the comparison base is the lag: commits that exist on the base, but not
-for the tip's machine key.
+The empty stretch after the comparison base is the lag: commits that exist on the base ref, but
+not for the context run's machine key.
 
 The report says so, naming how far behind and which of two reasons applies:
 

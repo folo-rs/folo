@@ -163,7 +163,7 @@ where
 
     let selection = Selection::from_examine(options);
     let dataset = select_dataset(
-        git, storage, project_id, config, &selection, filter, auto, now, reporter, spawner,
+        git, storage, project_id, config, &selection, filter, false, auto, now, reporter, spawner,
     )
     .await?;
 

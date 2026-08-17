@@ -426,7 +426,7 @@ fn reason_label(reason: UnjudgedReason) -> &'static str {
         UnjudgedReason::TooFewPoints => "too few points",
         UnjudgedReason::TooFewPointsSinceBlessing => "too few points since blessing",
         UnjudgedReason::NotMeasuredOnBranch => "not measured on the branch",
-        UnjudgedReason::TooFewBaseCommits => "too few base commits",
+        UnjudgedReason::TooFewBaseCommits => "too few base-ref commits to compare against",
     }
 }
 
@@ -452,7 +452,7 @@ fn reason_remedy(reason: UnjudgedReason) -> &'static str {
     match reason {
         UnjudgedReason::Ghost => {
             "Nothing, if the benchmark was removed or its package was not built. Otherwise \
-             check that it still runs at the analyzed commit."
+             check that it still runs at the analyzed context commit."
         }
         UnjudgedReason::TooFewPoints => {
             "Wait. The series is judged once enough commits have been measured."
@@ -465,7 +465,7 @@ fn reason_remedy(reason: UnjudgedReason) -> &'static str {
              the comparison."
         }
         UnjudgedReason::TooFewBaseCommits => {
-            "Measure more of the base branch. A comparison needs a base window to compare \
+            "Measure more of the base ref. A comparison needs a base window to compare \
              against."
         }
     }

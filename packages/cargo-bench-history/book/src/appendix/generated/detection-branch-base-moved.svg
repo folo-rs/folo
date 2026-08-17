@@ -1,6 +1,6 @@
 <svg style="width:100%;height:auto" viewBox="0 0 680 300" xmlns="http://www.w3.org/2000/svg">
 <text x="340" y="17" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="12.096774193548388" opacity="1" fill="currentColor">
-a branch tip after the base level moved
+a context commit after the base level moved
 </text>
 <text x="12" y="144" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="currentColor" transform="rotate(270, 12, 144)">
 ns

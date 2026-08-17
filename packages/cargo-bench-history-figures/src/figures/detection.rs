@@ -32,11 +32,11 @@ pub fn assets() -> Vec<Asset> {
     assets
 }
 
-/// The branch-mode pair: a tip the base window does not explain, and one it does.
+/// The branch-mode pair: a context run the base window does not explain, and one it does.
 ///
 /// Drawn as two figures over the *same* base window so the only thing that differs between
-/// them is the tip. That is the comparison the chapter is making, and separate base windows
-/// would leave a reader unable to tell which difference produced the different verdict.
+/// them is the context run. That is the comparison the chapter is making, and separate base
+/// windows would leave a reader unable to tell which difference produced the different verdict.
 fn branch() -> Vec<Asset> {
     let mut assets = Vec::new();
     for (name, tip, reading) in BRANCH_CASES {
@@ -46,9 +46,9 @@ fn branch() -> Vec<Asset> {
         let prediction = branch_prediction_band(
             values
                 .get(..tip_index)
-                .expect("the branch figure always has base-side values before its tip"),
+                .expect("the branch figure always has base-ref values before its context run"),
         );
-        let plot = Plot::new("a branch tip against its base window", values.len())
+        let plot = Plot::new("a context commit against its base window", values.len())
             .value_label("ns")
             .scattered()
             .observations(values.iter().enumerate().map(|(index, &value)| {
@@ -76,7 +76,7 @@ fn branch() -> Vec<Asset> {
                 "predicted range",
                 theme::ALTERNATE,
             )
-            .split(tip_index, "the branch tip");
+            .split(tip_index, "context commit");
 
         assets.push(Asset::new(format!("{name}.svg"), plot.render()));
         assets.push(Asset::new(
@@ -93,27 +93,28 @@ fn branch() -> Vec<Asset> {
 /// The level the branch figures' base window sits at.
 const BRANCH_BASE_LEVEL: f64 = 100.0;
 
-/// The two branch figures: a tip the base window does not explain, and one it does. The
-/// tip levels are what make one report and the other stay quiet, which the accompanying
-/// test pins against the real detector so a policy change cannot silently reverse a
-/// lesson while keeping the asset names.
+/// The two branch figures: a context run the base window does not explain, and one it does.
+/// The context levels are what make one report and the other stay quiet, which the accompanying
+/// test pins against the real detector so a policy change cannot silently reverse a lesson while
+/// keeping the asset names.
 const BRANCH_CASES: [(&str, f64, &str); 2] = [
     (
         "detection-branch-reported",
         BRANCH_BASE_LEVEL * 1.30,
-        "the tip sits outside the range a further measurement was expected in",
+        "the context run sits outside the range a further measurement was expected in",
     ),
     (
         "detection-branch-quiet",
         BRANCH_BASE_LEVEL,
-        "the tip is inside the range the base window predicts, so there is nothing to report",
+        "the context run is inside the range the base window predicts, so there is nothing to \
+         report",
     ),
 ];
 
 /// How wide the branch figures draw their illustrative prediction range.
 ///
 /// The detector records the p-value, not a plotted cutoff. This multiple makes the range
-/// visibly cover ordinary base scatter while keeping the reporting tip outside it.
+/// visibly cover ordinary base scatter while keeping the reporting context run outside it.
 const BRANCH_PREDICTION_SIGMAS: f64 = 3.0;
 
 /// The value interval the branch figures shade as the base window's prediction.
@@ -137,7 +138,10 @@ fn branch_finding(name: &str, tip: f64) -> (Vec<f64>, Option<Finding>) {
         examples::seed_of("branch-base"),
     );
     values.push(tip);
-    let series = examples::series(name, &values, MetricKind::WallTime, 0);
+    let series = examples::with_base_window(
+        examples::series(name, &values, MetricKind::WallTime, 0),
+        BASE_COMMITS.saturating_sub(1),
+    );
     let context = examples::branch_context(&series, BASE_COMMITS.saturating_sub(1));
     let (finding, _) = evaluate_with_log(&series, &context);
     (values, finding)
@@ -151,7 +155,7 @@ const MOVED_BASE_OLD_LEVEL: f64 = 100.0;
 /// The current base level in the branch-base-moved figure.
 const MOVED_BASE_CURRENT_LEVEL: f64 = 130.0;
 
-/// The branch tip in the branch-base-moved figure.
+/// The context level in the branch-base-moved figure.
 ///
 /// Chosen outside the current regime's prediction band so the generated verdict proves
 /// that the comparison was formed from the newer base level.
@@ -177,7 +181,10 @@ fn branch_base_moved_finding() -> (Vec<f64>, Option<Finding>) {
         examples::seed_of("branch_base_moved"),
     );
     values.push(MOVED_BASE_TIP_LEVEL);
-    let series = examples::series("branch_base_moved", &values, MetricKind::WallTime, 0);
+    let series = examples::with_base_window(
+        examples::series("branch_base_moved", &values, MetricKind::WallTime, 0),
+        base_levels.len().saturating_sub(1),
+    );
     let context = examples::branch_context(&series, base_levels.len().saturating_sub(1));
     let (finding, _) = evaluate_with_log(&series, &context);
     (values, finding)
@@ -187,17 +194,17 @@ fn branch_base_moved_finding() -> (Vec<f64>, Option<Finding>) {
 fn branch_base_moved() -> Vec<Asset> {
     let (values, finding) = branch_base_moved_finding();
     let finding = finding.expect(
-        "the moved-base example places the tip outside the current regime's prediction \
+        "the moved-base example places the context run outside the current regime's prediction \
          band, so it must report if the detector uses the newer regime",
     );
     let tip_index = values.len().saturating_sub(1);
     let current_start = MOVED_BASE_REGIME;
     let current_values = values
         .get(current_start..tip_index)
-        .expect("the moved-base example has a current base regime before the tip");
+        .expect("the moved-base example has a current base regime before the context run");
     let prediction = branch_prediction_band(current_values);
 
-    let plot = Plot::new("a branch tip after the base level moved", values.len())
+    let plot = Plot::new("a context commit after the base level moved", values.len())
         .value_label("ns")
         .scattered()
         .observations(values.iter().enumerate().map(|(index, &value)| {
@@ -682,8 +689,8 @@ mod tests {
 
     #[test]
     fn the_branch_examples_report_the_outcomes_the_chapter_teaches() {
-        // The chapter presents `detection-branch-reported` as a tip that reports and
-        // `detection-branch-quiet` as a tip the base window explains. Pin both against the
+        // The chapter presents `detection-branch-reported` as a context run that reports and
+        // `detection-branch-quiet` as a context run the base window explains. Pin both against the
         // real detector so a policy change fails this test rather than silently reversing a
         // lesson while keeping the asset names. Runs the detector, not the renderer, so it
         // needs no SVG budget.

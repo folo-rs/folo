@@ -55,7 +55,7 @@ fn history_reported(finding: &Finding, reading: &str) -> String {
     )
 }
 
-/// Branch mode: the tip against the base prediction interval.
+/// Branch mode: the context commit against the base prediction interval.
 ///
 /// The detector still records a [`FindingMethod`] because both modes share one finding
 /// type; the branch comparison is not a change point, so the fragment must not borrow
@@ -67,9 +67,9 @@ fn branch_reported(finding: &Finding, reading: &str) -> String {
     let latest = format_value(finding.latest);
 
     format!(
-        "> **Reported.** A {direction} of {:+.2}% at the branch tip against the base \
+        "> **Reported.** A {direction} of {:+.2}% at the context commit against the base \
          prediction interval, at {:.0}% confidence.\n>\n\
-         > The tip is {latest} against a base level of {baseline}.\n>\n\
+         > The context run is {latest} against a base level of {baseline}.\n>\n\
          > {reading}.\n",
         finding.relative_delta * 100.0,
         finding.confidence * 100.0,
@@ -132,6 +132,7 @@ mod tests {
             .checked_div(2)
             .and_then(|half| half.checked_sub(1))
             .expect("the example series holds more than one point");
+        let series = examples::with_base_window(series, merge_base);
         let context = examples::branch_context(&series, merge_base);
         evaluate_with_log(&series, &context).0.unwrap()
     }
@@ -149,17 +150,17 @@ mod tests {
         assert!(fragment.contains("Because the level changed."));
     }
 
-    /// Branch mode compares the tip to the base interval. History-mode phrasing would
+    /// Branch mode compares the context run to the base interval. History-mode phrasing would
     /// describe a split that the branch detector never locates.
     #[test]
-    fn a_branch_fragment_describes_a_tip_against_the_base_interval() {
+    fn a_branch_fragment_describes_a_context_run_against_the_base_interval() {
         let fragment = reported(
             &a_branch_finding(),
-            "the tip sits outside the predicted range",
+            "the context run sits outside the predicted range",
             AnalysisMode::Branch,
         );
 
-        assert!(fragment.contains("branch tip"));
+        assert!(fragment.contains("context commit"));
         assert!(fragment.contains("base prediction interval"));
         assert!(!fragment.contains("via change point"));
         assert!(!fragment.contains("first seen"));

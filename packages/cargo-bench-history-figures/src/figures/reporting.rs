@@ -50,7 +50,7 @@ pub fn assets() -> Vec<Asset> {
 /// The project the worked reports describe.
 const PROJECT: &str = "textproc";
 
-/// The analyzed tip commit.
+/// The analyzed context commit.
 ///
 /// A full hexadecimal object name, because that is what the pipeline hands the renderer;
 /// the report abbreviates it itself, and an excerpt built from a pre-abbreviated commit
@@ -114,6 +114,7 @@ fn suite_context(suite: &[Series]) -> AnalysisContext {
         mode: AnalysisMode::History,
         config: AnalysisConfig::default(),
         merge_base_index: None,
+        base_ref_index: None,
         tip_index,
         include_improvements: false,
     }
@@ -239,9 +240,9 @@ impl Analysis {
 /// Runs the real branch-mode detector over `values`, forking the branch from its base
 /// where the example's level changes.
 ///
-/// Branch mode judges the tip against a window of recent base commits, so the fork has to
-/// sit between the two regimes for the example to be a branch that moved rather than a
-/// branch indistinguishable from its base.
+/// Branch mode judges the context run against a window of recent base-ref commits, so the fork has
+/// to sit between the two regimes for the example to be a branch that moved rather than a branch
+/// indistinguishable from its base.
 fn judge_branch(name: &str, values: &[f64], kind: MetricKind) -> Finding {
     let mut series = examples::series(name, values, kind, 0);
     series.set = worked_set();
@@ -250,6 +251,8 @@ fn judge_branch(name: &str, values: &[f64], kind: MetricKind) -> Finding {
         .checked_div(2)
         .and_then(|half| half.checked_sub(1))
         .expect("the example series holds more than one point");
+    let mut series = examples::with_base_window(series, merge_base);
+    series.set = worked_set();
     let context = examples::branch_context(&series, merge_base);
     let (finding, _) = evaluate_with_log(&series, &context);
     finding.expect(
@@ -498,13 +501,13 @@ const LAG_DISTANCES: [(usize, ComparisonBaseLagReason); 2] = [
     (1, ComparisonBaseLagReason::NoRecentBaseData),
 ];
 
-/// The base-side measurements available for the tip's machine key.
+/// The base-ref measurements available for the context run's machine key.
 ///
 /// Light variation keeps the figure reading as real measured history while staying close
-/// enough to one level that the branch tip is the visible move.
+/// enough to one level that the context run is the visible move.
 const LAG_FIGURE_BASE_VALUES: [f64; 8] = [99.8, 100.3, 99.9, 100.2, 99.7, 100.1, 100.4, 100.0];
 
-/// How many base-side commits have no data for the tip's machine key.
+/// How many base-ref commits have no data for the context run's machine key.
 const LAG_FIGURE_GAP_COMMITS: usize = 4;
 
 /// The newest base commit that carries same-key data.
@@ -512,14 +515,14 @@ fn lag_figure_base_position() -> usize {
     LAG_FIGURE_BASE_VALUES.len().saturating_sub(1)
 }
 
-/// The branch tip position in the lag illustration.
+/// The context commit position in the lag illustration.
 fn lag_figure_tip_position() -> usize {
     LAG_FIGURE_BASE_VALUES
         .len()
         .saturating_add(LAG_FIGURE_GAP_COMMITS)
 }
 
-/// The level measured at the branch tip.
+/// The level measured at the context commit.
 const LAG_FIGURE_TIP_LEVEL: f64 = 130.0;
 
 /// The topology shape behind a comparison-base lag warning.
@@ -553,7 +556,7 @@ fn lag_figure() -> String {
         theme::MUTED,
     )
     .split(comparison_base, "comparison base")
-    .split(tip, "branch tip")
+    .split(tip, "context commit")
     .render()
 }
 
@@ -659,11 +662,11 @@ mod tests {
         miri,
         ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
     )]
-    fn the_lag_figure_names_the_base_tip_and_gap() {
+    fn the_lag_figure_names_the_comparison_base_context_and_gap() {
         let svg = lag_figure();
 
         assert!(svg.contains("comparison base"));
-        assert!(svg.contains("branch tip"));
+        assert!(svg.contains("context commit"));
         assert!(svg.contains("no same-key base data"));
     }
 

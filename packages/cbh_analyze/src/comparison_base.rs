@@ -1,24 +1,23 @@
 //! Branch-mode comparison-base lag classification.
 //!
-//! In branch mode each surviving finding is compared against the newest base-side
+//! In branch mode each surviving finding is compared against the newest base-ref
 //! point of its own discriminant set. On rotating CI machine pools the newest base
-//! commits may carry data only under a different machine key, so the branch runner's
-//! machine key has usable base data only several commits behind the merge-base — the
+//! commits may carry data only under a different machine key, so the context runner's
+//! machine key has usable base data only several commits behind the base ref — the
 //! comparison silently reaches back in history.
 //!
 //! This module measures that lag per finding from the detector's actual comparison
 //! point ([`Finding::comparison_base_index`]) and classifies why it lags:
 //!
-//! - [`ComparisonBaseLagReason::DiscriminantSetMismatch`] — a newer base-side run for
+//! - [`ComparisonBaseLagReason::DiscriminantSetMismatch`] — a newer base-ref run for
 //!   the same benchmark and metric exists, but under a different machine key
 //!   (machine-pool rotation);
-//! - [`ComparisonBaseLagReason::NoRecentBaseData`] — no newer base-side run for the
+//! - [`ComparisonBaseLagReason::NoRecentBaseData`] — no newer base-ref run for the
 //!   affected series exists at all.
 //!
-//! Evidence is drawn from the already reconstructed series first (which covers
-//! `--machine-key all`, where every machine key is already loaded), and only then
-//! from a lazy, deduplicated fetch of the sibling clean-run objects that could fall in
-//! a lagging finding's gap. Sets with no lagging finding never trigger a fetch.
+//! Evidence is drawn from the already reconstructed series first and only then from a
+//! lazy, deduplicated fetch of the retained base-ref clean-run objects that could fall
+//! in a lagging finding's gap. Sets with no lagging finding never trigger a fetch.
 //!
 //! Comparison-base warnings are advisory: if the optional sibling evidence cannot be
 //! fetched or parsed, the failure is noted and the affected findings degrade to the
@@ -37,7 +36,7 @@ use super::dataset::SiblingObservation;
 use super::load::load_objects_concurrently;
 use crate::{AnalyzeError, InvalidResultSetError, InvalidStoredUtf8Error};
 
-/// A surviving branch finding whose comparison base sits behind the merge-base.
+/// A surviving branch finding whose comparison base sits behind the base ref.
 struct LaggingFinding<'a> {
     /// The finding's discriminant set (the affected set the warning attaches to).
     set: &'a DiscriminantSet,
@@ -48,7 +47,7 @@ struct LaggingFinding<'a> {
     /// Topological index of the comparison base — the exclusive lower bound of the
     /// gap a newer sibling observation would have to fall into.
     comparison_base_index: usize,
-    /// First-parent distance from the comparison base to the merge-base.
+    /// First-parent distance from the comparison base to the base ref.
     commits_behind: NonZero<usize>,
 }
 
@@ -65,7 +64,7 @@ struct SiblingEvidence {
 /// Classifies the comparison-base lag of every surviving branch finding and groups
 /// the deterministic, deduplicated warnings by discriminant set.
 ///
-/// Returns an empty map in history mode (unknown merge-base) and when no finding's
+/// Returns an empty map in history mode (unknown base ref) and when no finding's
 /// comparison base lags. Only fetches foreign sibling payloads that could classify a
 /// still-unresolved lagging finding, reusing the shared bounded-concurrency loader.
 ///
@@ -77,14 +76,14 @@ pub(crate) async fn classify_comparison_base_lags<S>(
     storage: &S,
     findings: &[Finding],
     series: &[Series],
-    merge_base_index: Option<usize>,
+    base_ref_index: Option<usize>,
     siblings: &[SiblingObservation],
     reporter: &dyn Reporter,
 ) -> HashMap<DiscriminantSet, Vec<ComparisonBaseLag>>
 where
     S: Storage,
 {
-    let Some(merge_base) = merge_base_index else {
+    let Some(base_ref) = base_ref_index else {
         return HashMap::new();
     };
 
@@ -92,7 +91,7 @@ where
         .iter()
         .filter_map(|finding| {
             let comparison_base_index = finding.comparison_base_index?;
-            let commits_behind = merge_base
+            let commits_behind = base_ref
                 .checked_sub(comparison_base_index)
                 .and_then(NonZero::new)?;
             Some(LaggingFinding {
@@ -114,14 +113,14 @@ where
         )
     });
 
-    // Satisfy evidence from the already loaded series first: a newer base-side clean
+    // Satisfy evidence from the already loaded series first: a newer base-ref clean
     // point for the same benchmark and metric under a sibling machine key proves a
     // discriminant-set mismatch without any fetch. This is the whole story under
-    // `--machine-key all`, where every machine key is already resident.
+    // cases where every relevant machine key survived the ghost filter.
     let mut unresolved: Vec<&LaggingFinding<'_>> = Vec::new();
     let mut reasons: HashMap<usize, ComparisonBaseLagReason> = HashMap::new();
     for (index, finding) in lagging.iter().enumerate() {
-        if loaded_series_prove_mismatch(finding, series, merge_base) {
+        if loaded_series_prove_mismatch(finding, series, base_ref) {
             reasons.insert(index, ComparisonBaseLagReason::DiscriminantSetMismatch);
         } else {
             unresolved.push(finding);
@@ -136,7 +135,7 @@ where
     let evidence = if unresolved.is_empty() {
         Vec::new()
     } else {
-        match load_sibling_evidence(storage, &unresolved, siblings, merge_base, reporter).await {
+        match load_sibling_evidence(storage, &unresolved, siblings, base_ref, reporter).await {
             Ok(evidence) => evidence,
             Err(error) => {
                 reporter.note_with(move || {
@@ -150,7 +149,7 @@ where
     let mut lags: HashMap<&DiscriminantSet, Vec<ComparisonBaseLag>> = HashMap::new();
     for (index, finding) in lagging.iter().enumerate() {
         let reason = reasons.get(&index).copied().unwrap_or_else(|| {
-            if evidence_proves_mismatch(finding, &evidence, merge_base) {
+            if evidence_proves_mismatch(finding, &evidence, base_ref) {
                 ComparisonBaseLagReason::DiscriminantSetMismatch
             } else {
                 ComparisonBaseLagReason::NoRecentBaseData
@@ -184,20 +183,18 @@ where
 /// Whether an already loaded sibling series proves a machine-key mismatch for
 /// `finding`: a series sharing the finding's engine, target triple, benchmark, and
 /// metric, but under a different machine key, with a clean point strictly newer than
-/// the comparison base and no newer than the merge-base.
+/// the comparison base and no newer than the base ref.
 fn loaded_series_prove_mismatch(
     finding: &LaggingFinding<'_>,
     series: &[Series],
-    merge_base: usize,
+    base_ref: usize,
 ) -> bool {
     series.iter().any(|candidate| {
         is_sibling_set(&candidate.set, finding.set)
             && &candidate.id == finding.id
             && candidate.kind == finding.kind
-            && candidate.points.iter().any(|point| {
-                !point.dirty
-                    && point.topo_index > finding.comparison_base_index
-                    && point.topo_index <= merge_base
+            && candidate.base_window.iter().any(|level| {
+                level.topo_index > finding.comparison_base_index && level.topo_index <= base_ref
             })
     })
 }
@@ -206,12 +203,12 @@ fn loaded_series_prove_mismatch(
 fn evidence_proves_mismatch(
     finding: &LaggingFinding<'_>,
     evidence: &[SiblingEvidence],
-    merge_base: usize,
+    base_ref: usize,
 ) -> bool {
     evidence.iter().any(|sibling| {
         is_sibling_set(&sibling.set, finding.set)
             && sibling.topo_index > finding.comparison_base_index
-            && sibling.topo_index <= merge_base
+            && sibling.topo_index <= base_ref
             && sibling.points.results().iter().any(|result| {
                 &result.id == finding.id
                     && result
@@ -228,7 +225,7 @@ async fn load_sibling_evidence<S>(
     storage: &S,
     unresolved: &[&LaggingFinding<'_>],
     siblings: &[SiblingObservation],
-    merge_base: usize,
+    base_ref: usize,
     reporter: &dyn Reporter,
 ) -> Result<Vec<SiblingEvidence>, AnalyzeError>
 where
@@ -240,7 +237,7 @@ where
         let relevant = unresolved.iter().any(|finding| {
             is_sibling_set(&sibling.parsed.set, finding.set)
                 && sibling.topo_index > finding.comparison_base_index
-                && sibling.topo_index <= merge_base
+                && sibling.topo_index <= base_ref
         });
         if relevant && !topo_by_key.contains_key(&sibling.key) {
             topo_by_key.insert(sibling.key.clone(), sibling.topo_index);
@@ -300,7 +297,7 @@ fn reason_rank(reason: ComparisonBaseLagReason) -> u8 {
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
-    use cbh_detect::{Direction, FindingMethod, SeriesPoint};
+    use cbh_detect::{BaseLevel, Direction, FindingMethod, SeriesPoint};
     use cbh_diag::RecordingReporter;
     use cbh_model::{
         BenchmarkId, BenchmarkResult, Engine, EnvironmentInfo, GitInfo, Metric, Run, RunContext,
@@ -388,6 +385,15 @@ mod tests {
                 interval_low: None,
                 interval_high: None,
             }],
+            base_window: if dirty {
+                Vec::new()
+            } else {
+                vec![BaseLevel {
+                    topo_index,
+                    value: 100.0,
+                    interval: None,
+                }]
+            },
             active_start: 0,
             blessing: None,
         }
@@ -464,10 +470,10 @@ mod tests {
         storage: &MemoryStorage,
         findings: &[Finding],
         series: &[Series],
-        merge_base_index: Option<usize>,
+        base_ref_index: Option<usize>,
         siblings: &[SiblingObservation],
     ) -> HashMap<DiscriminantSet, Vec<ComparisonBaseLag>> {
-        classify_reported(storage, findings, series, merge_base_index, siblings).0
+        classify_reported(storage, findings, series, base_ref_index, siblings).0
     }
 
     /// Classifies and returns the recording reporter so a test can inspect whether a
@@ -476,7 +482,7 @@ mod tests {
         storage: &MemoryStorage,
         findings: &[Finding],
         series: &[Series],
-        merge_base_index: Option<usize>,
+        base_ref_index: Option<usize>,
         siblings: &[SiblingObservation],
     ) -> (
         HashMap<DiscriminantSet, Vec<ComparisonBaseLag>>,
@@ -487,7 +493,7 @@ mod tests {
             storage,
             findings,
             series,
-            merge_base_index,
+            base_ref_index,
             siblings,
             &reporter,
         ));
@@ -496,7 +502,7 @@ mod tests {
 
     #[test]
     fn history_mode_yields_no_lags() {
-        // No merge-base: history mode has no single comparison base, so nothing lags.
+        // No base ref: history mode has no single comparison base, so nothing lags.
         let storage = MemoryStorage::new();
         let findings = [finding("m1", Some(2))];
         let lags = classify(&storage, &findings, &[], None, &[]);
@@ -504,8 +510,8 @@ mod tests {
     }
 
     #[test]
-    fn a_comparison_base_reaching_the_merge_base_is_not_a_lag() {
-        // The comparison base is the merge-base itself (index 3 == merge-base 3).
+    fn a_comparison_base_reaching_the_base_ref_is_not_a_lag() {
+        // The comparison base is the base ref itself (index 3 == base ref 3).
         let storage = MemoryStorage::new();
         let findings = [finding("m1", Some(3))];
         let lags = classify(&storage, &findings, &[], Some(3), &[]);
@@ -731,9 +737,9 @@ mod tests {
     }
 
     #[test]
-    fn a_sibling_newer_than_the_merge_base_is_not_fetched() {
-        // Evidence must be no newer than the merge-base. A sibling past the merge-base
-        // (index 5, merge-base 3) is outside the finding's gap and never fetched.
+    fn a_sibling_newer_than_the_base_ref_is_not_fetched() {
+        // Evidence must be no newer than the base ref. A sibling past the base ref
+        // (index 5, base ref 3) is outside the finding's gap and never fetched.
         let storage = MemoryStorage::new();
         let sibling = sibling_at("m2", "c5", 5);
         let findings = [finding("m1", Some(2))];

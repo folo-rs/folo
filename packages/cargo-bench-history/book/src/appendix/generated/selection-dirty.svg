@@ -1,6 +1,6 @@
 <svg style="width:100%;height:auto" viewBox="0 0 680 508" xmlns="http://www.w3.org/2000/svg">
 <text x="340" y="5" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="12.096774193548388" opacity="1" fill="currentColor">
-a dirty run at the analyzed tip is admitted while the tree is dirty; earlier base-side dirty runs are not
+a dirty run at the analyzed context commit is admitted while the tree is dirty; earlier base-side dirty runs are not
 </text>
 <text x="340" y="45" dy="0.76em" text-anchor="middle" font-family="sans-serif" font-size="12.096774193548388" opacity="1" fill="currentColor">
 every stored run
@@ -95,7 +95,7 @@ commit position
 <polyline fill="none" opacity="1" stroke="currentColor" stroke-width="1" points="580,222 580,227 "/>
 <polyline fill="none" opacity="1" stroke="#D64541" stroke-width="2" points="642,221 642,62 "/>
 <text x="642" y="62" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#D64541">
-analyzed tip
+analyzed context commit
 </text>
 <polyline fill="none" opacity="1" stroke="#9664BE" stroke-width="2" points="86,194 111,184 "/>
 <polyline fill="none" opacity="1" stroke="#9664BE" stroke-width="2" points="111,184 135,201 "/>
@@ -211,7 +211,7 @@ commit position
 <polyline fill="none" opacity="1" stroke="currentColor" stroke-width="1" points="580,462 580,467 "/>
 <polyline fill="none" opacity="1" stroke="#D64541" stroke-width="2" points="642,461 642,302 "/>
 <text x="642" y="302" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#D64541">
-analyzed tip
+analyzed context commit
 </text>
 <polyline fill="none" opacity="1" stroke="#9664BE" stroke-width="2" points="86,435 111,426 "/>
 <polyline fill="none" opacity="1" stroke="#9664BE" stroke-width="2" points="111,426 135,441 "/>

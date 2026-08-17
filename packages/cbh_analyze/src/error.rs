@@ -22,7 +22,6 @@ use cbh_storage::StorageError;
 )]
 #[from(PruneSelectionRequiredError, PruneBaseConfirmationRequiredError)]
 #[from(BaseBranchUnavailableError, MergeBaseUnavailableError)]
-#[from(MergeBaseOffFirstParentError)]
 #[from(UnresolvedRefError)]
 #[from(InvalidStoredUtf8Error, InvalidResultSetError, InvalidBlessingError)]
 #[from(InvalidWindowValueError, WindowOutOfRangeError)]
@@ -149,25 +148,6 @@ pub(crate) struct MergeBaseUnavailableError {
 
 impl UnwindSafe for MergeBaseUnavailableError {}
 impl RefUnwindSafe for MergeBaseUnavailableError {}
-
-/// The merge-base resolved but does not lie on the target's first-parent line.
-#[ohno::error]
-#[display(
-    "the merge-base {merge_base} of the target {target_ref} ({target_commit}) and the base \
-     commit {base_commit} is not on the target's first-parent line, so the branch cannot be \
-     split from its base and the comparison has no baseline. This happens when the base was \
-     merged into the branch instead of the branch being rebased onto the base; rebase the branch \
-     onto its base, or analyze a --context whose first-parent history reaches the merge-base."
-)]
-pub(crate) struct MergeBaseOffFirstParentError {
-    pub(crate) target_ref: String,
-    pub(crate) target_commit: String,
-    pub(crate) base_commit: String,
-    pub(crate) merge_base: String,
-}
-
-impl UnwindSafe for MergeBaseOffFirstParentError {}
-impl RefUnwindSafe for MergeBaseOffFirstParentError {}
 
 /// A git ref did not resolve to a commit.
 #[ohno::error]
@@ -386,14 +366,6 @@ mod tests {
     );
     assert_impl_all!(
         MergeBaseUnavailableError: Send,
-        Sync,
-        Debug,
-        Error,
-        UnwindSafe,
-        RefUnwindSafe
-    );
-    assert_impl_all!(
-        MergeBaseOffFirstParentError: Send,
         Sync,
         Debug,
         Error,

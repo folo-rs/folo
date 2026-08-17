@@ -163,7 +163,8 @@ where
         ListSubject::Runs => {
             let filter = SeriesFilter::default();
             let dataset = select_dataset(
-                git, storage, project_id, config, &selection, filter, auto, now, reporter, spawner,
+                git, storage, project_id, config, &selection, filter, false, auto, now, reporter,
+                spawner,
             )
             .await?;
             let series = dataset.series;
@@ -663,7 +664,7 @@ where
 {
     let filter = SeriesFilter::default();
     let dataset = select_dataset(
-        git, storage, project_id, config, selection, filter, auto, now, reporter, spawner,
+        git, storage, project_id, config, selection, filter, false, auto, now, reporter, spawner,
     )
     .await?;
     let mut series = dataset.series;

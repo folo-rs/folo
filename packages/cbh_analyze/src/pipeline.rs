@@ -220,7 +220,7 @@ where
     };
     let load_started = Instant::now();
     let dataset = select_dataset(
-        git, storage, project_id, config, &selection, filter, auto, now, reporter, spawner,
+        git, storage, project_id, config, &selection, filter, true, auto, now, reporter, spawner,
     )
     .await?;
     reporter.timing(
@@ -290,6 +290,7 @@ where
         mode: dataset.mode,
         config: AnalysisConfig::default(),
         merge_base_index: dataset.merge_base_index,
+        base_ref_index: dataset.base_ref_index,
         tip_index: dataset.tip_index,
         include_improvements: options.include_improvements,
     };
@@ -315,7 +316,7 @@ where
         .count();
     let notable = !findings.is_empty();
 
-    // Disclose when a branch finding's comparison base lags the merge-base — the
+    // Disclose when a branch finding's comparison base lags the base ref — the
     // recent base commits carry data only under a rotated machine key, or none at
     // all. Classified per set from the detector's actual comparison point, drawing on
     // the already loaded series first and only then a lazy sibling fetch.
@@ -324,7 +325,7 @@ where
         storage,
         &findings,
         &series,
-        dataset.merge_base_index,
+        dataset.base_ref_index,
         &dataset.sibling_observations,
         reporter,
     )
@@ -645,7 +646,7 @@ mod tests {
 
     /// Base-side commits a branch-mode fixture holds. Branch mode collapses each
     /// base commit's runs to that commit's level and needs `min_series_points` such
-    /// levels before it will judge the branch tip against them, so a branch
+    /// levels before it will judge the context commit against them, so a branch
     /// fixture's base line is as long as a whole history fixture.
     const BASE_COMMITS: usize = HISTORY_COMMITS;
 

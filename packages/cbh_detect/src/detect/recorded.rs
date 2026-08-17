@@ -32,6 +32,6 @@ pub const STATIONARY_BIMODAL_NOISE: [f64; 40] = [
 pub const STATIONARY_BIMODAL_BASE: usize = 19;
 
 /// A level [`STATIONARY_BIMODAL_NOISE`] reaches on roughly half of its commits — an
-/// entirely ordinary value for that series, and so the branch tip that must not be
+/// entirely ordinary value for that series, and so the context run that must not be
 /// reported as a move.
 pub const STATIONARY_BIMODAL_HIGH: f64 = 24.97;

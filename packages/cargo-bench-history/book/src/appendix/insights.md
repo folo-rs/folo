@@ -68,11 +68,11 @@ tool looks for it.
 
 ### A branch finding
 
-Branch mode judges **only your tip commit**, against the base's current level. Your branch's
-intermediate commits are ignored — only the tip merges.
+Branch mode judges **only the analyzed context commit**, against the base ref's current level.
+Your branch's intermediate commits are ignored — only the context state is evaluated.
 
-1. **Re-run the benchmark on the tip.** Branch findings rest on a small sample, often a single
-   run. A second run costs little and settles most questions.
+1. **Re-run the benchmark on the context commit.** Branch findings rest on a small sample, often
+   a single run. A second run costs little and settles most questions.
 2. **Look for a comparison-base lag warning.** On a rotating CI pool, your runner's machine key
    may only have base data from several commits back. The comparison is still valid, but it is
    against an older base state than you might assume.

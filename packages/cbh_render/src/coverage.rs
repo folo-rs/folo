@@ -23,8 +23,8 @@ pub enum CoverageState {
     /// names which of those happened; this variant does not.
     NoSeries,
     /// Series were accounted for, but every one of them was a ghost, so nothing was
-    /// in scope at the analyzed tip commit. Remedy: check that the benchmarks still
-    /// run at the analyzed commit.
+    /// in scope at the analyzed context commit. Remedy: check that the benchmarks still
+    /// run at the analyzed context commit.
     NothingInScope,
     /// In-scope series existed and none of them could be judged. Remedy: the
     /// per-reason breakdown says which evidence floor they fell short of.
@@ -77,7 +77,7 @@ impl CoverageState {
                 "Nothing: no series was accounted for. The empty-outcome hint explains why."
             }
             Self::NothingInScope => {
-                "Nothing at the analyzed commit: every accounted series was measured elsewhere."
+                "Nothing at the analyzed context commit: every accounted series was measured elsewhere."
             }
             Self::NothingJudged => {
                 "Nothing: in-scope series existed but none could be judged; the breakdown \
@@ -206,7 +206,7 @@ impl Coverage {
             // accompanies this case explains the emptiness itself.
             CoverageState::NoSeries => "Nothing was analyzed, so no change could be detected.",
             CoverageState::NothingInScope => {
-                "Nothing was in scope at the analyzed tip commit, so nothing was judged."
+                "Nothing was in scope at the analyzed context commit, so nothing was judged."
             }
             CoverageState::NothingJudged => {
                 "Nothing was judged, so no change could be detected either way."
@@ -246,7 +246,7 @@ impl Coverage {
             // hint that accompanies it. A third statement of the one fact is noise.
             CoverageState::NoSeries => None,
             CoverageState::NothingInScope => Some(format!(
-                "None of the {} series accounted for is measured at the analyzed tip \
+                "None of the {} series accounted for is measured at the analyzed context \
                  commit, so nothing was tested.",
                 self.total
             )),
@@ -455,7 +455,7 @@ mod tests {
             sentences,
             vec![
                 "Judged 4 of 7 in-scope series; no reportable move survived the gates.".to_owned(),
-                "Not judged: 2 series not measured at the analyzed tip commit; 3 series \
+                "Not judged: 2 series not measured at the analyzed context commit; 3 series \
                  with too few points in the analyzed window."
                     .to_owned(),
             ]
@@ -484,7 +484,7 @@ mod tests {
             coverage.qualifications(),
             vec![
                 "Judged 3 of 3 in-scope series; no reportable move survived the gates.".to_owned(),
-                "Not judged: 2 series not measured at the analyzed tip commit.".to_owned(),
+                "Not judged: 2 series not measured at the analyzed context commit.".to_owned(),
             ]
         );
     }
@@ -504,7 +504,7 @@ mod tests {
                 "Judged 0 of 2 in-scope series, so nothing was tested: this silence is \
                  not evidence that nothing moved."
                     .to_owned(),
-                "Not judged: 4 series not measured at the analyzed tip commit; 2 series \
+                "Not judged: 4 series not measured at the analyzed context commit; 2 series \
                  with too few points in the analyzed window."
                     .to_owned(),
             ]

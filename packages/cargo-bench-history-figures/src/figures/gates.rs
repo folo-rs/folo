@@ -101,7 +101,7 @@ fn stage_subject(stage: GateStage) -> &'static str {
     match stage {
         GateStage::ChangePoint => "a level that moved and stayed moved",
         GateStage::Drift => "a level that is moving steadily",
-        GateStage::Branch => "a branch tip against the base it forked from",
+        GateStage::Branch => "a context commit against the base ref",
     }
 }
 
@@ -141,9 +141,9 @@ fn demanded(config: &AnalysisConfig, gate: Gate, stage: GateStage) -> String {
         Gate::MinBaseCommits => commits(config.min_series_points),
         Gate::SplitLocated => "a split must be found".to_owned(),
         Gate::MinRegime => match stage {
-            // Branch mode counts retained base-side commit levels, not the tip sample
+            // Branch mode counts retained base-ref commit levels, not the context sample
             // and not the shorter side of a split. Ref:
-            // packages/cargo-bench-history/docs/DESIGN.md, "Judging a branch tip",
+            // packages/cargo-bench-history/docs/DESIGN.md, "Judging a context commit",
             // section 8.2, noise-aware gating.
             GateStage::Branch => commits(config.min_regime),
             GateStage::ChangePoint | GateStage::Drift => points(config.min_regime),
@@ -189,37 +189,41 @@ fn demanded(config: &AnalysisConfig, gate: Gate, stage: GateStage) -> String {
 fn compares(gate: Gate, stage: GateStage) -> &'static str {
     match gate {
         Gate::MinSeriesPoints => "How many points the analyzed window holds.",
-        Gate::MinBaseCommits => "How many base-side commit levels the comparison window holds.",
+        Gate::MinBaseCommits => "How many base-ref commit levels the comparison window holds.",
         Gate::SplitLocated => "Whether a candidate split exists at all.",
         Gate::MinRegime => match stage {
             GateStage::ChangePoint | GateStage::Drift => {
                 "How many points the shorter side of the split holds."
             }
-            GateStage::Branch => "How many retained base-side commit levels the comparison holds.",
+            GateStage::Branch => "How many retained base-ref commit levels the comparison holds.",
         },
         Gate::NonZeroDelta => match stage {
             GateStage::ChangePoint => "Whether the two regime levels differ at all.",
             GateStage::Drift => "Whether the fitted line moved across the window.",
-            GateStage::Branch => "Whether the tip differs from the base level at all.",
+            GateStage::Branch => "Whether the context run differs from the base level at all.",
         },
         Gate::RelativeFloor => "The move as a fraction of the baseline.",
         Gate::AbsoluteFloor => "The move in the metric's own units.",
         Gate::ResidualNoise => "The move against the series' own typical residual.",
         Gate::BaseScatter => {
             "Whether the base window has any dispersion — measured scatter, or an integer \
-             metric's quantum — to build a prediction interval from; with none, the tip cannot \
-             be judged and the candidate is dropped."
+             metric's quantum — to build a prediction interval from; with none, the context run \
+             cannot be judged and the candidate is dropped."
         }
         Gate::Significance => match stage {
             GateStage::ChangePoint => {
                 "The chance level of the rank test comparing the two regimes."
             }
             GateStage::Drift => "The chance level of the trend test across the window.",
-            GateStage::Branch => "The chance level of the tip against the base window's interval.",
+            GateStage::Branch => {
+                "The chance level of the context run against the base window's interval."
+            }
         },
         Gate::RegimeSeparation => "The share of before-and-after pairs that agree the level moved.",
         Gate::IntervalDisjoint => match stage {
-            GateStage::Branch => "The base sample's and the tip's reported confidence intervals.",
+            GateStage::Branch => {
+                "The base sample's and the context run's reported confidence intervals."
+            }
             GateStage::ChangePoint | GateStage::Drift => {
                 "The two regimes' reported confidence intervals."
             }
@@ -1141,9 +1145,12 @@ mod tests {
             examples::TIMING_NOISE_CV,
             examples::seed_of("branch"),
         );
-        let series = examples::with_intervals(
-            examples::series("branch_tip", &values, EXAMPLE_KIND, 0),
-            reported_half_width(&values),
+        let series = examples::with_base_window(
+            examples::with_intervals(
+                examples::series("branch_tip", &values, EXAMPLE_KIND, 0),
+                reported_half_width(&values),
+            ),
+            base.saturating_sub(1),
         );
         let context = examples::branch_context(&series, base.saturating_sub(1));
         let log = evaluate_with_log(&series, &context);

@@ -13,6 +13,7 @@
 //! a large history, so the storage key is reduced to a 4-byte ordinal and the
 //! per-point commit string is interned to a shared `Arc<str>` rather than cloned.
 
+use std::cmp::Ordering;
 use std::collections::hash_map::Entry as MapEntry;
 use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasher;
@@ -21,6 +22,7 @@ use std::sync::Arc;
 use cbh_model::{
     BenchmarkId, BenchmarkIdPrefix, BlessingRecord, DiscriminantSet, MetricKind, Run, StorageKey,
 };
+use cbh_stats as stats;
 use foldhash::fast::RandomState;
 use foldhash::{HashMap as FoldHashMap, HashMapExt};
 use hashbrown::HashTable;
@@ -84,6 +86,23 @@ pub struct Blessing {
 /// did not report one), and the blessing record itself.
 pub type BlessingPlacement = (usize, Option<Timestamp>, BlessingRecord);
 
+/// One clean base-ref commit level used by branch-mode comparison.
+///
+/// Branch mode builds its baseline from the base ref's first-parent history rather
+/// than the analyzed context line. Each value is already collapsed to one
+/// per-commit level, but it keeps the commit coordinate and any representative
+/// engine confidence interval so the branch detector can apply the same
+/// interval-overlap veto history mode applies to raw regimes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BaseLevel {
+    /// First-parent topological index of the base-ref commit.
+    pub topo_index: usize,
+    /// Median value of this series' clean runs at the commit.
+    pub value: f64,
+    /// Representative confidence interval for the commit's runs, when available.
+    pub interval: Option<(f64, f64)>,
+}
+
 /// A per-`(set, benchmark, metric kind)` time series ordered by git topology.
 #[derive(Clone, Debug)]
 pub struct Series {
@@ -95,6 +114,15 @@ pub struct Series {
     pub kind: MetricKind,
     /// Observations ordered by `(topo_index, dirty, object_ordinal)`.
     pub points: Vec<SeriesPoint>,
+    /// Branch mode's base-ref comparison levels, oldest first.
+    ///
+    /// These levels are reconstructed from the base ref's own first-parent history,
+    /// not from the context ref's ancestry. Each entry is one clean base commit's
+    /// median level for this series. It retains each commit's coordinate and
+    /// representative interval so branch-mode lag reporting and interval vetoes use
+    /// the same base state the prediction interval judged. Detection truncates this
+    /// window further only when the base ref itself recently moved to a new regime.
+    pub base_window: Vec<BaseLevel>,
     /// Index into `points` where the active (post-blessing) window begins; `0`
     /// when the series is unblessed (every point is active). History-mode
     /// detection considers only `points[active_start..]`; the full `points` are
@@ -434,6 +462,7 @@ impl SeriesBuilder {
                         id: id.clone(),
                         kind,
                         points,
+                        base_window: Vec::new(),
                         active_start: 0,
                         blessing: None,
                     });
@@ -467,6 +496,94 @@ impl SeriesBuilder {
 
         series
     }
+}
+
+/// Attaches base-ref comparison windows to matching context series.
+///
+/// `base_series` is reconstructed from clean runs on the base ref's own
+/// first-parent history, while `series` is reconstructed from the context ref's
+/// first-parent history. Both slices are in `(set, id, kind)` order, so matching is a
+/// linear merge. Each attached window is the newest `compare_window` per-commit
+/// levels of the base series, with repeated runs for one commit collapsed to their
+/// median just like branch detection's in-series commit-level logic.
+pub fn attach_base_windows(series: &mut [Series], base_series: &[Series], compare_window: usize) {
+    let mut base = base_series.iter().peekable();
+    for one in series {
+        while base
+            .peek()
+            .is_some_and(|candidate| series_cmp(candidate, one).is_lt())
+        {
+            _ = base.next();
+        }
+        let Some(candidate) = base.peek() else {
+            break;
+        };
+        if series_cmp(candidate, one).is_eq() {
+            one.base_window = base_window_levels(candidate, compare_window);
+        }
+    }
+}
+
+fn series_cmp(left: &Series, right: &Series) -> Ordering {
+    left.set
+        .cmp(&right.set)
+        .then_with(|| left.id.cmp(&right.id))
+        .then_with(|| left.kind.cmp(&right.kind))
+}
+
+fn base_window_levels(series: &Series, compare_window: usize) -> Vec<BaseLevel> {
+    let levels = commit_levels(&series.points);
+    let start = levels.len().saturating_sub(compare_window);
+    levels.get(start..).unwrap_or_default().to_vec()
+}
+
+fn commit_levels(points: &[SeriesPoint]) -> Vec<BaseLevel> {
+    let mut levels = Vec::new();
+    let mut values: Vec<f64> = Vec::new();
+    let mut lows: Vec<f64> = Vec::new();
+    let mut highs: Vec<f64> = Vec::new();
+    let mut current: Option<(usize, bool)> = None;
+    for point in points {
+        let key = (point.topo_index, point.dirty);
+        if current != Some(key) {
+            if let Some((topo_index, _)) = current {
+                push_base_level(&mut levels, topo_index, &mut values, &mut lows, &mut highs);
+            }
+            values.clear();
+            lows.clear();
+            highs.clear();
+            current = Some(key);
+        }
+        values.push(point.value);
+        if let Some(low) = point.interval_low {
+            lows.push(low);
+        }
+        if let Some(high) = point.interval_high {
+            highs.push(high);
+        }
+    }
+    if let Some((topo_index, _)) = current {
+        push_base_level(&mut levels, topo_index, &mut values, &mut lows, &mut highs);
+    }
+    levels
+}
+
+fn push_base_level(
+    levels: &mut Vec<BaseLevel>,
+    topo_index: usize,
+    values: &mut [f64],
+    lows: &mut [f64],
+    highs: &mut [f64],
+) {
+    let Some(value) = stats::median_in_place(values) else {
+        return;
+    };
+    let interval = stats::median_in_place(lows).zip(stats::median_in_place(highs));
+    levels.push(BaseLevel {
+        topo_index,
+        value,
+        interval,
+    });
 }
 
 /// Re-baselines each series to its latest matching blessing (history mode).
