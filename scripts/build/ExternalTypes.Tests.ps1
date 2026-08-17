@@ -4,8 +4,9 @@
 #
 # Get-ExternalTypesManifest walks the filesystem, so tests build a `packages/<pkg>/Cargo.toml`
 # fixture under TestDrive and assert the filter behaviour: empty filter selects every package,
-# a space-separated filter restricts to named packages, directories without a Cargo.toml are
-# ignored, and a filter naming a non-existent package drops it instead of emitting a bad path.
+# a whitespace-separated filter restricts to named packages (collapsing repeats and arbitrary
+# spacing), directories without a Cargo.toml are ignored, and a filter naming a non-existent
+# package drops it instead of emitting a bad path.
 
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot 'ExternalTypes.psm1') -Force
@@ -39,6 +40,12 @@ Describe 'Get-ExternalTypesManifest' {
 
     It 'restricts to a space-separated package allow-list, sorted' {
         $manifests = @(Get-ExternalTypesManifest -PackagesRoot $script:Root -PackageFilter 'gamma alpha')
+        $names = $manifests | ForEach-Object { Split-Path (Split-Path $_ -Parent) -Leaf }
+        ($names -join ',') | Should -Be 'alpha,gamma'
+    }
+
+    It 'collapses arbitrary whitespace and de-duplicates repeated names' {
+        $manifests = @(Get-ExternalTypesManifest -PackagesRoot $script:Root -PackageFilter "gamma`t alpha   gamma")
         $names = $manifests | ForEach-Object { Split-Path (Split-Path $_ -Parent) -Leaf }
         ($names -join ',') | Should -Be 'alpha,gamma'
     }

@@ -65,13 +65,37 @@ install-tools:
     # lacks the multi-target/workspace support this repo needs; see constants.env
     # (CARGO_CHECK_EXTERNAL_TYPES_GIT / CARGO_CHECK_EXTERNAL_TYPES_REV) for the full rationale and
     # the condition for switching back to a crates.io pin. `--locked` builds against the commit's
-    # own Cargo.lock so the result is reproducible, and cargo replaces an install built from a
-    # different rev (a fast no-op when the rev already matches), so bumping the tool is just editing
-    # the rev in constants.env.
-    cargo install cargo-check-external-types `
-        --git $env:CARGO_CHECK_EXTERNAL_TYPES_GIT `
-        --rev $env:CARGO_CHECK_EXTERNAL_TYPES_REV `
-        --locked
+    # own Cargo.lock so the result is reproducible.
+    #
+    # Unlike the `@version` tools above, a plain reinstall cannot reconcile a git pin: cargo keys
+    # "already installed" on the crate *version*, which does not change between the commits we pin,
+    # so it would keep an older commit after a rev bump. rust-cache compounds this by restoring the
+    # previously compiled binary under a key that excludes the rev. So we read the commit cargo
+    # recorded in .crates2.json and reinstall with --force only when it differs from the pin: a rev
+    # bump always takes effect, while an unchanged pin stays a no-op instead of recompiling the tool
+    # on every CI job. constants.env pins a full 40-character commit SHA, which .crates2.json records
+    # verbatim, so an exact comparison suffices.
+    $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $HOME ".cargo" }
+    $cratesMetadata = Join-Path $cargoHome ".crates2.json"
+    $installedRev = ""
+    if (Test-Path -LiteralPath $cratesMetadata) {
+        $json = Get-Content -LiteralPath $cratesMetadata -Raw | ConvertFrom-Json
+        if ($json.PSObject.Properties.Name -contains "installs") {
+            $entry = $json.installs.PSObject.Properties.Name |
+                Where-Object { $_ -like "cargo-check-external-types *git+*" } |
+                Select-Object -First 1
+            if ($entry -and $entry -match "#([0-9a-f]{40})\)$") {
+                $installedRev = $Matches[1]
+            }
+        }
+    }
+
+    if ($installedRev -ne $env:CARGO_CHECK_EXTERNAL_TYPES_REV) {
+        cargo install cargo-check-external-types `
+            --git $env:CARGO_CHECK_EXTERNAL_TYPES_GIT `
+            --rev $env:CARGO_CHECK_EXTERNAL_TYPES_REV `
+            --locked --force
+    }
 
     # cargo-mutants transitively depends on `winapi 0.2.8`, which only defines its
     # types for `target_arch = "x86"` / `"x86_64"` and fails to compile on aarch64
