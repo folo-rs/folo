@@ -16,7 +16,6 @@ use std::fmt::Write as _;
 use cbh_analyze::auto_mode;
 use cbh_detect::select_commits;
 use cbh_model::MetricKind;
-use cbh_stats::median;
 
 use crate::assets::Asset;
 use crate::styles::occupancy::{Cell, Occupancy};
@@ -52,7 +51,6 @@ fn operations() -> Vec<(&'static str, Panes)> {
         ("reconstruction-gap.svg", gap()),
         ("reconstruction-ghost.svg", ghost()),
         ("reconstruction-blessing.svg", blessing()),
-        ("reconstruction-commit-median.svg", commit_median()),
     ]
 }
 
@@ -878,78 +876,6 @@ fn blessing() -> Panes {
     }
 }
 
-/// How many commits the commit-median figure spans.
-const COMMIT_MEDIAN_SPAN: usize = 12;
-
-/// The commits the worked example was benchmarked at more than once.
-const REPEATED_COMMITS: [usize; 3] = [4, 8, 11];
-
-/// How the repeated runs at one commit differ from one another, as a fraction of that
-/// commit's level.
-///
-/// Spread wide enough that the collapsed level is visibly a choice among the runs rather
-/// than a value one of them happened to carry, and asymmetric so the median is not also
-/// the midpoint of the spread.
-const REPEAT_SPREAD: [f64; 3] = [-0.045, 0.012, 0.052];
-
-/// What the worked commit-median example measured at each commit.
-fn commit_runs() -> Vec<Vec<f64>> {
-    flat(LEVEL, COMMIT_MEDIAN_SPAN)
-        .into_iter()
-        .enumerate()
-        .map(|(position, level)| {
-            if REPEATED_COMMITS.contains(&position) {
-                REPEAT_SPREAD
-                    .iter()
-                    .map(|spread| level * (1.0 + spread))
-                    .collect()
-            } else {
-                vec![level]
-            }
-        })
-        .collect()
-}
-
-/// Several runs at one commit collapsing to the one level branch mode compares.
-fn commit_median() -> Panes {
-    let measured = commit_runs();
-
-    let before = Plot::new("every run, as history mode keeps them", COMMIT_MEDIAN_SPAN)
-        .value_label("ns")
-        .scattered()
-        .observations(measured.iter().enumerate().flat_map(|(position, values)| {
-            values.iter().copied().map(move |value| {
-                let observation = Observation::new(position, value);
-                if REPEATED_COMMITS.contains(&position) {
-                    observation.marked(Mark::Focus)
-                } else {
-                    observation
-                }
-            })
-        }));
-
-    let after = Plot::new(
-        "one level per commit, as branch mode compares them",
-        COMMIT_MEDIAN_SPAN,
-    )
-    .value_label("ns")
-    .observations(measured.iter().enumerate().map(|(position, values)| {
-        let level = median(values).expect("every commit in the example carries a run");
-        let observation = Observation::new(position, level);
-        if REPEATED_COMMITS.contains(&position) {
-            observation.marked(Mark::Added)
-        } else {
-            observation
-        }
-    }));
-
-    Panes {
-        title: "branch mode collapses a commit's runs to one level before comparing",
-        before,
-        after,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use cbh_detect::AnalysisMode;
@@ -973,7 +899,6 @@ mod tests {
             "reconstruction-gap.svg",
             "reconstruction-ghost.svg",
             "reconstruction-blessing.svg",
-            "reconstruction-commit-median.svg",
         ] {
             assert!(
                 paths.iter().any(|path| path == expected),
@@ -1117,40 +1042,6 @@ mod tests {
     fn every_operation_figure_changes_the_data_it_acts_on() {
         for (path, panes) in operations() {
             assert!(panes.changes_the_data(), "{path} draws the same data twice");
-        }
-    }
-
-    /// Branch mode's collapse is a median, so the level it compares must sit inside the
-    /// spread of the runs it came from rather than being one of them picked off an end.
-    #[test]
-    fn the_commit_median_collapses_each_repeated_commit_to_one_level() {
-        let measured = commit_runs();
-        let levels: Vec<f64> = measured
-            .iter()
-            .map(|values| median(values).expect("every commit in the example carries a run"))
-            .collect();
-
-        assert_eq!(levels.len(), COMMIT_MEDIAN_SPAN, "one level per commit");
-
-        for position in REPEATED_COMMITS {
-            let values = measured
-                .get(position)
-                .expect("the commit is in the example");
-            let level = levels
-                .get(position)
-                .copied()
-                .expect("the level was derived");
-            let lowest = values.iter().copied().fold(f64::INFINITY, f64::min);
-            let highest = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-
-            assert!(
-                values.len() > 1,
-                "commit {position} must carry several runs for the figure to collapse"
-            );
-            assert!(
-                level > lowest && level < highest,
-                "commit {position} collapsed to {level}, outside {values:?}"
-            );
         }
     }
 

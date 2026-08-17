@@ -110,21 +110,18 @@ Two asymmetries worth knowing:
 - **Prefixes match as plain string prefixes.** Blessing `foo/bar` also accepts `foo/barbaz`.
   Bear that in mind when benchmark names share a stem.
 
-## Several runs at one commit
+## One run per commit
 
-Two runs at the same commit are two independent measurements of the same thing, and the two
-modes treat them differently:
+A series carries at most one point per commit. A clean run is stored once per commit and never
+rewritten, so it cannot contribute two. The only commit that can hold more than one run is one
+with **dirty snapshots** — repeated measurements of an uncommitted working tree — and those are
+admitted only on the target side (see [Selection](selection.md#dirty-admission)).
 
-- **History mode** keeps them as separate points. Both are evidence about that commit's level.
-- **Branch mode** collapses them to one level per commit before comparing.
-
-{{#include generated/reconstruction-commit-median.svg}}
-
-*Why the difference:* branch mode's comparison window is measured **in commits**, and its
-statistics assume one observation per commit. If several runs at one commit each counted
-separately, a commit that happened to be benchmarked five times would dominate the base level,
-and the size of the window would depend on how often each commit was run rather than on how
-much history it covers.
+History mode admits no dirty runs, so every commit it reconstructs contributes exactly one
+point. Branch mode judges only the branch tip, and only the tip's **latest** run: its clean
+run, or the newest dirty snapshot taken on top of it. An earlier run at the tip is a superseded
+state, not what a merge would land, so it takes no part. Either way the tip is a single
+observation, judged against a base that is itself one clean point per commit.
 
 ## What reconstruction hands on
 

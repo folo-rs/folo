@@ -1370,28 +1370,21 @@ fn split_at_merge_base(
     (base, branch)
 }
 
-/// The branch tip's latest measured state.
+/// The branch tip's single latest run.
 ///
 /// A feature branch's own history says nothing about what merging it into the base
 /// will do — only its tip commit lands there — so branch mode judges the newest
-/// commit's latest state, not a reconstructed within-branch regime. `branch` is
-/// sorted by `(topo_index, dirty, object_ordinal)`, so that state is the contiguous
-/// suffix sharing the last point's commit *and* dirty flag: the tip's committed
-/// (clean) runs, or — when the working tree is dirty — the dirty snapshots taken on
-/// top of it, which supersede the clean run as the newer state. Either way any
-/// repeated (`--best-of`) observations in that cohort are kept. Mixing a clean tip
-/// run with the dirty snapshots above it would blur two distinct states into one
-/// spuriously noisy sample, so only the latest cohort is returned. An empty branch
-/// yields no points.
+/// commit's latest run, not a reconstructed within-branch regime and not a cohort of
+/// several runs at that commit. `branch` is sorted by
+/// `(topo_index, dirty, object_ordinal)`, so the latest run is simply the last point:
+/// the tip's committed (clean) run, or — when the working tree is dirty — the newest
+/// dirty snapshot taken on top of it, which supersedes the clean run as the newer
+/// state. Any earlier run at the tip (an older dirty snapshot, or the clean run
+/// beneath a dirty one) is not the state a merge would land, so it is discarded. This
+/// keeps the comparison to one target-side observation, matching the prediction
+/// interval it is judged against. An empty branch yields no point.
 fn latest_commit_points<'a>(branch: &[&'a SeriesPoint]) -> Vec<&'a SeriesPoint> {
-    let Some(&last) = branch.last() else {
-        return Vec::new();
-    };
-    branch
-        .iter()
-        .filter(|point| point.topo_index == last.topo_index && point.dirty == last.dirty)
-        .copied()
-        .collect()
+    branch.last().map(|&point| vec![point]).unwrap_or_default()
 }
 
 /// A commit group's level and where that group starts in the source point slice.
@@ -4159,36 +4152,34 @@ mod tests {
     }
 
     #[test]
-    fn latest_commit_points_returns_only_the_newest_commit() {
-        // Two branch commits (topo 3 and topo 5); the newer carries two clean runs
-        // (a `--best-of` pair). Only the newest commit's runs are returned — the tip
-        // is what a merge lands in the base.
-        let series = placed_series(&[(3, 100.0, false), (5, 130.0, false), (5, 130.0, false)]);
+    fn latest_commit_points_returns_only_the_newest_commit_run() {
+        // Two branch commits (topo 3 and topo 5). Only the newest commit's latest
+        // run is returned — the tip is what a merge lands in the base, and a series
+        // carries at most one run per commit.
+        let series = placed_series(&[(3, 100.0, false), (5, 130.0, false)]);
         let branch: Vec<&SeriesPoint> = series.points.iter().collect();
         let latest = latest_commit_points(&branch);
-        assert_eq!(latest.len(), 2);
-        assert!(latest.iter().all(|point| point.topo_index == 5));
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0].topo_index, 5);
     }
 
     #[test]
-    fn latest_commit_points_prefers_dirty_snapshots_over_the_clean_tip() {
+    fn latest_commit_points_prefers_the_newest_dirty_snapshot_over_the_clean_tip() {
         // The tip commit (topo 5) has a committed clean run plus two dirty snapshots
-        // taken on top of it. The dirty snapshots are the newer state, so only they
-        // are returned — mixing in the clean run would blur two states into one.
+        // taken on top of it. Only the newest dirty snapshot is returned: it is the
+        // single state a merge would land, and mixing runs would blur states.
         let series = placed_series(&[
             (3, 100.0, false),
             (5, 130.0, false),
             (5, 131.0, true),
-            (5, 131.0, true),
+            (5, 132.0, true),
         ]);
         let branch: Vec<&SeriesPoint> = series.points.iter().collect();
         let latest = latest_commit_points(&branch);
-        assert_eq!(latest.len(), 2);
-        assert!(
-            latest
-                .iter()
-                .all(|point| point.topo_index == 5 && point.dirty)
-        );
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0].topo_index, 5);
+        assert!(latest[0].dirty);
+        assert_eq!(latest[0].value, 132.0);
     }
 
     #[test]

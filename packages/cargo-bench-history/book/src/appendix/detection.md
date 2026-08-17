@@ -160,7 +160,7 @@ That difference in question drives every difference in method.
 |---|---|---|
 | Question | Did the level move, anywhere in the window? | Is the tip off the base's current level? |
 | Evidence | Every point in the series | The base's recent commits, plus the tip |
-| A commit with several runs | Each run is its own point | The runs collapse to one level |
+| Dirty snapshots | Never admitted | Only the tip's newest is judged |
 | Window | The whole analyzed history | A fixed number of recent base commits |
 | Test | Rank comparison, or trend check | Did the tip land inside the range a further measurement was expected in? |
 | Reports | Regressions only, by default | Regressions and improvements |
