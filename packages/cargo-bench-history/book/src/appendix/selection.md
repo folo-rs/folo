@@ -37,13 +37,36 @@ The tool walks the context's first-parent ancestry and splits it at the merge ba
 base. Everything at or before the merge base is **base-side**; everything after is
 **target-side**.
 
+```mermaid
+flowchart LR
+    b0["·"] --> b1["·"] --> MB["merge base"]
+    MB --> t1["·"] --> T["context = HEAD"]
+    MB -. "base branch continues" .-> B["base tip"]
+    subgraph baseside["base-side — at or before the merge base"]
+        b0
+        b1
+        MB
+    end
+    subgraph targetside["target-side — after the merge base"]
+        t1
+        T
+    end
+```
+
 If the base cannot be resolved, or shares no ancestor with the context, that is a **hard
 error** — not a silent fallback. The usual cause is a shallow CI clone; fetch full history, or
 pass an explicit `--base`.
 
 ## Mode is derived, not chosen
 
-There is no flag to force a mode. The tool reads two signals:
+From the shape of the history it is handed, selection derives an **analysis mode**: the question
+the rest of the pipeline will answer about the series. There are two, and later stages —
+detection above all — branch on the one selection chose:
+
+- **History mode** — does a level move somewhere in an official branch's own history?
+- **Branch mode** — is a feature branch's tip off the base it would merge into?
+
+There is no flag to force the choice. The tool reads two signals:
 
 {{#include generated/selection-mode-table.md}}
 
@@ -71,7 +94,8 @@ side of the merge base it sits:
 against. A measurement of somebody's uncommitted experiment is not a description of the base's
 history, and letting it in would corrupt the baseline for everyone.
 
-`--no-dirty` removes them everywhere.
+`--no-dirty` removes dirty runs from the target side as well, so no dirty run is admitted
+anywhere — the base side already rejects them regardless.
 
 ## The window
 
@@ -106,9 +130,9 @@ actually searched and which parts were defaulted. It is not opt-in.
 
 ## Ordering is fixed before any parallelism
 
-Survivors are sorted by storage key and assigned their positions **before** any object is
-fetched. Loading is then parallel, but the result is not affected by which worker finished
-first.
+Runs that survive the preceding selection stages are sorted by storage key and assigned their
+positions **before** any object is fetched. Loading is then parallel, but the result is not
+affected by which worker finished first.
 
 Two analyses of the same store therefore produce byte-identical reports. That is what makes a
 report diffable and a regression in the tool itself detectable.
@@ -116,7 +140,11 @@ report diffable and a regression in the tool itself detectable.
 ## What the other commands share
 
 `analyze`, `list runs`, and `examine` run this same selection pipeline, so `list` genuinely
-previews what `analyze` would consume. The divergences are real, though, and worth knowing:
+previews what `analyze` would consume. Three of the columns below name concepts that later
+chapters introduce — [benchmark prefixes](../commands/bless.md), the
+[ghost filter](reconstruction.md#ghost-elimination), and
+[blessings](reconstruction.md#blessings) — so a linear reader is not expected to know them yet;
+they are forward references. The divergences are real, though, and worth knowing:
 
 | | Discriminant filters, window, dirty rules | Benchmark prefixes | Ghost filter | Blessings |
 |---|---|---|---|---|

@@ -72,11 +72,9 @@ its metric series, before anything else happens.
 
 {{#include generated/reconstruction-ghost.svg}}
 
-Three details matter:
+A couple of details matter:
 
 - **Any run at that commit counts as presence**, including one from a dirty working tree.
-- **One metric rescues the rest.** If a benchmark's instruction count was recorded at the tip,
-  its branch counts survive too.
 - **It runs before blessings and before detection**, so a ghost never enters the
   [false-discovery family](coverage.md) and never dilutes the correction.
 
@@ -103,12 +101,16 @@ detection judges only the active part. A blessed series that is left with too fe
 judge is reported with its own distinct reason, rather than being lumped in with series that
 were simply too short.
 
-Two asymmetries worth knowing:
+A few asymmetries worth knowing:
 
 - **History mode only.** Branch mode ignores blessings entirely — see
   [Limits](limits.md#branch-mode-ignores-blessings).
-- **Prefixes match as plain string prefixes.** Blessing `foo/bar` also accepts `foo/barbaz`.
-  Bear that in mind when benchmark names share a stem.
+- **A blessing is a prefix of the benchmark identity.** The blessed value is matched as a plain
+  string prefix of the slash-joined benchmark identity (`group/case`, `package/module/fn`, …),
+  so blessing `foo/bar` also accepts `foo/barbaz`. Bear that in mind when names share a stem.
+- **A blessing is per discriminant set.** It re-baselines only the series in the discriminant
+  set it was recorded against, under the same partitioning rules as everything else; a different
+  machine key or target triple is untouched.
 
 ## One run per commit
 
