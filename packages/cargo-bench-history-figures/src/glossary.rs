@@ -43,6 +43,13 @@ pub const TERMS: &[Term] = &[
         chapter: "reconstruction.md",
     },
     Term {
+        phrase: "detector",
+        definition: "The procedure that examines one series for one shape of change: a \
+                     change point, a drift, or a branch comparison.",
+        formal_name: "",
+        chapter: "detection.md",
+    },
+    Term {
         phrase: "level",
         definition: "The value a series sits at over a stretch of commits, ignoring \
                      run-to-run scatter.",
@@ -84,8 +91,9 @@ pub const TERMS: &[Term] = &[
     },
     Term {
         phrase: "rank comparison",
-        definition: "Rank-based evidence that the before and after regimes differ, \
-                     tested two-sided.",
+        definition: "A test for whether two regimes differ that weighs each measurement by \
+                     its rank among all of them rather than by its size, so a few extreme \
+                     values cannot dominate. Tested two-sided.",
         formal_name: "Mann-Whitney U test",
         chapter: "detection.md",
     },
@@ -132,8 +140,8 @@ pub const TERMS: &[Term] = &[
     },
     Term {
         phrase: "typical residual",
-        definition: "How far an ordinary point sits from the level or line fitted to the \
-                     series.",
+        definition: "How far a representative point sits from the model fitted to the series: \
+                     a level for a change point or branch comparison, a line for a drift.",
         formal_name: "median absolute residual",
         chapter: "gates.md",
     },

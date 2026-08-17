@@ -53,9 +53,10 @@ Each adapter picks one value per metric, and the choice matters more than it loo
 
 Two consequences worth knowing. The stored record does **not** say which estimator was used, so
 a Criterion benchmark that stops producing a usable slope falls back to the mean silently — and
-that can read as a step. And for the two operation engines, a missing or non-finite slope drops
-the whole operation from the run rather than falling back to anything, so a benchmark can vanish
-from a series without an error.
+because the mean and the slope disagree, that switch can read as a step that no code caused. And
+for `alloc_tracker` and `all_the_time`, a missing or non-finite slope drops that operation from
+the run rather than falling back to anything, so a benchmark can simply disappear from a series,
+with no error to say why.
 
 ## Dispersion: what the engine tells you about its own precision
 
@@ -68,9 +69,6 @@ interval can only ever take a candidate away.** No gate uses one to create or st
 candidate. So an engine that reports none is not held to a weaker standard — it is judged on its
 own between-commit scatter instead, which is arguably the more relevant quantity anyway.
 
-`std_dev` is a special case: Criterion reports it, the tool stores it, and nothing reads it
-back. See [Limits](limits.md#some-stored-facts-are-never-read-back).
-
 ## Benchmark identity
 
 An identity is an ordered list of name segments, rendered with slashes. Each adapter builds it
@@ -81,8 +79,10 @@ from what its engine knows:
 Renaming a benchmark therefore starts a new series and retires the old one — the tool has no
 way to know the two are related. See [Reconstruction](reconstruction.md#ghost-elimination).
 
-Note the Criterion row carefully: **there is no package attribution**. Two identically-named
-benchmarks in different crates of one workspace share a series. See
+Note which identities carry **no package attribution**: Criterion (group and function only) and
+the operation engines `alloc_tracker` and `all_the_time` (the operation name alone). Only
+Callgrind is fully qualified. So two identically-named benchmarks in different crates of one
+workspace share a series. See
 [Limits](limits.md#benchmark-identity-can-collide-and-the-estimator-is-invisible).
 
 ## What a stored run holds
@@ -93,7 +93,7 @@ One run is one engine's whole output at one commit, written as a single object.
 
 The context is provenance. Only some of it drives behaviour:
 
-| Field | Role |
+| Context item | Role |
 |---|---|
 | git commit | **Drives everything.** It is how a run is placed in the timeline. |
 | target triple, machine key | **Partitions.** Part of the discriminant set. |
@@ -113,7 +113,7 @@ A storage key is a path with a fixed grammar:
 
 {{#include generated/shape-key-grammar.md}}
 
-A commit directory holds three kinds of object, distinguished by file name:
+The objects sharing one commit come in three kinds, distinguished by file name:
 
 {{#include generated/shape-object-kinds.md}}
 

@@ -182,7 +182,11 @@ fn identity_description(engine: Engine) -> (&'static str, &'static str) {
             "package directory, module path, function, and the case id where one is given",
             "Fully qualified",
         ),
-        Engine::AllocTracker | Engine::AllTheTime => ("the operation name", "A single segment"),
+        Engine::AllocTracker | Engine::AllTheTime => (
+            "the operation name alone",
+            "Carries no package name, so identical operation names in different crates share a \
+             series",
+        ),
     }
 }
 
