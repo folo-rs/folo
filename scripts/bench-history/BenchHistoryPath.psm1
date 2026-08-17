@@ -1,10 +1,8 @@
 #requires -Version 7
 
 # Output-directory preparation shared by the benchmark-history automation recipes in
-# justfiles/just_automation.just. Both analyze recipes (gh-analyze-bench-history,
-# gh-analyze-pr-bench-history) must ensure their scratch report directory exists before writing the
-# four report artefacts into it, and gh-write-bench-history-machine-key must ensure the parent
-# directory of the key file exists before writing the key.
+# justfiles/just_automation.just. Both analyze recipes must ensure their scratch report directory
+# exists before writing the report artefacts into it.
 #
 # Ensuring a directory exists looks trivial, but the exact cmdlet invocation is a footgun: New-Item's
 # directory-creation parameter is -Path, NOT -LiteralPath (unlike Get-/Set-/Remove-Item, New-Item has
@@ -19,9 +17,7 @@ Set-StrictMode -Version Latest
 function New-BenchHistoryDirectory {
     # Ensures $Path exists as a directory, creating any missing parents, and is a no-op when it
     # already exists - so a recipe can call it unconditionally on a path that may or may not have been
-    # created yet. An empty or null $Path is treated as "nothing to create" rather than an error: that
-    # is what `Split-Path -Parent` yields for a bare filename with no directory component, and
-    # gh-write-bench-history-machine-key relies on it to skip creation in that case.
+    # created yet. An empty or null $Path is treated as "nothing to create" rather than an error.
     [CmdletBinding(SupportsShouldProcess)]
     [OutputType([void])]
     param(

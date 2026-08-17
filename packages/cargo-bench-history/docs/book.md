@@ -42,7 +42,7 @@ The teaching points that every chapter should reinforce, not just the concept ch
 6. **Findings are advisory; JSON is the signal.** The exit code reflects whether analysis *ran*,
    not what it found. Automation reads the machine-readable report.
 7. **Prefer auto-detection.** Analysis mode is derived from git topology. Collection derives the
-   machine key from hardware by default but allows an explicit stable key for a machine pool.
+   machine key from hardware.
 8. **Git topology orders time.** Series are ordered by first-parent committer-date topology read
    at analyze time, never by wall-clock measurement timestamps.
 
@@ -73,8 +73,8 @@ the commands that exercise them and down into the appendix for mechanism.
 #### Getting started
 
 - **Goal**: one end-to-end walkthrough on local storage, from nothing to a first analysis.
-- **Teach**: the natural command order (install → backfill → collect → analyze → examine →
-  machine-key) and *why a single collect is not enough* (tenet 1).
+- **Teach**: the natural command order (install → backfill → collect → analyze → examine) and
+  *why a single collect is not enough* (tenet 1).
 - **Carry**: link forward to comparability + analysis for the mechanism.
 
 #### Storage backends
@@ -105,7 +105,6 @@ the commands that exercise them and down into the appendix for mechanism.
 | `list` | Preview the runs `analyze` would consume, catalog discriminant sets, or audit blessings without analyzing. |
 | `prune` | Delete a chosen scope of stored data; `--dry-run` previews the exact deletion plan, and base-branch history needs an explicit confirm. |
 | `bless` / `unbless` | Manually accept an intentional change so history stops re-flagging it; per-benchmark; honored only in history mode. |
-| `machine-key` | Print the hardware fingerprint that all history is partitioned by; it hashes hardware identity only, and `--verbose` explains the factors. |
 
 ### Part 3 — Concepts
 

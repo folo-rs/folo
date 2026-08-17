@@ -166,11 +166,6 @@ Describe 'Get-BenchHistoryBackfillCommand' {
             $result | Should -Not -Contain '--overwrite'
         }
 
-        It 'never pins a machine key, so each runner fills its own partition' {
-            $result = Get-BenchHistoryBackfillCommand
-            $result | Should -Not -Contain '--machine-key'
-        }
-
         It 'measures with exactly the scope the push-to-main collect uses' {
             # A partially-scoped or lower-best-of commit would still count as recorded and never be
             # revisited, so the two builders must emit an identical scope slice. Both are compared

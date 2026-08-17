@@ -203,10 +203,10 @@ and a triple or machine key differing only in case resolves to one set rather th
 splitting into two.
 
 The commands divide into **create** and **query** roles. `collect` and `backfill` record
-new data into exactly one machine's reality, so they auto-detect their discriminant values
-and accept only a machine-key override (for a stable CI-pool key); they reject engine or
-triple selection and the `all` keyword. Every other command queries existing data and uses
-the full repeatable, `all`-aware, auto-detecting discriminant-filter model.
+new data into exactly one machine's reality, so they auto-detect their discriminant values;
+they reject engine or triple selection and the `all` keyword. Every other command queries
+existing data and uses the full repeatable, `all`-aware, auto-detecting discriminant-filter
+model.
 
 ## 4. Machine key
 
@@ -235,25 +235,20 @@ Because the key is persisted and compared across machines and tool versions, it 
 truncated to a compact path segment, and a golden test pins a fixed profile to its digest
 so an accidental change to the canonical form is caught. The version tag is what makes a
 change to the factor set an explicit, visible fork of stored history rather than a silent
-break. A command-line override wins over the computed fingerprint (it is
-CLI-only — a committed config would carry a machine key wrong for some checkouts). The key
-is computed for every run, because every engine is partitioned by it.
+break. The key is computed for every run, because every engine is partitioned by it.
 
 There is no machine-independent partition: every engine — Callgrind instruction counts and
 `alloc_tracker` allocations included — is keyed by the host fingerprint, because those
 figures vary with the microarchitecture in practice. The string `synthetic` carries no
-special meaning; it is an ordinary machine-key value like any other, reachable only through
-an explicit `--machine-key synthetic` (or `--machine-key all`).
+special meaning; it is an ordinary machine-key value like any other and can be selected by
+query-time discriminant filters.
 
 The individual factors behind the fingerprint (the version tag, processor and memory-region
 counts, and processor models) are surfaced for debugging: `collect` and the query commands
-emit them to standard error under `--verbose`, and the standalone `machine-key` command
-prints the key to standard output (with `--verbose` adding the factors to standard error).
-Only true factors appear there, so what is shown is exactly what the key depends on. The
-latter exists so CI can capture the real per-runner key and thread it into a later `analyze`
-selection. Where a run's host is probed, those factors, the resulting fingerprint, and the
-speed histogram that is deliberately not a factor are also recorded beside it as write-only
-provenance (see §5).
+emit them to standard error under `--verbose`. Only true factors appear there, so what is
+shown is exactly what the key depends on. Where a run's host is probed, those factors, the
+resulting fingerprint, and the speed histogram that is deliberately not a factor are also
+recorded beside it as write-only provenance (see §5).
 
 ## 5. Run context
 
@@ -274,8 +269,8 @@ hash to. It is **write-only** — nothing reads it back — and exists purely so
 change in a machine key can be traced to the specific factor that moved (for example, a
 runner pool swapping CPU models). The speed histogram is recorded even though it is not a
 factor, because it is the sharpest available evidence of what the host actually was. It
-records the auto-detected fingerprint regardless of any `--machine-key` override, and is an
-additive, backward-compatible field, absent on runs written before it existed and on the
+records the auto-detected fingerprint, and is an additive, backward-compatible field, absent
+on runs written before it existed and on the
 non-`collect` construction sites that do not probe hardware, so its introduction only bumps
 the schema version for legibility. Nothing may therefore assume a stored run carries it, nor
 that what it carries is the whole of what a key was computed from at the time.
@@ -471,9 +466,9 @@ commit.
 
 Regardless of `--verbose`, `collect` prints a one-line **effective-partition** summary to
 stderr naming the storage partition its results land in: the target triple (always the
-toolchain host) and the machine key every engine is partitioned by — marked as
-auto-detected or as coming from `--machine-key`. This makes the otherwise-invisible
-auto-detected partition self-describing on every run. `backfill` reuses the same `collect`
+toolchain host) and the auto-detected machine key every engine is partitioned by. This
+makes the otherwise-invisible auto-detected partition self-describing on every run.
+`backfill` reuses the same `collect`
 path and so emits the line per commit, each reflecting that commit's own probed toolchain.
 
 ### 7.2 `install`
@@ -618,8 +613,8 @@ keeping backfilled ranges recent, not a defect with a fix.
 By default, commits that already have a stored result are listed once up front and
 **skipped before their benches run**, making backfill resumable and cheap to re-issue;
 overwrite regenerates them. That pre-check reads only the **partition this run would write
-to** — the target triple and machine key this run stores under, honouring a `--machine-key`
-override (§3) — because a different triple or machine key is an independent data set and
+to** — the target triple and auto-detected machine key this run stores under — because a
+different triple or machine key is an independent data set and
 must never count as coverage of this one. The partition is resolved **once**, from the
 newest checkout in the range, so the pre-check matches every write as long as all the
 toolchains in the range resolve to the same host triple; that condition is the price of
@@ -786,11 +781,10 @@ it probes the real repository (keying by the current HEAD commit), toolchain, an
 but records a clean point regardless of incidental working-tree changes. `--dirty` explicitly
 opts into dirty-snapshot keying.
 
-Four overrides let a caller attribute an imported run to a context other than the current
-host, and they touch **only key-affecting discriminants** — body provenance stays real.
-`--target-triple` sets both the storage-partition triple and the recorded toolchain target
-triple. `--machine-key` sets the machine partition of every engine (every engine is
-machine-keyed); the recorded `MachineInfo` stays the real host's. `--commit` is **resolved
+Three overrides let a caller attribute an imported run to a context other than the current
+host. `--target-triple` sets both the storage-partition triple and the recorded toolchain
+target triple. The machine partition is always the auto-detected hardware fingerprint.
+`--commit` is **resolved
 through git** (an unknown commit is a hard error) and keys the run to any existing commit —
 typically an ancestor — **without checking it out**, clearing the branch to `None`; this
 lets a test attribute a whole synthetic series across history from a single HEAD position.

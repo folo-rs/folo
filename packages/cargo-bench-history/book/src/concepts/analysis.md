@@ -173,8 +173,7 @@ modes, auto-detected from git topology (there is no flag to force a mode):
 ## Comparison-base lag
 
 Branch mode compares the tip against the recent base-side points for the **same project** and
-the **same** discriminant set — same engine, target triple, and
-[machine key](../commands/machine-key.md).
+the **same** discriminant set — same engine, target triple, and machine key.
 Measurements are never compared across machine keys, so on rotating CI pools, where the newest
 base commits may have run on a different machine, the branch runner's key can have usable base
 data only a few commits behind the merge-base. The comparison quietly reaches back in history.

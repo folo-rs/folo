@@ -33,10 +33,6 @@ cargo bench-history analyze --local=./bench-history
 # commit that caused it (both --benchmark and --metric are required).
 cargo bench-history examine --local=./bench-history \
     --benchmark my_pkg/my_group/my_case --metric instruction_count
-
-# Print this machine's hardware fingerprint (the key every engine's history is
-# partitioned by).
-cargo bench-history machine-key
 ```
 
 ## What just happened

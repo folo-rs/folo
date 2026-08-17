@@ -14,7 +14,6 @@ runs, analyze what changed, inspect the evidence, and maintain the stored data. 
 | [`list`](list.md) | Preview the data set an `analyze` pass would consume, or catalog stored partitions. |
 | [`prune`](prune.md) | Delete a chosen portion of the stored data set. |
 | [`bless` / `unbless`](bless.md) | Accept (or un-accept) an intentional performance change on the base branch. |
-| [`machine-key`](machine-key.md) | Print this machine's hardware fingerprint. |
 
 ## Shared option groups
 

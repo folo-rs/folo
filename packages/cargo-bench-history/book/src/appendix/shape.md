@@ -119,8 +119,8 @@ A commit directory holds three kinds of object, distinguished by file name:
 
 Each path segment is **sanitized**: characters outside a safe set are replaced, and the result
 is lowercased. That is what keeps a key usable as both a filesystem path and a blob name — but
-it also means two identifiers differing only in case or punctuation collapse into **one
-partition**. Worth knowing if you set machine keys by hand.
+it also means identifiers differing only in case or punctuation collapse into **one
+partition**.
 
 Bodies are compressed at the storage boundary, so a local store is a tree of gzipped JSON.
 

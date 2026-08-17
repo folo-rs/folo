@@ -93,15 +93,9 @@ intermediate commits are ignored — only the tip merges.
 
 - `cargo bench-history list discriminants` shows how your history is partitioned. Several
   machine keys where you expected one means the pool is rotating.
-- `cargo bench-history machine-key --verbose` explains what the current machine hashed to and
-  why.
-
 **Remedies:**
 
-- For a genuinely homogeneous pool, set a stable `--machine-key` so the machines share one
-  history. Only do this if they really are equivalent — the partition exists because they
-  usually are not.
-- For a heterogeneous pool, [`backfill`](../commands/backfill.md) on each machine so each key
+- [`backfill`](../commands/backfill.md) on each machine so each key
   accumulates its own usable history.
 - For a one-off infrastructure step you accept, `bless --all` re-baselines everything at once.
 

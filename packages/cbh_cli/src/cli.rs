@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use cbh_command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
     ExamineOptions, ImportOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection,
-    MachineKeyOptions, PruneOptions, UnblessOptions,
+    PruneOptions, UnblessOptions,
 };
 use cbh_model::BenchmarkIdPrefix;
 use clap::{ArgGroup, Args, Parser, Subcommand as ClapSubcommand, ValueEnum};
@@ -96,7 +96,6 @@ impl Cli {
             Subcommand::Import(command) => Command::Import(command.into_options()),
             Subcommand::Install(command) => Command::Install(command.into_options()),
             Subcommand::List(command) => Command::List(command.into_options()),
-            Subcommand::MachineKey(command) => Command::MachineKey(command.into_options()),
             Subcommand::Prune(command) => Command::Prune(command.into_options()),
             Subcommand::Unbless(command) => Command::Unbless(command.into_options()),
         }
@@ -138,8 +137,6 @@ enum Subcommand {
     Install(InstallCommand),
     /// List the data set a matching `analyze` would include, without analyzing it.
     List(ListCommand),
-    /// Print this machine's hardware fingerprint (the machine key).
-    MachineKey(MachineKeyCommand),
     /// Show the raw per-commit data points of one `(benchmark, metric)` series.
     Examine(ExamineCommand),
     /// Delete stored runs (and their blessing sidecars) from the resolved data set.
@@ -325,11 +322,6 @@ struct CollectCommand {
     #[command(flatten)]
     env: EnvArgs,
 
-    /// Override the machine key used to partition every engine's results (for
-    /// example, a CI machine-pool name).
-    #[arg(long, value_name = "KEY", help_heading = HEADING_DISCRIMINANT)]
-    machine_key: Option<String>,
-
     /// Benchmark the entire workspace (the default when no `--package` is given);
     /// conflicts with `--package`.
     #[arg(long, help_heading = HEADING_SCOPE, conflicts_with = "package")]
@@ -402,7 +394,6 @@ impl CollectCommand {
             features: self.features,
             all_features: self.all_features,
             no_default_features: self.no_default_features,
-            machine_key: self.machine_key,
             no_store: self.no_store,
             overwrite: self.overwrite,
             skip_existing: self.skip_existing,
@@ -418,8 +409,8 @@ impl CollectCommand {
 ///
 /// It keeps collect's environment/storage flags and adds the required scan
 /// directory plus the metadata overrides that let one host synthesize data for
-/// another target triple, machine, or commit. It has no benchmark-scope or feature
-/// flags because it never runs a build.
+/// another target triple or commit. It has no benchmark-scope or feature flags
+/// because it never runs a build.
 #[derive(Args, Debug)]
 struct ImportCommand {
     #[command(flatten)]
@@ -431,11 +422,6 @@ struct ImportCommand {
     /// must name the tree it curated.
     #[arg(long, value_name = "PATH", help_heading = HEADING_ENV)]
     target_dir: PathBuf,
-
-    /// Override the machine key used to partition every engine's results (for
-    /// example, a CI machine-pool name).
-    #[arg(long, value_name = "KEY", help_heading = HEADING_DISCRIMINANT)]
-    machine_key: Option<String>,
 
     /// Override the target triple the results are partitioned under (and recorded
     /// against), so a single host can synthesize data for another target.
@@ -472,7 +458,6 @@ impl ImportCommand {
             repo: self.env.repo,
             local: local_selection(self.env.local),
             target_dir: self.target_dir,
-            machine_key: self.machine_key,
             target_triple: self.target_triple,
             commit: self.commit,
             dirty: self.dirty,
@@ -500,27 +485,6 @@ impl InstallCommand {
     fn into_options(self) -> InstallOptions {
         InstallOptions {
             config_path: self.config,
-            verbose: self.verbose,
-        }
-    }
-}
-
-/// Print this machine's hardware fingerprint (the machine key).
-#[derive(Args, Debug)]
-struct MachineKeyCommand {
-    /// Also emit the individual hardware factors that make up the fingerprint to
-    /// standard error (the fingerprint version, processor count, memory-region
-    /// count and processor models), so a change in the key can be traced to which
-    /// factor changed. Per-processor speeds are recorded with collected runs as
-    /// hardware provenance, but they are not factors and so are not reported here.
-    /// The key itself always goes to standard output.
-    #[arg(long, help_heading = HEADING_ENV)]
-    verbose: bool,
-}
-
-impl MachineKeyCommand {
-    fn into_options(self) -> MachineKeyOptions {
-        MachineKeyOptions {
             verbose: self.verbose,
         }
     }
@@ -878,11 +842,6 @@ struct BackfillCommand {
     #[command(flatten)]
     env: EnvArgs,
 
-    /// Override the machine key used to partition every engine's results (for
-    /// example, a CI machine-pool name).
-    #[arg(long, value_name = "KEY", help_heading = HEADING_DISCRIMINANT)]
-    machine_key: Option<String>,
-
     /// Benchmark the entire workspace (the default when no `--package` is given);
     /// conflicts with `--package`.
     #[arg(long, help_heading = HEADING_SCOPE, conflicts_with = "package")]
@@ -952,7 +911,6 @@ impl BackfillCommand {
             features: self.features,
             all_features: self.all_features,
             no_default_features: self.no_default_features,
-            machine_key: self.machine_key,
             overwrite: self.overwrite,
             ignore_errors: self.ignore_errors,
             passthrough: self.passthrough,
@@ -1106,8 +1064,6 @@ mod tests {
             "curated/target",
             "--target-triple",
             "aarch64-apple-darwin",
-            "--machine-key",
-            "lab-runner-7",
             "--commit",
             "release-1.0",
             "--dirty",
@@ -1121,7 +1077,6 @@ mod tests {
             options.target_triple.as_deref(),
             Some("aarch64-apple-darwin")
         );
-        assert_eq!(options.machine_key.as_deref(), Some("lab-runner-7"));
         assert_eq!(options.commit.as_deref(), Some("release-1.0"));
         assert!(options.dirty);
         assert!(options.overwrite);
@@ -1523,15 +1478,6 @@ mod tests {
     }
 
     #[test]
-    fn collect_parses_machine_key_override() {
-        let command = parse(&["collect", "--machine-key", "ci-pool-a"]);
-        let Command::Collect(options) = command else {
-            panic!("expected collect command");
-        };
-        assert_eq!(options.machine_key.as_deref(), Some("ci-pool-a"));
-    }
-
-    #[test]
     fn collect_parses_verbose_switch() {
         let Command::Collect(options) = parse(&["collect", "--verbose"]) else {
             panic!("expected collect command");
@@ -1571,25 +1517,6 @@ mod tests {
 
         let Command::Install(options) = parse(&["install"]) else {
             panic!("expected install command");
-        };
-        assert!(!options.verbose);
-    }
-
-    #[test]
-    fn machine_key_maps_to_machine_key_command() {
-        let command = parse(&["machine-key"]);
-        assert_eq!(command, Command::MachineKey(MachineKeyOptions::default()));
-    }
-
-    #[test]
-    fn machine_key_parses_verbose_switch() {
-        let Command::MachineKey(options) = parse(&["machine-key", "--verbose"]) else {
-            panic!("expected machine-key command");
-        };
-        assert!(options.verbose);
-
-        let Command::MachineKey(options) = parse(&["machine-key"]) else {
-            panic!("expected machine-key command");
         };
         assert!(!options.verbose);
     }
@@ -2083,8 +2010,6 @@ mod tests {
             "nm",
             "--bench",
             "nm_observe",
-            "--machine-key",
-            "ci-pool",
             "--overwrite",
             "--ignore-errors",
             "--",
@@ -2097,7 +2022,6 @@ mod tests {
         assert_eq!(options.to, "def456");
         assert_eq!(options.packages, vec!["nm".to_owned()]);
         assert_eq!(options.benches, vec!["nm_observe".to_owned()]);
-        assert_eq!(options.machine_key.as_deref(), Some("ci-pool"));
         assert!(options.overwrite);
         assert!(options.ignore_errors);
         assert_eq!(options.passthrough, vec!["--noplot".to_owned()]);

@@ -161,7 +161,7 @@ async fn detect_auto_discriminants_with<P: EnvironmentProbe>(
     let hardware = probe.hardware().await;
     Ok(AutoDiscriminants {
         triple: toolchain.host.unwrap_or_default(),
-        machine_key: resolve_machine_key(None, &hardware),
+        machine_key: resolve_machine_key(&hardware),
     })
 }
 

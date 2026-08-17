@@ -266,26 +266,6 @@ jobs:
           PR_PACKAGES: ${{ needs.delta.outputs.packages }}
         run: just gh-collect-pr-bench-history "$env:PR_PACKAGES"
 
-      # Record THIS runner's real hardware fingerprint so the single analyze job can thread the exact
-      # keys collected this run into its `--machine-key` filter (collect is a matrix, analyze is not).
-      # Runs only after a SUCCESSFUL collect - the default step behavior - so a failed leg's key is
-      # not threaded. The write recipe logs the fingerprint components under --verbose.
-      - name: Record runner machine key
-        shell: pwsh
-        env:
-          KEY_FILE: ${{ runner.temp }}/machine-key.txt
-        run: just gh-write-bench-history-machine-key "$env:KEY_FILE"
-
-      # Upload this leg's key under a per-platform artifact name so the analyze job can download every
-      # leg's key together (one file per platform). if-no-files-found: error catches a broken
-      # key-write step loudly rather than silently dropping a key from the analysis.
-      - name: Upload runner machine key
-        uses: actions/upload-artifact@v7
-        with:
-          name: pr-bench-history-machine-key-${{ matrix.platform }}
-          path: ${{ runner.temp }}/machine-key.txt
-          if-no-files-found: error
-
   # Compare the PR head against `main` in branch mode and post/update the rolling PR comment. Runs
   # after every platform finishes (even partially: fail-fast is off) so the comparison reflects
   # whatever landed. Uses `!cancelled()` (NOT always()) so a partially-failed collect still analyzes -
@@ -306,15 +286,12 @@ jobs:
     # cold-cache setup-environment on top of the analysis.
     timeout-minutes: 150
 
-    # id-token to self-federate with Entra (reads the history), contents for checkout,
-    # pull-requests to post/update the rolling comment, and actions:read so the machine-key
-    # download below can enumerate this run's artifacts through the REST run-artifacts endpoint
-    # (see that step's note) rather than the attempt-scoped internal artifact service.
+    # id-token to self-federate with Entra (reads the history), contents for checkout, and
+    # pull-requests to post/update the rolling comment.
     permissions:
       id-token: write
       contents: read
       pull-requests: write
-      actions: read
 
     steps:
       - name: Checkout repository
@@ -367,28 +344,6 @@ jobs:
           restore-keys: |
             bench-history-cache-
 
-      # Download every collect leg's machine-key file (one per-platform artifact) into a single
-      # directory so the analysis can thread the EXACT fingerprints collected this run into its
-      # `--machine-key` filter. The default (no merge-multiple) keeps one subdirectory per artifact;
-      # the recipe scans recursively. A leg whose collection failed uploaded nothing, so its key is
-      # simply absent; if EVERY leg failed the pattern download matches nothing (it does not fail) and
-      # the recipe treats the empty directory as "nothing to analyze".
-      #
-      # `github-token` (with `run-id`, defaulted to this run) is what routes the download through the
-      # public REST run-artifacts endpoint instead of the attempt-bound internal artifact service.
-      # That endpoint lists a run's artifacts across ALL of its attempts, so after a PARTIAL re-run
-      # (e.g. `gh run rerun --failed` on one flaky collect leg) the surviving leg's artifact - which
-      # stays under the earlier attempt - still resolves. Without the token the action pins each
-      # artifact to the current attempt and 404s ("workflow run not found") on any older-attempt
-      # artifact, leaving `analyze` impossible to green without re-running the whole matrix.
-      - name: Download collected machine keys
-        uses: actions/download-artifact@v8
-        with:
-          pattern: pr-bench-history-machine-key-*
-          path: ${{ steps.scratch.outputs.dir }}/machine-keys
-          github-token: ${{ github.token }}
-          run-id: ${{ github.run_id }}
-
       # Renders report.md (full Markdown), report.json (full JSON), summary.md (the condensed
       # top-findings Markdown) and notable.txt into the scratch directory, in BRANCH mode (PR head
       # vs origin/main), including improvements as well as regressions. Findings never fail the
@@ -396,14 +351,13 @@ jobs:
       # deliberately run UNSCOPED: `analyze`'s always-on ghost-exclusion (only benchmarks present at
       # the PR head are analyzed) restricts it to exactly the collected packages, so no per-package
       # filter is needed - and the ghost exclusion is unconditional, so it can never be turned off.
-      # See the recipe / design.md.
-      # The third argument is the downloaded machine-key directory whose fingerprints scope the
-      # analysis.
+      # See the recipe / design.md. The recipe selects all machine-key partitions because collection
+      # stores auto-derived hardware fingerprints.
       - name: Analyze PR benchmark history
         shell: pwsh
         env:
           SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
-        run: just gh-analyze-pr-bench-history "$env:SCRATCH_DIR" origin/main "$env:SCRATCH_DIR/machine-keys"
+        run: just gh-analyze-pr-bench-history "$env:SCRATCH_DIR" origin/main
 
       - name: Read notable flag
         id: notable

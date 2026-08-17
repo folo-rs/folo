@@ -17,15 +17,13 @@
 //! history into incomparable pieces, which is the failure the fingerprint exists
 //! to prevent.
 //!
-//! The key is surfaced two ways for operators. [`resolve_machine_key`] yields the
-//! key itself (what `collect` stamps every result with and the
-//! `machine-key` command prints), while [`describe_fingerprint_components`] renders
-//! the individual factors that fed the hash, so a change in the key can be traced —
-//! in verbose logs — to the specific hardware detail that moved.
+//! [`resolve_machine_key`] yields the key `collect`, `import`, and `backfill` stamp
+//! every result with, while [`describe_fingerprint_components`] renders the
+//! individual factors that fed the hash, so a change in the key can be traced — in
+//! verbose logs — to the specific hardware detail that moved.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use cbh_model::sanitize_segment;
 use sha2::{Digest, Sha256};
 
 /// Version tag of the fingerprint factor set, prefixed onto the canonical string.
@@ -152,14 +150,10 @@ pub(crate) fn fingerprint(profile: &HardwareProfile) -> String {
     hex
 }
 
-/// Resolves the machine key for a partition: an explicit override (sanitized to a
-/// single path segment) wins; otherwise the hardware [`fingerprint`] is used.
+/// Resolves the machine key for a partition from the hardware [`fingerprint`].
 #[must_use]
-pub fn resolve_machine_key(override_key: Option<&str>, profile: &HardwareProfile) -> String {
-    match override_key {
-        Some(key) => sanitize_segment(key),
-        None => fingerprint(profile),
-    }
+pub fn resolve_machine_key(profile: &HardwareProfile) -> String {
+    fingerprint(profile)
 }
 
 /// Renders the individual factors behind a machine [`fingerprint`] as a
@@ -340,18 +334,9 @@ mod tests {
     }
 
     #[test]
-    fn resolve_machine_key_uses_fingerprint_without_override() {
+    fn resolve_machine_key_uses_fingerprint() {
         let hardware = profile(8, 1, &["CPU X"]);
-        assert_eq!(resolve_machine_key(None, &hardware), fingerprint(&hardware));
-    }
-
-    #[test]
-    fn resolve_machine_key_prefers_sanitized_override() {
-        let hardware = profile(8, 1, &["CPU X"]);
-        assert_eq!(
-            resolve_machine_key(Some("ci/pool one"), &hardware),
-            "ci_pool_one"
-        );
+        assert_eq!(resolve_machine_key(&hardware), fingerprint(&hardware));
     }
 
     #[test]
@@ -454,13 +439,13 @@ mod tests {
             "the 10681 reading is provenance, so it must leave the factor string alone",
         );
         assert_eq!(
-            resolve_machine_key(None, &uniform),
+            resolve_machine_key(&uniform),
             "2e3ad42f4e2cd3e1",
             "this runner's production history is filed under this key",
         );
         assert_eq!(
-            resolve_machine_key(None, &recalibrated),
-            resolve_machine_key(None, &uniform),
+            resolve_machine_key(&recalibrated),
+            resolve_machine_key(&uniform),
             "one machine's two calibration readings are one machine",
         );
     }

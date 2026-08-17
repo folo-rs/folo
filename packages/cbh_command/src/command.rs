@@ -71,10 +71,6 @@ pub enum Command {
     Bless(BlessOptions),
     /// Remove blessings recorded at the current commit.
     Unbless(UnblessOptions),
-    /// Print this machine's hardware fingerprint.
-    ///
-    /// Every benchmark engine partitions its history by this key.
-    MachineKey(MachineKeyOptions),
 }
 
 /// Options for the `collect` command.
@@ -104,8 +100,6 @@ pub struct CollectOptions {
     pub all_features: bool,
     /// Disable the default cargo feature set (`--no-default-features`).
     pub no_default_features: bool,
-    /// Override for the machine key used to partition every engine, if set.
-    pub machine_key: Option<String>,
     /// Harvest and build results without storing them.
     pub no_store: bool,
     /// Replace an already-stored result for this run's identity instead of
@@ -138,7 +132,6 @@ impl Default for CollectOptions {
             features: Vec::new(),
             all_features: false,
             no_default_features: false,
-            machine_key: None,
             no_store: false,
             overwrite: false,
             skip_existing: false,
@@ -157,8 +150,9 @@ impl Default for CollectOptions {
 /// scan directory plus metadata overrides; it drops every cargo-run and bench-scope
 /// flag (`--package`/`--bench`/`--features`/`--best-of`/`--no-store`/passthrough).
 ///
-/// The metadata overrides touch only the storage discriminants (key-affecting
-/// metadata); everything else in the run context stays probed from the real host.
+/// The metadata overrides touch only key-affecting metadata that can legitimately
+/// be attributed independently; everything else in the run context stays probed
+/// from the real host.
 #[doc(hidden)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImportOptions {
@@ -175,8 +169,6 @@ pub struct ImportOptions {
     /// leftovers from unrelated runs into one import, so the caller must name the
     /// tree it curated.
     pub target_dir: PathBuf,
-    /// Override for the machine key used to partition every engine, if set.
-    pub machine_key: Option<String>,
     /// Override for the partition target triple, if set. Applied to both the
     /// partition key and the recorded `ToolchainInfo.target_triple` so the stored
     /// object is internally coherent.
@@ -207,7 +199,6 @@ impl Default for ImportOptions {
             repo: None,
             local: None,
             target_dir: PathBuf::new(),
-            machine_key: None,
             target_triple: None,
             commit: None,
             dirty: false,
@@ -225,20 +216,6 @@ pub struct InstallOptions {
     /// Path to the configuration file to generate, if overridden.
     pub config_path: Option<PathBuf>,
     /// Emit detailed diagnostic notes to standard error describing each step.
-    pub verbose: bool,
-}
-
-/// Options for the `machine-key` command.
-///
-/// The command derives no configuration, git, or storage state: it only probes
-/// the host hardware and prints the resulting fingerprint, so its sole option is
-/// the shared verbosity flag.
-#[doc(hidden)]
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct MachineKeyOptions {
-    /// Emit the individual hardware components that make up the fingerprint to
-    /// standard error, so a change in the key can be traced to which factor
-    /// changed. The key itself always goes to standard output.
     pub verbose: bool,
 }
 
@@ -541,8 +518,6 @@ pub struct BackfillOptions {
     pub all_features: bool,
     /// Disable the default cargo feature set (`--no-default-features`).
     pub no_default_features: bool,
-    /// Override for the machine key used to partition every engine, if set.
-    pub machine_key: Option<String>,
     /// Replace already-stored results for the backfilled commits instead of
     /// skipping them as duplicates.
     pub overwrite: bool,
@@ -572,7 +547,6 @@ impl Default for BackfillOptions {
             features: Vec::new(),
             all_features: false,
             no_default_features: false,
-            machine_key: None,
             overwrite: false,
             ignore_errors: false,
             passthrough: Vec::new(),

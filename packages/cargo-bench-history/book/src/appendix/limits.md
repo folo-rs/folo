@@ -84,8 +84,8 @@ Results from different machine keys are never compared, only reported side by si
 pool rotates machines, some series will have less base data than the commit count suggests.
 
 *What to do:* the tool discloses this as a comparison-base lag warning rather than silently
-comparing. A stable `--machine-key` across a genuinely homogeneous pool is the fix; see
-[machine-key](../commands/machine-key.md).
+comparing. Run `backfill` on each machine so every real hardware partition accumulates a usable
+history.
 
 ## Some stored facts are never read back
 

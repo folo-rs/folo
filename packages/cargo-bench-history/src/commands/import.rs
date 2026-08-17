@@ -11,10 +11,9 @@
 //! It is internal and hidden from `--help`, but general-purpose: it makes no
 //! assumption that the imported output is synthetic, so feeding it real engine
 //! output stores exactly what `collect` would. The overrides
-//! (`--target-triple`/`--commit`/`--machine-key`/`--dirty`) touch only the storage
-//! discriminants; the rest of the run context stays probed from the real host, so
-//! (for example) `MachineInfo` always records this machine's provenance even when
-//! `--machine-key` repartitions the run.
+//! (`--target-triple`/`--commit`/`--dirty`) touch only key-affecting metadata that
+//! can legitimately be attributed independently; the rest of the run context stays
+//! probed from the real host.
 
 use std::path::{Path, PathBuf};
 
@@ -196,7 +195,6 @@ where
         "toolchain host"
     };
     let params = StoreParams {
-        machine_key: options.machine_key.as_deref(),
         overwrite: options.overwrite,
         skip_existing: options.skip_existing,
         no_store: false,
@@ -344,9 +342,9 @@ mod tests {
     }
 
     /// The auto-detected machine key every engine partitions under for the
-    /// [`FakeProbe`] hardware profile, when no `--machine-key` override applies.
+    /// [`FakeProbe`] hardware profile.
     fn probe_machine_key() -> String {
-        resolve_machine_key(None, &FakeProbe::new().hardware)
+        resolve_machine_key(&FakeProbe::new().hardware)
     }
 
     /// A curated-tree stand-in that hands back canned per-engine output, so a test
@@ -395,7 +393,7 @@ mod tests {
     }
 
     /// A curated tree carrying both a Callgrind and an `all_the_time` engine's
-    /// output, to prove `--machine-key` repartitions every engine.
+    /// output, to prove every engine is machine-keyed.
     fn callgrind_and_time_output() -> FakeOutput {
         FakeOutput {
             time: vec![RawOperationFile {
@@ -762,15 +760,11 @@ mod tests {
     }
 
     #[test]
-    fn machine_key_override_repartitions_every_engine() {
+    fn import_partitions_every_engine_under_the_probed_machine_key() {
         let storage = MemoryStorage::new();
-        let options = ImportOptions {
-            machine_key: Some("lab-runner-7".to_owned()),
-            ..ImportOptions::default()
-        };
 
         run_import(
-            &options,
+            &ImportOptions::default(),
             &callgrind_and_time_output(),
             &FakeProbe::new(),
             &FakeGitHistory::new(),
@@ -779,17 +773,16 @@ mod tests {
         .unwrap();
 
         let keys = storage.keys();
+        let machine = probe_machine_key();
         assert_eq!(keys.len(), 2, "{keys:?}");
-        // Callgrind is machine-keyed: the override names its partition.
         assert!(
             keys.iter()
-                .any(|key| key.contains("/callgrind/") && key.contains("/lab-runner-7/")),
+                .any(|key| key.contains("/callgrind/") && key.contains(&format!("/{machine}/"))),
             "{keys:?}"
         );
-        // `all_the_time` is machine-keyed too: the override names its partition.
         assert!(
             keys.iter()
-                .any(|key| key.contains("/all_the_time/") && key.contains("/lab-runner-7/")),
+                .any(|key| key.contains("/all_the_time/") && key.contains(&format!("/{machine}/"))),
             "{keys:?}"
         );
     }

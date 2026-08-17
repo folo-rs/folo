@@ -21,6 +21,5 @@ mod harness;
 mod import;
 mod install;
 mod list;
-mod machine_key;
 mod prune;
 mod storage;

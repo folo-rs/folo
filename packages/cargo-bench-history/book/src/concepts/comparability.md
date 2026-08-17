@@ -13,7 +13,7 @@ Two results are comparable exactly when they were measured in the same **project
   architectures.
 - **`machine_key`** — always present: a fingerprint of the host hardware the benchmark ran on.
   Every engine is partitioned by it, because every engine's numbers vary with the hardware in
-  practice. See [machine-key](../commands/machine-key.md).
+  practice. See [Collection](../appendix/collection.md#target-triples-and-machine-keys).
 
 The project — workspace identity, configured and defaulting to the repository directory name
 — partitions too, but it sits one level above: it selects *which store* is being read, so

@@ -94,8 +94,7 @@ impl RunContext {
 /// stand in for the factor set of some other key version. Write-only metadata: nothing
 /// reads it back; it exists so that a later change in a machine key can be traced to
 /// the specific hardware detail that changed (for example, a runner pool swapping CPU
-/// models). It records the host's auto-detected fingerprint and is independent of any
-/// `--machine-key` override used to partition storage.
+/// models). It records the host's auto-detected fingerprint used to partition storage.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MachineInfo {
     /// Number of logical processors the host reported.

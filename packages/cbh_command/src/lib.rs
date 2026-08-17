@@ -29,5 +29,5 @@ mod command;
 pub use command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
     ExamineOptions, ImportOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection,
-    MachineKeyOptions, PruneOptions, UnblessOptions,
+    PruneOptions, UnblessOptions,
 };

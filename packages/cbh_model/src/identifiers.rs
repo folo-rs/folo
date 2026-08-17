@@ -71,8 +71,7 @@ string_newtype! {
 }
 
 string_newtype! {
-    /// The machine key a series is partitioned by: a stable hardware fingerprint
-    /// or an explicit `--machine-key` override.
+    /// The machine key a series is partitioned by: a stable hardware fingerprint.
     ///
     /// Every engine is machine-keyed, so this segment always participates in a
     /// storage key alongside the [`TargetTriple`]; the distinct types keep the two
