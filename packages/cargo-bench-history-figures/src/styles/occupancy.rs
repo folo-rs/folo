@@ -265,13 +265,16 @@ fn draw_occupancy_legend(
     }
 
     let (width, _) = area.dim_in_pixel();
-    let column_width = i32::try_from(width).unwrap_or(i32::MAX)
-        / i32::try_from(cells.len()).expect("the legend cell count fits in i32");
+    let cell_count = i32::try_from(cells.len()).expect("the legend cell count fits in i32");
+    let column_width = i32::try_from(width)
+        .unwrap_or(i32::MAX)
+        .checked_div(cell_count)
+        .expect("the legend has at least one cell");
     for (index, cell) in cells.iter().copied().enumerate() {
         let index = i32::try_from(index).expect("the legend cell count fits in i32");
-        let left = OCCUPANCY_LEGEND_LEFT + index.saturating_mul(column_width);
-        let swatch_right = left + OCCUPANCY_LEGEND_SWATCH;
-        let swatch_bottom = OCCUPANCY_LEGEND_TOP + OCCUPANCY_LEGEND_SWATCH;
+        let left = OCCUPANCY_LEGEND_LEFT.saturating_add(index.saturating_mul(column_width));
+        let swatch_right = left.saturating_add(OCCUPANCY_LEGEND_SWATCH);
+        let swatch_bottom = OCCUPANCY_LEGEND_TOP.saturating_add(OCCUPANCY_LEGEND_SWATCH);
         let swatch = [(left, OCCUPANCY_LEGEND_TOP), (swatch_right, swatch_bottom)];
         if let Some(color) = cell.color() {
             area.draw(&Rectangle::new(swatch, color.mix(0.75).filled()))?;
@@ -290,8 +293,8 @@ fn draw_occupancy_legend(
         area.draw(&Text::new(
             cell.label().to_owned(),
             (
-                swatch_right + OCCUPANCY_LEGEND_TEXT_GAP,
-                OCCUPANCY_LEGEND_TOP + OCCUPANCY_LEGEND_SWATCH,
+                swatch_right.saturating_add(OCCUPANCY_LEGEND_TEXT_GAP),
+                OCCUPANCY_LEGEND_TOP.saturating_add(OCCUPANCY_LEGEND_SWATCH),
             ),
             TextStyle::from((theme::FONT, theme::FONT_TICK)).color(&theme::INK),
         ))?;

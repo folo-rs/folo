@@ -262,17 +262,14 @@ where
     // unresolvable merge-base, so it is a hard error rather than a quiet degenerate run.
     // The usual cause is the base having been merged into the branch instead of the
     // branch being rebased onto the base.
-    let merge_base_index = match order.get(&merge_base).copied() {
-        Some(index) => index,
-        None => {
-            return Err(MergeBaseOffFirstParentError::new(
-                target_ref,
-                &target_commit_id,
-                &base_commit_id,
-                &merge_base,
-            )
-            .into());
-        }
+    let Some(merge_base_index) = order.get(&merge_base).copied() else {
+        return Err(MergeBaseOffFirstParentError::new(
+            target_ref,
+            &target_commit_id,
+            &base_commit_id,
+            &merge_base,
+        )
+        .into());
     };
     // The target's tip is its own merge-base exactly when this is an official
     // base-branch view rather than a feature branch.

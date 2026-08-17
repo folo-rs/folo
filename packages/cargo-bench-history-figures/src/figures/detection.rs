@@ -566,12 +566,11 @@ fn returned_excursion_values() -> Vec<f64> {
     .into_iter()
     .flat_map(|level| std::iter::repeat_n(level, regime))
     .collect();
-    let values = examples::scattered(
+    examples::scattered(
         &levels,
         examples::TIMING_NOISE_CV,
         examples::seed_of("returned_excursion"),
-    );
-    values
+    )
 }
 
 /// A sustained excursion that has already returned to its original level.
