@@ -49,17 +49,22 @@ filled in.
 
 {{#include generated/reconstruction-gap.svg}}
 
+The two panes are the same series twice. The first is what the **history** holds: each
+observation at the commit it was measured at, gaps drawn to scale, so a steady climb reads as the
+straight line it is even though most commits were never measured. The second is what the
+**detector receives**: a bare sequence, with no notion of a commit it holds no observation for.
+The same climb now reads as uneven steps, because the gaps the detector cannot see are exactly
+where the biggest jumps happened.
+
 The consequence is the single most important thing to understand about this stage, and it is
 easy to miss:
 
 > **The detectors cannot see how far apart two observations are.**
 
-A series is a *sequence* to the statistics. Ten observations spread across a thousand commits
-and ten across ten consecutive commits are indistinguishable to every detector and every gate.
-
-Charts, on the other hand, are drawn against topology and *do* show gaps to scale. So the
-picture tells you something the statistics never knew — which is deliberate, and why a
-suspicious finding is always worth looking at as a chart.
+Ten observations spread across a thousand commits and ten across ten consecutive commits are
+indistinguishable to every detector and every gate. The report's charts, like the history pane,
+are drawn against topology and *do* show gaps to scale — which is why a suspicious finding is
+always worth looking at as a chart: it shows you what the statistics never knew.
 
 *Why not interpolate?* A gap means nothing was measured, not that nothing changed.
 Interpolating would invent data, and inventing data in the input to a change detector

@@ -756,18 +756,23 @@ const GAP_SPAN: usize = 20;
 /// which is the shape a suite benchmarked on some commits and not others produces.
 const GAP_POSITIONS: [usize; GAP_OBSERVATIONS] = [0, 1, 2, 3, 4, 11, 12, 13, 18, 19];
 
-/// The same observations as a sequence, then against the topology they were measured at.
+/// How much the series rises per commit. A steady climb means the history holds a straight line
+/// a reader can follow through the gaps, while the detector — which sees only the sequence —
+/// meets it as uneven steps wherever a gap hid the commits in between.
+const GAP_SLOPE: f64 = 3.0;
+
+/// The series as the history holds it (against topology, gaps to scale), then as the detector
+/// receives it (a gapless sequence).
 fn gap() -> Panes {
-    let values = flat(LEVEL, GAP_OBSERVATIONS);
+    // Value rises linearly with the commit *position*, so the true series is a straight line and
+    // a reader can infer it from the topology pane even though most commits hold nothing.
+    let values: Vec<f64> = GAP_POSITIONS
+        .iter()
+        .map(|&position| LEVEL + GAP_SLOPE * crate::coord::of(position))
+        .collect();
 
-    // The span is the number of observations, not the topology the lower pane draws: this
-    // pane is the sequence the detectors see, which has no notion of a commit it holds no
-    // observation for. Drawing it across the full topology would put the gaps back.
-    let before = Plot::new("what the detectors see: a sequence", GAP_OBSERVATIONS)
-        .value_label("ns")
-        .values(&values);
-
-    let after = Plot::new("what the chart draws: one column per commit", GAP_SPAN)
+    // History first: each observation at the commit it was measured at, gaps drawn to scale.
+    let before = Plot::new("what the history contains: one column per commit", GAP_SPAN)
         .value_label("ns")
         .observations(
             GAP_POSITIONS
@@ -777,8 +782,15 @@ fn gap() -> Panes {
                 .map(|(position, value)| Observation::new(position, value)),
         );
 
+    // Then the detector's input: the same values as a bare sequence, with no notion of a commit
+    // it holds no observation for. The straight climb now reads as uneven steps, because the gaps
+    // it cannot see are exactly where the biggest jumps happened.
+    let after = Plot::new("what the detector receives: a gapless sequence", GAP_OBSERVATIONS)
+        .value_label("ns")
+        .values(&values);
+
     Panes {
-        title: "a commit with no observation leaves an empty column",
+        title: "the same series as the history holds it, then as the detector receives it",
         before,
         after,
     }
