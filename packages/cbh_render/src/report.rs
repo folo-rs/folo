@@ -3092,6 +3092,17 @@ mod tests {
         }
     }
 
+    #[test]
+    fn attribution_text_names_a_commit_or_a_drift_range() {
+        // A change point (no window start) is attributed to its single commit.
+        assert_eq!(attribution_text(&regression()), "@ deadbee");
+        // A drift names the whole range it accumulated over, not one commit.
+        assert_eq!(
+            attribution_text(&drift()),
+            "accumulated f00dcafe → deadbee"
+        );
+    }
+
     fn darwin_set() -> DiscriminantSet {
         DiscriminantSet {
             engine: Engine::Callgrind,
