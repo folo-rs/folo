@@ -398,11 +398,14 @@ fn formats() -> String {
     .expect("writing to a String never fails");
 
     markdown.push_str(
-        "\nJSON is the complete archival form: it always carries the full census. Text and \
-         Markdown drop the per-reason breakdown when there are findings to show. The \
-         condensed summary is lossy by design, so it is the one output that must not be \
-         automated against: a check reading it cannot distinguish findings that were \
-         capped away from findings that were never made.\n",
+        "\nJSON is the complete machine-readable result: it always carries every finding and \
+         the full per-reason census, including the ghost count. It is not an observation \
+         archive — the per-commit series behind the charts is obtained with `examine`. Text \
+         and Markdown carry every finding but drop the per-reason census when there are \
+         findings to show, so only JSON always reveals the ghost count. The condensed \
+         summary is lossy by design, so it is the one output that must not be automated \
+         against: a check reading it cannot distinguish findings that were capped away from \
+         findings that were never made.\n",
     );
     markdown
 }

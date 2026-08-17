@@ -96,16 +96,15 @@ pub fn check(root: &Path) -> io::Result<Option<String>> {
 fn write_registry(root: &Path, assets: &[Asset]) -> io::Result<usize> {
     let registered = registered_paths(assets)?;
     for (_relative, extra) in extra_files(root, &registered)? {
-        fs::remove_file(&extra).map_err(|error| wrap_io(&error, "delete", &extra))?;
+        fs::remove_file(&extra).map_err(|error| wrap_io(error, "delete", &extra))?;
     }
     for asset in assets {
         let location = asset.location(root);
         if let Some(parent) = location.parent() {
             fs::create_dir_all(parent)
-                .map_err(|error| wrap_io(&error, "create directory", parent))?;
+                .map_err(|error| wrap_io(error, "create directory", parent))?;
         }
-        fs::write(&location, &asset.content)
-            .map_err(|error| wrap_io(&error, "write", &location))?;
+        fs::write(&location, &asset.content).map_err(|error| wrap_io(error, "write", &location))?;
     }
     Ok(assets.len())
 }
@@ -126,7 +125,7 @@ fn check_registry(root: &Path, assets: &[Asset]) -> io::Result<Option<String>> {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 problems.push(format!("  {} has not been generated yet", asset.path));
             }
-            Err(error) => return Err(wrap_io(&error, "read", &location)),
+            Err(error) => return Err(wrap_io(error, "read", &location)),
         }
     }
 
@@ -199,15 +198,15 @@ fn collect_extras(
         Err(error) if error.kind() == io::ErrorKind::NotFound && dir == root => {
             return Ok(());
         }
-        Err(error) => return Err(wrap_io(&error, "read directory", dir)),
+        Err(error) => return Err(wrap_io(error, "read directory", dir)),
     };
 
     for entry in entries {
-        let entry = entry.map_err(|error| wrap_io(&error, "read directory", dir))?;
+        let entry = entry.map_err(|error| wrap_io(error, "read directory", dir))?;
         let path = entry.path();
         let file_type = entry
             .file_type()
-            .map_err(|error| wrap_io(&error, "inspect", &path))?;
+            .map_err(|error| wrap_io(error, "inspect", &path))?;
         if file_type.is_dir() {
             debug_assert!(
                 path.starts_with(dir) && path != dir,
@@ -242,11 +241,47 @@ fn relative_posix(root: &Path, path: &Path) -> Option<String> {
     Some(posix)
 }
 
-/// Attaches the attempted operation and path to a filesystem failure.
-fn wrap_io(error: &io::Error, operation: &str, path: &Path) -> io::Error {
+/// A filesystem failure with the operation and path that produced it.
+///
+/// Wrapping the original `io::Error` rather than reformatting it keeps the operating-system
+/// error reachable through [`Error::source`](std::error::Error::source), so a caller can
+/// still downcast to the underlying `io::Error`, while `Display` adds the operation and path
+/// a bare kind omits.
+#[derive(Debug)]
+struct IoContext {
+    operation: &'static str,
+    path: String,
+    source: io::Error,
+}
+
+impl std::fmt::Display for IoContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "failed to {} {}: {}",
+            self.operation, self.path, self.source
+        )
+    }
+}
+
+impl std::error::Error for IoContext {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+/// Attaches the attempted operation and path to a filesystem failure, keeping the original
+/// error reachable through the source chain and its `ErrorKind` on the returned error.
+#[must_use]
+pub fn wrap_io(error: io::Error, operation: &'static str, path: &Path) -> io::Error {
+    let kind = error.kind();
     io::Error::new(
-        error.kind(),
-        format!("failed to {operation} {}: {error}", path.display()),
+        kind,
+        IoContext {
+            operation,
+            path: path.display().to_string(),
+            source: error,
+        },
     )
 }
 
@@ -260,6 +295,31 @@ mod tests {
             .nth(2)
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf()
+    }
+
+    #[test]
+    fn wrap_io_keeps_the_operation_path_and_original_error() {
+        use std::error::Error as _;
+
+        let original = io::Error::new(io::ErrorKind::PermissionDenied, "denied");
+        let wrapped = wrap_io(original, "write", Path::new("nested/figure.svg"));
+
+        // The original kind carries through to the wrapped error.
+        assert_eq!(wrapped.kind(), io::ErrorKind::PermissionDenied);
+
+        // Display names the operation and the path.
+        let shown = wrapped.to_string();
+        assert!(shown.contains("write"), "{shown}");
+        assert!(shown.contains("figure.svg"), "{shown}");
+
+        // The original io::Error is still reachable through the source chain.
+        let source = wrapped
+            .source()
+            .expect("a wrapped error carries its source");
+        let inner = source
+            .downcast_ref::<io::Error>()
+            .expect("the source is the original io::Error");
+        assert_eq!(inner.kind(), io::ErrorKind::PermissionDenied);
     }
 
     #[test]

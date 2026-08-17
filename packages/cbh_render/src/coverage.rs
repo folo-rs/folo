@@ -64,12 +64,12 @@ impl CoverageState {
 
     /// How far a silent run's verdict reaches, in coverage terms only.
     ///
-    /// A silent verdict states that nothing crossed the reporting threshold; it never
-    /// proves that nothing moved. This describes *how much of the suite* that statement
-    /// covers for each state, in the same `accounted for` / `in scope` / `judged`
-    /// vocabulary the rest of [`Coverage`] uses, so every surface that explains coverage
-    /// extent — the report and the book's state table — reads one description rather than
-    /// a parallel copy.
+    /// A silent verdict states that no reportable move survived the gates; it never proves
+    /// that nothing moved. This describes *how much of the suite* that statement covers for
+    /// each state, in the same `accounted for` / `in scope` / `judged` vocabulary the rest
+    /// of [`Coverage`] uses. It backs the book's state table; the report states its own
+    /// count-bearing qualification through [`qualifications`](Self::qualifications), which
+    /// uses the same predicate but is not this string.
     #[must_use]
     pub fn reach(self) -> &'static str {
         match self {
@@ -256,8 +256,7 @@ impl Coverage {
                 self.in_scope
             )),
             CoverageState::Partial | CoverageState::Full => Some(format!(
-                "Judged {} of {} in-scope series; none moved beyond the measurement \
-                 floor.",
+                "Judged {} of {} in-scope series; no reportable move survived the gates.",
                 self.judged, self.in_scope
             )),
         }
@@ -455,8 +454,7 @@ mod tests {
         assert_eq!(
             sentences,
             vec![
-                "Judged 4 of 7 in-scope series; none moved beyond the measurement floor."
-                    .to_owned(),
+                "Judged 4 of 7 in-scope series; no reportable move survived the gates.".to_owned(),
                 "Not judged: 2 series not measured at the analyzed tip commit; 3 series \
                  with too few points in the analyzed window."
                     .to_owned(),
@@ -470,8 +468,7 @@ mod tests {
         assert_eq!(
             coverage.qualifications(),
             vec![
-                "Judged 3 of 3 in-scope series; none moved beyond the measurement floor."
-                    .to_owned()
+                "Judged 3 of 3 in-scope series; no reportable move survived the gates.".to_owned()
             ]
         );
     }
@@ -486,8 +483,7 @@ mod tests {
         assert_eq!(
             coverage.qualifications(),
             vec![
-                "Judged 3 of 3 in-scope series; none moved beyond the measurement floor."
-                    .to_owned(),
+                "Judged 3 of 3 in-scope series; no reportable move survived the gates.".to_owned(),
                 "Not judged: 2 series not measured at the analyzed tip commit.".to_owned(),
             ]
         );

@@ -41,7 +41,14 @@ book-build-one NAME OUT="target/book-site":
     # output. A book that embeds generated fragments would then publish with holes in it and
     # nothing would fail, so the log is inspected and any ERROR line is made fatal here.
     $output = mdbook build $bookDir --dest-dir $destination 2>&1
+    $exitCode = $LASTEXITCODE
     $output | ForEach-Object { Write-Host $_ }
+    # A non-zero exit (a missing mdbook binary, a hard build failure, or a fault reported under a
+    # log prefix other than ERROR) must fail the recipe on its own, independently of the ERROR
+    # scan below, which only catches the zero-exit content faults.
+    if ($exitCode -ne 0) {
+        throw "mdbook build exited with code $exitCode while building '{{ NAME }}'."
+    }
     $failures = @($output | Where-Object { "$_" -match "^ERROR" })
     if ($failures.Count -gt 0) {
         throw "mdbook reported $($failures.Count) error(s) while building '{{ NAME }}'; the affected pages are missing from the output."

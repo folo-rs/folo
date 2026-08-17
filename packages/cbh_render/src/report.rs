@@ -1596,9 +1596,8 @@ mod tests {
             "{report}"
         );
         assert!(
-            report.contains(
-                "Judged 1 of 1 in-scope series; none moved beyond the measurement floor."
-            ),
+            report
+                .contains("Judged 1 of 1 in-scope series; no reportable move survived the gates."),
             "{report}"
         );
         assert!(
@@ -1635,9 +1634,7 @@ mod tests {
         let text = render(&input, ReportFormat::Text, false);
         assert!(text.contains("in-scope series judged: 4 of 7"), "{text}");
         assert!(
-            text.contains(
-                "Judged 4 of 7 in-scope series; none moved beyond the measurement floor."
-            ),
+            text.contains("Judged 4 of 7 in-scope series; no reportable move survived the gates."),
             "{text}"
         );
         assert!(
@@ -1688,7 +1685,7 @@ mod tests {
             );
             assert!(
                 rendering.contains(
-                    "Judged 3 of 3 in-scope series; none moved beyond the measurement floor."
+                    "Judged 3 of 3 in-scope series; no reportable move survived the gates."
                 ),
                 "{surface}: {rendering}"
             );
@@ -1716,7 +1713,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            !text.contains("none moved beyond the measurement floor"),
+            !text.contains("no reportable move survived the gates"),
             "nothing was measured against the floor: {text}"
         );
         assert!(
