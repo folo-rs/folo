@@ -20,7 +20,7 @@ http_parse/case
 
 index_build/case
   +10.40% wall_time (100% confidence)
-    regression via drift · 98.5 → 108.7 · @ commit29
+    regression via drift · 98.5 → 108.7 · accumulated commit0 → commit29
  113 ┤                    ╭╮    ╭── 
  109 ┤          ╭╮╭╮╭─╮   ││ ╭╮╭╯   
  105 ┤ ╭╮     ╭─╯╰╯╰╯ ╰─╮╭╯╰─╯╰╯    

@@ -62,7 +62,8 @@
       "latest": 108.7433855201543,
       "relative_delta": 0.10395864254986495,
       "confidence": 0.9999958352376284,
-      "commit": "commit29"
+      "commit": "commit29",
+      "window_start": "commit0"
     }
   ],
   "sets": [

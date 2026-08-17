@@ -621,8 +621,16 @@ pub struct Finding {
     /// How confident the detector is (`1 - p_value` of the significance test that
     /// confirmed the move).
     pub confidence: f64,
-    /// Commit the change is attributed to, if known.
+    /// Commit the change is attributed to, if known. For a change point this is the
+    /// first commit of the new level; for a branch comparison it is the tip; for a
+    /// drift it is the newest commit the trend reached (paired with
+    /// [`window_start_commit`](Self::window_start_commit) to name the accumulation
+    /// range, since a drift belongs to the whole window rather than one commit).
     pub commit: Option<String>,
+    /// The oldest commit of a drift's accumulation window, so the report can name the
+    /// range the trend accrued over. `Some` only for a drift finding; `None` for a
+    /// change point or branch comparison, which are attributed to a single commit.
+    pub window_start_commit: Option<String>,
     /// Abbreviated commit of the blessing that re-baselined this series, if any.
     pub blessed_at: Option<String>,
     /// Effective (committer) time of the blessed commit, RFC 3339, if blessed.
@@ -1200,6 +1208,7 @@ fn evaluate_change_point(
             relative_delta,
             confidence: (1.0 - effective_p).clamp(0.0, 1.0),
             commit,
+            window_start_commit: None,
             blessed_at: None,
             blessed_commit_time: None,
             series: Vec::new(),
@@ -1287,6 +1296,7 @@ fn evaluate_drift(
     }
 
     let commit = points.last().and_then(owned_commit);
+    let window_start_commit = points.first().and_then(owned_commit);
     Some(Candidate {
         finding: Finding {
             set: series.set.clone(),
@@ -1300,6 +1310,7 @@ fn evaluate_drift(
             relative_delta,
             confidence: (1.0 - trend.p_value).clamp(0.0, 1.0),
             commit,
+            window_start_commit,
             blessed_at: None,
             blessed_commit_time: None,
             series: Vec::new(),
@@ -1737,6 +1748,7 @@ fn compare_samples(
             relative_delta,
             confidence: (1.0 - effective_p).clamp(0.0, 1.0),
             commit,
+            window_start_commit: None,
             blessed_at: None,
             blessed_commit_time: None,
             series: Vec::new(),
@@ -2346,6 +2358,7 @@ mod tests {
                 relative_delta: 0.0,
                 confidence: 1.0,
                 commit: None,
+                window_start_commit: None,
                 blessed_at: None,
                 blessed_commit_time: None,
                 series: Vec::new(),

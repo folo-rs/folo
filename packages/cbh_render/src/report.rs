@@ -293,9 +293,14 @@ struct JsonFinding<'a> {
     /// The detector's confidence (`1 - p_value`), approaching `1.0` as the change
     /// becomes statistically unambiguous.
     confidence: f64,
-    /// Commit the change is attributed to, if known.
+    /// Commit the change is attributed to, if known. For a drift this is the newest
+    /// commit the trend reached; `window_start` names where it began.
     #[serde(skip_serializing_if = "Option::is_none")]
     commit: Option<&'a str>,
+    /// The oldest commit of a drift's accumulation window, present only for a drift, so
+    /// a consumer can see the range rather than reading `commit` as a single point.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    window_start: Option<&'a str>,
     /// Abbreviated commit of the blessing that re-baselined the series, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     blessed_at: Option<&'a str>,
@@ -318,6 +323,7 @@ impl<'a> JsonFinding<'a> {
             relative_delta: finding.relative_delta,
             confidence: finding.confidence,
             commit: finding.commit.as_deref(),
+            window_start: finding.window_start_commit.as_deref(),
             blessed_at: finding.blessed_at.as_deref(),
             blessed_commit_time: finding.blessed_commit_time.as_deref(),
         }
@@ -648,18 +654,33 @@ fn runs_with_span(runs: usize, span: Option<(&str, &str)>) -> String {
 }
 
 /// The plain-text detail body shared by the text and Markdown reports: the
-/// direction, detector, the `baseline → latest` move, and the attributed commit.
-/// Confidence rides on the headline line instead. Carries no styling and no
-/// leading indent; each format applies its own.
+/// direction, detector, the `baseline → latest` move, and the commit it is attributed
+/// to. A drift belongs to its whole window rather than one commit, so it names the
+/// range it accumulated over (`from … to …`) instead of a single commit. Confidence
+/// rides on the headline line instead. Carries no styling and no leading indent; each
+/// format applies its own.
 fn detail_text(finding: &Finding) -> String {
     format!(
-        "{} via {} · {} → {} · @ {}",
+        "{} via {} · {} → {} · {}",
         direction_label(finding.direction),
         method_label(finding.method),
         format_value(finding.baseline),
         format_value(finding.latest),
-        finding.commit.as_deref().unwrap_or("unknown"),
+        attribution_text(finding),
     )
+}
+
+/// The commit(s) a finding is attributed to, for the detail body. A change point or
+/// branch comparison names one commit (`@ <commit>`); a drift names the range it
+/// accumulated over (`accumulated <oldest> → <newest>`), because no single commit is
+/// responsible — [`examine`](../commands/examine.md) is where to see the shape within
+/// it.
+fn attribution_text(finding: &Finding) -> String {
+    let commit = finding.commit.as_deref().unwrap_or("unknown");
+    match finding.window_start_commit.as_deref() {
+        Some(start) => format!("accumulated {start} → {commit}"),
+        None => format!("@ {commit}"),
+    }
 }
 
 /// The plain-text blessing note, when the series was re-baselined by a
@@ -1280,6 +1301,7 @@ mod tests {
             relative_delta: 0.30,
             confidence: 1.0,
             commit: Some("deadbee".to_owned()),
+            window_start_commit: None,
             blessed_at: None,
             blessed_commit_time: None,
             series: Vec::new(),
@@ -3064,6 +3086,8 @@ mod tests {
     fn drift() -> Finding {
         Finding {
             method: FindingMethod::Drift,
+            commit: Some("deadbee".to_owned()),
+            window_start_commit: Some("f00dcafe".to_owned()),
             ..regression()
         }
     }

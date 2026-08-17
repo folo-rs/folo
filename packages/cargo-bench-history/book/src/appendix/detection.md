@@ -87,9 +87,15 @@ The drift detector also works in three moves, but every one of them differs.
    points happened to do.
 
 A drift is attributed to the whole window rather than to a commit, because that is what the
-evidence supports: no single commit is responsible. The finding still names a commit — the
-newest one in the window — but that is where the drift has *got to*, not where it started.
-Do not go looking at that commit's diff.
+evidence supports: no single commit is responsible. So the finding names the **range** it
+accumulated over — rendered `accumulated <oldest> → <newest>` — rather than a single commit.
+Do not go looking at one commit's diff.
+
+The range is always the whole analyzed window, even when the drift occupies only part of it: a
+series that held flat, drifted for a stretch, then held flat again is still reported over its
+full range, because the detector does not try to pin down where the slope began or ended.
+[`examine`](../commands/examine.md) prints every point, which is where to see the shape within
+the range and correlate it with commits yourself.
 
 {{#include generated/detection-slow-ramp.svg}}
 
