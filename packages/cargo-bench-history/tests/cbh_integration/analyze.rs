@@ -1601,14 +1601,15 @@ async fn analyze_official_line_follows_first_parent_across_a_merge() {
     assert_eq!(parsed["findings"][0]["latest"], 130.0, "{report}");
 }
 
-/// When a feature branch merges the default branch *in* (so the merge-base sits
-/// off the feature's first-parent chain), the selection treats the whole feature
-/// line as target-side and admits dirty snapshots on every selected commit —
-/// including ones that a plain branch-point split would have left base-side and
-/// clean-only. The merged-in default-branch commits stay off the line.
+/// When a feature branch merges the default branch *in*, the merge-base sits off
+/// the feature's first-parent chain: there is no point at which to split the branch
+/// from its base, so no baseline to compare against. That is as un-analyzable as an
+/// unresolvable merge-base, so `analyze` fails with a hard error telling the user to
+/// rebase, rather than silently treating the whole line as target-side and reporting
+/// nothing.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_feature_that_merged_master_admits_dirty_off_chain_merge_base() {
+async fn analyze_feature_that_merged_master_is_an_off_chain_merge_base_error() {
     let workspace = Workspace::repo(&storage_only_config());
     // master:  root - c1 - c2 - c3
     //                  \
@@ -1626,28 +1627,22 @@ async fn analyze_feature_that_merged_master_admits_dirty_off_chain_merge_base() 
     workspace.merge("master", "M");
     workspace.commit("f2");
 
-    // Clean points along the feature's first-parent line.
     workspace.seed_callgrind("c1", 100.0);
     workspace.seed_callgrind("f1", 100.0);
     workspace.seed_callgrind("f2", 100.0);
-    // A dirty snapshot on c1. Without the merge, c1 would be base-side (clean
-    // only) and this would be excluded; the off-chain merge-base makes the whole
-    // line target-side, so it is admitted.
-    workspace.seed_dirty_callgrind("2024-01-03", "c1", 200.0);
-    // Merged-in master commits c2/c3 are off the first-parent line and excluded.
-    workspace.seed_callgrind("c2", 999.0);
-    workspace.seed_callgrind("c3", 999.0);
 
-    let report = workspace.drive_json(&["analyze"]).await;
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-    // Loaded: c1 clean, c1 dirty, f1 clean, f2 clean = 4. The dirty c1 being
-    // counted proves the off-chain merge-base admitted it; c2/c3 being absent
-    // proves first-parent selection excluded the merged-in commits (otherwise the
-    // count would be 6).
-    assert_eq!(
-        parsed["runs"], 4,
-        "off-chain merge-base admits the dirty base-side snapshot and excludes the \
-         merged-in commits: {report}"
+    let error = workspace.drive(&["analyze"]).await.unwrap_err();
+    let analyze = error
+        .find_source::<cbh_analyze::AnalyzeError>()
+        .expect("an off-chain merge-base is an analyze error");
+    let message = analyze.to_string();
+    assert!(
+        message.contains("first-parent line"),
+        "the error names the off-chain merge-base: {message}"
+    );
+    assert!(
+        message.contains("rebase"),
+        "the error tells the user how to recover: {message}"
     );
 }
 

@@ -60,10 +60,10 @@ pub(crate) use error::{
     BlessSelectionRequiredError, CommitterTimeFailedError, DefaultBranchProbeFailedError,
     EmptyBenchmarkError, FirstParentWalkFailedError, InvalidBlessingError, InvalidResultSetError,
     InvalidStoredUtf8Error, InvalidWindowValueError, ListAllUnsupportedError, MergeBaseFailedError,
-    MergeBaseUnavailableError, NoOutputSelectedError, PruneBaseConfirmationRequiredError,
-    PruneSelectionRequiredError, ResolveRefFailedError, ToolchainProbeFailedError,
-    UnknownEngineError, UnknownMetricError, UnresolvedRefError, WindowOutOfRangeError,
-    WorkingTreeProbeFailedError,
+    MergeBaseOffFirstParentError, MergeBaseUnavailableError, NoOutputSelectedError,
+    PruneBaseConfirmationRequiredError, PruneSelectionRequiredError, ResolveRefFailedError,
+    ToolchainProbeFailedError, UnknownEngineError, UnknownMetricError, UnresolvedRefError,
+    WindowOutOfRangeError, WorkingTreeProbeFailedError,
 };
 pub use examine::execute as examine;
 pub(crate) use history::{

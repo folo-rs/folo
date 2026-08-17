@@ -130,15 +130,17 @@ recorded data, and hiding points there would defeat its purpose. `prune` is a ma
 command with its own selection rules — notably no default `--since` — because deleting data
 by accident is much worse than analyzing too little.
 
-## An edge worth knowing
+## An off-chain merge base is a hard error
 
-If the merge base is resolvable but does not lie on the context's first-parent line, every
-commit is treated as target-side. Branch mode then finds an empty base and can report nothing
-at all, without any error.
+The merge base must lie on the context's first-parent line. If it resolves but sits off that
+line — which happens when the base was merged *into* the branch rather than the branch being
+rebased onto it — there is no point at which to split the branch from its base, and so no
+baseline to compare against. That is as un-analyzable as a merge base that cannot be resolved at
+all, so it stops the operation with an error rather than silently analyzing a topology it cannot
+compare.
 
-This happens when the base was merged into the branch rather than the branch being rebased on
-it. The report will show series judged as zero, or coverage that does not match the store —
-which is the signal to check your branch topology.
+Rebase the branch onto its base, or analyze a `--context` whose first-parent history reaches the
+merge base.
 
 ## What selection hands on
 

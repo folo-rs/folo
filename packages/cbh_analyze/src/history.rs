@@ -13,8 +13,9 @@ use jiff::Timestamp;
 use super::selection::Selection;
 use crate::{
     AnalyzeError, BaseBranchUnavailableError, DefaultBranchProbeFailedError,
-    FirstParentWalkFailedError, MergeBaseFailedError, MergeBaseUnavailableError,
-    ResolveRefFailedError, UnresolvedRefError, WorkingTreeProbeFailedError,
+    FirstParentWalkFailedError, MergeBaseFailedError, MergeBaseOffFirstParentError,
+    MergeBaseUnavailableError, ResolveRefFailedError, UnresolvedRefError,
+    WorkingTreeProbeFailedError,
 };
 
 /// How the base-branch dirty-tip exception is gated.
@@ -74,9 +75,11 @@ pub(crate) struct ResolvedHistory {
     /// dirty-tree exception, which triggers the ephemeral-data warning.
     pub(crate) dirty_base_exception: HashMap<String, bool>,
     /// First-parent topological index of the merge-base, used by branch mode to
-    /// split base-side history from the branch's own commits. `None` when the
-    /// merge-base is off the target's first-parent line (an off-chain merge-base);
-    /// a merge-base that cannot be determined at all is a hard error, not `None`.
+    /// split base-side history from the branch's own commits. `resolve_history`
+    /// always populates it: both an unresolvable merge-base and one off the target's
+    /// first-parent line are hard errors, so a resolved history always has a split
+    /// point. The `Option` is retained for the downstream consumers that predate the
+    /// off-chain hard error.
     pub(crate) merge_base_index: Option<usize>,
     /// Whether the target's tip *is* its own merge-base with the base: the signal
     /// that this is an official base-branch view rather than a feature branch.
@@ -252,9 +255,25 @@ where
         .collect();
 
     // The merge-base's topological position (when it is on the analyzed chain)
-    // splits base-side history from the branch's own commits in branch mode. It is
-    // absent only when the merge-base is off the target's first-parent line.
-    let merge_base_index = order.get(&merge_base).copied();
+    // splits base-side history from the branch's own commits in branch mode. A
+    // merge-base that resolved but is not on the target's first-parent line leaves no
+    // split point: the branch cannot be separated from its base, so a comparison would
+    // find an empty base and silently report nothing. That is as un-analyzable as an
+    // unresolvable merge-base, so it is a hard error rather than a quiet degenerate run.
+    // The usual cause is the base having been merged into the branch instead of the
+    // branch being rebased onto the base.
+    let merge_base_index = match order.get(&merge_base).copied() {
+        Some(index) => index,
+        None => {
+            return Err(MergeBaseOffFirstParentError::new(
+                target_ref,
+                &target_commit_id,
+                &base_commit_id,
+                &merge_base,
+            )
+            .into());
+        }
+    };
     // The target's tip is its own merge-base exactly when this is an official
     // base-branch view rather than a feature branch.
     let tip_is_merge_base = merge_base == target_commit_id;
@@ -270,7 +289,7 @@ where
         commit_subjects,
         admit_dirty,
         dirty_base_exception,
-        merge_base_index,
+        merge_base_index: Some(merge_base_index),
         tip_is_merge_base,
     })
 }
