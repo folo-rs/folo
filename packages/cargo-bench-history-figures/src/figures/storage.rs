@@ -1,16 +1,18 @@
 //! Tables and figures for the Shape of the data and Collection chapters.
 //!
 //! These two chapters describe the storage layer, so their evidence is drawn from the model
-//! types themselves rather than transcribed: the metric kinds come from the enum, the key
-//! grammar from the key builder, the schema version from the constant. A metric kind added
-//! to the model appears in the book on the next regeneration, and one whose name changes
-//! cannot leave a stale name behind in the prose.
+//! types and key builders rather than transcribed: metric kinds come from the enum, interval
+//! support comes from the engine contract, key grammar from the key builder, and the schema
+//! version from the constant. A metric kind added to the model appears in the book on the next
+//! regeneration, and one whose name changes cannot leave a stale name behind in the prose.
 
 use std::fmt::Write as _;
 
 #[cfg(test)]
 use cbh_model::sanitize_segment;
-use cbh_model::{DiscriminantSet, Engine, MachineKey, MetricKind, SCHEMA_VERSION, TargetTriple};
+use cbh_model::{
+    DiscriminantSet, Engine, IntervalSupport, MachineKey, MetricKind, SCHEMA_VERSION, TargetTriple,
+};
 
 use crate::assets::Asset;
 use crate::styles::occupancy::{Cell, Occupancy};
@@ -127,29 +129,61 @@ fn unit_of(kind: MetricKind) -> &'static str {
 
 /// Which engines report dispersion, and under what conditions.
 fn dispersion() -> String {
-    String::from(
-        "| Engine | Confidence interval | Standard deviation |\n\
-         |---|---|---|\n\
-         | `criterion` | Always | Recorded, never read |\n\
-         | `callgrind` | Never — it reports a single simulated figure | Never |\n\
-         | `alloc_tracker` | Only when the operation was measured over several spans | Never |\n\
-         | `all_the_time` | Only when the operation was measured over several spans | Never |\n",
-    )
+    let mut markdown =
+        String::from("| Engine | Confidence interval | Standard deviation |\n|---|---|---|\n");
+    for engine in Engine::ALL {
+        writeln!(
+            markdown,
+            "| `{engine}` | {} | {} |",
+            interval_support_description(engine.interval_support()),
+            standard_deviation_description(engine),
+        )
+        .expect("writing to a String never fails");
+    }
+    markdown
+}
+
+/// The wording used in the storage chapter for interval support.
+fn interval_support_description(support: IntervalSupport) -> &'static str {
+    match support {
+        IntervalSupport::Always => "Always",
+        IntervalSupport::MultiSpanOnly => "Only when the operation was measured over several spans",
+        IntervalSupport::Never => "Never — it reports a single simulated figure",
+    }
+}
+
+/// The wording used in the storage chapter for standard-deviation storage.
+fn standard_deviation_description(engine: Engine) -> &'static str {
+    match engine {
+        Engine::Criterion => "Recorded, never read",
+        Engine::Callgrind | Engine::AllocTracker | Engine::AllTheTime => "Never",
+    }
 }
 
 /// How each engine forms a benchmark identity.
 fn identity() -> String {
-    String::from(
-        "| Engine | Segments | Note |\n\
-         |---|---|---|\n\
-         | `criterion` | group, function, and the parameter where the benchmark is \
-         parameterized | Carries no package name, so identical names in different crates \
-         share a series |\n\
-         | `callgrind` | package directory, module path, function, and the case id where one \
-         is given | Fully qualified |\n\
-         | `alloc_tracker` | the operation name | A single segment |\n\
-         | `all_the_time` | the operation name | A single segment |\n",
-    )
+    let mut markdown = String::from("| Engine | Segments | Note |\n|---|---|---|\n");
+    for engine in Engine::ALL {
+        let (segments, note) = identity_description(engine);
+        writeln!(markdown, "| `{engine}` | {segments} | {note} |")
+            .expect("writing to a String never fails");
+    }
+    markdown
+}
+
+/// The storage identity contract for one engine.
+fn identity_description(engine: Engine) -> (&'static str, &'static str) {
+    match engine {
+        Engine::Criterion => (
+            "group, function, and the parameter where the benchmark is parameterized",
+            "Carries no package name, so identical names in different crates share a series",
+        ),
+        Engine::Callgrind => (
+            "package directory, module path, function, and the case id where one is given",
+            "Fully qualified",
+        ),
+        Engine::AllocTracker | Engine::AllTheTime => ("the operation name", "A single segment"),
+    }
 }
 
 /// The shape of a stored run.
@@ -333,6 +367,16 @@ mod tests {
     }
 
     #[test]
+    fn dispersion_mentions_every_engine() {
+        assert_every_engine_has_one_row(&dispersion());
+    }
+
+    #[test]
+    fn identity_mentions_every_engine() {
+        assert_every_engine_has_one_row(&identity());
+    }
+
+    #[test]
     fn every_metric_kind_has_a_unit() {
         for kind in MetricKind::ALL {
             assert!(!unit_of(kind).is_empty());
@@ -370,6 +414,31 @@ mod tests {
     #[test]
     fn the_run_shape_names_the_current_schema_version() {
         assert!(run_shape().contains(&SCHEMA_VERSION.to_string()));
+    }
+
+    #[test]
+    fn the_object_kind_table_names_real_key_files() {
+        let set = DiscriminantSet::new(
+            Engine::Criterion,
+            &TargetTriple::from("x86_64-pc-windows-msvc"),
+            &MachineKey::from("m1"),
+        );
+        let observation_unix = 1_700_000_000;
+        let issued_unix = 1_700_000_001;
+
+        let clean_key = set.clean_key("folo", "abc123");
+        let dirty_key = set.dirty_key("folo", "abc123", observation_unix);
+        let bless_key = set.bless_key("folo", "abc123", issued_unix);
+        let clean_file = file_segment(&clean_key);
+        let dirty_file = file_segment(&dirty_key);
+        let bless_file = file_segment(&bless_key);
+        let dirty_pattern = dirty_file.replace(&observation_unix.to_string(), "<unix>");
+        let bless_pattern = bless_file.replace(&issued_unix.to_string(), "<unix>");
+
+        let table = object_kinds();
+        for file in [clean_file.to_owned(), dirty_pattern, bless_pattern] {
+            assert!(table.contains(&format!("| `{file}` |")));
+        }
     }
 
     /// The hashed column names the fingerprint factors, not a broader hardware picture.
@@ -426,5 +495,27 @@ mod tests {
     )]
     fn rendering_is_reproducible() {
         assert_eq!(assets(), assets());
+    }
+
+    fn assert_every_engine_has_one_row(table: &str) {
+        let rows: Vec<&str> = table
+            .lines()
+            .filter(|line| line.starts_with("| `"))
+            .collect();
+
+        for engine in Engine::ALL {
+            let prefix = format!("| `{engine}` |");
+            assert_eq!(
+                rows.iter()
+                    .filter(|row| row.starts_with(prefix.as_str()))
+                    .count(),
+                1
+            );
+        }
+        assert_eq!(rows.len(), Engine::ALL.len());
+    }
+
+    fn file_segment(key: &str) -> &str {
+        key.rsplit('/').next().unwrap()
     }
 }

@@ -66,12 +66,13 @@ short table defining it in plain language, and the [Glossary](glossary.md) colle
 with the textbook name alongside, for when you want to read further. Where a plain description
 works as well as the technical name, this appendix uses the description.
 
-**Generated evidence is computed, not invented.** The registered figures, computed examples,
-configured values, and serialized excerpts that depend on executable behaviour are produced by
-running the code this appendix describes, and regenerated whenever that code changes. If a
-figure shows a gate declining a move by a hair, that is what the code actually did with that
-data — not an illustration of what it would do. A test fails if those generated assets drift
-from the code. Stable explanatory tables and prose stay ordinary Markdown.
+**Generated evidence is computed, not invented.** Every behaviour-bearing table, figure,
+computed example, configured value, and serialized excerpt is produced by
+`cargo-bench-history-figures` from the production type, key builder, adapter fixture, or
+`private-test-util` inspection surface that owns the behaviour. Completeness and derivation
+tests pin those links — enum `ALL` coverage, exhaustive matches, real key-builder assertions,
+and fixture-backed adapter checks — and freshness tests fail if the checked-in includes drift
+from regenerated output. Genuinely explanatory, non-behavioural prose stays ordinary Markdown.
 
 This is also why the examples are small: they are meant to be checkable by hand, not realistic.
 
@@ -85,4 +86,3 @@ This is also why the examples are small: they are meant to be checkable by hand,
 | Why two results are or are not compared | [Comparability](../concepts/comparability.md) |
 | To make your benchmarks less noisy | [Measurement stability](../concepts/stability.md) |
 | The full mechanism, with numbers | this appendix |
-

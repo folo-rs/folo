@@ -153,12 +153,13 @@ against and what a user reads when a finding does not make sense.
   nothing is simply not used.
 - **Evidence discipline**: generated evidence is the registered figures, computed examples,
   configured values, and serialized excerpts that materially depend on executable behaviour.
-  Those are produced by `cargo-bench-history-figures` from data the test suite also asserts
-  against, and included with `{{#include}}`. Stable explanatory Markdown stays ordinary Markdown.
-  Registration guarantees only that a checked-in copy stays byte-for-byte what the generator
-  produces; that byte freshness is not by itself semantic fidelity. For a behaviour-derived
-  asset a diff means the pipeline changed and the diff is the review, whereas a presentation-only
-  change (geometry, palette, wording) moves bytes without any behaviour change.
+  Every behaviour-bearing table, figure, computed example, configured value, and serialized
+  excerpt is produced by `cargo-bench-history-figures` from the production type, key builder,
+  adapter fixture, or `private-test-util` inspection surface that owns the behaviour.
+  Completeness and derivation tests pin those links — enum `ALL` coverage, exhaustive matches,
+  real key-builder assertions, and fixture-backed adapter checks — and freshness tests fail if
+  the checked-in includes drift from regenerated output. Genuinely explanatory,
+  non-behavioural prose stays ordinary Markdown.
   The generated-evidence boundary is owned by `cargo-bench-history-figures`: it manages the asset
   registry, write/check reconciliation, rendering, and preview for appendix evidence. Its
   dependencies are one-way from the generator to narrow production-owned projections such as

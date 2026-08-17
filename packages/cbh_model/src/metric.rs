@@ -21,9 +21,10 @@ pub struct Metric {
     /// few percent from run to run, so this is always a point estimate rather than
     /// an exact truth.
     pub value: f64,
-    /// Estimated standard deviation of the measurement, when the engine reports
-    /// one (Criterion, `all_the_time`, `alloc_tracker`). Absent for engines that
-    /// report no dispersion (Callgrind).
+    /// Estimated standard deviation of the measurement, when the engine reports one.
+    ///
+    /// Stored runs keep this value for schema fidelity, but analysis uses
+    /// confidence intervals and between-run scatter instead of this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub std_dev: Option<f64>,
     /// Lower bound of the value's confidence interval, when reported.
