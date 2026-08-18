@@ -7,9 +7,10 @@ package draws the distinctions it does.
 
 ## Machine size
 
-The package imposes no ceiling of its own on how many processors a machine may have. Every
-processor that the operating system reports can be inspected, selected and pinned to, and a
-thread's affinity can be read back, on machines of any size the operating system supports.
+The package imposes no ceiling of its own on how large a machine may be, within the range of
+machines that operating systems support. Every processor that the operating system reports can
+be inspected, selected and pinned to, and a thread's affinity can be read back, however many
+processors there are.
 
 ## Processor identity
 

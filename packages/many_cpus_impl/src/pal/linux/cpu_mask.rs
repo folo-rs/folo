@@ -224,6 +224,7 @@ impl Debug for CpuMask {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
+    use std::{mem, slice};
 
     use new_zealand::nz;
     use static_assertions::assert_impl_all;
@@ -388,5 +389,42 @@ mod tests {
         // The whole point of the inline width is that a mask of the size the platform's C API
         // offers needs no allocation, so guard that relationship.
         assert_eq!(CpuMask::new().len_bytes(), size_of::<cpu_set_t>());
+    }
+
+    #[test]
+    fn mask_bytes_match_the_platform_mask() {
+        // The operating system, not this type, interprets the bits, so where a processor's bit
+        // lands is a contract with the platform. Every other test here both writes and reads the
+        // bits through this type, which cannot tell a correct layout apart from one that is
+        // merely self-consistent, so the layout is compared against the platform's own.
+        let processors = [0, 1, WORD_BITS - 1, WORD_BITS, LAST_INLINE_PROCESSOR];
+
+        // SAFETY: A `cpu_set_t` is an array of machine words, for which an all-zero bit pattern
+        // is valid and means that the set is empty.
+        let mut expected: cpu_set_t = unsafe { mem::zeroed() };
+
+        for processor in processors {
+            // SAFETY: Every processor here is one that the fixed-size mask can describe, which
+            // is what `CPU_SET` requires.
+            unsafe { libc::CPU_SET(processor as usize, &mut expected) }
+        }
+
+        let mut mask = CpuMask::new();
+
+        for processor in processors {
+            mask.insert(processor);
+        }
+
+        // SAFETY: A `cpu_set_t` holds no padding, so all of its bytes are initialized, and the
+        // borrow keeps it alive for as long as the slice.
+        let expected_bytes = unsafe {
+            slice::from_raw_parts((&raw const expected).cast::<u8>(), size_of::<cpu_set_t>())
+        };
+
+        // SAFETY: The mask owns this many initialized bytes and outlives the slice.
+        let actual_bytes =
+            unsafe { slice::from_raw_parts(mask.as_ptr().cast::<u8>(), mask.len_bytes()) };
+
+        assert_eq!(actual_bytes, expected_bytes);
     }
 }

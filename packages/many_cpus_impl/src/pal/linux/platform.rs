@@ -40,7 +40,7 @@ pub(crate) struct BuildTargetPlatform {
     ///
     /// Zero means that no width has been established yet. This is a hint and not a conclusion:
     /// the required width can grow while the process runs, so a width that stops working merely
-    /// starts the search again.
+    /// sends the search widening again from there.
     affinity_mask_words: AtomicUsize,
 }
 
@@ -48,7 +48,7 @@ pub(crate) struct BuildTargetPlatform {
 ///
 /// Each attempt doubles the width of the previous one, starting from a mask that already covers
 /// every processor that the platform's own fixed-size mask can describe, so the final attempt
-/// describes more processors than any operating system can boot. The limit exists to guarantee
+/// describes a machine far larger than operating systems support. The limit exists to guarantee
 /// that the search ends. Ref: `packages/many_cpus/docs/implementation.md`,
 /// "Thread affinity masks".
 const AFFINITY_MASK_ATTEMPTS: usize = 11;
@@ -1459,6 +1459,71 @@ mod tests {
                 vec![1024, 1500, 2047]
             );
         }
+    }
+
+    #[test]
+    fn current_thread_processors_widens_again_when_the_remembered_width_stops_working() {
+        let mut bindings = MockBindings::new();
+
+        let narrow = CpuMask::default_words();
+        let wide = narrow.checked_mul(AFFINITY_MASK_GROWTH).unwrap();
+
+        let before = mask_from([1024]);
+        let after = mask_from([1024, 1500, 2047]);
+
+        // The first read settles on a width and it is remembered.
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words == narrow)
+            .times(1)
+            .returning(move |_| Ok(before.clone()));
+
+        // The machine can grow while the process runs, so a remembered width is a hint and not a
+        // conclusion - once it stops working, the search must widen again rather than give up.
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words == narrow)
+            .times(1)
+            .returning(|_| Err(io::Error::from_raw_os_error(libc::EINVAL)));
+
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words == wide)
+            .times(1)
+            .returning(move |_| Ok(after.clone()));
+
+        let mut fs = MockFilesystem::new();
+        simulate_processor_layout(
+            &mut fs,
+            GIANT_MACHINE_PROCESSORS,
+            None,
+            None,
+            GIANT_MACHINE_MEMORY_REGIONS,
+            GIANT_MACHINE_BOGOMIPS,
+        );
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(bindings),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        assert_eq!(
+            platform
+                .current_thread_processors()
+                .iter()
+                .copied()
+                .collect_vec(),
+            vec![1024]
+        );
+
+        assert_eq!(
+            platform
+                .current_thread_processors()
+                .iter()
+                .copied()
+                .collect_vec(),
+            vec![1024, 1500, 2047]
+        );
     }
 
     #[test]

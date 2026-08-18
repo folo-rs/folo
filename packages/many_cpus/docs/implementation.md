@@ -37,7 +37,7 @@ terms.
 The only way to learn the required width is therefore to offer wider and wider masks until one
 is accepted. The search doubles the width each time so that the number of attempts stays
 logarithmic in the size of the machine, and it makes a fixed number of attempts so that it
-always ends: the final width describes more processors than any operating system can boot, so
+always ends: the final width describes a machine far larger than operating systems support, so
 reaching the end means something other than a large machine is wrong, and the error that the
 last attempt produced is reported rather than a conclusion of our own. An invalid-argument error
 has causes other than a narrow mask — a sandbox may forbid the call outright — which is why that
@@ -45,11 +45,11 @@ error is preserved and why any other error ends the search immediately.
 
 A width that the operating system accepted is remembered and tried first next time. It is a
 hint and not a conclusion: a process can outlive a change in the machine it runs on, so a width
-that stops working simply starts the search over.
+that stops working merely sends the search widening again from there.
 
 Writing a mask needs none of this. The operating system accepts a mask of any width when setting
 affinity and treats the processors beyond it as absent from the set, so a write is a single call
-with a mask exactly wide enough for the processors it names.
+with a mask wide enough for the processors it names.
 
 ### Comparing masks
 

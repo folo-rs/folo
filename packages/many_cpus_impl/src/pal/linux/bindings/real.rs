@@ -83,6 +83,11 @@ mod tests {
     /// Ratio between one mask width and the next one to try.
     const MASK_GROWTH: NonZero<usize> = nz!(2);
 
+    /// How much wider than the platform's own fixed-size mask a deliberately oversized mask is.
+    /// Any factor above one exercises the same path; this one keeps the mask small enough that
+    /// its cost is irrelevant.
+    const OVERSIZED_MASK_GROWTH: NonZero<usize> = nz!(4);
+
     /// Reads the affinity of the current thread the way the platform does, and reports how wide
     /// the mask had to be, so that tests can assert on the search as well as on its outcome.
     fn read_affinity_by_widening() -> (NonZero<usize>, CpuMask) {
@@ -121,6 +126,30 @@ mod tests {
 
         // Writing back the mask we just read changes nothing, which makes it safe to do in a
         // test, while still exercising the full path into the operating system.
+        BuildTargetBindings
+            .sched_setaffinity_current(&mask)
+            .expect("the operating system accepts the affinity it just reported");
+    }
+
+    #[test]
+    fn a_mask_wider_than_the_fixed_size_one_reaches_the_operating_system_intact() {
+        // Exceeding the platform's own fixed-size mask is the entire point of the type, yet only
+        // a machine large enough to demand it would otherwise take that path. Asking for a width
+        // beyond the fixed-size mask exercises it on every machine.
+        let words = CpuMask::default_words()
+            .checked_mul(OVERSIZED_MASK_GROWTH)
+            .expect("a mask a few times the platform mask cannot overflow a machine word");
+
+        let mask = BuildTargetBindings
+            .sched_getaffinity_current(words)
+            .expect("a mask wider than the operating system needs is wide enough for it");
+
+        assert_eq!(mask.words(), words);
+
+        // A wider buffer must not change the answer, only where there is room to put it.
+        let (_, reference) = read_affinity_by_widening();
+        assert_eq!(mask, reference);
+
         BuildTargetBindings
             .sched_setaffinity_current(&mask)
             .expect("the operating system accepts the affinity it just reported");
