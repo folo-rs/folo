@@ -166,9 +166,10 @@ Further rules:
 Each error carries its own backtrace, so a wrapper chain prints one backtrace block
 per level under `RUST_BACKTRACE=1`. `message()` is no safer than `to_string()` here:
 it omits only the error's own backtrace but renders its source through `Display`, so
-a wrapper's `message()` carries every backtrace beneath it. Never assert that either
-rendering equals a fixed string, and never compare the renderings of two different
-errors; both hold only while backtrace capture is off. Assert on a substring, or, for
-a transparent wrapper, against the wrapped error's own `to_string()`, which it
-reproduces exactly. See the unwind-safety chapter for the manual
-`UnwindSafe`/`RefUnwindSafe` impls these types require.
+a wrapper's `message()` carries every backtrace beneath it. Never assert that a
+rendering equals a fixed string, and never pair two renderings that merely look
+interchangeable — a wrapper's `message()` against the wrapped error's `message()`
+holds only while backtrace capture is off. Assert on a substring, or pair renderings
+that are equal by construction: a transparent wrapper's `message()` reproduces the
+wrapped error's `to_string()` exactly, backtraces included. See the unwind-safety
+chapter for the manual `UnwindSafe`/`RefUnwindSafe` impls these types require.
