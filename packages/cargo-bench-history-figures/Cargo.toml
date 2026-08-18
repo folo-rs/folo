@@ -16,11 +16,7 @@ rust-version.workspace = true
 # workspace-internal API is intentional, not an accidental leak, so they are acknowledged here (see
 # docs/external-types.md). It is the one crate in the workspace with a wide external surface by design.
 [package.metadata.cargo_check_external_types]
-allowed_external_types = [
-    "cbh_detect::*",
-    "plotters::*",
-    "plotters_svg::*",
-]
+allowed_external_types = ["cbh_detect::*", "plotters::*", "plotters_svg::*"]
 
 [dependencies]
 cbh_analyze = { workspace = true }

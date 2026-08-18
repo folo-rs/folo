@@ -142,7 +142,6 @@ impl Mode {
     /// so the context matches the mode's intended reporting semantics: branch (which
     /// reports both directions) opts in, history opts out. Branch mode ignores the
     /// flag today, but pinning it consistently keeps the context correct if that changes.
-    ///
     fn context(self, merge_base_index: Option<usize>, tip_index: usize) -> AnalysisContext {
         let mode = match self {
             Self::History => AnalysisMode::History,

@@ -270,7 +270,9 @@ where
         .map(|one| (one.commit.clone(), one.dirty.is_base_exception()))
         .collect();
 
-    let merge_base_index = split_commit.as_ref().and_then(|commit| order.get(commit).copied());
+    let merge_base_index = split_commit
+        .as_ref()
+        .and_then(|commit| order.get(commit).copied());
     // The target's tip is its own merge-base exactly when this is an official
     // base-branch view rather than a feature branch.
     let tip_is_merge_base = merge_base == target_commit_id;
@@ -331,7 +333,9 @@ where
             high = mid;
         }
     }
-    let fork_point = low.checked_sub(1).and_then(|index| ancestry.get(index).cloned());
+    let fork_point = low
+        .checked_sub(1)
+        .and_then(|index| ancestry.get(index).cloned());
     reporter.timing(
         "base-ref fork-point binary search (merge-base probes for a merged-in base)",
         started.elapsed(),

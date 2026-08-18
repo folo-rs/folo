@@ -19,9 +19,8 @@
 
 #![cfg_attr(coverage_nightly, coverage(off))]
 
-use std::iter;
-use std::slice;
 use std::sync::Arc;
+use std::{iter, slice};
 
 use cbh_model::{BenchmarkId, DiscriminantSet, Engine, MetricKind};
 use nonempty::nonempty;
