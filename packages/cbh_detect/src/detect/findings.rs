@@ -73,7 +73,7 @@ use serde::Serialize;
 
 use crate::detect::gate_log::{Gate, GateLog, GateStage, StageLog};
 use crate::detect::parallel::{balanced_chunk_sizes, worker_count};
-use crate::detect::{BaseLevel, Series, SeriesPoint, noise_gates};
+use crate::detect::{BaseLevel, Series, SeriesPoint, excursions, noise_gates};
 
 /// Tunable parameters of the engine-aware analysis.
 ///
@@ -272,6 +272,44 @@ pub struct AnalysisConfig {
     /// precise probability: with the smallest regimes on both sides it admits one
     /// contradicting pair in twenty-five and no more.
     pub min_base_split_separation: f64,
+    /// How far a base-window level must stand from its surroundings for branch mode to
+    /// read it as a measurement excursion and discard it.
+    ///
+    /// A shared runner occasionally loses time to something else and records one commit
+    /// far above the level its neighbours agree on. Such a level describes the runner
+    /// rather than the code, and left in the window it both displaces the comparison's
+    /// centre and inflates its scatter, silently costing branch mode much of its
+    /// sensitivity. Discarding it is guarded by
+    /// [`excursion_neighbour_agreement`](Self::excursion_neighbour_agreement) and
+    /// [`excursion_max_removals`](Self::excursion_max_removals), which together confine
+    /// it to levels that are genuinely isolated.
+    ///
+    /// Raising this admits more interference into the comparison; lowering it starts
+    /// discarding the ordinary scatter that comparison is judged against, and every level
+    /// discarded tightens the window and makes branch mode readier to report.
+    pub excursion_relative_magnitude: f64,
+    /// How closely the levels on either side of a candidate excursion must agree before
+    /// it may be discarded.
+    ///
+    /// This is what keeps a genuine level shift out of the excursion rule: after a real
+    /// change the levels following it sit at the new level and disagree with those
+    /// before it, so its opening level is kept however large the step is. Only a level
+    /// its own surroundings straddle can be discarded.
+    pub excursion_neighbour_agreement: f64,
+    /// How many levels on each side of a candidate excursion form the surroundings it is
+    /// judged against.
+    ///
+    /// The candidate is judged locally rather than against the whole window, because a
+    /// window may legitimately span a level shift, and measured against such a window's
+    /// middle the ordinary levels of both regimes stand clear.
+    pub excursion_neighbours: usize,
+    /// How many excursions a base window may contain before it is left alone entirely.
+    ///
+    /// Above this the window is read as a benchmark that genuinely oscillates rather than
+    /// as a clean window with a bad reading in it. Removing levels from such a window
+    /// would leave a spuriously tight comparison in which the benchmark's own ordinary
+    /// values read as large, certain regressions — so it is left exactly as measured.
+    pub excursion_max_removals: usize,
 }
 
 impl Default for AnalysisConfig {
@@ -297,6 +335,10 @@ impl Default for AnalysisConfig {
             residual_noise_multiple: noise_gates::RESIDUAL_NOISE_MULTIPLE,
             min_regime_separation: noise_gates::MIN_REGIME_SEPARATION,
             min_base_split_separation: noise_gates::MIN_BASE_SPLIT_SEPARATION,
+            excursion_relative_magnitude: noise_gates::EXCURSION_RELATIVE_MAGNITUDE,
+            excursion_neighbour_agreement: noise_gates::EXCURSION_NEIGHBOUR_AGREEMENT,
+            excursion_neighbours: noise_gates::EXCURSION_NEIGHBOURS,
+            excursion_max_removals: noise_gates::EXCURSION_MAX_REMOVALS,
         }
     }
 }
@@ -809,7 +851,7 @@ fn direction_of(delta: f64) -> Direction {
 ///
 /// A move away from a (near-)zero baseline is proportionally unbounded; its sign
 /// is returned as a full-magnitude move so it ranks as major.
-fn relative_delta_of(delta: f64, baseline: f64) -> f64 {
+pub(super) fn relative_delta_of(delta: f64, baseline: f64) -> f64 {
     if baseline.abs() <= f64::EPSILON {
         delta.signum()
     } else {
@@ -1884,8 +1926,9 @@ fn test_base_levels(points: &[&SeriesPoint]) -> Vec<BaseLevel> {
 /// in the base. A new benchmark introduced on the context (no base-ref points) or
 /// an empty context yields nothing, since there is no baseline to compare.
 ///
-/// The recent base window is first collapsed to per-commit levels and checked for
-/// enough evidence as a whole. If that window contains a genuine level shift, located
+/// The recent base window is first cleared of isolated measurement excursions (see
+/// [`excursions`]) and collapsed to per-commit levels, then checked for enough evidence
+/// as a whole. If that window contains a genuine level shift, located
 /// with Pettitt and accepted only by the same Mann–Whitney significance, separation,
 /// relative-floor, and absolute-floor gates that make such a split trustworthy, the
 /// stale prefix before the newest accepted split is discarded. The prediction interval
@@ -1900,7 +1943,13 @@ fn evaluate_branch(
     // The base window arrives already capped to the recent `compare_window` levels
     // (attach_base_windows/`base_window_levels` own that truncation), so detection reads
     // it whole rather than re-slicing it here.
-    let base_window = &series.base_window[..];
+    //
+    // Isolated measurement excursions are discarded before anything is counted or
+    // compared, because a reading that describes the runner rather than the code is not
+    // evidence: it should neither prop up the minimum-commits count nor enter the
+    // comparison's centre and scatter. A window left too short by the removals is judged
+    // unjudgeable below, which is the honest outcome.
+    let base_window = excursions::cleaned_window(&series.base_window, config);
     let levels: Vec<f64> = base_window.iter().map(|level| level.value).collect();
     let base_spans = level_spans(&levels);
     if !log.stage(GateStage::Branch).numeric(

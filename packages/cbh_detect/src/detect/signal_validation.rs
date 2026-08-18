@@ -105,7 +105,9 @@ use cbh_model::MetricKind;
 use crate::detect::findings::find_changes;
 use crate::detect::noise_gates::{MIN_REGIME, MIN_SERIES_POINTS};
 use crate::detect::recorded::{
-    STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_HIGH, STATIONARY_BIMODAL_NOISE,
+    CONTENDED_RUNNER_BASE, CONTENDED_RUNNER_EXCURSION, CONTENDED_RUNNER_LEVEL,
+    CONTENDED_RUNNER_LEVEL_START, STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_HIGH,
+    STATIONARY_BIMODAL_NOISE,
 };
 use crate::detect::scatter::{TIMING_NOISE_CV, scattered, seed_of};
 use crate::detect::{
@@ -405,6 +407,16 @@ const FLOOR_REGIME_POINTS: usize = 50;
 /// first regime, so branch mode sees the whole second regime as the branch side.
 const FLOOR_MERGE_BASE: usize = FLOOR_REGIME_POINTS - 1;
 
+/// The move the context run of `a_regression_through_a_contended_window_is_reported`
+/// carries, as a multiple of the base level.
+///
+/// Twice the smallest move branch mode reports at all, so the case turns on whether the
+/// window is clean rather than on where the reporting floor sits, and several times what
+/// the recording's own ordinary commits vary by, so a human reading the chart calls it
+/// without hesitation. It is nonetheless far below what the same window silences while it
+/// still holds the excursion, which is what makes the case discriminating.
+const CONTENDED_WINDOW_REGRESSION: f64 = 1.10;
+
 /// The hand-curated cases. New "obvious answer" series are added as one row each.
 fn cases() -> Vec<SignalCase> {
     vec![
@@ -469,6 +481,54 @@ fn cases() -> Vec<SignalCase> {
             )
             .branch(vec![STATIONARY_BIMODAL_HIGH])
             .recorded(),
+        // A wall-time series that holds one level apart from a single commit where the
+        // runner lost time to something else — recorded, so the excursion is the real
+        // shape rather than a modelled one. History reads the recording whole: it opens
+        // on a higher level and steps down, which is an improvement history does not
+        // report, and the lone excursion past that step is not a sustained trend. Branch
+        // has no branch side.
+        SignalCase::new("contended_runner_excursion", MetricKind::WallTime)
+            .base(CONTENDED_RUNNER_EXCURSION.to_vec())
+            .expects(Outcome::Fall, Outcome::Quiet)
+            .recorded(),
+        // Matched pair, part one. The same recording cut so branch mode's recent window
+        // holds the excursion with ordinary commits on either side, and a context run at
+        // the level the series actually sits at. Branch mode discards the excursion as
+        // the measurement artifact it is, and must still find nothing to report about a
+        // context run that agrees with everything around it — discarding evidence
+        // tightens the window, so the pair's job is to prove that tightening does not
+        // manufacture a verdict.
+        SignalCase::new("contended_runner_excursion_branch_tip", MetricKind::WallTime)
+            .base(
+                CONTENDED_RUNNER_EXCURSION
+                    .get(CONTENDED_RUNNER_LEVEL_START..CONTENDED_RUNNER_BASE)
+                    .unwrap()
+                    .to_vec(),
+            )
+            .branch(vec![CONTENDED_RUNNER_LEVEL])
+            .recorded(),
+        // Matched pair, part two: the same window, with a context run that genuinely
+        // regressed. This is the case the excursion silences if it is left in the window.
+        // A move of this size stands several times clear of what the series' own commits
+        // vary by, so a human reading the chart calls it immediately; averaged in, the
+        // excursion both drags the window's centre up toward the context run and inflates
+        // the window's spread severalfold, and the move disappears into a window that
+        // finds nothing surprising. Together the pair states that clearing the excursion
+        // restores the sensitivity it costs without inventing findings on branches that
+        // changed nothing.
+        SignalCase::new(
+            "a_regression_through_a_contended_window_is_reported",
+            MetricKind::WallTime,
+        )
+        .base(
+            CONTENDED_RUNNER_EXCURSION
+                .get(CONTENDED_RUNNER_LEVEL_START..CONTENDED_RUNNER_BASE)
+                .unwrap()
+                .to_vec(),
+        )
+        .branch(vec![CONTENDED_RUNNER_LEVEL * CONTENDED_WINDOW_REGRESSION])
+        .expects(Outcome::Quiet, Outcome::Rise)
+        .recorded(),
         // A branch that got slower but was fixed in the last commit.
         // History sees the regression, but branch sees only the final commit and must stay quiet.
         SignalCase::new("branch_with_regression_then_fix", MetricKind::WallTime)

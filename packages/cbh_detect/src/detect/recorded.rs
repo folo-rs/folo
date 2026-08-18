@@ -35,3 +35,45 @@ pub const STATIONARY_BIMODAL_BASE: usize = 19;
 /// entirely ordinary value for that series, and so the context run that must not be
 /// reported as a move.
 pub const STATIONARY_BIMODAL_HIGH: f64 = 24.97;
+
+/// A wall-time series holding one commit where the runner lost time to something else,
+/// recorded from this project's own stored results.
+///
+/// It opens on one level, steps down to another, and then holds that second level for the
+/// rest of its history apart from a single commit that measures around half as much again
+/// as its neighbours. That commit is not a property of the code: the same run recorded
+/// comparably inflated figures across the whole family of multithreaded benchmarks
+/// measured alongside it, and the series returns to its established level at the very next
+/// commit and stays there.
+///
+/// This is the workspace's reference case for runner interference. Its value is that no
+/// noise model produces it: a generator's deviates are bounded and symmetric, whereas the
+/// excursion here is one-sided, several times the series' own spread, and gone as
+/// abruptly as it arrived — the shape branch mode has to discard rather than average in.
+pub(crate) const CONTENDED_RUNNER_EXCURSION: [f64; 32] = [
+    1141.117, 1139.266, 1129.181, 1155.445, 1146.464, 1139.776, 1143.118, 1155.482, 1041.326,
+    1041.057, 1044.074, 1044.310, 1034.942, 1054.552, 1050.274, 1034.325, 1045.818, 1581.042,
+    1045.424, 1051.638, 1040.738, 1047.509, 1044.247, 1043.722, 1040.797, 1044.360, 1049.268,
+    1060.142, 1051.753, 1042.930, 1042.876, 1043.306,
+];
+
+/// Where the level [`CONTENDED_RUNNER_EXCURSION`] settles on begins: the commit that
+/// stepped it down off its opening level.
+///
+/// A base window taken from here holds one level and one excursion, which is the shape
+/// the branch-mode rows exercise. Taken from the recording's start it would straddle the
+/// step as well, mixing two questions into one case.
+pub(crate) const CONTENDED_RUNNER_LEVEL_START: usize = 8;
+
+/// How much of [`CONTENDED_RUNNER_EXCURSION`] a branch-mode case takes as its base side.
+///
+/// Chosen so that the recent window branch mode reads holds the excursion with several
+/// ordinary commits on either side of it. The excursion has to sit clear of both window
+/// edges for the case to be about the excursion rather than about the window's endpoint
+/// handling.
+pub(crate) const CONTENDED_RUNNER_BASE: usize = 27;
+
+/// A value [`CONTENDED_RUNNER_EXCURSION`] settles at once past
+/// [`CONTENDED_RUNNER_LEVEL_START`] — an entirely ordinary commit for that series, and so
+/// the context run that must not be reported as a move.
+pub(crate) const CONTENDED_RUNNER_LEVEL: f64 = 1045.0;

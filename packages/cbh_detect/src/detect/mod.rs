@@ -11,6 +11,7 @@
 pub(crate) mod discriminant;
 #[cfg(any(test, feature = "private-test-util"))]
 pub mod examples;
+mod excursions;
 pub(crate) mod findings;
 pub(crate) mod gate_log;
 mod noise_gates;
