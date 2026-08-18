@@ -99,7 +99,7 @@ pub type ProcessorTimePct = int!(1, 100);
 /// Configures instances of [`Job`] before creation.
 #[derive(Debug, Default)]
 pub struct JobBuilder {
-    processor_count: Option<NonZero<u32>>,
+    affinity_mask: Option<NonZero<usize>>,
     max_processor_time_pct: Option<ProcessorTimePct>,
 }
 
@@ -115,8 +115,31 @@ impl JobBuilder {
     /// The implementation will choose the specific processors, all you can do as caller is
     /// to specify the number of processors.
     #[must_use]
-    pub fn processor_count(mut self, processor_count: NonZero<u32>) -> Self {
-        self.processor_count = Some(processor_count);
+    pub fn processor_count(self, processor_count: NonZero<u32>) -> Self {
+        // We are just going to assume that the primary processor group of this process
+        // has a sufficient number of processors to satisfy the request. Good enough
+        // for test/example purposes, though obviously not production-quality logic.
+
+        // We set the first `processor_count` bits of the processor affinity mask to 1.
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "side effects are intentional here"
+        )]
+        let affinity_mask = (1_usize << processor_count.get()) - 1;
+
+        self.processor_affinity_mask(
+            NonZero::new(affinity_mask).expect("a nonzero processor count sets at least one bit"),
+        )
+    }
+
+    /// Restricts the job to only execute on the processors selected by an affinity mask.
+    ///
+    /// Bit N of the mask selects the processor with index N in the primary processor group of
+    /// the process. In contrast to [`processor_count()`][Self::processor_count], the caller
+    /// picks the processors, which is what makes it possible to select a non-contiguous set.
+    #[must_use]
+    pub fn processor_affinity_mask(mut self, affinity_mask: NonZero<usize>) -> Self {
+        self.affinity_mask = Some(affinity_mask);
         self
     }
 
@@ -176,22 +199,11 @@ impl JobBuilder {
             }
         }
 
-        if let Some(processor_count) = self.processor_count {
-            // We are just going to assume that the primary processor group of this process
-            // has a sufficient number of processors to satisfy the request. Good enough
-            // for test/example purposes, though obviously not production-quality logic.
-
-            // We set the first `processor_count` bits of the processor affinity mask to 1.
-            #[expect(
-                clippy::arithmetic_side_effects,
-                reason = "side effects are intentional here"
-            )]
-            let affinity_mask = (1_usize << processor_count.get()) - 1;
-
+        if let Some(affinity_mask) = self.affinity_mask {
             let limit = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
                 BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION {
                     LimitFlags: JOB_OBJECT_LIMIT_AFFINITY,
-                    Affinity: affinity_mask,
+                    Affinity: affinity_mask.get(),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -224,7 +236,7 @@ impl JobBuilder {
 
         Job {
             handle: job,
-            affinity_active: self.processor_count.is_some(),
+            affinity_active: self.affinity_mask.is_some(),
             rate_control_active: self.max_processor_time_pct.is_some(),
             mutex_guard,
         }
