@@ -1,5 +1,6 @@
 use std::alloc::{Layout, alloc, dealloc};
 use std::any::type_name;
+use std::cell::UnsafeCell;
 use std::fmt;
 use std::mem::MaybeUninit;
 use std::ops::Deref;
@@ -8,7 +9,9 @@ use std::ptr::NonNull;
 use crate::LocalEvent;
 
 /// Enables a sender or receiver to reference the event that connects them.
-pub(crate) trait LocalRef<T>: Deref<Target = LocalEvent<T>> + fmt::Debug {
+pub(crate) trait LocalRef<T>:
+    Deref<Target = UnsafeCell<LocalEvent<T>>> + fmt::Debug
+{
     /// Releases the event, asserting that the last endpoint has been dropped
     /// and nothing will access the event after this call.
     fn release_event(&self);
@@ -16,12 +19,12 @@ pub(crate) trait LocalRef<T>: Deref<Target = LocalEvent<T>> + fmt::Debug {
 
 /// References an event stored anywhere, via raw pointer.
 pub(crate) struct PtrLocalRef<T> {
-    event: NonNull<LocalEvent<T>>,
+    event: NonNull<UnsafeCell<LocalEvent<T>>>,
 }
 
 impl<T: 'static> PtrLocalRef<T> {
     #[must_use]
-    pub(crate) fn new(event: NonNull<LocalEvent<T>>) -> Self {
+    pub(crate) fn new(event: NonNull<UnsafeCell<LocalEvent<T>>>) -> Self {
         Self { event }
     }
 }
@@ -32,12 +35,12 @@ impl<T: 'static> LocalRef<T> for PtrLocalRef<T> {
         // The storage is owned by whoever placed the event there and is reused without dropping
         // the event, so we clear its diagnostic state before we let go of it.
         #[cfg(debug_assertions)]
-        self.clear_awaiter_backtrace();
+        LocalEvent::clear_awaiter_backtrace(self);
     }
 }
 
 impl<T: 'static> Deref for PtrLocalRef<T> {
-    type Target = LocalEvent<T>;
+    type Target = UnsafeCell<LocalEvent<T>>;
 
     fn deref(&self) -> &Self::Target {
         // SAFETY: The creator of the reference is responsible for ensuring the event outlives it.
@@ -56,7 +59,7 @@ impl<T: 'static> fmt::Debug for PtrLocalRef<T> {
 
 /// References an event stored on the heap.
 pub(crate) struct BoxedLocalRef<T> {
-    event: NonNull<LocalEvent<T>>,
+    event: NonNull<UnsafeCell<LocalEvent<T>>>,
 }
 
 impl<T: 'static> BoxedLocalRef<T> {
@@ -69,7 +72,11 @@ impl<T: 'static> BoxedLocalRef<T> {
 
         // SAFETY: MaybeUninit is a transparent wrapper, so the layout matches.
         // This is the only reference, so we have exclusive access rights.
-        let event_as_maybe_uninit = unsafe { event.cast::<MaybeUninit<LocalEvent<T>>>().as_mut() };
+        let event_as_maybe_uninit = unsafe {
+            event
+                .cast::<UnsafeCell<MaybeUninit<LocalEvent<T>>>>()
+                .as_mut()
+        };
 
         LocalEvent::new_in_inner(event_as_maybe_uninit);
 
@@ -88,7 +95,7 @@ impl<T: 'static> LocalRef<T> for BoxedLocalRef<T> {
 
         // Releasing the memory does not drop the event, so we clear its diagnostic state first.
         #[cfg(debug_assertions)]
-        self.clear_awaiter_backtrace();
+        LocalEvent::clear_awaiter_backtrace(self);
 
         // SAFETY: Still the same type - all is well. We rely on the event state machine
         // to ensure that there is no double-release happening.
@@ -99,7 +106,7 @@ impl<T: 'static> LocalRef<T> for BoxedLocalRef<T> {
 }
 
 impl<T: 'static> Deref for BoxedLocalRef<T> {
-    type Target = LocalEvent<T>;
+    type Target = UnsafeCell<LocalEvent<T>>;
 
     fn deref(&self) -> &Self::Target {
         // SAFETY: Storage is automatically managed - as long as either sender/receiver

@@ -1,4 +1,5 @@
 use std::any::type_name;
+use std::cell::UnsafeCell;
 use std::fmt;
 use std::mem::MaybeUninit;
 use std::panic::RefUnwindSafe;
@@ -43,7 +44,7 @@ use crate::LocalEvent;
 ///
 /// [1]: crate::LocalEvent::placed
 pub struct EmbeddedLocalEvent<T> {
-    pub(crate) inner: MaybeUninit<LocalEvent<T>>,
+    pub(crate) inner: UnsafeCell<MaybeUninit<LocalEvent<T>>>,
 }
 
 // MaybeUninit<LocalEvent<T>> inherits LocalEvent's !RefUnwindSafe
@@ -56,7 +57,7 @@ impl<T: 'static> EmbeddedLocalEvent<T> {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            inner: MaybeUninit::uninit(),
+            inner: UnsafeCell::new(MaybeUninit::uninit()),
         }
     }
 }
