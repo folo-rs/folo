@@ -94,7 +94,7 @@ mutants SHARD="" CAREFUL='false':
         # one at a time. Mutation jobs still run concurrently (the `--jobs` heuristic
         # above is unchanged); only test concurrency within a job is removed. Serial
         # tests surface latent per-test timeouts that concurrent execution can otherwise
-        # hide - which is the entire point of the `mutants-careful` recipe.
+        # hide, which is the entire point of the `mutants-careful` recipe.
         $env:RUST_TEST_THREADS = "1"
     }
 
