@@ -62,6 +62,11 @@ thread_local! {
 /// it. Such a callback may operate on the endpoints of the event it belongs to: it may poll the
 /// receiver to completion, and it may drop an endpoint - including the last one, which releases
 /// the event storage.
+///
+/// A poll that registers the task for later notification runs the waker's clone operation, which
+/// is likewise user-supplied code. Such a callback may operate on the sender endpoint of the event
+/// being polled: it may send a value and it may drop the sender. The poll observes the resulting
+/// state.
 pub struct Event<T> {
     /// The logical state of the event; see constants in `state.rs`.
     pub(crate) state: AtomicU8,
@@ -986,11 +991,14 @@ mod tests {
     use std::rc::Rc;
     use std::sync::Barrier;
     use std::task::Poll;
-    use std::{task, thread};
+    use std::{mem, task, thread};
 
     use futures::executor::block_on;
     use static_assertions::assert_impl_all;
-    use testing::{DropOnWakerRelease, ReentrantWakerData, drop_waker, with_watchdog};
+    use testing::{
+        DropOnWakerRelease, ReentrantWakerData, assert_panics_with, clone_action_waker,
+        clone_action_waker_panicking_on_clone_release, drop_waker, with_watchdog,
+    };
 
     use super::*;
     use crate::IntoValueError;
@@ -2340,4 +2348,149 @@ mod tests {
     /// Without it the test would pass no matter how the code under test behaved.
     const REENTRANCY_REQUIRED: &str =
         "the event must have held a waker clone whose drop reentered the operation under test";
+
+    /// Explains a failure to reach the reentrant clone that a regression test exists to exercise.
+    /// Without it the test would pass no matter how the code under test behaved.
+    const WAKER_CLONE_REQUIRED: &str =
+        "the poll must have cloned the waker it was given, which is what re-enters the sender";
+
+    // Parity counterparts of the `LocalEvent` waker-clone reentrancy regression tests in
+    // `core/local.rs`. Registering an awaiter clones the waker, which is user code that may
+    // operate on the sender endpoint of the same event and move it into a terminal state. The
+    // poll must observe the state the clone left behind. Ref: docs/callback-safety.md.
+    #[test]
+    fn boxed_poll_with_reentrant_send_during_waker_clone_observes_set() {
+        with_watchdog(|| {
+            let (sender, receiver) = Event::<i32>::boxed();
+            let mut receiver = Box::pin(receiver);
+
+            // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
+            let (waker, cloned) = unsafe { clone_action_waker(move || sender.send(42)) };
+
+            let mut cx = task::Context::from_waker(&waker);
+            let poll_result = receiver.as_mut().poll(&mut cx);
+
+            assert!(cloned.get(), "{WAKER_CLONE_REQUIRED}");
+            assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+        });
+    }
+
+    #[test]
+    fn boxed_poll_with_reentrant_sender_drop_during_waker_clone_observes_disconnected() {
+        with_watchdog(|| {
+            let (sender, receiver) = Event::<i32>::boxed();
+            let mut receiver = Box::pin(receiver);
+
+            // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
+            let (waker, cloned) = unsafe { clone_action_waker(move || drop(sender)) };
+
+            let mut cx = task::Context::from_waker(&waker);
+            let poll_result = receiver.as_mut().poll(&mut cx);
+
+            assert!(cloned.get(), "{WAKER_CLONE_REQUIRED}");
+            assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
+        });
+    }
+
+    #[test]
+    fn boxed_repoll_with_reentrant_send_during_waker_clone_observes_set() {
+        with_watchdog(|| {
+            let (sender, receiver) = Event::<i32>::boxed();
+            let mut receiver = Box::pin(receiver);
+
+            // First poll transitions BOUND -> AWAITING and registers a waker for the sender to
+            // take.
+            let mut cx = task::Context::from_waker(Waker::noop());
+            assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
+
+            // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
+            let (waker, cloned) = unsafe { clone_action_waker(move || sender.send(42)) };
+
+            let mut cx = task::Context::from_waker(&waker);
+            let poll_result = receiver.as_mut().poll(&mut cx);
+
+            assert!(cloned.get(), "{WAKER_CLONE_REQUIRED}");
+            assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+        });
+    }
+
+    #[test]
+    fn boxed_repoll_with_reentrant_sender_drop_during_waker_clone_observes_disconnected() {
+        with_watchdog(|| {
+            let (sender, receiver) = Event::<i32>::boxed();
+            let mut receiver = Box::pin(receiver);
+
+            let mut cx = task::Context::from_waker(Waker::noop());
+            assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
+
+            // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
+            let (waker, cloned) = unsafe { clone_action_waker(move || drop(sender)) };
+
+            let mut cx = task::Context::from_waker(&waker);
+            let poll_result = receiver.as_mut().poll(&mut cx);
+
+            assert!(cloned.get(), "{WAKER_CLONE_REQUIRED}");
+            assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
+        });
+    }
+
+    /// Counts its own drops, so a test can tell a value that was delivered exactly once apart from
+    /// one that was extracted twice or lost.
+    struct DropCounter {
+        drops: Arc<atomic::AtomicUsize>,
+    }
+
+    impl Drop for DropCounter {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, atomic::Ordering::Relaxed);
+        }
+    }
+
+    // Parity counterpart of the local unwinding test. Releasing the awaiter that a racing send
+    // made useless is user code, so it may unwind. The value must still be inside the event at
+    // that moment, or the receiver's own cleanup reads an extracted cell a second time.
+    // Ref: docs/callback-safety.md.
+    #[test]
+    fn boxed_poll_unwinding_during_waker_clone_release_leaves_value_in_event() {
+        with_watchdog(|| {
+            let drops = Arc::new(atomic::AtomicUsize::new(0));
+
+            let (sender, receiver) = Event::<DropCounter>::boxed();
+            let mut receiver = Box::pin(receiver);
+
+            let value = DropCounter {
+                drops: Arc::clone(&drops),
+            };
+
+            // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
+            let (waker, cloned) = unsafe {
+                clone_action_waker_panicking_on_clone_release(move || sender.send(value))
+            };
+
+            let mut cx = task::Context::from_waker(&waker);
+            assert_panics_with(
+                || receiver.as_mut().poll(&mut cx),
+                |message| assert!(message.contains("waker clone release")),
+            );
+
+            assert!(cloned.get(), "{WAKER_CLONE_REQUIRED}");
+
+            if drops.load(atomic::Ordering::Relaxed) != 0 {
+                // The poll extracted the value before running the callback, so the event now
+                // claims a value it no longer holds. Letting the receiver clean up would read
+                // that cell again, so leak the event instead of escalating the failure into
+                // undefined behavior.
+                mem::forget(receiver);
+
+                panic!(
+                    "the value must stay in the event while a callback can still unwind past it"
+                );
+            }
+
+            // The event still owns the value, so the receiver's cleanup delivers exactly one drop.
+            drop(receiver);
+
+            assert_eq!(drops.load(atomic::Ordering::Relaxed), 1);
+        });
+    }
 }
