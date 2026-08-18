@@ -2107,10 +2107,8 @@ fn finalize_findings(
     // raising one either way. The p-values the correction sees therefore overstate the
     // risk of what it admits, and the bound holds with room to spare.
     // Ref: DESIGN.md §8.3.
-    let candidates: Vec<Candidate> = candidates
-        .into_iter()
-        .filter(|candidate| context.keeps(candidate.finding.direction))
-        .collect();
+    let mut candidates = candidates;
+    candidates.retain(|candidate| context.keeps(candidate.finding.direction));
 
     // Control the false-discovery rate across every series that was actually judged,
     // not merely those that raised a candidate. Feeding the filter only its own
@@ -4716,6 +4714,139 @@ mod tests {
         // directions.
         assert!(!context(AnalysisMode::History).reports_improvements());
         assert!(context(AnalysisMode::Branch).reports_improvements());
+    }
+
+    /// The judged family the direction-order case is corrected against. Ten makes the
+    /// first two Benjamini–Hochberg thresholds `FDR_Q / 10` and `FDR_Q / 5`, far enough
+    /// apart to seat a p-value strictly between them.
+    const DIRECTION_ORDER_FAMILY: usize = 10;
+
+    /// The improvement's p-value, as a fraction of `FDR_Q`. Well under the rank-1
+    /// threshold (`FDR_Q / 10`), so it is rejected under either order and always takes
+    /// rank 1 away from the regression.
+    const DIRECTION_ORDER_IMPROVEMENT_P: f64 = 0.01;
+
+    /// The regression's p-value, as a fraction of `FDR_Q`. Chosen to sit strictly
+    /// between the rank-1 threshold (`FDR_Q / 10`) and the rank-2 one (`FDR_Q / 5`), so
+    /// its survival depends entirely on which rank it lands at — which is exactly what
+    /// the screening order decides.
+    const DIRECTION_ORDER_REGRESSION_P: f64 = 0.15;
+
+    /// Builds a candidate carrying `direction` and `bh_p`, drawn from `source`.
+    ///
+    /// `comparison_base_index` is the branch-mode chart anchor, left `None` for history
+    /// mode. Everything the false-discovery filter does not read is left at a neutral
+    /// value: the filter arbitrates on `bh_p` alone, and the surviving finding's
+    /// charting points are materialised from `source` afterwards.
+    fn direction_order_candidate(
+        source: &Series,
+        source_index: usize,
+        direction: Direction,
+        bh_p: f64,
+        comparison_base_index: Option<usize>,
+    ) -> Candidate {
+        Candidate {
+            finding: Finding {
+                set: source.set.clone(),
+                id: source.id.clone(),
+                kind: source.kind,
+                method: FindingMethod::ChangePoint,
+                direction,
+                baseline: 100.0,
+                latest: 110.0,
+                delta: 10.0,
+                relative_delta: 0.1,
+                confidence: 1.0 - bh_p,
+                commit: None,
+                window_start_commit: None,
+                blessed_at: None,
+                blessed_commit_time: None,
+                series: Vec::new(),
+                comparison_base_index,
+                chart_base_ref: None,
+            },
+            source_index,
+            bh_p,
+            split: None,
+            line: None,
+        }
+    }
+
+    /// The mode's direction screen runs *before* the false-discovery correction, so a
+    /// regression is corrected against the ranks its own direction occupies rather than
+    /// borrowing an earlier one from an improvement the report would never show.
+    ///
+    /// The two candidates are sized so the orders disagree: correcting both directions
+    /// seats the regression at rank 2, where it clears the looser threshold, while
+    /// screening first leaves it alone at rank 1, where it does not. History mode must
+    /// therefore report nothing, and branch mode — which reports both directions, so the
+    /// screen is a no-op — must report both.
+    #[test]
+    fn history_screens_direction_before_the_correction() {
+        let config = AnalysisConfig::default();
+        let improvement_p = config.fdr_q * DIRECTION_ORDER_IMPROVEMENT_P;
+        let regression_p = config.fdr_q * DIRECTION_ORDER_REGRESSION_P;
+
+        // Bind the case to the thresholds it is built around, so a moved gate fails here
+        // rather than silently leaving the two orders in agreement.
+        let family = count_to_f64(DIRECTION_ORDER_FAMILY);
+        assert!(improvement_p < config.fdr_q / family);
+        assert!(regression_p > config.fdr_q / family);
+        assert!(regression_p < config.fdr_q * 2.0 / family);
+
+        let series = vec![
+            named_series("improving", &[100.0, 70.0]),
+            named_series("regressing", &[100.0, 110.0]),
+        ];
+        let mut census = SeriesCensus::default();
+        for _ in 0..DIRECTION_ORDER_FAMILY {
+            census.record(Testability::Judged);
+        }
+
+        let candidates = |comparison_base_index| {
+            vec![
+                direction_order_candidate(
+                    &series[0],
+                    0,
+                    Direction::Improvement,
+                    improvement_p,
+                    comparison_base_index,
+                ),
+                direction_order_candidate(
+                    &series[1],
+                    1,
+                    Direction::Regression,
+                    regression_p,
+                    comparison_base_index,
+                ),
+            ]
+        };
+
+        // History charts against the analyzed tip; branch charts against the base ref,
+        // so each leg supplies the anchors its own charting path reads.
+        let history_context = AnalysisContext {
+            mode: AnalysisMode::History,
+            config,
+            merge_base_index: None,
+            base_ref_index: None,
+            tip_index: 1,
+        };
+        let branch_context = AnalysisContext {
+            mode: AnalysisMode::Branch,
+            config,
+            merge_base_index: Some(1),
+            base_ref_index: Some(1),
+            tip_index: 1,
+        };
+
+        let history = finalize_findings(candidates(None), &census, &series, &history_context);
+        assert!(
+            history.is_empty(),
+            "the regression alone sits at rank 1, where it does not clear the bar: {history:?}"
+        );
+
+        let branch = finalize_findings(candidates(Some(1)), &census, &series, &branch_context);
+        assert_eq!(branch.len(), 2, "{branch:?}");
     }
 
     #[test]

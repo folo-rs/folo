@@ -371,7 +371,7 @@ gh-analyze-pr-bench-history dir base keydir:
 
     $common = @('--engine', 'all', '--target-triple', 'all') + $keyArgs
 
-    Write-Verbose "Analyzing PR benchmark history in branch mode (context HEAD vs base {{base}}); writing the full Markdown to $reportPath, the full JSON to $jsonPath and the condensed top-findings Markdown summary to $summaryPath, including improvements as well as regressions, and mirroring fetched cloud objects under $cacheDir." -Verbose
+    Write-Verbose "Analyzing PR benchmark history in branch mode (context HEAD vs base {{base}}); writing the full Markdown to $reportPath, the full JSON to $jsonPath and the condensed top-findings Markdown summary to $summaryPath, and mirroring fetched cloud objects under $cacheDir. Branch mode judges the tip against the base in both directions, so the reports carry improvements as well as regressions." -Verbose
     cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --verbose --context HEAD --base '{{base}}' --cache=$cacheDir --no-text --markdown $reportPath --json $jsonPath --markdown-summary $summaryPath
     Write-Verbose "Computing the notable flag from the JSON report." -Verbose
     $json = Get-Content -LiteralPath $jsonPath -Raw | ConvertFrom-Json
