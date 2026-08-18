@@ -100,9 +100,15 @@ fn available_processor_ids() -> Vec<ProcessorId> {
     let result = unsafe { libc::sched_getaffinity(0, size_of::<cpu_set_t>(), &raw mut cpu_set) };
     assert_eq!(result, 0);
 
-    let cpu_set_size = usize::try_from(libc::CPU_SETSIZE).unwrap();
+    // The bound is the number of bits the structure holds, which is what `CPU_ISSET` checks the
+    // index against. `libc::CPU_SETSIZE` is not that number on every libc implementation - musl
+    // publishes a value below the capacity of the structure it ships - and scanning only that
+    // far would hide the processors above it on a large machine.
+    let cpu_set_capacity = size_of::<cpu_set_t>()
+        .checked_mul(usize::try_from(u8::BITS).unwrap())
+        .unwrap();
 
-    (0..cpu_set_size)
+    (0..cpu_set_capacity)
         // SAFETY: The index is within the set size and the set is initialized.
         .filter(|index| unsafe { libc::CPU_ISSET(*index, &cpu_set) })
         .map(|index| ProcessorId::try_from(index).unwrap())
