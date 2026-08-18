@@ -164,10 +164,15 @@ by accident is much worse than analyzing too little.
 ## A base merged into the branch is supported
 
 Branch mode builds its comparison window from the base ref's own recent first-parent history,
-anchored at the base ref. The context commit's first-parent line is still the line that `list`,
-`examine`, and `prune` display or maintain, but it is not split to obtain branch mode's baseline.
-Whether the branch was rebased onto the base, the base was merged into the branch, or both
-happened during development does not change the comparison window.
+anchored at the base ref. Whether the branch was rebased onto the base, the base was merged
+into the branch, or both happened during development does not change that comparison window.
+
+The context commit's first-parent line is still the line that `list`, `examine`, and `prune`
+display or maintain, and it is still divided at its **fork point** — the newest commit it
+shares with the base ref — into base-side history and the branch's own commits. When the base
+was merged in, the merge base sits off that line, so the fork point is the newest shared
+commit rather than the merge base itself; base-side history is identified and preserved either
+way, so `prune` never deletes a shared commit without the base-branch opt-in.
 
 The merge base is consulted only as a shared-history check. If no merge base can be resolved at
 all, the repository checkout is too shallow or the refs are disjoint, and selection stops with the

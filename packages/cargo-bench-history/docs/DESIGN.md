@@ -490,14 +490,18 @@ checking out that project's repo and pointing `analyze` at it.
 Two refs frame the analysis: a **target** (`--context`, default `HEAD`) whose first-parent
 history is analyzed, and a **base** (`--base`, default the detected default branch). The
 target line is ordered independently because it is the line that `list`, `examine`, and
-`prune` display or maintain. When the merge-base lies on that target line, commits at or
-before it contribute **clean points only**, while commits unique to the target contribute
-**clean and dirty** points (a flag drops the dirty ones). When the base was merged into the
-target and the merge-base is off the target first-parent line, that split point is absent
-from the target line; branch mode still obtains its baseline from the base ref's own
-first-parent history. An official view remains `--context <default>` (everything is base,
-so clean-only), and the "how does my feature fit in" view remains the default (clean base
-baseline plus the branch's own clean and dirty snapshots). Membership is purely
+`prune` display or maintain. That line is divided at its **fork point** — the newest target
+commit that is an ancestor of the base ref — into base-side history (at or before the fork
+point, contributing **clean points only**) and the branch's own commits (after it,
+contributing **clean and dirty** points; a flag drops the dirty ones). When the branch was
+rebased onto the base, the fork point is the merge-base itself. When the base was instead
+merged into the target, the merge-base sits off the target's first-parent line, so the fork
+point is the newest commit the base ref's own first-parent history still shares with the
+target line; base-side history is identified and preserved either way. Branch mode's
+comparison baseline is separate again: it always comes from the base ref's own first-parent
+history, not from this split. An official view remains `--context <default>` (everything is
+base, so clean-only), and the "how does my feature fit in" view remains the default (clean
+base baseline plus the branch's own clean and dirty snapshots). Membership is purely
 topological, so a dirty snapshot taken on a shared base commit is excluded from an official
 view until it is committed.
 
@@ -509,8 +513,8 @@ and points at the fix (deepen the clone with `git fetch --unshallow` / `fetch-de
 pass an explicit `--base`) rather than silently treating the incomplete history as a
 base-branch view. The tool has no requirement to support shallow or otherwise anomalous
 history; an unknown topology is reported, not guessed around. A merge-base that is resolved
-but sits off the target first-parent line is supported in branch mode; the shared-history
-check succeeds, and the base ref supplies the comparison window directly.
+but sits off the target first-parent line is supported: the fork point still divides the
+target line, and the base ref supplies the comparison window directly.
 
 There is one carve-out to the clean-only base rule, for the common "first impressions"
 case where a user runs `analyze` on the base branch with uncommitted changes (for instance

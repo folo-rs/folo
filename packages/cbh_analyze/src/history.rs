@@ -75,10 +75,14 @@ pub(crate) struct ResolvedHistory {
     /// Whether a commit's dirty runs are admitted *only* by the base-branch
     /// dirty-tree exception, which triggers the ephemeral-data warning.
     pub(crate) dirty_base_exception: HashMap<String, bool>,
-    /// First-parent topological index of the merge-base on the context line, when it
-    /// lies there. `None` is normal for a branch that merged the base ref into itself:
-    /// the context-line consumers still keep their own first-parent order, while
-    /// branch analysis loads the base ref's own first-parent window separately.
+    /// First-parent topological index of the **fork point** on the context line: the
+    /// newest context commit that is an ancestor of the base ref, dividing base-side
+    /// history from the branch's own commits. When the branch was rebased onto the
+    /// base, this is the merge-base itself. When the base was instead merged into the
+    /// branch, the merge-base sits off the context's first-parent line, so this is the
+    /// newest commit the two lines still shared before the branch diverged. `None` only
+    /// when the two lines share no first-parent commit at all, which cannot arise once a
+    /// merge-base exists.
     pub(crate) merge_base_index: Option<usize>,
     /// Whether the target's tip *is* its own merge-base with the base: the signal
     /// that this is an official base-branch view rather than a feature branch.
@@ -231,9 +235,24 @@ where
         }
     };
 
+    // The context-line consumers (list, prune, examine) and the base/branch dirty-run
+    // split both divide the first-parent line at its fork point with the base ref: the
+    // newest context commit that is an ancestor of the base ref. When the branch was
+    // rebased onto the base, that fork point is the merge-base itself and lies on the
+    // line. When the base was instead merged into the branch, the merge-base sits off the
+    // line, so the fork point is the newest commit the line still shares with the base
+    // ref's history — found by projecting onto the line rather than left absent, so a base
+    // merged in is split just like a rebased one. Ref: book appendix "A base merged into
+    // the branch is supported".
+    let split_commit = if ancestry.iter().any(|commit| commit == &merge_base) {
+        Some(merge_base.clone())
+    } else {
+        base_ref_fork_point(git, &ancestry, &base_commit_id, reporter).await?
+    };
+
     let selected = select_commits(
         &ancestry,
-        Some(merge_base.as_str()),
+        split_commit.as_deref(),
         !selection.no_dirty,
         dirty_tip_exception,
     );
@@ -251,11 +270,7 @@ where
         .map(|one| (one.commit.clone(), one.dirty.is_base_exception()))
         .collect();
 
-    // The context-line consumers keep their own first-parent order. When the base ref
-    // was merged into a feature branch, the merge-base is the base ref and is not on
-    // the context's first-parent line; branch analysis handles that by walking the
-    // base ref separately, so the context-line split is simply absent.
-    let merge_base_index = order.get(&merge_base).copied();
+    let merge_base_index = split_commit.as_ref().and_then(|commit| order.get(commit).copied());
     // The target's tip is its own merge-base exactly when this is an official
     // base-branch view rather than a feature branch.
     let tip_is_merge_base = merge_base == target_commit_id;
@@ -275,6 +290,75 @@ where
         merge_base_index,
         tip_is_merge_base,
     })
+}
+
+/// The fork point on the context's first-parent line when the merge-base lies off it.
+///
+/// Reached only when the merge-base is not on the context's first-parent line, which
+/// happens when the base ref was merged into the branch rather than the branch rebased
+/// onto the base. The fork point is the newest line commit that is an ancestor of the
+/// base ref — the last commit the branch shared with the base before diverging.
+///
+/// The line is oldest-first and ancestry is downward-closed: if a commit is an ancestor
+/// of the base ref, so is every commit before it, so the base-side commits form a prefix.
+/// The prefix boundary is found by binary search — `O(log n)` merge-base probes rather
+/// than one per commit. `Some(commit)` is the newest base-side commit; `None` only when
+/// the line shares nothing with the base ref, which cannot arise once a merge-base exists
+/// (the shared root is always base-side), so a `None` degrades to preserving the whole
+/// line as base-side rather than misclassifying it.
+async fn base_ref_fork_point<G>(
+    git: &G,
+    ancestry: &[String],
+    base_commit_id: &str,
+    reporter: &dyn Reporter,
+) -> Result<Option<String>, AnalyzeError>
+where
+    G: GitHistory,
+{
+    let started = Instant::now();
+    // Search for the first branch-own commit: the oldest line commit that is *not* an
+    // ancestor of the base ref. Every commit before it is base-side.
+    let mut low = 0_usize;
+    let mut high = ancestry.len();
+    while low < high {
+        let mid = low.midpoint(high);
+        let Some(candidate) = ancestry.get(mid) else {
+            break;
+        };
+        if is_ancestor_of(git, candidate, base_commit_id).await? {
+            low = mid.saturating_add(1);
+        } else {
+            high = mid;
+        }
+    }
+    let fork_point = low.checked_sub(1).and_then(|index| ancestry.get(index).cloned());
+    reporter.timing(
+        "base-ref fork-point binary search (merge-base probes for a merged-in base)",
+        started.elapsed(),
+    );
+    reporter.note_with(|| match &fork_point {
+        Some(commit) => format!(
+            "merge-base is off the context's first-parent line (the base ref was merged into \
+             the branch); the fork point is {commit}, so commits after it are the branch's own"
+        ),
+        None => "merge-base is off the context's first-parent line and the line shares nothing \
+             with the base ref, so the whole line is preserved as base-side"
+            .to_owned(),
+    });
+    Ok(fork_point)
+}
+
+/// Whether `commit` is an ancestor of `descendant` (or the same commit): true exactly
+/// when their merge-base is `commit` itself.
+async fn is_ancestor_of<G>(git: &G, commit: &str, descendant: &str) -> Result<bool, AnalyzeError>
+where
+    G: GitHistory,
+{
+    let merge_base = git
+        .merge_base(commit, descendant)
+        .await
+        .map_err(|error| MergeBaseFailedError::caused_by(commit, descendant, error))?;
+    Ok(merge_base.as_deref() == Some(commit))
 }
 
 /// The ephemeral-data warning appended when a dirty base-branch-tip run is admitted.

@@ -375,6 +375,52 @@ async fn prune_all_removes_only_the_feature_side() {
     );
 }
 
+/// `prune` preserves base-side history even when the base was merged into the branch,
+/// so the merge-base sits off the context's first-parent line. The fork point on that
+/// line (the newest shared commit) still divides base-side history from the branch's
+/// own commits, so a shared commit is never deleted without the base-branch opt-in.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn prune_preserves_base_side_when_the_base_is_merged_in() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // master:  root - c1 - c2
+    //                  \
+    // feature:          f1 - M - f2   (M merges master's tip c2 into feature)
+    // merge-base(feature, master) = c2, off feature's first-parent line
+    // [root, c1, f1, M, f2]; the fork point is the newest shared commit, c1.
+    workspace.commit("c1");
+    workspace.seed_callgrind("c1", 100.0);
+    workspace.checkout_new_branch("feature");
+    workspace.commit("f1");
+    workspace.seed_callgrind("f1", 100.0);
+    workspace.checkout("master");
+    workspace.commit("c2");
+    workspace.checkout("feature");
+    workspace.merge("master", "M");
+    workspace.commit("f2");
+    workspace.seed_callgrind("f2", 100.0);
+
+    // Only the branch's own commits (f1, f2) are eligible; the shared c1 is base-side.
+    let message = workspace
+        .drive_json(&["prune", "--all", "--context", "feature"])
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
+    assert_eq!(
+        parsed["totals"]["runs"], 2,
+        "only the two branch-own runs are deleted, not the shared base commit: {message}"
+    );
+
+    // The shared base commit c1 survives on the context's first-parent line.
+    let message = workspace
+        .drive_json(&["list", "runs", "--context", "feature"])
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
+    assert_eq!(
+        parsed["totals"]["runs"], 1,
+        "the shared base-side run is preserved: {message}"
+    );
+}
+
 /// `--clean` deletes clean runs while leaving dirty snapshots
 /// in place — the inverse of `--dirty`.
 #[tokio::test]

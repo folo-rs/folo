@@ -379,10 +379,12 @@ where
 /// Whether a commit at `index` (its first-parent position) is eligible for
 /// removal. When pruning the base branch itself (`tip_is_merge_base`), every
 /// selected commit is eligible. Otherwise only the context branch's own commits —
-/// those strictly after the merge-base — are eligible, so base-branch history is
-/// preserved. A `None` merge-base index means the merge-base is off the target's
-/// first-parent line (an off-chain merge-base), so no first-parent commit is
-/// base-side and every one is the context branch's own.
+/// those strictly after the fork point — are eligible, so base-branch history is
+/// preserved. `resolve_history` reports that fork point even when the base was merged
+/// into the branch (the newest shared commit, not the off-line merge-base). A `None`
+/// fork point means the two lines share no first-parent commit at all, which cannot
+/// arise once a merge-base exists; it is treated conservatively as base-side so a
+/// degenerate topology never authorises deleting history without `--prune-base`.
 fn commit_is_eligible(
     index: usize,
     merge_base_index: Option<usize>,
@@ -393,7 +395,7 @@ fn commit_is_eligible(
     }
     match merge_base_index {
         Some(merge_base_index) => index > merge_base_index,
-        None => true,
+        None => false,
     }
 }
 
@@ -1725,10 +1727,15 @@ mod tests {
         // On the base branch (tip is its own merge-base), every commit is eligible.
         assert!(commit_is_eligible(0, Some(3), true));
         assert!(commit_is_eligible(3, Some(3), true));
-        // An off-chain merge-base (no first-parent split point) leaves every
-        // first-parent commit as the context's own.
-        assert!(commit_is_eligible(0, None, false));
-        assert!(commit_is_eligible(5, None, false));
+    }
+
+    #[test]
+    fn commit_is_eligible_preserves_everything_without_a_fork_point() {
+        // A degenerate topology with no shared first-parent commit yields no fork point.
+        // Nothing is treated as branch-side, so no commit is deletable without the
+        // explicit base-branch opt-in — a `None` fork point never authorises deletion.
+        assert!(!commit_is_eligible(0, None, false));
+        assert!(!commit_is_eligible(5, None, false));
     }
 
     #[test]
