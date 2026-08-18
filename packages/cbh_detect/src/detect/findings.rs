@@ -1897,15 +1897,10 @@ fn evaluate_branch(
     context_index: usize,
     log: &mut GateLog,
 ) -> Option<Candidate> {
-    let base_window = if series.base_window.len() > config.compare_window {
-        let start = series
-            .base_window
-            .len()
-            .saturating_sub(config.compare_window);
-        series.base_window.get(start..).unwrap_or_default()
-    } else {
-        &series.base_window[..]
-    };
+    // The base window arrives already capped to the recent `compare_window` levels
+    // (attach_base_windows/`base_window_levels` own that truncation), so detection reads
+    // it whole rather than re-slicing it here.
+    let base_window = &series.base_window[..];
     let levels: Vec<f64> = base_window.iter().map(|level| level.value).collect();
     let base_spans = level_spans(&levels);
     if !log.stage(GateStage::Branch).numeric(
