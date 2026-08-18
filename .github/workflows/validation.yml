@@ -12,8 +12,11 @@ concurrency:
 
 # Emit a backtrace whenever a test (or any Rust process) panics, so a rare flake — such as the
 # alloc_tracker panic-on-next-alloc global-state race — is diagnosable straight from the failing
-# run's log instead of the log only advising a re-run with RUST_BACKTRACE set. This does not change
-# panic messages, so `#[should_panic]` matching and error-message assertions are unaffected.
+# run's log instead of the log only advising a re-run with RUST_BACKTRACE set. Panic messages are
+# unchanged, so `#[should_panic]` matching is unaffected. Rendered `ohno` error text is not: an
+# `ohno` error renders its captured backtrace as part of its `Display`, and `message()` renders an
+# error's source through `Display`. Assertions on rendered error text must therefore hold with
+# backtraces captured — see docs/error-handling.md.
 env:
   RUST_BACKTRACE: "1"
 
