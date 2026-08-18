@@ -1,4 +1,5 @@
 use std::any::type_name;
+use std::cell::UnsafeCell;
 use std::fmt;
 use std::ops::Deref;
 use std::ptr::NonNull;
@@ -15,14 +16,14 @@ pub(crate) struct PooledLocalRef<T: 'static> {
     #[cfg(debug_assertions)]
     core: Rc<LocalPoolCore<T>>,
 
-    event: NonNull<LocalEvent<T>>,
+    event: NonNull<UnsafeCell<LocalEvent<T>>>,
 }
 
 impl<T: 'static> PooledLocalRef<T> {
     #[must_use]
     pub(crate) fn new(
         #[cfg(debug_assertions)] core: Rc<LocalPoolCore<T>>,
-        event: NonNull<LocalEvent<T>>,
+        event: NonNull<UnsafeCell<LocalEvent<T>>>,
     ) -> Self {
         Self {
             #[cfg(debug_assertions)]
@@ -58,7 +59,7 @@ impl<T: 'static> LocalRef<T> for PooledLocalRef<T> {
 }
 
 impl<T: 'static> Deref for PooledLocalRef<T> {
-    type Target = LocalEvent<T>;
+    type Target = UnsafeCell<LocalEvent<T>>;
 
     fn deref(&self) -> &Self::Target {
         // SAFETY: The event state machine guarantees that the event stays alive for as long as

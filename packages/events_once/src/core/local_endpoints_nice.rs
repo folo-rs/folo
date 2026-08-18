@@ -2,6 +2,7 @@
 //! the outer generic type parameter, leaving only the inner T of the payload.
 
 use std::any::type_name;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::task::Poll;
 use std::{fmt, task};
@@ -17,6 +18,12 @@ use crate::{
 pub struct BoxedLocalSender<T: 'static> {
     inner: LocalSenderCore<BoxedLocalRef<T>, T>,
 }
+
+// Senders are one-shot and consumed on use. The UnsafeCell around the
+// underlying event is guarded by a state machine that prevents observing
+// inconsistent state during unwind.
+impl<T: 'static> UnwindSafe for BoxedLocalSender<T> {}
+impl<T: 'static> RefUnwindSafe for BoxedLocalSender<T> {}
 
 impl<T: 'static> BoxedLocalSender<T> {
     pub(crate) fn new(inner: LocalSenderCore<BoxedLocalRef<T>, T>) -> Self {
@@ -50,6 +57,12 @@ impl<T: 'static> fmt::Debug for BoxedLocalSender<T> {
 pub struct BoxedLocalReceiver<T: 'static> {
     inner: LocalReceiverCore<BoxedLocalRef<T>, T>,
 }
+
+// Receivers are one-shot. The UnsafeCell around the underlying event is
+// guarded by a state machine that prevents observing inconsistent state
+// during unwind.
+impl<T: 'static> UnwindSafe for BoxedLocalReceiver<T> {}
+impl<T: 'static> RefUnwindSafe for BoxedLocalReceiver<T> {}
 
 impl<T: 'static> BoxedLocalReceiver<T> {
     pub(crate) fn new(inner: LocalReceiverCore<BoxedLocalRef<T>, T>) -> Self {
@@ -140,6 +153,10 @@ pub struct RawLocalSender<T: 'static> {
     inner: LocalSenderCore<PtrLocalRef<T>, T>,
 }
 
+// See BoxedLocalSender for justification.
+impl<T: 'static> UnwindSafe for RawLocalSender<T> {}
+impl<T: 'static> RefUnwindSafe for RawLocalSender<T> {}
+
 impl<T: 'static> RawLocalSender<T> {
     pub(crate) fn new(inner: LocalSenderCore<PtrLocalRef<T>, T>) -> Self {
         Self { inner }
@@ -173,6 +190,10 @@ impl<T: 'static> fmt::Debug for RawLocalSender<T> {
 pub struct RawLocalReceiver<T: 'static> {
     inner: LocalReceiverCore<PtrLocalRef<T>, T>,
 }
+
+// See BoxedLocalReceiver for justification.
+impl<T: 'static> UnwindSafe for RawLocalReceiver<T> {}
+impl<T: 'static> RefUnwindSafe for RawLocalReceiver<T> {}
 
 impl<T: 'static> RawLocalReceiver<T> {
     pub(crate) fn new(inner: LocalReceiverCore<PtrLocalRef<T>, T>) -> Self {

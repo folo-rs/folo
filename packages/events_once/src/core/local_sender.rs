@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::{fmt, ptr};
 
-use crate::{Disconnected, LocalRef};
+use crate::{Disconnected, LocalEvent, LocalRef};
 
 /// Delivers a single value to the receiver connected to the same event.
 pub(crate) struct LocalSenderCore<E, T>
@@ -38,7 +38,7 @@ where
         // The drop logic is different before/after set(), so we switch to manual drop here.
         let mut this = ManuallyDrop::new(self);
 
-        if this.event_ref.set(value) == Err(Disconnected) {
+        if LocalEvent::set(&this.event_ref, value) == Err(Disconnected) {
             // The other endpoint has disconnected, so we need to clean up the event.
             this.event_ref.release_event();
         }
@@ -58,7 +58,7 @@ where
 {
     #[inline]
     fn drop(&mut self) {
-        if self.event_ref.sender_dropped_without_set() == Err(Disconnected) {
+        if LocalEvent::sender_dropped_without_set(&self.event_ref) == Err(Disconnected) {
             // The other endpoint has disconnected, so we need to clean up the event.
             self.event_ref.release_event();
         }
