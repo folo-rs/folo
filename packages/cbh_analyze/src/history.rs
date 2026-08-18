@@ -244,7 +244,7 @@ where
     // ref's history — found by projecting onto the line rather than left absent, so a base
     // merged in is split just like a rebased one. Ref: book appendix "A base merged into
     // the branch is supported".
-    let split_commit = if ancestry.iter().any(|commit| commit == &merge_base) {
+    let split_commit = if ancestry.contains(&merge_base) {
         Some(merge_base.clone())
     } else {
         base_ref_fork_point(git, &ancestry, &base_commit_id, reporter).await?
@@ -318,11 +318,16 @@ where
     G: GitHistory,
 {
     let started = Instant::now();
-    // Search for the first branch-own commit: the oldest line commit that is *not* an
-    // ancestor of the base ref. Every commit before it is base-side.
+    // Binary search for the first branch-own commit: the oldest line commit that is
+    // *not* an ancestor of the base ref. Every commit before it is base-side. The loop
+    // is bounded by the commit count — a strict over-estimate of the `log2` probes a
+    // halving search needs — so a comparison slip can only end it early, never spin it.
     let mut low = 0_usize;
     let mut high = ancestry.len();
-    while low < high {
+    for _ in 0..=ancestry.len() {
+        if low >= high {
+            break;
+        }
         let mid = low.midpoint(high);
         let Some(candidate) = ancestry.get(mid) else {
             break;
@@ -541,5 +546,66 @@ mod tests {
 
         let error = resolve_error(&git);
         assert!(error.find_source::<WorkingTreeProbeFailedError>().is_some());
+    }
+
+    /// A four-commit graph where the base ref (`c2`) forks off `c1`, alongside a
+    /// feature line `root - c1 - f1 - f2`. The merge-base of the feature tip and `c2`
+    /// is `c1`, which is off the feature's first-parent line only once a real merge is
+    /// involved; the fake still lets the fork-point helpers be exercised directly.
+    fn forked_git() -> FakeGitHistory {
+        let mut git = FakeGitHistory::new();
+        git.commit("root", None)
+            .commit("c1", Some("root"))
+            .commit("c2", Some("c1"))
+            .commit("f1", Some("c1"))
+            .commit("f2", Some("f1"));
+        git
+    }
+
+    #[test]
+    fn is_ancestor_of_holds_only_up_the_chain() {
+        let git = forked_git();
+        // `c1` and `root` are ancestors of `c2`; `f1` (a sibling of `c2`) and a
+        // descendant relation (`c2` under `c1`) are not.
+        assert!(block_on(is_ancestor_of(&git, "c1", "c2")).unwrap());
+        assert!(block_on(is_ancestor_of(&git, "root", "c2")).unwrap());
+        assert!(!block_on(is_ancestor_of(&git, "f1", "c2")).unwrap());
+        assert!(!block_on(is_ancestor_of(&git, "c2", "c1")).unwrap());
+    }
+
+    #[test]
+    fn base_ref_fork_point_is_the_newest_shared_commit() {
+        let git = forked_git();
+        let ancestry: Vec<String> = ["root", "c1", "f1", "f2"]
+            .iter()
+            .map(|commit| (*commit).to_owned())
+            .collect();
+        let fork = block_on(base_ref_fork_point(
+            &git,
+            &ancestry,
+            "c2",
+            &RecordingReporter::new(),
+        ))
+        .unwrap();
+        assert_eq!(fork.as_deref(), Some("c1"));
+    }
+
+    #[test]
+    fn base_ref_fork_point_without_shared_history_is_none() {
+        // The line shares no commit with the base ref, so no fork point can be located.
+        let mut git = FakeGitHistory::new();
+        git.commit("x1", None).commit("x2", Some("x1"));
+        let ancestry: Vec<String> = ["x1", "x2"]
+            .iter()
+            .map(|commit| (*commit).to_owned())
+            .collect();
+        let fork = block_on(base_ref_fork_point(
+            &git,
+            &ancestry,
+            "root",
+            &RecordingReporter::new(),
+        ))
+        .unwrap();
+        assert_eq!(fork, None);
     }
 }
