@@ -476,6 +476,37 @@ impl<T: 'static> LocalEvent<T> {
     /// In both of these cases, the receiver must clean up the event now.
     #[inline]
     pub(crate) fn final_poll(&self) -> Result<Option<T>, Disconnected> {
+        // If we are still awaiting, the receiver (the caller) owns the stored waker and must
+        // destroy it before disconnecting. We revert to EVENT_BOUND *before* dropping the waker
+        // so that a reentrant sender drop triggered by the waker's destructor observes a live,
+        // non-terminal event and defers cleanup, rather than deallocating the storage out from
+        // under this still-executing call (which holds a strongly-protected `&self`). Only once
+        // the waker is gone do we read the resulting state and transition to EVENT_DISCONNECTED.
+        //
+        // This mirrors the sync `Event::final_poll`, which reverts AWAITING -> BOUND before
+        // destroying the awaiter, and follows docs/callback-safety.md ("No callbacks under
+        // borrows of shared state"; symmetric handoff vs. cleanup ordering).
+        if self.state.get() == EVENT_AWAITING {
+            self.state.set(EVENT_BOUND);
+
+            // SAFETY: The only other potential references to the field are other short-lived
+            // references in this type, which cannot exist at the moment because
+            // the type is single-threaded and does not let any references escape.
+            let awaiter_cell_maybe = unsafe { self.awaiter.get().as_mut() };
+            // SAFETY: UnsafeCell pointer is never null.
+            let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
+
+            // We drop the waker and consider the field uninitialized again.
+            // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker in there.
+            unsafe {
+                awaiter_cell.assume_init_drop();
+            }
+        }
+
+        // Re-read the state: a reentrant sender drop during the waker's destructor above may
+        // have advanced us from EVENT_BOUND to EVENT_DISCONNECTED. In this single-threaded
+        // design the reentrant sender is the only actor that could have changed the state while
+        // we were dropping the waker.
         let previous_state = self.state.get();
 
         // We can immediately set this because this is a single-threaded event, so there cannot
@@ -484,7 +515,8 @@ impl<T: 'static> LocalEvent<T> {
 
         match previous_state {
             EVENT_BOUND => {
-                // The sender had not yet set any value. It will clean up the event later.
+                // The sender had not yet set any value (nor did a reentrant sender drop
+                // disconnect while we dropped the waker). It will clean up the event later.
                 Ok(None)
             }
             EVENT_SET => {
@@ -506,33 +538,14 @@ impl<T: 'static> LocalEvent<T> {
                 // The receiver will clean up.
                 Ok(Some(value))
             }
-            EVENT_AWAITING => {
-                // We had previously started listening for the value but have not received one,
-                // so the sender is the last endpoint remaining. We need to make sure we clean
-                // up our old waker first, though, as the sender knows nothing about the waker
-                // being present.
-
-                // SAFETY: The only other potential references to the field are other short-lived
-                // references in this type, which cannot exist at the moment because
-                // the type is single-threaded and does not let any references escape.
-                let awaiter_cell_maybe = unsafe { self.awaiter.get().as_mut() };
-                // SAFETY: UnsafeCell pointer is never null.
-                let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
-
-                // We drop the waker and consider the field uninitialized again.
-                // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker in there.
-                unsafe {
-                    awaiter_cell.assume_init_drop();
-                }
-
-                // The sender will clean up the event later.
-                Ok(None)
-            }
             EVENT_DISCONNECTED => {
-                // The receiver is the last endpoint remaining, so it will clean up.
+                // The receiver is the last endpoint remaining, so it will clean up. This also
+                // covers the case where a reentrant sender drop disconnected while we dropped
+                // the waker above: the sender observed EVENT_BOUND and deferred cleanup to us.
                 Err(Disconnected)
             }
-            // Defensive: state machine guarantees this is unreachable.
+            // Defensive: state machine guarantees this is unreachable, since we already handled
+            // and cleared EVENT_AWAITING above.
             _ => {
                 unreachable!(
                     "unreachable LocalEvent state on receiver disconnect: {previous_state}"
@@ -1255,5 +1268,73 @@ mod tests {
             // owns the Pin<Box> shell, drop it to release.
             drop(receiver_holder.borrow_mut().take());
         });
+    }
+
+    // Regression test for the cancellation reentrancy hazard in `final_poll`.
+    // A stored waker whose destructor reentrantly drops the sender must not
+    // cause the event storage to be deallocated while `final_poll` is still
+    // executing. `final_poll` must revert the AWAITING state to a non-terminal
+    // state before dropping the waker, so the reentrant sender drop observes a
+    // live event and defers cleanup instead of freeing storage out from under
+    // the active operation. Ref: docs/callback-safety.md; mirrors the sync
+    // `Event::final_poll`. Runs under Miri so the protected-pointer
+    // deallocation is caught if the ordering regresses.
+    #[test]
+    fn boxed_receiver_cancel_with_sender_dropping_waker_preserves_storage() {
+        use std::mem;
+        use std::task::{RawWaker, RawWakerVTable};
+
+        // Owns the sender behind a refcounted waker. When the last waker
+        // reference is dropped, `Drop` drops the sender, reentrantly entering
+        // `sender_dropped_without_set` while `final_poll` is on the stack.
+        struct DropSenderOnWakerDrop {
+            sender: Option<BoxedLocalSender<i32>>,
+        }
+
+        impl Drop for DropSenderOnWakerDrop {
+            fn drop(&mut self) {
+                drop(self.sender.take());
+            }
+        }
+
+        unsafe fn clone_raw(data: *const ()) -> RawWaker {
+            let rc = unsafe { Rc::from_raw(data.cast::<DropSenderOnWakerDrop>()) };
+            let clone = Rc::clone(&rc);
+            // Keep the original reference alive; we only wanted to bump the count.
+            mem::forget(rc);
+            RawWaker::new(Rc::into_raw(clone).cast(), &VTABLE)
+        }
+        unsafe fn wake_raw(data: *const ()) {
+            unsafe { drop_raw(data) }
+        }
+        unsafe fn wake_by_ref_raw(_data: *const ()) {}
+        unsafe fn drop_raw(data: *const ()) {
+            unsafe { drop(Rc::from_raw(data.cast::<DropSenderOnWakerDrop>())) }
+        }
+        static VTABLE: RawWakerVTable =
+            RawWakerVTable::new(clone_raw, wake_raw, wake_by_ref_raw, drop_raw);
+
+        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let mut receiver = Box::pin(receiver);
+
+        let data = Rc::new(DropSenderOnWakerDrop {
+            sender: Some(sender),
+        });
+        let waker =
+            unsafe { Waker::from_raw(RawWaker::new(Rc::into_raw(data).cast(), &VTABLE)) };
+
+        // First poll transitions BOUND -> AWAITING and stores a clone of the
+        // waker inside the event.
+        let mut cx = task::Context::from_waker(&waker);
+        assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
+
+        // Drop our local waker so only the event's stored clone remains; the
+        // sender is still owned behind that clone.
+        drop(waker);
+
+        // Dropping the receiver cancels the wait: `final_poll` drops the stored
+        // waker, whose destructor drops the sender. The event storage must
+        // survive until `final_poll` returns.
+        drop(receiver);
     }
 }
