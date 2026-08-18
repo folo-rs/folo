@@ -542,7 +542,7 @@ impl AzureWorkspace {
                 bench_command: Some(bench_command),
                 clock: None,
                 storage_override,
-                auto_facets: None,
+                auto_discriminants: None,
             },
         )
         .await

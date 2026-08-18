@@ -194,11 +194,11 @@ async fn examine_selects_only_the_named_metric() {
 }
 
 /// Like `analyze`, `examine` repeats per matching discriminant set and honors the
-/// facet filters: with two comparable pools present, a `--target-triple` scopes the
+/// discriminant filters: with two comparable pools present, a `--target-triple` scopes the
 /// pivot to just the matching set.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn examine_facet_selection_mirrors_analyze() {
+async fn examine_discriminant_selection_mirrors_analyze() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.commit_dated("2024-01-01", "c1");
     workspace.seed_callgrind_in(
@@ -216,9 +216,9 @@ async fn examine_facet_selection_mirrors_analyze() {
 
     // Across triples (`--target-triple all`), both comparable sets pivot. An
     // auto-detected triple would scope to the host's set alone — every set obeys the
-    // target-triple facet — so widening to `all` is what surfaces both pools here.
+    // target-triple filter — so widening to `all` is what surfaces both pools here.
     // Both pools share the harness's auto-detected machine key, so the machine-key
-    // facet admits them.
+    // discriminant admits them.
     let message = workspace
         .drive_json(&[
             "examine",

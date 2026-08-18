@@ -59,6 +59,5 @@ verbatim.
 ## Effective partition line
 
 Regardless of `--verbose`, `collect` prints a one-line effective-partition summary to
-stderr naming the storage partition its results land in: the target triple and the machine
-key every engine is partitioned by, marked as auto-detected or as coming from
-`--machine-key`.
+stderr naming the storage partition its results land in: the target triple and the auto-detected
+machine key every engine is partitioned by.

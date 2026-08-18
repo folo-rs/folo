@@ -94,8 +94,8 @@ function Get-BenchHistoryScopeArgument {
     # packages), the run is scoped to exactly those packages (`--package <name>` each); the caller is
     # expected to have already dropped `benchmarks` via Select-BenchmarkablePackage.
     #
-    # No `--machine-key` override: each runner stamps its results with its OWN real hardware
-    # fingerprint, so a heterogeneous GitHub runner pool splits into one clean wall-clock series per
+    # Each runner stamps its results with its OWN real hardware fingerprint, so a heterogeneous
+    # GitHub runner pool splits into one clean wall-clock series per
     # hardware type instead of one jittery series mixing incomparable machines. `--best-of 3` keeps
     # each metric's minimum across three runs to shed one-sided runner jitter - a point taken at a
     # lower best-of would sit systematically higher than its neighbours and manufacture a step change

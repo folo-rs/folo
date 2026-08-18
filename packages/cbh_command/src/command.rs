@@ -104,8 +104,6 @@ pub struct CollectOptions {
     pub all_features: bool,
     /// Disable the default cargo feature set (`--no-default-features`).
     pub no_default_features: bool,
-    /// Override for the machine key used to partition every engine, if set.
-    pub machine_key: Option<String>,
     /// Harvest and build results without storing them.
     pub no_store: bool,
     /// Replace an already-stored result for this run's identity instead of
@@ -138,7 +136,6 @@ impl Default for CollectOptions {
             features: Vec::new(),
             all_features: false,
             no_default_features: false,
-            machine_key: None,
             no_store: false,
             overwrite: false,
             skip_existing: false,
@@ -157,8 +154,9 @@ impl Default for CollectOptions {
 /// scan directory plus metadata overrides; it drops every cargo-run and bench-scope
 /// flag (`--package`/`--bench`/`--features`/`--best-of`/`--no-store`/passthrough).
 ///
-/// The metadata overrides touch only the storage discriminants (key-affecting
-/// metadata); everything else in the run context stays probed from the real host.
+/// The metadata overrides touch only key-affecting metadata that can legitimately
+/// be attributed independently; everything else in the run context stays probed
+/// from the real host.
 #[doc(hidden)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImportOptions {
@@ -175,8 +173,6 @@ pub struct ImportOptions {
     /// leftovers from unrelated runs into one import, so the caller must name the
     /// tree it curated.
     pub target_dir: PathBuf,
-    /// Override for the machine key used to partition every engine, if set.
-    pub machine_key: Option<String>,
     /// Override for the partition target triple, if set. Applied to both the
     /// partition key and the recorded `ToolchainInfo.target_triple` so the stored
     /// object is internally coherent.
@@ -207,7 +203,6 @@ impl Default for ImportOptions {
             repo: None,
             local: None,
             target_dir: PathBuf::new(),
-            machine_key: None,
             target_triple: None,
             commit: None,
             dirty: false,
@@ -295,10 +290,6 @@ pub struct AnalyzeOptions {
     /// In history mode, also report sustained improvements (regressions only by
     /// default, since improvement over time on the base branch is expected).
     pub include_improvements: bool,
-    /// In history mode, also report inactive findings: changes that the current
-    /// state no longer reflects (a regression that later recovered). Hidden by
-    /// default since they need no action.
-    pub include_inactive: bool,
     /// Emit detailed diagnostic notes to standard error describing each step.
     pub verbose: bool,
     /// Emit per-stage wall-clock timings to standard error, independent of
@@ -545,8 +536,6 @@ pub struct BackfillOptions {
     pub all_features: bool,
     /// Disable the default cargo feature set (`--no-default-features`).
     pub no_default_features: bool,
-    /// Override for the machine key used to partition every engine, if set.
-    pub machine_key: Option<String>,
     /// Replace already-stored results for the backfilled commits instead of
     /// skipping them as duplicates.
     pub overwrite: bool,
@@ -576,7 +565,6 @@ impl Default for BackfillOptions {
             features: Vec::new(),
             all_features: false,
             no_default_features: false,
-            machine_key: None,
             overwrite: false,
             ignore_errors: false,
             passthrough: Vec::new(),
@@ -588,7 +576,7 @@ impl Default for BackfillOptions {
 
 /// Options for the `bless` command.
 ///
-/// The data-set-selection options mirror the facet subset of [`AnalyzeOptions`]
+/// The data-set-selection options mirror the discriminant subset of [`AnalyzeOptions`]
 /// (engine, target triple, and machine key) so a `bless` writes its sidecars into
 /// exactly the discriminant sets a matching `analyze` would consume. It always
 /// acts at the current commit (`HEAD`), so it has no `context` / `since` /
@@ -630,7 +618,7 @@ pub struct BlessOptions {
 
 /// Options for the `unbless` command.
 ///
-/// Mirrors [`BlessOptions`]' selection facets but takes no prefixes: an unbless
+/// Mirrors [`BlessOptions`]' discriminant filters but takes no prefixes: an unbless
 /// removes every blessing recorded at the current commit in the selected sets
 /// (sidecars are immutable, so editing a blessing means unblessing then
 /// re-blessing the subset to keep).

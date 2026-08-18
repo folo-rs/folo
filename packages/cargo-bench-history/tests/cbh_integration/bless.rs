@@ -231,7 +231,7 @@ async fn bless_before_capture_applies_once_the_data_lands() {
     }
 
     // Pre-emptively accept the tip before any run exists there. With no data to
-    // anchor to, the target sets are synthesized from the resolved facets (every
+    // anchor to, the target sets are synthesized from the resolved discriminant filters (every
     // engine on this host).
     let RunOutcome::Completed { message } = workspace.drive(&["bless", "--all"]).await.unwrap()
     else {
@@ -253,54 +253,5 @@ async fn bless_before_capture_applies_once_the_data_lands() {
     assert_eq!(
         parsed["regressions"], 0,
         "a pre-emptive blessing must apply once the data lands: {report}"
-    );
-}
-
-/// A spike that rose and then recovered is suppressed by default (its current
-/// level matches the baseline), but `--include-inactive` surfaces it as an
-/// inactive finding so a reviewer can audit history that already self-corrected.
-#[tokio::test]
-#[cfg_attr(miri, ignore)]
-async fn analyze_include_inactive_surfaces_a_recovered_spike() {
-    let workspace = Workspace::clean_repo(&storage_only_config());
-    // A `MIN_REGIME`-point baseline, a `MIN_REGIME`-point spike, then a
-    // `MIN_REGIME`-point return to the baseline level. Each regime must be at least
-    // `MIN_REGIME` points long for the change-point detector to trust both the rise
-    // and the recovery, so the spike registers as an inactive (self-corrected)
-    // finding.
-    for (day, value) in std::iter::repeat_n(10.0, MIN_REGIME)
-        .chain(std::iter::repeat_n(20.0, MIN_REGIME))
-        .chain(std::iter::repeat_n(10.0, MIN_REGIME))
-        .enumerate()
-    {
-        let day = day + 1;
-        let label = format!("c{day}");
-        workspace.commit_dated(&format!("2024-01-{day:02}"), &label);
-        workspace.seed_callgrind(&label, value);
-    }
-
-    // By default, a fully recovered spike is not reported.
-    let report = workspace.drive_json(&["analyze"]).await;
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-    assert_eq!(parsed["mode"], "history", "{report}");
-    assert!(
-        parsed["findings"].as_array().is_some_and(Vec::is_empty),
-        "a recovered spike is suppressed by default: {report}"
-    );
-
-    // Opting in surfaces it as an inactive finding.
-    let report = workspace
-        .drive_json(&["analyze", "--include-inactive"])
-        .await;
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-    let finding = &parsed["findings"][0];
-    assert_eq!(finding["direction"], "regression", "{report}");
-    assert_eq!(
-        finding["active"], false,
-        "a recovered spike is an inactive finding: {report}"
-    );
-    assert!(
-        finding["flipped_at"].is_string(),
-        "an inactive finding names the commit it recovered at: {report}"
     );
 }

@@ -36,9 +36,9 @@ mod announce;
 mod bless;
 mod comparison_base;
 mod dataset;
+mod discriminants;
 mod error;
 mod examine;
-mod facets;
 mod history;
 mod list;
 mod load;
@@ -52,6 +52,8 @@ pub use bless::{bless, unbless};
 pub(crate) use cbh_detect::{Series, SeriesFilter, apply_blessings};
 pub(crate) use cbh_render::{ReportFormat, chart_series, format_value};
 pub(crate) use dataset::{empty_history_hint, select_dataset};
+pub use discriminants::AutoDiscriminants;
+pub(crate) use discriminants::resolve_discriminants;
 pub use error::AnalyzeError;
 pub(crate) use error::{
     BaseBranchUnavailableError, BlessBaseRequiredError, BlessDiscriminantsRequiredError,
@@ -64,17 +66,16 @@ pub(crate) use error::{
     WorkingTreeProbeFailedError,
 };
 pub use examine::execute as examine;
-pub use facets::AutoFacets;
-pub(crate) use facets::resolve_facets;
 pub(crate) use history::{
     DirtyTipPolicy, ResolvedHistory, dirty_base_exception_warning, resolve_history,
 };
 pub use list::execute as list;
-pub(crate) use load::{RunIndex, facet_filtered_candidates};
+pub(crate) use load::{RunIndex, discriminant_filtered_candidates};
 pub use pipeline::execute as analyze;
-pub(crate) use pipeline::{resolve_auto_facets, resolve_now};
+pub(crate) use pipeline::{resolve_auto_discriminants, resolve_now};
 pub use prune::execute as prune;
 pub use report::RenderedReports;
 pub(crate) use report::ReportRequest;
 pub(crate) use selection::Selection;
+pub use window::auto_mode;
 pub(crate) use window::{before_since_cutoff, parse_since};

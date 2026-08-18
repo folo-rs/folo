@@ -92,8 +92,8 @@ trait BackfillGit {
 trait CommitRunner {
     /// The set of commits (by full commit ID) that already have a stored clean
     /// result **in the partition this backfill writes to** — this host's target
-    /// triple and machine key (or the `--machine-key` override), across every
-    /// engine. A commit in that set has already been backfilled here, so the
+    /// triple and auto-detected machine key, across every engine. A commit in that
+    /// set has already been backfilled here, so the
     /// default skip-existing mode skips it without benchmarking. Probed once per
     /// backfill.
     ///
@@ -677,7 +677,7 @@ struct SystemCommitRunner<'a, S> {
     storage: &'a S,
     /// Version of this tool, recorded with each run.
     tool_version: &'a str,
-    /// The backfill options whose scope/triple/machine/overwrite are reused.
+    /// The backfill options whose scope and overwrite policy are reused.
     options: &'a BackfillOptions,
     /// The benchmark command (`cargo bench` in production) run in each worktree.
     bench_command: &'a [String],
@@ -693,11 +693,10 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
     async fn recorded_commits(&self) -> Result<HashSet<String>, AppError> {
         // The partition comes from the same helper (and the same worktree probe)
         // the store path uses, so the commits treated as already recorded are
-        // exactly the ones that would collide were they benchmarked again — the
-        // `--machine-key` override included.
+        // exactly the ones that would collide were they benchmarked again.
         let probe = SystemProbe::in_worktree(self.worktree);
         let env = |name: &str| std::env::var(name).ok();
-        let partition = probe_partition(&probe, &env, self.options.machine_key.as_deref()).await?;
+        let partition = probe_partition(&probe, &env).await?;
 
         // Always-on, because a nightly backfill is designed to end in a job
         // timeout and never reaches the summary: this line is what tells a reader
@@ -707,7 +706,6 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
             partition.target_triple.as_str(),
             "toolchain host of the newest checkout in the range",
             partition.machine_key.as_str(),
-            self.options.machine_key.is_some(),
         ));
         recorded_commits_in(self.storage, self.project_id, &partition, self.reporter).await
     }
@@ -736,7 +734,6 @@ impl<S: Storage> CommitRunner for SystemCommitRunner<'_, S> {
             features: self.options.features.clone(),
             all_features: self.options.all_features,
             no_default_features: self.options.no_default_features,
-            machine_key: self.options.machine_key.clone(),
             no_store: false,
             overwrite: self.options.overwrite,
             skip_existing: false,

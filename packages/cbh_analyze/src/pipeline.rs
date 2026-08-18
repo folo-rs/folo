@@ -1,6 +1,6 @@
 //! The `analyze` orchestration entry points: [`execute`] wires the real adapters
 //! and [`analyze_with`] is the storage- and git-generic orchestrator that the sibling
-//! modules (`selection`, `facets`, `load`, `dataset`, `history`, `window`) compose.
+//! modules (`selection`, `discriminants`, `load`, `dataset`, `history`, `window`) compose.
 //! The parent module re-exports the surface the sibling query commands
 //! (`list`, `prune`, `examine`, `bless`) share.
 
@@ -33,7 +33,7 @@ use tick::Clock;
 
 use super::comparison_base::classify_comparison_base_lags;
 use super::dataset::{empty_history_hint, select_dataset};
-use super::facets::AutoFacets;
+use super::discriminants::AutoDiscriminants;
 use super::history::dirty_base_exception_warning;
 use super::selection::Selection;
 use crate::{AnalyzeError, RenderedReports, ReportRequest, ToolchainProbeFailedError};
@@ -51,16 +51,16 @@ use crate::{AnalyzeError, RenderedReports, ReportRequest, ToolchainProbeFailedEr
 /// Returns the rendered reports for the requested formats plus the regression
 /// count; the shell writes the files and prints the text report.
 // Thin real-adapter wiring: loads config from disk, builds the configured storage,
-// and shells out via `SystemGitHistory`/`detect_auto_facets` before delegating every
-// decision to the mutation-tested `analyze_with`. In-crate tests cannot drive these
-// real adapters deterministically; the binary's integration tests cover this edge.
+// and shells out via `SystemGitHistory`/`detect_auto_discriminants` before delegating
+// every decision to the mutation-tested `analyze_with`. In-crate tests cannot drive
+// these real adapters deterministically; the binary's integration tests cover this edge.
 #[cfg_attr(test, mutants::skip)]
 pub async fn execute(
     options: &AnalyzeOptions,
     workspace_dir: &Path,
     clock_override: Option<Clock>,
     storage_override: Option<StorageFacade>,
-    auto_override: Option<AutoFacets>,
+    auto_override: Option<AutoDiscriminants>,
 ) -> Result<(RenderedReports, usize), AnalyzeError> {
     // Per-object notes follow `--verbose`; stage timings are emitted under either
     // `--verbose` or the programmatic `timing` flag (the stress harness sets the
@@ -87,7 +87,7 @@ pub async fn execute(
     storage.synchronize_cache(&project_id, &reporter).await?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
-    let auto = resolve_auto_facets(auto_override).await?;
+    let auto = resolve_auto_discriminants(auto_override).await?;
 
     let now = resolve_now(clock_override);
     let color = should_colorize(
@@ -137,52 +137,54 @@ fn should_colorize(is_terminal: bool, no_color: bool) -> bool {
     is_terminal && !no_color
 }
 
-/// Probes the current machine's auto-detect facet values for the query commands.
+/// Probes the current machine's auto-detect discriminant values for the query commands.
 ///
 /// The host triple comes from `rustc -vV` (with a platform fallback) and the
 /// machine key from the hardware fingerprint. There is no engine probe — a bare
 /// query analyzes every engine. Tests drive the generic orchestrators directly
-/// with deterministic [`AutoFacets`] instead of calling this.
-#[cfg_attr(test, mutants::skip)] // Probes the host environment; the facet resolution it feeds is tested.
-pub(crate) async fn detect_auto_facets() -> Result<AutoFacets, AnalyzeError> {
+/// with deterministic [`AutoDiscriminants`] instead of calling this.
+// Probes the host environment; the discriminant resolution it feeds is tested.
+#[cfg_attr(test, mutants::skip)]
+pub(crate) async fn detect_auto_discriminants() -> Result<AutoDiscriminants, AnalyzeError> {
     let probe = SystemProbe::default();
-    detect_auto_facets_with(&probe).await
+    detect_auto_discriminants_with(&probe).await
 }
 
-/// Resolves auto-detected facets from an injected environment probe.
-async fn detect_auto_facets_with<P: EnvironmentProbe>(
+/// Resolves auto-detected discriminant values from an injected environment probe.
+async fn detect_auto_discriminants_with<P: EnvironmentProbe>(
     probe: &P,
-) -> Result<AutoFacets, AnalyzeError> {
+) -> Result<AutoDiscriminants, AnalyzeError> {
     let toolchain = probe
         .toolchain()
         .await
         .map_err(ToolchainProbeFailedError::caused_by)?;
     let hardware = probe.hardware().await;
-    Ok(AutoFacets {
+    Ok(AutoDiscriminants {
         triple: toolchain.host.unwrap_or_default(),
-        machine_key: resolve_machine_key(None, &hardware),
+        machine_key: resolve_machine_key(&hardware),
     })
 }
 
-/// Resolves the auto-detect facets for a query command, preferring an injected
+/// Resolves the auto-detect discriminants for a query command, preferring an injected
 /// override over probing the host.
 ///
-/// Production passes `None` and probes via [`detect_auto_facets`]; the binary's
-/// integration tests inject deterministic [`AutoFacets`] through the `Overrides`
+/// Production passes `None` and probes via [`detect_auto_discriminants`]; the binary's
+/// integration tests inject deterministic [`AutoDiscriminants`] through the `Overrides`
 /// test hook so the suite is independent of the host it runs on.
-#[cfg_attr(test, mutants::skip)] // Trivial override-or-probe selection; the probe path is host-dependent.
-pub(crate) async fn resolve_auto_facets(
-    auto_override: Option<AutoFacets>,
-) -> Result<AutoFacets, AnalyzeError> {
+// Trivial override-or-probe selection; the probe path is host-dependent.
+#[cfg_attr(test, mutants::skip)]
+pub(crate) async fn resolve_auto_discriminants(
+    auto_override: Option<AutoDiscriminants>,
+) -> Result<AutoDiscriminants, AnalyzeError> {
     match auto_override {
         Some(auto) => Ok(auto),
-        None => detect_auto_facets().await,
+        None => detect_auto_discriminants().await,
     }
 }
 
-/// Storage- and git-generic `analyze`: facet-filter the stored objects, resolve
-/// the git topology, select the comparable commits, build the series, detect
-/// changes, and render a report for the requested format.
+/// Storage- and git-generic `analyze`: apply discriminant filters to the stored
+/// objects, resolve the git topology, select the comparable commits, build the
+/// series, detect changes, and render a report for the requested format.
 ///
 /// `color` enables ANSI styling and colored charts in the text report; callers
 /// pass the terminal-detection result so piped output and tests stay plain.
@@ -196,7 +198,7 @@ pub(crate) async fn analyze_with<G, S>(
     project_id: &str,
     config: &Config,
     options: &AnalyzeOptions,
-    auto: &AutoFacets,
+    auto: &AutoDiscriminants,
     now: Timestamp,
     reporter: &dyn Reporter,
     color: bool,
@@ -218,7 +220,7 @@ where
     };
     let load_started = Instant::now();
     let dataset = select_dataset(
-        git, storage, project_id, config, &selection, filter, auto, now, reporter, spawner,
+        git, storage, project_id, config, &selection, filter, true, auto, now, reporter, spawner,
     )
     .await?;
     reporter.timing(
@@ -288,9 +290,9 @@ where
         mode: dataset.mode,
         config: AnalysisConfig::default(),
         merge_base_index: dataset.merge_base_index,
+        base_ref_index: dataset.base_ref_index,
         tip_index: dataset.tip_index,
         include_improvements: options.include_improvements,
-        include_inactive: options.include_inactive,
     };
     // Share the series across the detection's blocking tasks without copying; the
     // remaining per-set reporting reads them back through this same handle.
@@ -314,7 +316,7 @@ where
         .count();
     let notable = !findings.is_empty();
 
-    // Disclose when a branch finding's comparison base lags the merge-base — the
+    // Disclose when a branch finding's comparison base lags the base ref — the
     // recent base commits carry data only under a rotated machine key, or none at
     // all. Classified per set from the detector's actual comparison point, drawing on
     // the already loaded series first and only then a lazy sibling fetch.
@@ -323,7 +325,7 @@ where
         storage,
         &findings,
         &series,
-        dataset.merge_base_index,
+        dataset.base_ref_index,
         &dataset.sibling_observations,
         reporter,
     )
@@ -366,7 +368,7 @@ where
             dataset.candidate_count,
             &dataset.target_ref,
             dataset.tally,
-            &dataset.facets,
+            &dataset.discriminants,
         )
     };
 
@@ -550,8 +552,8 @@ mod tests {
     }
 
     #[test]
-    fn auto_facet_toolchain_failure_is_mapped_at_the_call_site() {
-        let error = block_on(detect_auto_facets_with(&FailingProbe)).unwrap_err();
+    fn auto_discriminant_toolchain_failure_is_mapped_at_the_call_site() {
+        let error = block_on(detect_auto_discriminants_with(&FailingProbe)).unwrap_err();
 
         assert!(error.find_source::<ToolchainProbeFailedError>().is_some());
         assert!(error.find_source::<io::Error>().is_some());
@@ -644,13 +646,13 @@ mod tests {
 
     /// Base-side commits a branch-mode fixture holds. Branch mode collapses each
     /// base commit's runs to that commit's level and needs `min_series_points` such
-    /// levels before it will judge the branch tip against them, so a branch
+    /// levels before it will judge the context commit against them, so a branch
     /// fixture's base line is as long as a whole history fixture.
     const BASE_COMMITS: usize = HISTORY_COMMITS;
 
     /// Commits a selection-only fixture holds. Deliberately below
     /// [`HISTORY_COMMITS`]: the tests that use it assert on which runs the selection
-    /// admits — topology, dirty handling, facets, `--since` — never on findings.
+    /// admits — topology, dirty handling, discriminant filters, `--since` — never on findings.
     const SELECTION_COMMITS: usize = 4;
 
     #[test]
@@ -864,10 +866,10 @@ mod tests {
         Timestamp::from_second(0).unwrap()
     }
 
-    /// The auto-detected facets the unit-test data is seeded under
+    /// The auto-detected discriminant values the unit-test data is seeded under
     /// (`x86_64-unknown-linux-gnu`, `m1` machine).
-    fn auto() -> AutoFacets {
-        AutoFacets {
+    fn auto() -> AutoDiscriminants {
+        AutoDiscriminants {
             triple: "x86_64-unknown-linux-gnu".to_owned(),
             machine_key: "m1".into(),
         }
@@ -949,7 +951,7 @@ mod tests {
     }
 
     #[test]
-    fn facet_filter_skips_an_unrecognized_storage_key() {
+    fn discriminant_filter_skips_an_unrecognized_storage_key() {
         let storage = MemoryStorage::new();
         seed_linear_step(&storage);
         // A `.json` object under the project's objects prefix whose key is not a
@@ -1149,6 +1151,40 @@ mod tests {
     }
 
     #[test]
+    fn history_mode_does_not_resolve_a_base_ref_comparison_window() {
+        // History mode compares within the base branch's own first-parent line, so it has
+        // no separate base-ref comparison window to resolve. The base-ref window load is
+        // gated on branch mode *and* the caller opting in; in history mode neither the
+        // base ref's ancestry walk nor its window note may appear.
+        let storage = MemoryStorage::new();
+        seed_linear_step(&storage);
+        let reporter = RecordingReporter::new();
+        block_on(analyze_with(
+            &history_git(),
+            &storage,
+            "folo",
+            &config(),
+            &options(),
+            &auto(),
+            now_anchor(),
+            &reporter,
+            false,
+            &spawner(),
+        ))
+        .unwrap();
+        assert!(
+            !reporter.timed("base ref's first-parent line"),
+            "history mode must not walk the base ref's first-parent line: {:?}",
+            reporter.notes()
+        );
+        assert!(
+            !reporter.contains("for branch comparison windows"),
+            "history mode must not resolve a base-ref comparison window: {:?}",
+            reporter.notes()
+        );
+    }
+
+    #[test]
     fn analyze_records_a_timing_for_each_pipeline_stage() {
         // Every stage drawn in docs/analyze.md emits a timing on the dedicated
         // timing channel, so a `--verbose` run can localize a mystery slowdown.
@@ -1321,7 +1357,7 @@ mod tests {
 
         let git = linear_git();
         // The two sets live under different triples, and every set obeys the
-        // target-triple facet, so an auto-detected triple would report only its own.
+        // target-triple filter, so an auto-detected triple would report only its own.
         // Widen to `all` to exercise the per-set tallies across both partitions.
         let opts = AnalyzeOptions {
             target_triple: vec!["all".to_owned()],
@@ -2165,7 +2201,7 @@ mod tests {
     }
 
     #[test]
-    fn target_triple_facet_selects_the_windows_set() {
+    fn target_triple_discriminant_selects_the_windows_set() {
         // Two sets differing only by triple; an explicit `--target-triple` reports
         // just the matching one, even though the auto-detected default is Linux.
         // Both are seeded at the `linear_git` tip (`c3`) so the tip filter keeps them.
@@ -2193,7 +2229,7 @@ mod tests {
     }
 
     #[test]
-    fn target_triple_facet_selects_one_set() {
+    fn target_triple_discriminant_selects_one_set() {
         // Two sets differing only by triple; `--target-triple` reports just the one.
         // Both are seeded at the `linear_git` tip (`c3`) so the tip filter keeps them.
         let storage = MemoryStorage::new();
@@ -2223,7 +2259,7 @@ mod tests {
     fn two_sets_produce_two_report_sections() {
         // Both sets are seeded at the `linear_git` tip (`c3`) so the tip filter keeps
         // each and every partition is reported. They differ only by triple, and
-        // every set obeys the target-triple facet, so the query widens to
+        // every set obeys the target-triple filter, so the query widens to
         // `--target-triple all` to search both partitions rather than just the host's.
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c3"), &ir_set(3, "c3", 100.0));
@@ -2244,9 +2280,9 @@ mod tests {
     }
 
     #[test]
-    fn engine_facet_narrows_the_listing() {
+    fn engine_discriminant_narrows_the_listing() {
         // Two sets in the same triple/machine-key partition differing only by engine,
-        // so the engine facet alone selects one.
+        // so the engine discriminant alone selects one.
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c0"), &ir_set(0, "c0", 100.0));
         store(

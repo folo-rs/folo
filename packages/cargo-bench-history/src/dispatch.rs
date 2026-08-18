@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use cbh_analyze::AutoFacets;
+use cbh_analyze::AutoDiscriminants;
 use cbh_storage::StorageOverride;
 use ohno::AppError;
 use tick::Clock;
@@ -41,11 +41,11 @@ pub struct Overrides {
     /// against an Azurite backend behind a locally-faked Entra token and a
     /// certificate-trusting transport, which no configuration could produce.
     pub storage_override: Option<StorageOverride>,
-    /// The auto-detected discriminant facets (host target triple + machine key) the
-    /// query commands default to when a facet is omitted. `None` probes the host;
+    /// The auto-detected discriminant values (host target triple + machine key) the
+    /// query commands default to when a filter is omitted. `None` probes the host;
     /// integration tests inject fixed values so the suite is independent of the host
     /// it runs on.
-    pub auto_facets: Option<AutoFacets>,
+    pub auto_discriminants: Option<AutoDiscriminants>,
 }
 
 /// Executes a parsed command.
@@ -86,7 +86,7 @@ pub async fn run_with_overrides(
         bench_command,
         clock,
         storage_override,
-        auto_facets,
+        auto_discriminants,
     } = overrides;
     let workspace_dir = match workspace_dir {
         Some(dir) => dir,
@@ -110,24 +110,54 @@ pub async fn run_with_overrides(
             commands::import(options, workspace_dir, storage_override).await
         }
         Command::Analyze(options) => {
-            commands::analyze(options, workspace_dir, clock, storage_override, auto_facets).await
+            commands::analyze(
+                options,
+                workspace_dir,
+                clock,
+                storage_override,
+                auto_discriminants,
+            )
+            .await
         }
         Command::List(options) => {
-            commands::list(options, workspace_dir, clock, storage_override, auto_facets).await
+            commands::list(
+                options,
+                workspace_dir,
+                clock,
+                storage_override,
+                auto_discriminants,
+            )
+            .await
         }
         Command::Examine(options) => {
-            commands::examine(options, workspace_dir, clock, storage_override, auto_facets).await
+            commands::examine(
+                options,
+                workspace_dir,
+                clock,
+                storage_override,
+                auto_discriminants,
+            )
+            .await
         }
         Command::Prune(options) => {
-            commands::prune(options, workspace_dir, clock, storage_override, auto_facets).await
+            commands::prune(
+                options,
+                workspace_dir,
+                clock,
+                storage_override,
+                auto_discriminants,
+            )
+            .await
         }
         Command::Backfill(options) => {
             commands::backfill(options, workspace_dir, bench_command).await
         }
         Command::Bless(options) => {
-            commands::bless(options, workspace_dir, clock, auto_facets).await
+            commands::bless(options, workspace_dir, clock, auto_discriminants).await
         }
-        Command::Unbless(options) => commands::unbless(options, workspace_dir, auto_facets).await,
+        Command::Unbless(options) => {
+            commands::unbless(options, workspace_dir, auto_discriminants).await
+        }
         Command::MachineKey(options) => commands::machine_key(options).await,
     }
 }

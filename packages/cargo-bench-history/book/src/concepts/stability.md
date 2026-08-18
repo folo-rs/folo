@@ -95,7 +95,7 @@ Consequences worth planning for:
 - **Backfilling across the change mixes the two configurations.** `RUSTFLAGS` reaches
   [`backfill`](../commands/backfill.md) from the invocation, not from the commit being measured,
   so backfilling commits that predate the alignment change measures them *with* alignment while
-  their originally-collected neighbours lack it. Keep backfilled ranges recent enough to stay
+  their originally-collected neighbors lack it. Keep backfilled ranges recent enough to stay
   inside one configuration, or expect an extra step where the two meet.
 
 ## The repetition count is part of the protocol

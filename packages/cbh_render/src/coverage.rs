@@ -18,12 +18,13 @@ use cbh_detect::{SeriesCensus, UnjudgedReason};
 /// one lumped "blind" state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CoverageState {
-    /// The analysis accounted for no series whatsoever: nothing was collected, or
-    /// nothing survived loading. Remedy: look at collection, not at the gates.
+    /// The analysis accounted for no series: the selected partition was empty, every
+    /// matching run was excluded, or nothing survived loading. The empty-outcome hint
+    /// names which of those happened; this variant does not.
     NoSeries,
     /// Series were accounted for, but every one of them was a ghost, so nothing was
-    /// in scope at the analyzed tip commit. Remedy: check that the benchmarks still
-    /// run at the analyzed commit.
+    /// in scope at the analyzed context commit. Remedy: check that the benchmarks still
+    /// run at the analyzed context commit.
     NothingInScope,
     /// In-scope series existed and none of them could be judged. Remedy: the
     /// per-reason breakdown says which evidence floor they fell short of.
@@ -36,6 +37,18 @@ pub enum CoverageState {
 }
 
 impl CoverageState {
+    /// Every coverage state, in order of how much of the suite the verdict reaches.
+    ///
+    /// The appendix lists every state, so the inventory lives next to the type rather
+    /// than being restated beside the table.
+    pub const ALL: [Self; 5] = [
+        Self::NoSeries,
+        Self::NothingInScope,
+        Self::NothingJudged,
+        Self::Partial,
+        Self::Full,
+    ];
+
     /// The stable `snake_case` wire name of the state, as the JSON report carries it
     /// and downstream automation matches on it.
     #[must_use]
@@ -46,6 +59,39 @@ impl CoverageState {
             Self::NothingJudged => "nothing_judged",
             Self::Partial => "partial",
             Self::Full => "full",
+        }
+    }
+
+    /// How far a silent run's verdict reaches, in coverage terms only.
+    ///
+    /// A silent verdict states that no reportable move survived the gates; it never proves
+    /// that nothing moved. This describes *how much of the suite* that statement covers for
+    /// each state, in the same `accounted for` / `in scope` / `judged` vocabulary the rest
+    /// of [`Coverage`] uses. It backs the book's state table; the report states its own
+    /// count-bearing qualification through [`qualifications`](Self::qualifications), which
+    /// uses the same predicate but is not this string.
+    #[must_use]
+    pub fn reach(self) -> &'static str {
+        match self {
+            Self::NoSeries => {
+                "Nothing: no series was accounted for. The empty-outcome hint explains why."
+            }
+            Self::NothingInScope => {
+                "Nothing at the analyzed context commit: every accounted series was measured elsewhere."
+            }
+            Self::NothingJudged => {
+                "Nothing: in-scope series existed but none could be judged; the breakdown \
+                 says which evidence floor they fell short of."
+            }
+            Self::Partial => {
+                "The judged series only: no reportable move among them, and no claim about \
+                 the in-scope series that went unjudged."
+            }
+            Self::Full => {
+                "The whole in-scope suite: every in-scope series was judged, so this is the \
+                 only silent state with no coverage qualification. The verdict stays no \
+                 notable changes detected."
+            }
         }
     }
 }
@@ -160,7 +206,7 @@ impl Coverage {
             // accompanies this case explains the emptiness itself.
             CoverageState::NoSeries => "Nothing was analyzed, so no change could be detected.",
             CoverageState::NothingInScope => {
-                "Nothing was in scope at the analyzed tip commit, so nothing was judged."
+                "Nothing was in scope at the analyzed context commit, so nothing was judged."
             }
             CoverageState::NothingJudged => {
                 "Nothing was judged, so no change could be detected either way."
@@ -200,7 +246,7 @@ impl Coverage {
             // hint that accompanies it. A third statement of the one fact is noise.
             CoverageState::NoSeries => None,
             CoverageState::NothingInScope => Some(format!(
-                "None of the {} series accounted for is measured at the analyzed tip \
+                "None of the {} series accounted for is measured at the analyzed context \
                  commit, so nothing was tested.",
                 self.total
             )),
@@ -210,8 +256,7 @@ impl Coverage {
                 self.in_scope
             )),
             CoverageState::Partial | CoverageState::Full => Some(format!(
-                "Judged {} of {} in-scope series; none moved beyond the measurement \
-                 floor.",
+                "Judged {} of {} in-scope series; no reportable move survived the gates.",
                 self.judged, self.in_scope
             )),
         }
@@ -409,9 +454,8 @@ mod tests {
         assert_eq!(
             sentences,
             vec![
-                "Judged 4 of 7 in-scope series; none moved beyond the measurement floor."
-                    .to_owned(),
-                "Not judged: 2 series not measured at the analyzed tip commit; 3 series \
+                "Judged 4 of 7 in-scope series; no reportable move survived the gates.".to_owned(),
+                "Not judged: 2 series not measured at the analyzed context commit; 3 series \
                  with too few points in the analyzed window."
                     .to_owned(),
             ]
@@ -424,8 +468,7 @@ mod tests {
         assert_eq!(
             coverage.qualifications(),
             vec![
-                "Judged 3 of 3 in-scope series; none moved beyond the measurement floor."
-                    .to_owned()
+                "Judged 3 of 3 in-scope series; no reportable move survived the gates.".to_owned()
             ]
         );
     }
@@ -440,9 +483,8 @@ mod tests {
         assert_eq!(
             coverage.qualifications(),
             vec![
-                "Judged 3 of 3 in-scope series; none moved beyond the measurement floor."
-                    .to_owned(),
-                "Not judged: 2 series not measured at the analyzed tip commit.".to_owned(),
+                "Judged 3 of 3 in-scope series; no reportable move survived the gates.".to_owned(),
+                "Not judged: 2 series not measured at the analyzed context commit.".to_owned(),
             ]
         );
     }
@@ -462,7 +504,7 @@ mod tests {
                 "Judged 0 of 2 in-scope series, so nothing was tested: this silence is \
                  not evidence that nothing moved."
                     .to_owned(),
-                "Not judged: 4 series not measured at the analyzed tip commit; 2 series \
+                "Not judged: 4 series not measured at the analyzed context commit; 2 series \
                  with too few points in the analyzed window."
                     .to_owned(),
             ]
@@ -479,14 +521,10 @@ mod tests {
 
     #[test]
     fn state_wire_names_are_distinct_and_stable() {
-        let states = [
-            CoverageState::NoSeries,
-            CoverageState::NothingInScope,
-            CoverageState::NothingJudged,
-            CoverageState::Partial,
-            CoverageState::Full,
-        ];
-        let names: Vec<&str> = states.iter().map(|state| state.as_str()).collect();
+        let names: Vec<&str> = CoverageState::ALL
+            .iter()
+            .map(|state| state.as_str())
+            .collect();
         assert_eq!(
             names,
             vec![
@@ -496,6 +534,39 @@ mod tests {
                 "partial",
                 "full"
             ]
+        );
+    }
+
+    #[test]
+    fn every_state_states_a_distinct_reach_that_does_not_overclaim() {
+        let reaches: Vec<&str> = CoverageState::ALL
+            .iter()
+            .map(|state| state.reach())
+            .collect();
+        for reach in &reaches {
+            assert!(!reach.is_empty(), "a state must describe its reach");
+        }
+        let mut unique = reaches.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), reaches.len(), "each reach must be distinct");
+
+        // A silent partial run must not read as proof that the judged series did not
+        // move; it states only that none crossed the reporting threshold.
+        assert!(
+            CoverageState::Partial
+                .reach()
+                .contains("no reportable move"),
+            "{}",
+            CoverageState::Partial.reach()
+        );
+        // Full is the one state whose silence carries no coverage qualification.
+        assert!(
+            CoverageState::Full
+                .reach()
+                .contains("no coverage qualification"),
+            "{}",
+            CoverageState::Full.reach()
         );
     }
 }

@@ -27,10 +27,11 @@ cargo bench-history unbless --local=./bench-history <benchmark-prefix>...
   the base branch's first-parent history (for example after a fast-forward), so a fast-forward
   merge workflow can bless a commit already on a feature branch. Blessing a commit with **no
   recorded run also warns** (double-check the commit id) and synthesizes the target discriminant
-  sets from the resolved facets — all four engines when `--engine` is omitted, under the resolved
-  target triple and machine key — so a change can be accepted *before* its data is captured.
+  sets from the resolved discriminant filters — all four engines when `--engine` is omitted,
+  under the resolved target triple and machine key — so a change can be accepted *before* its
+  data is captured.
   A no-data blessing needs a concrete target triple and machine key, so one whose triple or
-  machine-key facet is unconstrained (`all`) is an error. An unresolvable context ref, an
+  machine-key filter is unconstrained (`all`) is an error. An unresolvable context ref, an
   undeterminable base branch, or no prefixes without `--all` remain hard errors.
 - A dirty working tree is allowed (the blessing targets the committed run) but warns.
 

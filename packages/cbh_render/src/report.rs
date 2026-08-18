@@ -28,10 +28,10 @@ const CHART_WIDTH: u32 = 48;
 
 /// Maximum number of values in a branch-mode chart.
 ///
-/// Branch mode judges a feature branch by its **tip commit alone** against a recent base
-/// level, so the tip is the one point that matters. Plotting the whole (often
+/// Branch mode judges the context commit alone against a recent base-ref level, so the
+/// context run is the one point that matters. Plotting the whole (often
 /// months-long) series would resample it down to [`CHART_WIDTH`] columns, shrinking that
-/// tip to a single edge column where it reads as noise. The chart starts with the
+/// context to a single edge column where it reads as noise. The chart starts with the
 /// comparison baseline and fills the remaining slots with the recent observed tail,
 /// keeping both sides of the reported change visible. The cap stays below
 /// [`CHART_WIDTH`] so every value maps to its own column without resampling.
@@ -79,42 +79,42 @@ pub struct SetSummary<'a> {
     pub series: usize,
     /// The set's findings, in the same global ranking as the top level.
     pub findings: Vec<&'a Finding>,
-    /// How far this set's comparison base(s) sit behind the merge-base, with the
+    /// How far this set's comparison base(s) sit behind the base ref, with the
     /// reason for each distinct lag. Branch mode only; empty when every finding's
-    /// comparison base reaches the merge-base (the usual whole-suite case) and in
+    /// comparison base reaches the base ref (the usual whole-suite case) and in
     /// history mode. Partial runs can leave different findings comparing against
     /// different points, so this is a deduplicated, deterministically ordered list
     /// rather than a single value.
     pub comparison_base_lags: Vec<ComparisonBaseLag>,
 }
 
-/// How far a discriminant set's comparison base sits behind the merge-base, and why.
+/// How far a discriminant set's comparison base sits behind the base ref, and why.
 ///
-/// In branch mode each finding is compared against the recent base-side points of its
-/// own discriminant set. On rotating CI machine pools the newest base commits may carry
-/// data only under a different machine key, so the branch runner's machine key has usable
-/// base data only several commits earlier — the comparison silently reaches back in
+/// In branch mode each finding is compared against the recent base-ref points of its
+/// own discriminant set. On rotating CI machine pools the newest base-ref commits may carry
+/// data only under a different machine key, so the context run's machine key has usable
+/// base data only several commits behind the base ref — the comparison silently reaches back in
 /// history. This records that lag for one set so the report can disclose it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct ComparisonBaseLag {
-    /// First-parent distance from the comparison base to the merge-base. Always at
-    /// least one: a comparison base that reaches the merge-base is not a lag and is
+    /// First-parent distance from the comparison base to the base ref. Always at
+    /// least one: a comparison base that reaches the base ref is not a lag and is
     /// never recorded.
     pub commits_behind: NonZero<usize>,
     /// Why the comparison base lags.
     pub reason: ComparisonBaseLagReason,
 }
 
-/// Why a discriminant set's comparison base lags the merge-base.
+/// Why a discriminant set's comparison base lags the base ref.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ComparisonBaseLagReason {
-    /// A newer base-side run for the same benchmark and metric exists, but under a
+    /// A newer base-ref run for the same benchmark and metric exists, but under a
     /// different machine key — machine-pool rotation, not missing measurements. The
     /// comparison base could not use it because counts are not comparable across
     /// machine keys.
     DiscriminantSetMismatch,
-    /// No base-side run for the affected series exists at any more recent commit; the
+    /// No base-ref run for the affected series exists at any more recent commit; the
     /// comparison base is simply the newest data available for this partition.
     NoRecentBaseData,
 }
@@ -125,12 +125,12 @@ pub struct ReportInput<'a> {
     /// The project the history belongs to.
     pub project: &'a str,
     /// The commit the analysis was run against (the resolved `--context`, HEAD by
-    /// default) — the tip whose line of history the report describes, so a reader
-    /// can identify exactly which state the findings pertain to.
+    /// default) — the context commit whose line of history the report describes, so a
+    /// reader can identify exactly which state the findings pertain to.
     pub tip_commit: &'a str,
     /// Whether the working tree carried uncommitted changes when the analysis ran.
-    /// When set, the tip is annotated `+ uncommitted changes` because the analyzed
-    /// checkout differs from the committed tip. False for a clean tree (the CI
+    /// When set, the context is annotated `+ uncommitted changes` because the analyzed
+    /// checkout differs from the committed context. False for a clean tree (the CI
     /// collection case).
     pub tip_dirty: bool,
     /// The analysis mode the report was produced in.
@@ -159,8 +159,8 @@ pub struct ReportInput<'a> {
     /// A diagnostic hint shown when stored runs existed but none were analyzed,
     /// explaining why the outcome is empty. Absent in the normal case.
     pub hint: Option<&'a str>,
-    /// A warning shown when the analysis admitted dirty runs on the base branch's
-    /// tip (the working-tree-dirty exception). Absent in the normal case.
+    /// A warning shown when the analysis admitted dirty runs on the base ref's context
+    /// commit (the working-tree-dirty exception). Absent in the normal case.
     pub warning: Option<&'a str>,
     /// How many benchmarks were dropped as "ghosts" — present only for past commits,
     /// not at the context commit — before detection. Zero when nothing was dropped.
@@ -245,8 +245,7 @@ struct JsonSet<'a> {
     engine: &'a str,
     /// Resolved target triple.
     target_triple: &'a str,
-    /// Machine key: the partition value the runs were stored under (a hardware
-    /// fingerprint, or an explicit `--machine-key` override such as a pool label).
+    /// Machine key: the hardware fingerprint partition value the runs were stored under.
     machine_key: &'a str,
     /// Stored runs loaded for this set.
     runs: usize,
@@ -256,9 +255,9 @@ struct JsonSet<'a> {
     regressions: usize,
     /// Flagged improvements in this set.
     improvements: usize,
-    /// How far this set's comparison base(s) lag the merge-base, with the reason for
+    /// How far this set's comparison base(s) lag the base ref, with the reason for
     /// each distinct lag (branch mode only). Omitted when the comparison base reaches
-    /// the merge-base — the usual case — and in history mode.
+    /// the base ref — the usual case — and in history mode.
     #[serde(skip_serializing_if = "<[ComparisonBaseLag]>::is_empty")]
     comparison_base_lags: &'a [ComparisonBaseLag],
 }
@@ -294,15 +293,14 @@ struct JsonFinding<'a> {
     /// The detector's confidence (`1 - p_value`), approaching `1.0` as the change
     /// becomes statistically unambiguous.
     confidence: f64,
-    /// Commit the change is attributed to, if known.
+    /// Commit the change is attributed to, if known. For a drift this is the newest
+    /// commit the trend reached; `window_start` names where it began.
     #[serde(skip_serializing_if = "Option::is_none")]
     commit: Option<&'a str>,
-    /// Whether the change is still reflected in the latest measured state.
-    active: bool,
-    /// Where, within a branch, the latest regime began (branch mode) or where the
-    /// level recovered (history + inactive). Present only when located.
+    /// The oldest commit of a drift's accumulation window, present only for a drift, so
+    /// a consumer can see the range rather than reading `commit` as a single point.
     #[serde(skip_serializing_if = "Option::is_none")]
-    flipped_at: Option<&'a str>,
+    window_start: Option<&'a str>,
     /// Abbreviated commit of the blessing that re-baselined the series, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     blessed_at: Option<&'a str>,
@@ -325,8 +323,7 @@ impl<'a> JsonFinding<'a> {
             relative_delta: finding.relative_delta,
             confidence: finding.confidence,
             commit: finding.commit.as_deref(),
-            active: finding.active,
-            flipped_at: finding.flipped_at.as_deref(),
+            window_start: finding.window_start_commit.as_deref(),
             blessed_at: finding.blessed_at.as_deref(),
             blessed_commit_time: finding.blessed_commit_time.as_deref(),
         }
@@ -365,7 +362,7 @@ struct JsonReport<'a> {
     /// A diagnostic hint when stored runs existed but none were analyzed.
     #[serde(skip_serializing_if = "Option::is_none")]
     hint: Option<&'a str>,
-    /// A warning when dirty base-branch-tip runs were admitted.
+    /// A warning when dirty base-ref context runs were admitted.
     #[serde(skip_serializing_if = "Option::is_none")]
     warning: Option<&'a str>,
     /// Every finding, globally ranked most-notable first; each names its own set.
@@ -436,8 +433,8 @@ fn set_label(set: &DiscriminantSet) -> String {
     set.to_string()
 }
 
-/// The `analyze` facet flags that select exactly this discriminant set, ready to
-/// paste into a follow-up query. Naming every facet explicitly pins the one set, so a
+/// The `analyze` discriminant-filter flags that select exactly this discriminant set, ready to
+/// paste into a follow-up query. Naming every filter explicitly pins the one set, so a
 /// reader who spots a finding can drill into that partition without having to guess
 /// which engine / triple / machine it came from.
 fn set_filter_flags(set: &DiscriminantSet) -> String {
@@ -447,10 +444,10 @@ fn set_filter_flags(set: &DiscriminantSet) -> String {
     )
 }
 
-/// The commit label shared by the text and Markdown headers: the analyzed tip
+/// The commit label shared by the text and Markdown headers: the analyzed context
 /// commit, annotated `+ uncommitted changes` when the working tree carried
 /// uncommitted changes so a reader knows the analyzed checkout differed from the
-/// committed tip.
+/// committed context.
 fn tip_label(commit: &str, dirty: bool) -> String {
     if dirty {
         format!("{commit} + uncommitted changes")
@@ -541,7 +538,7 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
     }
 
     // Both modes draw a per-finding chart; the scope differs. History walks the whole
-    // series; branch charts the comparison baseline and recent tail so the tip commit
+    // series; branch charts the comparison baseline and recent tail so the context commit
     // it judges stays legible (see `ChartScope`).
     let scope = chart_scope(input.mode);
     for summary in input.sets {
@@ -565,7 +562,7 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
 
 /// Appends one finding as a paragraph: the benchmark id on its own line as a
 /// chapter title, then a direction-colored `percentage metric (confidence)`
-/// headline, a dimmed detail line, an optional blessing/recovery note, and a chart
+/// headline, a dimmed detail line, an optional blessing note, and a chart
 /// of the metric over commits, scoped per [`ChartScope`].
 fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, scope: ChartScope) {
     lines.push(String::new());
@@ -579,13 +576,8 @@ fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, scope: ChartSc
         Direction::Regression => percent.red().bold(),
         Direction::Improvement => percent.green().bold(),
     };
-    let status = if finding.active {
-        String::new()
-    } else {
-        format!(" {}", "(recovered)".dimmed())
-    };
     lines.push(format!(
-        "  {headline} {} ({} confidence){status}",
+        "  {headline} {} ({} confidence)",
         finding.kind.as_str(),
         format_confidence(finding.confidence),
     ));
@@ -662,28 +654,36 @@ fn runs_with_span(runs: usize, span: Option<(&str, &str)>) -> String {
 }
 
 /// The plain-text detail body shared by the text and Markdown reports: the
-/// direction, detector, the `baseline → latest` move, the attributed commit, and
-/// (when located) the flip/recovery commit. Confidence rides on the headline line
-/// instead. Carries no styling and no leading indent; each format applies its own.
+/// direction, detector, the `baseline → latest` move, and the commit it is attributed
+/// to. A drift belongs to its whole window rather than one commit, so it names the
+/// range it accumulated over (`from … to …`) instead of a single commit. Confidence
+/// rides on the headline line instead. Carries no styling and no leading indent; each
+/// format applies its own.
 fn detail_text(finding: &Finding) -> String {
-    let mut detail = format!(
-        "{} via {} · {} → {} · @ {}",
+    format!(
+        "{} via {} · {} → {} · {}",
         direction_label(finding.direction),
         method_label(finding.method),
         format_value(finding.baseline),
         format_value(finding.latest),
-        finding.commit.as_deref().unwrap_or("unknown"),
-    );
-    // `flipped_at` is set only on an inactive (recovered) history-mode spike, naming
-    // the commit where the level returned to baseline; branch mode never sets it.
-    if let Some(recovered_at) = &finding.flipped_at {
-        use std::fmt::Write as _;
-        write!(detail, " · recovers at {recovered_at}").expect("writing to a String is infallible");
-    }
-    detail
+        attribution_text(finding),
+    )
 }
 
-/// The plain-text blessing/recovery note, when the series was re-baselined by a
+/// The commit(s) a finding is attributed to, for the detail body. A change point or
+/// branch comparison names one commit (`@ <commit>`); a drift names the range it
+/// accumulated over (`accumulated <oldest> → <newest>`), because no single commit is
+/// responsible — [`examine`](../commands/examine.md) is where to see the shape within
+/// it.
+fn attribution_text(finding: &Finding) -> String {
+    let commit = finding.commit.as_deref().unwrap_or("unknown");
+    match finding.window_start_commit.as_deref() {
+        Some(start) => format!("accumulated {start} → {commit}"),
+        None => format!("@ {commit}"),
+    }
+}
+
+/// The plain-text blessing note, when the series was re-baselined by a
 /// blessing. Carries no styling and no leading indent.
 fn blessing_text(finding: &Finding) -> Option<String> {
     let blessed_at = finding.blessed_at.as_deref()?;
@@ -703,7 +703,7 @@ enum ChartScope {
     /// History mode: plot the whole series, so the long-range trend shows.
     FullHistory,
     /// Branch mode: plot the comparison baseline followed by the most recent points
-    /// ending at the tip commit. Branch mode judges the branch by that one commit, so
+    /// ending at the context commit. Branch mode judges the branch by that one commit, so
     /// the bounded chart keeps it legible instead of aliasing it into a single edge
     /// column (see [`BRANCH_CHART_MAX_POINTS`]).
     BranchComparison,
@@ -725,12 +725,12 @@ fn chart_scope(mode: AnalysisMode) -> ChartScope {
 /// chart.
 ///
 /// The first column is the detector's actual comparison baseline. The rest are the
-/// recent per-commit tail ending at the tip: one column for each first-parent commit
-/// from `start_topo` up to the tip's `topo_index`, carrying the mean of the
+/// recent per-commit tail ending at the context commit: one column for each first-parent commit
+/// from `start_topo` up to the context point's `topo_index`, carrying the mean of the
 /// observations at that commit or a gap ([`f64::NAN`]) where the commit has none. The
-/// tip commit's column carries the finding's judged latest value and is never a gap, so
+/// context commit's column carries the finding's judged latest value and is never a gap, so
 /// both sides of the reported change stay visible — and the gap between the newest base
-/// point and the tip (the comparison-base lag) is drawn as those empty interior
+/// point and the context commit (the comparison-base lag) is drawn as those empty interior
 /// columns — however long the underlying history is. The window spans at most
 /// [`BRANCH_CHART_MAX_POINTS`] columns.
 fn branch_chart_values(finding: &Finding) -> Vec<f64> {
@@ -738,8 +738,8 @@ fn branch_chart_values(finding: &Finding) -> Vec<f64> {
     let Some(tip_topo) = finding.series.last().map(|point| point.topo_index) else {
         return values;
     };
-    // One column per first-parent commit in the recent window ending at the tip, so a
-    // data-less commit between the newest base point and the tip is a visible gap.
+    // One column per first-parent commit in the recent window ending at the context, so a
+    // data-less commit between the newest base point and the context commit is a visible gap.
     let window = BRANCH_CHART_MAX_POINTS.saturating_sub(1);
     let start_topo = tip_topo.saturating_sub(window.saturating_sub(1));
     // The series is ordered by `topo_index`, so the window is a contiguous suffix. Fold
@@ -861,9 +861,9 @@ fn count_as_f64(count: usize) -> f64 {
 ///
 /// [`ChartScope::FullHistory`] charts the whole series topology (one column per
 /// first-parent commit from the first observation onward, with gaps for data-less
-/// commits and a trailing gap up to the analysis tip); [`ChartScope::BranchComparison`]
-/// charts [`branch_chart_values`], so the comparison baseline and tip commit stay legible
-/// rather than becoming aliased edge columns.
+/// commits and a trailing gap up to the analysis context commit);
+/// [`ChartScope::BranchComparison`] charts [`branch_chart_values`], so the comparison
+/// baseline and context commit stay legible rather than becoming aliased edge columns.
 fn scoped_chart(finding: &Finding, scope: ChartScope) -> Option<String> {
     match scope {
         ChartScope::FullHistory => {
@@ -874,8 +874,8 @@ fn scoped_chart(finding: &Finding, scope: ChartScope) -> Option<String> {
                 .collect();
             chart_series(&points, finding.chart_base_ref)
         }
-        // Chart the comparison baseline and recent tail ending at the tip. This is
-        // business-critical: the tip commit is the sole data point branch mode judges,
+        // Chart the comparison baseline and recent tail ending at the context commit. This is
+        // business-critical: the context commit is the sole data point branch mode judges,
         // so it must remain visible and unaliased regardless of how much history
         // precedes it.
         ChartScope::BranchComparison => chart(&branch_chart_values(finding)),
@@ -1109,13 +1109,8 @@ fn push_finding_markdown(
     // rather than crowding the change headline that follows.
     lines.push(format!("{heading} `{}`", describe_id(&finding.id)));
 
-    let status = if finding.active {
-        String::new()
-    } else {
-        " _(recovered)_".to_owned()
-    };
     lines.push(format!(
-        "**{}** `{}` ({} confidence){status}",
+        "**{}** `{}` ({} confidence)",
         format_percent(finding.relative_delta),
         finding.kind.as_str(),
         format_confidence(finding.confidence),
@@ -1306,8 +1301,7 @@ mod tests {
             relative_delta: 0.30,
             confidence: 1.0,
             commit: Some("deadbee".to_owned()),
-            flipped_at: None,
-            active: true,
+            window_start_commit: None,
             blessed_at: None,
             blessed_commit_time: None,
             series: Vec::new(),
@@ -1501,7 +1495,7 @@ mod tests {
 
     #[test]
     fn markdown_summary_footers_each_finding_with_its_set_filter() {
-        // The summary drops the per-set grouping, so each finding carries the facet
+        // The summary drops the per-set grouping, so each finding carries the discriminant-filter
         // flags that isolate its partition as a trailing footer — enough to query that
         // exact set without leading the block.
         let findings = vec![named_regression("mover_a", 0.50)];
@@ -1623,9 +1617,8 @@ mod tests {
             "{report}"
         );
         assert!(
-            report.contains(
-                "Judged 1 of 1 in-scope series; none moved beyond the measurement floor."
-            ),
+            report
+                .contains("Judged 1 of 1 in-scope series; no reportable move survived the gates."),
             "{report}"
         );
         assert!(
@@ -1662,14 +1655,12 @@ mod tests {
         let text = render(&input, ReportFormat::Text, false);
         assert!(text.contains("in-scope series judged: 4 of 7"), "{text}");
         assert!(
-            text.contains(
-                "Judged 4 of 7 in-scope series; none moved beyond the measurement floor."
-            ),
+            text.contains("Judged 4 of 7 in-scope series; no reportable move survived the gates."),
             "{text}"
         );
         assert!(
             text.contains(
-                "Not judged: 2 series not measured at the analyzed tip commit; \
+                "Not judged: 2 series not measured at the analyzed context commit; \
                  3 series with too few points in the analyzed window."
             ),
             "{text}"
@@ -1715,12 +1706,13 @@ mod tests {
             );
             assert!(
                 rendering.contains(
-                    "Judged 3 of 3 in-scope series; none moved beyond the measurement floor."
+                    "Judged 3 of 3 in-scope series; no reportable move survived the gates."
                 ),
                 "{surface}: {rendering}"
             );
             assert!(
-                rendering.contains("Not judged: 2 series not measured at the analyzed tip commit."),
+                rendering
+                    .contains("Not judged: 2 series not measured at the analyzed context commit."),
                 "{surface}: {rendering}"
             );
         }
@@ -1743,7 +1735,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            !text.contains("none moved beyond the measurement floor"),
+            !text.contains("no reportable move survived the gates"),
             "nothing was measured against the floor: {text}"
         );
         assert!(
@@ -1808,7 +1800,7 @@ mod tests {
             (
                 "every series a ghost",
                 census_of(0, &[(UnjudgedReason::Ghost, 4)]),
-                "Nothing was in scope at the analyzed tip commit, so nothing was judged.",
+                "Nothing was in scope at the analyzed context commit, so nothing was judged.",
                 "No notable changes detected",
             ),
             (
@@ -1838,7 +1830,7 @@ mod tests {
             (
                 "partial: too few base commits",
                 census_of(2, &[(UnjudgedReason::TooFewBaseCommits, 1)]),
-                "with too few base-branch commits to compare against",
+                "with too few base-ref commits to compare against",
                 "No notable changes detected.",
             ),
             (
@@ -1850,7 +1842,7 @@ mod tests {
                         (UnjudgedReason::NotMeasuredOnBranch, 2),
                     ],
                 ),
-                "Not judged: 1 series not measured at the analyzed tip commit; 2 series \
+                "Not judged: 1 series not measured at the analyzed context commit; 2 series \
                  not measured on the branch.",
                 "No notable changes detected.",
             ),
@@ -1911,7 +1903,7 @@ mod tests {
         let text = render(&input, ReportFormat::Text, false);
         assert!(text.contains("in-scope series judged: 1 of 1"), "{text}");
         assert!(
-            text.contains("Not judged: 2 series not measured at the analyzed tip commit."),
+            text.contains("Not judged: 2 series not measured at the analyzed context commit."),
             "{text}"
         );
 
@@ -1940,14 +1932,14 @@ mod tests {
         let text = render(&input, ReportFormat::Text, false);
         assert!(!text.contains("in-scope series judged"), "{text}");
         assert!(
-            text.contains("Nothing was in scope at the analyzed tip commit"),
+            text.contains("Nothing was in scope at the analyzed context commit"),
             "{text}"
         );
 
         let markdown = render(&input, ReportFormat::Markdown, false);
         assert!(!markdown.contains("In-scope series judged"), "{markdown}");
         assert!(
-            markdown.contains("Nothing was in scope at the analyzed tip commit"),
+            markdown.contains("Nothing was in scope at the analyzed context commit"),
             "{markdown}"
         );
 
@@ -2081,7 +2073,7 @@ mod tests {
             report.contains("callgrind/x86_64-unknown-linux-gnu/m1"),
             "the set heading drops the redundant `Set ` prefix: {report}"
         );
-        // The set header names the facet flags that reproduce exactly this partition,
+        // The set header names the discriminant-filter flags that reproduce exactly this partition,
         // so a reader who spots a finding knows how to query it directly.
         assert!(
             report.contains(
@@ -2184,20 +2176,6 @@ mod tests {
     }
 
     #[test]
-    fn text_report_marks_an_inactive_recovered_finding() {
-        let set = discriminant_set();
-        let mut recovered = regression();
-        recovered.active = false;
-        recovered.flipped_at = Some("c4".to_owned());
-        let findings = vec![recovered];
-        let mut summaries = Vec::new();
-        let input = single_set_input("folo", &set, &findings, &mut summaries);
-        let report = render(&input, ReportFormat::Text, false);
-        assert!(report.contains("(recovered)"), "{report}");
-        assert!(report.contains("recovers at c4"), "{report}");
-    }
-
-    #[test]
     fn text_report_annotates_a_blessed_finding() {
         let set = discriminant_set();
         let mut blessed = regression();
@@ -2251,7 +2229,7 @@ mod tests {
         );
         // The per-set tally mirrors the JSON metadata and the text header.
         assert!(report.contains("- Regressions: 1"), "{report}");
-        // The set header names the facet flags that reproduce exactly this partition.
+        // The set header names the discriminant-filter flags that reproduce exactly this partition.
         assert!(
             report.contains(
                 "- Filter: `--engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key m1`"
@@ -2269,33 +2247,12 @@ mod tests {
         );
         // The old inline em-dash headline is gone.
         assert!(!report.contains("—"), "{report}");
-        // An active finding carries no recovered suffix.
-        assert!(!report.contains("_(recovered)_"), "{report}");
         // Confidence rides on the headline now, so the detail line drops it.
         assert!(
             report.contains("regression via change point · 100 → 130"),
             "{report}"
         );
         assert!(!report.contains("100% confidence · 100"), "{report}");
-    }
-
-    #[test]
-    fn markdown_report_marks_an_inactive_recovered_finding() {
-        let set = discriminant_set();
-        let mut recovered = regression();
-        recovered.active = false;
-        recovered.flipped_at = Some("c4".to_owned());
-        let findings = vec![recovered];
-        let mut summaries = Vec::new();
-        let input = single_set_input("folo", &set, &findings, &mut summaries);
-        let report = render(&input, ReportFormat::Markdown, false);
-        // The headline suffix flags a recovered finding; the shared detail line names
-        // the recovery commit.
-        assert!(
-            report.contains("`instruction_count` (100% confidence) _(recovered)_"),
-            "{report}"
-        );
-        assert!(report.contains("recovers at c4"), "{report}");
     }
 
     #[test]
@@ -2369,7 +2326,7 @@ mod tests {
             report_improvements: false,
             findings: &[],
             sets: &[],
-            hint: Some("dirty snapshots on base-branch commits"),
+            hint: Some("dirty snapshots on base-ref commits"),
             warning: None,
             ghosts_excluded: 0,
             census: judged_census(0),
@@ -2377,7 +2334,7 @@ mod tests {
         let report = render(&input, ReportFormat::Json, false);
         let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
         assert_eq!(
-            parsed["hint"], "dirty snapshots on base-branch commits",
+            parsed["hint"], "dirty snapshots on base-ref commits",
             "{report}"
         );
     }
@@ -2488,18 +2445,18 @@ mod tests {
     }
 
     #[test]
-    fn report_header_names_the_analyzed_tip_commit() {
+    fn report_header_names_the_analyzed_context_commit() {
         let set = discriminant_set();
         let findings = vec![regression()];
         let mut summaries = Vec::new();
         let input = single_set_input("folo", &set, &findings, &mut summaries);
 
-        // A clean tip is named without annotation in both human formats.
+        // A clean context commit is named without annotation in both human formats.
         let text = render(&input, ReportFormat::Text, false);
         assert!(text.contains("commit: 1234567890abcdef1234"), "{text}");
         assert!(
             !text.contains("uncommitted changes"),
-            "a clean tip must not be annotated: {text}"
+            "a clean context commit must not be annotated: {text}"
         );
         let markdown = render(&input, ReportFormat::Markdown, false);
         assert!(
@@ -2509,7 +2466,7 @@ mod tests {
     }
 
     #[test]
-    fn dirty_tip_is_annotated_with_uncommitted_changes() {
+    fn dirty_context_commit_is_annotated_with_uncommitted_changes() {
         let input = ReportInput {
             project: "folo",
             tip_commit: "1234567890abcdef1234",
@@ -2604,28 +2561,33 @@ mod tests {
 
     /// Builds a regression finding with a long, sparse topology: a lone ancient spike at
     /// `topo_index` 0, then a wide data-less gap, then a recent 30-commit cluster ending
-    /// at the tip (`topo_index` 199).
+    /// at the context commit (`topo_index` 199).
     ///
     /// The ancient spike ([`CHART_ONLY_MARKER`]) sits far outside the branch chart's
-    /// bounded recent window and dwarfs the tip, so it dominates a whole-series chart's
-    /// y-axis but is absent from a branch chart's — the discriminator the scope tests key
-    /// off. Because it is isolated at `topo_index` 0 it keeps its own leftmost column
-    /// (never averaged away), so the whole-series chart still shows it. The tip is the one
-    /// point branch mode judges; it must always survive into the chart.
+    /// bounded recent window and dwarfs the context value, so it dominates a
+    /// whole-series chart's y-axis but is absent from a branch chart's — the
+    /// discriminator the scope tests key off. Because it is isolated at
+    /// `topo_index` 0 it keeps its own leftmost column (never averaged away), so
+    /// the whole-series chart still shows it. The context run is the one point
+    /// branch mode judges; it must always survive into the chart.
     fn regression_with_long_series() -> Finding {
-        let tip_topo = 199;
+        let context_topo = 199;
         let cluster_start = 170;
         let baseline = 100.0;
-        let tip = 130.0;
+        let context_value = 130.0;
         let mut series = vec![SeriesValue {
             commit: Some("c0".to_owned()),
             value: CHART_ONLY_MARKER,
             dirty: false,
             topo_index: 0,
         }];
-        series.extend((cluster_start..=tip_topo).map(|topo| SeriesValue {
+        series.extend((cluster_start..=context_topo).map(|topo| SeriesValue {
             commit: Some(format!("c{topo}")),
-            value: if topo == tip_topo { tip } else { baseline },
+            value: if topo == context_topo {
+                context_value
+            } else {
+                baseline
+            },
             dirty: false,
             topo_index: topo,
         }));
@@ -2660,15 +2622,15 @@ mod tests {
     }
 
     #[test]
-    fn branch_mode_text_charts_the_bounded_comparison_including_the_tip() {
-        // BUSINESS-CRITICAL INVARIANT. Branch mode judges a feature branch by its tip
-        // commit alone, so the tip is the one data point the report exists to convey. It
-        // must remain visible on the chart no matter how long the history is — never
-        // aliased away or shrunk to an indistinct edge column by resampling a
+    fn branch_mode_text_charts_the_bounded_comparison_including_the_context() {
+        // BUSINESS-CRITICAL INVARIANT. Branch mode judges a feature branch by its context
+        // commit alone, so the context run is the one data point the report exists to
+        // convey. It must remain visible on the chart no matter how long the history is
+        // — never aliased away or shrunk to an indistinct edge column by resampling a
         // months-long series down to the chart width. This test pins that: charting the
-        // baseline and recent tail keeps the tip as the chart's maximum while dropping
-        // ancient history. Do NOT weaken it to "a chart is drawn" — the point is *which*
-        // values the chart shows.
+        // baseline and recent tail keeps the context value as the chart's maximum while
+        // dropping ancient history. Do NOT weaken it to "a chart is drawn" — the point
+        // is *which* values the chart shows.
         let set = discriminant_set();
         let findings = vec![regression_with_long_series()];
         let mut summaries = Vec::new();
@@ -2678,15 +2640,15 @@ mod tests {
 
         // A chart is drawn.
         assert!(text.contains('┤') || text.contains('┼'), "{text}");
-        // The tip is the tail's peak, so it labels the top of the y-axis: the last
+        // The context value is the tail's peak, so it labels the top of the y-axis: the last
         // commit analyzed is unmistakably plotted, not aliased into the baseline.
         assert!(
             text.contains("130 ┤") || text.contains("130 ┼"),
-            "the tip value must head the chart's y-axis: {text}"
+            "the context value must head the chart's y-axis: {text}"
         );
         // The ancient spike lies outside the bounded comparison, so it must not appear
         // on the chart scale — proof the whole series was not charted, and that ancient
-        // outliers cannot squash the tip out of view.
+        // outliers cannot squash the context value out of view.
         assert!(
             !text.contains("1000"),
             "branch mode must exclude ancient history from the chart: {text}"
@@ -2730,9 +2692,9 @@ mod tests {
     #[test]
     fn markdown_summary_charts_the_branch_comparison() {
         // The summary is the third renderer that must chart branch findings; and, like the
-        // full reports, it must keep the tip (last commit) visible while windowing out
+        // full reports, it must keep the context commit visible while windowing out
         // ancient history. See
-        // `branch_mode_text_charts_the_bounded_comparison_including_the_tip`.
+        // `branch_mode_text_charts_the_bounded_comparison_including_the_context`.
         let findings = vec![regression_with_long_series()];
         let mut input = flat_input(&findings);
         input.mode = AnalysisMode::Branch;
@@ -2741,7 +2703,7 @@ mod tests {
         assert!(report.contains("```text"), "{report}");
         assert!(
             report.contains("130 ┤") || report.contains("130 ┼"),
-            "the tip must head the summary chart's y-axis: {report}"
+            "the context value must head the summary chart's y-axis: {report}"
         );
         assert!(
             !report.contains("1000"),
@@ -2750,11 +2712,11 @@ mod tests {
     }
 
     #[test]
-    fn branch_chart_values_keep_the_baseline_and_tip() {
+    fn branch_chart_values_keep_the_baseline_and_context() {
         // BUSINESS-CRITICAL INVARIANT. A long-lived branch can itself contribute more
         // points than the chart cap. Even then, the bounded chart must retain both the
-        // comparison baseline and the last point — the tip commit branch mode judges —
-        // without resampling either one away.
+        // comparison baseline and the last point — the context commit branch mode
+        // judges — without resampling either one away.
         let mut finding = regression_with_long_series();
         for point in finding
             .series
@@ -2785,7 +2747,7 @@ mod tests {
                 .expect("the test series is non-empty")
                 .value
                 .to_bits(),
-            "the tip must be the last charted point"
+            "the context value must be the last charted point"
         );
         assert!(
             values
@@ -2862,9 +2824,9 @@ mod tests {
 
     #[test]
     fn topology_columns_keeps_the_trailing_gap_up_to_the_base_ref() {
-        // The base ref (the analyzed tip) sits three commits past the last observation,
-        // so those three data-less commits render as a trailing gap — the visual form of
-        // the "no newer data" lag.
+        // The base ref (the analyzed context) sits three commits past the last
+        // observation, so those three data-less commits render as a trailing gap — the
+        // visual form of the "no newer data" lag.
         let columns = topology_columns(&[(0, 10.0), (2, 20.0)], Some(5), CHART_WIDTH as usize);
         assert_eq!(columns.len(), 6, "topos 0..=5 span six columns");
         assert_eq!(columns[0].to_bits(), 10.0_f64.to_bits());
@@ -3011,10 +2973,11 @@ mod tests {
 
     #[test]
     fn branch_chart_values_open_with_baseline_close_with_latest_and_gap_the_lag() {
-        // The compact branch series is a single base observation at topo 0 and the tip at
-        // topo 3; topos 1 and 2 are the commits the branch's base is behind by. The chart
-        // must open with the comparison baseline, close with the tip's judged latest, and
-        // render those two lagging commits as exactly two gap columns.
+        // The compact branch series is a single base observation at topo 0 and the
+        // context commit at topo 3; topos 1 and 2 are the commits the branch's base is
+        // behind by. The chart must open with the comparison baseline, close with the
+        // context run's judged latest, and render those two lagging commits as exactly
+        // two gap columns.
         let finding = finding_with_series(100.0, 130.0, &[(0, 100.0), (3, 130.0)]);
         let values = branch_chart_values(&finding);
         assert_eq!(values.len(), 5, "baseline column + topos 0..=3");
@@ -3033,7 +2996,7 @@ mod tests {
         assert_eq!(
             values[4].to_bits(),
             130.0_f64.to_bits(),
-            "closes with the tip's latest"
+            "closes with the context run's latest"
         );
         assert_eq!(gap_count(&values), 2, "exactly commits_behind gap columns");
     }
@@ -3042,8 +3005,8 @@ mod tests {
     fn branch_chart_values_average_a_commits_shared_observations() {
         // A base commit contributes both a clean and a dirty snapshot at the same topo
         // index, so the branch chart's column for that commit is their mean, not their sum
-        // or product. topo 0 holds 100 and 120 (mean 110); the tip at topo 2 is the judged
-        // latest, with topo 1 the single lagging commit.
+        // or product. topo 0 holds 100 and 120 (mean 110); the context commit at topo
+        // 2 is the judged latest, with topo 1 the single lagging commit.
         let finding = finding_with_series(100.0, 130.0, &[(0, 100.0), (0, 120.0), (2, 130.0)]);
         let values = branch_chart_values(&finding);
         assert_eq!(values.len(), 4, "baseline column + topos 0..=2");
@@ -3056,7 +3019,7 @@ mod tests {
         assert_eq!(
             values[3].to_bits(),
             130.0_f64.to_bits(),
-            "closes with the tip's latest"
+            "closes with the context run's latest"
         );
     }
 
@@ -3130,8 +3093,18 @@ mod tests {
     fn drift() -> Finding {
         Finding {
             method: FindingMethod::Drift,
+            commit: Some("deadbee".to_owned()),
+            window_start_commit: Some("f00dcafe".to_owned()),
             ..regression()
         }
+    }
+
+    #[test]
+    fn attribution_text_names_a_commit_or_a_drift_range() {
+        // A change point (no window start) is attributed to its single commit.
+        assert_eq!(attribution_text(&regression()), "@ deadbee");
+        // A drift names the whole range it accumulated over, not one commit.
+        assert_eq!(attribution_text(&drift()), "accumulated f00dcafe → deadbee");
     }
 
     fn darwin_set() -> DiscriminantSet {

@@ -15,7 +15,7 @@
 /// reference case for structured jitter: the two levels recur on both sides of any
 /// split a change-point search proposes, so median-based gates — whose breakdown point
 /// is 50% — are defeated by it and only an effect-size gate rejects it.
-pub(crate) const STATIONARY_BIMODAL_NOISE: [f64; 40] = [
+pub const STATIONARY_BIMODAL_NOISE: [f64; 40] = [
     13.26, 14.33, 13.14, 24.97, 13.2, 24.97, 13.17, 25.39, 25.54, 13.18, 13.83, 25.45, 25.02, 25.0,
     13.2, 13.22, 13.24, 13.21, 13.15, 24.97, 26.78, 13.24, 28.98, 10.5, 10.53, 26.76, 26.74, 13.58,
     13.54, 28.86, 14.15, 13.5, 26.77, 25.38, 25.0, 13.97, 26.81, 25.54, 13.62, 13.57,
@@ -29,9 +29,9 @@ pub(crate) const STATIONARY_BIMODAL_NOISE: [f64; 40] = [
 /// over the recent window proposes a split there, and accepting that split would leave a
 /// comparison sample whose scatter is a fraction of the window's. A tip at the
 /// recording's high level would then read as an enormous, certain regression.
-pub(crate) const STATIONARY_BIMODAL_BASE: usize = 19;
+pub const STATIONARY_BIMODAL_BASE: usize = 19;
 
 /// A level [`STATIONARY_BIMODAL_NOISE`] reaches on roughly half of its commits — an
-/// entirely ordinary value for that series, and so the branch tip that must not be
+/// entirely ordinary value for that series, and so the context run that must not be
 /// reported as a move.
-pub(crate) const STATIONARY_BIMODAL_HIGH: f64 = 24.97;
+pub const STATIONARY_BIMODAL_HIGH: f64 = 24.97;

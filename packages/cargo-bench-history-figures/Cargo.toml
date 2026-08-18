@@ -1,0 +1,39 @@
+[package]
+# Cargo expects dashes in tool-style crate names. Okay.
+name = "cargo-bench-history-figures"
+description = "Generates the figures, tables and report excerpts embedded in the cargo-bench-history book's data pipeline appendix"
+publish = false
+version = "0.0.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# This crate is unpublished book infrastructure: a thin wrapper over `plotters` that renders the
+# appendix's figures from `cbh_detect`'s real findings. Exposing those two crates' types through its
+# workspace-internal API is intentional, not an accidental leak, so they are acknowledged here (see
+# docs/external-types.md). It is the one crate in the workspace with a wide external surface by design.
+[package.metadata.cargo_check_external_types]
+allowed_external_types = ["cbh_detect::*", "plotters::*", "plotters_svg::*"]
+
+[dependencies]
+cbh_analyze = { workspace = true }
+cbh_detect = { path = "../cbh_detect", default-features = false, features = [
+    "private-test-util",
+] }
+cbh_model = { workspace = true }
+cbh_render = { workspace = true }
+cbh_stats = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+plotters = { workspace = true }
+
+[dev-dependencies]
+cbh_probe = { path = "../cbh_probe", default-features = false }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
+
+

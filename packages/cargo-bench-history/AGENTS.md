@@ -47,12 +47,12 @@ New per-series logic must be side-effect-free. Flow and rationale: [`docs/analyz
 ## Selection lockstep (analyze / list / prune / examine)
 
 `analyze`, `list`, `prune`, and `examine` share one **data-set-selection pipeline** in
-`analyze/mod.rs` (`Selection` + `parsed_facets` + `facet_filtered_candidates` +
-`resolve_history`/`select_dataset`), and all four live inside the `analyze` module tree
-(`list.rs`, `prune.rs`, `examine.rs`, each `pub(crate) mod`; `bless`/`unbless` in `bless.rs`
-reuse the same facet selection). **A selection parameter added to one must be added to all
-four** unless genuinely inapplicable. The analysis-only flags
-(`--include-improvements`, `--include-inactive`) and the
+`analyze/mod.rs` (`Selection` + `resolve_discriminants` +
+`discriminant_filtered_candidates` + `resolve_history`/`select_dataset`), and all four live
+inside the `analyze` module tree (`list.rs`, `prune.rs`, `examine.rs`, each
+`pub(crate) mod`; `bless`/`unbless` in `bless.rs` reuse the same discriminant-filter
+selection). **A selection parameter added to one must be added to all four** unless
+genuinely inapplicable. The analysis-only flag `--include-improvements` and the
 analyze-only condensed `--markdown-summary` output are **not** part of the lockstep —
 only `analyze` detects; `list`/`prune`/`examine` reuse the selection but never analyze.
 The always-on **ghost filter** likewise changes only *which reconstructed series are detected
@@ -71,10 +71,7 @@ command that names a `--metric` (its input is an `analyze` finding, which prints
 run removed — reusing `collect`'s finalize-and-store helper. **Keep the two on one code path**:
 a store rule added to `collect` (keying, overwrite/skip-existing, dirty coexistence) must hold
 for `import` for free. Its invariants are easy to break: the harvest is **ungated** (freshness
-`None`), so `--target-dir` is **required** and must never fall back to `<repo>/target`; the
-four overrides (`--target-triple` / `--machine-key` / `--commit` / `--dirty`) touch **only
-key-affecting discriminants** — real-host `MachineInfo` provenance stays untouched — and
-`import` assumes nothing about the data being synthetic (real output must import identically).
+`None`), so `--target-dir` is **required** and must never fall back to `<repo>/target`; the three overrides (`--target-triple` / `--commit` / `--dirty`) attribute imported data without manual machine key selection; `import` assumes nothing about the data being synthetic (real output must import identically).
 `--commit` is git-resolved (unknown = hard error) and never checks the commit out. Semantics:
 DESIGN §7.9.
 
@@ -107,15 +104,14 @@ always-on channel).
   callers hand/receive plain JSON. `MemoryStorage` deliberately stays **plaintext** (keeps the
   Miri `analyze` suite fast) — do not compress it.
 * The backend is chosen at run time by `--local` / configured cloud (never a local path in the
-  committed config); read commands add a `--cache` read-through mirror. `--machine-key` is
-  CLI-only for the same reason (the config is committed). Details: DESIGN §4, §6.
+  committed config); read commands add a `--cache` read-through mirror. Details: DESIGN §4, §6.
 * Four engines are parsed in `bench/`. None is deterministic; they differ by whether each
   point carries a confidence interval (`criterion`, `all_the_time`, and `alloc_tracker` all
   record one on every operation) or is a single value (`callgrind`, plus any legacy mean-only
   file the adapter still tolerates). An interval is only ever an extra veto that can suppress
   a candidate finding, never create one. `collect`/`backfill` invoke `cargo bench` (once, or
   `--best-of N` times keeping the per-metric minimum) and harvest whatever ran; `--engine` is
-  an `analyze` facet, not a collect flag. Details: DESIGN §1, §7.1.
+  an `analyze` discriminant filter, not a collect flag. Details: DESIGN §1, §7.1.
 
 ## Testing
 

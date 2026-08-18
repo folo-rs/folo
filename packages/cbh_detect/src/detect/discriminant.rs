@@ -1,19 +1,17 @@
-//! The query side of discriminant sets: the facets `analyze`/`list`/`prune`
-//! filter on.
+//! The query side of discriminant sets: the filters `analyze`/`list`/`prune` apply.
 //!
 //! A *discriminant set* is the `engine / target_triple / machine` triple (within
 //! one project) that makes two runs comparable — the segment of a storage key
-//! above the commit directory (see the *Discriminant set & query facets* section
+//! above the commit directory (see the *Discriminant sets and discriminant filters* section
 //! of `DESIGN.md`). The [`DiscriminantSet`] data-model type — and the
 //! [`parse_key`](cbh_model::parse_key) that recovers one from a stored object's
 //! key — live in `cbh_model`; this module only adds the read-side concern of
-//! filtering on facets.
+//! filtering on discriminant fields.
 
 use cbh_model::DiscriminantSet;
 use nonempty::NonEmpty;
 
-/// A resolved filter for one discriminant facet (engine, target triple, or
-/// machine key).
+/// A resolved filter for one discriminant field.
 ///
 /// The variant records how the value was supplied. This does not change
 /// filtering — [`DiscriminantSetQuery::matches`] treats [`Auto`](Self::Auto)
@@ -21,21 +19,21 @@ use nonempty::NonEmpty;
 /// drives user-facing diagnostics: marking an auto-detected value in the
 /// verbose selection trail.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub enum FacetFilter {
+pub enum DiscriminantFilter {
     /// Unconstrained: every set passes. Produced by the `all` keyword, and by
     /// `--engine`'s omitted default (there is no host engine to auto-detect to).
     #[default]
     All,
-    /// The auto-detected current-machine value, used when the facet is omitted.
+    /// The auto-detected current-machine value, used when the filter is omitted.
     Auto(String),
     /// Explicit user-provided values; a set passes if it equals one of them
-    /// (case-insensitive). Never empty — an omitted facet resolves to
+    /// (case-insensitive). Never empty — an omitted filter resolves to
     /// [`All`](Self::All) or [`Auto`](Self::Auto) instead, so the values are a
     /// [`NonEmpty`].
     Explicit(NonEmpty<String>),
 }
 
-impl FacetFilter {
+impl DiscriminantFilter {
     /// Whether `actual` passes this filter.
     fn passes(&self, actual: &str) -> bool {
         match self {
@@ -48,7 +46,7 @@ impl FacetFilter {
     }
 }
 
-/// The facet filters from the command line, each resolved to a [`FacetFilter`].
+/// The discriminant filters from the command line, each resolved to a [`DiscriminantFilter`].
 ///
 /// This is the query counterpart of [`DiscriminantSet`]: the set is the data
 /// model that `run` writes and `analyze` reads, while the query selects which
@@ -58,19 +56,19 @@ impl FacetFilter {
 #[derive(Clone, Debug, Default)]
 pub struct DiscriminantSetQuery {
     /// Restrict to one or more engines (for example, `callgrind`).
-    pub engine: FacetFilter,
+    pub engine: DiscriminantFilter,
     /// Restrict to one or more full target triples (for example,
     /// `x86_64-unknown-linux-gnu`).
-    pub target_triple: FacetFilter,
+    pub target_triple: DiscriminantFilter,
     /// Restrict to one or more machine keys.
-    pub machine_key: FacetFilter,
+    pub machine_key: DiscriminantFilter,
 }
 
 impl DiscriminantSetQuery {
-    /// Whether `set` passes every facet filter.
+    /// Whether `set` passes every discriminant filter.
     ///
-    /// Every set is machine-keyed, so the machine-key facet applies uniformly.
-    /// Sets still obey the target-triple facet, because counts are not comparable
+    /// Every set is machine-keyed, so the machine-key filter applies uniformly.
+    /// Sets still obey the target-triple filter, because counts are not comparable
     /// across architectures (a per-architecture instruction count or allocation
     /// profile is a different measurement).
     #[must_use]
@@ -98,15 +96,15 @@ mod tests {
     }
 
     #[test]
-    fn matches_requires_every_set_facet() {
+    fn matches_requires_every_set_discriminant() {
         let windows = set("x86_64-pc-windows-msvc");
         // Explicit target-triple + machine pass.
         assert!(
             DiscriminantSetQuery {
-                target_triple: FacetFilter::Explicit(nonempty![
+                target_triple: DiscriminantFilter::Explicit(nonempty![
                     "x86_64-pc-windows-msvc".to_owned()
                 ]),
-                machine_key: FacetFilter::Explicit(nonempty!["m1".to_owned()]),
+                machine_key: DiscriminantFilter::Explicit(nonempty!["m1".to_owned()]),
                 ..DiscriminantSetQuery::default()
             }
             .matches(&windows)
@@ -114,7 +112,7 @@ mod tests {
         // Case-insensitive on the explicit values.
         assert!(
             DiscriminantSetQuery {
-                target_triple: FacetFilter::Explicit(nonempty![
+                target_triple: DiscriminantFilter::Explicit(nonempty![
                     "X86_64-PC-Windows-MSVC".to_owned()
                 ]),
                 ..DiscriminantSetQuery::default()
@@ -124,7 +122,7 @@ mod tests {
         // A different explicit triple misses.
         assert!(
             !DiscriminantSetQuery {
-                target_triple: FacetFilter::Explicit(nonempty![
+                target_triple: DiscriminantFilter::Explicit(nonempty![
                     "x86_64-unknown-linux-gnu".to_owned()
                 ]),
                 ..DiscriminantSetQuery::default()
@@ -134,7 +132,7 @@ mod tests {
         // A different explicit engine misses.
         assert!(
             !DiscriminantSetQuery {
-                engine: FacetFilter::Explicit(nonempty!["criterion".to_owned()]),
+                engine: DiscriminantFilter::Explicit(nonempty!["criterion".to_owned()]),
                 ..DiscriminantSetQuery::default()
             }
             .matches(&windows)
@@ -142,12 +140,14 @@ mod tests {
     }
 
     #[test]
-    fn set_obeys_the_machine_key_facet() {
+    fn set_obeys_the_machine_key_discriminant() {
         let machine = set("x86_64-unknown-linux-gnu"); // machine = m1
         // A non-matching explicit machine key excludes the set.
         assert!(
             !DiscriminantSetQuery {
-                machine_key: FacetFilter::Explicit(nonempty!["some-other-machine".to_owned()]),
+                machine_key: DiscriminantFilter::Explicit(nonempty![
+                    "some-other-machine".to_owned()
+                ]),
                 ..DiscriminantSetQuery::default()
             }
             .matches(&machine)
@@ -155,7 +155,7 @@ mod tests {
         // A non-matching auto-detected host fingerprint excludes it too.
         assert!(
             !DiscriminantSetQuery {
-                machine_key: FacetFilter::Auto("host-fingerprint".to_owned()),
+                machine_key: DiscriminantFilter::Auto("host-fingerprint".to_owned()),
                 ..DiscriminantSetQuery::default()
             }
             .matches(&machine)
@@ -163,7 +163,7 @@ mod tests {
         // Its own machine key includes it.
         assert!(
             DiscriminantSetQuery {
-                machine_key: FacetFilter::Explicit(nonempty!["m1".to_owned()]),
+                machine_key: DiscriminantFilter::Explicit(nonempty!["m1".to_owned()]),
                 ..DiscriminantSetQuery::default()
             }
             .matches(&machine)
@@ -171,13 +171,13 @@ mod tests {
     }
 
     #[test]
-    fn set_obeys_the_target_triple_facet() {
+    fn set_obeys_the_target_triple_discriminant() {
         let machine = set("x86_64-unknown-linux-gnu");
         // A matching auto-detected triple includes it.
         assert!(
             DiscriminantSetQuery {
-                target_triple: FacetFilter::Auto("x86_64-unknown-linux-gnu".to_owned()),
-                machine_key: FacetFilter::Auto("m1".to_owned()),
+                target_triple: DiscriminantFilter::Auto("x86_64-unknown-linux-gnu".to_owned()),
+                machine_key: DiscriminantFilter::Auto("m1".to_owned()),
                 ..DiscriminantSetQuery::default()
             }
             .matches(&machine)
@@ -186,7 +186,7 @@ mod tests {
         // across architectures.
         assert!(
             !DiscriminantSetQuery {
-                target_triple: FacetFilter::Auto("x86_64-pc-windows-msvc".to_owned()),
+                target_triple: DiscriminantFilter::Auto("x86_64-pc-windows-msvc".to_owned()),
                 ..DiscriminantSetQuery::default()
             }
             .matches(&machine)
@@ -194,7 +194,7 @@ mod tests {
         // An explicit non-matching triple also excludes it.
         assert!(
             !DiscriminantSetQuery {
-                target_triple: FacetFilter::Explicit(nonempty![
+                target_triple: DiscriminantFilter::Explicit(nonempty![
                     "x86_64-pc-windows-msvc".to_owned()
                 ]),
                 ..DiscriminantSetQuery::default()
@@ -213,7 +213,7 @@ mod tests {
         // This machine matches its own auto-detected fingerprint.
         assert!(
             DiscriminantSetQuery {
-                machine_key: FacetFilter::Auto("m1".to_owned()),
+                machine_key: DiscriminantFilter::Auto("m1".to_owned()),
                 ..DiscriminantSetQuery::default()
             }
             .matches(&machine)
@@ -221,7 +221,7 @@ mod tests {
         // Another machine's auto-detected fingerprint excludes it.
         assert!(
             !DiscriminantSetQuery {
-                machine_key: FacetFilter::Auto("m2".to_owned()),
+                machine_key: DiscriminantFilter::Auto("m2".to_owned()),
                 ..DiscriminantSetQuery::default()
             }
             .matches(&machine)
@@ -229,11 +229,11 @@ mod tests {
     }
 
     #[test]
-    fn repeated_facet_values_union() {
+    fn repeated_discriminant_values_union() {
         let linux = set("x86_64-unknown-linux-gnu");
         let windows = set("x86_64-pc-windows-msvc");
         let either = DiscriminantSetQuery {
-            target_triple: FacetFilter::Explicit(nonempty![
+            target_triple: DiscriminantFilter::Explicit(nonempty![
                 "x86_64-unknown-linux-gnu".to_owned(),
                 "x86_64-pc-windows-msvc".to_owned(),
             ]),

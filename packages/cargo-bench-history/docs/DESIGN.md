@@ -43,10 +43,10 @@ every engine is partitioned by machine key (see §3).
 * **`alloc_tracker`** — heap allocations (bytes and counts). Not deterministic: warmup and
   buffer-resize allocations are amortized over a Criterion-chosen iteration count, so the
   per-iteration figures jitter, and they too vary with the host's library code paths. It
-  prefers a warmup-robust slope and records a bootstrap confidence interval over its
-  measured spans when its output carries one.
-* **`all_the_time`** — processor (CPU) time. Hardware-dependent and noisy, carrying a
-  bootstrap confidence interval like Criterion.
+  prefers a warmup-robust slope and records a bootstrap confidence interval only when the
+  operation was measured over several spans.
+* **`all_the_time`** — processor (CPU) time. Hardware-dependent and noisy. It records a
+  bootstrap confidence interval only when the operation was measured over several spans.
 
 The two workspace-local crates (`alloc_tracker`, `all_the_time`) each auto-emit one flat
 JSON file per operation on drop, so they need no opt-in and the operation name alone
@@ -95,8 +95,11 @@ flowchart LR
   never copied onto the run, so a rebase or amended date can never leave a stale
   timestamp behind. There is deliberately no "effective timestamp" concept and no
   timestamp override.
-* **Discriminant set** — the partition under which a series accumulates. Two results are
-  comparable exactly when their discriminant sets match.
+* **Discriminant set** — `{ engine, target_triple, machine_key }`. Two results are
+  comparable exactly when they were measured in the same project and their discriminant
+  sets match. The project (workspace identity, configured and defaulting to the
+  repository directory name) selects which store is being read, so results from two
+  projects never meet; it is not a member of the discriminant set.
 * **Machine key** — a stable hardware fingerprint that partitions every engine's data by
   the host it ran on.
 
@@ -105,15 +108,20 @@ flowchart LR
 The central tenet: **partition only by what makes results fundamentally incomparable;
 record everything else as metadata so the analysis can see its effect over time.**
 
-A discriminant set is `{ project, engine, target_triple, machine_key }`:
+Two results are comparable exactly when they were measured in the same **project** and
+their **discriminant sets** match. A discriminant set is `{ engine, target_triple,
+machine_key }`:
 
-* `project` — workspace identity (configured, defaulting to the repository directory
-  name).
 * `engine` — different units and semantics never mix.
 * `target_triple` — even simulated counts are not comparable across
   architectures (`…-windows-msvc` and `…-windows-gnu` are genuinely different binaries).
 * `machine_key` — a stable fingerprint of the host the benchmark ran on; every engine is
   partitioned by it, because every engine's numbers vary with the hardware in practice.
+
+The project — workspace identity, configured and defaulting to the repository directory
+name — partitions too, but it sits one level above: it selects which store is being read,
+so results from two projects never meet in the first place. That is why it is not part of
+the discriminant set.
 
 Deliberately **metadata, not partition** — so a change shows up as a timeline step, which
 is the whole point of the tool — are the toolchain versions, OS/libc, commit, branch, and
@@ -144,11 +152,13 @@ shape is:
     dirty-<observation_unix>.json # 0..N snapshots taken on top of this base commit
 ```
 
-Data objects live under a per-project `objects/` subtree so project-level metadata (today
-the cache-invalidation marker; perhaps an index later) can sit as a **sibling** without a
-layout migration and a data listing can never pick it up.
+The project segment selects the enclosing store. Data objects live under that project's
+`objects/` subtree so project-level metadata (today the cache-invalidation marker; perhaps
+an index later) can sit as a **sibling** without a layout migration and a data listing can
+never pick it up.
 
-The segment above the commit is the discriminant set; the commit is a directory, and
+The segments above the commit — `engine / target_triple / machine` — are the discriminant
+set; the commit is a directory, and
 **clean vs. dirty is filename semantics** within it. This is dictated by how `analyze`
 selects data: storage is not a pre-assembled timeline but is pieced together at query time
 by resolving git history into an ordered set of commits and reading each commit's
@@ -171,31 +181,32 @@ because the commit-centric grouping co-locates a commit's clean run, dirty snaps
 blessing sidecars under one directory, which is exactly what lets `prune` drop a commit's
 whole set and keeps a blessing adjacent to the run it baselines.
 
-### 3.3 Discriminant sets and query facets
+### 3.3 Discriminant sets and discriminant filters
 
-A series is only ever built within one discriminant set. Three facets select which sets a
-query operates on: engine, target triple, and machine key. (Earlier drafts also exposed
-derived OS / architecture facets; they were removed because duplicating the target-triple
-dimension confused users — filter on the triple directly.)
+A series is only ever built within one discriminant set. Discriminant filters restrict which
+sets a query operates on by matching the engine, target triple, and machine key fields.
+(Earlier drafts also exposed derived OS / architecture filters; they were removed because
+duplicating the target-triple dimension confused users — filter on the triple directly.)
 
-Each facet is repeatable, unions its values, and accepts the literal `all` to widen past a
-dimension. Omitting a facet **auto-detects the current machine**: the triple defaults to
-the host triple and the machine key to the host fingerprint, so a bare query reports *this*
-machine's data; engine has no machine-derived value, so it defaults to all engines. Every
-engine is partitioned by machine key, so a bare query scopes every engine uniformly to
-*this* host's fingerprint — nothing rides along across machines, and no set is exempt from
-the machine-key facet. A facet that matches several sets yields one report per set —
-parallel data sets analyzed individually.
+Each discriminant filter is repeatable, unions its values, and accepts the literal `all` to
+widen past a dimension. Omitting a filter **auto-detects the current machine**: the triple
+defaults to the host triple and the machine key to the host fingerprint, so a bare query
+reports *this* machine's data; engine has no machine-derived value, so it defaults to all
+engines. Every engine is partitioned by machine key, so a bare query scopes every engine
+uniformly to *this* host's fingerprint — nothing rides along across machines, and no set is
+exempt from the machine-key filter. A filter that matches several sets yields one report per
+set — parallel data sets analyzed individually.
 
-Facet identity is **case-insensitive**: engine names and every key segment are normalized to
-lowercase, so `Callgrind`, `callgrind`, and `CALLGRIND` name the same engine, and a triple or
-machine key differing only in case resolves to one set rather than silently splitting into two.
+Discriminant-filter matching is **case-insensitive**: engine names and every key segment are
+normalized to lowercase, so `Callgrind`, `callgrind`, and `CALLGRIND` name the same engine,
+and a triple or machine key differing only in case resolves to one set rather than silently
+splitting into two.
 
 The commands divide into **create** and **query** roles. `collect` and `backfill` record
-new data into exactly one machine's reality, so they auto-detect every facet and accept
-only a machine-key override (for a stable CI-pool key); they reject engine or triple
-selection and the `all` keyword. Every other command queries existing data and uses the
-full repeatable, `all`-aware, auto-detecting facet model.
+new data into exactly one machine's reality, so they auto-detect their discriminant values;
+they reject engine or triple selection and the `all` keyword. Every other command queries
+existing data and uses the full repeatable, `all`-aware, auto-detecting discriminant-filter
+model.
 
 ## 4. Machine key
 
@@ -224,25 +235,22 @@ Because the key is persisted and compared across machines and tool versions, it 
 truncated to a compact path segment, and a golden test pins a fixed profile to its digest
 so an accidental change to the canonical form is caught. The version tag is what makes a
 change to the factor set an explicit, visible fork of stored history rather than a silent
-break. A command-line override wins over the computed fingerprint (it is
-CLI-only — a committed config would carry a machine key wrong for some checkouts). The key
-is computed for every run, because every engine is partitioned by it.
+break. The key is computed for every run, because every engine is partitioned by it.
 
 There is no machine-independent partition: every engine — Callgrind instruction counts and
 `alloc_tracker` allocations included — is keyed by the host fingerprint, because those
 figures vary with the microarchitecture in practice. The string `synthetic` carries no
-special meaning; it is an ordinary machine-key value like any other, reachable only through
-an explicit `--machine-key synthetic` (or `--machine-key all`).
+special meaning; it is an ordinary machine-key value like any other and can be selected by
+query-time discriminant filters.
 
 The individual factors behind the fingerprint (the version tag, processor and memory-region
 counts, and processor models) are surfaced for debugging: `collect` and the query commands
 emit them to standard error under `--verbose`, and the standalone `machine-key` command
 prints the key to standard output (with `--verbose` adding the factors to standard error).
-Only true factors appear there, so what is shown is exactly what the key depends on. The
-latter exists so CI can capture the real per-runner key and thread it into a later `analyze`
-selection. Where a run's host is probed, those factors, the resulting fingerprint, and the
-speed histogram that is deliberately not a factor are also recorded beside it as write-only
-provenance (see §5).
+Only true factors appear there, so what is
+shown is exactly what the key depends on. Where a run's host is probed, those factors, the
+resulting fingerprint, and the speed histogram that is deliberately not a factor are also
+recorded beside it as write-only provenance (see §5).
 
 ## 5. Run context
 
@@ -263,8 +271,8 @@ hash to. It is **write-only** — nothing reads it back — and exists purely so
 change in a machine key can be traced to the specific factor that moved (for example, a
 runner pool swapping CPU models). The speed histogram is recorded even though it is not a
 factor, because it is the sharpest available evidence of what the host actually was. It
-records the auto-detected fingerprint regardless of any `--machine-key` override, and is an
-additive, backward-compatible field, absent on runs written before it existed and on the
+records the auto-detected fingerprint, and is an additive, backward-compatible field, absent
+on runs written before it existed and on the
 non-`collect` construction sites that do not probe hardware, so its introduction only bumps
 the schema version for legibility. Nothing may therefore assume a stored run carries it, nor
 that what it carries is the whole of what a key was computed from at the time.
@@ -448,7 +456,8 @@ writing, for dry runs). A clean point writes the deterministic clean key, refuse
 default if it exists (overwrite to replace, or skip-existing to treat it as a success and
 write nothing — the append-only mode CI uses). A dirty snapshot coexists with prior
 snapshots. An engine that harvests zero cases stores nothing, since an empty set carries no
-comparable data.
+comparable data. Analysis can account only for series that already exist in history; verifying
+that every expected engine produced output is a separate collection-time check.
 
 Scope flags (`--workspace`, `--package`, `--exclude`, `--bench`) and cargo feature flags
 translate directly to `cargo bench` arguments, and everything after `--` is forwarded
@@ -459,9 +468,9 @@ commit.
 
 Regardless of `--verbose`, `collect` prints a one-line **effective-partition** summary to
 stderr naming the storage partition its results land in: the target triple (always the
-toolchain host) and the machine key every engine is partitioned by — marked as
-auto-detected or as coming from `--machine-key`. This makes the otherwise-invisible
-auto-detected partition self-describing on every run. `backfill` reuses the same `collect`
+toolchain host) and the auto-detected machine key every engine is partitioned by. This
+makes the otherwise-invisible auto-detected partition self-describing on every run.
+`backfill` reuses the same `collect`
 path and so emits the line per commit, each reflecting that commit's own probed toolchain.
 
 ### 7.2 `install`
@@ -480,25 +489,34 @@ resolvable git repository (the current checkout by default, or an explicit path)
 repo it errors rather than guessing an order. Analyzing a foreign project's data means
 checking out that project's repo and pointing `analyze` at it.
 
-Two refs frame the analysis: a **target** (`--context`, default `HEAD`) whose history is
-analyzed, and a **base** (`--base`, default the detected default branch). `analyze`
-resolves the first-parent ancestry of the target and splits it at the merge-base with the
-base: commits in the base ancestry contribute **clean points only**, while commits unique
-to the target contribute **clean and dirty** points (a flag drops the dirty ones). This
-single rule covers both use cases — an official view is `--context <default>` (everything
-is base, so clean-only), and the "how does my feature fit in" view is the default (clean
+Two refs frame the analysis: a **target** (`--context`, default `HEAD`) whose first-parent
+history is analyzed, and a **base** (`--base`, default the detected default branch). The
+target line is ordered independently because it is the line that `list`, `examine`, and
+`prune` display or maintain. That line is divided at its **fork point** — the newest target
+commit that is an ancestor of the base ref — into base-side history (at or before the fork
+point, contributing **clean points only**) and the branch's own commits (after it,
+contributing **clean and dirty** points; a flag drops the dirty ones). When the branch was
+rebased onto the base, the fork point is the merge-base itself. When the base was instead
+merged into the target, the merge-base sits off the target's first-parent line, so the fork
+point is the newest commit the base ref's own first-parent history still shares with the
+target line; base-side history is identified and preserved either way. Branch mode's
+comparison baseline is separate again: it always comes from the base ref's own first-parent
+history, not from this split. An official view remains `--context <default>` (everything is
+base, so clean-only), and the "how does my feature fit in" view remains the default (clean
 base baseline plus the branch's own clean and dirty snapshots). Membership is purely
 topological, so a dirty snapshot taken on a shared base commit is excluded from an official
 view until it is committed.
 
-Because that split is topological, the merge-base must be knowable. If the base ref cannot
-be resolved (no `--base`, no configured or detected default branch), or it shares no common
-ancestor with the target — typically a **shallow clone** whose fetched depth stops short of
-the branch point, or a checkout that never fetched the base branch — `analyze` **errors**
+Because the target/base relationship is topological, the merge-base must be knowable. If the
+base ref cannot be resolved (no `--base`, no configured or detected default branch), or it shares
+no common ancestor with the target — typically a **shallow clone** whose fetched depth stops short
+of the branch point, or a checkout that never fetched the base branch — `analyze` **errors**
 and points at the fix (deepen the clone with `git fetch --unshallow` / `fetch-depth: 0`, or
 pass an explicit `--base`) rather than silently treating the incomplete history as a
 base-branch view. The tool has no requirement to support shallow or otherwise anomalous
-history; an unknown topology is reported, not guessed around.
+history; an unknown topology is reported, not guessed around. A merge-base that is resolved
+but sits off the target first-parent line is supported: the fork point still divides the
+target line, and the base ref supplies the comparison window directly.
 
 There is one carve-out to the clean-only base rule, for the common "first impressions"
 case where a user runs `analyze` on the base branch with uncommitted changes (for instance
@@ -511,12 +529,14 @@ branch to persist history. The exception is limited to the tip and a flag overri
 Series are ordered by git topology; runs on one commit sub-order clean-before-dirty, then
 by storage key. The `--since` cutoff drops whole runs older than it by each commit's
 committer date (decided from topology before any out-of-window body is fetched); `--since`
-defaults to a six-month look-back uniformly, so a scheduled trend watch does not silently
-widen as history accumulates. The cutoff is deliberately one-sided: `--context` already
-anchors the newest edge of the timeline (its first-parent tip, the merge-base split, and the
+defaults to a six-month look-back in history mode, so a scheduled trend watch does not
+silently widen as history accumulates; branch mode applies no default, since a branch is
+judged against its base ref's recent commits whenever those landed and a window could only
+starve that comparison. The cutoff is deliberately one-sided: `--context` already
+anchors the newest edge of the timeline (its first-parent context commit and the
 ghost-detection reference), so a symmetric `--until` would only re-trim that same edge by
-timestamp — a topology-first tool moves the tip with `--context` instead — and is therefore
-omitted. Positional prefix subjects scope the analysis to benchmarks
+timestamp — a topology-first tool moves the context with `--context` instead — and is
+therefore omitted. Positional prefix subjects scope the analysis to benchmarks
 whose id starts with a prefix; there is no metric filter, since metrics are an internal
 detail users are not expected to know.
 
@@ -531,7 +551,7 @@ If a set has no runs at the context commit at all (`HEAD` was never collected or
 failed), every benchmark is a ghost and the set analyzes empty with a dedicated
 hint — an empty outcome the tool explains rather than guesses
 around. Because it changes only which reconstructed series are detected on (not which runs
-are selected), the ghost filter is analyze-only and outside the selection lockstep (§8.5).
+are selected), the ghost filter is analyze-only and outside the shared selection model (§8.5).
 
 Output toggles select which renderings one analysis pass emits — text to stdout by default,
 with file output flags that compose so a single pass can also write Markdown and JSON to
@@ -540,7 +560,7 @@ renderings, `analyze` offers one **derived** output — a condensed Markdown *su
 downstream consumer
 whose body has a hard size limit (the workflow posts it as a rolling GitHub issue, capped at
 65,536 characters). The summary keeps only the most significant findings and drops the
-per-facet grouping, so it is intentionally lossy; it is analyze-only because truncating a
+per-discriminant grouping, so it is intentionally lossy; it is analyze-only because truncating a
 ranked list is meaningless for the enumerating commands, and it never displaces the full
 reports, which the workflow attaches alongside it. **Findings never affect the exit code**:
 the process exits non-zero only when the analysis fails to *run*. A finding is advisory, and
@@ -549,17 +569,17 @@ regression watch, a PR comment bot) reads that rather than the exit status.
 
 Regardless of `--verbose`, every query run (`analyze`, `list`, `prune`, `examine`) prints a
 one-line **effective-selection** summary to stderr — the engine, target-triple, and
-machine-key facets (each marked when auto-detected), the resolved base branch, and the
-`--since` cutoff — so the user always sees what was actually searched, not just
-what they typed. The `bless` / `unbless` mutation commands print the same line, naming the
-facets and the context commit they act at (defaulted to `HEAD` unless `--context` is given;
-`bless` also names its base branch), so a manual acceptance states exactly which partition
-and commit it touched. Two empty outcomes also explain themselves in the stdout report without
-verbose diagnostics: when facet-matching runs were stored but none entered the analysis the
-hint breaks down why, and when the effective (possibly auto-detected) partition holds no
-runs at all the hint names that partition and suggests widening it. A zero-run outcome is
-thus never mistaken for "no data", and an auto-detected partition that quietly missed is
-never mistaken for an empty project.
+machine-key discriminant filters (each marked when auto-detected), the resolved base branch,
+and the `--since` cutoff — so the user always sees what was actually searched, not just what
+they typed. The `bless` / `unbless` mutation commands print the same line, naming the
+discriminant filters and the context commit they act at (defaulted to `HEAD` unless
+`--context` is given; `bless` also names its base branch), so a manual acceptance states
+exactly which partition and commit it touched. Two empty outcomes also explain themselves in
+the stdout report without verbose diagnostics: when discriminant-matching runs were stored
+but none entered the analysis the hint breaks down why, and when the effective (possibly
+auto-detected) partition holds no runs at all the hint names that partition and suggests
+widening it. A zero-run outcome is thus never mistaken for "no data", and an auto-detected
+partition that quietly missed is never mistaken for an empty project.
 
 ### 7.4 `backfill`
 
@@ -604,8 +624,8 @@ keeping backfilled ranges recent, not a defect with a fix.
 By default, commits that already have a stored result are listed once up front and
 **skipped before their benches run**, making backfill resumable and cheap to re-issue;
 overwrite regenerates them. That pre-check reads only the **partition this run would write
-to** — the target triple and machine key this run stores under, honouring a `--machine-key`
-override (§3) — because a different triple or machine key is an independent data set and
+to** — the target triple and auto-detected machine key this run stores under — because a
+different triple or machine key is an independent data set and
 must never count as coverage of this one. The partition is resolved **once**, from the
 newest checkout in the range, so the pre-check matches every write as long as all the
 toolchains in the range resolve to the same host triple; that condition is the price of
@@ -624,36 +644,38 @@ backfill can apply the same min-of-N noise reduction (§7.1) uniformly across th
 
 ### 7.5 `list`
 
-`list` **previews the exact data set an `analyze` pass would consume**, without running the
-analysis, letting a user confirm the commit range and discriminant sets first. For the
-`runs` and `blessings` subjects it **mirrors `analyze`'s data-set-selection parameters
-exactly** through the same shared selection pipeline, and the two must stay in lockstep — a
-selection parameter added to one is added to the other. It omits only the analysis-only
-flags. `list runs` reports, per discriminant set, the run / series / per-commit counts of
-the selected runs (each commit's clean/dirty split), oldest-first by topology.
+`list runs` **previews the exact data set an `analyze` pass would consume**, without running
+the analysis, letting a user confirm the commit range and discriminant sets first. The query
+commands share selection option meanings through the same pipeline, but not every subject or
+command uses identical defaults or admission policies. Selection parameters that are common
+to analysis-style data selection stay aligned, and `list` omits only the analysis-only
+flags. `list runs` reports, per discriminant set, the run / series / per-commit counts of the
+selected runs (each commit's clean/dirty split), oldest-first by topology.
 
 `list discriminants` is a different view: a **discovery catalog** of the sets present in
 storage, which requires **no repository** and so ignores the timeline and data-filtering
 groups. Because it is a catalog, it is the one query view that does *not* default omitted
-facets to the current machine — with no facets it lists every stored partition, so a user
-can find triples and machine keys they do not already know. `list blessings` audits
-blessings (below).
+discriminant filters to the current machine — with no discriminant filters it lists every
+stored partition, so a user can find triples and machine keys they do not already know. `list
+blessings` audits blessings (below).
 
 ### 7.6 `prune`
 
 `prune` **deletes a chosen portion of the stored data set** — to reclaim storage, discard a
-bad run, or drop the ephemeral uncommitted-tree snapshots that evaluation runs leave
-behind. It reuses `analyze`'s selection pipeline (keeping the three commands in lockstep)
-and then removes the selected objects rather than reporting on them.
+bad run, or drop the ephemeral uncommitted-tree snapshots that evaluation runs leave behind.
+It uses the shared selection option meanings and pipeline, then applies prune-specific
+defaults and admission rules before removing the selected objects. `prune --dry-run` is
+therefore the exact preview of a deletion plan; `list runs` is an analysis preview, not a
+prune preview.
 
 A deletion **action is required** — remove clean runs, dirty snapshots, or both, and/or
 delete blessing sidecars with `--include-blessings` — so a bare `prune` is an error that
-names them. Pruning never touches base-branch history: it walks the selected commits from
-the context back to the merge-base with the base and deletes only the context branch's own
-commits, preserving the shared base. Deleting the base branch's own data set (context
-resolves onto the base) wipes the mainline every feature analysis compares against, so it is
-refused unless a confirming flag is passed. The one intentional divergence from `analyze` /
-`list` is that the base tip's dirty snapshots are admitted **unconditionally**, so a dirty
+names them. Pruning never touches base-branch history: it walks the selected commits from the
+context back to the merge-base with the base and deletes only the context branch's own
+commits, preserving the shared base. The prune range is unbounded by default unless `--since`
+is supplied. Deleting the base branch's own data set (context resolves onto the base) wipes
+the mainline every feature analysis compares against, so it is refused unless a confirming
+flag is passed. The base tip's dirty snapshots are admitted **unconditionally**, so a dirty
 prune can reclaim ephemeral base-branch snapshots regardless of the current tree state.
 Pruning runs never removes a blessing; `--include-blessings` deletes every blessing sidecar
 in the selected range — including an orphan on a commit with no recorded run — and may be
@@ -678,13 +700,13 @@ the blessing only takes effect once the commit joins the base branch's first-par
 (for example after a fast-forward), so a fast-forward merge workflow can legitimately bless a
 commit already on a feature branch. Blessing a commit with **no recorded run** also warns
 (the commit id is worth double-checking) and synthesizes the target discriminant sets from
-the resolved facets — all four engines when `--engine` is omitted, under the resolved target
-triple and machine key — so an intentional change can be accepted *before* its data is
-captured; whichever engine's data lands there later is then accepted. This synthesis needs a
-concrete target triple and machine key, so a no-data blessing whose triple or machine-key
-facet is unconstrained (`all`) is a hard error. The remaining hard errors are an unresolvable
-context ref, an undeterminable base branch, and no prefixes without `--all`. A dirty working
-tree is allowed (the blessing targets the committed run) but warns.
+the resolved discriminant filters — all four engines when `--engine` is omitted, under the
+resolved target triple and machine key — so an intentional change can be accepted *before*
+its data is captured; whichever engine's data lands there later is then accepted. This
+synthesis needs a concrete target triple and machine key, so a no-data blessing whose triple
+or machine-key filter is unconstrained (`all`) is a hard error. The remaining hard errors
+are an unresolvable context ref, an undeterminable base branch, and no prefixes without
+`--all`. A dirty working tree is allowed (the blessing targets the committed run) but warns.
 
 A blessing is an **append-only sidecar** in each targeted set's commit directory (which need
 not yet hold a run), so narrowing one means unbless-then-re-bless the subset to keep.
@@ -705,11 +727,12 @@ with what that commit changed.
 
 It is a **drill-down sibling of `list runs`**: both are read-only previews over `analyze`'s
 exact data-set selection that never analyze, so `examine` reuses that selection pipeline
-unchanged and stays in the same lockstep — a selection parameter added to `analyze` is added
-to `list`, `prune`, and `examine` alike. Like `analyze` it requires a resolvable repository
-(it needs first-parent topology to enumerate and order the listed commits and each commit's
-title to label them) and repeats the pivot once **per matching discriminant set**, since the
-same series can exist under several triples or machine keys.
+unchanged. The shared selection options keep the same meanings across `analyze`, `list`,
+`prune`, and `examine`, while command-specific defaults and admission policies remain
+documented with each command. Like `analyze` it requires a resolvable repository (it needs
+first-parent topology to enumerate and order the listed commits and each commit's title to
+label them) and repeats the pivot once **per matching discriminant set**, since the same
+series can exist under several triples or machine keys.
 
 Two required options name the series, and they are the one place a command names a
 **metric**: `--benchmark <qualified-id>` selects exactly one benchmark identity and
@@ -724,9 +747,9 @@ gives; when runs enter but none carry the named `(benchmark, metric)` pair, a di
 pointing at the unmatched benchmark id or metric name.
 
 `examine` runs **no detection and no re-baselining** — it has no findings, modes, or
-blessings, which is why the analysis-only flags (improvements, inactive findings) are not
+blessings, which is why the analysis-only improvements flag is not
 part of its surface. It lists **every commit** from the earliest one at which any matching
-set carries the series through to the analyzed tip: a commit carrying data contributes a row
+set carries the series through to the analyzed context commit: a commit carrying data contributes a row
 per **observation** (clean run before dirty snapshots, each flagged, so a value's provenance
 is unambiguous), and a commit carrying none is marked `n/a`. That opening is a union across
 the sets, so every set lists the same commits and two of them can be read side by side.
@@ -769,11 +792,10 @@ it probes the real repository (keying by the current HEAD commit), toolchain, an
 but records a clean point regardless of incidental working-tree changes. `--dirty` explicitly
 opts into dirty-snapshot keying.
 
-Four overrides let a caller attribute an imported run to a context other than the current
-host, and they touch **only key-affecting discriminants** — body provenance stays real.
-`--target-triple` sets both the storage-partition triple and the recorded toolchain target
-triple. `--machine-key` sets the machine partition of every engine (every engine is
-machine-keyed); the recorded `MachineInfo` stays the real host's. `--commit` is **resolved
+Three overrides let a caller attribute an imported run to a context other than the current
+host. `--target-triple` sets both the storage-partition triple and the recorded toolchain
+target triple. The machine partition is always the auto-detected hardware fingerprint.
+`--commit` is **resolved
 through git** (an unknown commit is a hard error) and keys the run to any existing commit —
 typically an ancestor — **without checking it out**, clearing the branch to `None`; this
 lets a test attribute a whole synthetic series across history from a single HEAD position.
@@ -815,10 +837,12 @@ stored `Run` written before this policy that still lists them is read leniently,
 now-unknown metric kinds rather than failing.
 
 Engines differ only in *how much* dispersion they expose, and the gating adapts per point
-rather than per engine. Most points carry an explicit bootstrap confidence interval:
-Criterion, `all_the_time`, and `alloc_tracker` all record one on every operation they emit.
-Only single-figure engines (Callgrind, and any legacy mean-only file the adapter still
-tolerates) report a point without an interval. An interval, when present, is read as an
+rather than per engine. Criterion records a bootstrap confidence interval on every
+measurement. The two operation engines (`all_the_time`, `alloc_tracker`) record one only
+when the operation was measured over several spans; a single-span operation records its
+value alone. Callgrind, and any legacy mean-only file the adapter still tolerates, report
+a point without an interval. A point without bounds follows the interval-free gate path;
+the other across-commit gates still apply. An interval, when present, is read as an
 additional veto that can only *suppress* a candidate the other gates would report (never
 create one); the gates' *primary* noise check needs no interval at all: it is the series' own
 residual scatter about its fitted model, which covers every engine uniformly.
@@ -849,14 +873,15 @@ level shift too, so it reports as a change-point; the difference is which test e
 
 ### 8.2 Noise-aware gating
 
-The gates exist to suppress **noise** — movement the measurement itself manufactures — and
-nothing else. They are deliberately *not* a filter for changes a reader might find
-uninteresting. A level shift caused by a runner swap, a toolchain bump, or a hardware refresh
-is a genuine move of the measured level and **is reported**; deciding that its cause makes it
-acceptable is a human judgement, recorded with a blessing (§8.6). Every floor is therefore
-tuned to the **measurement floor** — the magnitude below which a metric stops carrying
-information about the code — rather than to what someone might call important, because a gate
-wide enough to hide an infrastructure step would hide the regressions that share its shape.
+Detection applies two kinds of gates. The practical relative and absolute floors are an explicit
+actionability check: a move below them stays silent even when the statistics establish that the
+measured level moved, because it is not worth a human's attention. The remaining statistical gates
+— significance, residual scatter, population separation, and interval vetoes — suppress **noise**:
+movement manufactured by measurement or insufficient evidence. They are deliberately *not* a
+cause filter. A level shift caused by a runner swap, a toolchain bump, or a hardware refresh is a
+genuine move of the measured level and **is reported** when it clears the same evidence and
+actionability checks; deciding that its cause makes it acceptable is a human judgement, recorded
+with a blessing (§8.6).
 
 The same gates run for every engine; only their inputs differ. A change-point needs a minimum
 number of points on **each** side of the split, so a one-off blip on the newest point cannot
@@ -887,13 +912,12 @@ the residual and separation gates stand alone. The separation gate is required w
 Pettitt is trusted to identify a regime boundary: the history change-point detector uses it
 for reported findings, and branch mode uses the same effect-size gate — at a stricter floor,
 for the reasons below — when deciding whether a base-side split is strong enough to define the
-current comparison regime. The resolved-spike detector's recover-to-baseline shape does not
-arise from a stationary oscillation in the first place.
+current comparison regime.
 
 The residual pool draws only from samples long enough to describe scatter. A sample of a single
 point is its own median, so it contributes a residual of exactly zero that says nothing about the
 dispersion the point was drawn from and only pulls the pooled median down. Leaving it out keeps
-the gate at full strength where it is otherwise weakest: branch mode compares one tip commit
+the gate at full strength where it is otherwise weakest: branch mode compares one context commit
 against a trailing regime that may be as short as the minimum regime size.
 
 Drift mirrors this: Mann–Kendall establishes the trend, Theil–Sen sizes it, and the total
@@ -901,15 +925,17 @@ movement must clear the practical floor and exceed the residual scatter about th
 line; the confidence-interval-width gate is applied additionally when intervals are present,
 again only able to suppress a candidate and never to create one.
 
-**Judging a branch tip.** Branch mode asks a different question — not "did this series change
-somewhere" but "is one new commit at this level surprising, given how much the base level
-moves from commit to commit?" — so it needs its own statistic. Two properties shape it:
+**Judging a context commit.** Branch mode asks a different question — not "did this series
+change somewhere" but "is one new commit at this level surprising, given how much the base
+ref's level moves from commit to commit?" — so it needs its own statistic. Two properties
+shape it:
 
 * **A commit is one observation.** Several stored runs at one commit are re-measurements of a
   single build on a single runner, not independent evidence about the base level, so each
   commit's runs collapse to that commit's median before anything is compared. What remains is
   the *between-commit* scatter, which is the only dispersion a new commit can be judged
-  against. The comparison window is counted in **commits** for the same reason: a
+  against. The base window is taken from the base ref's own first-parent history, anchored
+  at the base ref, and is counted in **commits** for the same reason: a
   run-counted window would shrink to a handful of commits on any repository that records
   several runs each, and would mean a different thing on every repository.
 
@@ -921,7 +947,7 @@ moves from commit to commit?" — so it needs its own statistic. Two properties 
   replicates it was given. On a store that records one run per commit, which is the shape
   continuous integration produces, the two modes see the same data and the asymmetry does not
   arise.
-* **One new observation, not a second sample.** The tip's level is judged against a
+* **One new observation, not a second sample.** The context commit's level is judged against a
   **Student-t prediction interval** for a single future observation drawn from the current base
   regime, so the interval carries the scatter of that regime's levels *plus* the uncertainty in
   their mean and widens correctly when the regime is short. The centre it measures from is that
@@ -941,15 +967,16 @@ moves from commit to commit?" — so it needs its own statistic. Two properties 
   interval at all — a timing regime that repeats one level exactly, so it carries neither observed
   scatter nor a quantum to stand in for one. Narrowing exists to move the comparison onto the
   level the branch merges into, not to withdraw it, so where the narrowed sample would be
-  unjudgeable the whole window stands and the tip is still compared.
+  unjudgeable the whole window stands and the context commit is still compared.
 
   That separation floor is held **above** the one a reported change point must clear, because the
   two decisions carry asymmetric costs. Reporting a move makes a claim a human then checks;
   accepting a boundary *discards evidence*, shrinking the comparison sample and rebuilding the
   scatter estimate from the trailing regime alone. A boundary drawn through a stationary
   oscillation can therefore collapse that estimate to a fraction of the window's true dispersion
-  and make the next ordinary tip read as a large, near-certain move — a far more damaging error
-  than a single over-eager report. A boundary that throws data away must be unambiguous. The
+  and make the next ordinary context run read as a large, near-certain move — a far more
+  damaging error than a single over-eager report. A boundary that throws data away must be
+  unambiguous. The
   statistic is coarse at these sample sizes (with the minimum regime on both sides its
   probability of superiority moves in steps of one twenty-fifth), so the floor is read as
   "essentially no pair of levels across the boundary may contradict it" rather than as a precise
@@ -968,8 +995,8 @@ moves from commit to commit?" — so it needs its own statistic. Two properties 
   Within whichever regime is selected, both the centre and the scale are deliberately
   non-robust. A settled base-side step moves them together onto one regime. Making only the scale
   robust while the centre stayed a mixed-window mean would be strictly worse: the mean would sit
-  between two levels and a tip agreeing exactly with the current level would read as displaced
-  from it.
+  between two levels and a context run agreeing exactly with the current level would read as
+  displaced from it.
 
   The scatter estimate is bounded below by the metric's **quantum** — the smallest difference a
   stored value can express. A counted metric moves in whole units, so a base window can repeat
@@ -989,8 +1016,8 @@ Branch mode holds its **relative** floor above history's — a pull-request comm
 everyone who touches the branch, so a false alarm there costs more than a missed marginal
 move. That same relative floor applies to base-window regime splits: a base-side step too small
 to justify a branch finding is too small to justify discarding history. Where the engine reports
-per-point dispersion, two further vetoes apply: the base and tip intervals must not overlap, and
-the move must clear a multiple of the measurement noise band. Like every interval-derived check,
+per-point dispersion, two further vetoes apply: the base and context intervals must not overlap,
+and the move must clear a multiple of the measurement noise band. Like every interval-derived check,
 both can only *suppress* a candidate the other gates would report.
 
 Whichever test produces a finding also fixes its reported **confidence**, in both modes: the
@@ -1063,17 +1090,17 @@ it, selects branch mode — only while the tree is currently dirty. Auto-detecti
 known merge-base: an undeterminable one is a hard error (see the base-resolution rule above),
 never a silent fall-through to history.
 
-* **history** — the base-branch view: auto-selected when the analyzed tip *is* the
+* **history** — the base-branch view: auto-selected when the analyzed context commit *is* the
   merge-base with the base and no dirty run is recorded on top of it. It applies the
   long-range change-point and drift techniques, and reports regressions
   only by default (steady improvement on the base branch is expected; a flag opts into
   improvements).
-* **branch** — auto-selected otherwise (commits past the merge-base, or a dirty run
-  admitted on the base tip by the exception above). It judges the branch by its **tip
-  commit** against the recent base level — a branch's intermediate commits say nothing
-  about what merging it into the base will do, since only the tip lands there, so the
-  branch's own history is discarded and only the newest commit's runs are compared —
-  reporting both directions.
+* **branch** — auto-selected otherwise (commits past the merge-base, a context line whose
+  merge-base is off first-parent because the base was merged into the branch, or a dirty run
+  admitted on the base tip by the exception above). It judges the analyzed context commit
+  against the recent base-ref level — a branch's intermediate commits say nothing about the
+  state being evaluated, so the branch's own history is discarded and only the context
+  commit's newest runs are compared — reporting both directions.
 
 The two driving scenarios are a scheduled base-branch regression watch (history) and a
 per-PR feature-branch evaluation (branch). Long-range trend analysis is meaningless on one
@@ -1085,44 +1112,34 @@ testable (§8.3).
 |---|---|---|
 | Change-point (Pettitt + engine gating) | ✅ | — |
 | Monotonic drift (Mann–Kendall + Theil–Sen) | ✅ | — |
-| Tip commit vs. base (Student-t prediction interval) | — | ✅ |
+| Context commit vs. base (Student-t prediction interval) | — | ✅ |
 | Benjamini–Hochberg false-discovery filter | ✅ | ✅ |
 | Improvements reported | opt-in | ✅ |
-| Resolved (inactive) findings reported | opt-in | — |
 
-Modes apply to `analyze` only; `list`, `prune`, and `examine` reuse the same data-set
-*selection* but never analyze, so the mode selection and improvement/inactive flags are
-analyze-only and not part of the selection lockstep. The **ghost filter** (§7.3) is likewise
-analyze-only and outside the lockstep: it applies in both modes, dropping — before detection
-— any benchmark absent at the context commit (the analyzed tip). In branch mode a benchmark
-removed on the branch is a ghost and a benchmark newly
-added on the branch is present and kept; dirty snapshots at the branch tip count as present
+Modes apply to `analyze` only; `list`, `prune`, and `examine` reuse the shared selection
+options and pipeline but never analyze, so the mode selection and improvements flag are
+analyze-only and not part of the shared option model. The **ghost filter** (§7.3) is likewise
+analyze-only and outside that shared selection model: it applies in both modes, dropping —
+before detection — any benchmark absent at the context commit. In branch
+mode a benchmark removed on the branch is a ghost and a benchmark newly
+added on the branch is present and kept; dirty snapshots at the context commit count as present
 via the base-tip dirty exception.
 
-### 8.6 Re-baselining: blessings and resolved spikes
+### 8.6 Re-baselining: blessings
 
-History mode distinguishes a change that is **still in effect** from one that has **already
-been addressed**, so a long history does not keep re-flagging events a reviewer has handled.
-Every history-mode finding therefore carries an active flag distinguishing the two.
+A long history should not keep re-flagging an event a reviewer has already handled. A blessing
+(see `bless`) re-baselines a series from the blessed commit forward: the detectors run on the
+**active segment only**, so the pre-blessing step is no longer re-flagged, while the earlier
+points still feed the chart and any long-range technique that needs context. Blessings are
+honoured **only in history mode** — branch mode judges the context commit against the base, which is
+treated as fully blessed by construction. A re-baselined finding records the blessing's commit
+and time for provenance.
 
 Blessing is also how a *real but uninteresting* shift is disposed of. The detector reports
 that the measured level moved; whether a runner swap, a toolchain bump, or a deliberate
 tradeoff caused it is a judgement the gates cannot make and do not try to (§8.2), so it is
 recorded here instead — once, against the commit it happened at, rather than by widening a
 threshold that would also hide real regressions.
-
-* **Resolved spikes** — when a level rose and later returned to its prior baseline, the
-  current state matches the baseline and there is nothing to act on. Such a finding is
-  **inactive**: suppressed by default and surfaced only on request, with its recovery
-  commit named. The recovered points always remain in the data set and on the chart; the
-  flag only governs whether the finding is reported.
-* **Blessings** — a blessing (see `bless`) re-baselines a series from the blessed commit
-  forward: the detectors run on the **active segment only**, so the pre-blessing step is no
-  longer re-flagged, while the earlier points still feed the chart and any long-range
-  technique that needs context. Blessings are honoured **only in history mode** — branch
-  mode judges the tip commit against the base, which is treated as fully blessed by
-  construction. A re-baselined finding records the blessing's commit and time for
-  provenance.
 
 Charts are **topology-accurate**: a commit's column position reflects its place in
 first-parent history, not its ordinal among the observations. A finding stores only its
@@ -1131,20 +1148,20 @@ materializes one column per commit from the first observation onward and draws a
 data-less commit as a **gap** (a broken line), so five missing commits read as five empty
 columns rather than collapsing into one. Leading gaps are trimmed — the line always opens
 on the first observation — while interior gaps are kept. A **trailing gap** from the last
-observation up to the analyzed tip is kept too: it is the visual form of the "no newer
+observation up to the analyzed context commit is kept too: it is the visual form of the "no newer
 data" disclosure, showing at a glance that the benchmark has not been measured on the most
 recent commits.
 
 The history-mode chart plots the whole series this way, so the long-range trend the finding
 is about stays visible alongside the earlier context kept for continuity. Branch mode charts
-differently: it judges only the **tip commit**, so it plots the detector's comparison
-baseline followed by the recent per-commit tail ending at the tip rather than the whole
-history, dropping the interior branch commits and representing the tip by a single column at
-its judged latest value. The gap between the newest base observation and that tip column is
-exactly the comparison-base lag (§8.8), drawn as empty interior columns. Charting the full,
-possibly months-long series would shrink the one commit that matters to an indistinct edge
-column; the bounded comparison chart keeps both the base level and the tip legible and
-unaliased.
+differently: it judges only the **context commit**, so it plots the detector's comparison
+baseline followed by the recent per-commit base-ref tail ending at the context commit rather
+than the whole history, dropping the interior branch commits and representing the context
+commit by a single column at its judged latest value. The gap between the newest base
+observation and that context column is exactly the comparison-base lag (§8.8), drawn as empty
+interior columns. Charting the full, possibly months-long series would shrink the one commit
+that matters to an indistinct edge column; the bounded comparison chart keeps both the base
+level and the context commit legible and unaliased.
 
 Both charts bin their columns to at most the fixed chart width **before** plotting: the
 underlying plotter resamples a series to its width with linear interpolation *before*
@@ -1159,7 +1176,7 @@ can attenuate an extreme falling inside it — the one detail binning gives up.
 ### 8.7 Report formats
 
 The three report formats carry the **same data** and differ only in presentation; the text
-layout is canonical. Each report names the **analyzed tip commit** — the commit whose line
+layout is canonical. Each report names the **analyzed context commit** — the commit whose line
 of history the findings describe — annotated `+ uncommitted changes` when the working tree
 was dirty, so a reader (or the auto-filed regression issue) can tie the report to an exact
 commit. Text goes to stdout as one paragraph per finding — the benchmark id on its own
@@ -1168,7 +1185,7 @@ percent with the metric and its confidence, a dimmed detail line, and a small li
 of the series — the whole series in history mode, only the bounded baseline-and-tail
 comparison in branch mode — the chart itself always uncolored, with headline color
 enabled only when stdout is a terminal and not disabled by environment. The text and Markdown reports
-group findings under a per-set header, which also states the **facet-filter flags** that
+group findings under a per-set header, which also states the **discriminant-filter flags** that
 reproduce exactly that partition, so a reader who spots a change can drill into it without
 reconstructing the query by hand. Markdown is that data with
 Markdown formatting (the id as a heading with the per-finding block nested beneath it, not
@@ -1189,10 +1206,10 @@ on the absence of findings.
 
 Separate from those three canonical formats, `analyze` can also render a condensed Markdown
 **summary** — a single derived view for a size-limited consumer. It reuses the Markdown
-finding blocks but keeps only the top findings by magnitude and drops the per-facet grouping,
+finding blocks but keeps only the top findings by magnitude and drops the per-discriminant grouping,
 so it is deliberately **not** "same data": it is a lossy excerpt that names how many of the
 total it shows and leaves the full reports to be consulted separately. Because it drops the
-grouping, each retained finding instead carries its set's facet-filter flags as a trailing
+grouping, each retained finding instead carries its set's discriminant-filter flags as a trailing
 footer — reference material for a follow-up query rather than a headline — so the summary
 stays investigable and blocks for the same benchmark in different sets remain distinguishable.
 Because it exists to
@@ -1201,27 +1218,27 @@ never by the enumerating commands, and the retained-count is a fixed policy of t
 
 ### 8.8 Comparison-base lag (branch mode)
 
-Branch mode compares the tip against the recent base-side points of the *same* discriminant set.
-On rotating CI machine pools (§4) the newest base commits may carry data only under a different
-machine key, so the branch runner's key has usable base data only several commits behind the
-merge-base — the comparison silently reaches back in history. Counts are never compared across
-machine keys, so the tool cannot bridge that gap; it only **discloses** it.
+Branch mode compares the context commit against the recent base-ref first-parent points of the
+*same* discriminant set. On rotating CI machine pools (§4) the newest base-ref commits may carry
+data only under a different machine key, so the context run's key has usable base data only
+several commits behind the base ref — the comparison silently reaches back in history. Counts are
+never compared across machine keys, so the tool cannot bridge that gap; it only **discloses** it.
 
-Each surviving branch finding records the first-parent index of the newest base-side point it was
-actually compared against — its **comparison base**. A finding whose comparison base sits behind
-the merge-base *lags*, by the first-parent distance between the two. History mode has no single
-comparison base and never lags. The lag is measured from the detector's real comparison point, not
-from raw run occupancy: a partial run can be newer than the point a particular series was compared
-against, so occupancy would overstate coverage.
+Each surviving branch finding records the base-ref first-parent index of the newest base point it
+was actually compared against — its **comparison base**. A finding whose comparison base sits
+behind the base ref *lags*, by the first-parent distance between the two. History mode has no
+single comparison base and never lags. The lag is measured from the detector's real comparison
+point, not from raw run occupancy: a partial run can be newer than the point a particular series
+was compared against, so occupancy would overstate coverage.
 
 A lag is classified by *why* the newer base commits were unusable:
 
-* **discriminant set mismatch** — a newer base-side clean run for the same benchmark and metric
+* **discriminant set mismatch** — a newer base-ref clean run for the same benchmark and metric
   exists, but under a different machine key: pool rotation, not missing measurements.
-* **no base data at more recent commits** — no newer base-side run for that series exists at all.
+* **no base data at more recent commits** — no newer base-ref run for that series exists at all.
 
 Mismatch evidence is satisfied from the already-loaded series first (the whole story under
-`--machine-key all`, where every key is resident) and otherwise from the base-side clean runs under
+`--machine-key all`, where every key is resident) and otherwise from the base-ref clean runs under
 other machine keys found in the same partition listing, fetched lazily and only when a lagging
 finding could use them. Raw storage occupancy is only a discovery index — a partial run may omit the
 affected benchmark or metric — so a mismatch is asserted only from a parsed payload that actually
@@ -1243,26 +1260,27 @@ Every report states **how many series it judged, out of how many it could have j
 the reason for each series it did not judge. Without that, silence is ambiguous: the identical
 "no notable changes" is printed when every series was judged and none moved, when every series
 was too short to test, when the benchmarks stopped being collected, and when a mis-set gate
-switched detection off. Only the first of those is an all-clear, and a monitoring tool that
-cannot distinguish them can go blind without anyone noticing.
+switched detection off. Only the first of those has no coverage qualification, and a monitoring
+tool that cannot distinguish them can go blind without anyone noticing.
 
 The claim a silent report makes is therefore narrow and stated outright: *these N series were
-judged and none of them moved beyond the measurement floor*. It says nothing about the series it
-could not judge — and, where a level did move, nothing about **why** it moved: the detector
-reports that a measured level changed and leaves the cause to a human (§8.2, §8.6).
+judged and none produced a reportable move*. It says nothing about series that collection never
+recorded or series it could not judge — and, where a level did move, nothing about **why** it
+moved: the detector reports that a measured level changed and leaves the cause to a human
+(§8.2, §8.6).
 
 The accounting unit is the **series**, the unit the detectors judge, and it covers every series
 the analysis reconstructed, including those dropped before detection. Each unjudged series
 carries exactly one reason — the first that applies in pipeline order:
 
-* **not measured at the analyzed tip commit** — the ghost filter (§8.5) dropped it: the
-  benchmark is no longer part of the suite at the analyzed commit.
+* **not measured at the analyzed context commit** — the ghost filter (§8.5) dropped it: the
+  benchmark is no longer part of the suite at the analyzed context commit.
 * **too few points in the analyzed window** — shorter than the minimum the mode's detector
   evaluates (§8.2).
 * **too few points since its blessing** — long enough overall, but its active segment (§8.6)
   is not.
-* **not measured on the branch** — branch mode has no tip-side observation to judge.
-* **too few base-branch commits to compare against** — branch mode has a tip observation but
+* **not measured on the branch** — branch mode has no context observation to judge.
+* **too few base-ref commits to compare against** — branch mode has a context observation but
   too few base levels to build a prediction interval from.
 
 Ghosts are excluded from the denominator, so what a report takes its ratio against — and
@@ -1284,10 +1302,11 @@ on:
 * `partial` — some, but not all, of the in-scope suite was judged.
 * `full` — the whole in-scope suite was judged.
 
-Only `full` makes an empty findings list an unqualified all-clear; under every other state the
-silence is partly or wholly an absence of evidence. The states that judged nothing stay distinct
-because their remedies differ: look at collection, at the analyzed commit, or at the evidence the
-gates require.
+Only `full` removes the coverage qualification from a silent report: the whole in-scope suite
+was judged. The verdict remains "no notable changes detected" for those judged series: no
+reportable move survived the gates. Under every other state, some or all in-scope series were
+not judged. The states that judged nothing stay distinct because their remedies differ: look
+at collection, at the analyzed context commit, or at the evidence the gates require.
 
 The set of judged series is exactly the false-discovery family (§8.3), so what a report counts as
 judged is the same set the correction is computed over and the two cannot drift apart. The

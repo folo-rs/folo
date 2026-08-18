@@ -131,7 +131,7 @@
 //! * `list discriminants` — the discriminant sets present in storage (no
 //!   repository required), for discovering which engines, triples, and machine
 //!   keys have data before scoping an analysis. This is a discovery catalog, so it
-//!   lists *every* stored partition regardless of the current machine; pass a facet
+//!   lists *every* stored partition regardless of the current machine; pass a discriminant
 //!   to narrow it.
 //! * `list blessings` — the blessings recorded at the current commit, or — with
 //!   `--all` — the most recent blessing of every benchmark across the window.
@@ -148,7 +148,7 @@
 //! the context branch's own commits (those after the merge-base with `--base`) are
 //! removed. When the context resolves onto the base branch itself, the whole
 //! selection *is* base-branch history, so the deletion is refused unless
-//! `--prune-base` confirms it. Narrow the selection with a facet, a `<commit>`
+//! `--prune-base` confirms it. Narrow the selection with a discriminant, a `<commit>`
 //! argument, or `--since`. `--dry-run` previews without deleting.
 //!
 //! ## `examine`
@@ -182,7 +182,7 @@
 //! recorded run at the blessed commit, but neither is required: blessing off the base
 //! branch warns (the blessing only takes effect once the commit joins the base's
 //! first-parent history), and blessing a commit with no recorded run warns and
-//! synthesizes the target discriminant sets from the resolved facets, so a change can
+//! synthesizes the target discriminant sets from the resolved discriminant filters, so a change can
 //! be accepted *before* its data is captured. By default `bless`/`unbless` act on
 //! `HEAD`; `--context <ref>` blesses or unblesses another commit instead. `unbless`
 //! removes the blessings recorded at that commit — note that any blessings defined
@@ -207,7 +207,7 @@
 //! in `--help` into named groups:
 //!
 //! * **Discriminant selection** (`--engine`, `--target-triple`, `--machine-key`) —
-//!   chooses which discriminant sets to operate on. Each facet is repeatable
+//!   chooses which discriminant sets to operate on. Each discriminant is repeatable
 //!   (union of values) and defaults to the current machine's value when omitted
 //!   (`--engine` defaults to every engine; `list discriminants` is a catalog and
 //!   defaults to every partition). The literal `all` removes the filter
@@ -231,8 +231,7 @@
 //!   analyze a clean checkout of the base branch). It detects sustained
 //!   change-points and slow drifts, defaults `--since` to the last six months, and
 //!   reports only **regressions** (steady improvement over time is expected) unless
-//!   `--include-improvements` is given. A spike that has since recovered is
-//!   suppressed by default; `--include-inactive` surfaces such resolved findings.
+//!   `--include-improvements` is given.
 //! * **branch** — "how does my feature compare" (selected for a feature branch, or
 //!   a dirty base checkout). It judges the branch by its **tip commit** versus the
 //!   base — the intermediate commits are ignored, since only the tip lands in the
@@ -326,7 +325,7 @@ mod errors;
 mod outcome;
 mod output;
 
-pub use cbh_analyze::AutoFacets;
+pub use cbh_analyze::AutoDiscriminants;
 pub use cbh_cli::{Cli, EarlyExit};
 pub use cbh_command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,

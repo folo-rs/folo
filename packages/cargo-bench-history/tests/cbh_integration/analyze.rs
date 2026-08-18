@@ -361,7 +361,7 @@ async fn analyze_markdown_summary_renders_a_flat_report() {
         !summary.contains("## callgrind"),
         "the summary must be flat, without per-set headings: {summary}"
     );
-    // Each flat finding instead carries the facet flags of its partition as a footer,
+    // Each flat finding instead carries the discriminant flags of its partition as a footer,
     // so a reader who loses the per-set grouping still knows how to query the exact set.
     assert!(
         summary.contains(
@@ -514,7 +514,7 @@ async fn analyze_engine_filters_partition() {
     workspace.commit_dated("2024-01-01", "c1");
     workspace.seed_callgrind("c1", 100.0);
     // A criterion-partition object that the callgrind filter must skip. Its commit
-    // segment is never read because the engine facet excludes it from listing.
+    // segment is never read because the engine discriminant excludes it from listing.
     workspace.seed(
         "v1/testproj/objects/criterion/x86_64-pc-windows-msvc/m1/abc123/clean.json",
         &ir_result_set(1, "c1", 100.0),
@@ -1372,10 +1372,6 @@ async fn analyze_branch_mode_reports_the_tip_commit_state() {
     assert_eq!(finding["baseline"], 100.0, "{report}");
     assert_eq!(finding["latest"], 130.0, "{report}");
     assert!(
-        finding["flipped_at"].is_null(),
-        "branch mode judges the tip commit alone, with no within-branch flip: {report}"
-    );
-    assert!(
         finding.get("series").is_none(),
         "the JSON finding mirrors the text data and omits the charting series: {report}"
     );
@@ -1467,7 +1463,7 @@ async fn analyze_history_mode_suppresses_improvements_by_default() {
 /// triple selection sees only its own.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_target_triple_facet_isolates_linux_from_windows() {
+async fn analyze_target_triple_discriminant_isolates_linux_from_windows() {
     let workspace = Workspace::repo(&storage_only_config());
     // Each commit carries both a Linux point (rising into a regression) and a
     // Windows point (flat). The chain is `MIN_SERIES_POINTS` long so both series
@@ -1518,7 +1514,7 @@ async fn analyze_target_triple_facet_isolates_linux_from_windows() {
     };
     assert_eq!(regressions, 0, "the Windows series is flat: {report}");
     // The Windows series was judged, so its silence is a verdict on the data rather
-    // than the facet having selected an untestable set.
+    // than the discriminant having selected an untestable set.
     assert_history_was_judged(&report);
 }
 
@@ -1605,54 +1601,55 @@ async fn analyze_official_line_follows_first_parent_across_a_merge() {
     assert_eq!(parsed["findings"][0]["latest"], 130.0, "{report}");
 }
 
-/// When a feature branch merges the default branch *in* (so the merge-base sits
-/// off the feature's first-parent chain), the selection treats the whole feature
-/// line as target-side and admits dirty snapshots on every selected commit —
-/// including ones that a plain branch-point split would have left base-side and
-/// clean-only. The merged-in default-branch commits stay off the line.
+/// When a feature branch merges the default branch *in*, branch mode still compares
+/// the context commit against the base ref's own first-parent window. The
+/// merge-base sits off the feature's first-parent chain, but that topology is no
+/// longer the source of the base window.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_feature_that_merged_master_admits_dirty_off_chain_merge_base() {
-    let workspace = Workspace::repo(&storage_only_config());
-    // master:  root - c1 - c2 - c3
-    //                  \
-    // feature:          f1 - M - f2   (M merges master's tip c3 into feature)
-    //                        /
-    // merge-base(feature, master) = c3, which is NOT on feature's first-parent
-    // chain [root, c1, f1, M, f2].
-    workspace.commit("c1");
-    workspace.checkout_new_branch("feature");
-    workspace.commit("f1");
-    workspace.checkout("master");
-    workspace.commit("c2");
-    workspace.commit("c3");
-    workspace.checkout("feature");
-    workspace.merge("master", "M");
-    workspace.commit("f2");
+async fn analyze_feature_that_merged_master_uses_the_base_ref_window() {
+    for (tip_value, expected_regressions) in [(130.0, 1_u64), (100.0, 0_u64)] {
+        let workspace = Workspace::repo(&storage_only_config());
+        // master:  root - c1 - c2 - ... - c{MIN_SERIES_POINTS}
+        //                  \
+        // feature:          f1 - M - f2
+        //                        /
+        // M merges master's tip into feature, so merge-base(feature, master) is
+        // c{MIN_SERIES_POINTS}, which is not on feature's first-parent line
+        // [root, c1, f1, M, f2].
+        workspace.commit("c1");
+        workspace.checkout_new_branch("feature");
+        workspace.commit("f1");
+        workspace.checkout("master");
+        for index in 2..=MIN_SERIES_POINTS {
+            workspace.commit(&format!("c{index}"));
+        }
+        workspace.checkout("feature");
+        workspace.merge("master", "M");
+        workspace.commit("f2");
 
-    // Clean points along the feature's first-parent line.
-    workspace.seed_callgrind("c1", 100.0);
-    workspace.seed_callgrind("f1", 100.0);
-    workspace.seed_callgrind("f2", 100.0);
-    // A dirty snapshot on c1. Without the merge, c1 would be base-side (clean
-    // only) and this would be excluded; the off-chain merge-base makes the whole
-    // line target-side, so it is admitted.
-    workspace.seed_dirty_callgrind("2024-01-03", "c1", 200.0);
-    // Merged-in master commits c2/c3 are off the first-parent line and excluded.
-    workspace.seed_callgrind("c2", 999.0);
-    workspace.seed_callgrind("c3", 999.0);
+        for index in 1..=MIN_SERIES_POINTS {
+            workspace.seed_callgrind(&format!("c{index}"), 100.0);
+        }
+        workspace.seed_callgrind("f2", tip_value);
 
-    let report = workspace.drive_json(&["analyze"]).await;
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-    // Loaded: c1 clean, c1 dirty, f1 clean, f2 clean = 4. The dirty c1 being
-    // counted proves the off-chain merge-base admitted it; c2/c3 being absent
-    // proves first-parent selection excluded the merged-in commits (otherwise the
-    // count would be 6).
-    assert_eq!(
-        parsed["runs"], 4,
-        "off-chain merge-base admits the dirty base-side snapshot and excludes the \
-         merged-in commits: {report}"
-    );
+        let report = workspace.drive_json(&["analyze"]).await;
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(parsed["mode"], "branch", "{report}");
+        assert_eq!(
+            parsed["regressions"], expected_regressions,
+            "tip value {tip_value} is compared with master's own recent history: {report}"
+        );
+        if expected_regressions == 1 {
+            assert_eq!(parsed["findings"][0]["baseline"], 100.0, "{report}");
+            assert_eq!(parsed["findings"][0]["latest"], tip_value, "{report}");
+        } else {
+            assert!(
+                parsed["findings"].as_array().unwrap().is_empty(),
+                "{report}"
+            );
+        }
+    }
 }
 
 /// Two machine-key partitions on the same engine/triple stay isolated: a rising
@@ -1699,7 +1696,7 @@ async fn analyze_criterion_machine_keys_stay_isolated() {
 /// only its own.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_target_triple_facet_selects_one_set() {
+async fn analyze_target_triple_discriminant_selects_one_set() {
     let workspace = Workspace::repo(&storage_only_config());
     // Each commit hosts a regressing x86_64 series and a flat aarch64 series; the
     // chain is `MIN_SERIES_POINTS` long so both series are judged.
@@ -1746,13 +1743,13 @@ async fn analyze_target_triple_facet_selects_one_set() {
     };
     assert_eq!(regressions, 0, "the aarch64 triple is flat: {report}");
     // The aarch64 series was judged, so its silence is a verdict on the data rather
-    // than the facet having selected an untestable set.
+    // than the discriminant having selected an untestable set.
     assert_history_was_judged(&report);
 }
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_machine_key_facet_selects_one_set() {
+async fn analyze_machine_key_discriminant_selects_one_set() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.seed_rising_criterion_history("mk-rising");
     // `mk-flat` stays flat across the same d1.. commits (already created by the

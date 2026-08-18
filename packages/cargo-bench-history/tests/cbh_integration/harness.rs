@@ -8,8 +8,8 @@ use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) use cargo_bench_history::{
-    AutoFacets, BenchmarkId, BenchmarkResult, Cli, Command, EnvironmentInfo, GitInfo, Metric,
-    MetricKind, Overrides, Run, RunContext, RunOutcome, SCHEMA_VERSION, ToolchainInfo,
+    AutoDiscriminants, BenchmarkId, BenchmarkResult, Cli, Command, EnvironmentInfo, GitInfo,
+    Metric, MetricKind, Overrides, Run, RunContext, RunOutcome, SCHEMA_VERSION, ToolchainInfo,
     default_template, run, run_with_overrides,
 };
 use cbh_codec as codec;
@@ -25,14 +25,14 @@ use tick::Clock;
 /// the package, so its `CARGO_PKG_VERSION` matches the version `collect` records.
 pub(crate) const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The target triple the harness pins the auto-detected facet to, matching the
+/// The target triple the harness pins the auto-detected discriminant value to, matching the
 /// triple the seed helpers write their partitions under. Pinning it keeps the
-/// suite host-independent: sets obey the target-triple facet (a `list`/`analyze`
+/// suite host-independent: sets obey the target-triple filter (a `list`/`analyze`
 /// with an auto triple never sees foreign-triple data), so a bare query must
 /// auto-detect the seeded triple regardless of the host the test runs on.
 pub(crate) const HARNESS_AUTO_TRIPLE: &str = "x86_64-unknown-linux-gnu";
 
-/// The machine key the harness pins the auto-detected facet to. Every engine is
+/// The machine key the harness pins the auto-detected discriminant value to. Every engine is
 /// machine-keyed, so a bare query must auto-detect a machine key the seeded sets
 /// share; the callgrind/alloc seed helpers plant their objects under this key so a
 /// default query matches them regardless of the host the test runs on. Tests that
@@ -457,13 +457,14 @@ pub(crate) struct Workspace {
     /// their own workspace type entirely.
     inject_local: bool,
     /// Whether [`drive`](Self::drive) uses real host auto-detection for the query
-    /// facets instead of the pinned [`HARNESS_AUTO_TRIPLE`]/[`HARNESS_AUTO_MACHINE_KEY`].
-    /// The standard constructors pin the facets so seeded-partition tests are
-    /// host-independent; [`with_real_auto_facets`](Self::with_real_auto_facets)
+    /// discriminant values instead of the pinned [`HARNESS_AUTO_TRIPLE`] /
+    /// [`HARNESS_AUTO_MACHINE_KEY`].
+    /// The standard constructors pin the discriminant values so seeded-partition tests are
+    /// host-independent; [`with_real_auto_discriminants`](Self::with_real_auto_discriminants)
     /// enables real detection for the `collect`→`analyze` round-trip tests, whose
     /// whole point is that a real `collect` (which stamps the host triple) and a
     /// bare `analyze` resolve the *same* host partition.
-    real_auto_facets: bool,
+    real_auto_discriminants: bool,
 }
 
 impl Drop for Workspace {
@@ -488,7 +489,7 @@ impl Workspace {
             bench: Vec::new(),
             graph: RefCell::new(GitGraph::new(root, "master")),
             inject_local: true,
-            real_auto_facets: false,
+            real_auto_discriminants: false,
         };
         let cargo_dir = workspace.root().join(".cargo");
         fs::create_dir_all(&cargo_dir).unwrap();
@@ -524,7 +525,7 @@ impl Workspace {
             bench: Vec::new(),
             graph: RefCell::new(GitGraph::new(root, "master")),
             inject_local: false,
-            real_auto_facets: false,
+            real_auto_discriminants: false,
         }
     }
 
@@ -539,7 +540,7 @@ impl Workspace {
             bench: Vec::new(),
             graph: RefCell::new(GitGraph::new(root, "master")),
             inject_local: true,
-            real_auto_facets: false,
+            real_auto_discriminants: false,
         };
         let path = workspace.root().join(relative);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -564,26 +565,26 @@ impl Workspace {
         self
     }
 
-    /// Uses real host auto-detection for the query facets instead of the pinned
+    /// Uses real host auto-detection for the discriminant filters instead of the pinned
     /// harness defaults (consuming builder). Reserved for `collect`→`analyze`
     /// round-trip tests: a real `collect` stamps the host triple, so a bare
     /// `analyze` must auto-detect that same host triple to find the run. Every
     /// other test seeds a fixed-triple partition and relies on the pin.
-    pub(crate) fn with_real_auto_facets(mut self) -> Self {
-        self.real_auto_facets = true;
+    pub(crate) fn with_real_auto_discriminants(mut self) -> Self {
+        self.real_auto_discriminants = true;
         self
     }
 
-    /// The auto-detected facet override a drive injects through `Overrides`.
+    /// The auto-detected discriminant override a drive injects through `Overrides`.
     ///
     /// Pinned to [`HARNESS_AUTO_TRIPLE`]/[`HARNESS_AUTO_MACHINE_KEY`] by default so
     /// the suite is host-independent; `None` (real detection) when
-    /// [`with_real_auto_facets`](Self::with_real_auto_facets) opted in.
-    fn auto_facets_override(&self) -> Option<AutoFacets> {
-        if self.real_auto_facets {
+    /// [`with_real_auto_discriminants`](Self::with_real_auto_discriminants) opted in.
+    fn auto_discriminants_override(&self) -> Option<AutoDiscriminants> {
+        if self.real_auto_discriminants {
             None
         } else {
-            Some(AutoFacets {
+            Some(AutoDiscriminants {
                 triple: HARNESS_AUTO_TRIPLE.to_owned(),
                 machine_key: HARNESS_AUTO_MACHINE_KEY.to_owned(),
             })
@@ -921,7 +922,7 @@ impl Workspace {
                 bench_command: Some(bench_command),
                 clock: Some(Clock::new_frozen_at(analysis_now())),
                 storage_override: None,
-                auto_facets: self.auto_facets_override(),
+                auto_discriminants: self.auto_discriminants_override(),
             },
         )
         .await
@@ -960,7 +961,7 @@ impl Workspace {
                 bench_command: Some(bench_command),
                 clock: Some(Clock::new_frozen_at(analysis_now())),
                 storage_override: None,
-                auto_facets: self.auto_facets_override(),
+                auto_discriminants: self.auto_discriminants_override(),
             },
         )
         .await

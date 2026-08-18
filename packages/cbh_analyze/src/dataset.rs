@@ -7,7 +7,10 @@ use std::time::Instant;
 
 use anyspawn::Spawner;
 use cbh_config::Config;
-use cbh_detect::{AnalysisMode, BlessingPlacement, DiscriminantSetQuery, Series, SeriesFilter};
+use cbh_detect::{
+    AnalysisConfig, AnalysisMode, BlessingPlacement, DiscriminantSetQuery, Series, SeriesFilter,
+    attach_base_windows,
+};
 use cbh_diag::{Reporter, ReporterExt, count_noun};
 use cbh_git::GitHistory;
 use cbh_model::{BenchmarkIdPrefix, BlessingRecord, DiscriminantSet, StorageKey};
@@ -15,8 +18,9 @@ use cbh_storage::Storage;
 use jiff::Timestamp;
 
 use super::announce::{AnnouncedBase, AnnouncedSince, announce_selection, selection_announcement};
-use super::facets::{
-    AutoFacets, describe_effective_facets, facets_are_unconstrained, resolve_facets,
+use super::discriminants::{
+    AutoDiscriminants, describe_effective_discriminants, discriminants_are_unconstrained,
+    resolve_discriminants,
 };
 use super::history::{DirtyTipPolicy, ResolvedHistory, resolve_history};
 use super::load::{
@@ -25,7 +29,9 @@ use super::load::{
 };
 use super::selection::Selection;
 use super::window::{auto_mode, before_since_cutoff, resolve_since, since_cutoff_reason};
-use crate::{AnalyzeError, InvalidBlessingError, InvalidStoredUtf8Error};
+use crate::{
+    AnalyzeError, FirstParentWalkFailedError, InvalidBlessingError, InvalidStoredUtf8Error,
+};
 
 /// The data an analysis (or listing) draws on, plus the bookkeeping needed to
 /// explain an empty outcome and warn about ephemeral data.
@@ -37,7 +43,7 @@ pub(crate) struct SelectedDataSet {
     /// Compact per-set, per-commit run tallies, standing in for a retained copy of
     /// every loaded object (which a large history cannot afford to keep resident).
     pub(crate) run_index: RunIndex,
-    /// How many facet-matching candidates existed before topology filtering.
+    /// How many discriminant-matching candidates existed before topology filtering.
     pub(crate) candidate_count: usize,
     /// Why candidates were excluded, for the empty-history hint.
     pub(crate) tally: ExclusionTally,
@@ -47,9 +53,9 @@ pub(crate) struct SelectedDataSet {
     /// The target ref the timeline was resolved against (for diagnostics).
     pub(crate) target_ref: String,
     /// The resolved discriminant-set query (the effective, possibly auto-detected
-    /// engine / target-triple / machine-key facets), so an empty outcome can name
+    /// engine / target-triple / machine-key filters), so an empty outcome can name
     /// the exact partition it searched.
-    pub(crate) facets: DiscriminantSetQuery,
+    pub(crate) discriminants: DiscriminantSetQuery,
     /// Subject line of each in-history commit that has one, so `examine` can label
     /// each data point with what its commit changed. A commit absent here has an
     /// empty subject; only `examine` reads this.
@@ -70,27 +76,33 @@ pub(crate) struct SelectedDataSet {
     pub(crate) tip_dirty: bool,
     /// The resolved analysis mode, auto-detected from the git topology.
     pub(crate) mode: AnalysisMode,
-    /// First-parent topological index of the merge-base, used by branch mode to
-    /// split base-side history from the branch's own commits.
+    /// First-parent topological index of the merge-base on the context line, when it
+    /// lies there. List, prune, and examine use the context line exactly as resolved;
+    /// branch analysis loads the base-ref comparison window separately.
     pub(crate) merge_base_index: Option<usize>,
+    /// First-parent topological index of the resolved base ref on its own history.
+    ///
+    /// Present in branch mode when detection requested base-ref windows. The detector
+    /// and lag classifier use this base-ref coordinate independently of the context
+    /// ref's first-parent line.
+    pub(crate) base_ref_index: Option<usize>,
     /// Blessings recorded on in-window commits, grouped by discriminant set. Each
     /// entry pairs the blessed commit's first-parent topological index and its
     /// committer date (from topology, for the report anchor) with the record;
     /// history-mode re-baselining picks, per series, the latest matching blessing.
     /// Empty in branch mode (it ignores blessings).
     pub(crate) blessings: HashMap<DiscriminantSet, Vec<BlessingPlacement>>,
-    /// Base-side clean-run observations under machine keys the selection does not
-    /// cover, retained (branch mode only) so the analysis can classify why a finding's
-    /// comparison base lags the merge-base. Empty in history mode and when the
-    /// selection already spans every machine key (`--machine-key all`). Each entry
-    /// carries the storage key, discriminant set, and first-parent topological index;
-    /// the payload is fetched lazily by the pipeline only when a lagging finding needs
-    /// it.
+    /// Base-ref clean-run observations retained (branch mode only) so the analysis can
+    /// classify why a finding's comparison base lags the base ref. Entries may come
+    /// from selected candidates or machine-relaxed sibling candidates; the classifier
+    /// keeps only observations under a different machine key from the finding it is
+    /// explaining. Empty in history mode. Each entry carries the storage key,
+    /// discriminant set, and first-parent topological index; the payload is fetched
+    /// lazily by the pipeline only when a lagging finding needs it.
     pub(crate) sibling_observations: Vec<SiblingObservation>,
 }
 
-/// A base-side clean run under a machine key the selection does not cover, retained
-/// for branch-mode comparison-base lag classification.
+/// A base-ref clean run retained for branch-mode comparison-base lag classification.
 #[derive(Clone, Debug)]
 pub(crate) struct SiblingObservation {
     /// The object's storage key, for the lazy payload fetch.
@@ -117,7 +129,8 @@ pub(crate) async fn select_dataset<G, S>(
     config: &Config,
     selection: &Selection<'_>,
     filter: SeriesFilter<'_>,
-    auto: &AutoFacets,
+    load_branch_base_windows: bool,
+    auto: &AutoDiscriminants,
     now: Timestamp,
     reporter: &dyn Reporter,
     spawner: &Spawner,
@@ -126,14 +139,21 @@ where
     G: GitHistory,
     S: Storage + Clone + 'static,
 {
-    let facets = resolve_facets(selection, Some(auto))?;
+    let discriminants = resolve_discriminants(selection, Some(auto))?;
     let listing_started = Instant::now();
     let CandidateListing {
         selected: candidates,
         siblings: sibling_candidates,
-    } = list_candidates(storage, project_id, &facets, true, reporter).await?;
+    } = list_candidates(
+        storage,
+        project_id,
+        &discriminants,
+        load_branch_base_windows,
+        reporter,
+    )
+    .await?;
     reporter.timing(
-        "candidate listing + facet filter (includes storage.list)",
+        "candidate listing + discriminant filter (includes storage.list)",
         listing_started.elapsed(),
     );
 
@@ -156,6 +176,7 @@ where
     let ResolvedHistory {
         target_ref,
         base_name,
+        base_commit,
         tip_commit,
         tip_dirty,
         order,
@@ -227,17 +248,44 @@ where
         )
     });
 
+    let base_ref_history = if mode == AnalysisMode::Branch && load_branch_base_windows {
+        Some(resolve_base_ref_history(git, &base_commit, reporter).await?)
+    } else {
+        None
+    };
+    let base_ref_index = base_ref_history
+        .as_ref()
+        .and_then(|history| history.tip_index);
+    let base_series = if let Some(history) = base_ref_history.as_ref() {
+        let load_started = Instant::now();
+        let series = load_branch_base_series(
+            storage,
+            spawner,
+            &candidates,
+            history,
+            since,
+            filter,
+            reporter,
+        )
+        .await?;
+        reporter.timing(
+            "branch base-ref window load (filter + fetch + parse + fold)",
+            load_started.elapsed(),
+        );
+        series
+    } else {
+        Vec::new()
+    };
+
     // Retain the base-side sibling observations branch mode uses to explain a lagging
-    // comparison base. Only clean runs up to the merge-base can serve as a comparison
-    // base, and the same on-history and `--since` admission the selection uses applies.
+    // comparison base. Only clean runs on the base ref can serve as a comparison
+    // base, and the same `--since` admission the selection uses applies.
     // History mode has no single comparison base, so it keeps none. This is key-only
     // work (no fetches); the payloads are read lazily only if a finding actually lags.
-    let sibling_observations = admit_sibling_observations(
-        sibling_candidates,
+    let sibling_observations = admit_comparison_base_observations(
+        candidates.iter().cloned().chain(sibling_candidates),
         mode,
-        merge_base_index,
-        &order,
-        &commit_times,
+        base_ref_history.as_ref(),
         since,
         reporter,
     );
@@ -248,7 +296,7 @@ where
     announce_selection(
         reporter,
         &effective_selection_summary(
-            &facets,
+            &discriminants,
             &base_name,
             selection.base.is_none(),
             since,
@@ -378,7 +426,14 @@ where
         }
     }
     let finish_started = Instant::now();
-    let series = builder.finish();
+    let mut series = builder.finish();
+    if !base_series.is_empty() {
+        attach_base_windows(
+            &mut series,
+            &base_series,
+            AnalysisConfig::default().compare_window,
+        );
+    }
     reporter.timing(
         "series build finalization (builder.finish: assemble + serial point sort)",
         finish_started.elapsed(),
@@ -473,7 +528,7 @@ where
         },
         included_dirty_base_exception,
         target_ref,
-        facets,
+        discriminants,
         commit_subjects,
         ordered_commits,
         tip_commit,
@@ -481,51 +536,169 @@ where
         tip_dirty,
         mode,
         merge_base_index,
+        base_ref_index,
         blessings,
         sibling_observations,
     })
 }
 
-/// Admits the base-side sibling observations branch mode uses to explain a lagging
-/// comparison base, applying the same on-history and `--since` admission the
-/// selection uses. Key-only work — no payloads are fetched. History mode, or an
-/// unknown merge-base, yields none: neither has a single comparison base to lag.
-fn admit_sibling_observations(
-    candidates: Vec<(String, StorageKey)>,
-    mode: AnalysisMode,
-    merge_base_index: Option<usize>,
-    order: &HashMap<String, usize>,
-    commit_times: &HashMap<String, Timestamp>,
-    since: Option<Timestamp>,
+/// The base ref's own first-parent topology.
+struct BaseRefHistory {
+    /// First-parent position of each base-ref commit.
+    order: HashMap<String, usize>,
+    /// Committer timestamp of each base-ref commit that reported one.
+    commit_times: HashMap<String, Timestamp>,
+    /// First-parent position of the resolved base ref commit.
+    tip_index: Option<usize>,
+}
+
+async fn resolve_base_ref_history<G>(
+    git: &G,
+    base_commit: &str,
     reporter: &dyn Reporter,
-) -> Vec<SiblingObservation> {
-    let (AnalysisMode::Branch, Some(merge_base)) = (mode, merge_base_index) else {
-        return Vec::new();
-    };
-    let mut observations = Vec::new();
+) -> Result<BaseRefHistory, AnalyzeError>
+where
+    G: GitHistory,
+{
+    let first_parent_started = Instant::now();
+    let first_parent = git
+        .first_parent(base_commit)
+        .await
+        .map_err(|error| FirstParentWalkFailedError::caused_by(base_commit, error))?;
+    reporter.timing(
+        "git.first_parent ancestry walk (base ref's first-parent line)",
+        first_parent_started.elapsed(),
+    );
+
+    let commit_count = first_parent.len();
+    let mut order = HashMap::with_capacity(commit_count);
+    let mut commit_times = HashMap::new();
+    for (index, commit) in first_parent.into_iter().enumerate() {
+        if let Some(time) = commit.committer_time {
+            commit_times.insert(commit.commit_id.clone(), time);
+        }
+        order.insert(commit.commit_id, index);
+    }
+    reporter.note_with(|| {
+        format!(
+            "base ref first-parent line contributes {} for branch comparison windows",
+            count_noun(commit_count, "commit")
+        )
+    });
+    Ok(BaseRefHistory {
+        order,
+        commit_times,
+        tip_index: commit_count.checked_sub(1),
+    })
+}
+
+async fn load_branch_base_series<S>(
+    storage: &S,
+    spawner: &Spawner,
+    candidates: &[(String, StorageKey)],
+    history: &BaseRefHistory,
+    since: Option<Timestamp>,
+    filter: SeriesFilter<'_>,
+    reporter: &dyn Reporter,
+) -> Result<Vec<Series>, AnalyzeError>
+where
+    S: Storage + Clone + 'static,
+{
+    let mut excluded_outside_base = 0_usize;
+    let mut excluded_dirty = 0_usize;
+    let mut excluded_since = 0_usize;
+    let mut to_fetch = Vec::new();
     for (key, parsed) in candidates {
-        let Some(&topo_index) = order.get(&parsed.commit) else {
-            reporter.note_with(|| {
-                format!(
-                    "skipping sibling {key}: commit {} is not on the analyzed history",
-                    parsed.commit
-                )
-            });
+        if !parsed.is_clean() {
+            excluded_dirty = excluded_dirty.saturating_add(1);
             continue;
-        };
-        if topo_index > merge_base {
+        }
+        if !history.order.contains_key(&parsed.commit) {
+            excluded_outside_base = excluded_outside_base.saturating_add(1);
             reporter.note_with(|| {
                 format!(
-                    "skipping sibling {key}: commit {} is on the branch side of the merge-base",
+                    "excluding {key} from the branch base window: commit {} is not on the \
+                     base ref's first-parent history",
                     parsed.commit
                 )
             });
             continue;
         }
-        if before_since_cutoff(commit_times.get(&parsed.commit).copied(), since) {
+        if before_since_cutoff(history.commit_times.get(&parsed.commit).copied(), since) {
+            excluded_since = excluded_since.saturating_add(1);
             reporter.note_with(|| {
                 format!(
-                    "skipping sibling {key}: commit {} is before the --since cutoff",
+                    "excluding {key} from the branch base window: commit {} is before the \
+                     --since cutoff",
+                    parsed.commit
+                )
+            });
+            continue;
+        }
+        to_fetch.push((key.clone(), parsed.clone()));
+    }
+    reporter.note_with(|| {
+        format!(
+            "{} enter the branch base-ref window load ({excluded_outside_base} outside base, \
+             {excluded_dirty} dirty, {excluded_since} before --since)",
+            count_noun(to_fetch.len(), "clean-run object")
+        )
+    });
+
+    to_fetch.sort_by(|left, right| left.0.cmp(&right.0));
+    let ranked: Vec<(usize, String, StorageKey)> = to_fetch
+        .into_iter()
+        .enumerate()
+        .map(|(rank, (key, parsed))| (rank, key, parsed))
+        .collect();
+    let prefixes: Arc<[BenchmarkIdPrefix]> = Arc::from(filter.prefixes);
+    let order = Arc::new(history.order.clone());
+    let empty_dirty_exceptions = Arc::new(HashMap::new());
+    let WorkerFold { builder, .. } = fold_runs_chunked(
+        storage,
+        spawner,
+        ranked,
+        &order,
+        &empty_dirty_exceptions,
+        prefixes,
+    )
+    .await?;
+    Ok(builder.finish())
+}
+
+/// Admits the base-ref observations branch mode uses to explain a lagging
+/// comparison base, applying the same `--since` admission the selection uses.
+/// Key-only work — no payloads are fetched. History mode, or an unavailable base-ref
+/// history, yields none: neither has a single comparison base to lag.
+fn admit_comparison_base_observations(
+    candidates: impl IntoIterator<Item = (String, StorageKey)>,
+    mode: AnalysisMode,
+    base_ref_history: Option<&BaseRefHistory>,
+    since: Option<Timestamp>,
+    reporter: &dyn Reporter,
+) -> Vec<SiblingObservation> {
+    let (AnalysisMode::Branch, Some(history)) = (mode, base_ref_history) else {
+        return Vec::new();
+    };
+    let mut observations = Vec::new();
+    for (key, parsed) in candidates {
+        if !parsed.is_clean() {
+            continue;
+        }
+        let Some(&topo_index) = history.order.get(&parsed.commit) else {
+            reporter.note_with(|| {
+                format!(
+                    "skipping comparison-base evidence {key}: commit {} is not on the base \
+                     ref's history",
+                    parsed.commit
+                )
+            });
+            continue;
+        };
+        if before_since_cutoff(history.commit_times.get(&parsed.commit).copied(), since) {
+            reporter.note_with(|| {
+                format!(
+                    "skipping comparison-base evidence {key}: commit {} is before the --since cutoff",
                     parsed.commit
                 )
             });
@@ -540,14 +713,14 @@ fn admit_sibling_observations(
     reporter.note_with(|| {
         format!(
             "retained {} for comparison-base classification",
-            count_noun(observations.len(), "base-side sibling observation")
+            count_noun(observations.len(), "base-ref clean-run observation")
         )
     });
     observations
 }
 
 /// Builds the always-on, one-line summary of a run's effective selection: the
-/// discriminant partition it searched (naming auto-detected facets), the base
+/// discriminant partition it searched (naming auto-detected discriminant values), the base
 /// branch it split history against, and the resolved look-back cutoff.
 ///
 /// Emitted to standard error regardless of `--verbose` so a plain run never hides
@@ -555,7 +728,7 @@ fn admit_sibling_observations(
 /// auto-detected (no explicit `--base`); `since_explicit` selects the wording for
 /// why the `--since` cutoff is what it is.
 fn effective_selection_summary(
-    facets: &DiscriminantSetQuery,
+    discriminants: &DiscriminantSetQuery,
     base_name: &str,
     base_auto: bool,
     since: Option<Timestamp>,
@@ -563,7 +736,7 @@ fn effective_selection_summary(
     mode: AnalysisMode,
 ) -> String {
     selection_announcement(
-        facets,
+        discriminants,
         Some(AnnouncedBase {
             name: base_name,
             auto: base_auto,
@@ -576,7 +749,7 @@ fn effective_selection_summary(
     )
 }
 
-/// How many facet-matching candidates were excluded, by reason.
+/// How many discriminant-matching candidates were excluded, by reason.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ExclusionTally {
     /// Commit is not on the analyzed first-parent history.
@@ -590,11 +763,11 @@ pub(crate) struct ExclusionTally {
 /// Builds a diagnostic hint explaining an empty outcome, so a bare `0 runs` never
 /// leaves a user guessing.
 ///
-/// Two empty cases are named. When *no* stored run matched the facet filters, the
+/// Two empty cases are named. When *no* stored run matched the discriminant filters, the
 /// hint names the effective (possibly auto-detected) partition it searched — so an
 /// auto-detected target-triple / machine-key that simply does not match the stored
 /// data explains itself — and distinguishes a genuinely empty project from a
-/// missed partition. When runs matched the facets but topology or the `--since`
+/// missed partition. When runs matched the discriminant filters but topology or the `--since`
 /// cutoff excluded them all, the hint breaks down the dominant exclusion reasons.
 ///
 /// Returns `None` when at least one run was loaded.
@@ -603,17 +776,17 @@ pub(crate) fn empty_history_hint(
     candidate_count: usize,
     target_ref: &str,
     tally: ExclusionTally,
-    facets: &DiscriminantSetQuery,
+    discriminants: &DiscriminantSetQuery,
 ) -> Option<String> {
     if !loaded_is_empty {
         return None;
     }
 
     if candidate_count == 0 {
-        // No stored run matched the facets at all. Either the project holds no runs
-        // yet, or an auto-detected facet points at a partition nothing was recorded
+        // No stored run matched the discriminant filters at all. Either the project holds no runs
+        // yet, or an auto-detected discriminant points at a partition nothing was recorded
         // under. Name the partition so the second case is not mistaken for the first.
-        if facets_are_unconstrained(facets) {
+        if discriminants_are_unconstrained(discriminants) {
             return Some(
                 "No benchmark runs are stored for this project yet. Record some with a \
                  `collect` (or `backfill`) run, then try again."
@@ -622,11 +795,11 @@ pub(crate) fn empty_history_hint(
         }
         return Some(format!(
             "No stored runs matched the current selection ({}). Nothing has been \
-             collected for this discriminant partition yet, or an auto-detected facet \
+             collected for this discriminant partition yet, or an auto-detected discriminant \
              does not match the stored data. Pass --target-triple all / --machine-key all \
              to widen the search, or run `list discriminants` to see which partitions \
              hold data.",
-            describe_effective_facets(facets)
+            describe_effective_discriminants(discriminants)
         ));
     }
 
@@ -662,18 +835,18 @@ pub(crate) fn empty_history_hint(
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use cbh_detect::FacetFilter;
+    use cbh_detect::DiscriminantFilter;
     use nonempty::nonempty;
 
     use super::*;
 
-    /// A facet query with no auto-detected or explicit constraints, for the
-    /// exclusion-reason cases whose hint text does not depend on the facets.
-    fn unconstrained_facets() -> DiscriminantSetQuery {
+    /// A discriminant query with no auto-detected or explicit constraints, for the
+    /// exclusion-reason cases whose hint text does not depend on the discriminant filters.
+    fn unconstrained_discriminants() -> DiscriminantSetQuery {
         DiscriminantSetQuery {
-            engine: FacetFilter::All,
-            target_triple: FacetFilter::All,
-            machine_key: FacetFilter::All,
+            engine: DiscriminantFilter::All,
+            target_triple: DiscriminantFilter::All,
+            machine_key: DiscriminantFilter::All,
         }
     }
 
@@ -684,10 +857,10 @@ mod tests {
             dirty_base: 0,
             since: 0,
         };
-        let facets = unconstrained_facets();
+        let discriminants = unconstrained_discriminants();
         // Runs were actually loaded → no hint regardless of candidate count.
         assert_eq!(
-            empty_history_hint(false, 3, "master", no_exclusions, &facets),
+            empty_history_hint(false, 3, "master", no_exclusions, &discriminants),
             None
         );
 
@@ -696,7 +869,7 @@ mod tests {
             dirty_base: 1,
             since: 4,
         };
-        let hint = empty_history_hint(true, 7, "master", tally, &facets).unwrap();
+        let hint = empty_history_hint(true, 7, "master", tally, &discriminants).unwrap();
         assert!(hint.contains("7 stored runs"), "{hint}");
         assert!(
             hint.contains("1 dirty (uncommitted-tree) snapshot"),
@@ -716,7 +889,7 @@ mod tests {
             dirty_base: 3,
             since: 0,
         };
-        let hint = empty_history_hint(true, 3, "master", dirty_only, &facets).unwrap();
+        let hint = empty_history_hint(true, 3, "master", dirty_only, &discriminants).unwrap();
         assert!(hint.contains("dirty (uncommitted-tree)"), "{hint}");
         assert!(!hint.contains("outside"), "{hint}");
         assert!(!hint.contains("--since cutoff"), "{hint}");
@@ -727,7 +900,7 @@ mod tests {
             dirty_base: 0,
             since: 0,
         };
-        let hint = empty_history_hint(true, 2, "master", outside_only, &facets).unwrap();
+        let hint = empty_history_hint(true, 2, "master", outside_only, &discriminants).unwrap();
         assert!(hint.contains("outside master"), "{hint}");
         assert!(!hint.contains("dirty (uncommitted-tree)"), "{hint}");
         assert!(!hint.contains("--since cutoff"), "{hint}");
@@ -738,7 +911,7 @@ mod tests {
             dirty_base: 0,
             since: 5,
         };
-        let hint = empty_history_hint(true, 5, "master", since_only, &facets).unwrap();
+        let hint = empty_history_hint(true, 5, "master", since_only, &discriminants).unwrap();
         assert!(
             hint.contains("5 runs older than the --since cutoff"),
             "{hint}"
@@ -755,20 +928,26 @@ mod tests {
             since: 0,
         };
 
-        // Unconstrained facets that matched nothing → a genuinely empty project.
-        let hint =
-            empty_history_hint(true, 0, "master", no_exclusions, &unconstrained_facets()).unwrap();
+        // Unconstrained discriminant filters that matched nothing → a genuinely empty project.
+        let hint = empty_history_hint(
+            true,
+            0,
+            "master",
+            no_exclusions,
+            &unconstrained_discriminants(),
+        )
+        .unwrap();
         assert!(hint.contains("No benchmark runs are stored"), "{hint}");
         assert!(hint.contains("collect"), "{hint}");
         // It must not misdescribe an empty project as a missed partition.
-        assert!(!hint.contains("auto-detected facet"), "{hint}");
+        assert!(!hint.contains("auto-detected discriminant"), "{hint}");
 
-        // Auto-detected facets that matched nothing → name the searched partition so
+        // Auto-detected discriminant filters that matched nothing → name the searched partition so
         // the user learns which auto-detected values missed.
         let auto = DiscriminantSetQuery {
-            engine: FacetFilter::All,
-            target_triple: FacetFilter::Auto("x86_64-pc-windows-msvc".to_owned()),
-            machine_key: FacetFilter::Auto("abcd".to_owned()),
+            engine: DiscriminantFilter::All,
+            target_triple: DiscriminantFilter::Auto("x86_64-pc-windows-msvc".to_owned()),
+            machine_key: DiscriminantFilter::Auto("abcd".to_owned()),
         };
         let hint = empty_history_hint(true, 0, "master", no_exclusions, &auto).unwrap();
         assert!(
@@ -782,16 +961,16 @@ mod tests {
 
     #[test]
     fn effective_selection_summary_names_auto_detected_inputs() {
-        let facets = DiscriminantSetQuery {
-            engine: FacetFilter::All,
-            target_triple: FacetFilter::Auto("x86_64-pc-windows-msvc".to_owned()),
-            machine_key: FacetFilter::Auto("abcd".to_owned()),
+        let discriminants = DiscriminantSetQuery {
+            engine: DiscriminantFilter::All,
+            target_triple: DiscriminantFilter::Auto("x86_64-pc-windows-msvc".to_owned()),
+            machine_key: DiscriminantFilter::Auto("abcd".to_owned()),
         };
         let since = Timestamp::from_second(1_700_000_000).unwrap();
         // History mode, auto-detected base, default look-back: every defaulted value
         // is named and marked.
         let summary = effective_selection_summary(
-            &facets,
+            &discriminants,
             "main",
             true,
             Some(since),
@@ -815,15 +994,15 @@ mod tests {
 
     #[test]
     fn effective_selection_summary_marks_explicit_inputs_without_auto() {
-        let facets = DiscriminantSetQuery {
-            engine: FacetFilter::Explicit(nonempty!["criterion".to_owned()]),
-            target_triple: FacetFilter::All,
-            machine_key: FacetFilter::All,
+        let discriminants = DiscriminantSetQuery {
+            engine: DiscriminantFilter::Explicit(nonempty!["criterion".to_owned()]),
+            target_triple: DiscriminantFilter::All,
+            machine_key: DiscriminantFilter::All,
         };
         // Branch mode, explicit base, no default cutoff: nothing is marked
         // auto-detected.
         let summary = effective_selection_summary(
-            &facets,
+            &discriminants,
             "release",
             false,
             None,
@@ -848,33 +1027,35 @@ mod tests {
         (key, parsed)
     }
 
-    /// The first-parent order and committer times for a `c0..c3` line.
-    fn topology() -> (HashMap<String, usize>, HashMap<String, Timestamp>) {
+    /// The first-parent order and committer times for a `c0..c3` base-ref line.
+    fn topology() -> BaseRefHistory {
         let mut order = HashMap::new();
-        let mut times = HashMap::new();
+        let mut commit_times = HashMap::new();
         for index in 0..=3 {
             let commit = format!("c{index}");
             order.insert(commit.clone(), index);
-            times.insert(
+            commit_times.insert(
                 commit,
                 Timestamp::from_second(i64::try_from(index).unwrap()).unwrap(),
             );
         }
-        (order, times)
+        BaseRefHistory {
+            order,
+            commit_times,
+            tip_index: Some(3),
+        }
     }
 
     #[test]
-    fn sibling_admission_keeps_on_history_base_side_commits() {
-        // c2 is on-history and at/before the c3 merge-base, so it is admitted with its
-        // topological index; c3 (the merge-base itself) is also base-side and kept.
-        let (order, times) = topology();
+    fn comparison_base_admission_keeps_base_ref_history_commits() {
+        // c2 is on the base ref's first-parent history, so it is admitted with its
+        // topological index; c3 (the base ref itself) is also kept.
+        let history = topology();
         let candidates = vec![sibling_key("c2"), sibling_key("c3")];
-        let observations = admit_sibling_observations(
+        let observations = admit_comparison_base_observations(
             candidates,
             AnalysisMode::Branch,
-            Some(3),
-            &order,
-            &times,
+            Some(&history),
             None,
             &cbh_diag::RecordingReporter::new(),
         );
@@ -883,45 +1064,36 @@ mod tests {
     }
 
     #[test]
-    fn sibling_admission_drops_off_history_and_branch_side_commits() {
-        // An unknown commit is off the analyzed history; a commit past the merge-base
-        // is branch-side. Neither can serve as a base-side comparison point.
-        let (mut order, times) = topology();
-        order.insert("f1".to_owned(), 4);
+    fn comparison_base_admission_drops_commits_off_the_base_ref_history() {
+        // Unknown commits and feature-branch commits are absent from the base ref's own
+        // first-parent history. Neither can serve as a base-ref comparison point.
+        let history = topology();
         let candidates = vec![
             sibling_key("unknown-commit"),
             sibling_key("c2"),
             sibling_key("f1"),
         ];
-        let observations = admit_sibling_observations(
+        let observations = admit_comparison_base_observations(
             candidates,
             AnalysisMode::Branch,
-            Some(3),
-            &order,
-            &times,
+            Some(&history),
             None,
             &cbh_diag::RecordingReporter::new(),
         );
         let indices: Vec<usize> = observations.iter().map(|obs| obs.topo_index).collect();
-        assert_eq!(
-            indices,
-            vec![2],
-            "only the on-history base-side c2 survives"
-        );
+        assert_eq!(indices, vec![2], "only the on-history base-ref c2 survives");
     }
 
     #[test]
-    fn sibling_admission_drops_commits_before_the_since_cutoff() {
+    fn comparison_base_admission_drops_commits_before_the_since_cutoff() {
         // A `--since` cutoff excludes commits committed before it, exactly as the
         // selection's own admission does.
-        let (order, times) = topology();
+        let history = topology();
         let candidates = vec![sibling_key("c0"), sibling_key("c2")];
-        let observations = admit_sibling_observations(
+        let observations = admit_comparison_base_observations(
             candidates,
             AnalysisMode::Branch,
-            Some(3),
-            &order,
-            &times,
+            Some(&history),
             Some(Timestamp::from_second(2).unwrap()),
             &cbh_diag::RecordingReporter::new(),
         );
@@ -930,16 +1102,14 @@ mod tests {
     }
 
     #[test]
-    fn sibling_admission_is_empty_outside_branch_mode_or_without_a_merge_base() {
-        let (order, times) = topology();
+    fn comparison_base_admission_is_empty_outside_branch_mode_or_without_base_ref_history() {
+        let history = topology();
         let reporter = cbh_diag::RecordingReporter::new();
         assert!(
-            admit_sibling_observations(
+            admit_comparison_base_observations(
                 vec![sibling_key("c2")],
                 AnalysisMode::History,
-                Some(3),
-                &order,
-                &times,
+                Some(&history),
                 None,
                 &reporter,
             )
@@ -947,17 +1117,15 @@ mod tests {
             "history mode has no single comparison base"
         );
         assert!(
-            admit_sibling_observations(
+            admit_comparison_base_observations(
                 vec![sibling_key("c2")],
                 AnalysisMode::Branch,
                 None,
-                &order,
-                &times,
                 None,
                 &reporter,
             )
             .is_empty(),
-            "an unknown merge-base cannot anchor a lag"
+            "an unavailable base-ref history cannot anchor a lag"
         );
     }
 }

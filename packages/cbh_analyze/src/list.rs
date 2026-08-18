@@ -30,9 +30,9 @@ use serde::Serialize;
 use tick::Clock;
 
 use super::{
-    AutoFacets, ReportFormat, RunIndex, Selection, Series, SeriesFilter, apply_blessings,
-    dirty_base_exception_warning, empty_history_hint, facet_filtered_candidates,
-    resolve_auto_facets, resolve_facets, resolve_now, select_dataset,
+    AutoDiscriminants, ReportFormat, RunIndex, Selection, Series, SeriesFilter, apply_blessings,
+    dirty_base_exception_warning, discriminant_filtered_candidates, empty_history_hint,
+    resolve_auto_discriminants, resolve_discriminants, resolve_now, select_dataset,
 };
 use crate::{
     AnalyzeError, CommitterTimeFailedError, InvalidBlessingError, InvalidStoredUtf8Error,
@@ -47,7 +47,7 @@ use crate::{
 /// "now" to (see [`analyze`](super::analyze)); production passes `None` for the
 /// runtime wall clock.
 // Thin real-adapter wiring: loads config from disk, builds the configured storage,
-// and shells out via `SystemGitHistory`/`detect_auto_facets` before delegating every
+// and shells out via `SystemGitHistory`/`detect_auto_discriminants` before delegating every
 // decision to the mutation-tested `list_with`. In-crate tests cannot drive these real
 // adapters deterministically; the binary's integration tests cover this edge.
 #[cfg_attr(test, mutants::skip)]
@@ -56,7 +56,7 @@ pub async fn execute(
     workspace_dir: &Path,
     clock_override: Option<Clock>,
     storage_override: Option<StorageFacade>,
-    auto_override: Option<AutoFacets>,
+    auto_override: Option<AutoDiscriminants>,
 ) -> Result<RenderedReports, AnalyzeError> {
     let reporter = StderrReporter::new(options.verbose);
 
@@ -78,7 +78,7 @@ pub async fn execute(
     storage.synchronize_cache(&project_id, &reporter).await?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
-    let auto = resolve_auto_facets(auto_override).await?;
+    let auto = resolve_auto_discriminants(auto_override).await?;
 
     let now = resolve_now(clock_override);
     // The object-load and detection work shares the ambient Tokio worker threads
@@ -113,7 +113,7 @@ pub(crate) async fn list_with<G, S>(
     project_id: &str,
     config: &Config,
     options: &ListOptions,
-    auto: &AutoFacets,
+    auto: &AutoDiscriminants,
     now: Timestamp,
     reporter: &dyn Reporter,
     spawner: &Spawner,
@@ -134,14 +134,15 @@ where
 
     match options.subject {
         ListSubject::Discriminants => {
-            // The discriminant listing is a facet-only view of storage; it never
+            // The discriminant listing is a discriminant-only view of storage; it never
             // resolves git topology, so it works without a repository. It is a
-            // discovery catalog, so omitted facets default to no filter (every
+            // discovery catalog, so omitted discriminant filters default to no filter (every
             // stored partition) rather than the current machine — pass `None` so a
             // user can see machine keys and triples they do not already know.
-            let facets = resolve_facets(&selection, None)?;
+            let discriminants = resolve_discriminants(&selection, None)?;
             let candidates =
-                facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
+                discriminant_filtered_candidates(storage, project_id, &discriminants, reporter)
+                    .await?;
             let mut sets: Vec<DiscriminantSet> = candidates
                 .into_iter()
                 .map(|(_, parsed)| parsed.set)
@@ -162,14 +163,15 @@ where
         ListSubject::Runs => {
             let filter = SeriesFilter::default();
             let dataset = select_dataset(
-                git, storage, project_id, config, &selection, filter, auto, now, reporter, spawner,
+                git, storage, project_id, config, &selection, filter, false, auto, now, reporter,
+                spawner,
             )
             .await?;
             let series = dataset.series;
             let listing = build_listing(project_id, &dataset.run_index, &series);
 
             // The same self-explaining diagnostics `analyze` shows: a hint when
-            // stored runs matched the facets but none entered the selection, and a
+            // stored runs matched the discriminant filters but none entered the selection, and a
             // warning when a dirty base-branch-tip run was admitted because the
             // working tree is dirty.
             let hint = empty_history_hint(
@@ -177,7 +179,7 @@ where
                 dataset.candidate_count,
                 &dataset.target_ref,
                 dataset.tally,
-                &dataset.facets,
+                &dataset.discriminants,
             );
             let warning = dataset
                 .included_dirty_base_exception
@@ -534,9 +536,10 @@ struct BlessingEntry {
 /// Lists blessings for `list blessings`.
 ///
 /// Default: every blessing recorded at the current commit (HEAD) in the
-/// facet-selected sets — the sidecars a fresh `unbless` would remove. `--all`: the
-/// most recent blessing of every benchmark across the analysis window `analyze`
-/// would resolve, so a user can audit which benchmarks are currently re-baselined.
+/// sets selected by discriminant filters — the sidecars a fresh `unbless` would remove.
+/// `--all`: the most recent blessing of every benchmark across the analysis window
+/// `analyze` would resolve, so a user can audit which benchmarks are currently
+/// re-baselined.
 #[expect(
     clippy::too_many_arguments,
     reason = "mirrors the analyze selection pipeline, which threads the same injected ports"
@@ -547,7 +550,7 @@ async fn list_blessings<G, S>(
     project_id: &str,
     config: &Config,
     options: &ListOptions,
-    auto: &AutoFacets,
+    auto: &AutoDiscriminants,
     now: Timestamp,
     reporter: &dyn Reporter,
     spawner: &Spawner,
@@ -577,13 +580,13 @@ where
 }
 
 /// Collects the blessings recorded at the current commit (HEAD) in the
-/// facet-selected sets, returning the abbreviated HEAD label and the rows.
+/// sets selected by discriminant filters, returning the abbreviated HEAD label and the rows.
 async fn blessings_at_head<G, S>(
     git: &G,
     storage: &S,
     project_id: &str,
     selection: &Selection<'_>,
-    auto: &AutoFacets,
+    auto: &AutoDiscriminants,
     reporter: &dyn Reporter,
 ) -> Result<(String, Vec<BlessingEntry>), AnalyzeError>
 where
@@ -602,8 +605,9 @@ where
                  needed.",
             )
         })?;
-    let facets = resolve_facets(selection, Some(auto))?;
-    let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
+    let discriminants = resolve_discriminants(selection, Some(auto))?;
+    let candidates =
+        discriminant_filtered_candidates(storage, project_id, &discriminants, reporter).await?;
 
     // The blessed commit is HEAD; its committer date comes from git topology, so
     // the sidecar itself need not carry a denormalized copy. A single-commit read
@@ -649,7 +653,7 @@ async fn blessings_across_window<G, S>(
     project_id: &str,
     config: &Config,
     selection: &Selection<'_>,
-    auto: &AutoFacets,
+    auto: &AutoDiscriminants,
     now: Timestamp,
     reporter: &dyn Reporter,
     spawner: &Spawner,
@@ -660,7 +664,7 @@ where
 {
     let filter = SeriesFilter::default();
     let dataset = select_dataset(
-        git, storage, project_id, config, selection, filter, auto, now, reporter, spawner,
+        git, storage, project_id, config, selection, filter, false, auto, now, reporter, spawner,
     )
     .await?;
     let mut series = dataset.series;
@@ -908,9 +912,9 @@ mod tests {
         Config::default()
     }
 
-    /// The auto-detected facets the tests seed their default partition under.
-    fn auto() -> AutoFacets {
-        AutoFacets {
+    /// The auto-detected discriminant values the tests seed their default partition under.
+    fn auto() -> AutoDiscriminants {
+        AutoDiscriminants {
             triple: "x86_64-unknown-linux-gnu".to_owned(),
             machine_key: "m1".into(),
         }
@@ -1398,7 +1402,7 @@ mod tests {
     }
 
     #[test]
-    fn list_engine_facet_restricts_the_data_set() {
+    fn list_engine_discriminant_restricts_the_data_set() {
         // Two sets in the same triple/machine-key partition differing only by engine.
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c0"), &two_metric_set(0, "c0"));
@@ -1457,7 +1461,7 @@ mod tests {
     }
 
     #[test]
-    fn list_discriminants_shows_all_sets_by_default_and_facets_narrow() {
+    fn list_discriminants_shows_all_sets_by_default_and_discriminants_narrow() {
         // The discriminants index never requires a repository.
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c0"), &two_metric_set(0, "c0"));
@@ -1468,7 +1472,7 @@ mod tests {
         );
         let git = FakeGitHistory::new(); // No repo, but listing does not need one.
 
-        // With no facets the catalog is unfiltered: it shows every stored partition
+        // With no discriminant filters the catalog is unfiltered: it shows every stored partition
         // — including the windows/m1 set that does not match the current machine —
         // so a user can discover triples and machine keys they do not already know.
         let opts = ListOptions {
@@ -1490,7 +1494,7 @@ mod tests {
         assert!(engines.contains(&"callgrind"), "{report}");
         assert!(engines.contains(&"criterion"), "{report}");
 
-        // An explicit facet still narrows the catalog. The discriminants catalog
+        // An explicit discriminant filter still narrows the catalog. The discriminants catalog
         // lists every stored partition regardless of the auto-detected triple or
         // machine key, but an explicit `--engine` still filters it.
         let opts = ListOptions {

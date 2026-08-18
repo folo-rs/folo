@@ -136,6 +136,17 @@ pub(crate) const BRANCH_PRACTICAL_RELATIVE: f64 = 0.05;
 /// noise, independently of how the tip compares against the base level.
 pub(crate) const BRANCH_NOISE_MULTIPLE: f64 = 2.0;
 
+/// Default `drift_noise_multiple`: multiple of the per-measurement noise floor a
+/// drift's total movement must exceed where the engine reports per-point confidence
+/// intervals.
+///
+/// Serves the same role for a trend that [`BRANCH_NOISE_MULTIPLE`] serves for a
+/// branch move: it vetoes movement the engine's own dispersion cannot distinguish
+/// from noise. The two are held equal because the question each asks is the same one
+/// — whether the endpoints separate by more than the per-point dispersion — and neither
+/// detector has evidence the other lacks to justify a different standard.
+pub(crate) const DRIFT_NOISE_MULTIPLE: f64 = 2.0;
+
 /// Default `residual_noise_multiple`: multiple of a series' own between-commit
 /// residual scatter a move must exceed to clear the primary noise gate.
 pub(crate) const RESIDUAL_NOISE_MULTIPLE: f64 = 3.0;
@@ -152,7 +163,7 @@ pub(crate) const MIN_REGIME_SEPARATION: f64 = 0.85;
 /// costs. Reporting a move makes a claim that a human then checks. Accepting a
 /// boundary *discards evidence*: the comparison sample shrinks to the trailing
 /// regime and the scatter estimate is rebuilt from it alone, so a wrong boundary can
-/// collapse a noisy window's dispersion to near zero and make any subsequent tip
+/// collapse a noisy window's scatter to near zero and make any subsequent tip
 /// read as certain. A boundary that throws data away must therefore be unambiguous,
 /// which is a higher standard than merely reporting a move.
 ///
@@ -165,7 +176,3 @@ pub(crate) const MIN_REGIME_SEPARATION: f64 = 0.85;
 /// two levels leaves several contradicting pairs in every candidate split and is
 /// rejected on that basis.
 pub(crate) const MIN_BASE_SPLIT_SEPARATION: f64 = 0.95;
-
-/// Largest interior window size resolved-spike search will scan; longer histories
-/// skip the quadratic search rather than stall.
-pub(crate) const RESOLVED_SPIKE_MAX_POINTS: usize = 200;

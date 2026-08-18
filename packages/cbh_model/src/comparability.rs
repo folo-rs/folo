@@ -3,8 +3,10 @@
 //!
 //! The guiding rule (see the *Comparability & storage partitioning* section of
 //! `DESIGN.md`) is to partition only by what makes results *fundamentally*
-//! incomparable — project, engine, target triple, and a machine key — and to
-//! record everything else as metadata so its effect stays visible in the timeline.
+//! incomparable. The project selects the enclosing store, so results from two
+//! projects never meet. Inside a project, a [`DiscriminantSet`] is engine, target
+//! triple, and machine key. Everything else is recorded as metadata so its effect
+//! stays visible in the timeline.
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -23,18 +25,47 @@ use super::identifiers::{MachineKey, TargetTriple};
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Engine {
-    /// Criterion wall-clock benchmarks: noisy, with a confidence interval.
+    /// Criterion wall-clock benchmarks: noisy, with confidence intervals on every point.
     Criterion,
     /// Callgrind (via Gungraun) instruction counts: simulated and low-noise, yet
     /// still machine-dependent (microarchitecture-specific library dispatch moves
     /// the counts), so its history is partitioned by machine key like every engine.
+    /// It reports single simulated figures rather than interval estimates.
     Callgrind,
     /// `alloc_tracker` allocation counts and bytes: not deterministic — warmup and
     /// buffer-resize allocations jitter the per-iteration figure, which is amortized
-    /// over a Criterion-chosen iteration count.
+    /// over a Criterion-chosen iteration count. A confidence interval is present
+    /// only when the operation was measured over several spans.
     AllocTracker,
-    /// `all_the_time` processor-time measurements: noisy, with a confidence interval.
+    /// `all_the_time` processor-time measurements: noisy. A confidence interval is
+    /// present only when the operation was measured over several spans.
     AllTheTime,
+}
+
+/// Whether an engine can attach confidence-interval bounds to parsed metrics.
+///
+/// This is the production contract for interval availability. Adapters may omit
+/// bounds only in the cases described here; analysis treats any present interval
+/// as a suppression-only veto, never as evidence that creates a finding.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum IntervalSupport {
+    /// Every persisted point carries confidence-interval bounds.
+    ///
+    /// The engine always estimates a point from a statistical sample that includes
+    /// interval bounds, so every metric parsed from its normal output can carry
+    /// those bounds into analysis.
+    Always,
+    /// Only multi-span measurements carry confidence-interval bounds.
+    ///
+    /// A single measured span has a point estimate but no between-span dispersion
+    /// to bound; once several spans are present, the producer can estimate interval
+    /// bounds and the adapter preserves them.
+    MultiSpanOnly,
+    /// Persisted points never carry confidence-interval bounds.
+    ///
+    /// The engine reports one simulated or observed value per metric rather than a
+    /// statistical interval estimate.
+    Never,
 }
 
 impl Engine {
@@ -68,6 +99,21 @@ impl Engine {
             "alloc_tracker" => Some(Self::AllocTracker),
             "all_the_time" => Some(Self::AllTheTime),
             _ => None,
+        }
+    }
+
+    /// Whether metrics parsed from this engine carry confidence intervals.
+    ///
+    /// Criterion stores an interval with every statistical estimate. Callgrind
+    /// stores low-noise simulated counts as single figures. `alloc_tracker` and
+    /// `all_the_time` store interval bounds only when the producer measured several
+    /// spans for the operation.
+    #[must_use]
+    pub fn interval_support(self) -> IntervalSupport {
+        match self {
+            Self::Criterion => IntervalSupport::Always,
+            Self::Callgrind => IntervalSupport::Never,
+            Self::AllocTracker | Self::AllTheTime => IntervalSupport::MultiSpanOnly,
         }
     }
 }
@@ -578,6 +624,19 @@ mod tests {
     fn engine_from_name_is_case_insensitive() {
         assert_eq!(Engine::from_name("Callgrind"), Some(Engine::Callgrind));
         assert_eq!(Engine::from_name("ALL_THE_TIME"), Some(Engine::AllTheTime));
+    }
+
+    #[test]
+    fn interval_support_is_declared_for_every_engine() {
+        for engine in Engine::ALL {
+            let expected = match engine {
+                Engine::Criterion => IntervalSupport::Always,
+                Engine::Callgrind => IntervalSupport::Never,
+                Engine::AllocTracker | Engine::AllTheTime => IntervalSupport::MultiSpanOnly,
+            };
+
+            assert_eq!(engine.interval_support(), expected);
+        }
     }
 
     #[test]
