@@ -30,6 +30,11 @@ use crate::{
 /// it. Such a callback may operate on the endpoints of the event it belongs to: it may poll the
 /// receiver to completion, and it may drop an endpoint - including the last one, which releases
 /// the event storage.
+///
+/// A poll that registers the task for later notification runs the waker's clone operation, which
+/// is likewise user-supplied code. Such a callback may operate on the sender endpoint of the event
+/// being polled: it may send a value and it may drop the sender. The poll observes the resulting
+/// state.
 pub struct LocalEvent<T> {
     /// The logical state of the event; see constants in `state.rs`.
     pub(crate) state: Cell<u8>,
@@ -379,9 +384,35 @@ impl<T: 'static> LocalEvent<T> {
         self.backtrace.replace(Some(capture_backtrace()));
 
         match self.state.get() {
-            EVENT_BOUND => {
-                // The sender has not yet set any value, so we will have to wait.
+            EVENT_BOUND => self.poll_bound(waker),
+            EVENT_SET => Some(Ok(self.poll_set())),
+            EVENT_AWAITING => self.poll_awaiting(waker),
+            EVENT_DISCONNECTED => {
+                // There is no result coming, ever! This is the end.
+                Some(Err(Disconnected))
+            }
+            // Defensive: state machine guarantees this is unreachable.
+            state => {
+                unreachable!("unreachable LocalEvent state on poll: {state}");
+            }
+        }
+    }
 
+    /// `poll()` impl for the `EVENT_BOUND` state.
+    #[must_use]
+    fn poll_bound(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
+        // The sender has not yet set any value, so we will have to wait.
+
+        // `Waker::clone` runs arbitrary user code, which is free to operate on the sender endpoint
+        // of this same event and thereby move the event into a terminal state. We therefore clone
+        // before touching the event and consult the state again afterwards. This mirrors the
+        // compare-exchange in the sync `Event::poll_bound`: reentrancy hands the single-threaded
+        // variant the same interleavings that concurrency hands the thread-safe one.
+        // Ref: docs/callback-safety.md.
+        let new_waker = waker.clone();
+
+        match self.state.get() {
+            EVENT_BOUND => {
                 // SAFETY: The only other potential references to the field are other short-lived
                 // references in this type, which cannot exist at the moment because
                 // the type is single-threaded and does not let any references escape.
@@ -389,40 +420,74 @@ impl<T: 'static> LocalEvent<T> {
                 // SAFETY: UnsafeCell pointer is never null.
                 let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
 
-                awaiter_cell.write(waker.clone());
+                awaiter_cell.write(new_waker);
 
                 // The sender will wake us up when it has set the value.
                 self.state.set(EVENT_AWAITING);
                 None
             }
             EVENT_SET => {
-                // The sender has delivered a value and we can complete the event.
+                // A reentrant sender delivered the value while we were cloning the waker. Nobody
+                // would ever consume a registration made now, so we release the clone instead.
+                // Releasing it runs user code, which must not see the event mid-extraction: the
+                // value comes out only once no callback can run, so an unwinding destructor leaves
+                // `EVENT_SET` still backed by an initialized value for the receiver to clean up.
+                // Ref: docs/callback-safety.md.
+                drop(new_waker);
 
-                // SAFETY: The only other potential references to the field are other short-lived
-                // references in this type, which cannot exist at the moment because
-                // the type is single-threaded and does not let any references escape.
-                let value_cell_maybe = unsafe { self.value.get().as_ref() };
-                // SAFETY: UnsafeCell pointer is never null.
-                let value_cell = unsafe { value_cell_maybe.unwrap_unchecked() };
-
-                // We extract the value and consider the cell uninitialized.
-                //
-                // SAFETY: We were in EVENT_SET which guarantees there is a value in there.
-                let value = unsafe { value_cell.assume_init_read() };
-
-                Some(Ok(value))
+                Some(Ok(self.poll_set()))
             }
+            EVENT_DISCONNECTED => {
+                // A reentrant sender drop disconnected while we were cloning the waker, so there
+                // is no result coming, ever. We release the clone that nobody would consume.
+                drop(new_waker);
+
+                Some(Err(Disconnected))
+            }
+            // Defensive: only the receiver enters EVENT_AWAITING and it is right here, so the
+            // state machine guarantees this is unreachable.
+            state => {
+                unreachable!("unreachable LocalEvent state on poll of bound event: {state}");
+            }
+        }
+    }
+
+    /// `poll()` impl for the `EVENT_SET` state.
+    #[must_use]
+    fn poll_set(&self) -> T {
+        // The sender has delivered a value and we can complete the event.
+
+        // SAFETY: The only other potential references to the field are other short-lived
+        // references in this type, which cannot exist at the moment because
+        // the type is single-threaded and does not let any references escape.
+        let value_cell_maybe = unsafe { self.value.get().as_ref() };
+        // SAFETY: UnsafeCell pointer is never null.
+        let value_cell = unsafe { value_cell_maybe.unwrap_unchecked() };
+
+        // We extract the value and consider the cell uninitialized.
+        //
+        // SAFETY: We were in EVENT_SET which guarantees there is a value in there.
+        unsafe { value_cell.assume_init_read() }
+    }
+
+    /// `poll()` impl for the `EVENT_AWAITING` state.
+    #[must_use]
+    fn poll_awaiting(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
+        // We are re-polling after previously starting a wait. This is fine
+        // and we just need to clean up the previous waker, replacing it with
+        // a new one. The previous registration must be released exactly once;
+        // overwriting it without dropping would leak a `Waker` reference.
+
+        // Clone the incoming waker before touching the cell. `Waker::clone` runs arbitrary user
+        // code, so it must not observe the cell in the transiently-uninitialized window between
+        // the read and the write below. That code is also free to operate on the sender endpoint
+        // of this same event, which moves the event into a terminal state and takes the
+        // previously registered waker along the way, so we consult the state again afterwards.
+        // Ref: docs/callback-safety.md.
+        let new_waker = waker.clone();
+
+        match self.state.get() {
             EVENT_AWAITING => {
-                // We are re-polling after previously starting a wait. This is fine
-                // and we just need to clean up the previous waker, replacing it with
-                // a new one. The previous registration must be released exactly once;
-                // overwriting it without dropping would leak a `Waker` reference.
-
-                // Clone the incoming waker before touching the cell. `Waker::clone`
-                // runs arbitrary vtable code, so it must not observe the cell in the
-                // transiently-uninitialized window between the read and the write below.
-                let new_waker = waker.clone();
-
                 // Extract the previous waker in a tight scope so the
                 // `&mut MaybeUninit<Waker>` borrow is released before we drop it below:
                 // a waker's drop runs arbitrary vtable code that must not observe an
@@ -448,17 +513,33 @@ impl<T: 'static> LocalEvent<T> {
                 };
 
                 // Release the previous registration exactly once, now that the borrow is gone.
+                // A reentrant sender that completes the event from this destructor takes the
+                // registration we just made and wakes it, so the caller is still told to come
+                // back even though we report being pending. We touch nothing in the event after
+                // this point.
                 drop(previous_waker);
 
                 None
             }
+            EVENT_SET => {
+                // A reentrant sender delivered the value while we were cloning the waker, taking
+                // the previous registration with it. See the equivalent arm of `poll_bound()` for
+                // why the unused clone is released before the value comes out.
+                drop(new_waker);
+
+                Some(Ok(self.poll_set()))
+            }
             EVENT_DISCONNECTED => {
-                // There is no result coming, ever! This is the end.
+                // A reentrant sender drop disconnected while we were cloning the waker, taking
+                // the previous registration with it. There is no result coming, ever.
+                drop(new_waker);
+
                 Some(Err(Disconnected))
             }
-            // Defensive: state machine guarantees this is unreachable.
+            // Defensive: only the receiver leaves EVENT_AWAITING for a non-terminal state and it
+            // is right here, so the state machine guarantees this is unreachable.
             state => {
-                unreachable!("unreachable LocalEvent state on poll: {state}");
+                unreachable!("unreachable LocalEvent state on poll of awaited event: {state}");
             }
         }
     }
@@ -662,7 +743,9 @@ mod tests {
     use std::task::{self, Poll};
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
-    use testing::{DropOnWakerRelease, ReentrantWakerData, drop_waker, with_watchdog};
+    use testing::{
+        DropOnWakerRelease, ReentrantWakerData, clone_action_waker, drop_waker, with_watchdog,
+    };
 
     use super::*;
     use crate::IntoValueError;
@@ -1570,4 +1653,126 @@ mod tests {
     /// Without it the test would pass no matter how the code under test behaved.
     const REENTRANCY_REQUIRED: &str =
         "the event must have held a waker clone whose drop reentered the operation under test";
+
+    /// Explains a failure to reach the reentrant clone that a regression test exists to exercise.
+    /// Without it the test would pass no matter how the code under test behaved.
+    const WAKER_CLONE_REQUIRED: &str =
+        "the poll must have cloned the waker it was given, which is what re-enters the sender";
+
+    // Regression tests for the reentrancy hazard in `poll`. Registering an awaiter clones the
+    // waker, which is user code that may operate on the sender endpoint of the same event and
+    // move it into a terminal state. The poll must observe the state the clone left behind
+    // instead of overwriting it with EVENT_AWAITING, which would strand the receiver and lose
+    // the result. Ref: docs/callback-safety.md.
+    #[test]
+    fn boxed_poll_with_reentrant_send_during_waker_clone_observes_set() {
+        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let mut receiver = Box::pin(receiver);
+
+        // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
+        let (waker, cloned) = unsafe { clone_action_waker(move || sender.send(42)) };
+
+        let mut cx = task::Context::from_waker(&waker);
+        let poll_result = receiver.as_mut().poll(&mut cx);
+
+        assert!(cloned.get(), "{WAKER_CLONE_REQUIRED}");
+        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+    }
+
+    #[test]
+    fn boxed_poll_with_reentrant_sender_drop_during_waker_clone_observes_disconnected() {
+        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let mut receiver = Box::pin(receiver);
+
+        // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
+        let (waker, cloned) = unsafe { clone_action_waker(move || drop(sender)) };
+
+        let mut cx = task::Context::from_waker(&waker);
+        let poll_result = receiver.as_mut().poll(&mut cx);
+
+        assert!(cloned.get(), "{WAKER_CLONE_REQUIRED}");
+        assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
+    }
+
+    // The same hazard on the re-poll path, where the reentrant sender additionally consumes the
+    // previously registered waker on its way to the terminal state.
+    #[test]
+    fn boxed_repoll_with_reentrant_send_during_waker_clone_observes_set() {
+        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let mut receiver = Box::pin(receiver);
+
+        // First poll transitions BOUND -> AWAITING and registers a waker for the sender to take.
+        let mut cx = task::Context::from_waker(Waker::noop());
+        assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
+
+        // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
+        let (waker, cloned) = unsafe { clone_action_waker(move || sender.send(42)) };
+
+        let mut cx = task::Context::from_waker(&waker);
+        let poll_result = receiver.as_mut().poll(&mut cx);
+
+        assert!(cloned.get(), "{WAKER_CLONE_REQUIRED}");
+        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+    }
+
+    #[test]
+    fn boxed_repoll_with_reentrant_sender_drop_during_waker_clone_observes_disconnected() {
+        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let mut receiver = Box::pin(receiver);
+
+        let mut cx = task::Context::from_waker(Waker::noop());
+        assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
+
+        // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
+        let (waker, cloned) = unsafe { clone_action_waker(move || drop(sender)) };
+
+        let mut cx = task::Context::from_waker(&waker);
+        let poll_result = receiver.as_mut().poll(&mut cx);
+
+        assert!(cloned.get(), "{WAKER_CLONE_REQUIRED}");
+        assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
+    }
+
+    // The re-poll path releases the registration made by the previous poll, which is user code
+    // that may drop the sender and thereby complete the event from inside the re-poll. The
+    // replacement registration is written before that destructor runs, so the completion finds it
+    // and wakes it. Reporting pending therefore loses no wakeup.
+    // Ref: docs/callback-safety.md.
+    #[test]
+    #[cfg_attr(miri, ignore)] // Custom raw waker is not Miri-compatible.
+    fn boxed_repoll_with_reentrant_sender_drop_during_previous_waker_release_wakes_new_waker() {
+        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let mut receiver = Box::pin(receiver);
+
+        let (data, sender_dropped) = DropOnWakerRelease::new(sender);
+        // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
+        let previous_waker = unsafe { drop_waker(data) };
+
+        // First poll transitions BOUND -> AWAITING and registers a clone of `previous_waker`.
+        let mut cx = task::Context::from_waker(&previous_waker);
+        assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
+
+        // Release our own reference so the registration inside the event is the last one and
+        // dropping it drops the sender it carries.
+        drop(previous_waker);
+        assert!(!sender_dropped.get());
+
+        let new_waker_data = ReentrantWakerData::new(|| {});
+        // SAFETY: `new_waker_data` outlives the waker and the test is single-threaded.
+        let new_waker = unsafe { new_waker_data.waker() };
+
+        let mut cx = task::Context::from_waker(&new_waker);
+        assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
+
+        assert!(sender_dropped.get(), "{REENTRANCY_REQUIRED}");
+        assert!(
+            new_waker_data.was_woken(),
+            "the completion must have reached the registration made by this poll"
+        );
+
+        assert!(matches!(
+            receiver.as_mut().poll(&mut cx),
+            Poll::Ready(Err(Disconnected))
+        ));
+    }
 }
