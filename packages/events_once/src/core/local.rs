@@ -662,7 +662,7 @@ mod tests {
     use std::task::{self, Poll};
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
-    use testing::{ReentrantWakerData, drop_waker, with_watchdog};
+    use testing::{DropOnWakerRelease, ReentrantWakerData, drop_waker, with_watchdog};
 
     use super::*;
     use crate::IntoValueError;
@@ -1416,6 +1416,59 @@ mod tests {
         });
     }
 
+    // Parity counterpart of the `set` case above. A waker fired by the sender
+    // drop that synchronously polls the receiver must likewise observe a
+    // terminal state, here DISCONNECTED.
+    #[test]
+    #[cfg_attr(miri, ignore)] // Custom raw waker is not Miri-compatible.
+    fn boxed_sender_drop_with_reentrant_waker_observes_disconnected() {
+        type ObservedResult = Poll<Result<i32, Disconnected>>;
+
+        with_watchdog(|| {
+            let (sender, receiver) = LocalEvent::<i32>::boxed();
+            let receiver_holder: Rc<RefCell<Option<Pin<Box<_>>>>> =
+                Rc::new(RefCell::new(Some(Box::pin(receiver))));
+            let receiver_for_waker = Rc::clone(&receiver_holder);
+
+            let reentrant_observed: Rc<RefCell<Option<ObservedResult>>> =
+                Rc::new(RefCell::new(None));
+            let observed_for_waker = Rc::clone(&reentrant_observed);
+
+            let waker_data = ReentrantWakerData::new(move || {
+                let mut holder = receiver_for_waker.borrow_mut();
+                let receiver = holder.as_mut().expect("receiver still held");
+                let noop = Waker::noop();
+                let mut cx = task::Context::from_waker(noop);
+                let result = receiver.as_mut().poll(&mut cx);
+                *observed_for_waker.borrow_mut() = Some(result);
+            });
+            // SAFETY: `waker_data` outlives the waker and the test is single-threaded.
+            let waker = unsafe { waker_data.waker() };
+
+            // First poll transitions BOUND -> AWAITING and stores the
+            // reentrant waker.
+            {
+                let mut holder = receiver_holder.borrow_mut();
+                let receiver = holder.as_mut().expect("receiver still held");
+                let mut cx = task::Context::from_waker(&waker);
+                assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
+            }
+
+            // Dropping the sender transitions AWAITING -> DISCONNECTED and then
+            // invokes the waker, which must observe the terminal state.
+            drop(sender);
+
+            assert!(waker_data.was_woken());
+            let observed = reentrant_observed.borrow_mut().take();
+            assert!(
+                matches!(observed, Some(Poll::Ready(Err(Disconnected)))),
+                "reentrant poll should observe DISCONNECTED",
+            );
+
+            drop(receiver_holder.borrow_mut().take());
+        });
+    }
+
     // Regression test for the cancellation reentrancy hazard in `final_poll`.
     // A stored waker whose destructor reentrantly drops the sender must not
     // cause the event storage to be deallocated while `final_poll` is still
@@ -1430,7 +1483,7 @@ mod tests {
         let (sender, receiver) = LocalEvent::<i32>::boxed();
         let mut receiver = Box::pin(receiver);
 
-        let (data, sender_dropped) = DropEndpointOnWakerDrop::new(sender);
+        let (data, sender_dropped) = DropOnWakerRelease::new(sender);
         // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
         let waker = unsafe { drop_waker(data) };
 
@@ -1462,18 +1515,16 @@ mod tests {
     fn boxed_send_with_reentrant_receiver_drop_releases_storage() {
         let (sender, receiver) = LocalEvent::<i32>::boxed();
 
-        let (data, receiver_dropped) = DropEndpointOnWakerDrop::new(Box::pin(receiver));
+        let (data, receiver_dropped) = DropOnWakerRelease::new(Box::pin(receiver));
         // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
         let waker = unsafe { drop_waker(Arc::clone(&data)) };
 
         // First poll transitions BOUND -> AWAITING and stores a clone of the
         // waker inside the event.
-        {
-            let mut endpoint = data.endpoint.borrow_mut();
-            let receiver = endpoint.as_mut().expect("receiver still held");
+        data.with_value(|receiver| {
             let mut cx = task::Context::from_waker(&waker);
             assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
-        }
+        });
 
         // Leave the event's stored clone as the only reference, so waking it
         // runs the reentrant drop.
@@ -1495,16 +1546,14 @@ mod tests {
     fn boxed_sender_drop_with_reentrant_receiver_drop_releases_storage() {
         let (sender, receiver) = LocalEvent::<i32>::boxed();
 
-        let (data, receiver_dropped) = DropEndpointOnWakerDrop::new(Box::pin(receiver));
+        let (data, receiver_dropped) = DropOnWakerRelease::new(Box::pin(receiver));
         // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
         let waker = unsafe { drop_waker(Arc::clone(&data)) };
 
-        {
-            let mut endpoint = data.endpoint.borrow_mut();
-            let receiver = endpoint.as_mut().expect("receiver still held");
+        data.with_value(|receiver| {
             let mut cx = task::Context::from_waker(&waker);
             assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
-        }
+        });
 
         drop(waker);
         drop(data);
@@ -1515,37 +1564,6 @@ mod tests {
         drop(sender);
 
         assert!(receiver_dropped.get(), "{REENTRANCY_REQUIRED}");
-    }
-
-    /// Owns an event endpoint on behalf of a waker, dropping that endpoint once the last waker
-    /// reference goes away. When the event under test releases its stored waker while completing
-    /// or cancelling, the endpoint drop therefore happens reentrantly, from inside the operation
-    /// being tested.
-    struct DropEndpointOnWakerDrop<T> {
-        endpoint: RefCell<Option<T>>,
-        dropped: Rc<Cell<bool>>,
-    }
-
-    impl<T> DropEndpointOnWakerDrop<T> {
-        /// Returns the payload together with a flag that records whether the endpoint has been
-        /// dropped, letting a test prove that the reentrancy it targets actually occurred.
-        fn new(endpoint: T) -> (Arc<Self>, Rc<Cell<bool>>) {
-            let dropped = Rc::new(Cell::new(false));
-
-            let data = Arc::new(Self {
-                endpoint: RefCell::new(Some(endpoint)),
-                dropped: Rc::clone(&dropped),
-            });
-
-            (data, dropped)
-        }
-    }
-
-    impl<T> Drop for DropEndpointOnWakerDrop<T> {
-        fn drop(&mut self) {
-            drop(self.endpoint.borrow_mut().take());
-            self.dropped.set(true);
-        }
     }
 
     /// Explains a failure to reach the reentrant drop that a regression test exists to exercise.
