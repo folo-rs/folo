@@ -777,9 +777,15 @@ where
         // We use Relaxed ordering because this is independent of any other data.
         // If something wishes to actually obtain the value from the event, that
         // logic will perform its own synchronization.
+        //
+        // Only terminal states count as ready. `EVENT_SIGNALING` is the transient window
+        // during which the sender is mid-`set()`: the value is not yet retrievable, so
+        // `into_value()` still reports `Pending` there. Reporting readiness in that window
+        // would disagree with immediate value retrieval (issue #462). This matches the
+        // single-threaded variant, whose `is_set()` also admits only terminal states.
         matches!(
             self.state.load(atomic::Ordering::Relaxed),
-            EVENT_SET | EVENT_SIGNALING | EVENT_DISCONNECTED
+            EVENT_SET | EVENT_DISCONNECTED
         )
     }
 
@@ -2074,6 +2080,56 @@ mod tests {
 
                 send_thread.join().unwrap();
                 drop_thread.join().unwrap();
+            });
+        });
+    }
+
+    // Regression test for issue #462: `is_ready()` must not report readiness while the
+    // sender is mid-`set()` in the transient SIGNALING state, because `into_value()` still
+    // reports `Pending` there. The two must agree. `EVENT_SIGNALING` is not a terminal
+    // state, so it must count as "not ready".
+    #[test]
+    #[cfg_attr(miri, ignore)] // Barrier-heavy threading pattern is too slow for Miri.
+    fn boxed_is_ready_false_while_sender_signaling() {
+        with_watchdog(|| {
+            let BarrierHook {
+                entered,
+                proceed,
+                hook,
+            } = barrier_hook();
+            with_hook(&HOOK_SET_IN_SIGNALING, hook, || {
+                let (sender, receiver) = Event::<i32>::boxed();
+                let mut receiver = Box::pin(receiver);
+
+                // First poll transitions BOUND -> AWAITING so that the sender's
+                // `set()` takes the AWAITING path that pauses at the hook.
+                let mut cx = task::Context::from_waker(Waker::noop());
+                let poll_result = receiver.as_mut().poll(&mut cx);
+                assert!(matches!(poll_result, Poll::Pending));
+
+                // Sender sends on a separate thread. The swap transitions
+                // AWAITING -> SIGNALING, then the sender pauses at the hook while
+                // still in the SIGNALING state.
+                let send_thread = thread::spawn(move || {
+                    HOOK_PARTICIPANT.set(true);
+                    sender.send(42);
+                });
+
+                // Wait for the hook to fire (sender is parked in SIGNALING).
+                entered.wait();
+
+                // The value is not yet retrievable in SIGNALING, so readiness must be
+                // false here, consistent with `into_value()` reporting `Pending`.
+                assert!(!receiver.is_ready());
+
+                // Release the sender so it completes SIGNALING -> SET.
+                proceed.wait();
+                send_thread.join().unwrap();
+
+                // Now in the terminal SET state, readiness agrees with retrieval.
+                assert!(receiver.is_ready());
+                let poll_result = receiver.as_mut().poll(&mut cx);
+                assert!(matches!(poll_result, Poll::Ready(Ok(42))));
             });
         });
     }
