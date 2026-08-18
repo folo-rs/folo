@@ -67,8 +67,8 @@ pub(crate) struct MeasureResult {
     pub(crate) series: usize,
     /// Flagged regressions.
     pub(crate) regressions: usize,
-    /// Flagged improvements.
-    pub(crate) improvements: usize,
+    /// Flagged improvements, or `None` in a mode that does not report them.
+    pub(crate) improvements: Option<usize>,
     /// Whether any finding survived (the downstream signal).
     pub(crate) notable: bool,
 }
@@ -82,8 +82,9 @@ struct ReportCounts {
     series: usize,
     /// Flagged regressions.
     regressions: usize,
-    /// Flagged improvements.
-    improvements: usize,
+    /// Flagged improvements. Absent from the report in a mode that does not report
+    /// improvements.
+    improvements: Option<usize>,
     /// Whether any finding survived.
     notable: bool,
 }

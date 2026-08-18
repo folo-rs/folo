@@ -83,7 +83,7 @@ the display. The full rejected set may still have a false-discovery bound, but t
 findings do not.
 
 The order is conservative in another way too. The detectors' chance levels are two-sided, so an
-unchanged series has only about half that chance to raise a candidate in one named direction.
+unchanged series has at most half that chance to raise a candidate in one named direction.
 The bar the correction sets is therefore met with room to spare, which is why the target is an
 upper bound rather than a level the tool aims at.
 

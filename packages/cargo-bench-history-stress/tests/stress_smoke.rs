@@ -65,10 +65,6 @@ const SERIES: usize = BENCHMARKS * DISCRIMINANT_SETS;
 /// set no blessing re-baselined.
 const HISTORY_REGRESSIONS: usize = 2 * DISCRIMINANT_SETS + (DISCRIMINANT_SETS - BLESSED_SETS);
 
-/// History-mode improvements the seeded shapes produce: the step-down family, in
-/// every set.
-const HISTORY_IMPROVEMENTS: usize = DISCRIMINANT_SETS;
-
 /// Branch-mode regressions the seeded shapes produce: the two seeded benchmarks the
 /// feature branch elevates, in every set.
 const BRANCH_REGRESSIONS: usize = 2 * DISCRIMINANT_SETS;
@@ -93,8 +89,8 @@ struct ModeRow {
     series: usize,
     /// Regressions the mode flagged.
     regressions: usize,
-    /// Improvements the mode flagged.
-    improvements: usize,
+    /// Improvements the mode flagged, or `None` for a mode that does not report them.
+    improvements: Option<usize>,
     /// Whether any finding survived.
     notable: bool,
 }
@@ -169,13 +165,17 @@ fn parse_mode_row(line: &str) -> Option<(String, ModeRow)> {
         "no" => false,
         _ => return None,
     };
+    let improvements = match *improvements {
+        "n/a" => None,
+        count => Some(count.parse().ok()?),
+    };
     Some((
         (*mode).to_owned(),
         ModeRow {
             objects: objects.parse().ok()?,
             series: series.parse().ok()?,
             regressions: regressions.parse().ok()?,
-            improvements: improvements.parse().ok()?,
+            improvements,
             notable,
         },
     ))
@@ -218,14 +218,14 @@ fn expected_row(mode: &str, with_runs: usize) -> ModeRow {
             objects: with_runs * DISCRIMINANT_SETS,
             series: SERIES,
             regressions: HISTORY_REGRESSIONS,
-            improvements: HISTORY_IMPROVEMENTS,
+            improvements: None,
             notable: true,
         },
         "branch" => ModeRow {
             objects: (with_runs + BRANCH_COMMITS + DIRTY_RUNS) * DISCRIMINANT_SETS,
             series: SERIES,
             regressions: BRANCH_REGRESSIONS,
-            improvements: BRANCH_IMPROVEMENTS,
+            improvements: Some(BRANCH_IMPROVEMENTS),
             notable: true,
         },
         other => panic!("the report only ever carries the seeded modes, not {other}"),

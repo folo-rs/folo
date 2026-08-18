@@ -2101,10 +2101,12 @@ fn finalize_findings(
     // false-discovery guarantee to a set larger than the reported one: discarding true
     // improvements shrinks the denominator the rate is defined over while leaving false
     // regressions in place, so the regressions actually shown would inherit no bound.
-    // Screening first costs only power — for an unchanged series the chance of raising a
-    // candidate in one named direction is half the two-sided p-value the detectors
-    // report, so the surviving p-values are conservative and the bound holds with room
-    // to spare. Ref: DESIGN.md §8.3.
+    // Screening first costs only power, and it is conservative: the detectors report
+    // two-sided p-values from symmetric nulls, so for an unchanged series the chance of
+    // raising a candidate in a direction named in advance is at most half the chance of
+    // raising one either way. The p-values the correction sees therefore overstate the
+    // risk of what it admits, and the bound holds with room to spare.
+    // Ref: DESIGN.md §8.3.
     let candidates: Vec<Candidate> = candidates
         .into_iter()
         .filter(|candidate| context.keeps(candidate.finding.direction))

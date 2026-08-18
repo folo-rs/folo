@@ -1065,10 +1065,10 @@ set says nothing about a subset of it. A mode that reports only one direction (Â
 therefore discards the other direction's candidates **before** the correction runs, so every
 hypothesis the correction rejects is a finding the report goes on to show and the controlled
 rate is the rate among what the reader sees. The family size is unaffected: it still counts
-every judged series, whichever direction that series moved. Screening to one named direction
-only makes the guarantee safer, since an unchanged series has half the chance of raising a
-candidate in a direction chosen in advance as it does of raising one either way; the target
-is an upper bound, and this order keeps the true rate under it.
+every judged series, whichever direction that series moved. Screening to one named direction only makes the guarantee safer, since an unchanged series
+has at most half the chance of raising a candidate in a direction chosen in advance as it
+does of raising one either way; the target is an upper bound, and this order keeps the true
+rate under it.
 
 Because every mode's verdict rests on a real p-value and on that one family definition, the
 correction applies uniformly to history and branch analysis rather than being a history-mode
