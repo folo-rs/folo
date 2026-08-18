@@ -37,11 +37,27 @@ impl Filesystem for FilesystemFacade {
         }
     }
 
-    fn get_numa_node_cpulist_contents(&self, node_index: u32) -> String {
+    fn get_numa_node_cpulist_contents(&self, node_index: u32) -> Option<String> {
         match self {
             Self::Target(filesystem) => filesystem.get_numa_node_cpulist_contents(node_index),
             #[cfg(test)]
             Self::Mock(mock) => mock.get_numa_node_cpulist_contents(node_index),
+        }
+    }
+
+    fn get_possible_cpus_contents(&self) -> Option<String> {
+        match self {
+            Self::Target(filesystem) => filesystem.get_possible_cpus_contents(),
+            #[cfg(test)]
+            Self::Mock(mock) => mock.get_possible_cpus_contents(),
+        }
+    }
+
+    fn get_online_cpus_contents(&self) -> Option<String> {
+        match self {
+            Self::Target(filesystem) => filesystem.get_online_cpus_contents(),
+            #[cfg(test)]
+            Self::Mock(mock) => mock.get_online_cpus_contents(),
         }
     }
 

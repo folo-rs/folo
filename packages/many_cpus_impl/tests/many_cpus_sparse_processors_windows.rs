@@ -70,10 +70,14 @@ fn job_affinity_limit_reveals_sparse_processor_ids() {
     // exercise on real hardware.
     assert!(hw.max_processor_count() > all_processors.len());
 
-    // Windows counts the active processors of the machine, which a constraint on the process
-    // does not change, so the active count also exceeds what the process may use. A job object
-    // affinity limit therefore cannot make the active count differ from the maximum count.
+    // The active count describes the machine, which a constraint on the process does not change,
+    // so the active count also exceeds what the process may use. A job object affinity limit
+    // therefore cannot make the active count differ from the maximum count.
     assert!(hw.active_processor_count() > all_processors.len());
+
+    // Every active processor occupies an ID, while the ID space may additionally cover
+    // processors that are not currently active.
+    assert!(hw.max_processor_count() >= hw.active_processor_count());
 
     // The default processor set obeys the resource quota on top of the affinity limit, so it can
     // only be a subset of what the limit permits.

@@ -46,17 +46,19 @@ fn narrowed_affinity_reveals_sparse_processor_ids() {
 
     assert_eq!(observed_ids, [lowest, highest]);
 
-    // The ID space reaches up to the highest processor we kept, while only the two processors we
-    // kept are usable - this is the gap between the maximum and the available that we are here
-    // to exercise on real hardware.
-    let expected_max_processor_count = usize::try_from(highest).unwrap().checked_add(1).unwrap();
-    assert_eq!(hw.max_processor_count(), expected_max_processor_count);
+    // The ID space covers the whole machine, while only the two processors we kept are usable -
+    // this is the gap between the maximum and the available that we are here to exercise on real
+    // hardware.
     assert!(hw.max_processor_count() > all_processors.len());
 
-    // Linux counts as active only the processors that are both online and permitted to the
-    // process, so narrowing the affinity narrows the active count along with it.
-    assert_eq!(hw.active_processor_count(), all_processors.len());
-    assert!(hw.max_processor_count() > hw.active_processor_count());
+    // The active count describes the machine, which a constraint on the process does not change,
+    // so the active count also exceeds what the process may use. Narrowing the affinity of the
+    // process therefore cannot make the active count differ from the maximum count.
+    assert!(hw.active_processor_count() > all_processors.len());
+
+    // Every active processor occupies an ID, while the ID space may additionally cover
+    // processors that are not currently active.
+    assert!(hw.max_processor_count() >= hw.active_processor_count());
 
     // The default processor set obeys the resource quota on top of the affinity, so it can only
     // be a subset of what the affinity permits.
