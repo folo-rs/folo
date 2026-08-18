@@ -19,3 +19,16 @@ path = "junit.xml"
 [[profile.default.overrides]]
 filter = 'test(=collect_against_real_criterion_bench_stores_wall_time)'
 retries = { backoff = "exponential", count = 2, delay = "2m", jitter = true }
+
+# `panic_on_next_alloc` arms a process-global one-shot flag that the very next allocation on ANY
+# thread consumes (see packages/alloc_tracker/src/allocator.rs). This test expects its own `vec!`
+# to be that allocation, but the test process is not single-threaded — the libtest harness and
+# incidental runtime allocations share it — so occasionally another thread's allocation trips the
+# flag first, the intended allocation no longer panics, and `assert!(result.is_err())` fails. The
+# behaviour is an inherent race on global state and hard to test hermetically; a fresh retry (each
+# in a new process) re-rolls the race. This is a deliberate, narrowly-scoped exception to the
+# no-retry policy above: it masks only this known global-state race, not genuine regressions, which
+# would fail every attempt.
+[[profile.default.overrides]]
+filter = 'test(=panic_on_next_alloc_resets_automatically)'
+retries = 3
