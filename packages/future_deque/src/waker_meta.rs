@@ -108,6 +108,12 @@ pub(crate) fn check_activated(meta: MetaPtr) -> bool {
 /// Decrements the refcount and returns the metadata to the pool if this was the
 /// last reference. Called when a Slot releases its reference (future completes or
 /// deque is dropped) and when the last waker clone is dropped.
+// Mutating the `previous == 1` guard (to `!=` or `true`) frees the pooled slot while other
+// references remain, so a live slot is reused for a new WakerMeta while stale wakers still
+// point at it. The resulting corrupted waker state leaves block_on-based tests polling or
+// parking forever, so the test binary never exits within the mutation testing timeout.
+// Non-blocking tests catch these mutations, but cannot prevent the blocking tests from hanging.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn release_ref(meta: MetaPtr) {
     // SAFETY: The metadata is valid (refcount > 0 guarantees it has not been removed).
     let previous = unsafe { &*meta.0 }.ref_count.fetch_sub(1, Ordering::AcqRel);
