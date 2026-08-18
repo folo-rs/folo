@@ -991,12 +991,13 @@ mod tests {
     use std::rc::Rc;
     use std::sync::Barrier;
     use std::task::Poll;
-    use std::{task, thread};
+    use std::{mem, task, thread};
 
     use futures::executor::block_on;
     use static_assertions::assert_impl_all;
     use testing::{
-        DropOnWakerRelease, ReentrantWakerData, clone_action_waker, drop_waker, with_watchdog,
+        DropOnWakerRelease, ReentrantWakerData, assert_panics_with, clone_action_waker,
+        clone_action_waker_panicking_on_clone_release, drop_waker, with_watchdog,
     };
 
     use super::*;
@@ -2430,6 +2431,66 @@ mod tests {
 
             assert!(cloned.get(), "{WAKER_CLONE_REQUIRED}");
             assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
+        });
+    }
+
+    /// Counts its own drops, so a test can tell a value that was delivered exactly once apart from
+    /// one that was extracted twice or lost.
+    struct DropCounter {
+        drops: Arc<atomic::AtomicUsize>,
+    }
+
+    impl Drop for DropCounter {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, atomic::Ordering::Relaxed);
+        }
+    }
+
+    // Parity counterpart of the local unwinding test. Releasing the awaiter that a racing send
+    // made useless is user code, so it may unwind. The value must still be inside the event at
+    // that moment, or the receiver's own cleanup reads an extracted cell a second time.
+    // Ref: docs/callback-safety.md.
+    #[test]
+    fn boxed_poll_unwinding_during_waker_clone_release_leaves_value_in_event() {
+        with_watchdog(|| {
+            let drops = Arc::new(atomic::AtomicUsize::new(0));
+
+            let (sender, receiver) = Event::<DropCounter>::boxed();
+            let mut receiver = Box::pin(receiver);
+
+            let value = DropCounter {
+                drops: Arc::clone(&drops),
+            };
+
+            // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
+            let (waker, cloned) = unsafe {
+                clone_action_waker_panicking_on_clone_release(move || sender.send(value))
+            };
+
+            let mut cx = task::Context::from_waker(&waker);
+            assert_panics_with(
+                || receiver.as_mut().poll(&mut cx),
+                |message| assert!(message.contains("waker clone release")),
+            );
+
+            assert!(cloned.get(), "{WAKER_CLONE_REQUIRED}");
+
+            if drops.load(atomic::Ordering::Relaxed) != 0 {
+                // The poll extracted the value before running the callback, so the event now
+                // claims a value it no longer holds. Letting the receiver clean up would read
+                // that cell again, so leak the event instead of escalating the failure into
+                // undefined behavior.
+                mem::forget(receiver);
+
+                panic!(
+                    "the value must stay in the event while a callback can still unwind past it"
+                );
+            }
+
+            // The event still owns the value, so the receiver's cleanup delivers exactly one drop.
+            drop(receiver);
+
+            assert_eq!(drops.load(atomic::Ordering::Relaxed), 1);
         });
     }
 }
