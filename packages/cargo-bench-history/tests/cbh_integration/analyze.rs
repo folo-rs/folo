@@ -1453,10 +1453,21 @@ async fn analyze_history_mode_never_reports_improvements() {
         "the improvement was judged and then withheld, not left untested: {report}"
     );
     assert_eq!(parsed["notable"], false, "{report}");
+    // The key must be absent rather than null: `parsed["improvements"]` cannot tell the
+    // two apart, so the object is asked directly. Both the top-level document and every
+    // per-set entry carry the tally, so both must omit it.
+    let object = parsed.as_object().expect("the report is a JSON object");
     assert!(
-        parsed["improvements"].is_null(),
+        !object.contains_key("improvements"),
         "history mode states no improvement tally: {report}"
     );
+    for set in parsed["sets"].as_array().expect("the report lists its sets") {
+        let set = set.as_object().expect("a set entry is a JSON object");
+        assert!(
+            !set.contains_key("improvements"),
+            "a history-mode set states no improvement tally: {report}"
+        );
+    }
     assert!(
         parsed["findings"].as_array().is_some_and(Vec::is_empty),
         "improvements are never reported in history mode: {report}"
