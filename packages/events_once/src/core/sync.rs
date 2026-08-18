@@ -55,6 +55,13 @@ thread_local! {
 }
 
 /// Coordinates delivery of a `T` at most once from a sender to a receiver on any thread.
+///
+/// # Reentrancy
+///
+/// Completing or cancelling an event runs the awaiting task's waker, either waking it or dropping
+/// it. Such a callback may freely operate on the endpoints of the event it belongs to: it may drop
+/// an endpoint, poll the receiver to completion or consume its value, and it may release the event
+/// storage by dropping the last endpoint.
 pub struct Event<T> {
     /// The logical state of the event; see constants in `state.rs`.
     pub(crate) state: AtomicU8,
@@ -975,18 +982,19 @@ impl<T: Send + 'static> fmt::Debug for Event<T> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::cell::RefCell;
+    use std::marker::PhantomData;
     use std::panic::{AssertUnwindSafe, RefUnwindSafe, UnwindSafe, catch_unwind, resume_unwind};
     use std::rc::Rc;
     use std::sync::Barrier;
-    use std::task::Poll;
-    use std::{task, thread};
+    use std::task::{Poll, RawWaker, RawWakerVTable};
+    use std::{mem, task, thread};
 
     use futures::executor::block_on;
     use static_assertions::assert_impl_all;
     use testing::{ReentrantWakerData, with_watchdog};
 
     use super::*;
-    use crate::IntoValueError;
+    use crate::{IntoValueError, NEVER_POISONED};
 
     assert_impl_all!(Event<u32>: Send, Sync, UnwindSafe, RefUnwindSafe);
 
@@ -2194,5 +2202,126 @@ mod tests {
             // Drop the receiver to release its half of the event.
             drop(receiver_holder.borrow_mut().take());
         });
+    }
+
+    // Parity counterparts of the `LocalEvent` reentrancy regression tests in `core/local.rs`.
+    // A wake callback fired while completing or cancelling an event is free to drop the receiver,
+    // which releases the event storage while the operation is still on the stack. Ref:
+    // docs/callback-safety.md. These run under Miri, which is what detects a regression here.
+    #[test]
+    fn boxed_send_with_reentrant_receiver_drop_releases_storage() {
+        // Owns the receiver behind a refcounted waker. When the last waker reference is dropped,
+        // `Drop` drops the receiver, which observes the SET state and releases the event storage.
+        struct DropReceiverOnWakerDrop {
+            receiver: Mutex<Option<Pin<Box<BoxedReceiver<i32>>>>>,
+        }
+
+        impl Drop for DropReceiverOnWakerDrop {
+            fn drop(&mut self) {
+                drop(self.receiver.lock().expect(NEVER_POISONED).take());
+            }
+        }
+
+        let (sender, receiver) = Event::<i32>::boxed();
+
+        let data = Arc::new(DropReceiverOnWakerDrop {
+            receiver: Mutex::new(Some(Box::pin(receiver))),
+        });
+        let waker = arc_drop_waker(Arc::clone(&data));
+
+        // First poll transitions BOUND -> AWAITING and stores a clone of the waker in the event.
+        {
+            let mut receiver = data.receiver.lock().expect(NEVER_POISONED);
+            let receiver = receiver.as_mut().expect("receiver still held");
+            let mut cx = task::Context::from_waker(&waker);
+            assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
+        }
+
+        // Leave the event's stored clone as the only reference, so waking it runs the reentrant
+        // drop. Without this the test would silently pass even if the hazard were present.
+        drop(waker);
+        drop(data);
+
+        // `set` stores the value, reaches a terminal state and wakes, which drops the receiver,
+        // which consumes the value and frees the event.
+        sender.send(42);
+    }
+
+    #[test]
+    fn boxed_sender_drop_with_reentrant_receiver_drop_releases_storage() {
+        struct DropReceiverOnWakerDrop {
+            receiver: Mutex<Option<Pin<Box<BoxedReceiver<i32>>>>>,
+        }
+
+        impl Drop for DropReceiverOnWakerDrop {
+            fn drop(&mut self) {
+                drop(self.receiver.lock().expect(NEVER_POISONED).take());
+            }
+        }
+
+        let (sender, receiver) = Event::<i32>::boxed();
+
+        let data = Arc::new(DropReceiverOnWakerDrop {
+            receiver: Mutex::new(Some(Box::pin(receiver))),
+        });
+        let waker = arc_drop_waker(Arc::clone(&data));
+
+        {
+            let mut receiver = data.receiver.lock().expect(NEVER_POISONED);
+            let receiver = receiver.as_mut().expect("receiver still held");
+            let mut cx = task::Context::from_waker(&waker);
+            assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
+        }
+
+        drop(waker);
+        drop(data);
+
+        // `sender_dropped_without_set` reaches DISCONNECTED and wakes, which drops the receiver,
+        // which frees the event.
+        drop(sender);
+    }
+
+    /// Creates a waker that holds one reference to `data` and whose `wake()` and destructor both
+    /// merely release that reference. Any reentrant behavior under test therefore belongs in the
+    /// `Drop` implementation of `T`, which runs once the last reference is released.
+    ///
+    /// This is a Miri-compatible alternative to [`ReentrantWakerData`], so tests built on it can
+    /// exercise the aliasing rules that only Miri enforces.
+    fn arc_drop_waker<T: Send + Sync + 'static>(data: Arc<T>) -> Waker {
+        unsafe { Waker::from_raw(ArcDropWaker::<T>::raw_waker(data)) }
+    }
+
+    /// Carries the [`RawWakerVTable`] for [`arc_drop_waker`], one instance per payload type.
+    struct ArcDropWaker<T>(PhantomData<T>);
+
+    impl<T: Send + Sync + 'static> ArcDropWaker<T> {
+        const VTABLE: RawWakerVTable = RawWakerVTable::new(
+            Self::clone_raw,
+            Self::wake_raw,
+            Self::wake_by_ref_raw,
+            Self::drop_raw,
+        );
+
+        fn raw_waker(data: Arc<T>) -> RawWaker {
+            RawWaker::new(Arc::into_raw(data).cast(), &Self::VTABLE)
+        }
+
+        unsafe fn clone_raw(data: *const ()) -> RawWaker {
+            let arc = unsafe { Arc::from_raw(data.cast::<T>()) };
+            let clone = Arc::clone(&arc);
+            // Keep the original reference alive; we only wanted to bump the count.
+            mem::forget(arc);
+            Self::raw_waker(clone)
+        }
+
+        unsafe fn wake_raw(data: *const ()) {
+            unsafe { Self::drop_raw(data) }
+        }
+
+        unsafe fn wake_by_ref_raw(_data: *const ()) {}
+
+        unsafe fn drop_raw(data: *const ()) {
+            drop(unsafe { Arc::from_raw(data.cast::<T>()) });
+        }
     }
 }

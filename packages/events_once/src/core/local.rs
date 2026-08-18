@@ -26,15 +26,10 @@ use crate::{
 ///
 /// # Reentrancy
 ///
-/// Completing an event runs a user-supplied callback (`Waker::wake()` or the waker's destructor)
-/// that is free to release the event storage before it returns. Any method that runs such a
-/// callback therefore reaches the event through an `&UnsafeCell<Self>` argument instead of
-/// `&self`: a `&self` argument stays strongly protected by the aliasing model for the whole call,
-/// which makes deallocating the event from inside the callback undefined behavior, whereas
-/// references derived from an `UnsafeCell` are exempt from that protection and may dangle once
-/// the callback returns. Such methods therefore do not touch the event after the callback runs.
-///
-/// See `docs/callback-safety.md` in the repository root for the workspace-wide convention.
+/// Completing or cancelling an event runs the awaiting task's waker, either waking it or dropping
+/// it. Such a callback may freely operate on the endpoints of the event it belongs to: it may drop
+/// an endpoint, poll the receiver to completion or consume its value, and it may release the event
+/// storage by dropping the last endpoint.
 pub struct LocalEvent<T> {
     /// The logical state of the event; see constants in `state.rs`.
     pub(crate) state: Cell<u8>,
@@ -265,8 +260,12 @@ impl<T: 'static> LocalEvent<T> {
     ///
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
     ///
-    /// Reaches the event through an [`UnsafeCell`] because the wake callback may reentrantly
-    /// release the event storage; see the type-level reentrancy documentation.
+    /// The event arrives as an `&UnsafeCell<Self>` rather than as `&self` because the wake
+    /// callback performed here is free to release the event storage. A `&self` argument stays
+    /// strongly protected by the aliasing model for the whole call, which makes such a release
+    /// undefined behavior, whereas references derived from an `UnsafeCell` carry no protector and
+    /// may dangle. The event is therefore not touched after the callback runs.
+    /// Ref: docs/callback-safety.md.
     #[inline]
     pub(crate) fn set(event_cell: &UnsafeCell<Self>, result: T) -> Result<(), Disconnected> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
@@ -468,8 +467,7 @@ impl<T: 'static> LocalEvent<T> {
     ///
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
     ///
-    /// Reaches the event through an [`UnsafeCell`] because the wake callback may reentrantly
-    /// release the event storage; see the type-level reentrancy documentation.
+    /// See [`set()`][Self::set] for why the event arrives as an `&UnsafeCell<Self>`.
     #[inline]
     pub(crate) fn sender_dropped_without_set(
         event_cell: &UnsafeCell<Self>,
@@ -541,8 +539,8 @@ impl<T: 'static> LocalEvent<T> {
     /// Returns `Err` if the sender has already disconnected without sending a value.
     /// In both of these cases, the receiver must clean up the event now.
     ///
-    /// Reaches the event through an [`UnsafeCell`] because the waker destructor may reentrantly
-    /// release the event storage; see the type-level reentrancy documentation.
+    /// See [`set()`][Self::set] for why the event arrives as an `&UnsafeCell<Self>`; here it is
+    /// the waker's destructor rather than `wake()` that may release the event storage.
     #[inline]
     pub(crate) fn final_poll(event_cell: &UnsafeCell<Self>) -> Result<Option<T>, Disconnected> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
