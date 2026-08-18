@@ -5,6 +5,12 @@ callers can place work deliberately on specific hardware. This document covers t
 identity that the package attaches to a processor: what a caller can rely on and why the
 package draws the distinctions it does.
 
+## Machine size
+
+The package imposes no ceiling of its own on how many processors a machine may have. Every
+processor that the operating system reports can be inspected, selected and pinned to, and a
+thread's affinity can be read back, on machines of any size the operating system supports.
+
 ## Processor identity
 
 A processor is identified by the numeric ID the operating system assigns to it. Every
