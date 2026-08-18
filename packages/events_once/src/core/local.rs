@@ -579,10 +579,11 @@ impl<T: 'static> fmt::Debug for LocalEvent<T> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::cell::RefCell;
+    use std::mem;
     use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::pin::Pin;
     use std::rc::Rc;
-    use std::task::{self, Poll};
+    use std::task::{self, Poll, RawWaker, RawWakerVTable};
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
     use testing::{ReentrantWakerData, with_watchdog};
@@ -1281,9 +1282,6 @@ mod tests {
     // deallocation is caught if the ordering regresses.
     #[test]
     fn boxed_receiver_cancel_with_sender_dropping_waker_preserves_storage() {
-        use std::mem;
-        use std::task::{RawWaker, RawWakerVTable};
-
         // Owns the sender behind a refcounted waker. When the last waker
         // reference is dropped, `Drop` drops the sender, reentrantly entering
         // `sender_dropped_without_set` while `final_poll` is on the stack.
