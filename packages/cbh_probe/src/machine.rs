@@ -17,8 +17,9 @@
 //! history into incomparable pieces, which is the failure the fingerprint exists
 //! to prevent.
 //!
-//! [`resolve_machine_key`] yields the key `collect`, `import`, and `backfill` stamp
-//! every result with, while [`describe_fingerprint_components`] renders the
+//! The key is surfaced two ways for operators. [`resolve_machine_key`] yields the
+//! key `collect`, `import`, and `backfill` stamp every result with (the same key the
+//! `machine-key` command prints), while [`describe_fingerprint_components`] renders the
 //! individual factors that fed the hash, so a change in the key can be traced — in
 //! verbose logs — to the specific hardware detail that moved.
 

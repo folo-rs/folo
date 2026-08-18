@@ -17,6 +17,7 @@
 - [list](commands/list.md)
 - [prune](commands/prune.md)
 - [bless / unbless](commands/bless.md)
+- [machine-key](commands/machine-key.md)
 
 # Concepts
 

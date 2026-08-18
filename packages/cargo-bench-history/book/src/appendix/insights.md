@@ -93,6 +93,9 @@ Your branch's intermediate commits are ignored — only the context state is eva
 
 - `cargo bench-history list discriminants` shows how your history is partitioned. Several
   machine keys where you expected one means the pool is rotating.
+- `cargo bench-history machine-key --verbose` explains what the current machine hashed to and
+  why.
+
 **Remedies:**
 
 - [`backfill`](../commands/backfill.md) on each machine so each key

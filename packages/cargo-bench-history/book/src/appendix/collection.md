@@ -91,8 +91,8 @@ thermal state and power policy on the same physical machine — including them w
 key spontaneously and shatter the history. Hostname is excluded so a renamed machine keeps its
 history.
 
-Verbose collection logs include the resolved machine key and fingerprint components, which is
-the fastest way to diagnose a pool that is rotating keys unexpectedly.
+`machine-key --verbose` prints exactly what was hashed and why, which is the fastest way to
+diagnose a pool that is rotating keys unexpectedly.
 
 ## What is stored per commit
 
@@ -191,7 +191,7 @@ partition; each ends up with a history dense enough to judge.
 | A commit has some engines but not others | A collection was interrupted between engines. Re-collect with `--overwrite`. |
 | A benchmark stops appearing | It was renamed or deleted; the old identity is now a [ghost](reconstruction.md#ghost-elimination). |
 | A suite-wide step at one commit | Usually infrastructure or a changed `--best-of`, not code. See [Insights](insights.md). |
-| Several machine keys where you expected one | The pool is rotating, or hardware changed; inspect verbose collection logs for the fingerprint components. |
+| Several machine keys where you expected one | The pool is rotating, or hardware changed. `machine-key --verbose`. |
 | A run's commit shows as `unknown` in `list` and the report | Git reported no commit when the run was collected, so it was stored under an `unknown` commit. It can never match a real commit and is permanently a ghost. |
 
 ## What collection hands on

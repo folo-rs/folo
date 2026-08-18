@@ -158,5 +158,6 @@ pub async fn run_with_overrides(
         Command::Unbless(options) => {
             commands::unbless(options, workspace_dir, auto_discriminants).await
         }
+        Command::MachineKey(options) => commands::machine_key(options).await,
     }
 }

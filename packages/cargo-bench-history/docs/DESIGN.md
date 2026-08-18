@@ -245,7 +245,9 @@ query-time discriminant filters.
 
 The individual factors behind the fingerprint (the version tag, processor and memory-region
 counts, and processor models) are surfaced for debugging: `collect` and the query commands
-emit them to standard error under `--verbose`. Only true factors appear there, so what is
+emit them to standard error under `--verbose`, and the standalone `machine-key` command
+prints the key to standard output (with `--verbose` adding the factors to standard error).
+Only true factors appear there, so what is
 shown is exactly what the key depends on. Where a run's host is probed, those factors, the
 resulting fingerprint, and the speed histogram that is deliberately not a factor are also
 recorded beside it as write-only provenance (see §5).

@@ -218,8 +218,10 @@ The stored history can also change *out of band* — a blessing or unblessing, a
 administrative overwrite performed from a developer machine. Those surface in the rolling issue on
 the next push, which re-lists the store (so out-of-band additions are seen) while deletions and
 overwrites bump the cache-invalidation marker (so those are seen too). There is deliberately no
-"analysis only" dispatch mode: a refresh out of band is forced by pushing a commit or dispatching a
-`recollect_commit_id` run.
+"analysis only" dispatch mode: analysis threads the *exact machine keys collected this run* from the
+collect matrix into the single analyze job (see below), so a mode that skipped collection would have
+no keys to analyze. To force a refresh out of band, push a commit or dispatch a `recollect_commit_id`
+run (which still collects, hence still produces keys).
 A downstream analysis job reads the accumulated
 history and files a single rolling, advisory issue when it detects a notable regression;
 regressions never fail the run. Because a GitHub issue body is size-capped and a large

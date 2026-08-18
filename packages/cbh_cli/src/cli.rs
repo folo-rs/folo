@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use cbh_command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
     ExamineOptions, ImportOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection,
-    PruneOptions, UnblessOptions,
+    MachineKeyOptions, PruneOptions, UnblessOptions,
 };
 use cbh_model::BenchmarkIdPrefix;
 use clap::{ArgGroup, Args, Parser, Subcommand as ClapSubcommand, ValueEnum};
@@ -96,6 +96,7 @@ impl Cli {
             Subcommand::Import(command) => Command::Import(command.into_options()),
             Subcommand::Install(command) => Command::Install(command.into_options()),
             Subcommand::List(command) => Command::List(command.into_options()),
+            Subcommand::MachineKey(command) => Command::MachineKey(command.into_options()),
             Subcommand::Prune(command) => Command::Prune(command.into_options()),
             Subcommand::Unbless(command) => Command::Unbless(command.into_options()),
         }
@@ -137,6 +138,8 @@ enum Subcommand {
     Install(InstallCommand),
     /// List the data set a matching `analyze` would include, without analyzing it.
     List(ListCommand),
+    /// Print this machine's hardware fingerprint (the machine key).
+    MachineKey(MachineKeyCommand),
     /// Show the raw per-commit data points of one `(benchmark, metric)` series.
     Examine(ExamineCommand),
     /// Delete stored runs (and their blessing sidecars) from the resolved data set.
@@ -485,6 +488,27 @@ impl InstallCommand {
     fn into_options(self) -> InstallOptions {
         InstallOptions {
             config_path: self.config,
+            verbose: self.verbose,
+        }
+    }
+}
+
+/// Print this machine's hardware fingerprint (the machine key).
+#[derive(Args, Debug)]
+struct MachineKeyCommand {
+    /// Also emit the individual hardware factors that make up the fingerprint to
+    /// standard error (the fingerprint version, processor count, memory-region
+    /// count and processor models), so a change in the key can be traced to which
+    /// factor changed. Per-processor speeds are recorded with collected runs as
+    /// hardware provenance, but they are not factors and so are not reported here.
+    /// The key itself always goes to standard output.
+    #[arg(long, help_heading = HEADING_ENV)]
+    verbose: bool,
+}
+
+impl MachineKeyCommand {
+    fn into_options(self) -> MachineKeyOptions {
+        MachineKeyOptions {
             verbose: self.verbose,
         }
     }
@@ -1517,6 +1541,25 @@ mod tests {
 
         let Command::Install(options) = parse(&["install"]) else {
             panic!("expected install command");
+        };
+        assert!(!options.verbose);
+    }
+
+    #[test]
+    fn machine_key_maps_to_machine_key_command() {
+        let command = parse(&["machine-key"]);
+        assert_eq!(command, Command::MachineKey(MachineKeyOptions::default()));
+    }
+
+    #[test]
+    fn machine_key_parses_verbose_switch() {
+        let Command::MachineKey(options) = parse(&["machine-key", "--verbose"]) else {
+            panic!("expected machine-key command");
+        };
+        assert!(options.verbose);
+
+        let Command::MachineKey(options) = parse(&["machine-key"]) else {
+            panic!("expected machine-key command");
         };
         assert!(!options.verbose);
     }
