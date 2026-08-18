@@ -451,7 +451,10 @@ mod tests {
         let source_message = source.message();
         let error = AnalyzeError::from(source);
 
-        assert_eq!(error.message(), source_message);
+        assert_eq!(
+            message_body(&error.message()),
+            message_body(&source_message)
+        );
         assert!(error.find_source::<ConfigError>().is_some());
     }
 
@@ -461,8 +464,26 @@ mod tests {
         let source_message = source.message();
         let error = AnalyzeError::from(source);
 
-        assert_eq!(error.message(), source_message);
+        assert_eq!(
+            message_body(&error.message()),
+            message_body(&source_message)
+        );
         assert!(error.find_source::<StorageError>().is_some());
+    }
+
+    /// A rendered `ohno` message with any trailing backtrace section removed.
+    ///
+    /// `ohno` appends a `Backtrace:` block when the process runs with backtraces
+    /// enabled, which `cargo nextest` and CI do but a plain `cargo test` does not. A
+    /// source error and the aggregate that wrapped it capture that backtrace at
+    /// different points, so the blocks legitimately differ; comparing the errors'
+    /// user-facing messages must therefore weigh the message and cause chain alone,
+    /// not the run's backtrace policy.
+    fn message_body(message: &str) -> &str {
+        message
+            .split_once("\nBacktrace:")
+            .map_or(message, |(body, _)| body)
+            .trim_end()
     }
 
     #[test]
