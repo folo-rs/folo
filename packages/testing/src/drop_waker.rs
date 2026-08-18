@@ -13,6 +13,12 @@ use std::{fmt, mem};
 /// the waker it stored, or discards that waker during cancellation. [`DropOnWakerRelease`]
 /// provides a ready-made payload for that pattern.
 ///
+/// [`Waker::wake_by_ref()`] does not consume a reference, so it does not release the payload and
+/// does not reach the behavior under test. A test must therefore observe that the payload really
+/// was dropped rather than assume it; the flag from [`DropOnWakerRelease::new()`] serves that
+/// purpose, and turns a primitive that only wakes by reference into a failure rather than a
+/// vacuous pass.
+///
 /// Prefer this over [`ReentrantWakerData`][crate::ReentrantWakerData] when the test must run
 /// under Miri: this waker owns its data outright, whereas `ReentrantWakerData` hands out a
 /// borrowed pointer to data the test still owns.
@@ -73,6 +79,7 @@ impl<T: 'static> VTable<T> {
         unsafe { Self::drop_raw(data) }
     }
 
+    /// Waking by reference does not consume a reference, so there is nothing to release.
     fn wake_by_ref_raw(_data: *const ()) {}
 
     /// # Safety
