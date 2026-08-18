@@ -1151,6 +1151,40 @@ mod tests {
     }
 
     #[test]
+    fn history_mode_does_not_resolve_a_base_ref_comparison_window() {
+        // History mode compares within the base branch's own first-parent line, so it has
+        // no separate base-ref comparison window to resolve. The base-ref window load is
+        // gated on branch mode *and* the caller opting in; in history mode neither the
+        // base ref's ancestry walk nor its window note may appear.
+        let storage = MemoryStorage::new();
+        seed_linear_step(&storage);
+        let reporter = RecordingReporter::new();
+        block_on(analyze_with(
+            &history_git(),
+            &storage,
+            "folo",
+            &config(),
+            &options(),
+            &auto(),
+            now_anchor(),
+            &reporter,
+            false,
+            &spawner(),
+        ))
+        .unwrap();
+        assert!(
+            !reporter.timed("base ref's first-parent line"),
+            "history mode must not walk the base ref's first-parent line: {:?}",
+            reporter.notes()
+        );
+        assert!(
+            !reporter.contains("for branch comparison windows"),
+            "history mode must not resolve a base-ref comparison window: {:?}",
+            reporter.notes()
+        );
+    }
+
+    #[test]
     fn analyze_records_a_timing_for_each_pipeline_stage() {
         // Every stage drawn in docs/analyze.md emits a timing on the dedicated
         // timing channel, so a `--verbose` run can localize a mystery slowdown.
