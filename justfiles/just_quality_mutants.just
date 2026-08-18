@@ -27,15 +27,11 @@ mutants SHARD="" CAREFUL='false':
     $mutantArgs = @(Get-MutantsExcludeArgument -IsWindowsPlatform $IsWindows -IsLinuxPlatform $IsLinux)
 
     $mutantArgs += "--jobs"
-    if ($careful) {
-        # In careful mode, only one mutation is tested at a time. Combined with
-        # `RUST_TEST_THREADS=1` set below, this ensures that exactly one test runs at any
-        # given moment across the entire mutation testing run.
-        $mutantArgs += "1"
-    } else {
-        # Experimentally determined heuristics.
-        $mutantArgs += [int]([Math]::Floor([Environment]::ProcessorCount / 6)) + 1
-    }
+    # Experimentally determined heuristics. Careful mode deliberately keeps this same
+    # mutation-job parallelism; it only serializes the tests within each job (via
+    # `RUST_TEST_THREADS=1` set below), so latent per-test timeouts are not masked by
+    # concurrent tests.
+    $mutantArgs += [int]([Math]::Floor([Environment]::ProcessorCount / 6)) + 1
 
     # Optional sharding lets CI split mutation testing across multiple parallel runners. We accept
     # the same 1-based "N/M" format as `miri-harder` (so `1/8 .. 8/8` for 8 shards); the module
@@ -94,10 +90,11 @@ mutants SHARD="" CAREFUL='false':
     }
 
     if ($careful) {
-        # Force libtest to run a single test at a time within each `cargo test` invocation.
-        # Combined with `--jobs 1` above, this ensures that exactly one test runs at any
-        # given moment, which helps diagnose tests that are sensitive to concurrent
-        # execution or otherwise interact in unexpected ways.
+        # Disable libtest's intra-suite parallelism so each mutation job runs its tests
+        # one at a time. Mutation jobs still run concurrently (the `--jobs` heuristic
+        # above is unchanged); only test concurrency within a job is removed. Serial
+        # tests surface latent per-test timeouts that concurrent execution can otherwise
+        # hide - which is the entire point of the `mutants-careful` recipe.
         $env:RUST_TEST_THREADS = "1"
     }
 
@@ -114,6 +111,6 @@ mutants SHARD="" CAREFUL='false':
     Invoke-Expression "cargo mutants {{ target_package }} --baseline=skip --timeout=60 --no-shuffle --caught --unviable $expanded_args"
     exit $LASTEXITCODE
 
-# Run mutation tests with no parallelism: one mutation at a time, one test at a time within each mutation. Slow but useful for investigating flaky or concurrency-sensitive tests.
+# Run mutation tests like `mutants` (mutation jobs still run in parallel) but with test concurrency disabled, so only one test runs at a time within each mutation job. Slower, but surfaces per-test timeouts that concurrent test execution can hide.
 [group('quality')]
 mutants-careful: (mutants "" "true")
