@@ -387,16 +387,41 @@ impl<T: 'static> LocalEvent<T> {
             EVENT_AWAITING => {
                 // We are re-polling after previously starting a wait. This is fine
                 // and we just need to clean up the previous waker, replacing it with
-                // a new one.
+                // a new one. The previous registration must be released exactly once;
+                // overwriting it without dropping would leak a `Waker` reference.
 
-                // SAFETY: The only other potential references to the field are other short-lived
-                // references in this type, which cannot exist at the moment because
-                // the type is single-threaded and does not let any references escape.
-                let awaiter_cell_maybe = unsafe { self.awaiter.get().as_mut() };
-                // SAFETY: UnsafeCell pointer is never null.
-                let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
+                // Clone the incoming waker before touching the cell. `Waker::clone`
+                // runs arbitrary vtable code, so it must not observe the cell in the
+                // transiently-uninitialized window between the read and the write below.
+                let new_waker = waker.clone();
 
-                awaiter_cell.write(waker.clone());
+                // Extract the previous waker in a tight scope so the
+                // `&mut MaybeUninit<Waker>` borrow is released before we drop it below:
+                // a waker's drop runs arbitrary vtable code that must not observe an
+                // active borrow of shared state.
+                // Ref: docs/callback-safety.md, "No callbacks under borrows of shared state".
+                let previous_waker = {
+                    // SAFETY: The only other potential references to the field are other
+                    // short-lived references in this type, which cannot exist at the moment
+                    // because the type is single-threaded and does not let any references
+                    // escape.
+                    let awaiter_cell_maybe = unsafe { self.awaiter.get().as_mut() };
+                    // SAFETY: UnsafeCell pointer is never null.
+                    let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
+
+                    // We extract the previous waker and immediately overwrite the cell with
+                    // the new one, keeping the field initialized and the state consistent for
+                    // any reentrant poll triggered while the previous waker is dropped below.
+                    // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker
+                    // in there.
+                    let previous_waker = unsafe { awaiter_cell.assume_init_read() };
+                    awaiter_cell.write(new_waker);
+                    previous_waker
+                };
+
+                // Release the previous registration exactly once, now that the borrow is gone.
+                drop(previous_waker);
+
                 None
             }
             EVENT_DISCONNECTED => {
@@ -1108,6 +1133,71 @@ mod tests {
         // Third poll picks up the value.
         let poll_result = receiver.as_mut().poll(&mut cx);
         assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+    }
+
+    #[test]
+    fn boxed_repoll_releases_previous_waker() {
+        // A re-poll in the EVENT_AWAITING state must release the previously
+        // registered waker exactly once when it replaces it. We observe this via
+        // an `Arc`-backed waker whose strong count reflects the number of live
+        // clones: a leaked registration would make the count grow with each re-poll.
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::task::Wake;
+
+        struct CountingWake {
+            woken: AtomicUsize,
+        }
+
+        impl Wake for CountingWake {
+            fn wake(self: Arc<Self>) {
+                self.woken.fetch_add(1, Ordering::Relaxed);
+            }
+
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.woken.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let (sender, receiver) = LocalEvent::<i32>::boxed();
+        let mut receiver = Box::pin(receiver);
+
+        let counter = Arc::new(CountingWake {
+            woken: AtomicUsize::new(0),
+        });
+        let waker = Waker::from(Arc::clone(&counter));
+
+        // Baseline: `counter` plus our local `waker`.
+        assert_eq!(Arc::strong_count(&counter), 2);
+
+        let mut cx = task::Context::from_waker(&waker);
+
+        // First poll transitions BOUND → AWAITING and stores one clone.
+        assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
+        assert_eq!(Arc::strong_count(&counter), 3);
+
+        // Each re-poll in the AWAITING state must drop the previous clone before
+        // storing the new one, so the count stays put.
+        for _ in 0..5 {
+            assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
+            assert_eq!(
+                Arc::strong_count(&counter),
+                3,
+                "re-poll must release the previously registered waker",
+            );
+        }
+
+        // Completion consumes and drops the stored waker, releasing its clone and
+        // waking exactly the one registration that survived the replacements.
+        sender.send(42);
+        assert_eq!(Arc::strong_count(&counter), 2);
+        assert_eq!(counter.woken.load(Ordering::Relaxed), 1);
+
+        assert!(matches!(
+            receiver.as_mut().poll(&mut cx),
+            Poll::Ready(Ok(42))
+        ));
+        assert_eq!(Arc::strong_count(&counter), 2);
     }
 
     #[cfg(debug_assertions)]
