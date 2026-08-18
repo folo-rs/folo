@@ -10,6 +10,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
+# Emit a backtrace whenever a test (or any Rust process) panics, so a rare flake — such as the
+# alloc_tracker panic-on-next-alloc global-state race — is diagnosable straight from the failing
+# run's log instead of the log only advising a re-run with RUST_BACKTRACE set. This does not change
+# panic messages, so `#[should_panic]` matching and error-message assertions are unaffected.
+env:
+  RUST_BACKTRACE: "1"
+
 jobs:
   # Determines which packages are impacted by changes in a PR branch compared
   # to origin/main. On push to main (backstop), all packages are validated.
