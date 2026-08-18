@@ -1461,7 +1461,10 @@ async fn analyze_history_mode_never_reports_improvements() {
         !object.contains_key("improvements"),
         "history mode states no improvement tally: {report}"
     );
-    for set in parsed["sets"].as_array().expect("the report lists its sets") {
+    for set in parsed["sets"]
+        .as_array()
+        .expect("the report lists its sets")
+    {
         let set = set.as_object().expect("a set entry is a JSON object");
         assert!(
             !set.contains_key("improvements"),

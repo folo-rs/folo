@@ -723,7 +723,10 @@ mod tests {
             corrected.kept,
             "correcting both directions first would keep the regression"
         );
-        assert!(!filtered.kept, "filtering first must suppress the regression");
+        assert!(
+            !filtered.kept,
+            "filtering first must suppress the regression"
+        );
         assert_eq!(corrected.rank, 2);
         assert_eq!(filtered.rank, 1);
         assert!(
