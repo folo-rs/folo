@@ -84,7 +84,8 @@
 //! What the generator supplies is realistic *spread*, not realistic *shape*: its deviates
 //! are bounded, symmetric, and light-tailed (see [`scattered`]), while real timing noise
 //! is right-skewed with occasional large excursions and can settle into distinct modes.
-//! Shapes like that reach this suite through recorded series instead.
+//! Shapes like that reach this suite as declared values instead — recorded from a real
+//! series where one exists, and hand-built where the case needs a shape stated exactly.
 //!
 //! Two cases are exempt from the model: the `stationary_bimodal_noise` rows are verbatim
 //! recordings of one real series and carry the dispersion it was measured with — flatly
@@ -196,9 +197,10 @@ enum Scatter {
     /// The declared values are flat regime levels, and the suite adds the measurement
     /// scatter the case's metric kind actually shows (see [`with_noise`]).
     Modelled,
-    /// The declared values were recorded from a real series and already carry their own
-    /// dispersion, so they are analysed exactly as given.
-    Recorded,
+    /// The declared values already carry their own dispersion — recorded from a real
+    /// series, or hand-built because the exact shape is the point — so they are analysed
+    /// exactly as given.
+    Declared,
 }
 
 /// One curated series — its base and branch sides — and the outcome each mode is
@@ -285,9 +287,9 @@ impl SignalCase {
         self
     }
 
-    /// Declares the values a verbatim recording, to be analysed without added scatter.
-    fn recorded(mut self) -> Self {
-        self.scatter = Scatter::Recorded;
+    /// Declares the values complete as written, to be analysed without added scatter.
+    fn declared(mut self) -> Self {
+        self.scatter = Scatter::Declared;
         self
     }
 
@@ -297,7 +299,7 @@ impl SignalCase {
         let levels = [self.base.as_slice(), self.branch.as_slice()].concat();
         match self.scatter {
             Scatter::Modelled => with_noise(&levels, self.kind, seed_of(self.name)),
-            Scatter::Recorded => levels,
+            Scatter::Declared => levels,
         }
     }
 
@@ -420,11 +422,11 @@ const CONTENDED_WINDOW_REGRESSION: f64 = 1.10;
 /// The base window of `recurrent_high_mode`, oldest first.
 ///
 /// A benchmark resting at one level with ordinary scatter around it, which twice in
-/// sixteen commits visits a level a third higher. Each visit is individually
-/// indistinguishable from a reading a disturbed runner produced — the commits on either
-/// side of it agree with each other, and it stands far clear of them — so nothing local
-/// to either visit can tell them apart from interference. What the window has to be read
-/// by instead is that there are two of them.
+/// sixteen commits visits a level far enough above it to stand clear of its neighbours.
+/// Each visit is individually indistinguishable from a reading a disturbed runner
+/// produced — the commits on either side of it agree with each other, and it stands far
+/// clear of them — so nothing local to either visit can tell them apart from
+/// interference. What the window has to be read by instead is that there are two of them.
 const RECURRENT_HIGH_MODE: [f64; 16] = [
     82.5, 100.0, 100.0, 100.0, 135.0, 100.0, 100.0, 117.5, 100.0, 100.0, 135.0, 100.0, 100.0,
     100.0, 117.5, 82.5,
@@ -433,6 +435,22 @@ const RECURRENT_HIGH_MODE: [f64; 16] = [
 /// The context run `recurrent_high_mode` is judged on: the same high level the window's
 /// own commits already reach, and so not a move at all.
 const RECURRENT_HIGH_MODE_TIP: f64 = 135.0;
+
+/// The base window of `rare_high_mode`, oldest first.
+///
+/// The harder counterpart of [`RECURRENT_HIGH_MODE`]: the high level appears just once,
+/// so nothing inside the window distinguishes it from a reading a disturbed runner
+/// produced. Its scatter sits at the window's ends, where it cannot be mistaken for a
+/// candidate, leaving that single visit as the only one — which is what makes the context
+/// run the deciding evidence.
+const RARE_HIGH_MODE: [f64; 16] = [
+    76.0, 124.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 135.0, 100.0, 100.0, 100.0, 100.0,
+    100.0, 76.0, 124.0,
+];
+
+/// The context run `rare_high_mode` is judged on: the same high level the window visits
+/// once, and so not a move at all.
+const RARE_HIGH_MODE_TIP: f64 = 135.0;
 
 /// The hand-curated cases. New "obvious answer" series are added as one row each.
 fn cases() -> Vec<SignalCase> {
@@ -479,7 +497,7 @@ fn cases() -> Vec<SignalCase> {
         // whole series and must stay quiet; branch has no branch side.
         SignalCase::new("stationary_bimodal_noise", MetricKind::WallTime)
             .base(STATIONARY_BIMODAL_NOISE.to_vec())
-            .recorded(),
+            .declared(),
         // The same recording judged by branch mode, which reads only the recent base
         // window and one context commit. The window is cut where the recording happens to
         // end on five consecutive low-mode commits, and the tip sits at the high mode the
@@ -497,7 +515,7 @@ fn cases() -> Vec<SignalCase> {
                     .to_vec(),
             )
             .branch(vec![STATIONARY_BIMODAL_HIGH])
-            .recorded(),
+            .declared(),
         // A wall-time series that holds one level apart from a single commit where the
         // runner lost time to something else — recorded, so the excursion is the real
         // shape rather than a modelled one. History reads the recording whole: it opens
@@ -507,7 +525,7 @@ fn cases() -> Vec<SignalCase> {
         SignalCase::new("contended_runner_excursion", MetricKind::WallTime)
             .base(CONTENDED_RUNNER_EXCURSION.to_vec())
             .expects(Outcome::Fall, Outcome::Quiet)
-            .recorded(),
+            .declared(),
         // Matched pair, part one. The same recording cut so branch mode's recent window
         // holds the excursion with ordinary commits on either side, and a context run at
         // the level the series actually sits at. Branch mode discards the excursion as
@@ -526,7 +544,7 @@ fn cases() -> Vec<SignalCase> {
                 .to_vec(),
         )
         .branch(vec![CONTENDED_RUNNER_LEVEL])
-        .recorded(),
+        .declared(),
         // Matched pair, part two: the same window, with a context run that genuinely
         // regressed. This is the case the excursion silences if it is left in the window.
         // A move of this size stands several times clear of what the series' own commits
@@ -548,17 +566,28 @@ fn cases() -> Vec<SignalCase> {
         )
         .branch(vec![CONTENDED_RUNNER_LEVEL * CONTENDED_WINDOW_REGRESSION])
         .expects(Outcome::Quiet, Outcome::Rise)
-        .recorded(),
+        .declared(),
         // The counterweight to the pair above, and the reason a window may give up only
-        // one reading. This benchmark visits a level a third above its resting one twice
-        // in sixteen commits — too rarely for either visit to look like anything but a
+        // one reading. This benchmark visits a level well above its resting one twice in
+        // sixteen commits — too rarely for either visit to look like anything but a
         // disturbed runner from where it sits, since its neighbours agree with each other
         // and it stands far clear of them. The context run lands on that same perfectly
         // ordinary high level. Both modes must stay quiet: nothing changed.
         SignalCase::new("recurrent_high_mode", MetricKind::WallTime)
             .base(RECURRENT_HIGH_MODE.to_vec())
             .branch(vec![RECURRENT_HIGH_MODE_TIP])
-            .recorded(),
+            .declared(),
+        // The same lesson where the window alone cannot teach it. Here the high level
+        // appears once, so it looks exactly like a disturbed reading from every angle
+        // inside the window — and the only thing saying otherwise is that the context run
+        // is standing on it. A level the context run itself sits at is never discarded,
+        // because discarding it would leave the window describing a level this benchmark
+        // does not reliably hold and turn an ordinary value into a large, certain
+        // regression against what remained. Both modes must stay quiet: nothing changed.
+        SignalCase::new("rare_high_mode", MetricKind::WallTime)
+            .base(RARE_HIGH_MODE.to_vec())
+            .branch(vec![RARE_HIGH_MODE_TIP])
+            .declared(),
         // A branch that got slower but was fixed in the last commit.
         // History sees the regression, but branch sees only the final commit and must stay quiet.
         SignalCase::new("branch_with_regression_then_fix", MetricKind::WallTime)

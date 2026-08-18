@@ -1976,8 +1976,16 @@ fn evaluate_branch(
     // Isolated measurement excursions come out before the window is searched for a regime
     // boundary or compared against, because a reading that describes the runner rather
     // than the code would otherwise both invite a spurious boundary and distort the
-    // comparison's centre and scatter.
-    let base_window = excursions::cleaned_window(&series.base_window, config);
+    // comparison's centre and scatter. The context run's own level is part of that
+    // judgment, so it is established first.
+    let latest_points = latest_context_run(&series.points, context_index);
+    let context_level = stats::median(
+        &latest_points
+            .iter()
+            .map(|point| point.value)
+            .collect::<Vec<f64>>(),
+    );
+    let base_window = excursions::cleaned_window(&series.base_window, context_level, config);
     let levels: Vec<f64> = base_window.iter().map(|level| level.value).collect();
     let base_spans = level_spans(&levels);
     let comparison_start = current_base_regime_start(
@@ -1987,7 +1995,6 @@ fn evaluate_branch(
         config.branch_practical_relative,
     );
     let comparison_base = base_window.get(comparison_start..).unwrap_or_default();
-    let latest_points = latest_context_run(&series.points, context_index);
     let commit = latest_points.last().and_then(|point| owned_commit(point));
     // The newest base-ref point in the selected comparison sample is this series'
     // comparison base. Truncating stale levels changes the sample's start, not this
