@@ -8,7 +8,7 @@ use std::task::{self, Poll};
 
 use crate::{
     Disconnected, EVENT_AWAITING, EVENT_BOUND, EVENT_DISCONNECTED, EVENT_SET, IntoValueError,
-    LocalRef,
+    LocalEvent, LocalRef,
 };
 
 /// Receives a single value from the sender connected to the same event.
@@ -48,7 +48,12 @@ where
             panic!("receiver queried after completion");
         };
 
-        event_ref.is_set()
+        // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
+        // The event lives until both sender and receiver are dropped or inert, so we know it must
+        // still exist because something was able to call this method with `Some(event_ref)`.
+        let event = unsafe { &*event_ref.get() };
+
+        event.is_set()
     }
 
     /// Consumes the receiver and transforms it into the received value, if the value is available.
@@ -67,7 +72,13 @@ where
             .expect("receiver polled after completion: Future trait contract violated");
 
         // Check the current state directly to decide what to do
-        let current_state = event_ref.state.get();
+        //
+        // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
+        // The event lives until both sender and receiver are dropped or inert, so we know it must
+        // still exist because something was able to call this method with `Some(event_ref)`.
+        let event = unsafe { &*event_ref.get() };
+
+        let current_state = event.state.get();
 
         match current_state {
             EVENT_BOUND | EVENT_AWAITING => {
@@ -79,7 +90,7 @@ where
                 let mut this = ManuallyDrop::new(self);
                 let event_ref = this.event_ref.take().unwrap();
 
-                match event_ref.final_poll() {
+                match LocalEvent::final_poll(&event_ref) {
                     Ok(Some(value)) => {
                         event_ref.release_event();
                         Ok(value)
@@ -120,7 +131,15 @@ where
             .as_ref()
             .expect("receiver polled after completion: Future trait contract violated");
 
-        let inner_poll_result = event_ref.poll(cx.waker());
+        let inner_poll_result = {
+            // SAFETY: We only ever create shared references to the event, so no aliasing
+            // conflicts. The event lives until both sender and receiver are dropped or inert, so
+            // we know it must still exist because something was able to call this method with
+            // `Some(event_ref)`.
+            let event = unsafe { &*event_ref.get() };
+
+            event.poll(cx.waker())
+        };
 
         // If the poll returns `Some`, we need to clean up the event.
         if inner_poll_result.is_some() {
@@ -148,7 +167,7 @@ where
     #[inline]
     fn drop(&mut self) {
         if let Some(event_ref) = self.event_ref.take() {
-            match event_ref.final_poll() {
+            match LocalEvent::final_poll(&event_ref) {
                 Ok(None) => {
                     // Nothing for us to do - the sender was still connected and had not
                     // sent any value, so it will perform the cleanup on its own.

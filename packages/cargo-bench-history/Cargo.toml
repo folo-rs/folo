@@ -3,13 +3,20 @@
 name = "cargo-bench-history"
 description = "A Cargo tool that maintains a long-lived history of benchmark results and analyzes it for trends"
 publish = true
-version = "0.2.0"
+version = "0.2.1"
 
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+# Baseline of external types intentionally exposed in the public API.
+# `cargo-bench-history` is the public shell over its own `cbh_*` implementation
+# partitions, so re-exporting any partition type is by-design layering, not
+# accidental exposure. Ref: docs/external-types.md; docs/impl-crate-split.md.
+[package.metadata.cargo_check_external_types]
+allowed_external_types = ["cbh_*::*"]
 
 [package.metadata.binstall]
 # Prebuilt binaries are published by .github/workflows/release.yml (see

@@ -13,6 +13,13 @@ rust-version.workspace = true
 [package.metadata.docs.rs]
 all-features = true
 
+# Baseline of external types intentionally exposed in the public API.
+# `linked` re-exports macro-support internals from its companion `linked_macros`
+# crate, so those are by-design layering, not accidental exposure.
+# Ref: docs/external-types.md; docs/impl-crate-split.md.
+[package.metadata.cargo_check_external_types]
+allowed_external_types = ["linked_macros::*"]
+
 [features]
 default = []
 

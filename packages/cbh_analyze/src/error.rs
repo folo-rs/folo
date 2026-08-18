@@ -448,42 +448,26 @@ mod tests {
     #[test]
     fn config_error_passes_through_unchanged() {
         let source = parse_config("invalid = [").unwrap_err();
-        let source_message = source.message();
+        // The source's `Display`, not its `message()`: `message()` omits an error's own
+        // backtrace but renders its source through `Display`, so a transparent wrapper
+        // reproduces the wrapped error's full rendering rather than its `message()`.
+        // Comparing against that rendering is exact whether or not `RUST_BACKTRACE`
+        // makes these errors capture a backtrace.
+        let source_rendering = source.to_string();
         let error = AnalyzeError::from(source);
 
-        assert_eq!(
-            message_body(&error.message()),
-            message_body(&source_message)
-        );
+        assert_eq!(error.message(), source_rendering);
         assert!(error.find_source::<ConfigError>().is_some());
     }
 
     #[test]
     fn storage_error_passes_through_unchanged() {
         let source = block_on(MemoryStorage::new().get("missing")).unwrap_err();
-        let source_message = source.message();
+        let source_rendering = source.to_string();
         let error = AnalyzeError::from(source);
 
-        assert_eq!(
-            message_body(&error.message()),
-            message_body(&source_message)
-        );
+        assert_eq!(error.message(), source_rendering);
         assert!(error.find_source::<StorageError>().is_some());
-    }
-
-    /// A rendered `ohno` message with any trailing backtrace section removed.
-    ///
-    /// `ohno` appends a `Backtrace:` block when the process runs with backtraces
-    /// enabled, which `cargo nextest` and CI do but a plain `cargo test` does not. A
-    /// source error and the aggregate that wrapped it capture that backtrace at
-    /// different points, so the blocks legitimately differ; comparing the errors'
-    /// user-facing messages must therefore weigh the message and cause chain alone,
-    /// not the run's backtrace policy.
-    fn message_body(message: &str) -> &str {
-        message
-            .split_once("\nBacktrace:")
-            .map_or(message, |(body, _)| body)
-            .trim_end()
     }
 
     #[test]

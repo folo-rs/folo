@@ -10,6 +10,16 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
+# Emit a backtrace whenever a test (or any Rust process) panics, so a rare flake — such as the
+# alloc_tracker panic-on-next-alloc global-state race — is diagnosable straight from the failing
+# run's log instead of the log only advising a re-run with RUST_BACKTRACE set. Panic messages are
+# unchanged, so `#[should_panic]` matching is unaffected. Rendered `ohno` error text is not: an
+# `ohno` error renders its captured backtrace as part of its `Display`, and `message()` renders an
+# error's source through `Display`. Assertions on rendered error text must therefore hold with
+# backtraces captured — see docs/error-handling.md.
+env:
+  RUST_BACKTRACE: "1"
+
 jobs:
   # Determines which packages are impacted by changes in a PR branch compared
   # to origin/main. On push to main (backstop), all packages are validated.
@@ -148,6 +158,30 @@ jobs:
 
       - name: Run default-features-check
         run: just default-features-check
+
+  # Fails when a library's public API exposes an external type that is not on its allow-list, so an
+  # accidental addition to the external surface is caught in review. Modelled on `machete`: a
+  # ubuntu + windows matrix, because the public surface is platform-dependent (cfg-gated items) and
+  # macOS (also cfg(unix)) is redundant with ubuntu here. Delta-scoped like the other package jobs.
+  check-external-types:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run check-external-types on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" check-external-types
 
   clippy-dev:
     needs: [delta]
@@ -937,6 +971,7 @@ jobs:
       - validate-workflows
       - format-check
       - default-features-check
+      - check-external-types
       - clippy-dev
       - test-x64
       - test-docs
