@@ -83,9 +83,10 @@ impl CpuMask {
             .checked_add(1)
             .expect("a processor identifier is a u32, so its word index cannot overflow a usize");
 
-        if self.words.len() < required_words {
-            self.words.resize(required_words, EMPTY_WORD);
-        }
+        // A mask never becomes narrower, because its width may be one that the operating system
+        // demanded rather than one that the processors in it call for.
+        self.words
+            .resize(self.words.len().max(required_words), EMPTY_WORD);
 
         let word = self
             .words

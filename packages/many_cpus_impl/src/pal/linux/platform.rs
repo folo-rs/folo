@@ -181,10 +181,8 @@ impl BuildTargetPlatform {
         let first = NonZero::new(self.affinity_mask_words.load(Ordering::Relaxed))
             .unwrap_or_else(CpuMask::default_words);
 
-        iter::successors(Some(first), |words| {
-            words.checked_mul(AFFINITY_MASK_GROWTH)
-        })
-        .take(AFFINITY_MASK_ATTEMPTS)
+        iter::successors(Some(first), |words| words.checked_mul(AFFINITY_MASK_GROWTH))
+            .take(AFFINITY_MASK_ATTEMPTS)
     }
 
     fn get_all_processors_impl(&self) -> &NonEmpty<ProcessorImpl> {
