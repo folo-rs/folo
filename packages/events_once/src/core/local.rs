@@ -1318,8 +1318,7 @@ mod tests {
         let data = Rc::new(DropSenderOnWakerDrop {
             sender: Some(sender),
         });
-        let waker =
-            unsafe { Waker::from_raw(RawWaker::new(Rc::into_raw(data).cast(), &VTABLE)) };
+        let waker = unsafe { Waker::from_raw(RawWaker::new(Rc::into_raw(data).cast(), &VTABLE)) };
 
         // First poll transitions BOUND -> AWAITING and stores a clone of the
         // waker inside the event.
