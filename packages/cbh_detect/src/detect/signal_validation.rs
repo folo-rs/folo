@@ -498,15 +498,18 @@ fn cases() -> Vec<SignalCase> {
         // context run that agrees with everything around it — discarding evidence
         // tightens the window, so the pair's job is to prove that tightening does not
         // manufacture a verdict.
-        SignalCase::new("contended_runner_excursion_branch_tip", MetricKind::WallTime)
-            .base(
-                CONTENDED_RUNNER_EXCURSION
-                    .get(CONTENDED_RUNNER_LEVEL_START..CONTENDED_RUNNER_BASE)
-                    .unwrap()
-                    .to_vec(),
-            )
-            .branch(vec![CONTENDED_RUNNER_LEVEL])
-            .recorded(),
+        SignalCase::new(
+            "contended_runner_excursion_branch_tip",
+            MetricKind::WallTime,
+        )
+        .base(
+            CONTENDED_RUNNER_EXCURSION
+                .get(CONTENDED_RUNNER_LEVEL_START..CONTENDED_RUNNER_BASE)
+                .unwrap()
+                .to_vec(),
+        )
+        .branch(vec![CONTENDED_RUNNER_LEVEL])
+        .recorded(),
         // Matched pair, part two: the same window, with a context run that genuinely
         // regressed. This is the case the excursion silences if it is left in the window.
         // A move of this size stands several times clear of what the series' own commits

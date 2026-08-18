@@ -1926,12 +1926,12 @@ fn test_base_levels(points: &[&SeriesPoint]) -> Vec<BaseLevel> {
 /// in the base. A new benchmark introduced on the context (no base-ref points) or
 /// an empty context yields nothing, since there is no baseline to compare.
 ///
-/// The recent base window is first cleared of isolated measurement excursions (see
-/// [`excursions`]) and collapsed to per-commit levels, then checked for enough evidence
-/// as a whole. If that window contains a genuine level shift, located
+/// The recent base window is first checked, exactly as recorded, for enough evidence as a
+/// whole. Only then is it narrowed: isolated measurement excursions are discarded (see
+/// [`excursions`]), and if what remains contains a genuine level shift, located
 /// with Pettitt and accepted only by the same Mann–Whitney significance, separation,
 /// relative-floor, and absolute-floor gates that make such a split trustworthy, the
-/// stale prefix before the newest accepted split is discarded. The prediction interval
+/// stale prefix before the newest accepted split is discarded too. The prediction interval
 /// then compares the context run against the trailing regime, moving its centre and
 /// scatter together onto the base level the context would merge into.
 fn evaluate_branch(
@@ -1944,22 +1944,33 @@ fn evaluate_branch(
     // (attach_base_windows/`base_window_levels` own that truncation), so detection reads
     // it whole rather than re-slicing it here.
     //
-    // Isolated measurement excursions are discarded before anything is counted or
-    // compared, because a reading that describes the runner rather than the code is not
-    // evidence: it should neither prop up the minimum-commits count nor enter the
-    // comparison's centre and scatter. A window left too short by the removals is judged
-    // unjudgeable below, which is the honest outcome.
-    let base_window = excursions::cleaned_window(&series.base_window, config);
-    let levels: Vec<f64> = base_window.iter().map(|level| level.value).collect();
-    let base_spans = level_spans(&levels);
+    // The evidence floor is applied to the window as recorded, before anything is
+    // discarded from it. That keeps this gate in exact correspondence with `testability`,
+    // which is what the census counts and what sizes the false-discovery family, and it
+    // is the same order the regime narrowing below already follows: the question this
+    // gate asks is whether the series has a recent base history at all, and it does.
+    let recorded_spans = level_spans(
+        &series
+            .base_window
+            .iter()
+            .map(|level| level.value)
+            .collect::<Vec<f64>>(),
+    );
     if !log.stage(GateStage::Branch).numeric(
         Gate::MinBaseCommits,
-        count_to_f64(base_spans.len()),
+        count_to_f64(recorded_spans.len()),
         count_to_f64(config.min_series_points),
-        base_spans.len() >= config.min_series_points,
+        recorded_spans.len() >= config.min_series_points,
     ) {
         return None;
     }
+    // Isolated measurement excursions come out before the window is searched for a regime
+    // boundary or compared against, because a reading that describes the runner rather
+    // than the code would otherwise both invite a spurious boundary and distort the
+    // comparison's centre and scatter.
+    let base_window = excursions::cleaned_window(&series.base_window, config);
+    let levels: Vec<f64> = base_window.iter().map(|level| level.value).collect();
+    let base_spans = level_spans(&levels);
     let comparison_start = current_base_regime_start(
         series,
         &base_spans,
@@ -2112,10 +2123,11 @@ pub fn testability(series: &Series, context: &AnalysisContext) -> Testability {
                 return Testability::Unjudged(UnjudgedReason::NotMeasuredOnBranch);
             }
             // Testability asks whether the full recent base window contains enough
-            // evidence to run a branch comparison at all. Detection may then narrow to
-            // a `min_regime`-sized trailing regime after an accepted base-side shift;
-            // that does not make this census reason untruthful, because the evidence
-            // floor was met before any history was discarded.
+            // evidence to run a branch comparison at all. Detection may then narrow it —
+            // discarding isolated measurement excursions, and narrowing to a
+            // `min_regime`-sized trailing regime after an accepted base-side shift. That
+            // does not make this census reason untruthful, because the evidence floor was
+            // met before any of it was discarded.
             let base_points = series.base_window.len().min(config.compare_window);
             if base_points < config.min_series_points {
                 return Testability::Unjudged(UnjudgedReason::TooFewBaseCommits);
@@ -5610,6 +5622,29 @@ mod tests {
         let detection = find_changes(&judged, &context);
         assert_eq!(detection.findings.len(), 1);
         assert_eq!(detection.census.judged(), 1);
+    }
+
+    #[test]
+    fn a_window_at_the_evidence_floor_is_judged_despite_an_excursion_in_it() {
+        // The evidence floor is answered on the window as recorded. Applying it to what
+        // survives excursion cleaning instead would let a discarded reading silence a
+        // series that `testability` — and so the census, and the false-discovery family
+        // sized from it — has already counted as judged.
+        //
+        // The finding is the other half of the statement: the excursion is gone from the
+        // comparison, so the context run is judged against the level the base actually
+        // sits at rather than against a window that reading has widened and pulled up.
+        let mut points = base_run(100.0);
+        points[MIN_SERIES_POINTS / 2].1 = 200.0;
+        points.push((MIN_SERIES_POINTS, 130.0, false));
+        let mut series = placed_series(&points);
+        attach_test_base_windows(slice::from_mut(&mut series), Some(base_merge_base()));
+        let series = [series];
+        let context = branch_context(&series, Some(base_merge_base()));
+        assert_eq!(testability(&series[0], &context), Testability::Judged);
+        let detection = find_changes(&series, &context);
+        assert_eq!(detection.census.judged(), 1);
+        assert_eq!(detection.findings.len(), 1);
     }
 
     #[test]

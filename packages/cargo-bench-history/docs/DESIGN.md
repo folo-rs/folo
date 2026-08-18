@@ -1039,6 +1039,26 @@ whose baseline is a couple of nanoseconds turns scheduling jitter into a double-
 percentage move; without the relative floor a large baseline would flag on a move that is
 noise at its scale.
 
+Branch mode also **discards isolated measurement excursions** from the base window before it
+compares anything. A shared runner occasionally loses time to something else and records one
+commit far above the level its neighbours agree on; that reading describes the runner rather
+than the code, and left in the window it both pulls the comparison's centre toward itself and
+inflates the scatter the move is judged against, so a genuine regression passes unreported.
+The failure is silent, which is what makes it worth correcting rather than tolerating. A level
+is discarded only when the levels on either side of it agree with one another, it stands far
+clear of them, and few enough levels in the window qualify — jointly, "the series was doing one
+thing, this one commit was not, and then it went back to doing it". A window where many levels
+qualify is not a clean window with a bad reading in it but a benchmark that genuinely
+oscillates between levels, and it is left exactly as measured; so are the window's oldest and
+newest levels, which have no surroundings on both sides to be judged against. Discarding a
+level *tightens* the window and so makes the mode readier to report, which is why the rule is
+narrow: it removes what no amount of unchanged code would reproduce, and nothing else.
+Whether a series is judged at all is decided on its window as recorded, before anything is
+discarded from it: that floor asks whether the series has a recent base history to be compared
+against, and a bad reading within that history does not change the answer.
+History mode does not clean its evidence, because its gates take their level and their scatter
+from medians, which absorb a single wild reading on their own.
+
 The gate thresholds are centralized as a single policy rather than embedded throughout the
 detectors, so maintainers can review and tune the complete policy together. Each threshold is
 documented there with the reasoning that sets its value; this document describes the rules

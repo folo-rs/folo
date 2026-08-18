@@ -167,6 +167,8 @@ impl Surroundings {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
+
     use super::*;
     use crate::detect::recorded::{
         CONTENDED_RUNNER_BASE, CONTENDED_RUNNER_EXCURSION, CONTENDED_RUNNER_LEVEL_START,
@@ -290,7 +292,7 @@ mod tests {
 
     #[test]
     fn an_all_zero_window_has_no_excursions() {
-        assert!(isolated_excursions(&vec![0.0; 16], &config()).is_empty());
+        assert!(isolated_excursions(&[0.0; 16], &config()).is_empty());
     }
 
     #[test]
