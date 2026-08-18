@@ -6,12 +6,14 @@
 
 mod assert_panics;
 mod cwd_guard;
+mod drop_waker;
 mod float;
 mod reentrant_waker;
 mod watchdog;
 
 pub use assert_panics::{assert_panics, assert_panics_with};
 pub use cwd_guard::CwdGuard;
+pub use drop_waker::drop_waker;
 pub use float::f64_diff_abs;
 pub use reentrant_waker::ReentrantWakerData;
 pub use watchdog::with_watchdog;

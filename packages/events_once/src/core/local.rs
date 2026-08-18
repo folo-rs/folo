@@ -27,9 +27,9 @@ use crate::{
 /// # Reentrancy
 ///
 /// Completing or cancelling an event runs the awaiting task's waker, either waking it or dropping
-/// it. Such a callback may freely operate on the endpoints of the event it belongs to: it may drop
-/// an endpoint, poll the receiver to completion or consume its value, and it may release the event
-/// storage by dropping the last endpoint.
+/// it. Such a callback may operate on the endpoints of the event it belongs to: it may poll the
+/// receiver to completion, and it may drop an endpoint - including the last one, which releases
+/// the event storage.
 pub struct LocalEvent<T> {
     /// The logical state of the event; see constants in `state.rs`.
     pub(crate) state: Cell<u8>,
@@ -655,14 +655,14 @@ impl<T: 'static> fmt::Debug for LocalEvent<T> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::cell::RefCell;
-    use std::mem;
     use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::pin::Pin;
     use std::rc::Rc;
-    use std::task::{self, Poll, RawWaker, RawWakerVTable};
+    use std::sync::Arc;
+    use std::task::{self, Poll};
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
-    use testing::{ReentrantWakerData, with_watchdog};
+    use testing::{ReentrantWakerData, drop_waker, with_watchdog};
 
     use super::*;
     use crate::IntoValueError;
@@ -1427,26 +1427,12 @@ mod tests {
     // deallocation is caught if the ordering regresses.
     #[test]
     fn boxed_receiver_cancel_with_sender_dropping_waker_preserves_storage() {
-        // Owns the sender behind a refcounted waker. When the last waker
-        // reference is dropped, `Drop` drops the sender, reentrantly entering
-        // `sender_dropped_without_set` while `final_poll` is on the stack.
-        struct DropSenderOnWakerDrop {
-            sender: RefCell<Option<BoxedLocalSender<i32>>>,
-        }
-
-        impl Drop for DropSenderOnWakerDrop {
-            fn drop(&mut self) {
-                drop(self.sender.borrow_mut().take());
-            }
-        }
-
         let (sender, receiver) = LocalEvent::<i32>::boxed();
         let mut receiver = Box::pin(receiver);
 
-        let data = Rc::new(DropSenderOnWakerDrop {
-            sender: RefCell::new(Some(sender)),
-        });
-        let waker = rc_drop_waker(data);
+        let (data, sender_dropped) = DropEndpointOnWakerDrop::new(sender);
+        // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
+        let waker = unsafe { drop_waker(data) };
 
         // First poll transitions BOUND -> AWAITING and stores a clone of the
         // waker inside the event.
@@ -1456,11 +1442,14 @@ mod tests {
         // Drop our local waker so only the event's stored clone remains; the
         // sender is still owned behind that clone.
         drop(waker);
+        assert!(!sender_dropped.get());
 
         // Dropping the receiver cancels the wait: `final_poll` drops the stored
         // waker, whose destructor drops the sender. The event storage must
         // survive until `final_poll` returns.
         drop(receiver);
+
+        assert!(sender_dropped.get(), "{REENTRANCY_REQUIRED}");
     }
 
     // Regression test for the reentrancy hazard in `set`. The wake callback
@@ -1471,44 +1460,32 @@ mod tests {
     // protected-pointer deallocation is caught if the shape regresses.
     #[test]
     fn boxed_send_with_reentrant_receiver_drop_releases_storage() {
-        // Owns the receiver behind a refcounted waker. When the last waker
-        // reference is dropped, `Drop` drops the receiver, which observes the
-        // SET state and releases the event storage.
-        struct DropReceiverOnWakerDrop {
-            receiver: RefCell<Option<Pin<Box<BoxedLocalReceiver<i32>>>>>,
-        }
-
-        impl Drop for DropReceiverOnWakerDrop {
-            fn drop(&mut self) {
-                drop(self.receiver.borrow_mut().take());
-            }
-        }
-
         let (sender, receiver) = LocalEvent::<i32>::boxed();
 
-        let data = Rc::new(DropReceiverOnWakerDrop {
-            receiver: RefCell::new(Some(Box::pin(receiver))),
-        });
-        let waker = rc_drop_waker(Rc::clone(&data));
+        let (data, receiver_dropped) = DropEndpointOnWakerDrop::new(Box::pin(receiver));
+        // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
+        let waker = unsafe { drop_waker(Arc::clone(&data)) };
 
         // First poll transitions BOUND -> AWAITING and stores a clone of the
         // waker inside the event.
         {
-            let mut receiver = data.receiver.borrow_mut();
-            let receiver = receiver.as_mut().expect("receiver still held");
+            let mut endpoint = data.endpoint.borrow_mut();
+            let receiver = endpoint.as_mut().expect("receiver still held");
             let mut cx = task::Context::from_waker(&waker);
             assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
         }
 
         // Leave the event's stored clone as the only reference, so waking it
-        // runs the reentrant drop. Without this the test would silently pass
-        // even if the hazard were present.
+        // runs the reentrant drop.
         drop(waker);
         drop(data);
+        assert!(!receiver_dropped.get());
 
         // `set` stores the value, transitions AWAITING -> SET and wakes, which
         // drops the receiver, which consumes the value and frees the event.
         sender.send(42);
+
+        assert!(receiver_dropped.get(), "{REENTRANCY_REQUIRED}");
     }
 
     // Regression test for the reentrancy hazard in `sender_dropped_without_set`.
@@ -1516,79 +1493,63 @@ mod tests {
     // observes DISCONNECTED instead of SET.
     #[test]
     fn boxed_sender_drop_with_reentrant_receiver_drop_releases_storage() {
-        struct DropReceiverOnWakerDrop {
-            receiver: RefCell<Option<Pin<Box<BoxedLocalReceiver<i32>>>>>,
-        }
-
-        impl Drop for DropReceiverOnWakerDrop {
-            fn drop(&mut self) {
-                drop(self.receiver.borrow_mut().take());
-            }
-        }
-
         let (sender, receiver) = LocalEvent::<i32>::boxed();
 
-        let data = Rc::new(DropReceiverOnWakerDrop {
-            receiver: RefCell::new(Some(Box::pin(receiver))),
-        });
-        let waker = rc_drop_waker(Rc::clone(&data));
+        let (data, receiver_dropped) = DropEndpointOnWakerDrop::new(Box::pin(receiver));
+        // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
+        let waker = unsafe { drop_waker(Arc::clone(&data)) };
 
         {
-            let mut receiver = data.receiver.borrow_mut();
-            let receiver = receiver.as_mut().expect("receiver still held");
+            let mut endpoint = data.endpoint.borrow_mut();
+            let receiver = endpoint.as_mut().expect("receiver still held");
             let mut cx = task::Context::from_waker(&waker);
             assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
         }
 
         drop(waker);
         drop(data);
+        assert!(!receiver_dropped.get());
 
         // `sender_dropped_without_set` transitions AWAITING -> DISCONNECTED and
         // wakes, which drops the receiver, which frees the event.
         drop(sender);
+
+        assert!(receiver_dropped.get(), "{REENTRANCY_REQUIRED}");
     }
 
-    /// Creates a waker that holds one reference to `data` and whose `wake()` and destructor
-    /// both merely release that reference. Any reentrant behavior under test therefore belongs
-    /// in the `Drop` implementation of `T`, which runs once the last reference is released.
-    ///
-    /// This is a Miri-compatible alternative to [`ReentrantWakerData`], so tests built on it can
-    /// exercise the aliasing rules that only Miri enforces.
-    fn rc_drop_waker<T: 'static>(data: Rc<T>) -> Waker {
-        unsafe { Waker::from_raw(RcDropWaker::<T>::raw_waker(data)) }
+    /// Owns an event endpoint on behalf of a waker, dropping that endpoint once the last waker
+    /// reference goes away. When the event under test releases its stored waker while completing
+    /// or cancelling, the endpoint drop therefore happens reentrantly, from inside the operation
+    /// being tested.
+    struct DropEndpointOnWakerDrop<T> {
+        endpoint: RefCell<Option<T>>,
+        dropped: Rc<Cell<bool>>,
     }
 
-    /// Carries the [`RawWakerVTable`] for [`rc_drop_waker`], one instance per payload type.
-    struct RcDropWaker<T>(PhantomData<T>);
+    impl<T> DropEndpointOnWakerDrop<T> {
+        /// Returns the payload together with a flag that records whether the endpoint has been
+        /// dropped, letting a test prove that the reentrancy it targets actually occurred.
+        fn new(endpoint: T) -> (Arc<Self>, Rc<Cell<bool>>) {
+            let dropped = Rc::new(Cell::new(false));
 
-    impl<T: 'static> RcDropWaker<T> {
-        const VTABLE: RawWakerVTable = RawWakerVTable::new(
-            Self::clone_raw,
-            Self::wake_raw,
-            Self::wake_by_ref_raw,
-            Self::drop_raw,
-        );
+            let data = Arc::new(Self {
+                endpoint: RefCell::new(Some(endpoint)),
+                dropped: Rc::clone(&dropped),
+            });
 
-        fn raw_waker(data: Rc<T>) -> RawWaker {
-            RawWaker::new(Rc::into_raw(data).cast(), &Self::VTABLE)
-        }
-
-        unsafe fn clone_raw(data: *const ()) -> RawWaker {
-            let rc = unsafe { Rc::from_raw(data.cast::<T>()) };
-            let clone = Rc::clone(&rc);
-            // Keep the original reference alive; we only wanted to bump the count.
-            mem::forget(rc);
-            Self::raw_waker(clone)
-        }
-
-        unsafe fn wake_raw(data: *const ()) {
-            unsafe { Self::drop_raw(data) }
-        }
-
-        unsafe fn wake_by_ref_raw(_data: *const ()) {}
-
-        unsafe fn drop_raw(data: *const ()) {
-            drop(unsafe { Rc::from_raw(data.cast::<T>()) });
+            (data, dropped)
         }
     }
+
+    impl<T> Drop for DropEndpointOnWakerDrop<T> {
+        fn drop(&mut self) {
+            drop(self.endpoint.borrow_mut().take());
+            self.dropped.set(true);
+        }
+    }
+
+    /// Explains a failure to reach the reentrant drop that a regression test exists to exercise.
+    /// Without it the test would pass no matter how the code under test behaved.
+    const REENTRANCY_REQUIRED: &str =
+        "the event must have held a waker clone whose drop reentered the operation under test";
 }
