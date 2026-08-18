@@ -17,17 +17,19 @@ that sets it. Detectors read those thresholds through the analysis configuration
 lets tests vary a single policy value in isolation.
 
 Evidence selection is separated from evidence judgment. Deciding which base-window levels a branch
-comparison may see — discarding a stale prefix when the base itself moved, and discarding isolated
-measurement excursions — happens before any comparison gate runs, so those gates judge one
+comparison may see — discarding a stale prefix when the base itself moved, and discarding an
+isolated measurement excursion — happens before any comparison gate runs, so those gates judge one
 already-chosen sample and the prediction interval's centre and scatter always come from that same
 sample. This is a hard constraint rather than a tidiness preference: a robust scale estimator
 paired with a non-robust centre was measured to invent regressions on unchanged code.
 
-Selection is nonetheless bounded by the evidence floor rather than the reverse. Whether a series
-can be judged at all is settled on its window as recorded, which keeps that decision in exact
-correspondence with the public testability projection the census counts and the false-discovery
-family is sized from. Narrowing that happens afterwards cannot make the census untruthful,
-because the floor was met before anything was discarded.
+Selection is nonetheless bounded by the eligibility gate rather than the reverse. That one gate
+runs first, so whether a series can be judged at all is settled on its window as recorded, which
+keeps the decision in exact correspondence with the public testability projection the census counts
+and the false-discovery family is sized from. Narrowing that happens afterwards cannot make the
+census untruthful, because the floor was met before anything was discarded. It follows that no
+selection step may discard so much that the remainder falls under the minimum regime length; the
+configured removal allowance is set far below that margin.
 
 Parallel work is supplied through an executor abstraction, preserving the same deterministic
 analysis logic for production execution and synchronous component tests.

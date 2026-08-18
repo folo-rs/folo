@@ -161,19 +161,26 @@ pub(crate) const EXCURSION_NEIGHBOUR_AGREEMENT: f64 = BRANCH_PRACTICAL_RELATIVE;
 /// what a side says, since these arrive in clusters, and few enough that the surroundings
 /// stay local to the candidate rather than reaching across a level shift the window may
 /// legitimately contain.
+///
+/// A candidate without this many levels on *both* sides is never discarded. Judging one
+/// against a shorter side would let a single adjacent level speak for a whole side, which
+/// is precisely the case this count exists to outvote.
 pub(crate) const EXCURSION_NEIGHBOURS: usize = 3;
 
 /// Default `excursion_max_removals`: how many excursions a window may contain before it
 /// is left alone entirely.
 ///
-/// A window holding more than this is not a clean window with a bad reading in it. It is
-/// a benchmark that genuinely oscillates between levels, where roughly half the levels
-/// look isolated from their neighbours and discarding them would leave a spuriously tight
-/// window in which the benchmark's own ordinary values read as large, certain
-/// regressions. The stored history puts two excursions inside one window at well under a
-/// percent of comparisons, so this is above what real interference produces while staying
-/// far below what an oscillating series offers.
-pub(crate) const EXCURSION_MAX_REMOVALS: usize = 2;
+/// One. A window offering a second is not a clean window with a bad reading in it: two
+/// separated levels agreeing on a value their surroundings do not is the signature of a
+/// benchmark that visits more than one level, and how often it does so is exactly what the
+/// comparison measures the context run against. Discarding a recurring level would leave a
+/// spuriously tight window in which the benchmark's own ordinary values read as large,
+/// certain regressions — the failure this whole rule exists to avoid causing.
+///
+/// Runner interference is rare enough per window that requiring uniqueness costs almost
+/// nothing: the stored history puts a second excursion inside the same window at well
+/// under a percent of comparisons.
+pub(crate) const EXCURSION_MAX_REMOVALS: usize = 1;
 
 /// Default `branch_noise_multiple`: multiple of the per-measurement noise floor a
 /// branch move must exceed where the engine reports per-point confidence intervals.

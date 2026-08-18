@@ -417,6 +417,23 @@ const FLOOR_MERGE_BASE: usize = FLOOR_REGIME_POINTS - 1;
 /// still holds the excursion, which is what makes the case discriminating.
 const CONTENDED_WINDOW_REGRESSION: f64 = 1.10;
 
+/// The base window of `recurrent_high_mode`, oldest first.
+///
+/// A benchmark resting at one level with ordinary scatter around it, which twice in
+/// sixteen commits visits a level a third higher. Each visit is individually
+/// indistinguishable from a reading a disturbed runner produced — the commits on either
+/// side of it agree with each other, and it stands far clear of them — so nothing local
+/// to either visit can tell them apart from interference. What the window has to be read
+/// by instead is that there are two of them.
+const RECURRENT_HIGH_MODE: [f64; 16] = [
+    82.5, 100.0, 100.0, 100.0, 135.0, 100.0, 100.0, 117.5, 100.0, 100.0, 135.0, 100.0, 100.0,
+    100.0, 117.5, 82.5,
+];
+
+/// The context run `recurrent_high_mode` is judged on: the same high level the window's
+/// own commits already reach, and so not a move at all.
+const RECURRENT_HIGH_MODE_TIP: f64 = 135.0;
+
 /// The hand-curated cases. New "obvious answer" series are added as one row each.
 fn cases() -> Vec<SignalCase> {
     vec![
@@ -532,6 +549,16 @@ fn cases() -> Vec<SignalCase> {
         .branch(vec![CONTENDED_RUNNER_LEVEL * CONTENDED_WINDOW_REGRESSION])
         .expects(Outcome::Quiet, Outcome::Rise)
         .recorded(),
+        // The counterweight to the pair above, and the reason a window may give up only
+        // one reading. This benchmark visits a level a third above its resting one twice
+        // in sixteen commits — too rarely for either visit to look like anything but a
+        // disturbed runner from where it sits, since its neighbours agree with each other
+        // and it stands far clear of them. The context run lands on that same perfectly
+        // ordinary high level. Both modes must stay quiet: nothing changed.
+        SignalCase::new("recurrent_high_mode", MetricKind::WallTime)
+            .base(RECURRENT_HIGH_MODE.to_vec())
+            .branch(vec![RECURRENT_HIGH_MODE_TIP])
+            .recorded(),
         // A branch that got slower but was fixed in the last commit.
         // History sees the regression, but branch sees only the final commit and must stay quiet.
         SignalCase::new("branch_with_regression_then_fix", MetricKind::WallTime)

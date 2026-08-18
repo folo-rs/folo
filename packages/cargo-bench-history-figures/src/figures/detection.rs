@@ -27,6 +27,7 @@ pub fn assets() -> Vec<Asset> {
     assets.extend(flat_noisy());
     assets.extend(branch());
     assets.extend(branch_base_moved());
+    assets.extend(branch_contended_runner());
     assets.extend(confidence_examples());
     assets.extend(minimums());
     assets
@@ -240,6 +241,103 @@ fn branch_base_moved() -> Vec<Asset> {
                 &finding,
                 "the prediction is centered on the newer base regime, not on the whole \
                  mixed window",
+                AnalysisMode::Branch,
+            ),
+        ),
+    ]
+}
+
+/// How much the contended-runner figure's context run moves above its base level.
+///
+/// A move well clear of the practical floor but far smaller than the recorded excursion,
+/// so the figure is about whether the excursion hides an ordinary regression rather than
+/// about an extreme one.
+const CONTENDED_TIP_RELATIVE: f64 = 1.10;
+
+/// Builds the contended-runner example and returns its values, the index the excursion
+/// sits at, and the detector's verdict.
+fn contended_runner_finding() -> (Vec<f64>, usize, Option<Finding>) {
+    let base = examples::CONTENDED_RUNNER_EXCURSION
+        .get(examples::CONTENDED_RUNNER_LEVEL_START..examples::CONTENDED_RUNNER_BASE)
+        .expect("the recording is longer than the span the branch cases take from it");
+    let excursion = base
+        .iter()
+        .enumerate()
+        .max_by(|left, right| left.1.total_cmp(right.1))
+        .map(|(index, _)| index)
+        .expect("the contended-runner base side is not empty");
+
+    let mut values = base.to_vec();
+    values.push(examples::CONTENDED_RUNNER_LEVEL * CONTENDED_TIP_RELATIVE);
+    let base_ref_index = base.len().saturating_sub(1);
+    let series = examples::with_base_window(
+        examples::series("collect_mt", &values, MetricKind::WallTime, 0),
+        base_ref_index,
+    );
+    let context = examples::branch_context(&series, base_ref_index);
+    let (finding, _) = evaluate_with_log(&series, &context);
+    (values, excursion, finding)
+}
+
+/// A base window holding one commit the runner lost time on, drawn from real stored results.
+fn branch_contended_runner() -> Vec<Asset> {
+    let (values, excursion, finding) = contended_runner_finding();
+    let finding = finding.expect(
+        "the contended-runner example places an ordinary regression against a window whose only \
+         unusual reading is discarded, so it must report",
+    );
+    let tip_index = values.len().saturating_sub(1);
+    let window_start = tip_index.saturating_sub(AnalysisConfig::default().compare_window);
+    let prediction = branch_prediction_band(
+        &values
+            .get(window_start..tip_index)
+            .expect("the contended-runner example has a base window before its context run")
+            .iter()
+            .enumerate()
+            .filter(|&(index, _)| index.saturating_add(window_start) != excursion)
+            .map(|(_, &value)| value)
+            .collect::<Vec<f64>>(),
+    );
+
+    let plot = Plot::new(
+        "a context commit against a window the runner disturbed",
+        values.len(),
+    )
+    .value_label("ns")
+    .scattered()
+    .observations(values.iter().enumerate().map(|(index, &value)| {
+        let observation = Observation::new(index, value);
+        if index == excursion {
+            observation.marked(Mark::Removed)
+        } else if index == tip_index {
+            observation.marked(Mark::Regression)
+        } else {
+            observation
+        }
+    }))
+    .band(
+        window_start,
+        tip_index.saturating_sub(1),
+        "base window",
+        theme::HIGHLIGHT,
+    )
+    .value_band(
+        window_start,
+        tip_index,
+        prediction,
+        "predicted range without the discarded reading",
+        theme::ALTERNATE,
+    )
+    .split(tip_index, "context commit");
+
+    vec![
+        Asset::new("detection-branch-contended.svg", plot.render()),
+        Asset::new(
+            "detection-branch-contended.md",
+            verdict::reported(
+                &finding,
+                "the isolated reading is left out of the comparison, so the window still \
+                 describes the level the context run is judged against",
                 AnalysisMode::Branch,
             ),
         ),
@@ -780,6 +878,8 @@ mod tests {
             "detection-branch-quiet.md",
             "detection-branch-base-moved.svg",
             "detection-branch-base-moved.md",
+            "detection-branch-contended.svg",
+            "detection-branch-contended.md",
             "detection-confidence-high.svg",
             "detection-confidence-high.md",
             "detection-confidence-lower.svg",
@@ -830,6 +930,19 @@ mod tests {
             "a sustained excursion that returned to baseline must not report"
         );
         assert!(noisy.is_none(), "scatter around one level must not report");
+    }
+
+    /// The contended-runner figure's whole lesson is that the disturbed reading does not cost
+    /// the window its sight. Were the reading averaged in, this comparison would fall silent
+    /// while the figure still claimed otherwise, so the claim is pinned against the detector.
+    #[test]
+    fn the_contended_window_still_sees_an_ordinary_regression() {
+        let (_, _, finding) = contended_runner_finding();
+
+        let finding =
+            finding.expect("a window whose only unusual reading is discarded must report");
+
+        assert_eq!(finding.direction, Direction::Regression);
     }
 
     #[test]

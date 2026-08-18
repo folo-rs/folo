@@ -230,6 +230,34 @@ scatter is re-estimated from what remains. A wrong boundary can collapse a noisy
 to almost nothing and make the next tip read as certain. A decision that discards data has to be
 more certain than one that merely reports something.
 
+### When one reading came from a disturbed runner
+
+A base window is a sample of what the base ref measures, and a shared machine occasionally
+contributes a reading that measures something else — another job on the same host, a thermal
+event, a noisy neighbour. Such a reading is not a level and not a trend: it stands well clear of
+its neighbours in one direction and is gone at the very next commit.
+
+Averaging one in would be quietly expensive. It drags the window's center toward the tip and
+inflates the window's apparent scatter several times over, and a wider predicted range is a range
+almost nothing falls outside of. The window would still look like a window, and the comparison
+would still run, but it would have lost most of its ability to see an ordinary move.
+
+So branch mode leaves such a reading out of the comparison. A reading qualifies only when the
+commits on either side of it agree with each other, it stands far clear of them, and it is the only
+one in the window — a window offering a second is a benchmark that visits more than one level, and
+how often it does so is exactly what the context run is being measured against.
+
+{{#include generated/detection-branch-contended.svg}}
+
+{{#include generated/detection-branch-contended.md}}
+
+The reading is left out of the comparison only. It is still stored, still charted, and still
+counted as one of the commits whose existence lets the window be judged at all — a window is
+never made eligible by discarding.
+
+History mode does not do this. Its arithmetic is built on medians and ranks, which a lone
+reading barely moves, so it has nothing to gain and evidence to lose.
+
 ## Confidence, and what it is not
 
 Every finding carries a confidence, and it is **one minus the chance level of whichever test

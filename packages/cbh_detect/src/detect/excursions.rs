@@ -67,16 +67,18 @@ pub(super) fn cleaned_window<'a>(
 /// 2. **It stands far clear of them.** It must differ from its surroundings by at least
 ///    [`excursion_relative_magnitude`](AnalysisConfig::excursion_relative_magnitude),
 ///    which is set well above ordinary measurement wobble.
-/// 3. **There are few of them.** If more than
+/// 3. **It is the only one.** If more than
 ///    [`excursion_max_removals`](AnalysisConfig::excursion_max_removals) levels qualify,
-///    nothing is removed at all. A window full of candidates is not a clean window with
-///    a bad reading in it; it is a benchmark that genuinely oscillates, and stripping one
-///    of its two levels away would leave a spuriously tight window in which the
-///    benchmark's own ordinary values read as large, certain regressions.
+///    nothing is removed at all. A window offering a second candidate is not a clean
+///    window with a bad reading in it: two separated levels agreeing on a value their
+///    surroundings do not is a benchmark that visits more than one level, and how often it
+///    does so is exactly what the context run is measured against. Stripping a recurring
+///    level away would leave a spuriously tight window in which the benchmark's own
+///    ordinary values read as large, certain regressions.
 ///
-/// The window's first and last levels are never removed, since neither has surroundings
-/// on both sides for test 1 to consult. That is deliberate rather than incidental at the
-/// newest end: a level shift that landed on the base branch at its final commit is
+/// A level without a full set of neighbours on *both* sides is never removed, since test 1
+/// has nothing complete to consult. That is deliberate rather than incidental at the
+/// newest end: a level shift that landed on the base branch near its final commit is
 /// indistinguishable, from inside the window, from a bad reading there, and the two call
 /// for opposite treatment.
 ///
@@ -126,22 +128,20 @@ struct Surroundings {
 }
 
 impl Surroundings {
-    /// The surroundings of `levels[index]`, taking up to `reach` neighbours on each side.
+    /// The surroundings of `levels[index]`, taking `reach` neighbours on each side.
     ///
-    /// `None` when either side is empty, which is what excludes the window's endpoints,
-    /// and `None` when the neighbourhood sits at zero. Both tests are proportional, and
-    /// against a zero reference the magnitude test admits every nonzero level however
-    /// small — so the rule would lose the very narrowness that makes it safe. A window
-    /// resting at zero is left exactly as measured; the absolute floors already keep
-    /// branch mode from reporting a move there.
+    /// `None` unless both sides are complete. A shorter side would let one adjacent level
+    /// speak for that side, which is what `reach` exists to outvote, so the window's outer
+    /// `reach` levels at each end are never candidates. It is also `None` when the
+    /// neighbourhood sits at zero: both tests are proportional, and against a zero
+    /// reference the magnitude test admits every nonzero level however small — the rule
+    /// would lose the very narrowness that makes it safe. A window resting at zero is left
+    /// exactly as measured; the absolute floors already keep branch mode from reporting a
+    /// move there.
     fn around(index: usize, levels: &[f64], reach: usize) -> Option<Self> {
-        let before = levels.get(index.saturating_sub(reach)..index)?;
+        let before = levels.get(index.checked_sub(reach)?..index)?;
         let after_start = index.checked_add(1)?;
-        let after_end = after_start.saturating_add(reach).min(levels.len());
-        let after = levels.get(after_start..after_end)?;
-        if before.is_empty() || after.is_empty() {
-            return None;
-        }
+        let after = levels.get(after_start..after_start.checked_add(reach)?)?;
         let neighbours: Vec<f64> = before.iter().chain(after).copied().collect();
         let level = stats::median(&neighbours)?;
         if level.abs() <= f64::EPSILON {
@@ -174,7 +174,6 @@ mod tests {
         CONTENDED_RUNNER_BASE, CONTENDED_RUNNER_EXCURSION, CONTENDED_RUNNER_LEVEL_START,
         STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_NOISE,
     };
-
     /// A level far enough above its surroundings to qualify, used where a test needs an
     /// excursion and does not care about its exact size.
     const EXCURSION: f64 = 200.0;
@@ -226,30 +225,36 @@ mod tests {
     }
 
     #[test]
-    fn the_window_endpoints_are_never_removed() {
+    fn levels_without_full_surroundings_are_never_removed() {
+        // The outer `excursion_neighbours` levels at each end have no complete side to be
+        // judged against, so an excursion there is kept however far it stands out.
+        let config = config();
         let mut levels = flat(16);
-        levels[0] = EXCURSION;
         let last = levels.len() - 1;
-        levels[last] = EXCURSION;
-        assert!(isolated_excursions(&levels, &config()).is_empty());
+        for offset in 0..config.excursion_neighbours {
+            levels[offset] = EXCURSION;
+            levels[last - offset] = EXCURSION;
+        }
+        assert!(isolated_excursions(&levels, &config).is_empty());
     }
 
     #[test]
-    fn excursions_up_to_the_limit_are_all_found() {
+    fn a_second_candidate_stops_the_window_being_cleaned() {
+        // Two separated levels agreeing on a value their surroundings do not is a
+        // benchmark that visits more than one level, which the comparison must account
+        // for rather than edit away. This is the sparse counterpart of the bimodal
+        // recording below, where the second level is too rare to look like a mode.
         let config = config();
         let mut levels = flat(16);
-        // Spaced so neither lands in the other's surroundings, which is the case the
-        // limit is meant to admit: independent bad moments, not an oscillation.
-        levels[4] = EXCURSION;
-        levels[12] = EXCURSION;
-        assert_eq!(config.excursion_max_removals, 2);
-        assert_eq!(isolated_excursions(&levels, &config), vec![4, 12]);
+        levels[5] = EXCURSION;
+        levels[11] = EXCURSION;
+        assert!(isolated_excursions(&levels, &config).is_empty());
     }
 
     #[test]
     fn a_window_past_the_limit_is_left_untouched() {
         let mut levels = flat(20);
-        for index in [4, 10, 16] {
+        for index in [5, 11, 16] {
             levels[index] = EXCURSION;
         }
         assert!(isolated_excursions(&levels, &config()).is_empty());
@@ -297,11 +302,18 @@ mod tests {
 
     #[test]
     fn a_window_too_short_to_have_surroundings_is_left_untouched() {
-        for length in 0..=2 {
+        // A candidate needs a full set of neighbours on each side, so a window shorter
+        // than that plus the candidate itself has nowhere a level could be judged.
+        let config = config();
+        let shortest_with_interior = config
+            .excursion_neighbours
+            .saturating_mul(2)
+            .saturating_add(1);
+        for length in 0..shortest_with_interior {
             let levels = vec![EXCURSION; length];
             assert!(
-                isolated_excursions(&levels, &config()).is_empty(),
-                "a window of {length} level(s) has no interior",
+                isolated_excursions(&levels, &config).is_empty(),
+                "a window of {length} level(s) has no judgeable interior",
             );
         }
     }

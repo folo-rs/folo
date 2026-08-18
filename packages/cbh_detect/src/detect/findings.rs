@@ -302,13 +302,22 @@ pub struct AnalysisConfig {
     /// The candidate is judged locally rather than against the whole window, because a
     /// window may legitimately span a level shift, and measured against such a window's
     /// middle the ordinary levels of both regimes stand clear.
+    ///
+    /// A level without this many neighbours on *both* sides is never discarded, so the
+    /// window's outermost levels are always kept.
     pub excursion_neighbours: usize,
     /// How many excursions a base window may contain before it is left alone entirely.
     ///
-    /// Above this the window is read as a benchmark that genuinely oscillates rather than
-    /// as a clean window with a bad reading in it. Removing levels from such a window
-    /// would leave a spuriously tight comparison in which the benchmark's own ordinary
-    /// values read as large, certain regressions — so it is left exactly as measured.
+    /// Above this the window is read as a benchmark that visits more than one level
+    /// rather than as a clean window with a bad reading in it. Removing levels from such
+    /// a window would leave a spuriously tight comparison in which the benchmark's own
+    /// ordinary values read as large, certain regressions — so it is left exactly as
+    /// measured.
+    ///
+    /// Keep it far below the difference between [`min_series_points`](Self::min_series_points)
+    /// and [`min_regime`](Self::min_regime): eligibility is settled on the window as
+    /// recorded, so a window that gave up more than that margin would be counted as judged
+    /// while holding too little evidence to compare.
     pub excursion_max_removals: usize,
 }
 
@@ -5635,7 +5644,8 @@ mod tests {
         // comparison, so the context run is judged against the level the base actually
         // sits at rather than against a window that reading has widened and pulled up.
         let mut points = base_run(100.0);
-        points[MIN_SERIES_POINTS / 2].1 = 200.0;
+        let excursion_at = MIN_SERIES_POINTS.checked_div(2).unwrap();
+        points[excursion_at].1 = 200.0;
         points.push((MIN_SERIES_POINTS, 130.0, false));
         let mut series = placed_series(&points);
         attach_test_base_windows(slice::from_mut(&mut series), Some(base_merge_base()));
@@ -5645,6 +5655,22 @@ mod tests {
         let detection = find_changes(&series, &context);
         assert_eq!(detection.census.judged(), 1);
         assert_eq!(detection.findings.len(), 1);
+    }
+
+    #[test]
+    fn the_removal_allowance_cannot_starve_a_window_that_was_judged_eligible() {
+        // Eligibility is settled on the window as recorded, so the levels cleaning may
+        // take have to come out of the margin between the evidence floor and the minimum
+        // a comparison needs. Were the allowance set above that margin, a window could be
+        // counted as judged and then hold too little evidence to compare — the census and
+        // the false-discovery family would both be describing work that cannot happen.
+        let config = AnalysisConfig::default();
+        let margin = config
+            .min_series_points
+            .checked_sub(config.min_regime)
+            .expect("the evidence floor is at least the minimum regime length");
+
+        assert!(config.excursion_max_removals <= margin);
     }
 
     #[test]
