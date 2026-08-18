@@ -38,9 +38,11 @@
 //!   move as measurement noise. The veto direction is one-way: it can only
 //!   suppress a candidate the other gates would have reported — it can never
 //!   promote a move into a finding.
-//! * Surviving candidates then pass a Benjamini–Hochberg false-discovery filter,
-//!   taken over every series judged rather than only those that raised a candidate,
-//!   so a batch of series does not manufacture spurious findings.
+//! * Surviving candidates are screened to the directions the mode reports, then pass
+//!   a Benjamini–Hochberg false-discovery filter, taken over every series judged
+//!   rather than only those that raised a candidate, so a batch of series does not
+//!   manufacture spurious findings and the rate the filter controls is the rate among
+//!   the findings actually reported.
 //!
 //! A separate slow-[`Drift`](FindingMethod::Drift) finding is raised from a
 //! Mann–Kendall trend test plus a Theil–Sen slope, gated by the same practical
@@ -332,8 +334,8 @@ impl AnalysisMode {
 
 /// The context a [`find_changes_spawned`] pass runs in.
 ///
-/// Carries which analysis to perform, the tuned parameters, the topology anchors
-/// the mode needs, and whether improvements are reported alongside regressions.
+/// Carries which analysis to perform, the tuned parameters, and the topology anchors
+/// the mode needs.
 #[derive(Clone, Copy, Debug)]
 pub struct AnalysisContext {
     /// The analysis to perform.
@@ -354,25 +356,26 @@ pub struct AnalysisContext {
     /// target so a series that stops short of the context renders the data-less commits
     /// after its last observation as a gap. Consulted only in [`AnalysisMode::History`].
     pub tip_index: usize,
-    /// Whether improvements are reported. History mode defaults to regressions only
-    /// (scheduled drift watch); branch mode always reports both.
-    pub include_improvements: bool,
 }
 
 impl AnalysisContext {
     /// Whether a finding of the given `direction` is reported in this mode.
+    ///
+    /// The two modes ask differently shaped questions, so they keep different
+    /// directions (DESIGN §8.3, §8.5). History mode is a drift watch over the base
+    /// branch, where improvement over time is the expected background and only a
+    /// worsening warrants attention, so it is one-directional. Branch mode judges one
+    /// change against its base, where any movement is what the reader came for.
     fn keeps(&self, direction: Direction) -> bool {
         match self.mode {
-            AnalysisMode::History => {
-                direction == Direction::Regression || self.include_improvements
-            }
+            AnalysisMode::History => direction == Direction::Regression,
             AnalysisMode::Branch => true,
         }
     }
 
-    /// Whether this analysis reports improvements at all. `false` for the
-    /// regressions-only case (history mode's default drift watch), where an
-    /// always-zero improvement tally is noise the report omits.
+    /// Whether this analysis reports improvements at all. `false` in history mode's
+    /// regressions-only drift watch, where an always-zero improvement tally is noise
+    /// the report omits.
     #[must_use]
     pub fn reports_improvements(&self) -> bool {
         self.keeps(Direction::Improvement)
@@ -2009,10 +2012,10 @@ pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Detection {
 /// the branch's latest state against its base. A series that cannot be judged (see
 /// [`testability`]) is never evaluated and is accounted for in the returned
 /// [`SeriesCensus`] instead.
-/// Surviving candidates pass a Benjamini–Hochberg false-discovery filter at
-/// `config.fdr_q`. Findings are then filtered to the directions the mode reports and
-/// ordered by descending relative move, then method, then a stable identity
-/// tie-break.
+/// Surviving candidates are screened to the directions the mode reports and then pass
+/// a Benjamini–Hochberg false-discovery filter at `config.fdr_q`, so every reported
+/// finding is one the correction rejected. Findings are ordered by descending relative
+/// move, then method, then a stable identity tie-break.
 ///
 /// Detection is per-series independent, so the series are split into one balanced
 /// contiguous chunk per worker and each chunk runs on its own blocking task via
@@ -2092,6 +2095,21 @@ fn finalize_findings(
 ) -> Vec<Finding> {
     let config = &context.config;
 
+    // Screen to the directions this mode reports *before* the correction, so that every
+    // hypothesis the correction rejects is a finding the report goes on to show.
+    // Correcting over both directions and discarding one afterwards would attach the
+    // false-discovery guarantee to a set larger than the reported one: discarding true
+    // improvements shrinks the denominator the rate is defined over while leaving false
+    // regressions in place, so the regressions actually shown would inherit no bound.
+    // Screening first costs only power — for an unchanged series the chance of raising a
+    // candidate in one named direction is half the two-sided p-value the detectors
+    // report, so the surviving p-values are conservative and the bound holds with room
+    // to spare. Ref: DESIGN.md §8.3.
+    let candidates: Vec<Candidate> = candidates
+        .into_iter()
+        .filter(|candidate| context.keeps(candidate.finding.direction))
+        .collect();
+
     // Control the false-discovery rate across every series that was actually judged,
     // not merely those that raised a candidate. Feeding the filter only its own
     // survivors would make it a no-op: each has already cleared `change_alpha`, which
@@ -2104,9 +2122,8 @@ fn finalize_findings(
     let mut keep_iter = keep.into_iter();
 
     // `candidates` and `candidate_p` were built in the same order, so advancing
-    // `keep_iter` for each candidate keeps the mask aligned. A surviving finding that
-    // the mode keeps materialises its charting points here — a dropped candidate never
-    // pays for them.
+    // `keep_iter` for each candidate keeps the mask aligned. A surviving finding
+    // materialises its charting points here — a dropped candidate never pays for them.
     let mut findings: Vec<Finding> = candidates
         .into_iter()
         .filter_map(|candidate| {
@@ -2118,9 +2135,6 @@ fn finalize_findings(
                 source_index,
                 ..
             } = candidate;
-            if !context.keeps(finding.direction) {
-                return None;
-            }
             let source = series
                 .get(source_index)
                 .expect("the source index was assigned from this series slice");
@@ -2512,8 +2526,7 @@ mod tests {
         super::evaluate_branch(series, config, context_index, log)
     }
 
-    /// Runs the history-mode detector with default config, reporting both
-    /// directions.
+    /// Runs the history-mode detector with default config.
     fn changes(series: &[Series]) -> Vec<Finding> {
         find_changes(series, &history_context(series)).findings
     }
@@ -2526,7 +2539,6 @@ mod tests {
             merge_base_index: None,
             base_ref_index: None,
             tip_index: max_topo_index(series),
-            include_improvements: true,
         }
     }
 
@@ -2580,7 +2592,6 @@ mod tests {
             merge_base_index: None,
             base_ref_index: None,
             tip_index: max_topo_index(&series),
-            include_improvements: true,
         };
 
         let serial = find_changes(&series, &context);
@@ -3484,7 +3495,6 @@ mod tests {
             merge_base_index,
             base_ref_index: merge_base_index,
             tip_index: max_topo_index(series),
-            include_improvements: false,
         }
     }
 
@@ -3622,8 +3632,7 @@ mod tests {
 
     #[test]
     fn branch_mode_reports_an_improvement_over_the_base() {
-        // Branch mode always reports both directions, regardless of
-        // `include_improvements` (which only governs history mode).
+        // Branch mode reports both directions; only history is regressions-only.
         let series = branch_over_base(100.0, 70.0, 3);
         let finding = only(branch_changes(&[series], Some(base_merge_base())));
         assert_eq!(finding.direction, Direction::Improvement);
@@ -3970,7 +3979,6 @@ mod tests {
             merge_base_index: None,
             base_ref_index: None,
             tip_index: 20,
-            include_improvements: true,
         };
         let finding = only(find_changes(slice::from_ref(&series), &context).findings);
         assert_eq!(finding.chart_base_ref, Some(20));
@@ -4679,37 +4687,33 @@ mod tests {
     }
 
     #[test]
-    fn history_keeps_regressions_and_optionally_improvements() {
-        let context = |include_improvements| AnalysisContext {
+    fn history_reports_regressions_only() {
+        let context = AnalysisContext {
             mode: AnalysisMode::History,
             config: AnalysisConfig::default(),
             merge_base_index: None,
             base_ref_index: None,
             tip_index: 0,
-            include_improvements,
         };
-        // Regressions are always reported; improvements only when opted in.
-        assert!(context(false).keeps(Direction::Regression));
-        assert!(!context(false).keeps(Direction::Improvement));
-        assert!(context(true).keeps(Direction::Improvement));
+        // A drift watch over the base branch is one-directional: improvement over time
+        // is the expected background there, so only a worsening is a finding.
+        assert!(context.keeps(Direction::Regression));
+        assert!(!context.keeps(Direction::Improvement));
     }
 
     #[test]
     fn reports_improvements_reflects_the_mode() {
-        let context = |mode, include_improvements| AnalysisContext {
+        let context = |mode| AnalysisContext {
             mode,
             config: AnalysisConfig::default(),
             merge_base_index: None,
             base_ref_index: None,
             tip_index: 0,
-            include_improvements,
         };
-        // History reports improvements only when opted in; branch always compares
-        // both directions. Pinning both a true and a false case keeps the flag from
-        // collapsing to a constant.
-        assert!(!context(AnalysisMode::History, false).reports_improvements());
-        assert!(context(AnalysisMode::History, true).reports_improvements());
-        assert!(context(AnalysisMode::Branch, false).reports_improvements());
+        // History is the regressions-only drift watch; branch compares both
+        // directions.
+        assert!(!context(AnalysisMode::History).reports_improvements());
+        assert!(context(AnalysisMode::Branch).reports_improvements());
     }
 
     #[test]

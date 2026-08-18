@@ -1,12 +1,12 @@
 //! Figures and worked examples for the Multiplicity and coverage chapter.
 //!
 //! The chapter makes two arithmetic claims — that the rank threshold tightens with the
-//! size of the family, and that correcting before filtering the display is the more
-//! sensitive of the two possible orders — and one accounting claim, that every series an
-//! analysis did not judge is named. Each figure here is the arithmetic itself: the
-//! step-up decisions come from the real [`benjamini_hochberg`](cbh_stats::benjamini_hochberg)
-//! procedure and the coverage account from a real [`SeriesCensus`], so a change in either
-//! rewrites the chapter rather than leaving its numbers behind.
+//! size of the family, and that filtering direction before correction is stricter than
+//! correcting both directions first — and one accounting claim, that every series an analysis
+//! did not judge is named. Each figure here is the arithmetic itself: the step-up decisions
+//! come from the real [`benjamini_hochberg`](cbh_stats::benjamini_hochberg) procedure and the
+//! coverage account from a real [`SeriesCensus`], so a change in either rewrites the chapter
+//! rather than leaving its numbers behind.
 
 use std::fmt::Write as _;
 
@@ -290,14 +290,14 @@ const DIRECTION_FAMILY: usize = 10;
 
 /// The improvement's chance level.
 ///
-/// Decisive enough that no ordering could drop it, which is what makes it a rank the
-/// regression has to sit behind rather than a second marginal case.
+/// Decisive enough that the alternate order keeps it, isolating the comparison to the
+/// regression's rank instead of making both candidates marginal.
 const IMPROVEMENT_CHANCE: f64 = 0.001;
 
 /// The regression's chance level.
 ///
 /// Between the thresholds for the first and second rank in this family, which is exactly the
-/// range where the two orders disagree.
+/// range where the table can demonstrate the cost of filtering first.
 const REGRESSION_CHANCE: f64 = 0.015;
 
 /// How the appendix names the improvement.
@@ -306,8 +306,7 @@ const IMPROVEMENT_SERIES: &str = "checksum";
 /// How the appendix names the regression.
 const REGRESSION_SERIES: &str = "tokenize";
 
-/// The worked example showing that correcting before filtering the display is the more
-/// sensitive order.
+/// The worked example comparing direction filtering before and after correction.
 fn direction_order_table() -> String {
     let corrected_first = judge(
         &[
@@ -316,9 +315,8 @@ fn direction_order_table() -> String {
         ],
         DIRECTION_FAMILY,
     );
-    // Filtering first hands the procedure a shorter list. The family it divides by is
-    // unchanged — the same series were judged either way — so the whole of the difference
-    // is the rank the regression lands on.
+    // Filtering first removes the improvement from the corrected list without changing the
+    // judged family, so the whole difference is the rank the regression lands on.
     let filtered_first = judge(&[(REGRESSION_SERIES, REGRESSION_CHANCE)], DIRECTION_FAMILY);
 
     let mut table =
@@ -351,14 +349,14 @@ fn direction_order_table() -> String {
     let filtered = regression_outcome(&filtered_first);
     writeln!(
         table,
-        "\nBoth orders divide by the same {DIRECTION_FAMILY} judged series. Correcting \
-         first leaves the regression at rank {}, where it is {}; filtering the \
-         improvement out first moves it to rank {}, where it is {}. The display then \
-         omits the improvement either way.",
-        corrected.rank,
-        corrected.outcome(),
+        "\nBoth orders divide by the same {DIRECTION_FAMILY} judged series. The tool \
+         filters, then corrects: the regression is at rank {}, where it is {}. Correcting \
+         both directions first would leave it at rank {}, where it is {}, before the \
+         display would hide the improvement.",
         filtered.rank,
-        filtered.outcome()
+        filtered.outcome(),
+        corrected.rank,
+        corrected.outcome()
     )
     .expect("writing to a String never fails");
 
@@ -705,10 +703,10 @@ mod tests {
         assert!(table.contains(&format!("| {LARGE_FAMILY} |")));
     }
 
-    /// The chapter asserts that correcting first is the more sensitive order. The
-    /// arithmetic has to show it rather than the prose claiming it.
+    /// The chapter states that filtering first is stricter, so the arithmetic has to show
+    /// the regression moving to a stricter rank.
     #[test]
-    fn the_regression_survives_correcting_first_and_not_filtering_first() {
+    fn filtering_first_is_stricter_for_the_regression() {
         let corrected_first = judge(
             &[
                 (IMPROVEMENT_SERIES, IMPROVEMENT_CHANCE),
@@ -723,9 +721,9 @@ mod tests {
 
         assert!(
             corrected.kept,
-            "correcting first must report the regression"
+            "correcting both directions first would keep the regression"
         );
-        assert!(!filtered.kept, "filtering first must suppress it");
+        assert!(!filtered.kept, "filtering first must suppress the regression");
         assert_eq!(corrected.rank, 2);
         assert_eq!(filtered.rank, 1);
         assert!(
@@ -734,9 +732,9 @@ mod tests {
         );
     }
 
-    /// The improvement is there to occupy a rank, not to be a second marginal case.
+    /// The improvement is decisive under the alternate order, not a second marginal case.
     #[test]
-    fn the_improvement_survives_the_correction_it_is_part_of() {
+    fn the_alternate_order_keeps_the_decisive_improvement() {
         let judged = judge(
             &[
                 (IMPROVEMENT_SERIES, IMPROVEMENT_CHANCE),
@@ -760,6 +758,8 @@ mod tests {
 
         assert!(table.contains("correct, then filter"));
         assert!(table.contains("filter, then correct"));
+        assert!(table.contains("The tool filters, then corrects"));
+        assert!(table.contains("Correcting both directions first would leave it"));
         assert!(table.contains(&chance(IMPROVEMENT_CHANCE)));
         assert!(table.contains(&chance(REGRESSION_CHANCE)));
     }

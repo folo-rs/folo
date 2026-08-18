@@ -314,9 +314,10 @@ gh-analyze-bench-history dir keydir:
 # ancestry's clean points as the baseline, and reports how the branch tip's level moved. `{{base}}`
 # is passed EXPLICITLY (the pr-bench-history.yml `analyze` job passes `origin/main`) because the PR
 # head is checked out detached, so there is no local `main` branch to auto-resolve, whereas
-# `fetch-depth: 0` populates the `origin/main` remote-tracking ref the merge-base needs.
-# `--include-improvements` is added so the rolling PR comment can also surface detected speedups, not
-# only regressions. Everything else matches the main analyze: the EXACT machine keys collected this
+# `fetch-depth: 0` populates the `origin/main` remote-tracking ref the merge-base needs. Branch mode
+# reports improvements alongside regressions on its own, so the rolling PR comment surfaces detected
+# speedups without any flag asking for them. Everything else matches the main analyze: the EXACT
+# machine keys collected this
 # run (threaded from {{keydir}} via Get-MachineKeyArgument, not the removed fixed `github` key), all
 # engines and triples, findings never fail the recipe (the tool always exits 0), `--verbose` logs the
 # effective machine-key selection, and `--cache` mirrors fetched cloud objects under {{dir}}/cache. A
@@ -371,7 +372,7 @@ gh-analyze-pr-bench-history dir base keydir:
     $common = @('--engine', 'all', '--target-triple', 'all') + $keyArgs
 
     Write-Verbose "Analyzing PR benchmark history in branch mode (context HEAD vs base {{base}}); writing the full Markdown to $reportPath, the full JSON to $jsonPath and the condensed top-findings Markdown summary to $summaryPath, including improvements as well as regressions, and mirroring fetched cloud objects under $cacheDir." -Verbose
-    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --verbose --context HEAD --base '{{base}}' --include-improvements --cache=$cacheDir --no-text --markdown $reportPath --json $jsonPath --markdown-summary $summaryPath
+    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --verbose --context HEAD --base '{{base}}' --cache=$cacheDir --no-text --markdown $reportPath --json $jsonPath --markdown-summary $summaryPath
     Write-Verbose "Computing the notable flag from the JSON report." -Verbose
     $json = Get-Content -LiteralPath $jsonPath -Raw | ConvertFrom-Json
     $notable = if (($json.PSObject.Properties.Name -contains 'notable') -and $json.notable) { 'true' } else { 'false' }

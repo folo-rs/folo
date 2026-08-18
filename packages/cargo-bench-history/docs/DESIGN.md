@@ -747,8 +747,7 @@ gives; when runs enter but none carry the named `(benchmark, metric)` pair, a di
 pointing at the unmatched benchmark id or metric name.
 
 `examine` runs **no detection and no re-baselining** — it has no findings, modes, or
-blessings, which is why the analysis-only improvements flag is not
-part of its surface. It lists **every commit** from the earliest one at which any matching
+blessings. It lists **every commit** from the earliest one at which any matching
 set carries the series through to the analyzed context commit: a commit carrying data contributes a row
 per **observation** (clean run before dirty snapshots, each flagged, so a value's provenance
 is unambiguous), and a commit carrying none is marked `n/a`. That opening is a union across
@@ -1061,6 +1060,16 @@ false positive. Testability is one mode-aware predicate (enough points in the wi
 mode's detector reads), and detection short-circuits on that same predicate, so a series is
 either judged *and* counted or neither.
 
+The correction and the report must cover the same set, because a rate controlled over one
+set says nothing about a subset of it. A mode that reports only one direction (§8.5)
+therefore discards the other direction's candidates **before** the correction runs, so every
+hypothesis the correction rejects is a finding the report goes on to show and the controlled
+rate is the rate among what the reader sees. The family size is unaffected: it still counts
+every judged series, whichever direction that series moved. Screening to one named direction
+only makes the guarantee safer, since an unchanged series has half the chance of raising a
+candidate in a direction chosen in advance as it does of raising one either way; the target
+is an upper bound, and this order keeps the true rate under it.
+
 Because every mode's verdict rests on a real p-value and on that one family definition, the
 correction applies uniformly to history and branch analysis rather than being a history-mode
 concept.
@@ -1093,8 +1102,8 @@ never a silent fall-through to history.
 * **history** — the base-branch view: auto-selected when the analyzed context commit *is* the
   merge-base with the base and no dirty run is recorded on top of it. It applies the
   long-range change-point and drift techniques, and reports regressions
-  only by default (steady improvement on the base branch is expected; a flag opts into
-  improvements).
+  only (steady improvement on the base branch is expected, so a report of it would be
+  noise in a channel whose whole purpose is to raise alarms).
 * **branch** — auto-selected otherwise (commits past the merge-base, a context line whose
   merge-base is off first-parent because the base was merged into the branch, or a dirty run
   admitted on the base tip by the exception above). It judges the analyzed context commit
@@ -1106,7 +1115,7 @@ The two driving scenarios are a scheduled base-branch regression watch (history)
 per-PR feature-branch evaluation (branch). Long-range trend analysis is meaningless on one
 or two branch points, which is why the techniques differ by mode. The false-discovery
 correction is not one of the differences: it spans whichever series the running mode found
-testable (§8.3).
+testable, over the directions that mode reports (§8.3).
 
 | Technique | history | branch |
 |---|---|---|
@@ -1114,11 +1123,11 @@ testable (§8.3).
 | Monotonic drift (Mann–Kendall + Theil–Sen) | ✅ | — |
 | Context commit vs. base (Student-t prediction interval) | — | ✅ |
 | Benjamini–Hochberg false-discovery filter | ✅ | ✅ |
-| Improvements reported | opt-in | ✅ |
+| Improvements reported | — | ✅ |
 
 Modes apply to `analyze` only; `list`, `prune`, and `examine` reuse the shared selection
-options and pipeline but never analyze, so the mode selection and improvements flag are
-analyze-only and not part of the shared option model. The **ghost filter** (§7.3) is likewise
+options and pipeline but never analyze, so the mode selection is analyze-only and not part of
+the shared option model. The **ghost filter** (§7.3) is likewise
 analyze-only and outside that shared selection model: it applies in both modes, dropping —
 before detection — any benchmark absent at the context commit. In branch
 mode a benchmark removed on the branch is a ghost and a benchmark newly

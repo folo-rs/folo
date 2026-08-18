@@ -129,19 +129,13 @@ impl Mode {
     const ALL: [Self; 2] = [Self::History, Self::Branch];
 
     /// Whether this mode reports improvements as findings. Only branch does: history is
-    /// run here as a regressions-only drift watch (`include_improvements = false`), so
-    /// for it an improvement is a non-finding.
+    /// a regressions-only drift watch, so for it an improvement is a non-finding.
     fn reports_improvements(self) -> bool {
         matches!(self, Self::Branch)
     }
 
     /// The analysis context this mode is evaluated under. `merge_base_index` and
     /// `tip_index` are consulted only by branch mode; history ignores them.
-    ///
-    /// `include_improvements` is set from [`reports_improvements`](Self::reports_improvements)
-    /// so the context matches the mode's intended reporting semantics: branch (which
-    /// reports both directions) opts in, history opts out. Branch mode ignores the
-    /// flag today, but pinning it consistently keeps the context correct if that changes.
     fn context(self, merge_base_index: Option<usize>, tip_index: usize) -> AnalysisContext {
         let mode = match self {
             Self::History => AnalysisMode::History,
@@ -153,7 +147,6 @@ impl Mode {
             merge_base_index,
             base_ref_index: merge_base_index,
             tip_index,
-            include_improvements: self.reports_improvements(),
         }
     }
 }
@@ -823,9 +816,10 @@ fn companion_crowds_report_nothing_of_their_own() {
     // The stricter reading — that companions raise no *candidate* at all — is not a
     // property flat noisy series can have. Fifty of them tested at `change_alpha` will now
     // and then throw one that clears it, which is what that threshold means. What they may
-    // not do is throw one in the direction the mode reports, so the second assertion pins
-    // the crowd's whole contribution to the improvement side, where a regressions-only
-    // drift watch discards it.
+    // not do is carry one through to a reported finding. The branch leg covers both
+    // directions on its own, since branch mode reports improvements as well as
+    // regressions; the history leg covers the regression side, which is all a
+    // regressions-only drift watch can report.
     for case in cases() {
         let values = case.values();
         for scale in [1.0, SCALE_MULTIPLE] {
@@ -847,21 +841,6 @@ fn companion_crowds_report_nothing_of_their_own() {
                     case.name,
                     detection.findings.len(),
                 );
-
-                let both_directions = AnalysisContext {
-                    include_improvements: true,
-                    ..mode.context(case.merge_base_index(), case.tip_index())
-                };
-                for finding in find_changes(&crowd, &both_directions).findings {
-                    assert_eq!(
-                        finding.direction,
-                        Direction::Improvement,
-                        "case '{}' mode={mode:?} scale={scale}: companion '{}' raised a \
-                         regression of its own",
-                        case.name,
-                        finding.id.qualified(),
-                    );
-                }
             }
         }
     }

@@ -116,7 +116,6 @@ fn suite_context(suite: &[Series]) -> AnalysisContext {
         merge_base_index: None,
         base_ref_index: None,
         tip_index,
-        include_improvements: false,
     }
 }
 
