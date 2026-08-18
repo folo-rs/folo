@@ -2668,6 +2668,38 @@ mod tests {
     }
 
     #[test]
+    fn noise_band_is_strict_at_the_exact_floor() {
+        // A move equal to the band is within noise, not above it: the gate requires a
+        // strict excess, so a move exactly at `multiple * half_width` is suppressed.
+        // The scenario fixes an exact boundary (half-width 2.0, multiple 3.0, band
+        // 6.0, delta 6.0), so relaxing `>` to `>=` would wrongly clear the gate here.
+        let series = wall_series(&[100.0, 100.0, 100.0], 2.0);
+        let mut unobserved = GateLog::disabled();
+        let mut log = unobserved.stage(GateStage::Drift);
+        assert!(!exceeds_noise_band(6.0, &series.points, 3.0, &mut log));
+    }
+
+    #[test]
+    fn branch_noise_band_is_strict_at_the_exact_floor() {
+        // The branch noise band draws its floor from the base levels' and context
+        // run's intervals together; a move equal to that band is within noise. The
+        // exact boundary (both half-widths 2.0, multiple 3.0, band 6.0, delta 6.0)
+        // pins the strict `>` so a `>=` slip cannot pass a boundary move.
+        let before = [BaseLevel {
+            topo_index: 0,
+            value: 100.0,
+            interval: Some((98.0, 102.0)),
+        }];
+        let after_points = pts(&[(130.0, 2.0)]);
+        let after: Vec<&SeriesPoint> = after_points.iter().collect();
+        let mut unobserved = GateLog::disabled();
+        let mut log = unobserved.stage(GateStage::Branch);
+        assert!(!exceeds_branch_noise_band(
+            6.0, &before, &after, 3.0, &mut log
+        ));
+    }
+
+    #[test]
     fn step_model_residual_is_the_median_absolute_deviation_per_regime() {
         // before [1,7] -> median 4 -> residuals 3,3; after [40,40] -> median 40 ->
         // residuals 0,0; the median of [3,3,0,0] is 1.5.
