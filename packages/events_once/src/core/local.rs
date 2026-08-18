@@ -1179,7 +1179,10 @@ mod tests {
         assert_eq!(Arc::strong_count(&counter), 2);
         assert_eq!(counter.woken.load(Ordering::Relaxed), 1);
 
-        assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Ready(Ok(42))));
+        assert!(matches!(
+            receiver.as_mut().poll(&mut cx),
+            Poll::Ready(Ok(42))
+        ));
         assert_eq!(Arc::strong_count(&counter), 2);
     }
 
