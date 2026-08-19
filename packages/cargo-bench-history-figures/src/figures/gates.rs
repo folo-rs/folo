@@ -930,11 +930,11 @@ fn commits(count: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use cbh_detect::{
         COMPARE_WINDOW, PRACTICAL_ABSOLUTE_ALLOC, PRACTICAL_ABSOLUTE_COUNT, PRACTICAL_ABSOLUTE_TIME,
     };
+
+    use super::*;
 
     /// The gates chapter names every gate in a hand-written table grouping them by the
     /// question each asks. That table is the appendix's one list of gate identifiers that is

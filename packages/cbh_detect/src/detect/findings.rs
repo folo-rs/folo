@@ -652,7 +652,9 @@ fn scatter_floor(kind: MetricKind) -> f64 {
         | MetricKind::ConditionalBranches
         | MetricKind::IndirectBranches => noise_gates::SCATTER_FLOOR_COUNT,
         MetricKind::WallTime | MetricKind::ProcessorTime => noise_gates::SCATTER_FLOOR_TIME,
-        MetricKind::AllocatedBytes | MetricKind::AllocationCount => noise_gates::SCATTER_FLOOR_ALLOC,
+        MetricKind::AllocatedBytes | MetricKind::AllocationCount => {
+            noise_gates::SCATTER_FLOOR_ALLOC
+        }
     }
 }
 
@@ -994,11 +996,7 @@ fn arbitrate(
 /// gate that rejects a noisy-but-stable series whose levels interleave), and — when
 /// the engine reports per-point confidence intervals — separate the two regimes'
 /// intervals.
-fn evaluate_change_point(
-    series: &Series,
-    values: &[f64],
-    log: &mut GateLog,
-) -> Option<Candidate> {
+fn evaluate_change_point(series: &Series, values: &[f64], log: &mut GateLog) -> Option<Candidate> {
     let mut log = log.stage(GateStage::ChangePoint);
     let points = &series.points;
     let n = points.len();
@@ -1151,7 +1149,11 @@ fn evaluate_drift(series: &Series, values: &[f64], log: &mut GateLog) -> Option<
     if !clears_absolute_floor(series, delta, &mut log) {
         return None;
     }
-    if !exceeds_residual_noise(delta, line_model_residual(values, slope, intercept), &mut log) {
+    if !exceeds_residual_noise(
+        delta,
+        line_model_residual(values, slope, intercept),
+        &mut log,
+    ) {
         return None;
     }
     // Where the engine reports dispersion, a trend must also clear the measurement
@@ -2678,8 +2680,14 @@ mod tests {
             "the fixture must report under the fixed alpha"
         );
         let (p, alpha) = gate_value(&log, Gate::Significance).expect("the significance gate ran");
-        assert_eq!(alpha, CHANGE_ALPHA, "the gate compares against the fixed alpha");
-        assert!(p < CHANGE_ALPHA, "the reported step's p sits below alpha: {p}");
+        assert_eq!(
+            alpha, CHANGE_ALPHA,
+            "the gate compares against the fixed alpha"
+        );
+        assert!(
+            p < CHANGE_ALPHA,
+            "the reported step's p sits below alpha: {p}"
+        );
     }
 
     #[test]
@@ -3037,8 +3045,7 @@ mod tests {
             0.5,
         );
         let candidate =
-            evaluate_change_point(&series, &values_of(&series), &mut GateLog::disabled())
-                .unwrap();
+            evaluate_change_point(&series, &values_of(&series), &mut GateLog::disabled()).unwrap();
         assert_eq!(candidate.finding.baseline, 100.0);
         assert_eq!(candidate.finding.latest, 103.0);
         assert_eq!(candidate.finding.relative_delta, PRACTICAL_RELATIVE);
@@ -3405,8 +3412,8 @@ mod tests {
         // (48 / (1 * sqrt(1 + 1/10))), so it is reported decisively — exactly the
         // regression shape this floor exists for.
         let series = branch_over_base_of_kind(0.0, 48.0, 1, MetricKind::AllocatedBytes);
-        let candidate = evaluate_branch(&series, &mut GateLog::disabled())
-            .expect("48 bytes is a move");
+        let candidate =
+            evaluate_branch(&series, &mut GateLog::disabled()).expect("48 bytes is a move");
         assert_eq!(candidate.finding.direction, Direction::Regression);
         assert_eq!(candidate.finding.latest, 48.0);
         assert!(candidate.bh_p < CHANGE_ALPHA, "{}", candidate.bh_p);
@@ -3931,15 +3938,7 @@ mod tests {
         let after_refs: Vec<&SeriesPoint> = after.iter().collect();
         let mut log = GateLog::recording();
 
-        assert!(
-            compare_samples(
-                &series,
-                &before_refs,
-                &after_refs,
-                &mut log,
-            )
-            .is_some()
-        );
+        assert!(compare_samples(&series, &before_refs, &after_refs, &mut log,).is_some());
 
         let outcome = log
             .entries()
@@ -3965,15 +3964,7 @@ mod tests {
         let after_refs: Vec<&SeriesPoint> = after.iter().collect();
         let mut log = GateLog::recording();
 
-        assert!(
-            compare_samples(
-                &series,
-                &before_refs,
-                &after_refs,
-                &mut log,
-            )
-            .is_none()
-        );
+        assert!(compare_samples(&series, &before_refs, &after_refs, &mut log,).is_none());
 
         let outcome = log
             .entries()
@@ -4013,15 +4004,7 @@ mod tests {
         let after_refs: Vec<&SeriesPoint> = after.iter().collect();
         let mut log = GateLog::recording();
 
-        assert!(
-            compare_samples(
-                &series,
-                &before_refs,
-                &after_refs,
-                &mut log,
-            )
-            .is_none()
-        );
+        assert!(compare_samples(&series, &before_refs, &after_refs, &mut log,).is_none());
         assert_eq!(
             log.declined_by_stage(GateStage::Branch),
             Some(Gate::IntervalNoiseBand)
@@ -4104,8 +4087,8 @@ mod tests {
         // p > 0, so a mutated `1 + p` / `1 / p` would clamp to 1. The nine-unit rise
         // over a baseline of 300 lands the relative move on the floor exactly.
         let series = series_of(&ramp(300.0, 1.0, MIN_SERIES_POINTS));
-        let candidate = evaluate_drift(&series, &values_of(&series), &mut GateLog::disabled())
-            .unwrap();
+        let candidate =
+            evaluate_drift(&series, &values_of(&series), &mut GateLog::disabled()).unwrap();
         assert_eq!(candidate.finding.method, FindingMethod::Drift);
         assert_eq!(candidate.finding.relative_delta, PRACTICAL_RELATIVE);
         assert!(candidate.finding.confidence < 1.0);
@@ -4138,9 +4121,7 @@ mod tests {
         // reason.
         let series = series_of(&staircase(100.0, MIN_SERIES_POINTS));
         let mut log = GateLog::recording();
-        assert!(
-            evaluate_drift(&series, &values_of(&series), &mut log).is_none()
-        );
+        assert!(evaluate_drift(&series, &values_of(&series), &mut log).is_none());
         assert_eq!(
             log.declined_by_stage(GateStage::Drift),
             Some(Gate::AbsoluteFloor)
@@ -4153,8 +4134,8 @@ mod tests {
         // counts, which clears the absolute floor and is flagged, pinning the gate's
         // `>=` boundary.
         let series = series_of(&staircase(100.0, MIN_SERIES_POINTS + 1));
-        let candidate = evaluate_drift(&series, &values_of(&series), &mut GateLog::disabled())
-            .unwrap();
+        let candidate =
+            evaluate_drift(&series, &values_of(&series), &mut GateLog::disabled()).unwrap();
         assert_eq!(candidate.finding.method, FindingMethod::Drift);
         assert_eq!(candidate.finding.delta, 5.0);
     }
@@ -4167,9 +4148,7 @@ mod tests {
         // the recorded threshold pins the product (a `+` mutant would lower it to 22).
         let series = wall_series(&ramp(100.0, 4.0, MIN_SERIES_POINTS), 20.0);
         let mut log = GateLog::recording();
-        assert!(
-            evaluate_drift(&series, &values_of(&series), &mut log).is_none()
-        );
+        assert!(evaluate_drift(&series, &values_of(&series), &mut log).is_none());
         assert_eq!(log.declined_by(), Some(Gate::IntervalNoiseBand));
         assert_eq!(
             gate_value(&log, Gate::IntervalNoiseBand),
@@ -4201,13 +4180,9 @@ mod tests {
         // rejected outright, while a series of exactly that length is still evaluated
         // (so a gate mutated to reject the longer series instead is caught).
         let short = series_of(&ramp(100.0, 4.0, DRIFT_MIN_POINTS - 1));
-        assert!(
-            evaluate_drift(&short, &values_of(&short), &mut GateLog::disabled()).is_none()
-        );
+        assert!(evaluate_drift(&short, &values_of(&short), &mut GateLog::disabled()).is_none());
         let long = series_of(&ramp(100.0, 4.0, DRIFT_MIN_POINTS));
-        assert!(
-            evaluate_drift(&long, &values_of(&long), &mut GateLog::disabled()).is_some()
-        );
+        assert!(evaluate_drift(&long, &values_of(&long), &mut GateLog::disabled()).is_some());
     }
 
     #[test]

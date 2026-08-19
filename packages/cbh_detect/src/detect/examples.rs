@@ -32,9 +32,7 @@ pub use crate::detect::recorded::{
     STATIONARY_BIMODAL_NOISE,
 };
 pub use crate::detect::scatter::{TIMING_NOISE_CV, scattered, seed_of};
-use crate::detect::{
-    AnalysisContext, AnalysisMode, Series, SeriesPoint, attach_base_windows,
-};
+use crate::detect::{AnalysisContext, AnalysisMode, Series, SeriesPoint, attach_base_windows};
 
 /// The level every example series starts from.
 ///
@@ -204,8 +202,8 @@ pub fn with_base_window(mut series: Series, base_ref_index: usize) -> Series {
     series
 }
 
-/// A history-mode context over `series` under the default configuration: what a
-/// scheduled analysis of one benchmark's stored history runs.
+/// A history-mode context over `series`: what a scheduled analysis of one
+/// benchmark's stored history runs.
 ///
 /// History mode reports regressions only, so an example that moves downwards is a
 /// non-finding here; use [`branch_context`] for an example that must be visible in
@@ -220,7 +218,7 @@ pub fn history_context(series: &Series) -> AnalysisContext {
     }
 }
 
-/// A branch-mode context over `series` under the default configuration.
+/// A branch-mode context over `series`.
 ///
 /// Branch mode judges the latest state against the base window attached to
 /// `series`, so it reports both directions.

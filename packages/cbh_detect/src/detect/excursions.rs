@@ -289,8 +289,7 @@ mod tests {
         // truncated neighbourhood is ever consulted instead of the position being skipped.
         let length = 16;
         let last = length - 1;
-        let protected =
-            (0..EXCURSION_NEIGHBOURS).chain((last - EXCURSION_NEIGHBOURS + 1)..=last);
+        let protected = (0..EXCURSION_NEIGHBOURS).chain((last - EXCURSION_NEIGHBOURS + 1)..=last);
 
         for index in protected {
             let mut levels = flat(length);

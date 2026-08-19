@@ -117,9 +117,7 @@ use crate::detect::recorded::{
     STATIONARY_BIMODAL_NOISE,
 };
 use crate::detect::scatter::{TIMING_NOISE_CV, scattered, seed_of};
-use crate::detect::{
-    AnalysisContext, AnalysisMode, Direction, Series, UnjudgedReason, examples,
-};
+use crate::detect::{AnalysisContext, AnalysisMode, Direction, Series, UnjudgedReason, examples};
 
 /// The analysis mode a case is evaluated under — the suite's dimension-1 lever.
 ///

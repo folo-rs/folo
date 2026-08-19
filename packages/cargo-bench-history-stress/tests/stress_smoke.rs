@@ -46,6 +46,27 @@ const COMMITS: usize = 8 * REGIME_POINTS;
 /// commit's state, so the branch itself stays short.
 const BRANCH_COMMITS: usize = 2;
 
+// The scenario sizes above are derived from the gates rather than picked for
+// speed. Bind them to the gates here, so moving a gate fails the build instead
+// of silently leaving this suite judging a history the detectors abstain on.
+const _: () = assert!(
+    REGIME_POINTS == MIN_REGIME,
+    "each side of a seeded step must hold a full regime"
+);
+const _: () = assert!(
+    COMMITS >= 4 * MIN_SERIES_POINTS,
+    "half the seeded commits carry a run, and the fixture keeps twice the points a \
+     judged series needs"
+);
+const _: () = assert!(
+    COMMITS >= 4 * DRIFT_MIN_POINTS,
+    "the fixture keeps twice the run-carrying commits the seeded drift needs to be seen"
+);
+const _: () = assert!(
+    COMPARE_WINDOW >= MIN_SERIES_POINTS,
+    "branch mode's base window must be able to hold the levels its test demands"
+);
+
 /// Dirty (uncommitted-tree) snapshots the scenario seeds on the feature tip.
 const DIRTY_RUNS: usize = 1;
 
@@ -269,30 +290,6 @@ fn assert_seeded_ground_truth(stdout: &str, modes: &[&str]) {
             .unwrap_or_else(|| panic!("the {mode} row was just matched: {stdout}"));
         assert_eq!(*row, expected_row(mode, with_runs), "mode {mode}: {stdout}");
     }
-}
-
-#[test]
-fn fixture_sizes_match_the_analysis_gates() {
-    // The scenario sizes above are derived from the gates rather than picked for
-    // speed. Bind them to the gates here, so moving a gate fails loudly instead of
-    // silently leaving this suite judging a history the detectors abstain on.
-    assert_eq!(
-        REGIME_POINTS, MIN_REGIME,
-        "each side of a seeded step must hold a full regime"
-    );
-    assert!(
-        COMMITS >= 4 * MIN_SERIES_POINTS,
-        "half the seeded commits carry a run, and the fixture keeps twice the points a \
-         judged series needs"
-    );
-    assert!(
-        COMMITS >= 4 * DRIFT_MIN_POINTS,
-        "the fixture keeps twice the run-carrying commits the seeded drift needs to be seen"
-    );
-    assert!(
-        COMPARE_WINDOW >= MIN_SERIES_POINTS,
-        "branch mode's base window must be able to hold the levels its test demands"
-    );
 }
 
 #[test]
