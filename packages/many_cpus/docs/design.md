@@ -8,9 +8,9 @@ package draws the distinctions it does.
 ## Machine size
 
 The package imposes no ceiling of its own on how large a machine may be, within the range of
-machines that operating systems support. However many processors there are, every one the
-operating system reports can be inspected and selected, and on a platform with native affinity
-support a thread can be pinned to any of them and its affinity read back.
+machines that operating systems support. Every processor that the operating system reports can
+be inspected, selected and pinned to, and a thread's affinity can be read back, however many
+processors there are.
 
 ## Processor identity
 
