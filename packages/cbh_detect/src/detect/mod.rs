@@ -29,10 +29,15 @@ mod signal_validation;
 pub use discriminant::{DiscriminantFilter, DiscriminantSetQuery};
 pub use excursions::DiscardedReading;
 pub use findings::{
-    AnalysisConfig, AnalysisContext, AnalysisMode, Detection, Direction, DiscardedBaseReading,
-    Finding, FindingMethod, SeriesCensus, SeriesValue, Testability, UnjudgedReason,
-    find_changes_spawned, short_commit, testability,
+    AnalysisContext, AnalysisMode, Detection, Direction, DiscardedBaseReading, Finding,
+    FindingMethod, SeriesCensus, SeriesValue, Testability, UnjudgedReason, find_changes_spawned,
+    short_commit, testability,
 };
+// The gating policy is a fixed set of named thresholds rather than a per-run
+// configuration, so the constants are the public form of that policy: in-workspace
+// consumers (the shell's series building, the documentation figures, the stress
+// harness) read them directly instead of a tunable config object.
+pub use noise_gates::*;
 #[cfg(any(test, feature = "private-test-util"))]
 pub use findings::{evaluate_with_log, find_changes};
 // The gate types are compiled unconditionally because the detectors take a log by reference,

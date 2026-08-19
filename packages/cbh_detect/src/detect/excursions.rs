@@ -26,8 +26,8 @@ use std::borrow::Cow;
 
 use cbh_stats as stats;
 
-use super::AnalysisConfig;
 use super::findings::relative_delta_of;
+use super::noise_gates;
 use super::series::BaseLevel;
 
 /// One base-window reading branch mode left out of a comparison.
@@ -58,10 +58,9 @@ pub struct DiscardedReading {
 pub(super) fn cleaned_window<'a>(
     window: &'a [BaseLevel],
     context_level: Option<f64>,
-    config: &AnalysisConfig,
 ) -> (Cow<'a, [BaseLevel]>, Vec<DiscardedReading>) {
     let levels: Vec<f64> = window.iter().map(|level| level.value).collect();
-    let discarded = isolated_excursions(&levels, context_level, config);
+    let discarded = isolated_excursions(&levels, context_level);
     if discarded.is_empty() {
         return (Cow::Borrowed(window), Vec::new());
     }
@@ -71,7 +70,8 @@ pub(super) fn cleaned_window<'a>(
         .iter()
         .filter_map(|&index| {
             let level = window.get(index)?;
-            let surroundings = Surroundings::around(index, &levels, config.excursion_neighbours)?;
+            let surroundings =
+                Surroundings::around(index, &levels, noise_gates::EXCURSION_NEIGHBOURS)?;
             Some(DiscardedReading {
                 topo_index: level.topo_index,
                 value: level.value,
@@ -95,15 +95,15 @@ pub(super) fn cleaned_window<'a>(
 ///
 /// 1. **Its surroundings agree with each other.** The levels immediately before it and
 ///    the levels immediately after it must describe the same level, within
-///    [`excursion_neighbour_agreement`](AnalysisConfig::excursion_neighbour_agreement).
+///    [`EXCURSION_NEIGHBOUR_AGREEMENT`](noise_gates::EXCURSION_NEIGHBOUR_AGREEMENT).
 ///    This is what separates a bad measurement from a real step: when the code genuinely
 ///    changes, the levels after the change sit at the *new* level and disagree with the
 ///    ones before it, so a step is never mistaken for an excursion however large it is.
 /// 2. **It stands far clear of them.** It must differ from its surroundings by at least
-///    [`excursion_relative_magnitude`](AnalysisConfig::excursion_relative_magnitude),
+///    [`EXCURSION_RELATIVE_MAGNITUDE`](noise_gates::EXCURSION_RELATIVE_MAGNITUDE),
 ///    which is set well above ordinary measurement wobble.
 /// 3. **It is the only one, and the context run does not agree with it.** If more than
-///    [`excursion_max_removals`](AnalysisConfig::excursion_max_removals) levels qualify,
+///    [`EXCURSION_MAX_REMOVALS`](noise_gates::EXCURSION_MAX_REMOVALS) levels qualify,
 ///    nothing is removed at all, and a level the context run itself sits at is never
 ///    removed. Either way the window has shown the level twice, and twice is a level the
 ///    series reaches rather than a moment its runner lost. Stripping a recurring level
@@ -120,33 +120,30 @@ pub(super) fn cleaned_window<'a>(
 /// exactly across runs of unchanged code, so an isolated excursion in one is as much a
 /// measurement artifact as it is in a timing series, and is as unrepresentative of the
 /// level a pull request would merge into.
-pub(super) fn isolated_excursions(
-    levels: &[f64],
-    context_level: Option<f64>,
-    config: &AnalysisConfig,
-) -> Vec<usize> {
+pub(super) fn isolated_excursions(levels: &[f64], context_level: Option<f64>) -> Vec<usize> {
     let mut found = Vec::new();
     for index in 0..levels.len() {
-        let Some(surroundings) = Surroundings::around(index, levels, config.excursion_neighbours)
+        let Some(surroundings) =
+            Surroundings::around(index, levels, noise_gates::EXCURSION_NEIGHBOURS)
         else {
             continue;
         };
-        if !surroundings.agree(config.excursion_neighbour_agreement) {
+        if !surroundings.agree(noise_gates::EXCURSION_NEIGHBOUR_AGREEMENT) {
             continue;
         }
         let Some(&level) = levels.get(index) else {
             continue;
         };
-        if !surroundings.stands_clear(level, config.excursion_relative_magnitude) {
+        if !surroundings.stands_clear(level, noise_gates::EXCURSION_RELATIVE_MAGNITUDE) {
             continue;
         }
         if context_level.is_some_and(|context| {
-            surroundings.same_level(level, context, config.excursion_neighbour_agreement)
+            surroundings.same_level(level, context, noise_gates::EXCURSION_NEIGHBOUR_AGREEMENT)
         }) {
             continue;
         }
         found.push(index);
-        if found.len() > config.excursion_max_removals {
+        if found.len() > noise_gates::EXCURSION_MAX_REMOVALS {
             return Vec::new();
         }
     }

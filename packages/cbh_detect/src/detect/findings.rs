@@ -78,283 +78,6 @@ use crate::detect::gate_log::{Gate, GateLog, GateStage, StageLog};
 use crate::detect::parallel::{balanced_chunk_sizes, worker_count};
 use crate::detect::{BaseLevel, Series, SeriesPoint, excursions, noise_gates};
 
-/// Tunable parameters of the engine-aware analysis.
-///
-/// Every field is read as supplied and gates one stage of detection on its own; no
-/// relationship between fields is required or enforced, so any combination is a
-/// valid configuration. A combination that leaves a stage unreachable — a
-/// [`compare_window`](Self::compare_window) holding fewer commit levels than
-/// [`min_series_points`](Self::min_series_points), say — makes that stage abstain
-/// rather than misreport.
-///
-/// [`AnalysisConfig::default()`](Self::default) is the tuned policy the tool ships.
-/// Field documentation that gives a worked example, or that relates one field's
-/// value to another's, describes that default configuration rather than the type.
-#[derive(Clone, Copy, Debug)]
-pub struct AnalysisConfig {
-    /// Minimum points each side of a change must hold for the step to be trusted.
-    ///
-    /// A split leaving either regime shorter than this raises no candidate, so a move
-    /// confined to fewer than this many trailing points cannot flag (persistence).
-    /// Branch mode applies it to the base-side commit levels either side of a
-    /// candidate regime boundary, and to the comparison sample as a whole.
-    pub min_regime: usize,
-    /// Minimum points a series must carry before it is evaluated at all.
-    ///
-    /// A shorter series raises no finding and does not count toward the
-    /// false-discovery family: it is unjudged rather than judged-and-quiet (see
-    /// [`Testability`]). History mode measures the post-blessing window against this
-    /// floor; branch mode measures the base-side commit levels inside
-    /// [`compare_window`](Self::compare_window) against it.
-    ///
-    /// Under [`AnalysisConfig::default()`](Self::default) this is two full regimes,
-    /// the shortest series a split can satisfy [`min_regime`](Self::min_regime) on
-    /// both sides of.
-    pub min_series_points: usize,
-    /// Significance level a change-point's Mann–Whitney rank test must clear.
-    ///
-    /// Pettitt only locates the split — its analytic p-value is too conservative on
-    /// short series to gate significance — so the rank test between the two regimes
-    /// decides. Branch mode holds its prediction-interval p-value to the same level,
-    /// as does a candidate base-side regime boundary.
-    pub change_alpha: f64,
-    /// Target false-discovery rate for the Benjamini–Hochberg filter.
-    ///
-    /// The filter runs over the surviving candidates with the family sized from every
-    /// series the pass judged (see [`SeriesCensus::judged`]), so a larger judged suite
-    /// demands a smaller p-value of each candidate.
-    pub fdr_q: f64,
-    /// Minimum points a series needs before a slow-drift finding is considered.
-    ///
-    /// Independent of [`min_series_points`](Self::min_series_points), which decides
-    /// whether the series is judged at all: a series above that floor but below this
-    /// one is judged, and can raise only a level shift.
-    ///
-    /// [`AnalysisConfig::default()`](Self::default) sets the two equal, so both
-    /// history detectors demand the same evidence and a series is evaluable by both
-    /// or by neither.
-    pub drift_min_points: usize,
-    /// Significance level a drift's Mann–Kendall trend must clear.
-    pub drift_alpha: f64,
-    /// Multiple of the per-measurement noise floor a drift's total movement must
-    /// exceed.
-    ///
-    /// Applies only where the engine reports per-point confidence intervals, whose
-    /// median half-width is that noise floor. An additional veto on top of the trend
-    /// test, able only to suppress a candidate. This is the drift counterpart of
-    /// [`branch_noise_multiple`](Self::branch_noise_multiple), and
-    /// [`AnalysisConfig::default()`](Self::default) holds the two equal.
-    pub drift_noise_multiple: f64,
-    /// Minimum relative magnitude a move must reach to matter in practice.
-    ///
-    /// Applied to the move against its baseline, independently of statistical
-    /// significance, so a certain but tiny move is not reported. Branch mode
-    /// substitutes [`branch_practical_relative`](Self::branch_practical_relative).
-    pub practical_relative: f64,
-    /// Absolute magnitude floor for instruction and branch counts, in counts.
-    ///
-    /// Composed by conjunction with the relative floor in force
-    /// ([`practical_relative`](Self::practical_relative), or
-    /// [`branch_practical_relative`](Self::branch_practical_relative) in branch mode):
-    /// a move must clear both. An absolute floor is needed alongside the relative one
-    /// because these counts move in whole units, so on a small baseline a handful of
-    /// units of build-layout jitter works out to a large *percentage* move that the
-    /// relative floor alone would let through.
-    pub practical_absolute_count: f64,
-    /// Absolute magnitude floor for timing moves, in nanoseconds.
-    ///
-    /// Composed by conjunction with the relative floor in force, exactly as
-    /// [`practical_absolute_count`](Self::practical_absolute_count) is. A timing
-    /// figure resolves far below a nanosecond, so this expresses which moves are worth
-    /// acting on rather than what the engine can measure.
-    ///
-    /// Under [`AnalysisConfig::default()`](Self::default) this is the binding gate on
-    /// a benchmark measuring a couple of nanoseconds an iteration, where the relative
-    /// floor works out to a fraction of a nanosecond.
-    pub practical_absolute_time: f64,
-    /// Absolute magnitude floor for allocation moves, in bytes or allocations.
-    ///
-    /// Composed by conjunction with the relative floor in force, exactly as
-    /// [`practical_absolute_count`](Self::practical_absolute_count) is. What an
-    /// allocation floor rejects is the sub-unit moves that amortizing a run's warmup
-    /// and buffer-resize allocations across its iterations manufactures, since a
-    /// fraction of a byte or of an allocation cannot happen.
-    pub practical_absolute_alloc: f64,
-    /// Lower bound on the scatter of an instruction or branch count sample, in counts.
-    ///
-    /// Branch mode's prediction interval takes its standard error from the base
-    /// window's standard deviation, and this bounds that deviation from below, so a
-    /// window that happens to repeat one value still yields a usable standard error
-    /// rather than a degenerate one. A scatter floor is the metric's *quantum*, not a
-    /// statement about which moves matter — see
-    /// [`scatter_floor_time`](Self::scatter_floor_time) for what raising one costs.
-    pub scatter_floor_count: f64,
-    /// Lower bound on the scatter of a timing sample, in nanoseconds.
-    ///
-    /// Serves the same role as [`scatter_floor_count`](Self::scatter_floor_count).
-    /// Raising it makes every timing series behave as if it wobbled by at least that
-    /// much, imposing an absolute detection threshold in units of the standard error
-    /// on top of the [`practical_absolute_time`](Self::practical_absolute_time) floor
-    /// that already decides which timing moves are worth reporting.
-    ///
-    /// [`AnalysisConfig::default()`](Self::default) leaves timing scatter unbounded
-    /// from below, because a time is a regression slope over a run's iterations and
-    /// resolves far below a clock tick, so it has no quantum to express. The price is
-    /// that a base window of identical timings yields no verdict, which is silence
-    /// rather than a spurious certainty.
-    pub scatter_floor_time: f64,
-    /// Lower bound on the scatter of an allocation sample, in bytes or allocations.
-    ///
-    /// Serves the same role as [`scatter_floor_count`](Self::scatter_floor_count).
-    /// The case it exists for is code that allocated nothing and now allocates: a base
-    /// window of zeroes has exactly zero scatter, and without a positive floor the
-    /// standard error collapses and that (real and important) move cannot be judged.
-    pub scatter_floor_alloc: f64,
-    /// How many recent base-side commits branch mode inspects.
-    ///
-    /// The window is the base evidence the branch's latest state is compared against.
-    /// A genuine level shift accepted inside it narrows the comparison to the trailing
-    /// regime; otherwise the whole window is the comparison sample. Its size therefore
-    /// sets both how small a move branch mode can resolve and how far back it looks
-    /// for a current-regime boundary, and a window holding fewer commit levels than
-    /// [`min_series_points`](Self::min_series_points) leaves branch mode unable to
-    /// judge the series at all.
-    pub compare_window: usize,
-    /// Minimum relative magnitude a *branch* move must reach.
-    ///
-    /// Branch mode's substitute for [`practical_relative`](Self::practical_relative),
-    /// applied both to a reported move and to a candidate base-side regime boundary.
-    ///
-    /// [`AnalysisConfig::default()`](Self::default) holds it above the history floor:
-    /// a feature-branch signal must be high-confidence, since we would rather miss a
-    /// small move than cry wolf on a pull request.
-    pub branch_practical_relative: f64,
-    /// Multiple of the per-measurement noise floor a branch move must exceed.
-    ///
-    /// Applies only where the engine reports per-point confidence intervals, whose
-    /// median half-width is that noise floor. An additional veto on top of the
-    /// prediction-interval test, able only to suppress a candidate.
-    pub branch_noise_multiple: f64,
-    /// Multiple of a series' own residual scatter a move must exceed to be trusted.
-    ///
-    /// The scatter is the median absolute residual of the fitted step or line model —
-    /// the series' between-commit wobble. This is the primary, series-intrinsic noise
-    /// gate applied to every engine: a clean series has near-zero residual scatter, so
-    /// any persistent move clears it, while a jittery series demands a move that stands
-    /// out above its own run-to-run wobble. It composes with (and is independent of)
-    /// the optional confidence-interval veto available on dispersion-reporting engines.
-    pub residual_noise_multiple: f64,
-    /// Minimum **probability of superiority** a level shift's two regimes must reach.
-    ///
-    /// The probability of superiority is the Mann–Whitney common-language effect size:
-    /// the fraction of after-vs-before commit pairs that move in the finding's
-    /// direction. It is the *effect-size* companion to the rank test's *significance*
-    /// gate, and closes a hole the significance gate cannot: a rank test grows
-    /// "significant" with sample size even for two heavily overlapping regimes, so a
-    /// long but stationary series that merely oscillates between two levels — noisy
-    /// yet stable — otherwise reads as a change-point. A genuine step scores ~1 here;
-    /// bimodal jitter scores near ½. The gate composes by conjunction, so it can only
-    /// suppress a candidate the median-based gates were fooled by, never create one.
-    pub min_regime_separation: f64,
-    /// Minimum probability of superiority a base-window split must reach.
-    ///
-    /// Branch mode accepts a base-side split as a regime boundary — discarding the
-    /// levels before it — only when the split clears this rather than
-    /// [`min_regime_separation`](Self::min_regime_separation).
-    ///
-    /// The two decisions carry asymmetric costs, which is why
-    /// [`AnalysisConfig::default()`](Self::default) holds this the higher of the pair.
-    /// Reporting a move makes a claim a human then checks; accepting a boundary
-    /// *discards evidence*, shrinking the comparison sample to the trailing regime and
-    /// rebuilding the scatter estimate from it alone — so a wrong boundary can collapse
-    /// a noisy window's dispersion to near zero and make any subsequent context run
-    /// read as certain. A boundary that throws data away must be unambiguous.
-    ///
-    /// The statistic is coarse at these sample sizes, so at the default this reads as
-    /// "essentially no crossing pair may contradict the boundary" rather than as a
-    /// precise probability: with the smallest regimes on both sides it admits one
-    /// contradicting pair in twenty-five and no more.
-    pub min_base_split_separation: f64,
-    /// How far a base-window level must stand from its surroundings for branch mode to
-    /// read it as a measurement excursion and discard it.
-    ///
-    /// A shared runner occasionally loses time to something else and records one commit
-    /// far above the level its neighbours agree on. Such a level describes the runner
-    /// rather than the code, and left in the window it both displaces the comparison's
-    /// centre and inflates its scatter, silently costing branch mode much of its
-    /// sensitivity. Discarding it is guarded by
-    /// [`excursion_neighbour_agreement`](Self::excursion_neighbour_agreement) and
-    /// [`excursion_max_removals`](Self::excursion_max_removals), which together confine
-    /// it to levels that are genuinely isolated.
-    ///
-    /// Raising this admits more interference into the comparison; lowering it starts
-    /// discarding the ordinary scatter that comparison is judged against, and every level
-    /// discarded tightens the window and makes branch mode readier to report.
-    pub excursion_relative_magnitude: f64,
-    /// How closely the levels on either side of a candidate excursion must agree before
-    /// it may be discarded.
-    ///
-    /// This is what keeps a genuine level shift out of the excursion rule: after a real
-    /// change the levels following it sit at the new level and disagree with those
-    /// before it, so its opening level is kept however large the step is. Only a level
-    /// its own surroundings straddle can be discarded.
-    pub excursion_neighbour_agreement: f64,
-    /// How many levels on each side of a candidate excursion form the surroundings it is
-    /// judged against.
-    ///
-    /// The candidate is judged locally rather than against the whole window, because a
-    /// window may legitimately span a level shift, and measured against such a window's
-    /// middle the ordinary levels of both regimes stand clear.
-    ///
-    /// A level without this many neighbours on *both* sides is never discarded, so the
-    /// window's outermost levels are always kept.
-    pub excursion_neighbours: usize,
-    /// How many excursions a base window may contain before it is left alone entirely.
-    ///
-    /// Above this the window is read as a benchmark that visits more than one level
-    /// rather than as a clean window with a bad reading in it. Removing levels from such
-    /// a window would leave a spuriously tight comparison in which the benchmark's own
-    /// ordinary values read as large, certain regressions — so it is left exactly as
-    /// measured.
-    ///
-    /// Keep it far below the difference between [`min_series_points`](Self::min_series_points)
-    /// and [`min_regime`](Self::min_regime): eligibility is settled on the window as
-    /// recorded, so a window that gave up more than that margin would be counted as judged
-    /// while holding too little evidence to compare.
-    pub excursion_max_removals: usize,
-}
-
-impl Default for AnalysisConfig {
-    fn default() -> Self {
-        Self {
-            min_regime: noise_gates::MIN_REGIME,
-            min_series_points: noise_gates::MIN_SERIES_POINTS,
-            change_alpha: noise_gates::CHANGE_ALPHA,
-            fdr_q: noise_gates::FDR_Q,
-            drift_min_points: noise_gates::DRIFT_MIN_POINTS,
-            drift_alpha: noise_gates::DRIFT_ALPHA,
-            drift_noise_multiple: noise_gates::DRIFT_NOISE_MULTIPLE,
-            practical_relative: noise_gates::PRACTICAL_RELATIVE,
-            practical_absolute_count: noise_gates::PRACTICAL_ABSOLUTE_COUNT,
-            practical_absolute_time: noise_gates::PRACTICAL_ABSOLUTE_TIME,
-            practical_absolute_alloc: noise_gates::PRACTICAL_ABSOLUTE_ALLOC,
-            scatter_floor_count: noise_gates::SCATTER_FLOOR_COUNT,
-            scatter_floor_time: noise_gates::SCATTER_FLOOR_TIME,
-            scatter_floor_alloc: noise_gates::SCATTER_FLOOR_ALLOC,
-            compare_window: noise_gates::COMPARE_WINDOW,
-            branch_practical_relative: noise_gates::BRANCH_PRACTICAL_RELATIVE,
-            branch_noise_multiple: noise_gates::BRANCH_NOISE_MULTIPLE,
-            residual_noise_multiple: noise_gates::RESIDUAL_NOISE_MULTIPLE,
-            min_regime_separation: noise_gates::MIN_REGIME_SEPARATION,
-            min_base_split_separation: noise_gates::MIN_BASE_SPLIT_SEPARATION,
-            excursion_relative_magnitude: noise_gates::EXCURSION_RELATIVE_MAGNITUDE,
-            excursion_neighbour_agreement: noise_gates::EXCURSION_NEIGHBOUR_AGREEMENT,
-            excursion_neighbours: noise_gates::EXCURSION_NEIGHBOURS,
-            excursion_max_removals: noise_gates::EXCURSION_MAX_REMOVALS,
-        }
-    }
-}
-
 /// Which analysis a [`find_changes_spawned`] pass performs.
 ///
 /// The mode is auto-detected by the caller from git topology and the admitted data
@@ -386,14 +109,11 @@ impl AnalysisMode {
 
 /// The context a [`find_changes_spawned`] pass runs in.
 ///
-/// Carries which analysis to perform, the tuned parameters, and the topology anchors
-/// the mode needs.
+/// Carries which analysis to perform and the topology anchors the mode needs.
 #[derive(Clone, Copy, Debug)]
 pub struct AnalysisContext {
     /// The analysis to perform.
     pub mode: AnalysisMode,
-    /// The tuned analysis parameters.
-    pub config: AnalysisConfig,
     /// First-parent topological index of the merge-base on the context line, when it
     /// lies there. Branch detection does not derive its base window from this split;
     /// it compares against [`Series::base_window`], which is loaded from the base ref.
@@ -446,10 +166,10 @@ pub enum UnjudgedReason {
     /// longer part of the suite and was dropped before detection.
     Ghost,
     /// History mode: the series carries fewer than
-    /// [`min_series_points`](AnalysisConfig::min_series_points) points.
+    /// [`MIN_SERIES_POINTS`](noise_gates::MIN_SERIES_POINTS) points.
     TooFewPoints,
     /// History mode: a blessing re-baselined the series and fewer than
-    /// [`min_series_points`](AnalysisConfig::min_series_points) points have been
+    /// [`MIN_SERIES_POINTS`](noise_gates::MIN_SERIES_POINTS) points have been
     /// measured since, so the evidence the blessing left standing is too thin to
     /// judge.
     TooFewPointsSinceBlessing,
@@ -457,7 +177,7 @@ pub enum UnjudgedReason {
     /// context state to compare against the base.
     NotMeasuredOnBranch,
     /// Branch mode: the recent base window holds fewer than
-    /// [`min_series_points`](AnalysisConfig::min_series_points) base-ref commit
+    /// [`MIN_SERIES_POINTS`](noise_gates::MIN_SERIES_POINTS) base-ref commit
     /// levels, so there is not enough base evidence to judge the branch. A later
     /// regime split may compare against a shorter trailing regime, but only after
     /// this full-window evidence floor is met.
@@ -902,13 +622,15 @@ pub(super) fn relative_delta_of(delta: f64, baseline: f64) -> f64 {
 /// nanosecond is not worth acting on, and a fraction of an allocation cannot happen.
 /// The floors differ because those units do. This gates the *move*; the scatter of
 /// the sample it is judged against is bounded separately (see [`scatter_floor`]).
-fn absolute_floor(kind: MetricKind, config: &AnalysisConfig) -> f64 {
+fn absolute_floor(kind: MetricKind) -> f64 {
     match kind {
         MetricKind::InstructionCount
         | MetricKind::ConditionalBranches
-        | MetricKind::IndirectBranches => config.practical_absolute_count,
-        MetricKind::WallTime | MetricKind::ProcessorTime => config.practical_absolute_time,
-        MetricKind::AllocatedBytes | MetricKind::AllocationCount => config.practical_absolute_alloc,
+        | MetricKind::IndirectBranches => noise_gates::PRACTICAL_ABSOLUTE_COUNT,
+        MetricKind::WallTime | MetricKind::ProcessorTime => noise_gates::PRACTICAL_ABSOLUTE_TIME,
+        MetricKind::AllocatedBytes | MetricKind::AllocationCount => {
+            noise_gates::PRACTICAL_ABSOLUTE_ALLOC
+        }
     }
 }
 
@@ -924,13 +646,13 @@ fn absolute_floor(kind: MetricKind, config: &AnalysisConfig) -> f64 {
 ///
 /// The match is exhaustive on purpose: a new metric kind must state its own
 /// quantum rather than inherit one.
-fn scatter_floor(kind: MetricKind, config: &AnalysisConfig) -> f64 {
+fn scatter_floor(kind: MetricKind) -> f64 {
     match kind {
         MetricKind::InstructionCount
         | MetricKind::ConditionalBranches
-        | MetricKind::IndirectBranches => config.scatter_floor_count,
-        MetricKind::WallTime | MetricKind::ProcessorTime => config.scatter_floor_time,
-        MetricKind::AllocatedBytes | MetricKind::AllocationCount => config.scatter_floor_alloc,
+        | MetricKind::IndirectBranches => noise_gates::SCATTER_FLOOR_COUNT,
+        MetricKind::WallTime | MetricKind::ProcessorTime => noise_gates::SCATTER_FLOOR_TIME,
+        MetricKind::AllocatedBytes | MetricKind::AllocationCount => noise_gates::SCATTER_FLOOR_ALLOC,
     }
 }
 
@@ -940,13 +662,8 @@ fn scatter_floor(kind: MetricKind, config: &AnalysisConfig) -> f64 {
 /// otherwise a move too small to mean anything would clear the relative floor and
 /// read as a regression on a small baseline. The gate composes with the relative
 /// floor by conjunction and can only *suppress*, never promote, a move.
-fn clears_absolute_floor(
-    series: &Series,
-    delta: f64,
-    config: &AnalysisConfig,
-    log: &mut StageLog<'_>,
-) -> bool {
-    let floor = absolute_floor(series.kind, config);
+fn clears_absolute_floor(series: &Series, delta: f64, log: &mut StageLog<'_>) -> bool {
+    let floor = absolute_floor(series.kind);
     log.numeric(
         Gate::AbsoluteFloor,
         delta.abs(),
@@ -1175,20 +892,15 @@ fn collect_scatter_residuals(sample: &[f64], residuals: &mut Vec<f64>) {
 }
 
 /// Whether `delta` stands clear of a series' own between-commit scatter: it must
-/// exceed `config.residual_noise_multiple` times the model's median absolute
-/// residual. A clean series has a near-zero residual, so any persistent move
-/// passes; a jittery one demands a move that stands out above its wobble. A missing
-/// residual (an empty model) is treated as no evidence of noise, so the move is
-/// trusted.
-fn exceeds_residual_noise(
-    delta: f64,
-    residual: Option<f64>,
-    config: &AnalysisConfig,
-    log: &mut StageLog<'_>,
-) -> bool {
+/// exceed [`RESIDUAL_NOISE_MULTIPLE`](noise_gates::RESIDUAL_NOISE_MULTIPLE) times the
+/// model's median absolute residual. A clean series has a near-zero residual, so any
+/// persistent move passes; a jittery one demands a move that stands out above its
+/// wobble. A missing residual (an empty model) is treated as no evidence of noise, so
+/// the move is trusted.
+fn exceeds_residual_noise(delta: f64, residual: Option<f64>, log: &mut StageLog<'_>) -> bool {
     match residual {
         Some(residual) => {
-            let band = config.residual_noise_multiple * residual;
+            let band = noise_gates::RESIDUAL_NOISE_MULTIPLE * residual;
             log.numeric(Gate::ResidualNoise, delta.abs(), band, delta.abs() > band)
         }
         None => true,
@@ -1285,7 +997,6 @@ fn arbitrate(
 fn evaluate_change_point(
     series: &Series,
     values: &[f64],
-    config: &AnalysisConfig,
     log: &mut GateLog,
 ) -> Option<Candidate> {
     let mut log = log.stage(GateStage::ChangePoint);
@@ -1304,8 +1015,8 @@ fn evaluate_change_point(
     if !log.numeric(
         Gate::MinRegime,
         count_to_f64(shortest),
-        count_to_f64(config.min_regime),
-        shortest >= config.min_regime,
+        count_to_f64(noise_gates::MIN_REGIME),
+        shortest >= noise_gates::MIN_REGIME,
     ) {
         return None;
     }
@@ -1325,29 +1036,29 @@ fn evaluate_change_point(
     if !log.numeric(
         Gate::Significance,
         mann_whitney,
-        config.change_alpha,
-        mann_whitney < config.change_alpha,
+        noise_gates::CHANGE_ALPHA,
+        mann_whitney < noise_gates::CHANGE_ALPHA,
     ) {
         return None;
     }
     if !log.numeric(
         Gate::RelativeFloor,
         relative_delta.abs(),
-        config.practical_relative,
-        relative_delta.abs() >= config.practical_relative,
+        noise_gates::PRACTICAL_RELATIVE,
+        relative_delta.abs() >= noise_gates::PRACTICAL_RELATIVE,
     ) {
         return None;
     }
-    if !clears_absolute_floor(series, delta, config, &mut log) {
+    if !clears_absolute_floor(series, delta, &mut log) {
         return None;
     }
-    if !exceeds_residual_noise(delta, step_model_residual(values, tau), config, &mut log) {
+    if !exceeds_residual_noise(delta, step_model_residual(values, tau), &mut log) {
         return None;
     }
     if !regimes_are_separated(
         mann_whitney_u,
         delta,
-        config.min_regime_separation,
+        noise_gates::MIN_REGIME_SEPARATION,
         &mut log,
     ) {
         return None;
@@ -1396,22 +1107,17 @@ fn evaluate_change_point(
 /// own absolute floor) and stand above the series'
 /// own residual scatter about the fitted line; where the engine reports confidence
 /// intervals it must additionally exceed a multiple of the per-measurement noise floor
-/// (`config.drift_noise_multiple` times the median half-width), so jitter does not read
-/// as a trend.
-fn evaluate_drift(
-    series: &Series,
-    values: &[f64],
-    config: &AnalysisConfig,
-    log: &mut GateLog,
-) -> Option<Candidate> {
+/// ([`DRIFT_NOISE_MULTIPLE`](noise_gates::DRIFT_NOISE_MULTIPLE) times the median
+/// half-width), so jitter does not read as a trend.
+fn evaluate_drift(series: &Series, values: &[f64], log: &mut GateLog) -> Option<Candidate> {
     let mut log = log.stage(GateStage::Drift);
     let points = &series.points;
     let n = points.len();
     if !log.numeric(
         Gate::MinSeriesPoints,
         count_to_f64(n),
-        count_to_f64(config.drift_min_points),
-        n >= config.drift_min_points,
+        count_to_f64(noise_gates::DRIFT_MIN_POINTS),
+        n >= noise_gates::DRIFT_MIN_POINTS,
     ) {
         return None;
     }
@@ -1420,8 +1126,8 @@ fn evaluate_drift(
     if !log.numeric(
         Gate::Significance,
         trend.p_value,
-        config.drift_alpha,
-        trend.p_value < config.drift_alpha,
+        noise_gates::DRIFT_ALPHA,
+        trend.p_value < noise_gates::DRIFT_ALPHA,
     ) {
         return None;
     }
@@ -1437,26 +1143,21 @@ fn evaluate_drift(
     if !log.numeric(
         Gate::RelativeFloor,
         relative_delta.abs(),
-        config.practical_relative,
-        relative_delta.abs() >= config.practical_relative,
+        noise_gates::PRACTICAL_RELATIVE,
+        relative_delta.abs() >= noise_gates::PRACTICAL_RELATIVE,
     ) {
         return None;
     }
-    if !clears_absolute_floor(series, delta, config, &mut log) {
+    if !clears_absolute_floor(series, delta, &mut log) {
         return None;
     }
-    if !exceeds_residual_noise(
-        delta,
-        line_model_residual(values, slope, intercept),
-        config,
-        &mut log,
-    ) {
+    if !exceeds_residual_noise(delta, line_model_residual(values, slope, intercept), &mut log) {
         return None;
     }
     // Where the engine reports dispersion, a trend must also clear the measurement
     // noise floor: the endpoints have to separate by more than the run-to-run
     // dispersion, or it is just jitter.
-    if !exceeds_noise_band(delta, points, config.drift_noise_multiple, &mut log) {
+    if !exceeds_noise_band(delta, points, noise_gates::DRIFT_NOISE_MULTIPLE, &mut log) {
         return None;
     }
 
@@ -1620,14 +1321,9 @@ fn commit_levels(points: &[&SeriesPoint]) -> Vec<f64> {
 ///
 /// A split whose trailing regime the prediction interval cannot characterise is not
 /// taken, so the window stays whole rather than becoming unjudgeable.
-fn current_base_regime_start(
-    series: &Series,
-    spans: &[CommitLevel],
-    config: &AnalysisConfig,
-    practical_floor: f64,
-) -> usize {
+fn current_base_regime_start(series: &Series, spans: &[CommitLevel]) -> usize {
     let levels: Vec<f64> = spans.iter().map(|span| span.level).collect();
-    let min_regime = config.min_regime.max(1);
+    let min_regime = noise_gates::MIN_REGIME.max(1);
     let Some(min_window) = min_regime.checked_mul(2) else {
         return 0;
     };
@@ -1646,7 +1342,7 @@ fn current_base_regime_start(
         let Some(split) = start.checked_add(change.index) else {
             continue;
         };
-        if base_regime_split_qualifies(series, suffix, change.index, config, practical_floor) {
+        if base_regime_split_qualifies(series, suffix, change.index) {
             latest_split = Some(latest_split.map_or(split, |latest| latest.max(split)));
         }
     }
@@ -1672,13 +1368,7 @@ fn current_base_regime_start(
 /// searching for the newest qualifying boundary, so its decisions describe the search
 /// rather than the verdict on the series, and recording them would bury the branch
 /// comparison's own gates under hundreds of rejected candidates.
-fn base_regime_split_qualifies(
-    series: &Series,
-    levels: &[f64],
-    split: usize,
-    config: &AnalysisConfig,
-    practical_floor: f64,
-) -> bool {
+fn base_regime_split_qualifies(series: &Series, levels: &[f64], split: usize) -> bool {
     let mut unobserved = GateLog::disabled();
     let mut log = unobserved.stage(GateStage::Branch);
     let Some(before) = levels.get(..split) else {
@@ -1687,11 +1377,11 @@ fn base_regime_split_qualifies(
     let Some(after) = levels.get(split..) else {
         return false;
     };
-    let min_regime = config.min_regime.max(1);
+    let min_regime = noise_gates::MIN_REGIME.max(1);
     if before.len() < min_regime || after.len() < min_regime {
         return false;
     }
-    if !regime_supports_prediction(series, after, config) {
+    if !regime_supports_prediction(series, after) {
         return false;
     }
     let Some(baseline) = stats::median(before) else {
@@ -1704,21 +1394,21 @@ fn base_regime_split_qualifies(
     if delta.abs() <= 0.0 {
         return false;
     }
-    if relative_delta_of(delta, baseline).abs() < practical_floor {
+    if relative_delta_of(delta, baseline).abs() < noise_gates::BRANCH_PRACTICAL_RELATIVE {
         return false;
     }
-    if !clears_absolute_floor(series, delta, config, &mut log) {
+    if !clears_absolute_floor(series, delta, &mut log) {
         return false;
     }
     let mann_whitney_u = stats::MannWhitneyU::new(before, after);
     let mann_whitney = mann_whitney_u.map_or(1.0, |ranked| ranked.two_sided_p_value());
-    if mann_whitney >= config.change_alpha {
+    if mann_whitney >= noise_gates::CHANGE_ALPHA {
         return false;
     }
     regimes_are_separated(
         mann_whitney_u,
         delta,
-        config.min_base_split_separation,
+        noise_gates::MIN_BASE_SPLIT_SEPARATION,
         &mut log,
     )
 }
@@ -1731,8 +1421,8 @@ fn base_regime_split_qualifies(
 /// verdict at all, so narrowing onto it would trade a comparison the full window can
 /// still make for silence. Narrowing exists to move the comparison onto the current
 /// level, not to withdraw it.
-fn regime_supports_prediction(series: &Series, levels: &[f64], config: &AnalysisConfig) -> bool {
-    if scatter_floor(series.kind, config) > 0.0 {
+fn regime_supports_prediction(series: &Series, levels: &[f64]) -> bool {
+    if scatter_floor(series.kind) > 0.0 {
         return true;
     }
     stats::sample_std_dev(levels).is_some_and(|scatter| scatter > 0.0)
@@ -1806,18 +1496,17 @@ fn prediction_interval_p(base: &[f64], latest: f64, scatter_floor: f64) -> Optio
 /// [`prediction_interval_p`] measures against, so the magnitude the finding reports
 /// is the one its p-value describes.
 ///
-/// The relative move must clear `practical_floor` and the metric's absolute floor,
-/// stand above the comparison sample's own residual scatter, and then be significant as
-/// a Student-t prediction interval. Where the engine reports per-point confidence
-/// intervals the base sample and context measurement must also clear their combined
-/// measurement noise band — an extra veto that can only *suppress* a candidate the
-/// other gates would have reported, never turn a non-finding into a finding.
+/// The relative move must clear [`BRANCH_PRACTICAL_RELATIVE`](noise_gates::BRANCH_PRACTICAL_RELATIVE)
+/// and the metric's absolute floor, stand above the comparison sample's own residual
+/// scatter, and then be significant as a Student-t prediction interval. Where the engine
+/// reports per-point confidence intervals the base sample and context measurement must
+/// also clear their combined measurement noise band — an extra veto that can only
+/// *suppress* a candidate the other gates would have reported, never turn a non-finding
+/// into a finding.
 fn compare_branch_levels(
     series: &Series,
     before: &[BaseLevel],
     after: &[&SeriesPoint],
-    config: &AnalysisConfig,
-    practical_floor: f64,
     commit: Option<String>,
     log: &mut GateLog,
 ) -> Option<Candidate> {
@@ -1832,7 +1521,7 @@ fn compare_branch_levels(
     }
     let relative_delta = relative_delta_of(delta, baseline);
 
-    let min_regime = config.min_regime.max(1);
+    let min_regime = noise_gates::MIN_REGIME.max(1);
     if !log.numeric(
         Gate::MinRegime,
         count_to_f64(before_values.len()),
@@ -1844,24 +1533,22 @@ fn compare_branch_levels(
     if !log.numeric(
         Gate::RelativeFloor,
         relative_delta.abs(),
-        practical_floor,
-        relative_delta.abs() >= practical_floor,
+        noise_gates::BRANCH_PRACTICAL_RELATIVE,
+        relative_delta.abs() >= noise_gates::BRANCH_PRACTICAL_RELATIVE,
     ) {
         return None;
     }
-    if !clears_absolute_floor(series, delta, config, &mut log) {
+    if !clears_absolute_floor(series, delta, &mut log) {
         return None;
     }
     if !exceeds_residual_noise(
         delta,
         sample_step_residual(&before_values, &after_values),
-        config,
         &mut log,
     ) {
         return None;
     }
-    let interval_p =
-        prediction_interval_p(&before_values, latest, scatter_floor(series.kind, config));
+    let interval_p = prediction_interval_p(&before_values, latest, scatter_floor(series.kind));
     if !log.boolean(Gate::BaseScatter, interval_p.is_some()) {
         return None;
     }
@@ -1869,8 +1556,8 @@ fn compare_branch_levels(
     if !log.numeric(
         Gate::Significance,
         effective_p,
-        config.change_alpha,
-        effective_p < config.change_alpha,
+        noise_gates::CHANGE_ALPHA,
+        effective_p < noise_gates::CHANGE_ALPHA,
     ) {
         return None;
     }
@@ -1879,7 +1566,13 @@ fn compare_branch_levels(
     }
     // Where per-point confidence intervals exist, require the move to also clear the
     // measurement noise band — a veto that can only suppress this candidate.
-    if !exceeds_branch_noise_band(delta, before, after, config.branch_noise_multiple, &mut log) {
+    if !exceeds_branch_noise_band(
+        delta,
+        before,
+        after,
+        noise_gates::BRANCH_NOISE_MULTIPLE,
+        &mut log,
+    ) {
         return None;
     }
 
@@ -1916,22 +1609,11 @@ fn compare_samples(
     series: &Series,
     before: &[&SeriesPoint],
     after: &[&SeriesPoint],
-    config: &AnalysisConfig,
-    practical_floor: f64,
-    _comparison_base_index: Option<usize>,
     log: &mut GateLog,
 ) -> Option<Candidate> {
     let before_levels = test_base_levels(before);
     let commit = after.last().and_then(|point| owned_commit(point));
-    compare_branch_levels(
-        series,
-        &before_levels,
-        after,
-        config,
-        practical_floor,
-        commit,
-        log,
-    )
+    compare_branch_levels(series, &before_levels, after, commit, log)
 }
 
 #[cfg(test)]
@@ -1972,7 +1654,6 @@ fn test_base_levels(points: &[&SeriesPoint]) -> Vec<BaseLevel> {
 /// scatter together onto the base level the context would merge into.
 fn evaluate_branch(
     series: &Series,
-    config: &AnalysisConfig,
     context_index: usize,
     log: &mut GateLog,
     discarded: &mut Vec<DiscardedReading>,
@@ -1990,8 +1671,8 @@ fn evaluate_branch(
     if !log.stage(GateStage::Branch).numeric(
         Gate::MinBaseCommits,
         count_to_f64(recorded_levels),
-        count_to_f64(config.min_series_points),
-        recorded_levels >= config.min_series_points,
+        count_to_f64(noise_gates::MIN_SERIES_POINTS),
+        recorded_levels >= noise_gates::MIN_SERIES_POINTS,
     ) {
         return None;
     }
@@ -2006,17 +1687,11 @@ fn evaluate_branch(
     // sample and no allocation on the analysis path. Ref: docs/performance.md, no allocation
     // on the hot path.
     let context_level = latest_points.first().map(|point| point.value);
-    let (base_window, removed) =
-        excursions::cleaned_window(&series.base_window, context_level, config);
+    let (base_window, removed) = excursions::cleaned_window(&series.base_window, context_level);
     discarded.extend(removed);
     let levels: Vec<f64> = base_window.iter().map(|level| level.value).collect();
     let base_spans = level_spans(&levels);
-    let comparison_start = current_base_regime_start(
-        series,
-        &base_spans,
-        config,
-        config.branch_practical_relative,
-    );
+    let comparison_start = current_base_regime_start(series, &base_spans);
     let comparison_base = base_window.get(comparison_start..).unwrap_or_default();
     let commit = latest_points.last().and_then(|point| owned_commit(point));
     // The newest base-ref point in the selected comparison sample is this series'
@@ -2024,15 +1699,8 @@ fn evaluate_branch(
     // newest point, so lag classification still measures freshness against the base
     // state the context would merge into.
     let comparison_base_index = comparison_base.last().map(|level| level.topo_index);
-    let mut candidate = compare_branch_levels(
-        series,
-        comparison_base,
-        &latest_points,
-        config,
-        config.branch_practical_relative,
-        commit,
-        log,
-    )?;
+    let mut candidate =
+        compare_branch_levels(series, comparison_base, &latest_points, commit, log)?;
     candidate.finding.comparison_base_index = comparison_base_index;
     Some(candidate)
 }
@@ -2113,9 +1781,9 @@ pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Detection {
 /// [`testability`]) is never evaluated and is accounted for in the returned
 /// [`SeriesCensus`] instead.
 /// Surviving candidates are screened to the directions the mode reports and then pass
-/// a Benjamini–Hochberg false-discovery filter at `config.fdr_q`, so every reported
-/// finding is one the correction rejected. Findings are ordered by descending relative
-/// move, then method, then a stable identity tie-break.
+/// a Benjamini–Hochberg false-discovery filter at [`FDR_Q`](noise_gates::FDR_Q), so
+/// every reported finding is one the correction rejected. Findings are ordered by
+/// descending relative move, then method, then a stable identity tie-break.
 ///
 /// Detection is per-series independent, so the series are split into one balanced
 /// contiguous chunk per worker and each chunk runs on its own blocking task via
@@ -2151,13 +1819,12 @@ pub async fn find_changes_spawned(
 /// [`Judged`](Testability::Judged).
 #[must_use]
 pub fn testability(series: &Series, context: &AnalysisContext) -> Testability {
-    let config = &context.config;
     match context.mode {
         AnalysisMode::History => {
             // The detectors run on the post-blessing window (see `active_view`), so
             // that window's length — not the whole series' — is the evidence.
             let active_points = series.points.len().saturating_sub(series.active_start);
-            if active_points >= config.min_series_points {
+            if active_points >= noise_gates::MIN_SERIES_POINTS {
                 Testability::Judged
             } else if series.active_start > 0 {
                 Testability::Unjudged(UnjudgedReason::TooFewPointsSinceBlessing)
@@ -2175,8 +1842,8 @@ pub fn testability(series: &Series, context: &AnalysisContext) -> Testability {
             // `min_regime`-sized trailing regime after an accepted base-side shift. That
             // does not make this census reason untruthful, because the evidence floor was
             // met before any of it was discarded.
-            let base_points = series.base_window.len().min(config.compare_window);
-            if base_points < config.min_series_points {
+            let base_points = series.base_window.len().min(noise_gates::COMPARE_WINDOW);
+            if base_points < noise_gates::MIN_SERIES_POINTS {
                 return Testability::Unjudged(UnjudgedReason::TooFewBaseCommits);
             }
             Testability::Judged
@@ -2198,8 +1865,6 @@ fn finalize_findings(
     series: &[Series],
     context: &AnalysisContext,
 ) -> Vec<Finding> {
-    let config = &context.config;
-
     // Screen to the directions this mode reports *before* the correction, so that every
     // hypothesis the correction rejects is a finding the report goes on to show.
     // Correcting over both directions and discarding one afterwards would attach the
@@ -2223,7 +1888,7 @@ fn finalize_findings(
     // what the census counted as judged.
     let family_size = census.judged();
     let candidate_p: Vec<f64> = candidates.iter().map(|candidate| candidate.bh_p).collect();
-    let keep = stats::benjamini_hochberg(&candidate_p, config.fdr_q, family_size);
+    let keep = stats::benjamini_hochberg(&candidate_p, noise_gates::FDR_Q, family_size);
     let mut keep_iter = keep.into_iter();
 
     // `candidates` and `candidate_p` were built in the same order, so advancing
@@ -2369,15 +2034,14 @@ fn detect_one(
     log: &mut GateLog,
     discarded: &mut Vec<DiscardedBaseReading>,
 ) -> Option<Candidate> {
-    let config = &context.config;
     let candidate = match context.mode {
         AnalysisMode::History => {
             let active = active_view(one);
             // The point values are projected once here and shared by every history
             // detector, rather than each rebuilding the same `Vec<f64>`.
             let values: Vec<f64> = active.points.iter().map(|point| point.value).collect();
-            let change = evaluate_change_point(&active, &values, config, log);
-            let drift = evaluate_drift(&active, &values, config, log);
+            let change = evaluate_change_point(&active, &values, log);
+            let drift = evaluate_drift(&active, &values, log);
             arbitrate(&values, change, drift).map(|mut candidate| {
                 stamp_history(&mut candidate.finding, one);
                 candidate
@@ -2385,7 +2049,7 @@ fn detect_one(
         }
         AnalysisMode::Branch => {
             let mut readings = Vec::new();
-            let candidate = evaluate_branch(one, config, context.tip_index, log, &mut readings);
+            let candidate = evaluate_branch(one, context.tip_index, log, &mut readings);
             discarded.extend(readings.into_iter().map(|reading| DiscardedBaseReading {
                 set: one.set.clone(),
                 id: one.id.clone(),
