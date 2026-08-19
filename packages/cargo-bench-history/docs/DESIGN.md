@@ -850,6 +850,20 @@ residual scatter about its fitted model, which covers every engine uniformly.
 Every persisted metric is lower-is-better, so a rise is always a regression and a fall an
 improvement; there is no per-metric polarity for the analysis to key off.
 
+**Supported series length.** The analysis targets histories of **dozens to a few hundred**
+points — the range a benchmark accrues in practice. Two hard bounds frame that range, and
+neither is expected to bind in normal use; they exist so the tool degrades predictably at the
+extremes instead of behaving unpredictably. Below `MIN_SERIES_POINTS` a series carries too
+little evidence to judge and the analysis stays silent. Above `MAX_SERIES_POINTS` (1000) only
+the most recent 1000 points are analyzed and older measurements are discarded before analysis;
+1000 sits far above any realistic history yet below the length at which the analysis would
+lose accuracy, so it binds in neither direction in practice. A consequence of the upper bound
+is that a change more than `MAX_SERIES_POINTS` points in the past falls outside the analyzed
+window and is treated as settled history rather than a recent regression — which is the
+intended reading, since the tool reports *recent* movement. Outside the supported range the
+tool is deliberately either silent (too little data) or lossy at the far tail (too much data);
+it does not attempt to remain accurate for histories it is not designed to serve.
+
 ### 8.1 Findings: change-points and drift
 
 History mode emits two finding *methods* per series, ranked together by descending relative
