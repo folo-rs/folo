@@ -16,8 +16,8 @@ use std::fmt::Write as _;
 use std::num::NonZero;
 
 use cbh_detect::{
-    AnalysisConfig, AnalysisContext, AnalysisMode, Detection, Finding, Series, SeriesCensus,
-    UnjudgedReason, evaluate_with_log, examples, find_changes,
+    AnalysisContext, AnalysisMode, Detection, Finding, Series, SeriesCensus, UnjudgedReason,
+    evaluate_with_log, examples, find_changes,
 };
 use cbh_model::{DiscriminantSet, Engine, MachineKey, MetricKind, TargetTriple};
 use cbh_render::{
@@ -112,7 +112,6 @@ fn suite_context(suite: &[Series]) -> AnalysisContext {
         .unwrap_or(0);
     AnalysisContext {
         mode: AnalysisMode::History,
-        config: AnalysisConfig::default(),
         merge_base_index: None,
         base_ref_index: None,
         tip_index,

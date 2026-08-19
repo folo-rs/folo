@@ -2,7 +2,7 @@
 //!
 //! Every figure here is a rendering of a real [`GateLog`]: the module runs the detector
 //! over an example series and draws the decisions it recorded gate by gate. No threshold
-//! is written down — each one is read from [`AnalysisConfig::default`] or from the outcome
+//! is written down — each one is read from the policy constants or from the outcome
 //! a gate logged — so a change in the gating policy rewrites the chapter rather than
 //! leaving its numbers behind, and the freshness check turns that into a failing test.
 
@@ -10,8 +10,10 @@ use std::fmt::Write as _;
 use std::iter;
 
 use cbh_detect::{
-    AnalysisConfig, Finding, Gate, GateLog, GateOutcome, GateStage, Series, evaluate_with_log,
-    examples,
+    BRANCH_NOISE_MULTIPLE, BRANCH_PRACTICAL_RELATIVE, CHANGE_ALPHA, DRIFT_ALPHA, DRIFT_MIN_POINTS,
+    DRIFT_NOISE_MULTIPLE, Finding, Gate, GateLog, GateOutcome, GateStage, MIN_REGIME,
+    MIN_REGIME_SEPARATION, MIN_SERIES_POINTS, PRACTICAL_RELATIVE, RESIDUAL_NOISE_MULTIPLE, Series,
+    evaluate_with_log, examples,
 };
 use cbh_model::MetricKind;
 
@@ -131,53 +133,46 @@ fn gates_below(stage: GateStage, gate: Gate) -> Vec<Gate> {
 
 /// What `stage` demands of `gate`, as the chapter states it.
 ///
-/// Every threshold is a field of `config`, so the shipped defaults are the single source
-/// the chapter reads from. Several gates are one policy asked by more than one detector,
-/// and some of them are asked against a different figure depending on who is asking —
-/// which is why the stage is a parameter rather than the gate alone deciding.
-fn demanded(config: &AnalysisConfig, gate: Gate, stage: GateStage) -> String {
+/// Every threshold is read from the same policy constants the detector uses. Several gates
+/// are one policy asked by more than one detector, and some of them are asked against a
+/// different figure depending on who is asking — which is why the stage is a parameter
+/// rather than the gate alone deciding.
+fn demanded(gate: Gate, stage: GateStage) -> String {
     match gate {
-        Gate::MinSeriesPoints => points(config.drift_min_points),
-        Gate::MinBaseCommits => commits(config.min_series_points),
+        Gate::MinSeriesPoints => points(DRIFT_MIN_POINTS),
+        Gate::MinBaseCommits => commits(MIN_SERIES_POINTS),
         Gate::SplitLocated => "a split must be found".to_owned(),
         Gate::MinRegime => match stage {
             // Branch mode counts retained base-ref commit levels, not the context sample
             // and not the shorter side of a split. Ref:
             // packages/cargo-bench-history/docs/DESIGN.md, "Judging a context commit",
             // section 8.2, noise-aware gating.
-            GateStage::Branch => commits(config.min_regime),
-            GateStage::ChangePoint | GateStage::Drift => points(config.min_regime),
+            GateStage::Branch => commits(MIN_REGIME),
+            GateStage::ChangePoint | GateStage::Drift => points(MIN_REGIME),
         },
         Gate::NonZeroDelta => "above zero".to_owned(),
         Gate::RelativeFloor => match stage {
-            GateStage::Branch => percent(config.branch_practical_relative),
-            _ => percent(config.practical_relative),
+            GateStage::Branch => percent(BRANCH_PRACTICAL_RELATIVE),
+            _ => percent(PRACTICAL_RELATIVE),
         },
         Gate::AbsoluteFloor => "the metric's own floor, below".to_owned(),
-        Gate::ResidualNoise => format!(
-            "{}× the typical residual",
-            number(config.residual_noise_multiple)
-        ),
+        Gate::ResidualNoise => format!("{}× the typical residual", number(RESIDUAL_NOISE_MULTIPLE)),
         Gate::BaseScatter => concat!(
             "observed scatter, or one count, byte, or allocation of scale; ",
             "flat timings have no quantum"
         )
         .to_owned(),
         Gate::Significance => match stage {
-            GateStage::Drift => format!("p < {}", chance(config.drift_alpha)),
-            _ => format!("p < {}", chance(config.change_alpha)),
+            GateStage::Drift => format!("p < {}", chance(DRIFT_ALPHA)),
+            _ => format!("p < {}", chance(CHANGE_ALPHA)),
         },
-        Gate::RegimeSeparation => share(config.min_regime_separation),
+        Gate::RegimeSeparation => share(MIN_REGIME_SEPARATION),
         Gate::IntervalDisjoint => "the two intervals must not overlap".to_owned(),
         Gate::IntervalNoiseBand => match stage {
-            GateStage::Branch => format!(
-                "{}× the reported half-width",
-                number(config.branch_noise_multiple)
-            ),
-            _ => format!(
-                "{}× the reported half-width",
-                number(config.drift_noise_multiple)
-            ),
+            GateStage::Branch => {
+                format!("{}× the reported half-width", number(BRANCH_NOISE_MULTIPLE))
+            }
+            _ => format!("{}× the reported half-width", number(DRIFT_NOISE_MULTIPLE)),
         },
     }
 }
@@ -234,7 +229,6 @@ fn compares(gate: Gate, stage: GateStage) -> &'static str {
 
 /// The gates each detector applies, in the order it applies them.
 fn order_table() -> String {
-    let config = AnalysisConfig::default();
     let mut markdown = String::from(
         "Each detector applies its own gates in its own order, and a candidate stops at \
          the first gate that declines it. A gate several detectors share is one policy \
@@ -256,7 +250,7 @@ fn order_table() -> String {
                 "| `{}` | {} | {} |",
                 gate.label(),
                 compares(gate, stage),
-                demanded(&config, gate, stage)
+                demanded(gate, stage)
             )
             .expect("writing to a String never fails");
         }
@@ -403,11 +397,10 @@ fn rungs(log: &GateLog, stage: GateStage, kind: MetricKind) -> Vec<Rung> {
     let Some(declining) = log.declined_by_stage(stage) else {
         return rungs;
     };
-    let config = AnalysisConfig::default();
     rungs.extend(gates_below(stage, declining).into_iter().map(|gate| Rung {
         gate: gate.label().to_owned(),
         value: "not run".to_owned(),
-        threshold: demanded(&config, gate, stage),
+        threshold: demanded(gate, stage),
         verdict: Verdict::NotReached,
     }));
     rungs
@@ -468,10 +461,9 @@ const DECLINED_ELEVATED: f64 = 115.0;
 /// The candidate the residual gate declines: a real step that the series' own scatter
 /// explains.
 fn declined_candidate() -> Series {
-    let config = AnalysisConfig::default();
     // Twice the persistence floor on each side, so regime length is never the binding
     // constraint and the ladder reaches the gate the figure is about.
-    let regime = config.min_regime.saturating_mul(2);
+    let regime = MIN_REGIME.saturating_mul(2);
     let levels: Vec<f64> = iter::repeat_n(DECLINED_BASELINE, regime)
         .chain(iter::repeat_n(DECLINED_ELEVATED, regime))
         .collect();
@@ -550,8 +542,7 @@ const LARGE_MAGNITUDE: f64 = 1000.0;
 
 /// The same proportional move at two magnitudes, against the floor that separates them.
 fn scale() -> Vec<Asset> {
-    let config = AnalysisConfig::default();
-    let regime = config.min_regime.saturating_mul(2);
+    let regime = MIN_REGIME.saturating_mul(2);
     let small: Vec<f64> = iter::repeat_n(SMALL_BASELINE, regime)
         .chain(iter::repeat_n(SMALL_ELEVATED, regime))
         .collect();
@@ -634,9 +625,9 @@ fn scale_pane(values: &[f64], floor: f64, reported: bool) -> Plot {
 /// A move large enough in relative terms to reach the absolute-floor gate on every metric,
 /// and small enough in absolute terms that no metric's floor is trivially cleared. The
 /// values themselves are incidental: what the table needs is for each metric's floor to be
-/// quoted by a gate rather than transcribed from the configuration.
+/// quoted by a gate rather than transcribed from the policy constants.
 fn floor_probe() -> Vec<f64> {
-    let regime = AnalysisConfig::default().min_regime.saturating_mul(2);
+    let regime = MIN_REGIME.saturating_mul(2);
     iter::repeat_n(10.0_f64, regime)
         .chain(iter::repeat_n(10.5_f64, regime))
         .collect()
@@ -763,9 +754,9 @@ fn agreement_grids() -> Vec<Asset> {
 /// The grid is a field of squares, which shows a reader whether the pairings agree but not
 /// how close the series came to the gate's demand. Putting both numbers in the caption is
 /// what turns the picture into evidence, and reading them from the data and the
-/// configuration is what stops the caption from outliving either.
+/// policy is what stops the caption from outliving either.
 fn grid(subject: &str, values: &[f64]) -> String {
-    let floor = AnalysisConfig::default().min_regime_separation;
+    let floor = MIN_REGIME_SEPARATION;
     let grid = agreement("", values);
     let caption = format!(
         "{subject}: {} of pairings agree, against a floor of {}",
@@ -940,6 +931,10 @@ fn commits(count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use cbh_detect::{
+        COMPARE_WINDOW, PRACTICAL_ABSOLUTE_ALLOC, PRACTICAL_ABSOLUTE_COUNT, PRACTICAL_ABSOLUTE_TIME,
+    };
 
     /// The gates chapter names every gate in a hand-written table grouping them by the
     /// question each asks. That table is the appendix's one list of gate identifiers that is
@@ -1132,8 +1127,7 @@ mod tests {
 
     /// A branch candidate, which reaches every gate the comparison applies.
     fn judge_branch() -> (Option<Finding>, GateLog) {
-        let config = AnalysisConfig::default();
-        let base = config.compare_window;
+        let base = COMPARE_WINDOW;
         let levels: Vec<f64> = iter::repeat_n(DECLINED_BASELINE, base)
             .chain(iter::repeat_n(
                 examples::clean_step().last().copied().unwrap_or_default(),
@@ -1157,34 +1151,24 @@ mod tests {
         (log.0, log.1)
     }
 
-    /// The lockstep guard: every threshold the order table states is the configured one,
+    /// The lockstep guard: every threshold the order table states is the policy one,
     /// so a tuned policy rewrites the chapter instead of leaving it behind.
     #[test]
-    fn every_threshold_in_the_order_table_is_the_configured_one() {
-        let config = AnalysisConfig::default();
+    fn every_threshold_in_the_order_table_is_the_policy_one() {
         let table = content("gates-order.md");
 
         for expected in [
-            points(config.drift_min_points),
-            points(config.min_regime),
-            commits(config.min_series_points),
-            percent(config.practical_relative),
-            percent(config.branch_practical_relative),
-            format!("p < {}", chance(config.change_alpha)),
-            format!("p < {}", chance(config.drift_alpha)),
-            format!(
-                "{}× the typical residual",
-                number(config.residual_noise_multiple)
-            ),
-            format!(
-                "{}× the reported half-width",
-                number(config.drift_noise_multiple)
-            ),
-            format!(
-                "{}× the reported half-width",
-                number(config.branch_noise_multiple)
-            ),
-            share(config.min_regime_separation),
+            points(DRIFT_MIN_POINTS),
+            points(MIN_REGIME),
+            commits(MIN_SERIES_POINTS),
+            percent(PRACTICAL_RELATIVE),
+            percent(BRANCH_PRACTICAL_RELATIVE),
+            format!("p < {}", chance(CHANGE_ALPHA)),
+            format!("p < {}", chance(DRIFT_ALPHA)),
+            format!("{}× the typical residual", number(RESIDUAL_NOISE_MULTIPLE)),
+            format!("{}× the reported half-width", number(DRIFT_NOISE_MULTIPLE)),
+            format!("{}× the reported half-width", number(BRANCH_NOISE_MULTIPLE)),
+            share(MIN_REGIME_SEPARATION),
         ] {
             assert!(
                 table.contains(&expected),
@@ -1216,24 +1200,23 @@ mod tests {
     /// The floors table is the other half of the lockstep guard: the numbers it prints are
     /// the numbers the gates compared against, per metric.
     #[test]
-    fn every_absolute_floor_is_the_configured_one_for_its_metric() {
-        let config = AnalysisConfig::default();
+    fn every_absolute_floor_is_the_policy_one_for_its_metric() {
         let table = content("gates-floors.md");
 
         for kind in MetricKind::ALL {
             let expected = match kind {
                 MetricKind::InstructionCount
                 | MetricKind::ConditionalBranches
-                | MetricKind::IndirectBranches => config.practical_absolute_count,
-                MetricKind::WallTime | MetricKind::ProcessorTime => config.practical_absolute_time,
+                | MetricKind::IndirectBranches => PRACTICAL_ABSOLUTE_COUNT,
+                MetricKind::WallTime | MetricKind::ProcessorTime => PRACTICAL_ABSOLUTE_TIME,
                 MetricKind::AllocatedBytes | MetricKind::AllocationCount => {
-                    config.practical_absolute_alloc
+                    PRACTICAL_ABSOLUTE_ALLOC
                 }
             };
 
             assert!(
                 (observed_absolute_floor(kind) - expected).abs() < f64::EPSILON,
-                "{} is judged against a floor the configuration does not set",
+                "{} is judged against a floor the policy does not set",
                 kind.as_str()
             );
             assert!(
@@ -1261,8 +1244,8 @@ mod tests {
     /// The two grids exist to show the gate's floor doing its work, which they only do if
     /// they land either side of it.
     #[test]
-    fn the_agreement_grids_straddle_the_configured_separation_floor() {
-        let floor = AnalysisConfig::default().min_regime_separation;
+    fn the_agreement_grids_straddle_the_policy_separation_floor() {
+        let floor = MIN_REGIME_SEPARATION;
 
         let separated = agreement("separated", &examples::clean_step()).share();
         let oscillating = agreement("oscillating", &examples::STATIONARY_BIMODAL_NOISE).share();
@@ -1280,8 +1263,8 @@ mod tests {
     /// The grid's caption is where the two numbers the gate compared appear, so they have
     /// to be the numbers it really compared.
     #[test]
-    fn each_agreement_grid_states_its_own_share_and_the_configured_floor() {
-        let floor = AnalysisConfig::default().min_regime_separation;
+    fn each_agreement_grid_states_its_own_share_and_the_policy_floor() {
+        let floor = MIN_REGIME_SEPARATION;
 
         for (path, values) in [
             ("gates-agreement-separated.svg", examples::clean_step()),
@@ -1356,7 +1339,7 @@ mod tests {
     /// magnitude and reported at the other.
     #[test]
     fn the_small_move_is_declined_by_the_absolute_floor_and_the_large_one_reported() {
-        let regime = AnalysisConfig::default().min_regime.saturating_mul(2);
+        let regime = MIN_REGIME.saturating_mul(2);
         let small: Vec<f64> = iter::repeat_n(SMALL_BASELINE, regime)
             .chain(iter::repeat_n(SMALL_ELEVATED, regime))
             .collect();

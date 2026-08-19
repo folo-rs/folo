@@ -8,7 +8,7 @@ use std::time::Instant;
 use anyspawn::Spawner;
 use cbh_config::Config;
 use cbh_detect::{
-    AnalysisConfig, AnalysisMode, BlessingPlacement, DiscriminantSetQuery, Series, SeriesFilter,
+    AnalysisMode, BlessingPlacement, COMPARE_WINDOW, DiscriminantSetQuery, Series, SeriesFilter,
     attach_base_windows,
 };
 use cbh_diag::{Reporter, ReporterExt, count_noun};
@@ -428,11 +428,7 @@ where
     let finish_started = Instant::now();
     let mut series = builder.finish();
     if !base_series.is_empty() {
-        attach_base_windows(
-            &mut series,
-            &base_series,
-            AnalysisConfig::default().compare_window,
-        );
+        attach_base_windows(&mut series, &base_series, COMPARE_WINDOW);
     }
     reporter.timing(
         "series build finalization (builder.finish: assemble + serial point sort)",

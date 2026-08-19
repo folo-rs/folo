@@ -10,7 +10,7 @@
 
 use std::fmt::Write as _;
 
-use cbh_detect::{AnalysisConfig, SeriesCensus, Testability, UnjudgedReason};
+use cbh_detect::{FDR_Q, SeriesCensus, Testability, UnjudgedReason};
 use cbh_render::{Coverage, CoverageState};
 use plotters::style::RGBColor;
 
@@ -99,7 +99,7 @@ fn judge(candidates: &[(&str, f64)], family_size: usize) -> Vec<Judged> {
 
 /// The target expected false-discovery proportion for reported findings.
 fn fdr_q() -> f64 {
-    AnalysisConfig::default().fdr_q
+    FDR_Q
 }
 
 /// The threshold associated with `rank` in a family of `family_size`.
@@ -768,17 +768,15 @@ mod tests {
     }
 
     /// The threshold is only worth drawing if the tool would actually apply it, which means
-    /// the share it derives from is the configured one.
+    /// the share it derives from is the policy one.
     #[test]
-    fn every_threshold_derives_from_the_configured_false_discovery_share() {
-        let config = AnalysisConfig::default();
-
-        assert!((fdr_q() - config.fdr_q).abs() < f64::EPSILON);
+    fn every_threshold_derives_from_the_policy_false_discovery_share() {
+        assert!((fdr_q() - FDR_Q).abs() < f64::EPSILON);
         assert!(
-            (threshold_at(1, 1) - config.fdr_q).abs() < f64::EPSILON,
+            (threshold_at(1, 1) - FDR_Q).abs() < f64::EPSILON,
             "the last rank's threshold in a family of one is the share itself"
         );
-        assert!(content("coverage-staircase.md").contains(&percent(config.fdr_q)));
+        assert!(content("coverage-staircase.md").contains(&percent(FDR_Q)));
     }
 
     /// The census figure is an account, so every series it draws must be one the census

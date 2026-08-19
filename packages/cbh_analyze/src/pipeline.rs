@@ -16,9 +16,10 @@ use cbh_config::{
     resolve_project_id, resolve_repo, storage_env,
 };
 use cbh_detect::{
-    AnalysisConfig, AnalysisContext, AnalysisMode, Detection, DiscardedBaseReading,
-    DiscardedReading, Series, SeriesCensus, SeriesFilter, Testability, UnjudgedReason,
-    apply_blessings, find_changes_spawned, retain_present_at_context, short_commit, testability,
+    AnalysisContext, AnalysisMode, COMPARE_WINDOW, Detection, DiscardedBaseReading,
+    DiscardedReading, MIN_REGIME, MIN_SERIES_POINTS, Series, SeriesCensus, SeriesFilter,
+    Testability, UnjudgedReason, apply_blessings, find_changes_spawned, retain_present_at_context,
+    short_commit, testability,
 };
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
@@ -288,7 +289,6 @@ where
     );
     let context = AnalysisContext {
         mode: dataset.mode,
-        config: AnalysisConfig::default(),
         merge_base_index: dataset.merge_base_index,
         base_ref_index: dataset.base_ref_index,
         tip_index: dataset.tip_index,
@@ -502,19 +502,18 @@ fn note_series_census<R: Reporter + ?Sized>(
                 reason.describe(),
             ));
         }
-        let config = &context.config;
         let rule = match context.mode {
             AnalysisMode::History => format!(
                 "history mode judges a series only from {} in the analyzed window, \
                  since a change point needs {} on each side of it",
-                count_noun(config.min_series_points, "point"),
-                count_noun(config.min_regime, "point"),
+                count_noun(MIN_SERIES_POINTS, "point"),
+                count_noun(MIN_REGIME, "point"),
             ),
             AnalysisMode::Branch => format!(
                 "branch mode judges a series only with a measurement on the branch and \
                  {} in the {}-commit comparison window to judge it against",
-                count_noun(config.min_series_points, "base-branch commit"),
-                config.compare_window,
+                count_noun(MIN_SERIES_POINTS, "base-branch commit"),
+                COMPARE_WINDOW,
             ),
         };
         // The trail states the same ratio the report's header and verdict do, read from
@@ -701,29 +700,25 @@ mod tests {
     /// admits — topology, dirty handling, discriminant filters, `--since` — never on findings.
     const SELECTION_COMMITS: usize = 4;
 
-    #[test]
-    fn fixture_sizes_match_the_analysis_gates() {
-        // The fixture sizes above are literals so the seeded shapes read plainly, but
-        // each one exists to satisfy a production gate. Bind them to the gates here,
-        // so moving a gate fails loudly instead of silently making fixtures vacuous.
-        let config = AnalysisConfig::default();
-        assert_eq!(
-            REGIME_COMMITS, config.min_regime,
-            "a seeded step must hold a full regime on each side of its split"
-        );
-        assert_eq!(
-            HISTORY_COMMITS, config.min_series_points,
-            "a history fixture must be long enough for the detectors to judge it"
-        );
-        assert!(
-            BASE_COMMITS <= config.compare_window,
-            "a branch fixture's whole base line must fit the comparison window"
-        );
-        assert!(
-            SELECTION_COMMITS < config.min_series_points,
-            "the selection fixture is deliberately too short to be judged"
-        );
-    }
+    // The fixture sizes above are literals so the seeded shapes read plainly, but each one
+    // exists to satisfy a production gate. Bind them to the gates here, so moving a gate
+    // fails the build instead of silently making a fixture vacuous.
+    const _: () = assert!(
+        REGIME_COMMITS == MIN_REGIME,
+        "a seeded step must hold a full regime on each side of its split"
+    );
+    const _: () = assert!(
+        HISTORY_COMMITS == MIN_SERIES_POINTS,
+        "a history fixture must be long enough for the detectors to judge it"
+    );
+    const _: () = assert!(
+        BASE_COMMITS <= COMPARE_WINDOW,
+        "a branch fixture's whole base line must fit the comparison window"
+    );
+    const _: () = assert!(
+        SELECTION_COMMITS < MIN_SERIES_POINTS,
+        "the selection fixture is deliberately too short to be judged"
+    );
 
     /// The name of the `index`th commit on a master fixture's line.
     fn commit_name(index: usize) -> String {

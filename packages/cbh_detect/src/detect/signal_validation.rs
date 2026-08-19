@@ -118,7 +118,7 @@ use crate::detect::recorded::{
 };
 use crate::detect::scatter::{TIMING_NOISE_CV, scattered, seed_of};
 use crate::detect::{
-    AnalysisConfig, AnalysisContext, AnalysisMode, Direction, Series, UnjudgedReason, examples,
+    AnalysisContext, AnalysisMode, Direction, Series, UnjudgedReason, examples,
 };
 
 /// The analysis mode a case is evaluated under — the suite's dimension-1 lever.
@@ -152,7 +152,6 @@ impl Mode {
         };
         AnalysisContext {
             mode,
-            config: AnalysisConfig::default(),
             merge_base_index,
             base_ref_index: merge_base_index,
             tip_index,
