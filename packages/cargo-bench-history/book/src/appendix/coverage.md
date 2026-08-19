@@ -23,12 +23,12 @@ are working. As the judged family grows, the expected number of false candidates
 does the probability of seeing at least one.
 
 So a per-series check is not enough. The tool applies a **group-wide correction**: sort every
-candidate by chance level, and require the strongest to clear a strict bar, the next a
-slightly looser one, and so on down. What Benjamini-Hochberg controls is the false-discovery
-rate *averaged over many analyses* — the expected share of reported findings that are wrong is
-held below the target. It is not a promise about any single report: one report can still carry a
-higher wrong share than the target, and only across many analyses does the average settle back
-to it.
+candidate the mode can report by chance level, and require the strongest to clear a strict bar,
+the next a slightly looser one, and so on down. What Benjamini-Hochberg controls is the
+false-discovery rate *averaged over many analyses* — the expected share of reported findings
+that are wrong is held below the target, because every rejection is displayed. It is not a
+promise about any single report: one report can still carry a higher wrong share than the
+target, and only across many analyses does the average settle back to it.
 
 {{#include generated/coverage-staircase.svg}}
 
@@ -61,22 +61,31 @@ at once. The alternative — a fixed per-series bar — is a report where the ex
 false alarms grows with the size of your suite, which is precisely the failure that makes
 people stop reading benchmark reports.
 
-## Why improvements are corrected too
+## Why history filters direction first
 
-In history mode, improvements are not displayed by default. They are, however, still part of
-the family the correction divides by, and they still consume a rank.
+In history mode, improvements are neither displayed nor corrected. They leave the candidate set
+before the correction runs, so only regressions enter the sorted list. Branch mode reports both
+directions, so the same filter changes nothing there.
 
-That is deliberate, and the arithmetic shows why the obvious alternative is worse. Suppose
-ten series were judged, and two produced candidates: an improvement with a very low chance
-level, and a regression with a middling one.
+The judged family does not shrink; the denominator remains every series the analysis judged.
+Only the directions being corrected change. Suppose ten series were judged, and two produced
+candidates: an improvement with a very low chance level, and a regression with a middling one.
 
 {{#include generated/coverage-direction-order.md}}
 
-Filtering improvements out *before* the correction would shorten the sorted list, which moves
-the regression to an earlier rank and therefore a **stricter** bar. The regression that is
-reported today would be suppressed. Correcting first, then filtering the display, is both the
-more sensitive order and the honest one: an improvement is a real discovery that was really
-tested, and it is only the *display* that omits it.
+Filtering first is the stricter order. It shortens the sorted list, which moves the regression
+to an earlier rank and therefore a stricter bar. That costs findings: a regression the other
+order would have kept can be suppressed.
+
+That extra sensitivity is not legitimate for a regressions-only report. It is borrowed from a
+discovery the reader never sees: the improvement helps the regression pass, then disappears from
+the display. The full rejected set may still have a false-discovery bound, but the displayed
+findings do not.
+
+The order is conservative in another way too. The detectors' chance levels are two-sided, so an
+unchanged series has at most half that chance to raise a candidate in one named direction.
+The bar the correction sets is therefore met with room to spare, which is why the target is an
+upper bound rather than a level the tool aims at.
 
 ## What a report judged
 

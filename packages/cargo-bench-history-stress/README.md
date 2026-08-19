@@ -55,8 +55,8 @@ magnitudes — so the seeded findings still surface while the noise-aware detect
 exercised too. Each benchmark belongs to a *family* (`index % 5`) that fixes its
 timeline shape (gradual drift, mid-step up, step down, blessable step, stable), and a
 cross-cutting rule injects a `branch`-only change. The result
-is that each mode reports a sensible, explainable *mix* of regressions and
-improvements rather than flagging everything or nothing. See the module docs in
+is that each mode reports a sensible, explainable *subset* of the seeded shapes
+rather than flagging everything or nothing. See the module docs in
 `src/scenario.rs` for the exact family/divisor math.
 
 A seeded shape only becomes a *finding* once the history carries the evidence the
@@ -155,7 +155,7 @@ upload:           <seconds>
 
 mode        duration        cpu   cpu%   objects   series  regressions  improvements  notable
 ----        -------- ----------   ----   -------   ------  -----------  ------------  -------
-history       <secs>     <secs>  <pct>   <count>  <count>      <count>       <count>   yes/no
+history       <secs>     <secs>  <pct>   <count>  <count>      <count>           n/a   yes/no
 branch        <secs>     <secs>  <pct>   <count>  <count>      <count>       <count>   yes/no
 ```
 
@@ -170,7 +170,7 @@ and what each seeding phase cost. Each mode row then reports:
 | `cpu%` | Processor time as a fraction of `duration × cores` — full saturation is 100%. |
 | `objects` | Stored objects the run loaded. |
 | `series` | Reconstructed `(set, benchmark, metric)` series. |
-| `regressions` / `improvements` | Findings the detectors reported. |
+| `regressions` / `improvements` | Findings the detectors reported. `improvements` reads `n/a` in `history` mode, which watches for regressions only. |
 | `notable` | Whether the run reported anything at all. |
 
 Finding counts are a joint property of the sizing and the detectors' evidence gates,

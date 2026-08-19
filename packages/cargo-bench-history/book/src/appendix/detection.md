@@ -180,7 +180,7 @@ That difference in question drives every difference in method.
 | Dirty snapshots | Never admitted | Only the context commit's newest snapshot is judged |
 | Window | The whole analyzed history | A fixed number of recent base-ref commits |
 | Test | Rank comparison, or trend check | Did the context run land inside the range a further measurement was expected in? |
-| Reports | Regressions only, by default | Regressions and improvements |
+| Reports | Regressions only | Regressions and improvements |
 | Blessings | Honored | Ignored |
 
 The branch's own intermediate commits are discarded. Only the analyzed context commit is the

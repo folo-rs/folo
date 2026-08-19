@@ -162,10 +162,10 @@ modes, auto-detected from git topology (there is no flag to force a mode):
 | Monotonic drift (Mann–Kendall + Theil–Sen) | ✅ | — |
 | Context commit vs. base (Student-t prediction interval) | — | ✅ |
 | Benjamini–Hochberg false-discovery filter | ✅ | ✅ |
-| Improvements reported | opt-in | ✅ |
+| Improvements reported | — | ✅ |
 
 - **history** — the base-branch view: long-range change-point and drift detection; reports
-  regressions only by default.
+  regressions only.
 - **branch** — the feature-branch view: judges the context commit's latest state against the
   base ref, reporting both directions. The branch's own intermediate history is ignored.
 

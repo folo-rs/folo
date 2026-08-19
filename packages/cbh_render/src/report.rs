@@ -148,9 +148,8 @@ pub struct ReportInput<'a> {
     /// entered the analysis.
     pub commit_span: Option<(&'a str, &'a str)>,
     /// Whether this analysis reports improvements. When `false` (history mode's
-    /// default regressions-only watch) the text and Markdown reports
-    /// omit the improvement tally, which would always be zero. The JSON report always
-    /// carries it.
+    /// regressions-only watch) every rendering omits the improvement tally rather
+    /// than stating a zero the analysis never looked for.
     pub report_improvements: bool,
     /// Every set's findings, globally ranked most-notable first.
     pub findings: &'a [Finding],
@@ -253,8 +252,10 @@ struct JsonSet<'a> {
     series: usize,
     /// Flagged regressions in this set.
     regressions: usize,
-    /// Flagged improvements in this set.
-    improvements: usize,
+    /// Flagged improvements in this set. Absent in a mode that does not report
+    /// improvements, so the document never states a tally the analysis did not look for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    improvements: Option<usize>,
     /// How far this set's comparison base(s) lag the base ref, with the reason for
     /// each distinct lag (branch mode only). Omitted when the comparison base reaches
     /// the base ref — the usual case — and in history mode.
@@ -351,8 +352,10 @@ struct JsonReport<'a> {
     series: usize,
     /// Number of flagged regressions.
     regressions: usize,
-    /// Number of flagged improvements.
-    improvements: usize,
+    /// Number of flagged improvements. Absent in a mode that does not report
+    /// improvements, so the document never states a tally the analysis did not look for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    improvements: Option<usize>,
     /// Benchmarks dropped as ghosts (present only for past commits, not at the
     /// context commit) before detection. Zero when nothing was dropped.
     ghosts_excluded: usize,
@@ -1148,7 +1151,9 @@ fn render_json(input: &ReportInput<'_>) -> String {
             runs: summary.runs,
             series: summary.series,
             regressions: count_direction(&summary.findings, Direction::Regression),
-            improvements: count_direction(&summary.findings, Direction::Improvement),
+            improvements: input
+                .report_improvements
+                .then(|| count_direction(&summary.findings, Direction::Improvement)),
             comparison_base_lags: &summary.comparison_base_lags,
         })
         .collect();
@@ -1162,7 +1167,9 @@ fn render_json(input: &ReportInput<'_>) -> String {
         runs: input.runs,
         series: input.series,
         regressions: count_top(input.findings, Direction::Regression),
-        improvements: count_top(input.findings, Direction::Improvement),
+        improvements: input
+            .report_improvements
+            .then(|| count_top(input.findings, Direction::Improvement)),
         ghosts_excluded: input.ghosts_excluded,
         census: JsonCensus::from_coverage(&Coverage::from_census(&input.census)),
         hint: input.hint,

@@ -176,8 +176,8 @@ Work down this list. Each step names the chapter that explains it.
 6. **Is the judged family large?** Read the report's judged count. A marginal finding must clear
    a stricter bar for an analysis that judged many series than for one that judged few.
    → [Multiplicity and coverage](coverage.md)
-7. **Was it an improvement in history mode?** Improvements are detected and corrected, but not
-   displayed by default. → [Reporting](reporting.md)
+7. **Was it an improvement in history mode?** History mode watches for regressions only, so a
+   move that made things faster never becomes a finding there. → [Reporting](reporting.md)
 8. **Was it blessed?** A blessing re-baselines the series, so moves before the blessed commit
    are no longer considered. → [Reconstruction](reconstruction.md)
 

@@ -29,6 +29,5 @@ filters mean the same thing wherever they appear. Some commands also take a bare
 `analyze`, `list runs`, `prune`, and `examine` share selection option meanings, but not every
 default or admission policy is identical. Use `list runs` to preview the data set an
 `analyze` pass would consume, `examine` to inspect one series from that selection, and
-`prune --dry-run` to preview the exact deletion plan. The analysis-only flag
-`--include-improvements` and the condensed Markdown summary are exceptions because the other
-commands select data but never detect findings.
+`prune --dry-run` to preview the exact deletion plan. The condensed Markdown summary is an
+exception because the other commands select data but never detect findings.

@@ -90,11 +90,16 @@ pub(crate) fn print(
             result.runs,
             result.series,
             result.regressions,
-            result.improvements,
+            count_or_absent(result.improvements),
             if result.notable { "yes" } else { "no" },
         );
     }
     println!();
+}
+
+/// Formats a tally the analysis reports, or `n/a` for one it does not look for.
+fn count_or_absent(count: Option<usize>) -> String {
+    count.map_or_else(|| "n/a".to_owned(), |count| count.to_string())
 }
 
 /// Formats a duration as seconds with millisecond precision.
