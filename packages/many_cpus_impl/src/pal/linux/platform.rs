@@ -1,14 +1,16 @@
 use std::borrow::Cow;
-use std::iter::once;
-use std::mem;
+use std::iter::{self, once};
+use std::num::NonZero;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use foldhash::HashMap;
 use itertools::Itertools;
+use new_zealand::nz;
 use nonempty::NonEmpty;
 
 use crate::pal::linux::filesystem::FilesystemFacade;
-use crate::pal::linux::{Bindings, BindingsFacade, Filesystem};
+use crate::pal::linux::{Bindings, BindingsFacade, CpuMask, Filesystem};
 use crate::pal::{Platform, ProcessorFacade, ProcessorImpl};
 use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 
@@ -33,7 +35,30 @@ pub(crate) struct BuildTargetPlatform {
 
     // Only active.
     all_active_processors: OnceLock<NonEmpty<ProcessorFacade>>,
+
+    /// Width, in machine words, of the affinity mask that the operating system last accepted.
+    ///
+    /// This is a hint and not a conclusion: the required width can grow while the process runs,
+    /// so a width that stops working merely sends the search widening again from there.
+    affinity_mask_words: AtomicUsize,
 }
+
+/// The value of `affinity_mask_words` before the operating system has accepted any width.
+///
+/// A mask is never zero words wide, so zero cannot be mistaken for a width that worked.
+const AFFINITY_MASK_WIDTH_UNKNOWN: usize = 0;
+
+/// How many affinity mask widths to try before giving up on reading a thread's affinity.
+///
+/// Each attempt doubles the width of the previous one, starting from a mask that already covers
+/// every processor that the platform's own fixed-size mask can describe, so the final attempt
+/// describes a machine far larger than operating systems support. The limit exists to guarantee
+/// that the search ends. Ref: `packages/many_cpus/docs/linux.md`, "Thread affinity masks".
+const AFFINITY_MASK_ATTEMPTS: usize = 11;
+
+/// Ratio between one affinity mask width that the operating system rejected and the next one to
+/// try. Doubling keeps the number of attempts logarithmic in the size of the machine.
+const AFFINITY_MASK_GROWTH: NonZero<usize> = nz!(2);
 
 impl Platform for BuildTargetPlatform {
     fn get_all_processors(&self) -> NonEmpty<ProcessorFacade> {
@@ -44,20 +69,14 @@ impl Platform for BuildTargetPlatform {
     where
         P: AsRef<ProcessorFacade>,
     {
-        // SAFETY: Zero-initialized cpu_set_t is a valid value.
-        let mut cpu_set: libc::cpu_set_t = unsafe { mem::zeroed() };
+        let mut mask = CpuMask::new();
 
         for processor in processors.iter() {
-            // SAFETY: No safety requirements.
-            unsafe {
-                // TODO: This can go out of bounds with giant CPU set (1000+), we would need to use
-                // dynamically allocated CPU sets instead of relying on the fixed-size one in libc.
-                libc::CPU_SET(processor.as_ref().as_target().id as usize, &mut cpu_set);
-            }
+            mask.insert(processor.as_ref().as_target().id);
         }
 
         self.bindings
-            .sched_setaffinity_current(&cpu_set)
+            .sched_setaffinity_current(&mask)
             .expect("failed to configure thread affinity");
     }
 
@@ -80,16 +99,12 @@ impl Platform for BuildTargetPlatform {
     fn current_thread_processors(&self) -> NonEmpty<ProcessorId> {
         let max_processor_id = self.get_max_processor_id();
 
-        let affinity = self
-            .bindings
-            .sched_getaffinity_current()
-            .expect("failed to get current thread processor affinity");
+        let affinity = self.get_current_thread_affinity();
 
         NonEmpty::from_vec(
-            (0..=max_processor_id)
-                // TODO: Do we need to check for cpuset overflow here to avoid panic?
-                // SAFETY: No safety requirements.
-                .filter(|processor_id| unsafe { libc::CPU_ISSET(*processor_id as usize, &affinity) })
+            affinity
+                .processor_ids()
+                .filter(|processor_id| *processor_id <= max_processor_id)
                 .collect_vec())
                 .expect("current thread has no processors in its affinity mask - impossible because this code is running on an active processor")
     }
@@ -125,7 +140,52 @@ impl BuildTargetPlatform {
             all_active_processors: OnceLock::new(),
             max_processor_id: OnceLock::new(),
             max_memory_region_id: OnceLock::new(),
+            affinity_mask_words: AtomicUsize::new(AFFINITY_MASK_WIDTH_UNKNOWN),
         }
+    }
+
+    /// Reads the set of processors that the current thread is allowed to run on.
+    ///
+    /// The operating system refuses to fill an affinity mask that is too narrow to describe
+    /// every processor that it knows of, without saying how wide the mask needs to be, so the
+    /// only way to learn the required width is to offer wider and wider masks until one is
+    /// accepted. Ref: `packages/many_cpus/docs/linux.md`, "Thread affinity masks".
+    fn get_current_thread_affinity(&self) -> CpuMask {
+        let mut last_error = None;
+
+        for words in self.affinity_mask_widths() {
+            match self.bindings.sched_getaffinity_current(words) {
+                Ok(mask) => {
+                    self.affinity_mask_words
+                        .store(words.get(), Ordering::Relaxed);
+
+                    return mask;
+                }
+                // A mask that is too narrow is rejected as an invalid argument. Other causes of
+                // this error exist, so a wider mask is merely the most likely remedy and not a
+                // certain one - which is why the error is preserved for the final report.
+                Err(error) if error.raw_os_error() == Some(libc::EINVAL) => {
+                    last_error = Some(error);
+                }
+                Err(error) => panic!("failed to get current thread processor affinity: {error}"),
+            }
+        }
+
+        panic!(
+            "failed to get current thread processor affinity, even with a mask wider than any operating system can fill: {}",
+            last_error.expect("the search only ends without a mask once an attempt has failed")
+        );
+    }
+
+    /// The affinity mask widths to offer the operating system, in the order to offer them.
+    fn affinity_mask_widths(&self) -> impl Iterator<Item = NonZero<usize>> {
+        // A width that worked before is likely to work again, so we start there. The machine can
+        // grow while the process runs, so this is only a starting point.
+        let first = NonZero::new(self.affinity_mask_words.load(Ordering::Relaxed))
+            .unwrap_or_else(CpuMask::default_words);
+
+        iter::successors(Some(first), |words| words.checked_mul(AFFINITY_MASK_GROWTH))
+            .take(AFFINITY_MASK_ATTEMPTS)
     }
 
     fn get_all_processors_impl(&self) -> &NonEmpty<ProcessorImpl> {
@@ -652,13 +712,25 @@ mod tests {
         reason = "we need not worry in tests"
     )]
     use std::fmt::Write;
+    use std::sync::Barrier;
+    use std::{io, thread};
 
-    use testing::{assert_panics, f64_diff_abs};
+    use testing::{assert_panics, f64_diff_abs, with_watchdog};
 
     use super::*;
     use crate::pal::linux::{MockBindings, MockFilesystem};
 
     const PROCESSOR_TIME_CLOSE_ENOUGH: f64 = 0.01;
+
+    /// A machine with more processors than the operating system's own fixed-size mask can
+    /// describe. The identifiers straddle the edge of that mask on purpose.
+    const GIANT_MACHINE_PROCESSORS: [ProcessorId; 5] = [0, 1023, 1024, 1500, 2047];
+
+    /// Memory regions of the processors in `GIANT_MACHINE_PROCESSORS`.
+    const GIANT_MACHINE_MEMORY_REGIONS: [MemoryRegionId; 5] = [0; 5];
+
+    /// Speed of the processors in `GIANT_MACHINE_PROCESSORS`, which the tests do not care about.
+    const GIANT_MACHINE_BOGOMIPS: [f64; 5] = [2000.0; 5];
 
     #[test]
     fn get_all_processors_smoke_test() {
@@ -1070,7 +1142,7 @@ mod tests {
                 continue;
             }
 
-            let is_online = processor_is_active[processor_id as usize];
+            let is_online = processor_is_active[index];
             fs.expect_get_cpu_online_contents()
                 .withf(move |p| *p == processor_id)
                 .times(1)
@@ -1187,14 +1259,11 @@ mod tests {
     fn pin_current_thread_to_single_processor() {
         let mut bindings = MockBindings::new();
 
-        let expected_set = cpuset_from([0]);
+        let expected_mask = mask_from([0]);
 
         bindings
             .expect_sched_setaffinity_current()
-            .withf(move |cpu_set| {
-                // SAFETY: No safety requirements.
-                unsafe { libc::CPU_EQUAL(cpu_set, &expected_set) }
-            })
+            .withf(move |mask| *mask == expected_mask)
             .times(1)
             .returning(|_| Ok(()));
 
@@ -1213,14 +1282,11 @@ mod tests {
     fn pin_current_thread_to_multiple_processors() {
         let mut bindings = MockBindings::new();
 
-        let expected_set = cpuset_from([0, 1]);
+        let expected_mask = mask_from([0, 1]);
 
         bindings
             .expect_sched_setaffinity_current()
-            .withf(move |cpu_set| {
-                // SAFETY: No safety requirements.
-                unsafe { libc::CPU_EQUAL(cpu_set, &expected_set) }
-            })
+            .withf(move |mask| *mask == expected_mask)
             .times(1)
             .returning(|_| Ok(()));
 
@@ -1239,14 +1305,11 @@ mod tests {
     fn pin_current_thread_to_multiple_memory_regions() {
         let mut bindings = MockBindings::new();
 
-        let expected_set = cpuset_from([0, 1]);
+        let expected_mask = mask_from([0, 1]);
 
         bindings
             .expect_sched_setaffinity_current()
-            .withf(move |cpu_set| {
-                // SAFETY: No safety requirements.
-                unsafe { libc::CPU_EQUAL(cpu_set, &expected_set) }
-            })
+            .withf(move |mask| *mask == expected_mask)
             .times(1)
             .returning(|_| Ok(()));
 
@@ -1265,14 +1328,11 @@ mod tests {
     fn pin_current_thread_to_efficiency_processors() {
         let mut bindings = MockBindings::new();
 
-        let expected_set = cpuset_from([1, 2]);
+        let expected_mask = mask_from([1, 2]);
 
         bindings
             .expect_sched_setaffinity_current()
-            .withf(move |cpu_set| {
-                // SAFETY: No safety requirements.
-                unsafe { libc::CPU_EQUAL(cpu_set, &expected_set) }
-            })
+            .withf(move |mask| *mask == expected_mask)
             .times(1)
             .returning(|_| Ok(()));
 
@@ -1302,40 +1362,51 @@ mod tests {
         platform.pin_current_thread_to(&efficiency_processors);
     }
 
-    fn cpuset_from<const PROCESSOR_COUNT: usize>(
+    fn mask_from<const PROCESSOR_COUNT: usize>(
         processors: [ProcessorId; PROCESSOR_COUNT],
-    ) -> libc::cpu_set_t {
-        // SAFETY: Zero-initialized CPU set is correct.
-        let mut cpu_set: libc::cpu_set_t = unsafe { mem::zeroed() };
+    ) -> CpuMask {
+        let mut mask = CpuMask::new();
 
         for processor in processors {
-            // SAFETY: No safety requirements.
-            unsafe {
-                // TODO: This can go out of bounds with giant CPU set, we need to use dynamically
-                // allocated CPU sets instead of relying on the fixed-size one in libc.
-                libc::CPU_SET(processor as usize, &mut cpu_set);
-            }
+            mask.insert(processor);
         }
 
-        cpu_set
+        mask
+    }
+
+    /// A mask as the operating system would have filled it: exactly as wide as it was asked to be.
+    ///
+    /// The real bindings hand over a buffer of the requested width and the operating system fills
+    /// that buffer, so it can never answer with a processor that the requested width cannot
+    /// describe. A mock that answers otherwise describes something that cannot happen, which
+    /// would let a test pass on an impossible response, so the width is enforced here.
+    fn mask_of_width<const PROCESSOR_COUNT: usize>(
+        words: NonZero<usize>,
+        processors: [ProcessorId; PROCESSOR_COUNT],
+    ) -> CpuMask {
+        let mut mask = CpuMask::with_words(words);
+
+        for processor in processors {
+            mask.insert(processor);
+            assert_eq!(mask.words(), words);
+        }
+
+        mask
     }
 
     #[test]
     fn current_thread_processors_smoke_test() {
         let mut bindings = MockBindings::new();
 
-        let expected_set_1 = cpuset_from([0, 1]);
-        let expected_set_2 = cpuset_from([2]);
+        bindings
+            .expect_sched_getaffinity_current()
+            .times(1)
+            .returning(|words| Ok(mask_of_width(words, [0, 1])));
 
         bindings
             .expect_sched_getaffinity_current()
             .times(1)
-            .returning(move || Ok(expected_set_1));
-
-        bindings
-            .expect_sched_getaffinity_current()
-            .times(1)
-            .returning(move || Ok(expected_set_2));
+            .returning(|words| Ok(mask_of_width(words, [2])));
 
         let mut fs = MockFilesystem::new();
         simulate_processor_layout(
@@ -1360,6 +1431,327 @@ mod tests {
         let current_thread_processors = platform.current_thread_processors();
         assert_eq!(current_thread_processors.len(), 1);
         assert_eq!(current_thread_processors[0], 2);
+    }
+
+    #[test]
+    fn current_thread_processors_widens_mask_until_operating_system_accepts_it() {
+        let mut bindings = MockBindings::new();
+
+        let narrow = CpuMask::default_words();
+        let wide = narrow.checked_mul(AFFINITY_MASK_GROWTH).unwrap();
+
+        // A mask too narrow to describe every processor is rejected as an invalid argument.
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words == narrow)
+            .times(1)
+            .returning(|_| Err(io::Error::from_raw_os_error(libc::EINVAL)));
+
+        let affinity = [1024, 1500, 2047];
+
+        // Both reads are expected to use the wider mask - the second one because the first one
+        // already established the width that this operating system wants.
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words == wide)
+            .times(2)
+            .returning(move |words| Ok(mask_of_width(words, affinity)));
+
+        let mut fs = MockFilesystem::new();
+        simulate_processor_layout(
+            &mut fs,
+            GIANT_MACHINE_PROCESSORS,
+            None,
+            None,
+            GIANT_MACHINE_MEMORY_REGIONS,
+            GIANT_MACHINE_BOGOMIPS,
+        );
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(bindings),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        for _ in 0..2 {
+            let current_thread_processors = platform.current_thread_processors();
+
+            assert_eq!(
+                current_thread_processors.iter().copied().collect_vec(),
+                vec![1024, 1500, 2047]
+            );
+        }
+    }
+
+    #[test]
+    fn current_thread_processors_widens_again_when_the_remembered_width_stops_working() {
+        let mut bindings = MockBindings::new();
+
+        let narrow = CpuMask::default_words();
+        let wide = narrow.checked_mul(AFFINITY_MASK_GROWTH).unwrap();
+
+        // Every processor here fits in the narrower mask, which is what makes the first read
+        // succeed at that width.
+        let before = [0, 1023];
+        let after = [1024, 1500, 2047];
+
+        // The first read settles on a width and it is remembered.
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words == narrow)
+            .times(1)
+            .returning(move |words| Ok(mask_of_width(words, before)));
+
+        // The machine can grow while the process runs, so a remembered width is a hint and not a
+        // conclusion - once it stops working, the search must widen again rather than give up.
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words == narrow)
+            .times(1)
+            .returning(|_| Err(io::Error::from_raw_os_error(libc::EINVAL)));
+
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words == wide)
+            .times(1)
+            .returning(move |words| Ok(mask_of_width(words, after)));
+
+        let mut fs = MockFilesystem::new();
+        simulate_processor_layout(
+            &mut fs,
+            GIANT_MACHINE_PROCESSORS,
+            None,
+            None,
+            GIANT_MACHINE_MEMORY_REGIONS,
+            GIANT_MACHINE_BOGOMIPS,
+        );
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(bindings),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        assert_eq!(
+            platform
+                .current_thread_processors()
+                .iter()
+                .copied()
+                .collect_vec(),
+            vec![0, 1023]
+        );
+
+        assert_eq!(
+            platform
+                .current_thread_processors()
+                .iter()
+                .copied()
+                .collect_vec(),
+            vec![1024, 1500, 2047]
+        );
+    }
+
+    #[test]
+    fn current_thread_processors_shares_the_remembered_width_across_threads() {
+        // The remembered width is the one piece of shared mutable state in the platform, so it
+        // is read and written concurrently in practice. Every thread must come away with the
+        // same answer no matter how their reads interleave.
+        const READER_COUNT: usize = 8;
+        const READS_PER_READER: usize = 16;
+
+        let mut bindings = MockBindings::new();
+
+        let narrow = CpuMask::default_words();
+        let wide = narrow.checked_mul(AFFINITY_MASK_GROWTH).unwrap();
+        let affinity = [1024, 1500, 2047];
+
+        // How many threads try the narrower width before one of them establishes the wider one
+        // depends on how the threads interleave, so no count is expected here.
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words == narrow)
+            .returning(|_| Err(io::Error::from_raw_os_error(libc::EINVAL)));
+
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words == wide)
+            .returning(move |words| Ok(mask_of_width(words, affinity)));
+
+        let mut fs = MockFilesystem::new();
+        simulate_processor_layout(
+            &mut fs,
+            GIANT_MACHINE_PROCESSORS,
+            None,
+            None,
+            GIANT_MACHINE_MEMORY_REGIONS,
+            GIANT_MACHINE_BOGOMIPS,
+        );
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(bindings),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        // Releasing every thread at once is what makes them contend for the remembered width.
+        let start = Barrier::new(READER_COUNT);
+
+        // The barrier and thread joins block, so a scheduling or mutation defect could hang the
+        // test rather than fail it; the watchdog turns such a hang into a failure instead.
+        with_watchdog(move || {
+            thread::scope(|scope| {
+                for _ in 0..READER_COUNT {
+                    scope.spawn(|| {
+                        start.wait();
+
+                        for _ in 0..READS_PER_READER {
+                            assert_eq!(
+                                platform
+                                    .current_thread_processors()
+                                    .iter()
+                                    .copied()
+                                    .collect_vec(),
+                                affinity.to_vec()
+                            );
+                        }
+                    });
+                }
+            });
+        });
+    }
+
+    #[test]
+    fn current_thread_processors_ignores_processors_beyond_the_known_hardware() {
+        // The operating system sizes its answer by the processors it could ever have, which can
+        // exceed the processors that the hardware inventory lists, so it may name a processor
+        // that the inventory knows nothing about.
+        const UNKNOWN_PROCESSOR: ProcessorId = 3000;
+
+        let mut bindings = MockBindings::new();
+
+        // Naming a processor beyond the known hardware takes a mask wide enough to describe one,
+        // so the operating system here is one that demands a mask two widenings out.
+        let accepted = CpuMask::default_words()
+            .checked_mul(AFFINITY_MASK_GROWTH)
+            .unwrap()
+            .checked_mul(AFFINITY_MASK_GROWTH)
+            .unwrap();
+
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words < accepted)
+            .times(2)
+            .returning(|_| Err(io::Error::from_raw_os_error(libc::EINVAL)));
+
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words == accepted)
+            .times(1)
+            .returning(|words| Ok(mask_of_width(words, [1024, UNKNOWN_PROCESSOR])));
+
+        let mut fs = MockFilesystem::new();
+        simulate_processor_layout(
+            &mut fs,
+            GIANT_MACHINE_PROCESSORS,
+            None,
+            None,
+            GIANT_MACHINE_MEMORY_REGIONS,
+            GIANT_MACHINE_BOGOMIPS,
+        );
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(bindings),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        let current_thread_processors = platform.current_thread_processors();
+
+        assert_eq!(
+            current_thread_processors.iter().copied().collect_vec(),
+            vec![1024]
+        );
+    }
+
+    #[test]
+    fn current_thread_processors_panics_on_unexpected_error() {
+        let mut bindings = MockBindings::new();
+
+        // Only an invalid argument suggests that a wider mask might help.
+        bindings
+            .expect_sched_getaffinity_current()
+            .times(1)
+            .returning(|_| Err(io::Error::from_raw_os_error(libc::EPERM)));
+
+        let mut fs = MockFilesystem::new();
+        simulate_processor_layout(&mut fs, [0], None, None, [0], [2000.0]);
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(bindings),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        assert_panics(|| platform.current_thread_processors());
+    }
+
+    #[test]
+    fn current_thread_processors_gives_up_when_no_mask_is_accepted() {
+        let mut bindings = MockBindings::new();
+
+        // An operating system that rejects every mask must not send us searching forever.
+        bindings
+            .expect_sched_getaffinity_current()
+            .times(AFFINITY_MASK_ATTEMPTS)
+            .returning(|_| Err(io::Error::from_raw_os_error(libc::EINVAL)));
+
+        let mut fs = MockFilesystem::new();
+        simulate_processor_layout(&mut fs, [0], None, None, [0], [2000.0]);
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(bindings),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        assert_panics(|| platform.current_thread_processors());
+    }
+
+    #[test]
+    fn pin_current_thread_to_processor_beyond_fixed_size_mask() {
+        let mut bindings = MockBindings::new();
+
+        let expected_mask = mask_from([1500]);
+
+        bindings
+            .expect_sched_setaffinity_current()
+            .withf(move |mask| {
+                // A processor that the operating system's own fixed-size mask cannot describe
+                // must arrive in a mask that is wider than that.
+                *mask == expected_mask && mask.words() > CpuMask::default_words()
+            })
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let mut fs = MockFilesystem::new();
+        simulate_processor_layout(
+            &mut fs,
+            GIANT_MACHINE_PROCESSORS,
+            None,
+            None,
+            GIANT_MACHINE_MEMORY_REGIONS,
+            GIANT_MACHINE_BOGOMIPS,
+        );
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(bindings),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        let processors = platform.get_all_processors();
+        let target = NonEmpty::from_vec(
+            processors
+                .iter()
+                .filter(|processor| processor.as_target().id == 1500)
+                .collect_vec(),
+        )
+        .unwrap();
+
+        platform.pin_current_thread_to(&target);
     }
 
     #[test]

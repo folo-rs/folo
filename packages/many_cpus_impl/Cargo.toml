@@ -33,6 +33,7 @@ itertools = { workspace = true }
 new_zealand = { workspace = true }
 nonempty = { workspace = true }
 rand = { workspace = true, features = ["thread_rng"] }
+smallvec = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
@@ -40,7 +41,6 @@ libc = { workspace = true }
 [target.'cfg(windows)'.dependencies]
 folo_ffi = { workspace = true }
 heapless = { workspace = true }
-smallvec = { workspace = true }
 windows = { workspace = true, features = [
     "Win32_System_JobObjects",
     "Win32_System_Kernel",
