@@ -2,9 +2,19 @@ use std::fmt::Debug;
 use std::io;
 use std::num::NonZero;
 
-use libc::cpu_set_t;
+use libc::{c_ulong, cpu_set_t};
 
 use crate::pal::linux::{Bindings, CpuMask};
+
+/// The bindings hand a mask to the C API where the C API's own fixed-size mask type is expected.
+/// A mask is a sequence of machine words and the fixed-size mask is the same sequence under
+/// another name, so a pointer into one is aligned for the other. That is a property of the ABI
+/// rather than something we control, so it is pinned here: an ABI that ever stops defining its
+/// mask in terms of machine words breaks the build rather than the pointer.
+const _: () = assert!(
+    align_of::<cpu_set_t>() <= align_of::<c_ulong>(),
+    "a mask must be aligned for the fixed-size mask type that it stands in for"
+);
 
 /// FFI bindings that target the real operating system that the build is targeting.
 ///
@@ -21,8 +31,7 @@ impl Bindings for BuildTargetBindings {
     fn sched_setaffinity_current(&self, mask: &CpuMask) -> Result<(), io::Error> {
         // The mask is typed as `cpu_set_t` in the C API but the operating system only ever
         // touches the number of bytes we declare, so a mask of any width may be passed as long
-        // as its size accompanies it. A mask is a sequence of machine words, so it satisfies the
-        // alignment that `cpu_set_t` demands.
+        // as its size accompanies it. Alignment is guaranteed by the assertion above.
         let mask_ptr = mask.as_ptr().cast::<cpu_set_t>();
 
         // 0 means current thread.

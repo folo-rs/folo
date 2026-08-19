@@ -28,6 +28,14 @@ pub(crate) struct CpuMask {
 /// only machines that the C API cannot describe at all pay for an allocation.
 const INLINE_WORDS: usize = size_of::<cpu_set_t>().div_euclid(size_of::<c_ulong>());
 
+/// The inline width above accounts for the whole of the platform's own mask only while that mask
+/// is a whole number of machine words. Every ABI defines it that way, so this is pinned rather
+/// than handled: an ABI that ever stops doing so breaks the build rather than the arithmetic.
+const _: () = assert!(
+    size_of::<cpu_set_t>().is_multiple_of(size_of::<c_ulong>()),
+    "the platform's fixed-size mask must be a whole number of machine words"
+);
+
 /// Bits in one mask word.
 const WORD_BITS: u32 = c_ulong::BITS;
 
