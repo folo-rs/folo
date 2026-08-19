@@ -49,8 +49,7 @@ pub(crate) struct BuildTargetPlatform {
 /// Each attempt doubles the width of the previous one, starting from a mask that already covers
 /// every processor that the platform's own fixed-size mask can describe, so the final attempt
 /// describes a machine far larger than operating systems support. The limit exists to guarantee
-/// that the search ends. Ref: `packages/many_cpus/docs/implementation.md`,
-/// "Thread affinity masks".
+/// that the search ends. Ref: `packages/many_cpus/docs/linux.md`, "Thread affinity masks".
 const AFFINITY_MASK_ATTEMPTS: usize = 11;
 
 /// Ratio between one affinity mask width that the operating system rejected and the next one to
@@ -146,7 +145,7 @@ impl BuildTargetPlatform {
     /// The operating system refuses to fill an affinity mask that is too narrow to describe
     /// every processor that it knows of, without saying how wide the mask needs to be, so the
     /// only way to learn the required width is to offer wider and wider masks until one is
-    /// accepted. Ref: `packages/many_cpus/docs/implementation.md`, "Thread affinity masks".
+    /// accepted. Ref: `packages/many_cpus/docs/linux.md`, "Thread affinity masks".
     fn get_current_thread_affinity(&self) -> CpuMask {
         let mut last_error = None;
 

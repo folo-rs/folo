@@ -14,8 +14,8 @@ use crate::ProcessorId;
 /// in terms of processor identifiers.
 ///
 /// Small masks live on the stack and only sufficiently large ones reach for the heap. See
-/// `packages/many_cpus/docs/implementation.md`, "Thread affinity masks", for why the mask is
-/// counted in words and why the inline capacity is the size that it is.
+/// `packages/many_cpus/docs/linux.md`, "Thread affinity masks", for why the mask is counted in
+/// words and why the inline capacity is the size that it is.
 #[derive(Clone)]
 pub(crate) struct CpuMask {
     words: SmallVec<[c_ulong; INLINE_WORDS]>,
