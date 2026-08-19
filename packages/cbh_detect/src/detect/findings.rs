@@ -1998,12 +1998,11 @@ fn evaluate_branch(
     // comparison's centre and scatter. The context run's own level is part of that
     // judgment, so it is established first.
     let latest_points = latest_context_run(&series.points, context_index);
-    let context_level = stats::median(
-        &latest_points
-            .iter()
-            .map(|point| point.value)
-            .collect::<Vec<f64>>(),
-    );
+    // `latest_context_run` yields the single run a merge would land — at most one point —
+    // so the context level is that point's value directly, with no median over a one-element
+    // sample and no allocation on the analysis path. Ref: docs/performance.md, no allocation
+    // on the hot path.
+    let context_level = latest_points.first().map(|point| point.value);
     let (base_window, removed) =
         excursions::cleaned_window(&series.base_window, context_level, config);
     discarded.extend(removed);
