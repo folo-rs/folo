@@ -97,9 +97,9 @@ impl RunContext {
 /// models). It records the host's auto-detected fingerprint used to partition storage.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MachineInfo {
-    /// Number of logical processors the host reported.
+    /// Number of logical processors the run could use.
     pub processors: usize,
-    /// Number of NUMA memory regions the host reported.
+    /// Number of NUMA memory regions holding processors the run could use.
     pub memory_regions: usize,
     /// Distinct processor model strings the host reported, sorted ascending.
     /// Defaults to empty when reading older records that predate this factor.

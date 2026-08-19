@@ -10,7 +10,6 @@
   "runs": 128,
   "series": 8,
   "regressions": 2,
-  "improvements": 0,
   "ghosts_excluded": 2,
   "census": {
     "total": 10,
@@ -73,8 +72,7 @@
       "machine_key": "a1b2c3d4",
       "runs": 128,
       "series": 8,
-      "regressions": 2,
-      "improvements": 0
+      "regressions": 2
     }
   ]
 }

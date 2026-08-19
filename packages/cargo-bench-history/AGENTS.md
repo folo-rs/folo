@@ -52,9 +52,9 @@ New per-series logic must be side-effect-free. Flow and rationale: [`docs/analyz
 inside the `analyze` module tree (`list.rs`, `prune.rs`, `examine.rs`, each
 `pub(crate) mod`; `bless`/`unbless` in `bless.rs` reuse the same discriminant-filter
 selection). **A selection parameter added to one must be added to all four** unless
-genuinely inapplicable. The analysis-only flag `--include-improvements` and the
-analyze-only condensed `--markdown-summary` output are **not** part of the lockstep —
-only `analyze` detects; `list`/`prune`/`examine` reuse the selection but never analyze.
+genuinely inapplicable. The analyze-only condensed `--markdown-summary` output is **not**
+part of the lockstep — only `analyze` detects; `list`/`prune`/`examine` reuse the selection
+but never analyze.
 The always-on **ghost filter** likewise changes only *which reconstructed series are detected
 on* (it drops benchmarks absent at the context commit), not which runs are *selected*,
 so `list runs` may report more series than `analyze` now analyzes. Each is

@@ -25,7 +25,6 @@ const HEADING_COMMIT: &str = "Commit selection";
 const HEADING_FILTER: &str = "Data filtering";
 const HEADING_SCOPE: &str = "Benchmark scope";
 const HEADING_FEATURES: &str = "Feature selection";
-const HEADING_ANALYSIS: &str = "Analysis";
 
 /// Maintain a history of benchmark results over time and analyze it for trends.
 #[derive(Debug, Parser)]
@@ -542,12 +541,6 @@ struct AnalyzeCommand {
     #[arg(long, help_heading = HEADING_FILTER)]
     no_dirty: bool,
 
-    /// In history mode, also report sustained improvements (by default only
-    /// regressions are reported, since improvement over time is expected). Branch
-    /// mode always reports all findings, so this flag has no effect there.
-    #[arg(long, help_heading = HEADING_ANALYSIS)]
-    include_improvements: bool,
-
     /// Also write a condensed Markdown summary — only the most significant findings
     /// — to this path (a relative path resolves against the working directory). The
     /// full `--markdown` report carries every finding; this summary is capped so a
@@ -575,7 +568,6 @@ impl AnalyzeCommand {
             markdown: self.output.markdown,
             json: self.output.json,
             markdown_summary: self.markdown_summary,
-            include_improvements: self.include_improvements,
             verbose: self.env.verbose,
             timing: false,
         }
@@ -1575,15 +1567,6 @@ mod tests {
             panic!("expected analyze command");
         };
         assert!(!options.verbose);
-    }
-
-    #[test]
-    fn analyze_collects_switches() {
-        let command = parse(&["analyze", "--include-improvements"]);
-        let Command::Analyze(options) = command else {
-            panic!("expected analyze command");
-        };
-        assert!(options.include_improvements);
     }
 
     #[test]

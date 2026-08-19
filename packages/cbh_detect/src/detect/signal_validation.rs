@@ -84,17 +84,24 @@
 //! What the generator supplies is realistic *spread*, not realistic *shape*: its deviates
 //! are bounded, symmetric, and light-tailed (see [`scattered`]), while real timing noise
 //! is right-skewed with occasional large excursions and can settle into distinct modes.
-//! Shapes like that reach this suite through recorded series instead.
+//! Shapes like that reach this suite as declared values instead — recorded from a real
+//! series where one exists, and hand-built where the case needs a shape stated exactly.
 //!
-//! Two cases are exempt from the model: the `stationary_bimodal_noise` rows are verbatim
-//! recordings of one real series and carry the dispersion it was measured with — flatly
-//! bimodal, oscillating between two levels, which is the pathological shape the generator
-//! cannot produce and the one the noise gates are most easily fooled by. A human
-//! reading its chart answers "noisy, but nothing changed" without hesitation, so it is
-//! exactly the kind of obvious-answer input this suite exists to pin — and it guards the
-//! noise gates against reading structured jitter as a step. The pair puts it in front of
-//! both detectors: one row hands the whole recording to history mode, the other cuts it
-//! into a base window and a tip so branch mode judges it too.
+//! Among the declared cases, some are verbatim recordings. The `stationary_bimodal_noise`
+//! rows carry one real series' own dispersion — flatly bimodal, oscillating between two
+//! levels, which is the pathological shape the generator cannot produce and the one the
+//! noise gates are most easily fooled by. A human reading its chart answers "noisy, but
+//! nothing changed" without hesitation, so it is exactly the kind of obvious-answer input
+//! this suite exists to pin — and it guards the noise gates against reading structured
+//! jitter as a step. The pair puts it in front of both detectors: one row hands the whole
+//! recording to history mode, the other cuts it into a base window and a tip so branch
+//! mode judges it too. The `contended_runner_*` rows are likewise real, taken from a
+//! series a shared runner disturbed for exactly one commit.
+//!
+//! The rest are hand-built, because what they pin is a shape rather than a dispersion:
+//! how many times a window visits a level, and where those visits sit relative to the run
+//! being judged. Generated scatter would blur exactly the structure under test, so those
+//! rows state their values outright.
 
 #![cfg_attr(coverage_nightly, coverage(off))]
 
@@ -105,12 +112,12 @@ use cbh_model::MetricKind;
 use crate::detect::findings::find_changes;
 use crate::detect::noise_gates::{MIN_REGIME, MIN_SERIES_POINTS};
 use crate::detect::recorded::{
-    STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_HIGH, STATIONARY_BIMODAL_NOISE,
+    CONTENDED_RUNNER_BASE, CONTENDED_RUNNER_EXCURSION, CONTENDED_RUNNER_LEVEL,
+    CONTENDED_RUNNER_LEVEL_START, STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_HIGH,
+    STATIONARY_BIMODAL_NOISE,
 };
 use crate::detect::scatter::{TIMING_NOISE_CV, scattered, seed_of};
-use crate::detect::{
-    AnalysisConfig, AnalysisContext, AnalysisMode, Direction, Series, UnjudgedReason, examples,
-};
+use crate::detect::{AnalysisContext, AnalysisMode, Direction, Series, UnjudgedReason, examples};
 
 /// The analysis mode a case is evaluated under — the suite's dimension-1 lever.
 ///
@@ -129,19 +136,13 @@ impl Mode {
     const ALL: [Self; 2] = [Self::History, Self::Branch];
 
     /// Whether this mode reports improvements as findings. Only branch does: history is
-    /// run here as a regressions-only drift watch (`include_improvements = false`), so
-    /// for it an improvement is a non-finding.
+    /// a regressions-only drift watch, so for it an improvement is a non-finding.
     fn reports_improvements(self) -> bool {
         matches!(self, Self::Branch)
     }
 
     /// The analysis context this mode is evaluated under. `merge_base_index` and
     /// `tip_index` are consulted only by branch mode; history ignores them.
-    ///
-    /// `include_improvements` is set from [`reports_improvements`](Self::reports_improvements)
-    /// so the context matches the mode's intended reporting semantics: branch (which
-    /// reports both directions) opts in, history opts out. Branch mode ignores the
-    /// flag today, but pinning it consistently keeps the context correct if that changes.
     fn context(self, merge_base_index: Option<usize>, tip_index: usize) -> AnalysisContext {
         let mode = match self {
             Self::History => AnalysisMode::History,
@@ -149,11 +150,9 @@ impl Mode {
         };
         AnalysisContext {
             mode,
-            config: AnalysisConfig::default(),
             merge_base_index,
             base_ref_index: merge_base_index,
             tip_index,
-            include_improvements: self.reports_improvements(),
         }
     }
 }
@@ -194,9 +193,10 @@ enum Scatter {
     /// The declared values are flat regime levels, and the suite adds the measurement
     /// scatter the case's metric kind actually shows (see [`with_noise`]).
     Modelled,
-    /// The declared values were recorded from a real series and already carry their own
-    /// dispersion, so they are analysed exactly as given.
-    Recorded,
+    /// The declared values already carry their own dispersion — recorded from a real
+    /// series, or hand-built because the exact shape is the point — so they are analysed
+    /// exactly as given.
+    Declared,
 }
 
 /// One curated series — its base and branch sides — and the outcome each mode is
@@ -283,9 +283,9 @@ impl SignalCase {
         self
     }
 
-    /// Declares the values a verbatim recording, to be analysed without added scatter.
-    fn recorded(mut self) -> Self {
-        self.scatter = Scatter::Recorded;
+    /// Declares the values complete as written, to be analysed without added scatter.
+    fn declared(mut self) -> Self {
+        self.scatter = Scatter::Declared;
         self
     }
 
@@ -295,7 +295,7 @@ impl SignalCase {
         let levels = [self.base.as_slice(), self.branch.as_slice()].concat();
         match self.scatter {
             Scatter::Modelled => with_noise(&levels, self.kind, seed_of(self.name)),
-            Scatter::Recorded => levels,
+            Scatter::Declared => levels,
         }
     }
 
@@ -405,6 +405,49 @@ const FLOOR_REGIME_POINTS: usize = 50;
 /// first regime, so branch mode sees the whole second regime as the branch side.
 const FLOOR_MERGE_BASE: usize = FLOOR_REGIME_POINTS - 1;
 
+/// The move the context run of `a_regression_through_a_contended_window_is_reported`
+/// carries, as a multiple of the base level.
+///
+/// Twice the smallest move branch mode reports at all, so the case turns on whether the
+/// window is clean rather than on where the reporting floor sits, and several times what
+/// the recording's own ordinary commits vary by, so a human reading the chart calls it
+/// without hesitation. It is nonetheless far below what the same window silences while it
+/// still holds the excursion, which is what makes the case discriminating.
+const CONTENDED_WINDOW_REGRESSION: f64 = 1.10;
+
+/// The base window of `recurrent_high_mode`, oldest first.
+///
+/// A benchmark resting at one level with ordinary scatter around it, which twice in
+/// sixteen commits visits a level far enough above it to stand clear of its neighbours.
+/// Each visit is individually indistinguishable from a reading a disturbed runner
+/// produced — the commits on either side of it agree with each other, and it stands far
+/// clear of them — so nothing local to either visit can tell them apart from
+/// interference. What the window has to be read by instead is that there are two of them.
+const RECURRENT_HIGH_MODE: [f64; 16] = [
+    82.5, 100.0, 100.0, 100.0, 135.0, 100.0, 100.0, 117.5, 100.0, 100.0, 135.0, 100.0, 100.0,
+    100.0, 117.5, 82.5,
+];
+
+/// The context run `recurrent_high_mode` is judged on: the same high level the window's
+/// own commits already reach, and so not a move at all.
+const RECURRENT_HIGH_MODE_TIP: f64 = 135.0;
+
+/// The base window of `rare_high_mode`, oldest first.
+///
+/// The harder counterpart of [`RECURRENT_HIGH_MODE`]: the high level appears just once,
+/// so nothing inside the window distinguishes it from a reading a disturbed runner
+/// produced. Its scatter sits at the window's ends, where it cannot be mistaken for a
+/// candidate, leaving that single visit as the only one — which is what makes the context
+/// run the deciding evidence.
+const RARE_HIGH_MODE: [f64; 16] = [
+    76.0, 124.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 135.0, 100.0, 100.0, 100.0, 100.0,
+    100.0, 76.0, 124.0,
+];
+
+/// The context run `rare_high_mode` is judged on: the same high level the window visits
+/// once, and so not a move at all.
+const RARE_HIGH_MODE_TIP: f64 = 135.0;
+
 /// The hand-curated cases. New "obvious answer" series are added as one row each.
 fn cases() -> Vec<SignalCase> {
     vec![
@@ -450,7 +493,7 @@ fn cases() -> Vec<SignalCase> {
         // whole series and must stay quiet; branch has no branch side.
         SignalCase::new("stationary_bimodal_noise", MetricKind::WallTime)
             .base(STATIONARY_BIMODAL_NOISE.to_vec())
-            .recorded(),
+            .declared(),
         // The same recording judged by branch mode, which reads only the recent base
         // window and one context commit. The window is cut where the recording happens to
         // end on five consecutive low-mode commits, and the tip sits at the high mode the
@@ -468,7 +511,79 @@ fn cases() -> Vec<SignalCase> {
                     .to_vec(),
             )
             .branch(vec![STATIONARY_BIMODAL_HIGH])
-            .recorded(),
+            .declared(),
+        // A wall-time series that holds one level apart from a single commit where the
+        // runner lost time to something else — recorded, so the excursion is the real
+        // shape rather than a modelled one. History reads the recording whole: it opens
+        // on a higher level and steps down, which is an improvement history does not
+        // report, and the lone excursion past that step is not a sustained trend. Branch
+        // has no branch side.
+        SignalCase::new("contended_runner_excursion", MetricKind::WallTime)
+            .base(CONTENDED_RUNNER_EXCURSION.to_vec())
+            .expects(Outcome::Fall, Outcome::Quiet)
+            .declared(),
+        // Matched pair, part one. The same recording cut so branch mode's recent window
+        // holds the excursion with ordinary commits on either side, and a context run at
+        // the level the series actually sits at. Branch mode discards the excursion as
+        // the measurement artifact it is, and must still find nothing to report about a
+        // context run that agrees with everything around it — discarding evidence
+        // tightens the window, so the pair's job is to prove that tightening does not
+        // manufacture a verdict.
+        SignalCase::new(
+            "contended_runner_excursion_branch_tip",
+            MetricKind::WallTime,
+        )
+        .base(
+            CONTENDED_RUNNER_EXCURSION
+                .get(CONTENDED_RUNNER_LEVEL_START..CONTENDED_RUNNER_BASE)
+                .unwrap()
+                .to_vec(),
+        )
+        .branch(vec![CONTENDED_RUNNER_LEVEL])
+        .declared(),
+        // Matched pair, part two: the same window, with a context run that genuinely
+        // regressed. This is the case the excursion silences if it is left in the window.
+        // A move of this size stands several times clear of what the series' own commits
+        // vary by, so a human reading the chart calls it immediately; averaged in, the
+        // excursion both drags the window's centre up toward the context run and inflates
+        // the window's spread severalfold, and the move disappears into a window that
+        // finds nothing surprising. Together the pair states that clearing the excursion
+        // restores the sensitivity it costs without inventing findings on branches that
+        // changed nothing.
+        SignalCase::new(
+            "a_regression_through_a_contended_window_is_reported",
+            MetricKind::WallTime,
+        )
+        .base(
+            CONTENDED_RUNNER_EXCURSION
+                .get(CONTENDED_RUNNER_LEVEL_START..CONTENDED_RUNNER_BASE)
+                .unwrap()
+                .to_vec(),
+        )
+        .branch(vec![CONTENDED_RUNNER_LEVEL * CONTENDED_WINDOW_REGRESSION])
+        .expects(Outcome::Quiet, Outcome::Rise)
+        .declared(),
+        // The counterweight to the pair above, and the reason a window may give up only
+        // one reading. This benchmark visits a level well above its resting one twice in
+        // sixteen commits — too rarely for either visit to look like anything but a
+        // disturbed runner from where it sits, since its neighbours agree with each other
+        // and it stands far clear of them. The context run lands on that same perfectly
+        // ordinary high level. Both modes must stay quiet: nothing changed.
+        SignalCase::new("recurrent_high_mode", MetricKind::WallTime)
+            .base(RECURRENT_HIGH_MODE.to_vec())
+            .branch(vec![RECURRENT_HIGH_MODE_TIP])
+            .declared(),
+        // The same lesson where the window alone cannot teach it. Here the high level
+        // appears once, so it looks exactly like a disturbed reading from every angle
+        // inside the window — and the only thing saying otherwise is that the context run
+        // is standing on it. A level the context run itself sits at is never discarded,
+        // because discarding it would leave the window describing a level this benchmark
+        // does not reliably hold and turn an ordinary value into a large, certain
+        // regression against what remained. Both modes must stay quiet: nothing changed.
+        SignalCase::new("rare_high_mode", MetricKind::WallTime)
+            .base(RARE_HIGH_MODE.to_vec())
+            .branch(vec![RARE_HIGH_MODE_TIP])
+            .declared(),
         // A branch that got slower but was fixed in the last commit.
         // History sees the regression, but branch sees only the final commit and must stay quiet.
         SignalCase::new("branch_with_regression_then_fix", MetricKind::WallTime)
@@ -823,9 +938,10 @@ fn companion_crowds_report_nothing_of_their_own() {
     // The stricter reading — that companions raise no *candidate* at all — is not a
     // property flat noisy series can have. Fifty of them tested at `change_alpha` will now
     // and then throw one that clears it, which is what that threshold means. What they may
-    // not do is throw one in the direction the mode reports, so the second assertion pins
-    // the crowd's whole contribution to the improvement side, where a regressions-only
-    // drift watch discards it.
+    // not do is carry one through to a reported finding. The branch leg covers both
+    // directions on its own, since branch mode reports improvements as well as
+    // regressions; the history leg covers the regression side, which is all a
+    // regressions-only drift watch can report.
     for case in cases() {
         let values = case.values();
         for scale in [1.0, SCALE_MULTIPLE] {
@@ -847,21 +963,6 @@ fn companion_crowds_report_nothing_of_their_own() {
                     case.name,
                     detection.findings.len(),
                 );
-
-                let both_directions = AnalysisContext {
-                    include_improvements: true,
-                    ..mode.context(case.merge_base_index(), case.tip_index())
-                };
-                for finding in find_changes(&crowd, &both_directions).findings {
-                    assert_eq!(
-                        finding.direction,
-                        Direction::Improvement,
-                        "case '{}' mode={mode:?} scale={scale}: companion '{}' raised a \
-                         regression of its own",
-                        case.name,
-                        finding.id.qualified(),
-                    );
-                }
             }
         }
     }

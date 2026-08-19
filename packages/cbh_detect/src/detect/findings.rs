@@ -38,9 +38,11 @@
 //!   move as measurement noise. The veto direction is one-way: it can only
 //!   suppress a candidate the other gates would have reported — it can never
 //!   promote a move into a finding.
-//! * Surviving candidates then pass a Benjamini–Hochberg false-discovery filter,
-//!   taken over every series judged rather than only those that raised a candidate,
-//!   so a batch of series does not manufacture spurious findings.
+//! * Surviving candidates are screened to the directions the mode reports, then pass
+//!   a Benjamini–Hochberg false-discovery filter, taken over every series judged
+//!   rather than only those that raised a candidate, so a batch of series does not
+//!   manufacture spurious findings and the rate the filter controls is the rate among
+//!   the findings actually reported.
 //!
 //! A separate slow-[`Drift`](FindingMethod::Drift) finding is raised from a
 //! Mann–Kendall trend test plus a Theil–Sen slope, gated by the same practical
@@ -71,235 +73,10 @@ use cbh_model::{BenchmarkId, DiscriminantSet, MetricKind};
 use cbh_stats as stats;
 use serde::Serialize;
 
+use crate::detect::excursions::DiscardedReading;
 use crate::detect::gate_log::{Gate, GateLog, GateStage, StageLog};
 use crate::detect::parallel::{balanced_chunk_sizes, worker_count};
-use crate::detect::{BaseLevel, Series, SeriesPoint, noise_gates};
-
-/// Tunable parameters of the engine-aware analysis.
-///
-/// Every field is read as supplied and gates one stage of detection on its own; no
-/// relationship between fields is required or enforced, so any combination is a
-/// valid configuration. A combination that leaves a stage unreachable — a
-/// [`compare_window`](Self::compare_window) holding fewer commit levels than
-/// [`min_series_points`](Self::min_series_points), say — makes that stage abstain
-/// rather than misreport.
-///
-/// [`AnalysisConfig::default()`](Self::default) is the tuned policy the tool ships.
-/// Field documentation that gives a worked example, or that relates one field's
-/// value to another's, describes that default configuration rather than the type.
-#[derive(Clone, Copy, Debug)]
-pub struct AnalysisConfig {
-    /// Minimum points each side of a change must hold for the step to be trusted.
-    ///
-    /// A split leaving either regime shorter than this raises no candidate, so a move
-    /// confined to fewer than this many trailing points cannot flag (persistence).
-    /// Branch mode applies it to the base-side commit levels either side of a
-    /// candidate regime boundary, and to the comparison sample as a whole.
-    pub min_regime: usize,
-    /// Minimum points a series must carry before it is evaluated at all.
-    ///
-    /// A shorter series raises no finding and does not count toward the
-    /// false-discovery family: it is unjudged rather than judged-and-quiet (see
-    /// [`Testability`]). History mode measures the post-blessing window against this
-    /// floor; branch mode measures the base-side commit levels inside
-    /// [`compare_window`](Self::compare_window) against it.
-    ///
-    /// Under [`AnalysisConfig::default()`](Self::default) this is two full regimes,
-    /// the shortest series a split can satisfy [`min_regime`](Self::min_regime) on
-    /// both sides of.
-    pub min_series_points: usize,
-    /// Significance level a change-point's Mann–Whitney rank test must clear.
-    ///
-    /// Pettitt only locates the split — its analytic p-value is too conservative on
-    /// short series to gate significance — so the rank test between the two regimes
-    /// decides. Branch mode holds its prediction-interval p-value to the same level,
-    /// as does a candidate base-side regime boundary.
-    pub change_alpha: f64,
-    /// Target false-discovery rate for the Benjamini–Hochberg filter.
-    ///
-    /// The filter runs over the surviving candidates with the family sized from every
-    /// series the pass judged (see [`SeriesCensus::judged`]), so a larger judged suite
-    /// demands a smaller p-value of each candidate.
-    pub fdr_q: f64,
-    /// Minimum points a series needs before a slow-drift finding is considered.
-    ///
-    /// Independent of [`min_series_points`](Self::min_series_points), which decides
-    /// whether the series is judged at all: a series above that floor but below this
-    /// one is judged, and can raise only a level shift.
-    ///
-    /// [`AnalysisConfig::default()`](Self::default) sets the two equal, so both
-    /// history detectors demand the same evidence and a series is evaluable by both
-    /// or by neither.
-    pub drift_min_points: usize,
-    /// Significance level a drift's Mann–Kendall trend must clear.
-    pub drift_alpha: f64,
-    /// Multiple of the per-measurement noise floor a drift's total movement must
-    /// exceed.
-    ///
-    /// Applies only where the engine reports per-point confidence intervals, whose
-    /// median half-width is that noise floor. An additional veto on top of the trend
-    /// test, able only to suppress a candidate. This is the drift counterpart of
-    /// [`branch_noise_multiple`](Self::branch_noise_multiple), and
-    /// [`AnalysisConfig::default()`](Self::default) holds the two equal.
-    pub drift_noise_multiple: f64,
-    /// Minimum relative magnitude a move must reach to matter in practice.
-    ///
-    /// Applied to the move against its baseline, independently of statistical
-    /// significance, so a certain but tiny move is not reported. Branch mode
-    /// substitutes [`branch_practical_relative`](Self::branch_practical_relative).
-    pub practical_relative: f64,
-    /// Absolute magnitude floor for instruction and branch counts, in counts.
-    ///
-    /// Composed by conjunction with the relative floor in force
-    /// ([`practical_relative`](Self::practical_relative), or
-    /// [`branch_practical_relative`](Self::branch_practical_relative) in branch mode):
-    /// a move must clear both. An absolute floor is needed alongside the relative one
-    /// because these counts move in whole units, so on a small baseline a handful of
-    /// units of build-layout jitter works out to a large *percentage* move that the
-    /// relative floor alone would let through.
-    pub practical_absolute_count: f64,
-    /// Absolute magnitude floor for timing moves, in nanoseconds.
-    ///
-    /// Composed by conjunction with the relative floor in force, exactly as
-    /// [`practical_absolute_count`](Self::practical_absolute_count) is. A timing
-    /// figure resolves far below a nanosecond, so this expresses which moves are worth
-    /// acting on rather than what the engine can measure.
-    ///
-    /// Under [`AnalysisConfig::default()`](Self::default) this is the binding gate on
-    /// a benchmark measuring a couple of nanoseconds an iteration, where the relative
-    /// floor works out to a fraction of a nanosecond.
-    pub practical_absolute_time: f64,
-    /// Absolute magnitude floor for allocation moves, in bytes or allocations.
-    ///
-    /// Composed by conjunction with the relative floor in force, exactly as
-    /// [`practical_absolute_count`](Self::practical_absolute_count) is. What an
-    /// allocation floor rejects is the sub-unit moves that amortizing a run's warmup
-    /// and buffer-resize allocations across its iterations manufactures, since a
-    /// fraction of a byte or of an allocation cannot happen.
-    pub practical_absolute_alloc: f64,
-    /// Lower bound on the scatter of an instruction or branch count sample, in counts.
-    ///
-    /// Branch mode's prediction interval takes its standard error from the base
-    /// window's standard deviation, and this bounds that deviation from below, so a
-    /// window that happens to repeat one value still yields a usable standard error
-    /// rather than a degenerate one. A scatter floor is the metric's *quantum*, not a
-    /// statement about which moves matter — see
-    /// [`scatter_floor_time`](Self::scatter_floor_time) for what raising one costs.
-    pub scatter_floor_count: f64,
-    /// Lower bound on the scatter of a timing sample, in nanoseconds.
-    ///
-    /// Serves the same role as [`scatter_floor_count`](Self::scatter_floor_count).
-    /// Raising it makes every timing series behave as if it wobbled by at least that
-    /// much, imposing an absolute detection threshold in units of the standard error
-    /// on top of the [`practical_absolute_time`](Self::practical_absolute_time) floor
-    /// that already decides which timing moves are worth reporting.
-    ///
-    /// [`AnalysisConfig::default()`](Self::default) leaves timing scatter unbounded
-    /// from below, because a time is a regression slope over a run's iterations and
-    /// resolves far below a clock tick, so it has no quantum to express. The price is
-    /// that a base window of identical timings yields no verdict, which is silence
-    /// rather than a spurious certainty.
-    pub scatter_floor_time: f64,
-    /// Lower bound on the scatter of an allocation sample, in bytes or allocations.
-    ///
-    /// Serves the same role as [`scatter_floor_count`](Self::scatter_floor_count).
-    /// The case it exists for is code that allocated nothing and now allocates: a base
-    /// window of zeroes has exactly zero scatter, and without a positive floor the
-    /// standard error collapses and that (real and important) move cannot be judged.
-    pub scatter_floor_alloc: f64,
-    /// How many recent base-side commits branch mode inspects.
-    ///
-    /// The window is the base evidence the branch's latest state is compared against.
-    /// A genuine level shift accepted inside it narrows the comparison to the trailing
-    /// regime; otherwise the whole window is the comparison sample. Its size therefore
-    /// sets both how small a move branch mode can resolve and how far back it looks
-    /// for a current-regime boundary, and a window holding fewer commit levels than
-    /// [`min_series_points`](Self::min_series_points) leaves branch mode unable to
-    /// judge the series at all.
-    pub compare_window: usize,
-    /// Minimum relative magnitude a *branch* move must reach.
-    ///
-    /// Branch mode's substitute for [`practical_relative`](Self::practical_relative),
-    /// applied both to a reported move and to a candidate base-side regime boundary.
-    ///
-    /// [`AnalysisConfig::default()`](Self::default) holds it above the history floor:
-    /// a feature-branch signal must be high-confidence, since we would rather miss a
-    /// small move than cry wolf on a pull request.
-    pub branch_practical_relative: f64,
-    /// Multiple of the per-measurement noise floor a branch move must exceed.
-    ///
-    /// Applies only where the engine reports per-point confidence intervals, whose
-    /// median half-width is that noise floor. An additional veto on top of the
-    /// prediction-interval test, able only to suppress a candidate.
-    pub branch_noise_multiple: f64,
-    /// Multiple of a series' own residual scatter a move must exceed to be trusted.
-    ///
-    /// The scatter is the median absolute residual of the fitted step or line model —
-    /// the series' between-commit wobble. This is the primary, series-intrinsic noise
-    /// gate applied to every engine: a clean series has near-zero residual scatter, so
-    /// any persistent move clears it, while a jittery series demands a move that stands
-    /// out above its own run-to-run wobble. It composes with (and is independent of)
-    /// the optional confidence-interval veto available on dispersion-reporting engines.
-    pub residual_noise_multiple: f64,
-    /// Minimum **probability of superiority** a level shift's two regimes must reach.
-    ///
-    /// The probability of superiority is the Mann–Whitney common-language effect size:
-    /// the fraction of after-vs-before commit pairs that move in the finding's
-    /// direction. It is the *effect-size* companion to the rank test's *significance*
-    /// gate, and closes a hole the significance gate cannot: a rank test grows
-    /// "significant" with sample size even for two heavily overlapping regimes, so a
-    /// long but stationary series that merely oscillates between two levels — noisy
-    /// yet stable — otherwise reads as a change-point. A genuine step scores ~1 here;
-    /// bimodal jitter scores near ½. The gate composes by conjunction, so it can only
-    /// suppress a candidate the median-based gates were fooled by, never create one.
-    pub min_regime_separation: f64,
-    /// Minimum probability of superiority a base-window split must reach.
-    ///
-    /// Branch mode accepts a base-side split as a regime boundary — discarding the
-    /// levels before it — only when the split clears this rather than
-    /// [`min_regime_separation`](Self::min_regime_separation).
-    ///
-    /// The two decisions carry asymmetric costs, which is why
-    /// [`AnalysisConfig::default()`](Self::default) holds this the higher of the pair.
-    /// Reporting a move makes a claim a human then checks; accepting a boundary
-    /// *discards evidence*, shrinking the comparison sample to the trailing regime and
-    /// rebuilding the scatter estimate from it alone — so a wrong boundary can collapse
-    /// a noisy window's dispersion to near zero and make any subsequent context run
-    /// read as certain. A boundary that throws data away must be unambiguous.
-    ///
-    /// The statistic is coarse at these sample sizes, so at the default this reads as
-    /// "essentially no crossing pair may contradict the boundary" rather than as a
-    /// precise probability: with the smallest regimes on both sides it admits one
-    /// contradicting pair in twenty-five and no more.
-    pub min_base_split_separation: f64,
-}
-
-impl Default for AnalysisConfig {
-    fn default() -> Self {
-        Self {
-            min_regime: noise_gates::MIN_REGIME,
-            min_series_points: noise_gates::MIN_SERIES_POINTS,
-            change_alpha: noise_gates::CHANGE_ALPHA,
-            fdr_q: noise_gates::FDR_Q,
-            drift_min_points: noise_gates::DRIFT_MIN_POINTS,
-            drift_alpha: noise_gates::DRIFT_ALPHA,
-            drift_noise_multiple: noise_gates::DRIFT_NOISE_MULTIPLE,
-            practical_relative: noise_gates::PRACTICAL_RELATIVE,
-            practical_absolute_count: noise_gates::PRACTICAL_ABSOLUTE_COUNT,
-            practical_absolute_time: noise_gates::PRACTICAL_ABSOLUTE_TIME,
-            practical_absolute_alloc: noise_gates::PRACTICAL_ABSOLUTE_ALLOC,
-            scatter_floor_count: noise_gates::SCATTER_FLOOR_COUNT,
-            scatter_floor_time: noise_gates::SCATTER_FLOOR_TIME,
-            scatter_floor_alloc: noise_gates::SCATTER_FLOOR_ALLOC,
-            compare_window: noise_gates::COMPARE_WINDOW,
-            branch_practical_relative: noise_gates::BRANCH_PRACTICAL_RELATIVE,
-            branch_noise_multiple: noise_gates::BRANCH_NOISE_MULTIPLE,
-            residual_noise_multiple: noise_gates::RESIDUAL_NOISE_MULTIPLE,
-            min_regime_separation: noise_gates::MIN_REGIME_SEPARATION,
-            min_base_split_separation: noise_gates::MIN_BASE_SPLIT_SEPARATION,
-        }
-    }
-}
+use crate::detect::{BaseLevel, Series, SeriesPoint, excursions, noise_gates};
 
 /// Which analysis a [`find_changes_spawned`] pass performs.
 ///
@@ -332,14 +109,11 @@ impl AnalysisMode {
 
 /// The context a [`find_changes_spawned`] pass runs in.
 ///
-/// Carries which analysis to perform, the tuned parameters, the topology anchors
-/// the mode needs, and whether improvements are reported alongside regressions.
+/// Carries which analysis to perform and the topology anchors the mode needs.
 #[derive(Clone, Copy, Debug)]
 pub struct AnalysisContext {
     /// The analysis to perform.
     pub mode: AnalysisMode,
-    /// The tuned analysis parameters.
-    pub config: AnalysisConfig,
     /// First-parent topological index of the merge-base on the context line, when it
     /// lies there. Branch detection does not derive its base window from this split;
     /// it compares against [`Series::base_window`], which is loaded from the base ref.
@@ -354,25 +128,26 @@ pub struct AnalysisContext {
     /// target so a series that stops short of the context renders the data-less commits
     /// after its last observation as a gap. Consulted only in [`AnalysisMode::History`].
     pub tip_index: usize,
-    /// Whether improvements are reported. History mode defaults to regressions only
-    /// (scheduled drift watch); branch mode always reports both.
-    pub include_improvements: bool,
 }
 
 impl AnalysisContext {
     /// Whether a finding of the given `direction` is reported in this mode.
+    ///
+    /// The two modes ask differently shaped questions, so they keep different
+    /// directions (DESIGN §8.3, §8.5). History mode is a drift watch over the base
+    /// branch, where improvement over time is the expected background and only a
+    /// worsening warrants attention, so it is one-directional. Branch mode judges one
+    /// change against its base, where any movement is what the reader came for.
     fn keeps(&self, direction: Direction) -> bool {
         match self.mode {
-            AnalysisMode::History => {
-                direction == Direction::Regression || self.include_improvements
-            }
+            AnalysisMode::History => direction == Direction::Regression,
             AnalysisMode::Branch => true,
         }
     }
 
-    /// Whether this analysis reports improvements at all. `false` for the
-    /// regressions-only case (history mode's default drift watch), where an
-    /// always-zero improvement tally is noise the report omits.
+    /// Whether this analysis reports improvements at all. `false` in history mode's
+    /// regressions-only drift watch, where an always-zero improvement tally is noise
+    /// the report omits.
     #[must_use]
     pub fn reports_improvements(&self) -> bool {
         self.keeps(Direction::Improvement)
@@ -391,10 +166,10 @@ pub enum UnjudgedReason {
     /// longer part of the suite and was dropped before detection.
     Ghost,
     /// History mode: the series carries fewer than
-    /// [`min_series_points`](AnalysisConfig::min_series_points) points.
+    /// [`MIN_SERIES_POINTS`](noise_gates::MIN_SERIES_POINTS) points.
     TooFewPoints,
     /// History mode: a blessing re-baselined the series and fewer than
-    /// [`min_series_points`](AnalysisConfig::min_series_points) points have been
+    /// [`MIN_SERIES_POINTS`](noise_gates::MIN_SERIES_POINTS) points have been
     /// measured since, so the evidence the blessing left standing is too thin to
     /// judge.
     TooFewPointsSinceBlessing,
@@ -402,7 +177,7 @@ pub enum UnjudgedReason {
     /// context state to compare against the base.
     NotMeasuredOnBranch,
     /// Branch mode: the recent base window holds fewer than
-    /// [`min_series_points`](AnalysisConfig::min_series_points) base-ref commit
+    /// [`MIN_SERIES_POINTS`](noise_gates::MIN_SERIES_POINTS) base-ref commit
     /// levels, so there is not enough base evidence to judge the branch. A later
     /// regime split may compare against a shorter trailing regime, but only after
     /// this full-window evidence floor is met.
@@ -561,6 +336,29 @@ pub struct Detection {
     pub findings: Vec<Finding>,
     /// What the pass judged, and why it left the rest unjudged.
     pub census: SeriesCensus,
+    /// Base-window readings branch mode left out of a comparison, in series order.
+    ///
+    /// Discarding narrows the evidence a verdict rests on without declining anything, so
+    /// it is reported here rather than through the gate log, which speaks only of gates
+    /// that declined.
+    pub discarded: Vec<DiscardedBaseReading>,
+}
+
+/// One base-window reading branch mode left out of a comparison, and the series it
+/// belongs to.
+///
+/// Carries its own identity because discards are collected across the whole pass, well
+/// away from the series that produced them.
+#[derive(Clone, Debug)]
+pub struct DiscardedBaseReading {
+    /// The comparable discriminant set the series belongs to.
+    pub set: DiscriminantSet,
+    /// The benchmark identity.
+    pub id: BenchmarkId,
+    /// The category of the metric whose reading was discarded.
+    pub kind: MetricKind,
+    /// What was discarded, and what it stood clear of.
+    pub reading: DiscardedReading,
 }
 
 /// Which detector produced a finding.
@@ -809,7 +607,7 @@ fn direction_of(delta: f64) -> Direction {
 ///
 /// A move away from a (near-)zero baseline is proportionally unbounded; its sign
 /// is returned as a full-magnitude move so it ranks as major.
-fn relative_delta_of(delta: f64, baseline: f64) -> f64 {
+pub(super) fn relative_delta_of(delta: f64, baseline: f64) -> f64 {
     if baseline.abs() <= f64::EPSILON {
         delta.signum()
     } else {
@@ -824,13 +622,15 @@ fn relative_delta_of(delta: f64, baseline: f64) -> f64 {
 /// nanosecond is not worth acting on, and a fraction of an allocation cannot happen.
 /// The floors differ because those units do. This gates the *move*; the scatter of
 /// the sample it is judged against is bounded separately (see [`scatter_floor`]).
-fn absolute_floor(kind: MetricKind, config: &AnalysisConfig) -> f64 {
+fn absolute_floor(kind: MetricKind) -> f64 {
     match kind {
         MetricKind::InstructionCount
         | MetricKind::ConditionalBranches
-        | MetricKind::IndirectBranches => config.practical_absolute_count,
-        MetricKind::WallTime | MetricKind::ProcessorTime => config.practical_absolute_time,
-        MetricKind::AllocatedBytes | MetricKind::AllocationCount => config.practical_absolute_alloc,
+        | MetricKind::IndirectBranches => noise_gates::PRACTICAL_ABSOLUTE_COUNT,
+        MetricKind::WallTime | MetricKind::ProcessorTime => noise_gates::PRACTICAL_ABSOLUTE_TIME,
+        MetricKind::AllocatedBytes | MetricKind::AllocationCount => {
+            noise_gates::PRACTICAL_ABSOLUTE_ALLOC
+        }
     }
 }
 
@@ -846,13 +646,15 @@ fn absolute_floor(kind: MetricKind, config: &AnalysisConfig) -> f64 {
 ///
 /// The match is exhaustive on purpose: a new metric kind must state its own
 /// quantum rather than inherit one.
-fn scatter_floor(kind: MetricKind, config: &AnalysisConfig) -> f64 {
+fn scatter_floor(kind: MetricKind) -> f64 {
     match kind {
         MetricKind::InstructionCount
         | MetricKind::ConditionalBranches
-        | MetricKind::IndirectBranches => config.scatter_floor_count,
-        MetricKind::WallTime | MetricKind::ProcessorTime => config.scatter_floor_time,
-        MetricKind::AllocatedBytes | MetricKind::AllocationCount => config.scatter_floor_alloc,
+        | MetricKind::IndirectBranches => noise_gates::SCATTER_FLOOR_COUNT,
+        MetricKind::WallTime | MetricKind::ProcessorTime => noise_gates::SCATTER_FLOOR_TIME,
+        MetricKind::AllocatedBytes | MetricKind::AllocationCount => {
+            noise_gates::SCATTER_FLOOR_ALLOC
+        }
     }
 }
 
@@ -862,13 +664,8 @@ fn scatter_floor(kind: MetricKind, config: &AnalysisConfig) -> f64 {
 /// otherwise a move too small to mean anything would clear the relative floor and
 /// read as a regression on a small baseline. The gate composes with the relative
 /// floor by conjunction and can only *suppress*, never promote, a move.
-fn clears_absolute_floor(
-    series: &Series,
-    delta: f64,
-    config: &AnalysisConfig,
-    log: &mut StageLog<'_>,
-) -> bool {
-    let floor = absolute_floor(series.kind, config);
+fn clears_absolute_floor(series: &Series, delta: f64, log: &mut StageLog<'_>) -> bool {
+    let floor = absolute_floor(series.kind);
     log.numeric(
         Gate::AbsoluteFloor,
         delta.abs(),
@@ -1097,20 +894,15 @@ fn collect_scatter_residuals(sample: &[f64], residuals: &mut Vec<f64>) {
 }
 
 /// Whether `delta` stands clear of a series' own between-commit scatter: it must
-/// exceed `config.residual_noise_multiple` times the model's median absolute
-/// residual. A clean series has a near-zero residual, so any persistent move
-/// passes; a jittery one demands a move that stands out above its wobble. A missing
-/// residual (an empty model) is treated as no evidence of noise, so the move is
-/// trusted.
-fn exceeds_residual_noise(
-    delta: f64,
-    residual: Option<f64>,
-    config: &AnalysisConfig,
-    log: &mut StageLog<'_>,
-) -> bool {
+/// exceed [`RESIDUAL_NOISE_MULTIPLE`](noise_gates::RESIDUAL_NOISE_MULTIPLE) times the
+/// model's median absolute residual. A clean series has a near-zero residual, so any
+/// persistent move passes; a jittery one demands a move that stands out above its
+/// wobble. A missing residual (an empty model) is treated as no evidence of noise, so
+/// the move is trusted.
+fn exceeds_residual_noise(delta: f64, residual: Option<f64>, log: &mut StageLog<'_>) -> bool {
     match residual {
         Some(residual) => {
-            let band = config.residual_noise_multiple * residual;
+            let band = noise_gates::RESIDUAL_NOISE_MULTIPLE * residual;
             log.numeric(Gate::ResidualNoise, delta.abs(), band, delta.abs() > band)
         }
         None => true,
@@ -1204,12 +996,7 @@ fn arbitrate(
 /// gate that rejects a noisy-but-stable series whose levels interleave), and — when
 /// the engine reports per-point confidence intervals — separate the two regimes'
 /// intervals.
-fn evaluate_change_point(
-    series: &Series,
-    values: &[f64],
-    config: &AnalysisConfig,
-    log: &mut GateLog,
-) -> Option<Candidate> {
+fn evaluate_change_point(series: &Series, values: &[f64], log: &mut GateLog) -> Option<Candidate> {
     let mut log = log.stage(GateStage::ChangePoint);
     let points = &series.points;
     let n = points.len();
@@ -1226,8 +1013,8 @@ fn evaluate_change_point(
     if !log.numeric(
         Gate::MinRegime,
         count_to_f64(shortest),
-        count_to_f64(config.min_regime),
-        shortest >= config.min_regime,
+        count_to_f64(noise_gates::MIN_REGIME),
+        shortest >= noise_gates::MIN_REGIME,
     ) {
         return None;
     }
@@ -1247,29 +1034,29 @@ fn evaluate_change_point(
     if !log.numeric(
         Gate::Significance,
         mann_whitney,
-        config.change_alpha,
-        mann_whitney < config.change_alpha,
+        noise_gates::CHANGE_ALPHA,
+        mann_whitney < noise_gates::CHANGE_ALPHA,
     ) {
         return None;
     }
     if !log.numeric(
         Gate::RelativeFloor,
         relative_delta.abs(),
-        config.practical_relative,
-        relative_delta.abs() >= config.practical_relative,
+        noise_gates::PRACTICAL_RELATIVE,
+        relative_delta.abs() >= noise_gates::PRACTICAL_RELATIVE,
     ) {
         return None;
     }
-    if !clears_absolute_floor(series, delta, config, &mut log) {
+    if !clears_absolute_floor(series, delta, &mut log) {
         return None;
     }
-    if !exceeds_residual_noise(delta, step_model_residual(values, tau), config, &mut log) {
+    if !exceeds_residual_noise(delta, step_model_residual(values, tau), &mut log) {
         return None;
     }
     if !regimes_are_separated(
         mann_whitney_u,
         delta,
-        config.min_regime_separation,
+        noise_gates::MIN_REGIME_SEPARATION,
         &mut log,
     ) {
         return None;
@@ -1318,22 +1105,17 @@ fn evaluate_change_point(
 /// own absolute floor) and stand above the series'
 /// own residual scatter about the fitted line; where the engine reports confidence
 /// intervals it must additionally exceed a multiple of the per-measurement noise floor
-/// (`config.drift_noise_multiple` times the median half-width), so jitter does not read
-/// as a trend.
-fn evaluate_drift(
-    series: &Series,
-    values: &[f64],
-    config: &AnalysisConfig,
-    log: &mut GateLog,
-) -> Option<Candidate> {
+/// ([`DRIFT_NOISE_MULTIPLE`](noise_gates::DRIFT_NOISE_MULTIPLE) times the median
+/// half-width), so jitter does not read as a trend.
+fn evaluate_drift(series: &Series, values: &[f64], log: &mut GateLog) -> Option<Candidate> {
     let mut log = log.stage(GateStage::Drift);
     let points = &series.points;
     let n = points.len();
     if !log.numeric(
         Gate::MinSeriesPoints,
         count_to_f64(n),
-        count_to_f64(config.drift_min_points),
-        n >= config.drift_min_points,
+        count_to_f64(noise_gates::DRIFT_MIN_POINTS),
+        n >= noise_gates::DRIFT_MIN_POINTS,
     ) {
         return None;
     }
@@ -1342,8 +1124,8 @@ fn evaluate_drift(
     if !log.numeric(
         Gate::Significance,
         trend.p_value,
-        config.drift_alpha,
-        trend.p_value < config.drift_alpha,
+        noise_gates::DRIFT_ALPHA,
+        trend.p_value < noise_gates::DRIFT_ALPHA,
     ) {
         return None;
     }
@@ -1359,18 +1141,17 @@ fn evaluate_drift(
     if !log.numeric(
         Gate::RelativeFloor,
         relative_delta.abs(),
-        config.practical_relative,
-        relative_delta.abs() >= config.practical_relative,
+        noise_gates::PRACTICAL_RELATIVE,
+        relative_delta.abs() >= noise_gates::PRACTICAL_RELATIVE,
     ) {
         return None;
     }
-    if !clears_absolute_floor(series, delta, config, &mut log) {
+    if !clears_absolute_floor(series, delta, &mut log) {
         return None;
     }
     if !exceeds_residual_noise(
         delta,
         line_model_residual(values, slope, intercept),
-        config,
         &mut log,
     ) {
         return None;
@@ -1378,7 +1159,7 @@ fn evaluate_drift(
     // Where the engine reports dispersion, a trend must also clear the measurement
     // noise floor: the endpoints have to separate by more than the run-to-run
     // dispersion, or it is just jitter.
-    if !exceeds_noise_band(delta, points, config.drift_noise_multiple, &mut log) {
+    if !exceeds_noise_band(delta, points, noise_gates::DRIFT_NOISE_MULTIPLE, &mut log) {
         return None;
     }
 
@@ -1542,14 +1323,9 @@ fn commit_levels(points: &[&SeriesPoint]) -> Vec<f64> {
 ///
 /// A split whose trailing regime the prediction interval cannot characterise is not
 /// taken, so the window stays whole rather than becoming unjudgeable.
-fn current_base_regime_start(
-    series: &Series,
-    spans: &[CommitLevel],
-    config: &AnalysisConfig,
-    practical_floor: f64,
-) -> usize {
+fn current_base_regime_start(series: &Series, spans: &[CommitLevel]) -> usize {
     let levels: Vec<f64> = spans.iter().map(|span| span.level).collect();
-    let min_regime = config.min_regime.max(1);
+    let min_regime = noise_gates::MIN_REGIME.max(1);
     let Some(min_window) = min_regime.checked_mul(2) else {
         return 0;
     };
@@ -1568,7 +1344,7 @@ fn current_base_regime_start(
         let Some(split) = start.checked_add(change.index) else {
             continue;
         };
-        if base_regime_split_qualifies(series, suffix, change.index, config, practical_floor) {
+        if base_regime_split_qualifies(series, suffix, change.index) {
             latest_split = Some(latest_split.map_or(split, |latest| latest.max(split)));
         }
     }
@@ -1594,13 +1370,7 @@ fn current_base_regime_start(
 /// searching for the newest qualifying boundary, so its decisions describe the search
 /// rather than the verdict on the series, and recording them would bury the branch
 /// comparison's own gates under hundreds of rejected candidates.
-fn base_regime_split_qualifies(
-    series: &Series,
-    levels: &[f64],
-    split: usize,
-    config: &AnalysisConfig,
-    practical_floor: f64,
-) -> bool {
+fn base_regime_split_qualifies(series: &Series, levels: &[f64], split: usize) -> bool {
     let mut unobserved = GateLog::disabled();
     let mut log = unobserved.stage(GateStage::Branch);
     let Some(before) = levels.get(..split) else {
@@ -1609,11 +1379,11 @@ fn base_regime_split_qualifies(
     let Some(after) = levels.get(split..) else {
         return false;
     };
-    let min_regime = config.min_regime.max(1);
+    let min_regime = noise_gates::MIN_REGIME.max(1);
     if before.len() < min_regime || after.len() < min_regime {
         return false;
     }
-    if !regime_supports_prediction(series, after, config) {
+    if !regime_supports_prediction(series, after) {
         return false;
     }
     let Some(baseline) = stats::median(before) else {
@@ -1626,21 +1396,21 @@ fn base_regime_split_qualifies(
     if delta.abs() <= 0.0 {
         return false;
     }
-    if relative_delta_of(delta, baseline).abs() < practical_floor {
+    if relative_delta_of(delta, baseline).abs() < noise_gates::BRANCH_PRACTICAL_RELATIVE {
         return false;
     }
-    if !clears_absolute_floor(series, delta, config, &mut log) {
+    if !clears_absolute_floor(series, delta, &mut log) {
         return false;
     }
     let mann_whitney_u = stats::MannWhitneyU::new(before, after);
     let mann_whitney = mann_whitney_u.map_or(1.0, |ranked| ranked.two_sided_p_value());
-    if mann_whitney >= config.change_alpha {
+    if mann_whitney >= noise_gates::CHANGE_ALPHA {
         return false;
     }
     regimes_are_separated(
         mann_whitney_u,
         delta,
-        config.min_base_split_separation,
+        noise_gates::MIN_BASE_SPLIT_SEPARATION,
         &mut log,
     )
 }
@@ -1653,8 +1423,8 @@ fn base_regime_split_qualifies(
 /// verdict at all, so narrowing onto it would trade a comparison the full window can
 /// still make for silence. Narrowing exists to move the comparison onto the current
 /// level, not to withdraw it.
-fn regime_supports_prediction(series: &Series, levels: &[f64], config: &AnalysisConfig) -> bool {
-    if scatter_floor(series.kind, config) > 0.0 {
+fn regime_supports_prediction(series: &Series, levels: &[f64]) -> bool {
+    if scatter_floor(series.kind) > 0.0 {
         return true;
     }
     stats::sample_std_dev(levels).is_some_and(|scatter| scatter > 0.0)
@@ -1728,18 +1498,17 @@ fn prediction_interval_p(base: &[f64], latest: f64, scatter_floor: f64) -> Optio
 /// [`prediction_interval_p`] measures against, so the magnitude the finding reports
 /// is the one its p-value describes.
 ///
-/// The relative move must clear `practical_floor` and the metric's absolute floor,
-/// stand above the comparison sample's own residual scatter, and then be significant as
-/// a Student-t prediction interval. Where the engine reports per-point confidence
-/// intervals the base sample and context measurement must also clear their combined
-/// measurement noise band — an extra veto that can only *suppress* a candidate the
-/// other gates would have reported, never turn a non-finding into a finding.
+/// The relative move must clear [`BRANCH_PRACTICAL_RELATIVE`](noise_gates::BRANCH_PRACTICAL_RELATIVE)
+/// and the metric's absolute floor, stand above the comparison sample's own residual
+/// scatter, and then be significant as a Student-t prediction interval. Where the engine
+/// reports per-point confidence intervals the base sample and context measurement must
+/// also clear their combined measurement noise band — an extra veto that can only
+/// *suppress* a candidate the other gates would have reported, never turn a non-finding
+/// into a finding.
 fn compare_branch_levels(
     series: &Series,
     before: &[BaseLevel],
     after: &[&SeriesPoint],
-    config: &AnalysisConfig,
-    practical_floor: f64,
     commit: Option<String>,
     log: &mut GateLog,
 ) -> Option<Candidate> {
@@ -1754,7 +1523,7 @@ fn compare_branch_levels(
     }
     let relative_delta = relative_delta_of(delta, baseline);
 
-    let min_regime = config.min_regime.max(1);
+    let min_regime = noise_gates::MIN_REGIME.max(1);
     if !log.numeric(
         Gate::MinRegime,
         count_to_f64(before_values.len()),
@@ -1766,24 +1535,22 @@ fn compare_branch_levels(
     if !log.numeric(
         Gate::RelativeFloor,
         relative_delta.abs(),
-        practical_floor,
-        relative_delta.abs() >= practical_floor,
+        noise_gates::BRANCH_PRACTICAL_RELATIVE,
+        relative_delta.abs() >= noise_gates::BRANCH_PRACTICAL_RELATIVE,
     ) {
         return None;
     }
-    if !clears_absolute_floor(series, delta, config, &mut log) {
+    if !clears_absolute_floor(series, delta, &mut log) {
         return None;
     }
     if !exceeds_residual_noise(
         delta,
         sample_step_residual(&before_values, &after_values),
-        config,
         &mut log,
     ) {
         return None;
     }
-    let interval_p =
-        prediction_interval_p(&before_values, latest, scatter_floor(series.kind, config));
+    let interval_p = prediction_interval_p(&before_values, latest, scatter_floor(series.kind));
     if !log.boolean(Gate::BaseScatter, interval_p.is_some()) {
         return None;
     }
@@ -1791,8 +1558,8 @@ fn compare_branch_levels(
     if !log.numeric(
         Gate::Significance,
         effective_p,
-        config.change_alpha,
-        effective_p < config.change_alpha,
+        noise_gates::CHANGE_ALPHA,
+        effective_p < noise_gates::CHANGE_ALPHA,
     ) {
         return None;
     }
@@ -1801,7 +1568,13 @@ fn compare_branch_levels(
     }
     // Where per-point confidence intervals exist, require the move to also clear the
     // measurement noise band — a veto that can only suppress this candidate.
-    if !exceeds_branch_noise_band(delta, before, after, config.branch_noise_multiple, &mut log) {
+    if !exceeds_branch_noise_band(
+        delta,
+        before,
+        after,
+        noise_gates::BRANCH_NOISE_MULTIPLE,
+        &mut log,
+    ) {
         return None;
     }
 
@@ -1838,22 +1611,11 @@ fn compare_samples(
     series: &Series,
     before: &[&SeriesPoint],
     after: &[&SeriesPoint],
-    config: &AnalysisConfig,
-    practical_floor: f64,
-    _comparison_base_index: Option<usize>,
     log: &mut GateLog,
 ) -> Option<Candidate> {
     let before_levels = test_base_levels(before);
     let commit = after.last().and_then(|point| owned_commit(point));
-    compare_branch_levels(
-        series,
-        &before_levels,
-        after,
-        config,
-        practical_floor,
-        commit,
-        log,
-    )
+    compare_branch_levels(series, &before_levels, after, commit, log)
 }
 
 #[cfg(test)]
@@ -1884,56 +1646,63 @@ fn test_base_levels(points: &[&SeriesPoint]) -> Vec<BaseLevel> {
 /// in the base. A new benchmark introduced on the context (no base-ref points) or
 /// an empty context yields nothing, since there is no baseline to compare.
 ///
-/// The recent base window is first collapsed to per-commit levels and checked for
-/// enough evidence as a whole. If that window contains a genuine level shift, located
+/// The recent base window is first checked, exactly as recorded, for enough evidence as a
+/// whole. Only then is it narrowed: isolated measurement excursions are discarded (see
+/// [`excursions`]), and if what remains contains a genuine level shift, located
 /// with Pettitt and accepted only by the same Mann–Whitney significance, separation,
 /// relative-floor, and absolute-floor gates that make such a split trustworthy, the
-/// stale prefix before the newest accepted split is discarded. The prediction interval
+/// stale prefix before the newest accepted split is discarded too. The prediction interval
 /// then compares the context run against the trailing regime, moving its centre and
 /// scatter together onto the base level the context would merge into.
 fn evaluate_branch(
     series: &Series,
-    config: &AnalysisConfig,
     context_index: usize,
     log: &mut GateLog,
+    discarded: &mut Vec<DiscardedReading>,
 ) -> Option<Candidate> {
     // The base window arrives already capped to the recent `compare_window` levels
     // (attach_base_windows/`base_window_levels` own that truncation), so detection reads
     // it whole rather than re-slicing it here.
-    let base_window = &series.base_window[..];
-    let levels: Vec<f64> = base_window.iter().map(|level| level.value).collect();
-    let base_spans = level_spans(&levels);
+    //
+    // The evidence floor is applied to the window as recorded, before anything is
+    // discarded from it. That keeps this gate in exact correspondence with `testability`,
+    // which is what the census counts and what sizes the false-discovery family, and it
+    // is the same order the regime narrowing below already follows: the question this
+    // gate asks is whether the series has a recent base history at all, and it does.
+    let recorded_levels = series.base_window.len();
     if !log.stage(GateStage::Branch).numeric(
         Gate::MinBaseCommits,
-        count_to_f64(base_spans.len()),
-        count_to_f64(config.min_series_points),
-        base_spans.len() >= config.min_series_points,
+        count_to_f64(recorded_levels),
+        count_to_f64(noise_gates::MIN_SERIES_POINTS),
+        recorded_levels >= noise_gates::MIN_SERIES_POINTS,
     ) {
         return None;
     }
-    let comparison_start = current_base_regime_start(
-        series,
-        &base_spans,
-        config,
-        config.branch_practical_relative,
-    );
-    let comparison_base = base_window.get(comparison_start..).unwrap_or_default();
+    // Isolated measurement excursions come out before the window is searched for a regime
+    // boundary or compared against, because a reading that describes the runner rather
+    // than the code would otherwise both invite a spurious boundary and distort the
+    // comparison's centre and scatter. The context run's own level is part of that
+    // judgment, so it is established first.
     let latest_points = latest_context_run(&series.points, context_index);
+    // `latest_context_run` yields the single run a merge would land — at most one point —
+    // so the context level is that point's value directly, with no median over a one-element
+    // sample and no allocation on the analysis path. Ref: docs/performance.md, no allocation
+    // on the hot path.
+    let context_level = latest_points.first().map(|point| point.value);
+    let (base_window, removed) = excursions::cleaned_window(&series.base_window, context_level);
+    discarded.extend(removed);
+    let levels: Vec<f64> = base_window.iter().map(|level| level.value).collect();
+    let base_spans = level_spans(&levels);
+    let comparison_start = current_base_regime_start(series, &base_spans);
+    let comparison_base = base_window.get(comparison_start..).unwrap_or_default();
     let commit = latest_points.last().and_then(|point| owned_commit(point));
     // The newest base-ref point in the selected comparison sample is this series'
     // comparison base. Truncating stale levels changes the sample's start, not this
     // newest point, so lag classification still measures freshness against the base
     // state the context would merge into.
     let comparison_base_index = comparison_base.last().map(|level| level.topo_index);
-    let mut candidate = compare_branch_levels(
-        series,
-        comparison_base,
-        &latest_points,
-        config,
-        config.branch_practical_relative,
-        commit,
-        log,
-    )?;
+    let mut candidate =
+        compare_branch_levels(series, comparison_base, &latest_points, commit, log)?;
     candidate.finding.comparison_base_index = comparison_base_index;
     Some(candidate)
 }
@@ -1995,9 +1764,13 @@ pub fn short_commit(commit: &str) -> String {
 #[cfg(any(test, feature = "private-test-util"))]
 #[must_use]
 pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Detection {
-    let (candidates, census) = detect_all(series, context);
+    let (candidates, census, discarded) = detect_all(series, context);
     let findings = finalize_findings(candidates, &census, series, context);
-    Detection { findings, census }
+    Detection {
+        findings,
+        census,
+        discarded,
+    }
 }
 
 /// Evaluates every series and returns the surviving findings, ranked
@@ -2009,10 +1782,10 @@ pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Detection {
 /// the branch's latest state against its base. A series that cannot be judged (see
 /// [`testability`]) is never evaluated and is accounted for in the returned
 /// [`SeriesCensus`] instead.
-/// Surviving candidates pass a Benjamini–Hochberg false-discovery filter at
-/// `config.fdr_q`. Findings are then filtered to the directions the mode reports and
-/// ordered by descending relative move, then method, then a stable identity
-/// tie-break.
+/// Surviving candidates are screened to the directions the mode reports and then pass
+/// a Benjamini–Hochberg false-discovery filter at [`FDR_Q`](noise_gates::FDR_Q), so
+/// every reported finding is one the correction rejected. Findings are ordered by
+/// descending relative move, then method, then a stable identity tie-break.
 ///
 /// Detection is per-series independent, so the series are split into one balanced
 /// contiguous chunk per worker and each chunk runs on its own blocking task via
@@ -2030,9 +1803,13 @@ pub async fn find_changes_spawned(
     context: AnalysisContext,
     spawner: &Spawner,
 ) -> Detection {
-    let (candidates, census) = detect_all_spawned(&series, context, spawner).await;
+    let (candidates, census, discarded) = detect_all_spawned(&series, context, spawner).await;
     let findings = finalize_findings(candidates, &census, &series, &context);
-    Detection { findings, census }
+    Detection {
+        findings,
+        census,
+        discarded,
+    }
 }
 
 /// Whether `series` carries enough evidence for its mode's detector to reach a
@@ -2044,13 +1821,12 @@ pub async fn find_changes_spawned(
 /// [`Judged`](Testability::Judged).
 #[must_use]
 pub fn testability(series: &Series, context: &AnalysisContext) -> Testability {
-    let config = &context.config;
     match context.mode {
         AnalysisMode::History => {
             // The detectors run on the post-blessing window (see `active_view`), so
             // that window's length — not the whole series' — is the evidence.
             let active_points = series.points.len().saturating_sub(series.active_start);
-            if active_points >= config.min_series_points {
+            if active_points >= noise_gates::MIN_SERIES_POINTS {
                 Testability::Judged
             } else if series.active_start > 0 {
                 Testability::Unjudged(UnjudgedReason::TooFewPointsSinceBlessing)
@@ -2063,12 +1839,13 @@ pub fn testability(series: &Series, context: &AnalysisContext) -> Testability {
                 return Testability::Unjudged(UnjudgedReason::NotMeasuredOnBranch);
             }
             // Testability asks whether the full recent base window contains enough
-            // evidence to run a branch comparison at all. Detection may then narrow to
-            // a `min_regime`-sized trailing regime after an accepted base-side shift;
-            // that does not make this census reason untruthful, because the evidence
-            // floor was met before any history was discarded.
-            let base_points = series.base_window.len().min(config.compare_window);
-            if base_points < config.min_series_points {
+            // evidence to run a branch comparison at all. Detection may then narrow it —
+            // discarding isolated measurement excursions, and narrowing to a
+            // `min_regime`-sized trailing regime after an accepted base-side shift. That
+            // does not make this census reason untruthful, because the evidence floor was
+            // met before any of it was discarded.
+            let base_points = series.base_window.len().min(noise_gates::COMPARE_WINDOW);
+            if base_points < noise_gates::MIN_SERIES_POINTS {
                 return Testability::Unjudged(UnjudgedReason::TooFewBaseCommits);
             }
             Testability::Judged
@@ -2090,7 +1867,20 @@ fn finalize_findings(
     series: &[Series],
     context: &AnalysisContext,
 ) -> Vec<Finding> {
-    let config = &context.config;
+    // Screen to the directions this mode reports *before* the correction, so that every
+    // hypothesis the correction rejects is a finding the report goes on to show.
+    // Correcting over both directions and discarding one afterwards would attach the
+    // false-discovery guarantee to a set larger than the reported one: discarding true
+    // improvements shrinks the denominator the rate is defined over while leaving false
+    // regressions in place, so the regressions actually shown would inherit no bound.
+    // Screening first costs only power, and it is conservative: the detectors report
+    // two-sided p-values from symmetric nulls, so for an unchanged series the chance of
+    // raising a candidate in a direction named in advance is at most half the chance of
+    // raising one either way. The p-values the correction sees therefore overstate the
+    // risk of what it admits, and the bound holds with room to spare.
+    // Ref: DESIGN.md §8.3.
+    let mut candidates = candidates;
+    candidates.retain(|candidate| context.keeps(candidate.finding.direction));
 
     // Control the false-discovery rate across every series that was actually judged,
     // not merely those that raised a candidate. Feeding the filter only its own
@@ -2100,13 +1890,12 @@ fn finalize_findings(
     // what the census counted as judged.
     let family_size = census.judged();
     let candidate_p: Vec<f64> = candidates.iter().map(|candidate| candidate.bh_p).collect();
-    let keep = stats::benjamini_hochberg(&candidate_p, config.fdr_q, family_size);
+    let keep = stats::benjamini_hochberg(&candidate_p, noise_gates::FDR_Q, family_size);
     let mut keep_iter = keep.into_iter();
 
     // `candidates` and `candidate_p` were built in the same order, so advancing
-    // `keep_iter` for each candidate keeps the mask aligned. A surviving finding that
-    // the mode keeps materialises its charting points here — a dropped candidate never
-    // pays for them.
+    // `keep_iter` for each candidate keeps the mask aligned. A surviving finding
+    // materialises its charting points here — a dropped candidate never pays for them.
     let mut findings: Vec<Finding> = candidates
         .into_iter()
         .filter_map(|candidate| {
@@ -2118,9 +1907,6 @@ fn finalize_findings(
                 source_index,
                 ..
             } = candidate;
-            if !context.keeps(finding.direction) {
-                return None;
-            }
             let source = series
                 .get(source_index)
                 .expect("the source index was assigned from this series slice");
@@ -2148,7 +1934,10 @@ fn finalize_findings(
 /// order — the order [`finalize_findings`] relies on — and the census of what was
 /// judged.
 #[cfg(any(test, feature = "private-test-util"))]
-fn detect_all(series: &[Series], context: &AnalysisContext) -> (Vec<Candidate>, SeriesCensus) {
+fn detect_all(
+    series: &[Series],
+    context: &AnalysisContext,
+) -> (Vec<Candidate>, SeriesCensus, Vec<DiscardedBaseReading>) {
     detect_range(series, 0..series.len(), context, &mut GateLog::disabled())
 }
 
@@ -2166,7 +1955,7 @@ async fn detect_all_spawned(
     series: &Arc<[Series]>,
     context: AnalysisContext,
     spawner: &Spawner,
-) -> (Vec<Candidate>, SeriesCensus) {
+) -> (Vec<Candidate>, SeriesCensus, Vec<DiscardedBaseReading>) {
     let len = series.len();
     let workers = worker_count(len);
 
@@ -2188,12 +1977,14 @@ async fn detect_all_spawned(
     // must be absorbed or the family would shrink to whatever one worker saw.
     let mut candidates = Vec::new();
     let mut census = SeriesCensus::default();
+    let mut discarded = Vec::new();
     for handle in handles {
-        let (chunk_candidates, chunk_census) = handle.await;
+        let (chunk_candidates, chunk_census, chunk_discarded) = handle.await;
         candidates.extend(chunk_candidates);
         census.merge(&chunk_census);
+        discarded.extend(chunk_discarded);
     }
-    (candidates, census)
+    (candidates, census, discarded)
 }
 
 /// Detects the series in `range`, returning the raised candidates in index order and
@@ -2207,9 +1998,10 @@ fn detect_range(
     range: Range<usize>,
     context: &AnalysisContext,
     log: &mut GateLog,
-) -> (Vec<Candidate>, SeriesCensus) {
+) -> (Vec<Candidate>, SeriesCensus, Vec<DiscardedBaseReading>) {
     let mut candidates = Vec::new();
     let mut census = SeriesCensus::default();
+    let mut discarded = Vec::new();
     for index in range {
         let one = series
             .get(index)
@@ -2219,12 +2011,12 @@ fn detect_range(
         // Judging and counting are the same decision, so a series the census reports
         // as unjudged provably never reached a detector.
         if verdict.is_judged()
-            && let Some(candidate) = detect_one(index, one, context, log)
+            && let Some(candidate) = detect_one(index, one, context, log, &mut discarded)
         {
             candidates.push(candidate);
         }
     }
-    (candidates, census)
+    (candidates, census, discarded)
 }
 
 /// Runs the mode-appropriate detector on the series at `index` and returns its
@@ -2242,22 +2034,32 @@ fn detect_one(
     one: &Series,
     context: &AnalysisContext,
     log: &mut GateLog,
+    discarded: &mut Vec<DiscardedBaseReading>,
 ) -> Option<Candidate> {
-    let config = &context.config;
     let candidate = match context.mode {
         AnalysisMode::History => {
             let active = active_view(one);
             // The point values are projected once here and shared by every history
             // detector, rather than each rebuilding the same `Vec<f64>`.
             let values: Vec<f64> = active.points.iter().map(|point| point.value).collect();
-            let change = evaluate_change_point(&active, &values, config, log);
-            let drift = evaluate_drift(&active, &values, config, log);
+            let change = evaluate_change_point(&active, &values, log);
+            let drift = evaluate_drift(&active, &values, log);
             arbitrate(&values, change, drift).map(|mut candidate| {
                 stamp_history(&mut candidate.finding, one);
                 candidate
             })
         }
-        AnalysisMode::Branch => evaluate_branch(one, config, context.tip_index, log),
+        AnalysisMode::Branch => {
+            let mut readings = Vec::new();
+            let candidate = evaluate_branch(one, context.tip_index, log, &mut readings);
+            discarded.extend(readings.into_iter().map(|reading| DiscardedBaseReading {
+                set: one.set.clone(),
+                id: one.id.clone(),
+                kind: one.kind,
+                reading,
+            }));
+            candidate
+        }
     };
     candidate.map(|mut candidate| {
         candidate.source_index = index;
@@ -2285,7 +2087,7 @@ fn detect_one(
 pub fn evaluate_with_log(series: &Series, context: &AnalysisContext) -> (Option<Finding>, GateLog) {
     let mut log = GateLog::recording();
     let batch = slice::from_ref(series);
-    let (candidates, census) = detect_range(batch, 0..batch.len(), context, &mut log);
+    let (candidates, census, _) = detect_range(batch, 0..batch.len(), context, &mut log);
     let findings = finalize_findings(candidates, &census, batch, context);
     (findings.into_iter().next(), log)
 }
@@ -2309,8 +2111,10 @@ mod tests {
     use super::*;
     use crate::detect::gate_log::GateOutcome;
     use crate::detect::noise_gates::{
-        COMPARE_WINDOW, DRIFT_MIN_POINTS, DRIFT_NOISE_MULTIPLE, MIN_REGIME, MIN_SERIES_POINTS,
-        PRACTICAL_ABSOLUTE_COUNT, PRACTICAL_RELATIVE, RESIDUAL_NOISE_MULTIPLE,
+        BRANCH_PRACTICAL_RELATIVE, CHANGE_ALPHA, COMPARE_WINDOW, DRIFT_ALPHA, DRIFT_MIN_POINTS,
+        DRIFT_NOISE_MULTIPLE, EXCURSION_MAX_REMOVALS, FDR_Q, MIN_BASE_SPLIT_SEPARATION, MIN_REGIME,
+        MIN_REGIME_SEPARATION, MIN_SERIES_POINTS, PRACTICAL_ABSOLUTE_COUNT, PRACTICAL_RELATIVE,
+        RESIDUAL_NOISE_MULTIPLE,
     };
     use crate::detect::recorded::{
         STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_HIGH, STATIONARY_BIMODAL_NOISE,
@@ -2498,22 +2302,18 @@ mod tests {
 
     /// Runs the branch-mode detector for one fixture, using the fixture's newest
     /// topological point as the context commit.
-    fn evaluate_branch(
-        series: &Series,
-        config: &AnalysisConfig,
-        log: &mut GateLog,
-    ) -> Option<Candidate> {
+    fn evaluate_branch(series: &Series, log: &mut GateLog) -> Option<Candidate> {
         let context_index = max_topo_index(slice::from_ref(series));
+        let mut discarded = Vec::new();
         if series.base_window.is_empty() {
             let mut series = series.clone();
             attach_test_base_windows(slice::from_mut(&mut series), context_index.checked_sub(1));
-            return super::evaluate_branch(&series, config, context_index, log);
+            return super::evaluate_branch(&series, context_index, log, &mut discarded);
         }
-        super::evaluate_branch(series, config, context_index, log)
+        super::evaluate_branch(series, context_index, log, &mut discarded)
     }
 
-    /// Runs the history-mode detector with default config, reporting both
-    /// directions.
+    /// Runs the history-mode detector under the fixed detection policy.
     fn changes(series: &[Series]) -> Vec<Finding> {
         find_changes(series, &history_context(series)).findings
     }
@@ -2522,11 +2322,9 @@ mod tests {
     fn history_context(series: &[Series]) -> AnalysisContext {
         AnalysisContext {
             mode: AnalysisMode::History,
-            config: AnalysisConfig::default(),
             merge_base_index: None,
             base_ref_index: None,
             tip_index: max_topo_index(series),
-            include_improvements: true,
         }
     }
 
@@ -2576,11 +2374,9 @@ mod tests {
 
         let context = AnalysisContext {
             mode: AnalysisMode::History,
-            config: AnalysisConfig::default(),
             merge_base_index: None,
             base_ref_index: None,
             tip_index: max_topo_index(&series),
-            include_improvements: true,
         };
 
         let serial = find_changes(&series, &context);
@@ -2744,16 +2540,15 @@ mod tests {
 
     #[test]
     fn exceeds_residual_noise_requires_the_move_to_clear_the_scatter_band() {
-        let config = AnalysisConfig::default();
         let mut unobserved = GateLog::disabled();
         let mut log = unobserved.stage(GateStage::ChangePoint);
         // A residual of 1.0 puts the band at 3x = 3.0. A move inside the band is
         // not clear of it, a move exactly at the band is still not (the comparison
         // is strict), a move above it is, and a missing residual trusts the move.
-        assert!(!exceeds_residual_noise(1.0, Some(1.0), &config, &mut log));
-        assert!(!exceeds_residual_noise(3.0, Some(1.0), &config, &mut log));
-        assert!(exceeds_residual_noise(3.5, Some(1.0), &config, &mut log));
-        assert!(exceeds_residual_noise(0.0, None, &config, &mut log));
+        assert!(!exceeds_residual_noise(1.0, Some(1.0), &mut log));
+        assert!(!exceeds_residual_noise(3.0, Some(1.0), &mut log));
+        assert!(exceeds_residual_noise(3.5, Some(1.0), &mut log));
+        assert!(exceeds_residual_noise(0.0, None, &mut log));
     }
 
     #[test]
@@ -2823,107 +2618,81 @@ mod tests {
     #[test]
     fn change_point_rejects_a_single_point_regime() {
         // Pettitt splits at tau=1, leaving a one-point before regime (below
-        // min_regime) against a full-size after regime. The size guard rejects when
-        // *either* regime is too small, so a `||`->`&&` slip would wrongly admit this
-        // lopsided split. A permissive rank-test threshold isolates the guard: only
-        // the size check keeps it out.
-        let config = AnalysisConfig {
-            change_alpha: 0.5,
-            ..AnalysisConfig::default()
-        };
+        // min_regime) against a full-size after regime. The size guard judges the
+        // *shorter* regime, so a `.min()`->`.max()` slip would read the full after
+        // regime and wrongly admit this lopsided split. The recorded chain names the
+        // persistence gate as the one that rejects it: it runs before significance and
+        // short-circuits, so the silence is unambiguously the size check's.
         let mut values = vec![100.0];
         values.extend(std::iter::repeat_n(130.0, MIN_REGIME));
         let series = series_of(&values);
-        assert!(
-            evaluate_change_point(
-                &series,
-                &values_of(&series),
-                &config,
-                &mut GateLog::disabled()
-            )
-            .is_none()
+        let mut log = GateLog::recording();
+        assert!(evaluate_change_point(&series, &values_of(&series), &mut log).is_none());
+        assert_eq!(
+            log.declined_by_stage(GateStage::ChangePoint),
+            Some(Gate::MinRegime),
         );
     }
 
     #[test]
     fn change_point_within_its_own_residual_scatter_is_suppressed() {
-        // A rank-significant step (medians 102 -> 132, delta 30) whose regimes each
-        // wobble by 2. Under the default residual multiple the move stands clear of
-        // that scatter and is flagged; a deliberately high multiple pushes the noise
-        // band above the move, so only the residual gate rejects it (every earlier
-        // gate — persistence, Mann–Whitney, practical floor — still passes).
-        let series = series_of(&[
+        // A rank-significant step whose regimes each wobble by 2 stands clear of that
+        // scatter under the fixed residual multiple, so it is flagged: medians 102 ->
+        // 132, a move of 30 against a residual band of 6.
+        let clear = series_of(&[
             100.0, 104.0, 100.0, 104.0, 102.0, 130.0, 134.0, 130.0, 134.0, 132.0,
         ]);
         assert!(
-            evaluate_change_point(
-                &series,
-                &values_of(&series),
-                &AnalysisConfig::default(),
-                &mut GateLog::disabled()
-            )
-            .is_some()
+            evaluate_change_point(&clear, &values_of(&clear), &mut GateLog::disabled()).is_some()
         );
-        let config = AnalysisConfig {
-            residual_noise_multiple: 20.0,
-            ..AnalysisConfig::default()
-        };
-        assert!(
-            evaluate_change_point(
-                &series,
-                &values_of(&series),
-                &config,
-                &mut GateLog::disabled()
-            )
-            .is_none()
+
+        // The mirror: a cleanly separated step whose regimes wobble by 10 around
+        // medians only 30 apart. The move (30) does not exceed its residual band
+        // (RESIDUAL_NOISE_MULTIPLE x 10 = 30), so the residual gate suppresses it even
+        // though the regimes never interleave. The recorded chain attributes the
+        // silence to that gate, with every earlier gate (persistence, significance,
+        // practical floors) passing.
+        let buried = series_of(&[
+            90.0, 90.0, 100.0, 110.0, 110.0, 120.0, 120.0, 130.0, 140.0, 140.0,
+        ]);
+        let mut log = GateLog::recording();
+        assert!(evaluate_change_point(&buried, &values_of(&buried), &mut log).is_none());
+        assert_eq!(
+            log.declined_by_stage(GateStage::ChangePoint),
+            Some(Gate::ResidualNoise),
         );
     }
 
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "asserts a strict `<` at the exact recorded p-value, which needs bit-identical \
-                  recomputation of the rank statistic; Miri's float nondeterminism perturbs it"
-    )]
-    fn change_point_significance_is_a_strict_boundary() {
-        // The rank-test gate is a strict `<`: a candidate whose p-value lands exactly on
-        // the threshold is rejected. Rather than hard-code that p, take it from the
-        // detector's own recording at the default alpha, then set alpha to it — so a
-        // `<`->`<=` slip that admits the boundary turns this reported step silent.
+    fn change_point_significance_is_measured_against_the_fixed_alpha() {
+        // The rank-test gate compares the Mann–Whitney p-value against the fixed
+        // CHANGE_ALPHA. A clean step reports, and its recorded p sits strictly below
+        // that alpha — so the gate's comparison and its direction are pinned without
+        // relying on a per-run alpha. (The `<`-vs-`<=` distinction at a p landing
+        // exactly on alpha is not reachable: the rank statistic's p-values are discrete
+        // and never equal 0.05, so the shipped policy never sees that boundary.)
         let series = series_of(&[
             100.0, 104.0, 100.0, 104.0, 102.0, 130.0, 134.0, 130.0, 134.0, 132.0,
         ]);
         let mut log = GateLog::recording();
         assert!(
-            evaluate_change_point(
-                &series,
-                &values_of(&series),
-                &AnalysisConfig::default(),
-                &mut log
-            )
-            .is_some(),
-            "the fixture must report at the default alpha"
+            evaluate_change_point(&series, &values_of(&series), &mut log).is_some(),
+            "the fixture must report under the fixed alpha"
         );
-        let (p, _) = gate_value(&log, Gate::Significance).expect("the significance gate ran");
-        let at_boundary = AnalysisConfig {
-            change_alpha: p,
-            ..AnalysisConfig::default()
-        };
+        let (p, alpha) = gate_value(&log, Gate::Significance).expect("the significance gate ran");
+        assert_eq!(
+            alpha, CHANGE_ALPHA,
+            "the gate compares against the fixed alpha"
+        );
         assert!(
-            evaluate_change_point(
-                &series,
-                &values_of(&series),
-                &at_boundary,
-                &mut GateLog::disabled()
-            )
-            .is_none(),
-            "a p-value exactly at alpha must be rejected by the strict gate"
+            p < CHANGE_ALPHA,
+            "the reported step's p sits below alpha: {p}"
         );
     }
 
     #[test]
     fn regimes_are_separated_rejects_interleaved_levels() {
-        let floor = AnalysisConfig::default().min_regime_separation;
+        let floor = MIN_REGIME_SEPARATION;
         let mut unobserved = GateLog::disabled();
         let mut log = unobserved.stage(GateStage::ChangePoint);
         // A clean rise: every after-point exceeds every before-point (superiority 1).
@@ -2970,7 +2739,6 @@ mod tests {
         // One overlapping split, judged against both floors: the reporting floor admits
         // it and the stricter base-split floor rejects it. This is what makes the two
         // floors distinct policies rather than one constant read from two places.
-        let config = AnalysisConfig::default();
         let mut unobserved = GateLog::disabled();
         let mut log = unobserved.stage(GateStage::Branch);
         // Seven before-levels against five after-levels, with one before-level lying
@@ -2982,13 +2750,13 @@ mod tests {
         assert!(regimes_are_separated(
             ranked,
             -20.0,
-            config.min_regime_separation,
+            MIN_REGIME_SEPARATION,
             &mut log,
         ));
         assert!(regimes_are_separated(
             ranked,
             -20.0,
-            config.min_base_split_separation,
+            MIN_BASE_SPLIT_SEPARATION,
             &mut log,
         ));
 
@@ -2999,13 +2767,13 @@ mod tests {
         assert!(regimes_are_separated(
             ranked,
             -20.0,
-            config.min_regime_separation,
+            MIN_REGIME_SEPARATION,
             &mut log,
         ));
         assert!(!regimes_are_separated(
             ranked,
             -20.0,
-            config.min_base_split_separation,
+            MIN_BASE_SPLIT_SEPARATION,
             &mut log,
         ));
     }
@@ -3018,26 +2786,16 @@ mod tests {
         // dominant mode, collapsing the median-absolute residual so the residual gate
         // is fooled and (before this gate) a spurious "regression via change point"
         // was emitted. The regimes overlap heavily (probability of superiority ~0.72),
-        // so the separation gate rejects it. Dropping the separation floor to zero
-        // admits the split again, proving that gate is the sole reason it is silent.
+        // so the separation gate rejects it — and the recorded chain attributes the
+        // silence to exactly that gate: every earlier gate passes and RegimeSeparation
+        // is the first to decline.
         let values = STATIONARY_BIMODAL_NOISE.to_vec();
         let series = series_of(&values);
-        let permissive = AnalysisConfig {
-            min_regime_separation: 0.0,
-            ..AnalysisConfig::default()
-        };
-        assert!(
-            evaluate_change_point(&series, &values, &permissive, &mut GateLog::disabled())
-                .is_some()
-        );
-        assert!(
-            evaluate_change_point(
-                &series,
-                &values,
-                &AnalysisConfig::default(),
-                &mut GateLog::disabled()
-            )
-            .is_none()
+        let mut log = GateLog::recording();
+        assert!(evaluate_change_point(&series, &values, &mut log).is_none());
+        assert_eq!(
+            log.declined_by_stage(GateStage::ChangePoint),
+            Some(Gate::RegimeSeparation),
         );
     }
 
@@ -3117,22 +2875,16 @@ mod tests {
         // smaller floor rather than an exemption. This sub-nanosecond wall-time move
         // clears the relative floor, separates cleanly and carries disjoint
         // intervals, yet 0.63 ns of movement is below the resolution any wall-clock
-        // measurement can be trusted at, so it stays silent. Zeroing that one floor
-        // admits it again, proving the floor is the sole reason for the silence.
+        // measurement can be trusted at, so it stays silent — and the recorded chain
+        // attributes that silence to the absolute floor: every other gate passes and
+        // AbsoluteFloor is the first to decline.
         let series = wall_series(&step_values(2.49, 3.12), 0.05);
         judged_but_silent(slice::from_ref(&series));
-        let permissive = AnalysisConfig {
-            practical_absolute_time: 0.0,
-            ..AnalysisConfig::default()
-        };
-        assert!(
-            evaluate_change_point(
-                &series,
-                &values_of(&series),
-                &permissive,
-                &mut GateLog::disabled()
-            )
-            .is_some()
+        let mut log = GateLog::recording();
+        assert!(evaluate_change_point(&series, &values_of(&series), &mut log).is_none());
+        assert_eq!(
+            log.declined_by_stage(GateStage::ChangePoint),
+            Some(Gate::AbsoluteFloor),
         );
     }
 
@@ -3282,29 +3034,21 @@ mod tests {
     #[test]
     fn noisy_step_exactly_at_the_practical_floor_is_reported() {
         // The practical-magnitude floor is a strict `<` rejection, so a step whose
-        // relative move EQUALS the floor must still be reported. Pin the floor to
-        // exactly this series' relative delta (30/100) to exercise that boundary: a
-        // `<=` slip would suppress an at-floor regression.
+        // relative move EQUALS the fixed floor must still be reported — even on a noisy
+        // metric that carries confidence intervals. A wall-time step of 100 -> 103 is
+        // exactly PRACTICAL_RELATIVE (3%), and a `<=` slip would suppress this at-floor
+        // regression.
         let series = wall_series(
             &[
-                98.0, 100.0, 102.0, 99.0, 101.0, 128.0, 130.0, 132.0, 129.0, 131.0,
+                100.0, 100.0, 100.0, 100.0, 100.0, 103.0, 103.0, 103.0, 103.0, 103.0,
             ],
-            2.0,
+            0.5,
         );
-        let config = AnalysisConfig {
-            practical_relative: 30.0_f64 / 100.0,
-            ..AnalysisConfig::default()
-        };
-        let candidate = evaluate_change_point(
-            &series,
-            &values_of(&series),
-            &config,
-            &mut GateLog::disabled(),
-        )
-        .unwrap();
+        let candidate =
+            evaluate_change_point(&series, &values_of(&series), &mut GateLog::disabled()).unwrap();
         assert_eq!(candidate.finding.baseline, 100.0);
-        assert_eq!(candidate.finding.latest, 130.0);
-        assert_eq!(candidate.finding.relative_delta, config.practical_relative);
+        assert_eq!(candidate.finding.latest, 103.0);
+        assert_eq!(candidate.finding.relative_delta, PRACTICAL_RELATIVE);
     }
 
     #[test]
@@ -3469,7 +3213,7 @@ mod tests {
         placed_series_of_kind(points, MetricKind::InstructionCount)
     }
 
-    /// Runs the branch-mode detector with default config and the given merge-base.
+    /// Runs the branch-mode detector for the given merge-base.
     fn branch_changes(series: &[Series], merge_base_index: Option<usize>) -> Vec<Finding> {
         let mut series = series.to_vec();
         attach_test_base_windows(&mut series, merge_base_index);
@@ -3480,11 +3224,9 @@ mod tests {
     fn branch_context(series: &[Series], merge_base_index: Option<usize>) -> AnalysisContext {
         AnalysisContext {
             mode: AnalysisMode::Branch,
-            config: AnalysisConfig::default(),
             merge_base_index,
             base_ref_index: merge_base_index,
             tip_index: max_topo_index(series),
-            include_improvements: false,
         }
     }
 
@@ -3493,14 +3235,13 @@ mod tests {
         let Some(merge_base_index) = merge_base_index else {
             return;
         };
-        let config = AnalysisConfig::default();
         for one in series {
             let base: Vec<&SeriesPoint> = one
                 .points
                 .iter()
                 .filter(|point| !point.dirty && point.topo_index <= merge_base_index)
                 .collect();
-            let base = recent_commits(&base, config.compare_window);
+            let base = recent_commits(&base, COMPARE_WINDOW);
             one.base_window = test_base_levels(&base);
         }
     }
@@ -3563,8 +3304,7 @@ mod tests {
         );
         let levels: Vec<f64> = series.base_window.iter().map(|level| level.value).collect();
         let spans = level_spans(&levels);
-        let config = AnalysisConfig::default();
-        current_base_regime_start(&series, &spans, &config, config.branch_practical_relative)
+        current_base_regime_start(&series, &spans)
     }
 
     /// A base-branch run of [`MIN_SERIES_POINTS`] commits whose levels alternate
@@ -3622,8 +3362,7 @@ mod tests {
 
     #[test]
     fn branch_mode_reports_an_improvement_over_the_base() {
-        // Branch mode always reports both directions, regardless of
-        // `include_improvements` (which only governs history mode).
+        // Branch mode reports both directions; only history is regressions-only.
         let series = branch_over_base(100.0, 70.0, 3);
         let finding = only(branch_changes(&[series], Some(base_merge_base())));
         assert_eq!(finding.direction, Direction::Improvement);
@@ -3636,22 +3375,15 @@ mod tests {
         // A quantized context run 4 counts above a small base (60 -> 64) clears the 5%
         // branch relative floor (6.7%) and the residual gate, but not the absolute
         // floor of 5, so it is suppressed. Without the gate this single-quantum-scale
-        // move would flag on the pull request. Dropping the floor far below the move
-        // admits it again, so the floor is the sole reason for the silence.
+        // move would flag on the pull request. The recorded chain attributes the
+        // silence to the absolute floor, with every earlier gate passing.
         let series = branch_over_base(60.0, 64.0, 3);
-        assert!(
-            evaluate_branch(
-                &series,
-                &AnalysisConfig::default(),
-                &mut GateLog::disabled()
-            )
-            .is_none()
+        let mut log = GateLog::recording();
+        assert!(evaluate_branch(&series, &mut log).is_none());
+        assert_eq!(
+            log.declined_by_stage(GateStage::Branch),
+            Some(Gate::AbsoluteFloor),
         );
-        let permissive = AnalysisConfig {
-            practical_absolute_count: 0.1,
-            ..AnalysisConfig::default()
-        };
-        assert!(evaluate_branch(&series, &permissive, &mut GateLog::disabled()).is_some());
     }
 
     #[test]
@@ -3659,21 +3391,15 @@ mod tests {
         // A count moves in whole units, so a base window can repeat one integer and
         // have a sample standard deviation of exactly zero. The metric's quantum — one
         // count — stands in for that missing scatter, which is the only reason a
-        // verdict can be formed at all: with the quantum set to zero the standard
-        // error collapses and the same unmistakable 30-count move yields nothing.
-        let config = AnalysisConfig::default();
+        // verdict can be formed at all: the floored quantum gives the flat base a usable
+        // standard error, so the same unmistakable 30-count move is reported.
         assert_eq!(
             stats::sample_std_dev(&[100.0; MIN_SERIES_POINTS]),
             Some(0.0),
             "the base window must be perfectly flat for this to test the floor"
         );
         let series = branch_over_base(100.0, 130.0, 1);
-        assert!(evaluate_branch(&series, &config, &mut GateLog::disabled()).is_some());
-        let without_quantum = AnalysisConfig {
-            scatter_floor_count: 0.0,
-            ..config
-        };
-        assert!(evaluate_branch(&series, &without_quantum, &mut GateLog::disabled()).is_none());
+        assert!(evaluate_branch(&series, &mut GateLog::disabled()).is_some());
     }
 
     #[test]
@@ -3683,21 +3409,14 @@ mod tests {
         // one-byte quantum keeps the move judgeable. It is a full-scale move against a
         // zero baseline, 48 bytes clears the one-byte absolute floor, and the floored
         // scatter puts the context run 45.8 standard errors out
-        // (48 / (1 * sqrt(1 + 1/10))), so it is reported decisively. Removing the
-        // quantum silences it, which is exactly the regression shape this floor exists
-        // for.
+        // (48 / (1 * sqrt(1 + 1/10))), so it is reported decisively — exactly the
+        // regression shape this floor exists for.
         let series = branch_over_base_of_kind(0.0, 48.0, 1, MetricKind::AllocatedBytes);
-        let config = AnalysisConfig::default();
-        let candidate = evaluate_branch(&series, &config, &mut GateLog::disabled())
-            .expect("48 bytes is a move");
+        let candidate =
+            evaluate_branch(&series, &mut GateLog::disabled()).expect("48 bytes is a move");
         assert_eq!(candidate.finding.direction, Direction::Regression);
         assert_eq!(candidate.finding.latest, 48.0);
-        assert!(candidate.bh_p < config.change_alpha, "{}", candidate.bh_p);
-        let without_quantum = AnalysisConfig {
-            scatter_floor_alloc: 0.0,
-            ..config
-        };
-        assert!(evaluate_branch(&series, &without_quantum, &mut GateLog::disabled()).is_none());
+        assert!(candidate.bh_p < CHANGE_ALPHA, "{}", candidate.bh_p);
     }
 
     #[test]
@@ -3707,16 +3426,21 @@ mod tests {
         // leaves nothing to place the context run against and the standard error is
         // degenerate. A doubling from 20 ns to 40 ns clears every floor and is still not
         // reported: the degenerate case fails silent rather than manufacturing
-        // certainty. The same move against a base that does scatter is reported, so the
-        // flat base is the sole reason for the silence.
+        // certainty, and the recorded chain attributes that silence to the base-scatter
+        // gate. The same move against a base that does scatter is reported, so the flat
+        // base is the sole reason for the silence.
         let flat = branch_over_base_of_kind(20.0, 40.0, 1, MetricKind::WallTime);
-        let config = AnalysisConfig::default();
-        assert!(evaluate_branch(&flat, &config, &mut GateLog::disabled()).is_none());
+        let mut log = GateLog::recording();
+        assert!(evaluate_branch(&flat, &mut log).is_none());
+        assert_eq!(
+            log.declined_by_stage(GateStage::Branch),
+            Some(Gate::BaseScatter),
+        );
 
         let mut points = wobbling_base_run(20.0, 0.2);
         points.push((MIN_SERIES_POINTS, 40.0, false));
         let scattering = placed_series_of_kind(&points, MetricKind::WallTime);
-        assert!(evaluate_branch(&scattering, &config, &mut GateLog::disabled()).is_some());
+        assert!(evaluate_branch(&scattering, &mut GateLog::disabled()).is_some());
     }
 
     #[test]
@@ -3725,43 +3449,34 @@ mod tests {
         // That is a 25% move on a base scattering by only 0.05 ns, so every statistical
         // gate passes decisively (the context run sits 11.4 standard errors out) — yet
         // the move itself spans 0.63 ns, under the one-nanosecond floor below which a
-        // timing move is not worth acting on, so nothing is reported. Lowering that
-        // floor admits it, which pins the absolute floor as the sole reason for the
-        // silence.
+        // timing move is not worth acting on, so nothing is reported. The recorded chain
+        // pins the absolute floor as the sole reason for the silence.
         let mut points = wobbling_base_run(2.49, 0.05);
         points.push((MIN_SERIES_POINTS, 3.12, false));
         let series = placed_series_of_kind(&points, MetricKind::WallTime);
-        let config = AnalysisConfig::default();
-        assert!(evaluate_branch(&series, &config, &mut GateLog::disabled()).is_none());
-        let permissive = AnalysisConfig {
-            practical_absolute_time: 0.1,
-            ..config
-        };
-        assert!(evaluate_branch(&series, &permissive, &mut GateLog::disabled()).is_some());
+        let mut log = GateLog::recording();
+        assert!(evaluate_branch(&series, &mut log).is_none());
+        assert_eq!(
+            log.declined_by_stage(GateStage::Branch),
+            Some(Gate::AbsoluteFloor),
+        );
     }
 
     #[test]
-    fn branch_mode_reports_a_small_timing_regression_a_one_nanosecond_scatter_floor_would_hide() {
+    fn branch_mode_reports_a_small_timing_regression_on_a_quiet_base() {
         // A 20 ns benchmark whose base scatters by 0.2 ns from commit to commit,
         // regressing by 8% (1.6 ns). Against its own scatter the context run sits 7.2
         // standard errors out (1.6 / (0.2108 * sqrt(1 + 1/10))) and the move clears the
-        // one-nanosecond absolute floor, so it is reported. Flooring the scatter at that
-        // same nanosecond instead would put the context run only 1.5 standard errors out
-        // — p = 0.16, comfortably inside the interval — and hide the regression entirely,
-        // which is what makes the quantum and the magnitude floor separate quantities.
+        // one-nanosecond absolute floor, so it is reported. Timing scatter is left
+        // unfloored (SCATTER_FLOOR_TIME is zero) precisely so a quiet base keeps this
+        // sensitivity rather than having its standard error inflated to a nanosecond.
         let mut points = wobbling_base_run(20.0, 0.2);
         points.push((MIN_SERIES_POINTS, 21.6, false));
         let series = placed_series_of_kind(&points, MetricKind::WallTime);
-        let config = AnalysisConfig::default();
-        let candidate = evaluate_branch(&series, &config, &mut GateLog::disabled())
+        let candidate = evaluate_branch(&series, &mut GateLog::disabled())
             .expect("an 8% move on a quiet base is detectable");
         assert_eq!(candidate.finding.direction, Direction::Regression);
-        assert!(candidate.bh_p < config.change_alpha, "{}", candidate.bh_p);
-        let floored = AnalysisConfig {
-            scatter_floor_time: config.practical_absolute_time,
-            ..config
-        };
-        assert!(evaluate_branch(&series, &floored, &mut GateLog::disabled()).is_none());
+        assert!(candidate.bh_p < CHANGE_ALPHA, "{}", candidate.bh_p);
     }
 
     #[test]
@@ -3785,12 +3500,8 @@ mod tests {
         assert_eq!(stats::mean(&levels), Some(104.0));
         assert_eq!(stats::median(&levels), Some(100.0));
 
-        let candidate = evaluate_branch(
-            &series,
-            &AnalysisConfig::default(),
-            &mut GateLog::disabled(),
-        )
-        .expect("a doubling against a settled base is a finding");
+        let candidate = evaluate_branch(&series, &mut GateLog::disabled())
+            .expect("a doubling against a settled base is a finding");
         assert_eq!(candidate.finding.baseline, 104.0);
         assert_eq!(candidate.finding.delta, 96.0);
         assert_eq!(candidate.finding.relative_delta, 96.0 / 104.0);
@@ -3830,7 +3541,7 @@ mod tests {
         let series = wall_branch_series_with_intervals(130.0, 20.0, 20.0);
         let mut log = GateLog::recording();
 
-        assert!(evaluate_branch(&series, &AnalysisConfig::default(), &mut log).is_none());
+        assert!(evaluate_branch(&series, &mut log).is_none());
         assert_eq!(
             log.declined_by_stage(GateStage::Branch),
             Some(Gate::IntervalDisjoint)
@@ -3842,7 +3553,7 @@ mod tests {
         let series = wall_branch_series_with_intervals(130.0, 20.0, 0.1);
         let mut log = GateLog::recording();
 
-        assert!(evaluate_branch(&series, &AnalysisConfig::default(), &mut log).is_none());
+        assert!(evaluate_branch(&series, &mut log).is_none());
         assert_eq!(
             log.declined_by_stage(GateStage::Branch),
             Some(Gate::IntervalNoiseBand)
@@ -3966,11 +3677,9 @@ mod tests {
         let series = series_of(&step_values(100.0, 130.0));
         let context = AnalysisContext {
             mode: AnalysisMode::History,
-            config: AnalysisConfig::default(),
             merge_base_index: None,
             base_ref_index: None,
             tip_index: 20,
-            include_improvements: true,
         };
         let finding = only(find_changes(slice::from_ref(&series), &context).findings);
         assert_eq!(finding.chart_base_ref, Some(20));
@@ -4119,38 +3828,19 @@ mod tests {
             .collect()
     }
 
-    /// Compares the `before` and `after` samples on a wall-time (noisy) series,
-    /// passing `floor` as the practical relative floor and `config` as the analysis
-    /// configuration.
-    fn compare_with(
-        before: &[SeriesPoint],
-        after: &[SeriesPoint],
-        floor: f64,
-        config: &AnalysisConfig,
-    ) -> Option<Candidate> {
+    /// Compares the `before` and `after` samples on a wall-time (noisy) series under
+    /// the fixed branch-mode policy.
+    fn compare(before: &[SeriesPoint], after: &[SeriesPoint]) -> Option<Candidate> {
         let series = wall_series(&[100.0], 1.0);
         let before_refs: Vec<&SeriesPoint> = before.iter().collect();
         let after_refs: Vec<&SeriesPoint> = after.iter().collect();
-        compare_samples(
-            &series,
-            &before_refs,
-            &after_refs,
-            config,
-            floor,
-            None,
-            &mut GateLog::disabled(),
-        )
-    }
-
-    /// Compares the `before` and `after` samples with the default configuration.
-    fn compare(before: &[SeriesPoint], after: &[SeriesPoint], floor: f64) -> Option<Candidate> {
-        compare_with(before, after, floor, &AnalysisConfig::default())
+        compare_samples(&series, &before_refs, &after_refs, &mut GateLog::disabled())
     }
 
     /// The amount a fixture base window wobbles around its level from commit to
     /// commit, in the metric's own units.
     ///
-    /// The [`compare_with`] fixtures run on a wall-time series, whose scatter is not
+    /// The [`compare`] fixtures run on a wall-time series, whose scatter is not
     /// floored at all (time has no quantum), so a base window repeating one value
     /// leaves the prediction interval no distribution to place the context run in. Real
     /// timing series never repeat a value, so the window alternates by this much instead.
@@ -4185,25 +3875,33 @@ mod tests {
 
     #[test]
     fn compare_samples_at_the_practical_floor_is_not_suppressed() {
-        // The relative move (0.03) is exactly the floor: the `relative < floor` gate
-        // must be a strict `<` (a `<=`/`==` mutant would suppress it). The move then
-        // clears the noise floor (delta 3 > 2 * 0.5) and the prediction interval.
+        // The relative move (5%) is exactly BRANCH_PRACTICAL_RELATIVE, the floor branch
+        // mode holds moves to: the `relative < floor` gate must be a strict `<` (a
+        // `<=`/`==` mutant would suppress it). The move then clears the residual band and
+        // the prediction interval, so it is reported. The recorded gate pins that the
+        // fixture sits exactly on the floor, so the boundary is genuinely under test.
+        let series = wall_series(&[100.0], 1.0);
         let before = base_window(100.0, 0.5);
-        let after = pts(&[(103.0, 0.5)]);
-        assert!(compare(&before, &after, 3.0 / 100.0).is_some());
+        let after = pts(&[(105.0, 0.5)]);
+        let before_refs: Vec<&SeriesPoint> = before.iter().collect();
+        let after_refs: Vec<&SeriesPoint> = after.iter().collect();
+
+        let mut log = GateLog::recording();
+        assert!(compare_samples(&series, &before_refs, &after_refs, &mut log).is_some());
+        let (relative, floor) =
+            gate_value(&log, Gate::RelativeFloor).expect("the relative-floor gate ran");
+        assert_eq!(floor, BRANCH_PRACTICAL_RELATIVE);
+        assert_eq!(
+            relative, floor,
+            "the fixture must land exactly on the floor for the boundary to be under test"
+        );
     }
 
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "asserts a strict `<` at the exact recorded p-value, which needs bit-identical \
-                  recomputation of the rank statistic; Miri's float nondeterminism perturbs it"
-    )]
-    fn compare_samples_significance_is_a_strict_boundary() {
-        // Branch significance is a strict `<` against the prediction-interval p-value.
-        // Take that p from the detector's own recording at the default alpha, then set
-        // alpha to it: a `<`->`<=` slip that admits the exact boundary turns this
-        // reported context run silent.
+    fn compare_samples_significance_is_measured_against_the_fixed_alpha() {
+        // Branch significance is the prediction-interval p-value tested against
+        // CHANGE_ALPHA. An 8% move on a quiet base clears it decisively; the recorded
+        // gate pins both the threshold and that the move sits below it.
         let series = wall_series(&[100.0], 1.0);
         let before = base_window(100.0, 0.5);
         let after = pts(&[(108.0, 0.5)]);
@@ -4212,36 +3910,13 @@ mod tests {
 
         let mut log = GateLog::recording();
         assert!(
-            compare_samples(
-                &series,
-                &before_refs,
-                &after_refs,
-                &AnalysisConfig::default(),
-                0.03,
-                None,
-                &mut log,
-            )
-            .is_some(),
-            "the 8% move must report at the default alpha"
+            compare_samples(&series, &before_refs, &after_refs, &mut log).is_some(),
+            "the 8% move must report"
         );
-        let (p, _) = gate_value(&log, Gate::Significance).expect("the significance gate ran");
-        let at_boundary = AnalysisConfig {
-            change_alpha: p,
-            ..AnalysisConfig::default()
-        };
-        assert!(
-            compare_samples(
-                &series,
-                &before_refs,
-                &after_refs,
-                &at_boundary,
-                0.03,
-                None,
-                &mut GateLog::disabled(),
-            )
-            .is_none(),
-            "a p-value exactly at alpha must be rejected by the strict gate"
-        );
+        let (p, threshold) =
+            gate_value(&log, Gate::Significance).expect("the significance gate ran");
+        assert_eq!(threshold, CHANGE_ALPHA);
+        assert!(p < CHANGE_ALPHA, "{p}");
     }
 
     #[test]
@@ -4263,18 +3938,7 @@ mod tests {
         let after_refs: Vec<&SeriesPoint> = after.iter().collect();
         let mut log = GateLog::recording();
 
-        assert!(
-            compare_samples(
-                &series,
-                &before_refs,
-                &after_refs,
-                &AnalysisConfig::default(),
-                0.05,
-                None,
-                &mut log,
-            )
-            .is_some()
-        );
+        assert!(compare_samples(&series, &before_refs, &after_refs, &mut log,).is_some());
 
         let outcome = log
             .entries()
@@ -4300,18 +3964,7 @@ mod tests {
         let after_refs: Vec<&SeriesPoint> = after.iter().collect();
         let mut log = GateLog::recording();
 
-        assert!(
-            compare_samples(
-                &series,
-                &before_refs,
-                &after_refs,
-                &AnalysisConfig::default(),
-                0.05,
-                None,
-                &mut log,
-            )
-            .is_none()
-        );
+        assert!(compare_samples(&series, &before_refs, &after_refs, &mut log,).is_none());
 
         let outcome = log
             .entries()
@@ -4328,15 +3981,15 @@ mod tests {
     fn compare_samples_confidence_tracks_the_strength_of_the_evidence() {
         // Branch confidence is `1 - p` from the prediction interval, so it must move
         // with the size of the move rather than being pinned to a constant: the same
-        // base window judges a 3% move less confidently than an 8% one. Both stay
+        // base window judges a 6% move less confidently than a 10% one. Both stay
         // below 1 (a mutated `1 + p` / `1 / p` would clamp to 1) and neither lands on
-        // `1 - change_alpha`, the placeholder confidence a fixed p-value would give.
+        // `1 - CHANGE_ALPHA`, the placeholder confidence a fixed p-value would give.
         let before = base_window(100.0, 0.5);
-        let modest = compare(&before, &pts(&[(103.0, 0.5)]), 0.03).unwrap();
-        let large = compare(&before, &pts(&[(108.0, 0.5)]), 0.03).unwrap();
+        let modest = compare(&before, &pts(&[(106.0, 0.5)])).unwrap();
+        let large = compare(&before, &pts(&[(110.0, 0.5)])).unwrap();
         assert!(modest.finding.confidence < large.finding.confidence);
         assert!(large.finding.confidence < 1.0);
-        assert!(modest.finding.confidence > 1.0 - AnalysisConfig::default().change_alpha);
+        assert!(modest.finding.confidence > 1.0 - CHANGE_ALPHA);
     }
 
     #[test]
@@ -4351,18 +4004,7 @@ mod tests {
         let after_refs: Vec<&SeriesPoint> = after.iter().collect();
         let mut log = GateLog::recording();
 
-        assert!(
-            compare_samples(
-                &series,
-                &before_refs,
-                &after_refs,
-                &AnalysisConfig::default(),
-                0.05,
-                None,
-                &mut log,
-            )
-            .is_none()
-        );
+        assert!(compare_samples(&series, &before_refs, &after_refs, &mut log,).is_none());
         assert_eq!(
             log.declined_by_stage(GateStage::Branch),
             Some(Gate::IntervalNoiseBand)
@@ -4374,17 +4016,16 @@ mod tests {
 
         // Half a unit beyond the base-derived band clears it and is reported.
         let after = pts(&[(140.5, 0.1); 5]);
-        assert!(compare(&before, &after, 0.05).is_some());
+        assert!(compare(&before, &after).is_some());
     }
 
     #[test]
     fn compare_samples_suppresses_a_context_run_inside_a_bimodal_base() {
         // A base that alternates between two levels (~10 and ~30) from commit to
         // commit. A context run landing on the upper level moves the median by 10, but
-        // that is well inside the base's own commit-to-commit scatter, so the
-        // prediction interval refuses it — even with every scatter-based veto
-        // relaxed, which pins the prediction interval as the sole reason for the
-        // silence. A context run clear of *both* levels is reported.
+        // that is well inside the base's own commit-to-commit scatter, so a scatter gate
+        // refuses it. A context run clear of *both* levels stands out from that scatter
+        // and is reported.
         let mut specs = Vec::new();
         for _ in 0..MIN_REGIME {
             specs.push((10.0, 0.5));
@@ -4392,14 +4033,17 @@ mod tests {
         }
         let before = pts(&specs);
         let on_the_upper_level = pts(&[(30.0, 0.5)]);
-        assert!(compare(&before, &on_the_upper_level, 0.05).is_none());
-        let permissive = AnalysisConfig {
-            residual_noise_multiple: 0.0,
-            branch_noise_multiple: 0.0,
-            ..AnalysisConfig::default()
-        };
-        assert!(compare_with(&before, &on_the_upper_level, 0.05, &permissive).is_none());
-        assert!(compare(&before, &pts(&[(60.0, 0.5)]), 0.05).is_some());
+        let mut log = GateLog::recording();
+        let series = wall_series(&[100.0], 1.0);
+        let before_refs: Vec<&SeriesPoint> = before.iter().collect();
+        let after_refs: Vec<&SeriesPoint> = on_the_upper_level.iter().collect();
+        assert!(compare_samples(&series, &before_refs, &after_refs, &mut log).is_none());
+        assert_eq!(
+            log.declined_by_stage(GateStage::Branch),
+            Some(Gate::ResidualNoise),
+            "a run buried in the base scatter must be refused by the residual-scatter gate",
+        );
+        assert!(compare(&before, &pts(&[(60.0, 0.5)])).is_some());
     }
 
     #[test]
@@ -4438,95 +4082,49 @@ mod tests {
 
     #[test]
     fn drift_at_the_practical_floor_is_flagged_with_real_confidence() {
-        // A steady climb whose relative drift (0.36) is exactly the floor: the
+        // A steady climb whose relative drift is exactly PRACTICAL_RELATIVE (3%): the
         // floor gate must be a strict `<`, not a `<=`. Its confidence is 1 - p with
-        // p > 0, so a mutated `1 + p` / `1 / p` would clamp to 1.
-        let series = series_of(&ramp(100.0, 4.0, MIN_SERIES_POINTS));
-        let config = AnalysisConfig {
-            practical_relative: 36.0 / 100.0,
-            ..AnalysisConfig::default()
-        };
-        let candidate = evaluate_drift(
-            &series,
-            &values_of(&series),
-            &config,
-            &mut GateLog::disabled(),
-        )
-        .unwrap();
+        // p > 0, so a mutated `1 + p` / `1 / p` would clamp to 1. The nine-unit rise
+        // over a baseline of 300 lands the relative move on the floor exactly.
+        let series = series_of(&ramp(300.0, 1.0, MIN_SERIES_POINTS));
+        let candidate =
+            evaluate_drift(&series, &values_of(&series), &mut GateLog::disabled()).unwrap();
         assert_eq!(candidate.finding.method, FindingMethod::Drift);
-        assert_eq!(candidate.finding.relative_delta, config.practical_relative);
+        assert_eq!(candidate.finding.relative_delta, PRACTICAL_RELATIVE);
         assert!(candidate.finding.confidence < 1.0);
     }
 
     #[test]
-    #[cfg_attr(
-        miri,
-        ignore = "asserts a strict `<` at the exact recorded p-value, which needs bit-identical \
-                  recomputation of the rank statistic; Miri's float nondeterminism perturbs it"
-    )]
-    fn drift_significance_is_a_strict_boundary() {
-        // The Mann–Kendall gate is a strict `<`: a trend whose p-value lands exactly on
-        // `drift_alpha` is rejected. Take that p from the detector's own recording at the
-        // default alpha, then set alpha to it — so a `<`->`<=` slip that admits the
-        // boundary turns this reported ramp silent.
+    fn drift_significance_is_measured_against_the_fixed_alpha() {
+        // The Mann–Kendall gate tests the trend p-value against DRIFT_ALPHA. A clean
+        // ramp clears it decisively; the recorded gate pins both the threshold and that
+        // the trend sits below it.
         let series = series_of(&ramp(100.0, 4.0, MIN_SERIES_POINTS));
         let mut log = GateLog::recording();
         assert!(
-            evaluate_drift(
-                &series,
-                &values_of(&series),
-                &AnalysisConfig::default(),
-                &mut log
-            )
-            .is_some(),
-            "the ramp must report drift at the default alpha"
+            evaluate_drift(&series, &values_of(&series), &mut log).is_some(),
+            "the ramp must report drift"
         );
-        let (p, _) = gate_value(&log, Gate::Significance).expect("the significance gate ran");
-        let at_boundary = AnalysisConfig {
-            drift_alpha: p,
-            ..AnalysisConfig::default()
-        };
-        assert!(
-            evaluate_drift(
-                &series,
-                &values_of(&series),
-                &at_boundary,
-                &mut GateLog::disabled()
-            )
-            .is_none(),
-            "a trend p-value exactly at drift_alpha must be rejected"
-        );
+        let (p, threshold) =
+            gate_value(&log, Gate::Significance).expect("the significance gate ran");
+        assert_eq!(threshold, DRIFT_ALPHA);
+        assert!(p < DRIFT_ALPHA, "{p}");
     }
 
     #[test]
     fn drift_below_the_absolute_floor_is_suppressed() {
         // An upward drift on a quantized metric that gains one count every second
         // commit, totalling only 4.5 counts across the fitted line. Its relative move
-        // (4.5%) clears the relative floor and the trend is significant, so disabling
-        // the absolute floor admits it; the default floor of 5 is the gate that
-        // suppresses it.
+        // (4.5%) clears the relative floor and the trend is significant, but 4.5 counts
+        // is under the five-count floor below which a count move is not worth acting on,
+        // so nothing is reported and the recorded chain pins the absolute floor as the
+        // reason.
         let series = series_of(&staircase(100.0, MIN_SERIES_POINTS));
-        let without_absolute_floor = AnalysisConfig {
-            practical_absolute_count: 0.0,
-            ..AnalysisConfig::default()
-        };
-        assert!(
-            evaluate_drift(
-                &series,
-                &values_of(&series),
-                &without_absolute_floor,
-                &mut GateLog::disabled()
-            )
-            .is_some()
-        );
-        assert!(
-            evaluate_drift(
-                &series,
-                &values_of(&series),
-                &AnalysisConfig::default(),
-                &mut GateLog::disabled()
-            )
-            .is_none()
+        let mut log = GateLog::recording();
+        assert!(evaluate_drift(&series, &values_of(&series), &mut log).is_none());
+        assert_eq!(
+            log.declined_by_stage(GateStage::Drift),
+            Some(Gate::AbsoluteFloor)
         );
     }
 
@@ -4536,76 +4134,21 @@ mod tests {
         // counts, which clears the absolute floor and is flagged, pinning the gate's
         // `>=` boundary.
         let series = series_of(&staircase(100.0, MIN_SERIES_POINTS + 1));
-        let candidate = evaluate_drift(
-            &series,
-            &values_of(&series),
-            &AnalysisConfig::default(),
-            &mut GateLog::disabled(),
-        )
-        .unwrap();
+        let candidate =
+            evaluate_drift(&series, &values_of(&series), &mut GateLog::disabled()).unwrap();
         assert_eq!(candidate.finding.method, FindingMethod::Drift);
         assert_eq!(candidate.finding.delta, 5.0);
     }
 
     #[test]
-    fn noisy_drift_within_the_measurement_noise_floor_is_suppressed() {
-        // The same climb on a noisy engine, but the endpoints (delta 36) do not
-        // separate by more than the confidence half-width (20) times the default
-        // `drift_noise_multiple`: jitter, not a trend. The band must be that product (a
-        // `+` mutant lowers the floor to 22 and would flag it).
+    fn drift_noise_band_is_the_half_width_times_the_fixed_multiple() {
+        // A total movement of 36 against a confidence half-width of 20. The move sits
+        // between one and two half-widths, so only the noise band decides. The band is
+        // the half-width times DRIFT_NOISE_MULTIPLE (40), so the move is withheld, and
+        // the recorded threshold pins the product (a `+` mutant would lower it to 22).
         let series = wall_series(&ramp(100.0, 4.0, MIN_SERIES_POINTS), 20.0);
-        assert!(
-            evaluate_drift(
-                &series,
-                &values_of(&series),
-                &AnalysisConfig::default(),
-                &mut GateLog::disabled()
-            )
-            .is_none()
-        );
-    }
-
-    #[test]
-    fn the_default_drift_noise_multiple_is_the_named_constant() {
-        assert_eq!(
-            AnalysisConfig::default().drift_noise_multiple,
-            DRIFT_NOISE_MULTIPLE
-        );
-    }
-
-    #[test]
-    fn lowering_the_drift_noise_multiple_admits_a_drift_the_default_suppresses() {
-        // The trend the default band withholds: a total movement of 36 against a
-        // confidence half-width of 20. The move sits between one and two half-widths,
-        // so it is the multiple alone that decides — which is what makes the multiple a
-        // policy a caller can set rather than a constant of the detector.
-        let series = wall_series(&ramp(100.0, 4.0, MIN_SERIES_POINTS), 20.0);
-        let permissive = AnalysisConfig {
-            drift_noise_multiple: 1.0,
-            ..AnalysisConfig::default()
-        };
         let mut log = GateLog::recording();
-        let candidate = evaluate_drift(&series, &values_of(&series), &permissive, &mut log);
-
-        assert_eq!(
-            candidate.map(|found| found.finding.method),
-            Some(FindingMethod::Drift)
-        );
-        assert_eq!(
-            gate_value(&log, Gate::IntervalNoiseBand),
-            Some((36.0, 20.0))
-        );
-
-        let mut log = GateLog::recording();
-        assert!(
-            evaluate_drift(
-                &series,
-                &values_of(&series),
-                &AnalysisConfig::default(),
-                &mut log
-            )
-            .is_none()
-        );
+        assert!(evaluate_drift(&series, &values_of(&series), &mut log).is_none());
         assert_eq!(log.declined_by(), Some(Gate::IntervalNoiseBand));
         assert_eq!(
             gate_value(&log, Gate::IntervalNoiseBand),
@@ -4615,61 +4158,31 @@ mod tests {
 
     #[test]
     fn drift_within_its_own_residual_scatter_is_suppressed() {
-        // A significant upward trend (100 -> 167.5) that scatters about its Theil-Sen
-        // line. Under the default residual multiple the total move dwarfs that
-        // scatter and is flagged as drift; a deliberately high multiple lifts the
-        // noise band above the move, so only the residual gate rejects it (the
-        // length, Mann-Kendall, and practical-floor gates still pass).
+        // A climbing zigzag whose net rise is real — Mann-Kendall significant and clear
+        // of the relative and absolute floors — but which swings a fixed four units
+        // either side of its Theil-Sen line. The nine-unit fitted move does not exceed
+        // RESIDUAL_NOISE_MULTIPLE times that four-unit scatter, so the trend is buried in
+        // its own residual and refused by the residual gate.
         let series = series_of(&[
-            100.0, 110.0, 109.0, 120.0, 130.0, 140.0, 139.0, 150.0, 160.0, 170.0,
+            96.0, 105.0, 98.0, 107.0, 100.0, 109.0, 102.0, 111.0, 104.0, 113.0,
         ]);
-        assert!(
-            evaluate_drift(
-                &series,
-                &values_of(&series),
-                &AnalysisConfig::default(),
-                &mut GateLog::disabled()
-            )
-            .is_some()
-        );
-        let config = AnalysisConfig {
-            residual_noise_multiple: 1000.0,
-            ..AnalysisConfig::default()
-        };
-        assert!(
-            evaluate_drift(
-                &series,
-                &values_of(&series),
-                &config,
-                &mut GateLog::disabled()
-            )
-            .is_none()
+        let mut log = GateLog::recording();
+        assert!(evaluate_drift(&series, &values_of(&series), &mut log).is_none());
+        assert_eq!(
+            log.declined_by_stage(GateStage::Drift),
+            Some(Gate::ResidualNoise)
         );
     }
 
     #[test]
     fn drift_needs_at_least_the_minimum_points() {
-        // The length gate is `n < drift_min_points`: a series one point short is
+        // The length gate is `n < DRIFT_MIN_POINTS`: a series one point short is
         // rejected outright, while a series of exactly that length is still evaluated
         // (so a gate mutated to reject the longer series instead is caught).
-        let config = AnalysisConfig {
-            practical_relative: 20.0 / 100.0,
-            ..AnalysisConfig::default()
-        };
         let short = series_of(&ramp(100.0, 4.0, DRIFT_MIN_POINTS - 1));
-        assert!(
-            evaluate_drift(
-                &short,
-                &values_of(&short),
-                &config,
-                &mut GateLog::disabled()
-            )
-            .is_none()
-        );
+        assert!(evaluate_drift(&short, &values_of(&short), &mut GateLog::disabled()).is_none());
         let long = series_of(&ramp(100.0, 4.0, DRIFT_MIN_POINTS));
-        assert!(
-            evaluate_drift(&long, &values_of(&long), &config, &mut GateLog::disabled()).is_some()
-        );
+        assert!(evaluate_drift(&long, &values_of(&long), &mut GateLog::disabled()).is_some());
     }
 
     #[test]
@@ -4679,37 +4192,161 @@ mod tests {
     }
 
     #[test]
-    fn history_keeps_regressions_and_optionally_improvements() {
-        let context = |include_improvements| AnalysisContext {
+    fn history_reports_regressions_only() {
+        let context = AnalysisContext {
             mode: AnalysisMode::History,
-            config: AnalysisConfig::default(),
             merge_base_index: None,
             base_ref_index: None,
             tip_index: 0,
-            include_improvements,
         };
-        // Regressions are always reported; improvements only when opted in.
-        assert!(context(false).keeps(Direction::Regression));
-        assert!(!context(false).keeps(Direction::Improvement));
-        assert!(context(true).keeps(Direction::Improvement));
+        // A drift watch over the base branch is one-directional: improvement over time
+        // is the expected background there, so only a worsening is a finding.
+        assert!(context.keeps(Direction::Regression));
+        assert!(!context.keeps(Direction::Improvement));
     }
 
     #[test]
     fn reports_improvements_reflects_the_mode() {
-        let context = |mode, include_improvements| AnalysisContext {
+        let context = |mode| AnalysisContext {
             mode,
-            config: AnalysisConfig::default(),
             merge_base_index: None,
             base_ref_index: None,
             tip_index: 0,
-            include_improvements,
         };
-        // History reports improvements only when opted in; branch always compares
-        // both directions. Pinning both a true and a false case keeps the flag from
-        // collapsing to a constant.
-        assert!(!context(AnalysisMode::History, false).reports_improvements());
-        assert!(context(AnalysisMode::History, true).reports_improvements());
-        assert!(context(AnalysisMode::Branch, false).reports_improvements());
+        // History is the regressions-only drift watch; branch compares both
+        // directions.
+        assert!(!context(AnalysisMode::History).reports_improvements());
+        assert!(context(AnalysisMode::Branch).reports_improvements());
+    }
+
+    /// The judged family the direction-order case is corrected against. Ten makes the
+    /// first two Benjamini–Hochberg thresholds `FDR_Q / 10` and `FDR_Q / 5`, far enough
+    /// apart to seat a p-value strictly between them.
+    const DIRECTION_ORDER_FAMILY: usize = 10;
+
+    /// The improvement's p-value, as a fraction of `FDR_Q`. Well under the rank-1
+    /// threshold (`FDR_Q / 10`), so it is rejected under either order and always takes
+    /// rank 1 away from the regression.
+    const DIRECTION_ORDER_IMPROVEMENT_P: f64 = 0.01;
+
+    /// The regression's p-value, as a fraction of `FDR_Q`. Chosen to sit strictly
+    /// between the rank-1 threshold (`FDR_Q / 10`) and the rank-2 one (`FDR_Q / 5`), so
+    /// its survival depends entirely on which rank it lands at — which is exactly what
+    /// the screening order decides.
+    const DIRECTION_ORDER_REGRESSION_P: f64 = 0.15;
+
+    /// Builds a candidate carrying `direction` and `bh_p`, drawn from `source`.
+    ///
+    /// `comparison_base_index` is the branch-mode chart anchor, left `None` for history
+    /// mode. Everything the false-discovery filter does not read is left at a neutral
+    /// value: the filter arbitrates on `bh_p` alone, and the surviving finding's
+    /// charting points are materialised from `source` afterwards.
+    fn direction_order_candidate(
+        source: &Series,
+        source_index: usize,
+        direction: Direction,
+        bh_p: f64,
+        comparison_base_index: Option<usize>,
+    ) -> Candidate {
+        Candidate {
+            finding: Finding {
+                set: source.set.clone(),
+                id: source.id.clone(),
+                kind: source.kind,
+                method: FindingMethod::ChangePoint,
+                direction,
+                baseline: 100.0,
+                latest: 110.0,
+                delta: 10.0,
+                relative_delta: 0.1,
+                confidence: 1.0 - bh_p,
+                commit: None,
+                window_start_commit: None,
+                blessed_at: None,
+                blessed_commit_time: None,
+                series: Vec::new(),
+                comparison_base_index,
+                chart_base_ref: None,
+            },
+            source_index,
+            bh_p,
+            split: None,
+            line: None,
+        }
+    }
+
+    /// The mode's direction screen runs *before* the false-discovery correction, so a
+    /// regression is corrected against the ranks its own direction occupies rather than
+    /// borrowing an earlier one from an improvement the report would never show.
+    ///
+    /// The two candidates are sized so the orders disagree: correcting both directions
+    /// seats the regression at rank 2, where it clears the looser threshold, while
+    /// screening first leaves it alone at rank 1, where it does not. History mode must
+    /// therefore report nothing, and branch mode — which reports both directions, so the
+    /// screen is a no-op — must report both.
+    #[test]
+    fn history_screens_direction_before_the_correction() {
+        let improvement_p = FDR_Q * DIRECTION_ORDER_IMPROVEMENT_P;
+        let regression_p = FDR_Q * DIRECTION_ORDER_REGRESSION_P;
+
+        // Bind the case to the thresholds it is built around, so a moved gate fails here
+        // rather than silently leaving the two orders in agreement.
+        let family = count_to_f64(DIRECTION_ORDER_FAMILY);
+        assert!(improvement_p < FDR_Q / family);
+        assert!(regression_p > FDR_Q / family);
+        assert!(regression_p < FDR_Q * 2.0 / family);
+
+        let series = vec![
+            named_series("improving", &[100.0, 70.0]),
+            named_series("regressing", &[100.0, 110.0]),
+        ];
+        let mut census = SeriesCensus::default();
+        for _ in 0..DIRECTION_ORDER_FAMILY {
+            census.record(Testability::Judged);
+        }
+
+        let candidates = |comparison_base_index| {
+            vec![
+                direction_order_candidate(
+                    &series[0],
+                    0,
+                    Direction::Improvement,
+                    improvement_p,
+                    comparison_base_index,
+                ),
+                direction_order_candidate(
+                    &series[1],
+                    1,
+                    Direction::Regression,
+                    regression_p,
+                    comparison_base_index,
+                ),
+            ]
+        };
+
+        // History charts against the analyzed tip; branch charts against the base ref,
+        // so each leg supplies the anchors its own charting path reads.
+        let history_context = AnalysisContext {
+            mode: AnalysisMode::History,
+            merge_base_index: None,
+            base_ref_index: None,
+            tip_index: 1,
+        };
+        let branch_context = AnalysisContext {
+            mode: AnalysisMode::Branch,
+            merge_base_index: Some(1),
+            base_ref_index: Some(1),
+            tip_index: 1,
+        };
+
+        let history = finalize_findings(candidates(None), &census, &series, &history_context);
+        assert!(
+            history.is_empty(),
+            "the regression alone sits at rank 1, where it does not clear the bar: {history:?}"
+        );
+
+        let branch = finalize_findings(candidates(Some(1)), &census, &series, &branch_context);
+        assert_eq!(branch.len(), 2, "{branch:?}");
     }
 
     #[test]
@@ -4726,7 +4363,7 @@ mod tests {
         // comparison is dropped before any significance test.
         let before = base_window(100.0, 0.5);
         let after = pts(&[(101.0, 0.5)]);
-        assert!(compare(&before, &after, 0.05).is_none());
+        assert!(compare(&before, &after).is_none());
     }
 
     #[test]
@@ -4742,8 +4379,8 @@ mod tests {
         specs.push((70.0, 0.5));
         specs.push((130.0, 0.5));
         let before = pts(&specs);
-        assert!(compare(&before, &pts(&[(120.0, 0.5)]), 0.05).is_none());
-        assert!(compare(&before, &pts(&[(160.0, 0.5)]), 0.05).is_some());
+        assert!(compare(&before, &pts(&[(120.0, 0.5)])).is_none());
+        assert!(compare(&before, &pts(&[(160.0, 0.5)])).is_some());
     }
 
     #[test]
@@ -4832,11 +4469,10 @@ mod tests {
         let flat = [1000.0; MIN_SERIES_POINTS];
         assert_eq!(stats::sample_std_dev(&flat), Some(0.0));
         assert_eq!(prediction_interval_p(&flat, 1005.0, 0.0), None);
-        let alpha = AnalysisConfig::default().change_alpha;
         let large = prediction_interval_p(&flat, 1005.0, 1.0).unwrap();
-        assert!(large < alpha, "{large}");
+        assert!(large < CHANGE_ALPHA, "{large}");
         let at_the_quantum = prediction_interval_p(&flat, 1001.0, 1.0).unwrap();
-        assert!(at_the_quantum >= alpha, "{at_the_quantum}");
+        assert!(at_the_quantum >= CHANGE_ALPHA, "{at_the_quantum}");
     }
 
     #[test]
@@ -5012,28 +4648,16 @@ mod tests {
         // series reaches on roughly half of its commits. A change-point search over that
         // window proposes the split at the start of those five, and the trailing regime's
         // standard deviation is a fraction of the mixed window's — so accepting the split
-        // turns an ordinary value into a large, near-certain regression.
+        // would turn an ordinary value into a large, near-certain regression.
         //
-        // The stricter base-split separation floor is the sole reason for the silence:
-        // relaxing it to the reporting floor accepts the split and manufactures the
-        // finding, which is what makes the two floors different policies rather than one
-        // value written twice.
+        // The stricter base-split separation floor holds the window whole: the proposed
+        // split does not part the two modes cleanly enough to discard the prefix, so the
+        // full window is compared and the context value reads as ordinary. The narrowed
+        // start stays at zero and nothing is reported.
         let series = bimodal_branch_probe();
         let merge_base = STATIONARY_BIMODAL_BASE.checked_sub(1).unwrap();
         assert_eq!(bimodal_branch_regime_start(&series), 0);
         assert!(branch_changes(slice::from_ref(&series), Some(merge_base)).is_empty());
-
-        let permissive = AnalysisConfig {
-            min_base_split_separation: AnalysisConfig::default().min_regime_separation,
-            ..AnalysisConfig::default()
-        };
-        let manufactured = evaluate_branch(&series, &permissive, &mut GateLog::disabled()).unwrap();
-        assert_eq!(manufactured.finding.direction, Direction::Regression);
-        assert!(
-            manufactured.finding.relative_delta > 0.5,
-            "{:?}",
-            manufactured.finding
-        );
     }
 
     /// The recorded bimodal series cut to the base window that exposes a spurious
@@ -5058,34 +4682,20 @@ mod tests {
             COMPARE_WINDOW,
         );
         let spans = commit_level_spans(&base);
-        let config = AnalysisConfig::default();
-        current_base_regime_start(series, &spans, &config, config.branch_practical_relative)
+        current_base_regime_start(series, &spans)
     }
 
     fn base_split_qualifies(before: f64, after: f64, before_len: usize, after_len: usize) -> bool {
         let mut levels = vec![before; before_len];
         levels.extend(std::iter::repeat_n(after, after_len));
-        base_regime_split_qualifies(
-            &series_of(&[]),
-            &levels,
-            before_len,
-            &AnalysisConfig::default(),
-            AnalysisConfig::default().branch_practical_relative,
-        )
+        base_regime_split_qualifies(&series_of(&[]), &levels, before_len)
     }
 
     /// Whether a split onto a perfectly flat trailing regime qualifies for `kind`.
     fn flat_regime_split_qualifies(kind: MetricKind) -> bool {
         let mut levels = vec![100.0; MIN_REGIME];
         levels.extend(std::iter::repeat_n(130.0, MIN_REGIME));
-        let config = AnalysisConfig::default();
-        base_regime_split_qualifies(
-            &series_with(&[], kind, &[]),
-            &levels,
-            MIN_REGIME,
-            &config,
-            config.branch_practical_relative,
-        )
+        base_regime_split_qualifies(&series_with(&[], kind, &[]), &levels, MIN_REGIME)
     }
 
     #[test]
@@ -5248,7 +4858,6 @@ mod tests {
         // ever consulted.
         let batch = pure_noise_branch_batch();
         let context = branch_context(&batch, Some(NOISE_MERGE_BASE));
-        let config = AnalysisConfig::default();
 
         let detection = find_changes(&batch, &context);
         assert_eq!(detection.census.judged(), batch.len());
@@ -5259,7 +4868,7 @@ mod tests {
         // the gate is entitled to narrow there. What it may not do is narrow as a rule.
         let narrowed = batch
             .iter()
-            .filter(|series| noise_regime_start(series, &config) != 0)
+            .filter(|series| noise_regime_start(series) != 0)
             .count();
         assert!(
             narrowed * NOISE_SPLIT_SHARE <= batch.len(),
@@ -5270,7 +4879,7 @@ mod tests {
         // Nor may it narrow on a window where narrowing manufactures a report. Those are the
         // windows this fixture exists to guard, so there must be some.
         let weaponisable: Vec<usize> = (0..batch.len())
-            .filter(|&index| a_narrowed_split_would_report(batch.get(index).unwrap(), &config))
+            .filter(|&index| a_narrowed_split_would_report(batch.get(index).unwrap()))
             .collect();
         assert!(
             !weaponisable.is_empty(),
@@ -5280,7 +4889,7 @@ mod tests {
         for index in weaponisable {
             let series = batch.get(index).unwrap();
             assert_eq!(
-                noise_regime_start(series, &config),
+                noise_regime_start(series),
                 0,
                 "narrowing fired on pure-noise window {index}, where a narrowed base sample \
                  clears the branch floors and turns the context run into a finding"
@@ -5288,38 +4897,12 @@ mod tests {
         }
 
         // And the silence is not an artefact of the false discovery rate control: no series
-        // raises a candidate in the first place. Relaxing only the base-split separation
-        // floor narrows more windows and turns some of them into candidates, which is the
-        // failure this fixture stands guard over.
+        // raises a candidate in the first place.
         let candidates = batch
             .iter()
-            .filter(|series| evaluate_branch(series, &config, &mut GateLog::disabled()).is_some())
+            .filter(|series| evaluate_branch(series, &mut GateLog::disabled()).is_some())
             .count();
         assert_eq!(candidates, 0);
-
-        let permissive = AnalysisConfig {
-            min_base_split_separation: 0.0,
-            ..AnalysisConfig::default()
-        };
-        let relaxed = batch
-            .iter()
-            .filter(|series| noise_regime_start(series, &permissive) != 0)
-            .count();
-        let manufactured = batch
-            .iter()
-            .filter(|series| {
-                evaluate_branch(series, &permissive, &mut GateLog::disabled()).is_some()
-            })
-            .count();
-        assert!(
-            relaxed > narrowed,
-            "the fixture cannot expose a noise-driven split"
-        );
-        assert!(
-            manufactured > 0,
-            "a noise-driven split on this fixture cannot clear the branch floors, so the \
-             floors rather than the split gate would be producing the silence"
-        );
     }
 
     /// The level [`pure_noise_branch_batch`] wobbles around, in nanoseconds.
@@ -5374,11 +4957,11 @@ mod tests {
     }
 
     /// Where branch mode starts comparing a [`pure_noise_branch_batch`] series.
-    fn noise_regime_start(series: &Series, config: &AnalysisConfig) -> usize {
+    fn noise_regime_start(series: &Series) -> usize {
         let borrowed: Vec<&SeriesPoint> = series.points.iter().collect();
         let base = recent_commits(borrowed.get(..COMPARE_WINDOW).unwrap(), COMPARE_WINDOW);
         let spans = commit_level_spans(&base);
-        current_base_regime_start(series, &spans, config, config.branch_practical_relative)
+        current_base_regime_start(series, &spans)
     }
 
     /// Whether some trailing slice of a [`pure_noise_branch_batch`] base window, short of the
@@ -5386,22 +4969,13 @@ mod tests {
     ///
     /// This is what an implementation that split at an arbitrary index would be doing, so a
     /// window for which this holds is one the split gate has to decline.
-    fn a_narrowed_split_would_report(series: &Series, config: &AnalysisConfig) -> bool {
+    fn a_narrowed_split_would_report(series: &Series) -> bool {
         let borrowed: Vec<&SeriesPoint> = series.points.iter().collect();
         let base = recent_commits(borrowed.get(..COMPARE_WINDOW).unwrap(), COMPARE_WINDOW);
         let context = borrowed.get(COMPARE_WINDOW..).unwrap().to_vec();
         (1..=base.len().saturating_sub(MIN_REGIME)).any(|start| {
             let narrowed = base.get(start..).unwrap().to_vec();
-            compare_samples(
-                series,
-                &narrowed,
-                &context,
-                config,
-                config.branch_practical_relative,
-                None,
-                &mut GateLog::disabled(),
-            )
-            .is_some()
+            compare_samples(series, &narrowed, &context, &mut GateLog::disabled()).is_some()
         })
     }
 
@@ -5458,7 +5032,7 @@ mod tests {
             &[branch_over_base(100.0, 140.0, 1)],
             Some(base_merge_base()),
         ));
-        let placeholder = 1.0 - AnalysisConfig::default().change_alpha;
+        let placeholder = 1.0 - CHANGE_ALPHA;
         assert!(modest.confidence < large.confidence);
         assert!(large.confidence < 1.0);
         assert!((modest.confidence - placeholder).abs() > 1e-9, "{modest:?}");
@@ -5561,6 +5135,44 @@ mod tests {
         let detection = find_changes(&judged, &context);
         assert_eq!(detection.findings.len(), 1);
         assert_eq!(detection.census.judged(), 1);
+    }
+
+    #[test]
+    fn a_window_at_the_evidence_floor_is_judged_despite_an_excursion_in_it() {
+        // The evidence floor is answered on the window as recorded. Applying it to what
+        // survives excursion cleaning instead would let a discarded reading silence a
+        // series that `testability` — and so the census, and the false-discovery family
+        // sized from it — has already counted as judged.
+        //
+        // The finding is the other half of the statement: the excursion is gone from the
+        // comparison, so the context run is judged against the level the base actually
+        // sits at rather than against a window that reading has widened and pulled up.
+        let mut points = base_run(100.0);
+        let excursion_at = MIN_SERIES_POINTS.checked_div(2).unwrap();
+        points[excursion_at].1 = 200.0;
+        points.push((MIN_SERIES_POINTS, 130.0, false));
+        let mut series = placed_series(&points);
+        attach_test_base_windows(slice::from_mut(&mut series), Some(base_merge_base()));
+        let series = [series];
+        let context = branch_context(&series, Some(base_merge_base()));
+        assert_eq!(testability(&series[0], &context), Testability::Judged);
+        let detection = find_changes(&series, &context);
+        assert_eq!(detection.census.judged(), 1);
+        assert_eq!(detection.findings.len(), 1);
+    }
+
+    #[test]
+    fn the_removal_allowance_cannot_starve_a_window_that_was_judged_eligible() {
+        // Eligibility is settled on the window as recorded, so the levels cleaning may
+        // take have to come out of the margin between the evidence floor and the minimum
+        // a comparison needs. Were the allowance set above that margin, a window could be
+        // counted as judged and then hold too little evidence to compare — the census and
+        // the false-discovery family would both be describing work that cannot happen.
+        let margin = MIN_SERIES_POINTS
+            .checked_sub(MIN_REGIME)
+            .expect("the evidence floor is at least the minimum regime length");
+
+        assert!(EXCURSION_MAX_REMOVALS <= margin);
     }
 
     #[test]
@@ -5836,7 +5448,7 @@ mod tests {
                 stage: GateStage::Drift,
                 gate: Gate::Significance,
                 // No pair of points is ordered, so the rank test reports no trend at all.
-                compared: Some((1.0, AnalysisConfig::default().drift_alpha)),
+                compared: Some((1.0, DRIFT_ALPHA)),
             },
             DeclinedCase {
                 shape: "a climb smaller than the measurement noise band",

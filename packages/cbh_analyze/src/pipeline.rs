@@ -16,7 +16,8 @@ use cbh_config::{
     resolve_project_id, resolve_repo, storage_env,
 };
 use cbh_detect::{
-    AnalysisConfig, AnalysisContext, AnalysisMode, Detection, Series, SeriesCensus, SeriesFilter,
+    AnalysisContext, AnalysisMode, COMPARE_WINDOW, Detection, DiscardedBaseReading,
+    DiscardedReading, MIN_REGIME, MIN_SERIES_POINTS, Series, SeriesCensus, SeriesFilter,
     Testability, UnjudgedReason, apply_blessings, find_changes_spawned, retain_present_at_context,
     short_commit, testability,
 };
@@ -288,11 +289,9 @@ where
     );
     let context = AnalysisContext {
         mode: dataset.mode,
-        config: AnalysisConfig::default(),
         merge_base_index: dataset.merge_base_index,
         base_ref_index: dataset.base_ref_index,
         tip_index: dataset.tip_index,
-        include_improvements: options.include_improvements,
     };
     // Share the series across the detection's blocking tasks without copying; the
     // remaining per-set reporting reads them back through this same handle.
@@ -301,6 +300,7 @@ where
     let Detection {
         findings,
         mut census,
+        discarded,
     } = find_changes_spawned(Arc::clone(&series), context, spawner).await;
     // The ghost filter judged nothing either, and it ran before detection could see
     // those series, so its exclusions join the same account.
@@ -309,6 +309,7 @@ where
         "change detection (find_changes: per-series detectors + FDR filter)",
         detect_started.elapsed(),
     );
+    note_discarded_readings(reporter, &discarded);
     note_series_census(reporter, &series, &context, &census);
     let regressions = findings
         .iter()
@@ -419,6 +420,51 @@ fn all_ghosts_hint(tip_commit: &str) -> String {
     )
 }
 
+/// Explains, under `--verbose`, which base-window readings branch mode left out of its
+/// comparisons.
+///
+/// Discarding narrows the evidence a verdict rests on and so can change that verdict, in
+/// either direction, without any gate declining and without anything appearing in the
+/// report. Naming each discarded reading, what it measured, and the level its neighbours
+/// agreed on lets a reader tell a comparison that was narrowed from one that was not, and
+/// judge for themselves whether the reading deserved to go.
+fn note_discarded_readings<R: Reporter + ?Sized>(reporter: &R, discarded: &[DiscardedBaseReading]) {
+    if discarded.is_empty() {
+        return;
+    }
+    reporter.if_enabled(|notes| {
+        for one in discarded {
+            notes.note(&format!(
+                "discarding base commit at first-parent index {} from the comparison for {} {} \
+                 in {}: it measured {}, while the commits on both sides of it agree on {} — an \
+                 isolated excursion of {:+.1}%, which describes the runner rather than the code",
+                one.reading.topo_index,
+                one.id.qualified(),
+                one.kind.as_str(),
+                one.set,
+                one.reading.value,
+                one.reading.neighbour_level,
+                relative_excursion(&one.reading) * 100.0,
+            ));
+        }
+        notes.note(&format!(
+            "excursion filter: left {} out of the branch comparisons named above, each dropped \
+             rather than replaced by an estimate; every reading remains stored, charted, and \
+             counted toward whether its series had enough base history to be judged at all",
+            count_noun(discarded.len(), "isolated reading"),
+        ));
+    });
+}
+
+/// How far a discarded reading stood from the level its neighbours agreed on, as a
+/// fraction of that level.
+fn relative_excursion(reading: &DiscardedReading) -> f64 {
+    if reading.neighbour_level.abs() <= f64::EPSILON {
+        return 0.0;
+    }
+    (reading.value - reading.neighbour_level) / reading.neighbour_level
+}
+
 /// Explains, under `--verbose`, which series the detectors judged and what each of
 /// the rest lacked.
 ///
@@ -456,19 +502,18 @@ fn note_series_census<R: Reporter + ?Sized>(
                 reason.describe(),
             ));
         }
-        let config = &context.config;
         let rule = match context.mode {
             AnalysisMode::History => format!(
                 "history mode judges a series only from {} in the analyzed window, \
                  since a change point needs {} on each side of it",
-                count_noun(config.min_series_points, "point"),
-                count_noun(config.min_regime, "point"),
+                count_noun(MIN_SERIES_POINTS, "point"),
+                count_noun(MIN_REGIME, "point"),
             ),
             AnalysisMode::Branch => format!(
                 "branch mode judges a series only with a measurement on the branch and \
                  {} in the {}-commit comparison window to judge it against",
-                count_noun(config.min_series_points, "base-branch commit"),
-                config.compare_window,
+                count_noun(MIN_SERIES_POINTS, "base-branch commit"),
+                COMPARE_WINDOW,
             ),
         };
         // The trail states the same ratio the report's header and verdict do, read from
@@ -655,29 +700,25 @@ mod tests {
     /// admits — topology, dirty handling, discriminant filters, `--since` — never on findings.
     const SELECTION_COMMITS: usize = 4;
 
-    #[test]
-    fn fixture_sizes_match_the_analysis_gates() {
-        // The fixture sizes above are literals so the seeded shapes read plainly, but
-        // each one exists to satisfy a production gate. Bind them to the gates here,
-        // so moving a gate fails loudly instead of silently making fixtures vacuous.
-        let config = AnalysisConfig::default();
-        assert_eq!(
-            REGIME_COMMITS, config.min_regime,
-            "a seeded step must hold a full regime on each side of its split"
-        );
-        assert_eq!(
-            HISTORY_COMMITS, config.min_series_points,
-            "a history fixture must be long enough for the detectors to judge it"
-        );
-        assert!(
-            BASE_COMMITS <= config.compare_window,
-            "a branch fixture's whole base line must fit the comparison window"
-        );
-        assert!(
-            SELECTION_COMMITS < config.min_series_points,
-            "the selection fixture is deliberately too short to be judged"
-        );
-    }
+    // The fixture sizes above are literals so the seeded shapes read plainly, but each one
+    // exists to satisfy a production gate. Bind them to the gates here, so moving a gate
+    // fails the build instead of silently making a fixture vacuous.
+    const _: () = assert!(
+        REGIME_COMMITS == MIN_REGIME,
+        "a seeded step must hold a full regime on each side of its split"
+    );
+    const _: () = assert!(
+        HISTORY_COMMITS == MIN_SERIES_POINTS,
+        "a history fixture must be long enough for the detectors to judge it"
+    );
+    const _: () = assert!(
+        BASE_COMMITS <= COMPARE_WINDOW,
+        "a branch fixture's whole base line must fit the comparison window"
+    );
+    const _: () = assert!(
+        SELECTION_COMMITS < MIN_SERIES_POINTS,
+        "the selection fixture is deliberately too short to be judged"
+    );
 
     /// The name of the `index`th commit on a master fixture's line.
     fn commit_name(index: usize) -> String {
@@ -821,11 +862,17 @@ mod tests {
     }
 
     /// Seeds a flat base line of `base_commits` clean runs (`c0 …`) plus a raised
-    /// feature regime: clean `f1` and `f2` runs and a dirty `f2` snapshot on top of
-    /// them. Returns the number of runs stored.
+    /// feature regime. Returns the number of runs stored.
     fn seed_raised_feature(storage: &MemoryStorage, base_commits: usize) -> usize {
-        seed_master(storage, &vec![100.0; base_commits]);
-        let observed = i64::try_from(base_commits).unwrap();
+        seed_feature_over(storage, &vec![100.0; base_commits])
+    }
+
+    /// Seeds `base` as the base line (`c0 …`) plus a raised feature regime: clean `f1`
+    /// and `f2` runs and a dirty `f2` snapshot on top of them. Returns the number of runs
+    /// stored.
+    fn seed_feature_over(storage: &MemoryStorage, base: &[f64]) -> usize {
+        seed_master(storage, base);
+        let observed = i64::try_from(base.len()).unwrap();
         let dirty_at = observed.saturating_add(2);
         store(storage, &clean_key("f1"), &ir_set(observed, "f1", 130.0));
         store(
@@ -838,7 +885,7 @@ mod tests {
             &dirty_key("f2", dirty_at),
             &ir_set(dirty_at, "f2", 130.0),
         );
-        base_commits.saturating_add(3)
+        base.len().saturating_add(3)
     }
 
     /// The observation second the extra merge-base run in a lagging-base fixture
@@ -1470,6 +1517,61 @@ mod tests {
         serde_json::from_str::<serde_json::Value>(report).unwrap()["census"]["judged"]
             .as_u64()
             .expect("every report carries a census")
+    }
+
+    #[test]
+    fn the_trail_names_a_base_reading_left_out_of_a_branch_comparison() {
+        // Discarding a base reading narrows the evidence a verdict rests on without any
+        // gate declining, so nothing else in the output would reveal that the comparison
+        // was not run against the window as measured. The trail must name the commit,
+        // what it measured, what its neighbours agreed on, and how far apart those are,
+        // so a reader can judge the removal rather than merely discover it.
+        let storage = MemoryStorage::new();
+        // Far enough clear of its neighbours to qualify, with a full set of them on both
+        // sides — the shape the filter exists for.
+        let excursion_at = BASE_COMMITS.checked_div(2).unwrap();
+        let mut base = vec![100.0; BASE_COMMITS];
+        // Half again above its neighbours: clear of the magnitude floor, and a ratio the
+        // reported percentage cannot match by accident, so the trail must have computed it
+        // from the reading rather than emitting a constant.
+        base[excursion_at] = 150.0;
+        seed_feature_over(&storage, &base);
+
+        let (report, _, reporter) = analyze_json(&branch_git(), &storage, "folo", &options());
+        assert!(
+            reporter.contains(&format!(
+                "discarding base commit at first-parent index {excursion_at} from the comparison"
+            )),
+            "the trail must name the discarded commit: {report}"
+        );
+        assert!(
+            reporter.contains(
+                "it measured 150, while the commits on both sides of it agree on \
+                 100 — an isolated excursion of +50.0%"
+            ),
+            "the trail must state what was discarded and what it stood clear of: {report}"
+        );
+        assert!(
+            reporter.contains(
+                "excursion filter: left 1 isolated reading out of the branch \
+                 comparisons named above"
+            ),
+            "the trail must summarise how much was left out: {report}"
+        );
+    }
+
+    #[test]
+    fn the_trail_stays_silent_when_no_base_reading_is_left_out() {
+        // The filter reports only what it did. An ordinary window must produce no note at
+        // all, so the presence of one is itself the signal that a comparison was narrowed.
+        let storage = MemoryStorage::new();
+        seed_raised_feature(&storage, BASE_COMMITS);
+
+        let (report, _, reporter) = analyze_json(&branch_git(), &storage, "folo", &options());
+        assert!(
+            !reporter.contains("excursion filter"),
+            "an undisturbed window must not be described as narrowed: {report}"
+        );
     }
 
     #[test]

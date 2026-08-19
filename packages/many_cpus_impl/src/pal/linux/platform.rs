@@ -1,14 +1,16 @@
 use std::borrow::Cow;
-use std::iter::once;
-use std::mem;
+use std::iter::{self, once};
+use std::num::NonZero;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use foldhash::HashMap;
 use itertools::Itertools;
+use new_zealand::nz;
 use nonempty::NonEmpty;
 
 use crate::pal::linux::filesystem::FilesystemFacade;
-use crate::pal::linux::{Bindings, BindingsFacade, Filesystem};
+use crate::pal::linux::{Bindings, BindingsFacade, CpuMask, Filesystem};
 use crate::pal::{Platform, ProcessorFacade, ProcessorImpl};
 use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 
@@ -33,7 +35,41 @@ pub(crate) struct BuildTargetPlatform {
 
     // Only active.
     all_active_processors: OnceLock<NonEmpty<ProcessorFacade>>,
+
+    // System-wide, so not narrowed by what the current process may use.
+    active_processor_count: OnceLock<NonZero<usize>>,
+
+    // The kernel's ID space masks, as published in /sys. Each is read and interpreted once, so
+    // that every derivation made from a mask is made from the same reading of it - two
+    // derivations that disagreed about whether a mask is usable would describe a machine that
+    // does not exist (for example, more active processors than the ID space has room for).
+    possible_processor_ids: OnceLock<Option<NonEmpty<ProcessorId>>>,
+    online_processor_ids: OnceLock<Option<NonEmpty<ProcessorId>>>,
+    possible_memory_region_ids: OnceLock<Option<NonEmpty<MemoryRegionId>>>,
+
+    /// Width, in machine words, of the affinity mask that the operating system last accepted.
+    ///
+    /// This is a hint and not a conclusion: the required width can grow while the process runs,
+    /// so a width that stops working merely sends the search widening again from there.
+    affinity_mask_words: AtomicUsize,
 }
+
+/// The value of `affinity_mask_words` before the operating system has accepted any width.
+///
+/// A mask is never zero words wide, so zero cannot be mistaken for a width that worked.
+const AFFINITY_MASK_WIDTH_UNKNOWN: usize = 0;
+
+/// How many affinity mask widths to try before giving up on reading a thread's affinity.
+///
+/// Each attempt doubles the width of the previous one, starting from a mask that already covers
+/// every processor that the platform's own fixed-size mask can describe, so the final attempt
+/// describes a machine far larger than operating systems support. The limit exists to guarantee
+/// that the search ends. Ref: `packages/many_cpus/docs/linux.md`, "Thread affinity masks".
+const AFFINITY_MASK_ATTEMPTS: usize = 11;
+
+/// Ratio between one affinity mask width that the operating system rejected and the next one to
+/// try. Doubling keeps the number of attempts logarithmic in the size of the machine.
+const AFFINITY_MASK_GROWTH: NonZero<usize> = nz!(2);
 
 impl Platform for BuildTargetPlatform {
     fn get_all_processors(&self) -> NonEmpty<ProcessorFacade> {
@@ -44,20 +80,14 @@ impl Platform for BuildTargetPlatform {
     where
         P: AsRef<ProcessorFacade>,
     {
-        // SAFETY: Zero-initialized cpu_set_t is a valid value.
-        let mut cpu_set: libc::cpu_set_t = unsafe { mem::zeroed() };
+        let mut mask = CpuMask::new();
 
         for processor in processors.iter() {
-            // SAFETY: No safety requirements.
-            unsafe {
-                // TODO: This can go out of bounds with giant CPU set (1000+), we would need to use
-                // dynamically allocated CPU sets instead of relying on the fixed-size one in libc.
-                libc::CPU_SET(processor.as_ref().as_target().id as usize, &mut cpu_set);
-            }
+            mask.insert(processor.as_ref().as_target().id);
         }
 
         self.bindings
-            .sched_setaffinity_current(&cpu_set)
+            .sched_setaffinity_current(&mask)
             .expect("failed to configure thread affinity");
     }
 
@@ -80,16 +110,12 @@ impl Platform for BuildTargetPlatform {
     fn current_thread_processors(&self) -> NonEmpty<ProcessorId> {
         let max_processor_id = self.get_max_processor_id();
 
-        let affinity = self
-            .bindings
-            .sched_getaffinity_current()
-            .expect("failed to get current thread processor affinity");
+        let affinity = self.get_current_thread_affinity();
 
         NonEmpty::from_vec(
-            (0..=max_processor_id)
-                // TODO: Do we need to check for cpuset overflow here to avoid panic?
-                // SAFETY: No safety requirements.
-                .filter(|processor_id| unsafe { libc::CPU_ISSET(*processor_id as usize, &affinity) })
+            affinity
+                .processor_ids()
+                .filter(|processor_id| *processor_id <= max_processor_id)
                 .collect_vec())
                 .expect("current thread has no processors in its affinity mask - impossible because this code is running on an active processor")
     }
@@ -112,7 +138,7 @@ impl Platform for BuildTargetPlatform {
     }
 
     fn active_processor_count(&self) -> usize {
-        self.get_active_processors().len()
+        self.get_active_processor_count().get()
     }
 }
 
@@ -125,7 +151,56 @@ impl BuildTargetPlatform {
             all_active_processors: OnceLock::new(),
             max_processor_id: OnceLock::new(),
             max_memory_region_id: OnceLock::new(),
+            active_processor_count: OnceLock::new(),
+            possible_processor_ids: OnceLock::new(),
+            online_processor_ids: OnceLock::new(),
+            possible_memory_region_ids: OnceLock::new(),
+            affinity_mask_words: AtomicUsize::new(AFFINITY_MASK_WIDTH_UNKNOWN),
         }
+    }
+
+    /// Reads the set of processors that the current thread is allowed to run on.
+    ///
+    /// The operating system refuses to fill an affinity mask that is too narrow to describe
+    /// every processor that it knows of, without saying how wide the mask needs to be, so the
+    /// only way to learn the required width is to offer wider and wider masks until one is
+    /// accepted. Ref: `packages/many_cpus/docs/linux.md`, "Thread affinity masks".
+    fn get_current_thread_affinity(&self) -> CpuMask {
+        let mut last_error = None;
+
+        for words in self.affinity_mask_widths() {
+            match self.bindings.sched_getaffinity_current(words) {
+                Ok(mask) => {
+                    self.affinity_mask_words
+                        .store(words.get(), Ordering::Relaxed);
+
+                    return mask;
+                }
+                // A mask that is too narrow is rejected as an invalid argument. Other causes of
+                // this error exist, so a wider mask is merely the most likely remedy and not a
+                // certain one - which is why the error is preserved for the final report.
+                Err(error) if error.raw_os_error() == Some(libc::EINVAL) => {
+                    last_error = Some(error);
+                }
+                Err(error) => panic!("failed to get current thread processor affinity: {error}"),
+            }
+        }
+
+        panic!(
+            "failed to get current thread processor affinity, even with a mask wider than any operating system can fill: {}",
+            last_error.expect("the search only ends without a mask once an attempt has failed")
+        );
+    }
+
+    /// The affinity mask widths to offer the operating system, in the order to offer them.
+    fn affinity_mask_widths(&self) -> impl Iterator<Item = NonZero<usize>> {
+        // A width that worked before is likely to work again, so we start there. The machine can
+        // grow while the process runs, so this is only a starting point.
+        let first = NonZero::new(self.affinity_mask_words.load(Ordering::Relaxed))
+            .unwrap_or_else(CpuMask::default_words);
+
+        iter::successors(Some(first), |words| words.checked_mul(AFFINITY_MASK_GROWTH))
+            .take(AFFINITY_MASK_ATTEMPTS)
     }
 
     fn get_all_processors_impl(&self) -> &NonEmpty<ProcessorImpl> {
@@ -148,22 +223,91 @@ impl BuildTargetPlatform {
 
     fn get_max_memory_region_id(&self) -> MemoryRegionId {
         *self.max_memory_region_id.get_or_init(|| {
-            self.get_all_processors_impl()
-                .iter()
-                .map(|p| p.memory_region_id)
-                .max()
-                .expect("NonEmpty always has at least one item")
+            // The ID space of memory regions is what the kernel says could possibly exist, which
+            // is what `Platform::max_memory_region_id()` promises: a constant that covers offline
+            // regions and regions this process may not use.
+            //
+            // A kernel that discloses no usable node mask describes a machine with no NUMA
+            // topology for us to read, which `load_all_processors()` treats as the single memory
+            // region that every processor belongs to. That region is then the whole ID space.
+            // Both readings are made from the same interpretation of the mask, so they always
+            // agree on whether there is a topology to read.
+            self.get_possible_memory_region_ids()
+                .map_or(SINGLE_MEMORY_REGION_ID, |ids| *ids.maximum())
         })
     }
 
     fn get_max_processor_id(&self) -> ProcessorId {
         *self.max_processor_id.get_or_init(|| {
+            // The ID space of processors is what the kernel says could possibly exist. The
+            // kernel fixes that set at boot, so the value stays constant as processors go
+            // offline and regardless of which processors this process may use - which is what
+            // `Platform::max_processor_id()` promises.
+            if let Some(possible_processors) = self.get_possible_processor_ids() {
+                return *possible_processors.maximum();
+            }
+
+            // A kernel that publishes no possible mask may still publish the online one, which
+            // describes the machine just as system-wide a fact. It is the next best evidence
+            // because it is also where the count of active processors comes from: deriving the
+            // two from different sources could place the count outside the ID space, which is a
+            // machine that cannot exist.
+            if let Some(online_processors) = self.get_online_processor_ids() {
+                return *online_processors.maximum();
+            }
+
+            // A kernel that publishes no readable mask at all leaves us with the machine we
+            // managed to enumerate. That ID space is narrower than the contract asks for, but it
+            // is the widest one we have evidence for and it still covers every processor a
+            // caller can observe through this package.
             self.get_all_processors_impl()
                 .iter()
                 .map(|p| p.id)
                 .max()
                 .expect("NonEmpty always has at least one item")
         })
+    }
+
+    fn get_active_processor_count(&self) -> NonZero<usize> {
+        *self.active_processor_count.get_or_init(|| {
+            // The count is a fact about the machine, not about this process, so it comes from
+            // the system-wide online mask rather than from the processors we enumerated (which
+            // are narrowed to those the process may use).
+            if let Some(online_processors) = self.get_online_processor_ids() {
+                return NonZero::new(online_processors.len())
+                    .expect("NonEmpty always has at least one item");
+            }
+
+            // A kernel that publishes no readable mask leaves us with the processors we
+            // enumerated. They are all online, so counting them undercounts the machine at
+            // worst, which beats reporting nothing at all.
+            NonZero::new(self.get_active_processors().len())
+                .expect("NonEmpty always has at least one item")
+        })
+    }
+
+    /// The processors that could possibly exist in the system, or `None` when the kernel
+    /// discloses no usable mask.
+    fn get_possible_processor_ids(&self) -> Option<&NonEmpty<ProcessorId>> {
+        self.possible_processor_ids
+            .get_or_init(|| parse_kernel_id_list(self.fs.get_possible_cpus_contents()))
+            .as_ref()
+    }
+
+    /// The processors that are currently online across the whole system, or `None` when the
+    /// kernel discloses no usable mask.
+    fn get_online_processor_ids(&self) -> Option<&NonEmpty<ProcessorId>> {
+        self.online_processor_ids
+            .get_or_init(|| parse_kernel_id_list(self.fs.get_online_cpus_contents()))
+            .as_ref()
+    }
+
+    /// The memory regions that could possibly exist in the system, or `None` when the kernel
+    /// discloses no usable mask - which is the machine that discloses no NUMA topology at all.
+    fn get_possible_memory_region_ids(&self) -> Option<&NonEmpty<MemoryRegionId>> {
+        self.possible_memory_region_ids
+            .get_or_init(|| parse_kernel_id_list(self.fs.get_numa_node_possible_contents()))
+            .as_ref()
     }
 
     fn load_all_processors(&self) -> NonEmpty<ProcessorImpl> {
@@ -183,6 +327,9 @@ impl BuildTargetPlatform {
         // 3. /sys/devices/system/cpu/cpu*/online says whether a processor is online.
         // 4. /proc/self/status gives us the set of processors allowed for the current process.
         // Note: /sys/devices/system/node may be missing if there is only one NUMA node.
+        //
+        // The extent of the ID space is a separate question that none of these files answer -
+        // see `get_max_processor_id()` and `get_max_memory_region_id()`.
         let cpu_infos = self.get_cpuinfo();
         let numa_nodes = self.get_numa_nodes();
         let allowed_processors = self.get_processors_allowed_for_current_process();
@@ -194,8 +341,13 @@ impl BuildTargetPlatform {
             .collect_vec()).expect("found no allowed processors after filtering out forbidden processors - so how is this code even executing?");
 
         // If we did not get any NUMA node info, construct an imaginary NUMA node containing all.
-        let numa_nodes = numa_nodes
-            .unwrap_or_else(|| once((0, cpu_infos.clone().map(|info| info.index))).collect());
+        let numa_nodes = numa_nodes.unwrap_or_else(|| {
+            once((
+                SINGLE_MEMORY_REGION_ID,
+                cpu_infos.clone().map(|info| info.index),
+            ))
+            .collect()
+        });
 
         // We identify efficiency cores by comparing the bogomips of each processor to the maximum
         // bogomips of all processors. If the bogomips is less than the maximum, we consider it an
@@ -215,7 +367,16 @@ impl BuildTargetPlatform {
 
                     None
                 })
-                .expect("processor not found in any NUMA node");
+                // A processor that no node claims is not a machine we may refuse to describe, so
+                // it belongs to the region that every processor belongs to on a machine with no
+                // disclosed topology. Two situations reach here. The member list of each node
+                // and /proc/cpuinfo both name only the online processors and are read at two
+                // different instants, so a processor onlined or offlined in between is named by
+                // one and not the other - letting an unrelated hotplug event take down a process
+                // that merely asked about hardware is not an option. A kernel that lists an
+                // offline processor in /proc/cpuinfo at all also reaches here, because no node
+                // lists that processor either.
+                .unwrap_or(SINGLE_MEMORY_REGION_ID);
 
             let is_slower_than_the_fastest = info
                 .bogomips
@@ -228,8 +389,14 @@ impl BuildTargetPlatform {
                 EfficiencyClass::Performance
             };
 
-            // Some Linux flavors do not report this, so just assume online by default.
-            // Sometimes this is also omitted for a specific processor because... it just is.
+            // Mainstream kernels drop a processor from /proc/cpuinfo the moment it goes offline,
+            // so this check normally finds every enumerated processor online. We keep it because
+            // the per-processor file is the kernel's authoritative answer and a kernel that does
+            // list an offline processor must not have it reported as usable.
+            //
+            // Some Linux flavors do not report this at all, and mainstream kernels omit it for
+            // processor 0 because that processor cannot be taken offline, so an absent file
+            // means online.
             let is_online = self
                 .fs
                 .get_cpu_online_contents(info.index)
@@ -411,25 +578,32 @@ impl BuildTargetPlatform {
         )
     }
 
-    // May return None if everything is in a single NUMA node.
-    //
-    // Otherwise, returns a list of NUMA nodes, where each entry is a list of processor
-    // indexes that belong to that node.
+    /// The processors of each NUMA node the kernel says could possibly exist, or `None` when the
+    /// kernel discloses no node mask we can read a single ID out of - the machine with no NUMA
+    /// topology for us to read.
+    ///
+    /// A node that holds no online processor maps no processor to itself, so the result can be
+    /// empty and need not claim every processor the machine enumerates.
     fn get_numa_nodes(&self) -> Option<HashMap<MemoryRegionId, NonEmpty<ProcessorId>>> {
-        let node_indexes = cpulist::parse(self.fs.get_numa_node_possible_contents()?.trim())
-            .expect("platform provided invalid cpulist for list of NUMA nodes");
+        // The same interpretation of the node mask that `get_max_memory_region_id()` derives the
+        // ID space from, so a mask that names no node we can read means "no topology" to both.
+        let node_indexes = self.get_possible_memory_region_ids()?;
 
         Some(
             node_indexes
-                .into_iter()
-                .map(|node| {
-                    let cpulist_str = self.fs.get_numa_node_cpulist_contents(node);
+                .iter()
+                .filter_map(|node| {
+                    // A node that could possibly exist need not hold any online processor, in
+                    // which case the kernel publishes no member list for it or an empty one.
+                    // Such a node maps no processor to itself while still occupying an ID in the
+                    // memory region ID space - see `get_max_memory_region_id()`.
+                    let cpulist_str = self.fs.get_numa_node_cpulist_contents(*node)?;
                     let cpulist = NonEmpty::from_vec(
                         cpulist::parse(cpulist_str.trim())
-                            .expect("platform provided invalid cpulist for NUMA node members"))
-                        .expect("platform provided empty cpulist for NUMA node members - at least one processor must be present to make a NUMA node");
+                            .expect("platform provided invalid cpulist for NUMA node members"),
+                    )?;
 
-                    (node, cpulist)
+                    Some((*node, cpulist))
                 })
                 .collect(),
         )
@@ -513,6 +687,12 @@ const CPUINFO_KEY_PART: &str = "cpu part";
 /// being reported as a whole by the kernel.
 const SYNTHESIZED_MODEL_PREFIX: &str = "cpuinfo";
 
+/// The memory region every processor belongs to on a machine whose kernel discloses no NUMA
+/// topology, which is also then the only ID in the memory region ID space. It is additionally
+/// where a processor lands when the kernel does disclose a topology but no node claims that
+/// processor - see `load_all_processors()`.
+const SINGLE_MEMORY_REGION_ID: MemoryRegionId = 0;
+
 // A `model name` field is not universal: a 64-bit ARM kernel emits one only when the reading
 // process has a 32-bit personality, so a native 64-bit process sees none at all. Such kernels
 // describe the processor through numeric identity fields instead, and reading `model name` alone
@@ -588,6 +768,22 @@ fn canonical_identity_value(value: &str) -> Cow<'_, str> {
         })
 }
 
+/// Reads one of the kernel's cpulist-format ID masks into the IDs it names.
+///
+/// The kernel publishes the extent of the processor and memory region ID spaces as such masks
+/// (for example `/sys/devices/system/cpu/possible`), which is where the values promised to be
+/// constant and system-wide come from.
+///
+/// Returns `None` when the platform publishes no such file, publishes something we cannot read,
+/// or names no ID at all. Every caller then falls back to describing the machine from whatever
+/// other evidence it has, because a machine we can describe imperfectly is worth more to a caller
+/// than a machine we refuse to describe.
+fn parse_kernel_id_list(contents: Option<String>) -> Option<NonEmpty<u32>> {
+    let ids = cpulist::parse(contents?.trim()).ok()?;
+
+    NonEmpty::from_vec(ids)
+}
+
 /// This is the relative path of the cgroup the current process belongs to (e.g. `/foo/bar`)
 /// or `None` if no cgroup is assigned.
 ///
@@ -652,13 +848,29 @@ mod tests {
         reason = "we need not worry in tests"
     )]
     use std::fmt::Write;
+    use std::sync::Barrier;
+    use std::{io, thread};
 
-    use testing::{assert_panics, f64_diff_abs};
+    use testing::{assert_panics, f64_diff_abs, with_watchdog};
 
     use super::*;
     use crate::pal::linux::{MockBindings, MockFilesystem};
 
     const PROCESSOR_TIME_CLOSE_ENOUGH: f64 = 0.01;
+
+    /// The processor that mainstream kernels cannot take offline and therefore publish no
+    /// `/sys/devices/system/cpu/cpu{}/online` file for.
+    const FIRST_PROCESSOR_ID: ProcessorId = 0;
+
+    /// A machine with more processors than the operating system's own fixed-size mask can
+    /// describe. The identifiers straddle the edge of that mask on purpose.
+    const GIANT_MACHINE_PROCESSORS: [ProcessorId; 5] = [0, 1023, 1024, 1500, 2047];
+
+    /// Memory regions of the processors in `GIANT_MACHINE_PROCESSORS`.
+    const GIANT_MACHINE_MEMORY_REGIONS: [MemoryRegionId; 5] = [0; 5];
+
+    /// Speed of the processors in `GIANT_MACHINE_PROCESSORS`, which the tests do not care about.
+    const GIANT_MACHINE_BOGOMIPS: [f64; 5] = [2000.0; 5];
 
     #[test]
     fn get_all_processors_smoke_test() {
@@ -919,15 +1131,15 @@ mod tests {
     }
 
     #[test]
-    fn one_active_one_inactive_numa_node() {
+    fn numa_node_without_online_processors_stays_in_the_id_space() {
         let mut fs = MockFilesystem::new();
-        // Node 0 -> inactive, Node 1 -> [Performance, Efficiency, Performance]
+        // Node 1 has no online processor, Node 0 -> [Performance, Efficiency, Performance]
         simulate_processor_layout(
             &mut fs,
             [0, 1, 2, 3, 4, 5],
             Some([false, false, false, true, true, true]),
             None,
-            [0, 0, 0, 1, 1, 1],
+            [1, 1, 1, 0, 0, 0],
             [3400.0, 2000.0, 3400.0, 3400.0, 2000.0, 3400.0],
         );
 
@@ -938,10 +1150,10 @@ mod tests {
         let processors = platform.get_all_processors();
         assert_eq!(processors.len(), 3);
 
-        // Node 1 => [Perf, Eff, Perf]
+        // Node 0 => [Perf, Eff, Perf]
         let p0 = &processors[0];
         assert_eq!(p0.as_target().id, 3);
-        assert_eq!(p0.as_target().memory_region_id, 1);
+        assert_eq!(p0.as_target().memory_region_id, 0);
         assert_eq!(
             p0.as_target().efficiency_class,
             EfficiencyClass::Performance
@@ -949,16 +1161,333 @@ mod tests {
 
         let p1 = &processors[1];
         assert_eq!(p1.as_target().id, 4);
-        assert_eq!(p1.as_target().memory_region_id, 1);
+        assert_eq!(p1.as_target().memory_region_id, 0);
         assert_eq!(p1.as_target().efficiency_class, EfficiencyClass::Efficiency);
 
         let p2 = &processors[2];
         assert_eq!(p2.as_target().id, 5);
-        assert_eq!(p2.as_target().memory_region_id, 1);
+        assert_eq!(p2.as_target().memory_region_id, 0);
         assert_eq!(
             p2.as_target().efficiency_class,
             EfficiencyClass::Performance
         );
+
+        // Node 1 holds no processor a caller can observe but remains part of the ID space, so
+        // both nodes are still described by the extent of that space.
+        assert_eq!(platform.max_memory_region_id(), 1);
+
+        // The processors of node 1 are offline, not absent from the machine.
+        assert_eq!(platform.max_processor_id(), 5);
+        assert_eq!(platform.active_processor_count(), 3);
+    }
+
+    #[test]
+    fn numa_node_that_was_never_onlined_publishes_no_member_list() {
+        // A node named in the possible set need not have been onlined at all, in which case the
+        // kernel publishes no directory for the node and therefore no member list either.
+        let cpuinfo = "processor       : 0
+bogomips        : 50.00
+";
+
+        let mut fs = MockFilesystem::new();
+
+        fs.expect_get_cpuinfo_contents()
+            .times(1)
+            .return_const(cpuinfo.to_string());
+        fs.expect_get_possible_cpus_contents()
+            .return_const(Some("0\n".to_string()));
+        fs.expect_get_online_cpus_contents()
+            .return_const(Some("0\n".to_string()));
+        fs.expect_get_numa_node_possible_contents()
+            .times(1)
+            .return_const(Some("0-1\n".to_string()));
+        fs.expect_get_numa_node_cpulist_contents()
+            .withf(|n| *n == 0)
+            .times(1)
+            .return_const(Some("0\n".to_string()));
+        fs.expect_get_numa_node_cpulist_contents()
+            .withf(|n| *n == 1)
+            .times(1)
+            .return_const(None);
+        fs.expect_get_cpu_online_contents()
+            .withf(|p| *p == 0)
+            .times(1)
+            .return_const(None);
+        fs.expect_get_proc_self_status_contents()
+            .times(1)
+            .return_const("Cpus_allowed_list: 0".to_string());
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(MockBindings::new()),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        let processors = platform.get_all_processors();
+
+        assert_eq!(processors.len(), 1);
+        assert_eq!(processors[0].as_target().memory_region_id, 0);
+        assert_eq!(platform.max_memory_region_id(), 1);
+    }
+
+    #[test]
+    fn offline_processors_stay_in_the_processor_id_space() {
+        let mut fs = MockFilesystem::new();
+
+        simulate_processor_layout(
+            &mut fs,
+            [0, 1, 2, 3, 4, 5, 6, 7],
+            Some([true, true, true, true, false, false, false, false]),
+            None,
+            [0; 8],
+            [2000.0; 8],
+        );
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(MockBindings::new()),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        // Taking a processor offline does not remove it from the machine, so the ID space keeps
+        // its extent while only the online processors can be observed and used.
+        assert_eq!(platform.max_processor_id(), 7);
+        assert_eq!(platform.active_processor_count(), 4);
+        assert_eq!(platform.get_all_processors().len(), 4);
+    }
+
+    #[test]
+    fn forbidden_processors_stay_in_the_processor_id_space() {
+        let mut fs = MockFilesystem::new();
+
+        simulate_processor_layout(
+            &mut fs,
+            [0, 1, 2, 3, 4, 5, 6, 7],
+            None,
+            Some([true, true, false, false, false, false, false, false]),
+            [0; 8],
+            [2000.0; 8],
+        );
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(MockBindings::new()),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        // Both the extent of the ID space and the count of online processors describe the
+        // machine, so a constraint on what this process may use leaves them untouched.
+        assert_eq!(platform.max_processor_id(), 7);
+        assert_eq!(platform.active_processor_count(), 8);
+        assert_eq!(platform.get_all_processors().len(), 2);
+    }
+
+    #[test]
+    fn machine_without_id_space_masks_is_described_by_its_processors() {
+        let mut fs = MockFilesystem::new();
+
+        simulate_processor_layout_without_id_space_masks(
+            &mut fs,
+            [0, 1, 2, 3],
+            Some([true, true, false, true]),
+            [2000.0; 4],
+        );
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(MockBindings::new()),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        // With no mask to read, the machine we enumerated is all the evidence we have.
+        assert_eq!(platform.max_processor_id(), 3);
+        assert_eq!(platform.max_memory_region_id(), 0);
+        assert_eq!(platform.active_processor_count(), 3);
+        assert_eq!(platform.get_all_processors().len(), 3);
+    }
+
+    #[test]
+    fn machine_with_only_the_online_mask_derives_the_id_space_from_it() {
+        let mut fs = MockFilesystem::new();
+
+        // A machine of 8 processors whose kernel discloses which of them are online but not
+        // which of them could possibly exist, with the process narrowed to two of them.
+        simulate_processor_layout_with_only_the_online_mask(
+            &mut fs,
+            [0, 1, 2, 3, 4, 5, 6, 7],
+            Some([true, true, false, false, false, false, false, false]),
+            [2000.0; 8],
+        );
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(MockBindings::new()),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        // The online mask describes the machine and not this process, so the extent of the ID
+        // space follows it rather than the two processors this process may use.
+        assert_eq!(platform.max_processor_id(), 7);
+        assert_eq!(platform.active_processor_count(), 8);
+        assert_eq!(platform.get_all_processors().len(), 2);
+
+        // Every active processor occupies an ID, so an ID space that cannot name them all
+        // describes a machine that cannot exist. Deriving both from the same mask is what
+        // guarantees this.
+        assert!(
+            usize::try_from(platform.max_processor_id()).unwrap() + 1
+                >= platform.active_processor_count()
+        );
+    }
+
+    #[test]
+    fn cpuinfo_listing_offline_processor_excludes_the_processor() {
+        // Mainstream kernels drop an offline processor from /proc/cpuinfo, but a kernel that
+        // lists one anyway must not have it reported as a processor a caller may use. The node
+        // member list is what the kernel really publishes for such a machine: it names only the
+        // online processor, leaving the offline one claimed by no node at all.
+        let cpuinfo = "processor       : 0
+bogomips        : 50.00
+
+processor       : 1
+bogomips        : 50.00
+";
+
+        let mut fs = MockFilesystem::new();
+
+        fs.expect_get_cpuinfo_contents()
+            .times(1)
+            .return_const(cpuinfo.to_string());
+        fs.expect_get_possible_cpus_contents()
+            .return_const(Some("0-1\n".to_string()));
+        fs.expect_get_online_cpus_contents()
+            .return_const(Some("0\n".to_string()));
+        fs.expect_get_numa_node_possible_contents()
+            .times(1)
+            .return_const(Some("0\n".to_string()));
+        fs.expect_get_numa_node_cpulist_contents()
+            .withf(|n| *n == 0)
+            .times(1)
+            .return_const(Some("0\n".to_string()));
+        fs.expect_get_cpu_online_contents()
+            .withf(|p| *p == 0)
+            .times(1)
+            .return_const(None);
+        fs.expect_get_cpu_online_contents()
+            .withf(|p| *p == 1)
+            .times(1)
+            .return_const(Some("0\n".to_string()));
+        fs.expect_get_proc_self_status_contents()
+            .times(1)
+            .return_const("Cpus_allowed_list: 0-1".to_string());
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(MockBindings::new()),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        let processors = platform.get_all_processors();
+
+        assert_eq!(processors.len(), 1);
+        assert_eq!(processors[0].as_target().id, 0);
+    }
+
+    #[test]
+    fn processor_claimed_by_no_numa_node_is_still_reported() {
+        // A processor can be onlined between the moment we read /proc/cpuinfo and the moment we
+        // read the member list of each node, which leaves it named by the former and claimed by
+        // no node. Losing the machine to that race is not an option, so the processor belongs to
+        // the memory region that a machine without a disclosed topology uses.
+        let cpuinfo = "processor       : 0
+bogomips        : 50.00
+
+processor       : 1
+bogomips        : 50.00
+";
+
+        let mut fs = MockFilesystem::new();
+
+        fs.expect_get_cpuinfo_contents()
+            .times(1)
+            .return_const(cpuinfo.to_string());
+        fs.expect_get_possible_cpus_contents()
+            .return_const(Some("0-1\n".to_string()));
+        fs.expect_get_online_cpus_contents()
+            .return_const(Some("0-1\n".to_string()));
+        fs.expect_get_numa_node_possible_contents()
+            .times(1)
+            .return_const(Some("0\n".to_string()));
+        fs.expect_get_numa_node_cpulist_contents()
+            .withf(|n| *n == 0)
+            .times(1)
+            .return_const(Some("0\n".to_string()));
+        fs.expect_get_cpu_online_contents()
+            .withf(|p| *p == 0)
+            .times(1)
+            .return_const(None);
+        fs.expect_get_cpu_online_contents()
+            .withf(|p| *p == 1)
+            .times(1)
+            .return_const(Some("1\n".to_string()));
+        fs.expect_get_proc_self_status_contents()
+            .times(1)
+            .return_const("Cpus_allowed_list: 0-1".to_string());
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(MockBindings::new()),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        let processors = platform.get_all_processors();
+
+        assert_eq!(processors.len(), 2);
+        assert_eq!(processors[1].as_target().id, 1);
+        assert_eq!(
+            processors[1].as_target().memory_region_id,
+            SINGLE_MEMORY_REGION_ID
+        );
+    }
+
+    #[test]
+    fn numa_node_mask_that_names_nothing_is_a_machine_without_topology() {
+        // A node mask we cannot read a single ID out of tells us nothing about the topology,
+        // which must leave the machine described exactly as one whose kernel publishes no mask
+        // at all - the alternative is a topology that claims no processor, which describes no
+        // machine that could exist.
+        let cpuinfo = "processor       : 0
+bogomips        : 50.00
+";
+
+        for node_mask in ["", "\n", ",", "this is not a cpulist"] {
+            let mut fs = MockFilesystem::new();
+
+            fs.expect_get_cpuinfo_contents()
+                .times(1)
+                .return_const(cpuinfo.to_string());
+            fs.expect_get_possible_cpus_contents()
+                .return_const(Some("0\n".to_string()));
+            fs.expect_get_online_cpus_contents()
+                .return_const(Some("0\n".to_string()));
+            fs.expect_get_numa_node_possible_contents()
+                .times(1)
+                .return_const(Some(node_mask.to_string()));
+            fs.expect_get_cpu_online_contents()
+                .withf(|p| *p == 0)
+                .times(1)
+                .return_const(None);
+            fs.expect_get_proc_self_status_contents()
+                .times(1)
+                .return_const("Cpus_allowed_list: 0".to_string());
+
+            let platform = BuildTargetPlatform::new(
+                BindingsFacade::from_mock(MockBindings::new()),
+                FilesystemFacade::from_mock(fs),
+            );
+
+            let processors = platform.get_all_processors();
+
+            assert_eq!(processors.len(), 1);
+            assert_eq!(
+                processors[0].as_target().memory_region_id,
+                SINGLE_MEMORY_REGION_ID
+            );
+            assert_eq!(platform.max_memory_region_id(), SINGLE_MEMORY_REGION_ID);
+        }
     }
 
     #[test]
@@ -1012,29 +1541,114 @@ mod tests {
         );
     }
 
-    /// Configures mock bindings and filesystem to simulate a particular type of processor layout.
+    /// Configures the mock filesystem to simulate a particular machine.
     ///
-    /// The simulation is valid for one call to `get_all_processors_impl()`.
+    /// The processors named here are the processors the machine could possibly have, which is
+    /// what the kernel publishes in `/sys/devices/system/cpu/possible` and what defines the
+    /// processor ID space. A processor that is offline is absent from `/proc/cpuinfo` and from
+    /// `/sys/devices/system/cpu/online`, matching what mainstream kernels publish, so the
+    /// simulated machine can have an ID space wider than the set of processors it currently
+    /// runs. The same holds for memory regions: every region named here is published in
+    /// `/sys/devices/system/node/possible`, while a region whose every processor is offline
+    /// publishes an empty member list.
     fn simulate_processor_layout<const PROCESSOR_COUNT: usize>(
         fs: &mut MockFilesystem,
         processor_index: [ProcessorId; PROCESSOR_COUNT],
-        // If None, all are active.
-        processor_is_active: Option<[bool; PROCESSOR_COUNT]>,
+        // If None, all are online.
+        processor_is_online: Option<[bool; PROCESSOR_COUNT]>,
         // If None, all are allowed.
         processor_is_allowed: Option<[bool; PROCESSOR_COUNT]>,
         memory_region_index: [MemoryRegionId; PROCESSOR_COUNT],
         bogomips_per_processor: [f64; PROCESSOR_COUNT],
     ) {
-        let processor_is_active = processor_is_active.unwrap_or([true; PROCESSOR_COUNT]);
-        let processor_is_allowed = processor_is_allowed.unwrap_or([true; PROCESSOR_COUNT]);
+        simulate_machine(
+            fs,
+            processor_index,
+            processor_is_online.unwrap_or([true; PROCESSOR_COUNT]),
+            processor_is_allowed.unwrap_or([true; PROCESSOR_COUNT]),
+            memory_region_index,
+            bogomips_per_processor,
+            IdSpaceMasks::Published,
+        );
+    }
 
-        // Remember that the cpuinfo list will return all processors, including inactive ones.
+    /// Configures the mock filesystem to simulate a machine whose kernel publishes none of the
+    /// masks that describe the ID space, which is what the fallback derivations exist for.
+    ///
+    /// Such a kernel discloses no NUMA topology either, so every processor of the simulated
+    /// machine belongs to one memory region and every processor is online.
+    fn simulate_processor_layout_without_id_space_masks<const PROCESSOR_COUNT: usize>(
+        fs: &mut MockFilesystem,
+        processor_index: [ProcessorId; PROCESSOR_COUNT],
+        // If None, all are allowed.
+        processor_is_allowed: Option<[bool; PROCESSOR_COUNT]>,
+        bogomips_per_processor: [f64; PROCESSOR_COUNT],
+    ) {
+        simulate_machine(
+            fs,
+            processor_index,
+            [true; PROCESSOR_COUNT],
+            processor_is_allowed.unwrap_or([true; PROCESSOR_COUNT]),
+            [SINGLE_MEMORY_REGION_ID; PROCESSOR_COUNT],
+            bogomips_per_processor,
+            IdSpaceMasks::Absent,
+        );
+    }
+
+    /// Configures the mock filesystem to simulate a machine whose kernel publishes the online
+    /// processor mask but not the possible one, which is the mixed state where one system-wide
+    /// mask is available to describe the machine and the other is not.
+    ///
+    /// Such a kernel discloses no NUMA topology either, so every processor of the simulated
+    /// machine belongs to one memory region and every processor is online.
+    fn simulate_processor_layout_with_only_the_online_mask<const PROCESSOR_COUNT: usize>(
+        fs: &mut MockFilesystem,
+        processor_index: [ProcessorId; PROCESSOR_COUNT],
+        // If None, all are allowed.
+        processor_is_allowed: Option<[bool; PROCESSOR_COUNT]>,
+        bogomips_per_processor: [f64; PROCESSOR_COUNT],
+    ) {
+        simulate_machine(
+            fs,
+            processor_index,
+            [true; PROCESSOR_COUNT],
+            processor_is_allowed.unwrap_or([true; PROCESSOR_COUNT]),
+            [SINGLE_MEMORY_REGION_ID; PROCESSOR_COUNT],
+            bogomips_per_processor,
+            IdSpaceMasks::OnlyOnlineProcessors,
+        );
+    }
+
+    /// Which of the masks that describe the extent of the ID space the simulated kernel
+    /// publishes.
+    ///
+    /// A mainstream kernel publishes all of them, so the other variants exist to reach the
+    /// derivations we fall back to when a kernel discloses less.
+    #[derive(Clone, Copy)]
+    enum IdSpaceMasks {
+        Published,
+        Absent,
+        OnlyOnlineProcessors,
+    }
+
+    fn simulate_machine<const PROCESSOR_COUNT: usize>(
+        fs: &mut MockFilesystem,
+        processor_index: [ProcessorId; PROCESSOR_COUNT],
+        processor_is_online: [bool; PROCESSOR_COUNT],
+        processor_is_allowed: [bool; PROCESSOR_COUNT],
+        memory_region_index: [MemoryRegionId; PROCESSOR_COUNT],
+        bogomips_per_processor: [f64; PROCESSOR_COUNT],
+        id_space_masks: IdSpaceMasks,
+    ) {
+        let online_positions = || (0..PROCESSOR_COUNT).filter(|index| processor_is_online[*index]);
 
         let mut cpuinfo = String::new();
 
-        for (processor_index, bogomips) in processor_index.iter().zip(bogomips_per_processor.iter())
-        {
-            writeln!(cpuinfo, "processor       : {processor_index}").unwrap();
+        for position in online_positions() {
+            let processor_id = processor_index[position];
+            let bogomips = bogomips_per_processor[position];
+
+            writeln!(cpuinfo, "processor       : {processor_id}").unwrap();
             writeln!(cpuinfo, "model name      : Test Processor Model").unwrap();
             writeln!(cpuinfo, "bogomips        : {bogomips}").unwrap();
             writeln!(cpuinfo, "whatever        : 123").unwrap();
@@ -1042,75 +1656,103 @@ mod tests {
             writeln!(cpuinfo).unwrap();
         }
 
-        let node_indexes =
-            NonEmpty::from_vec(memory_region_index.iter().copied().unique().collect_vec())
-                .expect("simulating zero nodes is not supported");
-        let mut node_indexes_cpulist = cpulist::emit(node_indexes);
-        // \n might or might not be present, so let us verify that it gets
-        // trimmed if it is.
-        node_indexes_cpulist.push('\n');
-
-        let processors_per_node = memory_region_index
-            .iter()
-            .copied()
-            .zip(processor_index.iter().copied())
-            .into_group_map();
-
+        // Each file below answers a question the platform derives once and remembers, so asking
+        // the platform repeatedly must not read it again - asserting the exact count is what
+        // keeps that memoization honest. The processor ID space masks are pinned by the tests
+        // that read them rather than here, because most simulated scenarios ask no question
+        // that reaches them.
         fs.expect_get_cpuinfo_contents()
             .times(1)
             .return_const(cpuinfo);
 
+        let node_indexes = memory_region_index.iter().copied().unique().collect_vec();
+
+        // A trailing newline might or might not be present in a real file, so we add one
+        // everywhere to verify that it gets trimmed.
+        let possible_processors = format!("{}\n", cpulist::emit(processor_index));
+        let online_processor_ids = online_positions()
+            .map(|position| processor_index[position])
+            .collect_vec();
+        let online_processors = format!("{}\n", cpulist::emit(online_processor_ids));
+        let possible_nodes = format!("{}\n", cpulist::emit(node_indexes.iter().copied()));
+
+        let (possible_processors, possible_nodes) = match id_space_masks {
+            IdSpaceMasks::Published => {
+                fs.expect_get_online_cpus_contents()
+                    .return_const(Some(online_processors));
+
+                (Some(possible_processors), Some(possible_nodes))
+            }
+            IdSpaceMasks::Absent => {
+                fs.expect_get_online_cpus_contents().return_const(None);
+
+                (None, None)
+            }
+            IdSpaceMasks::OnlyOnlineProcessors => {
+                // Both the extent of the ID space and the count of active processors come from
+                // this one mask on such a machine, so reading it exactly once is what says the
+                // two are derived from the same reading of it.
+                fs.expect_get_online_cpus_contents()
+                    .times(1)
+                    .return_const(Some(online_processors));
+
+                (None, None)
+            }
+        };
+
+        let publishes_numa_topology = possible_nodes.is_some();
+
+        fs.expect_get_possible_cpus_contents()
+            .return_const(possible_processors);
         fs.expect_get_numa_node_possible_contents()
             .times(1)
-            .return_const(Some(node_indexes_cpulist));
+            .return_const(possible_nodes);
 
-        for (index, processor_id) in processor_index.iter().copied().enumerate() {
-            if !processor_is_allowed[index] {
+        for position in online_positions() {
+            if !processor_is_allowed[position] {
                 // Forbidden processors are not probed.
                 continue;
             }
 
-            let is_online = processor_is_active[processor_id as usize];
+            let processor_id = processor_index[position];
+
             fs.expect_get_cpu_online_contents()
                 .withf(move |p| *p == processor_id)
                 .times(1)
-                .return_const(if is_online {
-                    // \n might or might not be present, so let us verify
-                    // that it gets trimmed if it is.
-                    Some("1\n".to_string())
+                .return_const(if processor_id == FIRST_PROCESSOR_ID {
+                    // Mainstream kernels publish no such file for the first processor because
+                    // that processor cannot be taken offline.
+                    None
                 } else {
-                    Some("0".to_string())
+                    Some("1\n".to_string())
                 });
         }
 
-        for (node, processors) in processors_per_node {
-            let mut cpulist = processors
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(",");
+        // The kernel publishes a directory per node only for a machine whose topology it
+        // discloses at all, so a machine without the node mask publishes no member list either.
+        if publishes_numa_topology {
+            for node in node_indexes {
+                let members = online_positions()
+                    .filter(|position| memory_region_index[*position] == node)
+                    .map(|position| processor_index[position])
+                    .collect_vec();
 
-            // This might or might not be present, so let us verify that it gets trimmed if it is.
-            cpulist.push('\n');
+                // A node that holds no online processor publishes an empty member list.
+                let members = format!("{}\n", cpulist::emit(members));
 
-            fs.expect_get_numa_node_cpulist_contents()
-                .withf(move |n| *n == node)
-                .times(1)
-                .return_const(cpulist);
+                fs.expect_get_numa_node_cpulist_contents()
+                    .withf(move |n| *n == node)
+                    .times(1)
+                    .return_const(Some(members));
+            }
         }
 
-        let allowed_processors = NonEmpty::from_vec(processor_index
-            .iter()
-            .copied()
-            .enumerate()
-            .filter_map(|(index, processor_id)| {
-                if processor_is_allowed[index] {
-                    Some(processor_id)
-                } else {
-                    None
-                }
-            })
-            .collect_vec()).expect("simulated configuration allows zero processors - this is not valid, as some processor must be present to execute the code under test");
+        let allowed_processors = (0..PROCESSOR_COUNT)
+            .filter(|position| processor_is_allowed[*position])
+            .map(|position| processor_index[position])
+            .collect_vec();
+
+        assert!(!allowed_processors.is_empty());
 
         let allowed_cpus = cpulist::emit(allowed_processors);
 
@@ -1187,14 +1829,11 @@ mod tests {
     fn pin_current_thread_to_single_processor() {
         let mut bindings = MockBindings::new();
 
-        let expected_set = cpuset_from([0]);
+        let expected_mask = mask_from([0]);
 
         bindings
             .expect_sched_setaffinity_current()
-            .withf(move |cpu_set| {
-                // SAFETY: No safety requirements.
-                unsafe { libc::CPU_EQUAL(cpu_set, &expected_set) }
-            })
+            .withf(move |mask| *mask == expected_mask)
             .times(1)
             .returning(|_| Ok(()));
 
@@ -1213,14 +1852,11 @@ mod tests {
     fn pin_current_thread_to_multiple_processors() {
         let mut bindings = MockBindings::new();
 
-        let expected_set = cpuset_from([0, 1]);
+        let expected_mask = mask_from([0, 1]);
 
         bindings
             .expect_sched_setaffinity_current()
-            .withf(move |cpu_set| {
-                // SAFETY: No safety requirements.
-                unsafe { libc::CPU_EQUAL(cpu_set, &expected_set) }
-            })
+            .withf(move |mask| *mask == expected_mask)
             .times(1)
             .returning(|_| Ok(()));
 
@@ -1239,14 +1875,11 @@ mod tests {
     fn pin_current_thread_to_multiple_memory_regions() {
         let mut bindings = MockBindings::new();
 
-        let expected_set = cpuset_from([0, 1]);
+        let expected_mask = mask_from([0, 1]);
 
         bindings
             .expect_sched_setaffinity_current()
-            .withf(move |cpu_set| {
-                // SAFETY: No safety requirements.
-                unsafe { libc::CPU_EQUAL(cpu_set, &expected_set) }
-            })
+            .withf(move |mask| *mask == expected_mask)
             .times(1)
             .returning(|_| Ok(()));
 
@@ -1265,14 +1898,11 @@ mod tests {
     fn pin_current_thread_to_efficiency_processors() {
         let mut bindings = MockBindings::new();
 
-        let expected_set = cpuset_from([1, 2]);
+        let expected_mask = mask_from([1, 2]);
 
         bindings
             .expect_sched_setaffinity_current()
-            .withf(move |cpu_set| {
-                // SAFETY: No safety requirements.
-                unsafe { libc::CPU_EQUAL(cpu_set, &expected_set) }
-            })
+            .withf(move |mask| *mask == expected_mask)
             .times(1)
             .returning(|_| Ok(()));
 
@@ -1302,50 +1932,60 @@ mod tests {
         platform.pin_current_thread_to(&efficiency_processors);
     }
 
-    fn cpuset_from<const PROCESSOR_COUNT: usize>(
+    fn mask_from<const PROCESSOR_COUNT: usize>(
         processors: [ProcessorId; PROCESSOR_COUNT],
-    ) -> libc::cpu_set_t {
-        // SAFETY: Zero-initialized CPU set is correct.
-        let mut cpu_set: libc::cpu_set_t = unsafe { mem::zeroed() };
+    ) -> CpuMask {
+        let mut mask = CpuMask::new();
 
         for processor in processors {
-            // SAFETY: No safety requirements.
-            unsafe {
-                // TODO: This can go out of bounds with giant CPU set, we need to use dynamically
-                // allocated CPU sets instead of relying on the fixed-size one in libc.
-                libc::CPU_SET(processor as usize, &mut cpu_set);
-            }
+            mask.insert(processor);
         }
 
-        cpu_set
+        mask
+    }
+
+    /// A mask as the operating system would have filled it: exactly as wide as it was asked to be.
+    ///
+    /// The real bindings hand over a buffer of the requested width and the operating system fills
+    /// that buffer, so it can never answer with a processor that the requested width cannot
+    /// describe. A mock that answers otherwise describes something that cannot happen, which
+    /// would let a test pass on an impossible response, so the width is enforced here.
+    fn mask_of_width<const PROCESSOR_COUNT: usize>(
+        words: NonZero<usize>,
+        processors: [ProcessorId; PROCESSOR_COUNT],
+    ) -> CpuMask {
+        let mut mask = CpuMask::with_words(words);
+
+        for processor in processors {
+            mask.insert(processor);
+            assert_eq!(mask.words(), words);
+        }
+
+        mask
     }
 
     #[test]
     fn current_thread_processors_smoke_test() {
         let mut bindings = MockBindings::new();
 
-        let expected_set_1 = cpuset_from([0, 1]);
-        let expected_set_2 = cpuset_from([2]);
+        bindings
+            .expect_sched_getaffinity_current()
+            .times(1)
+            .returning(|words| Ok(mask_of_width(words, [0, 1])));
 
         bindings
             .expect_sched_getaffinity_current()
             .times(1)
-            .returning(move || Ok(expected_set_1));
-
-        bindings
-            .expect_sched_getaffinity_current()
-            .times(1)
-            .returning(move || Ok(expected_set_2));
+            .returning(|words| Ok(mask_of_width(words, [2])));
 
         let mut fs = MockFilesystem::new();
-        simulate_processor_layout(
-            &mut fs,
-            [0, 1, 2],
-            None,
-            None,
-            [0, 0, 0],
-            [2000.0, 2000.0, 1000.0],
-        );
+
+        // The affinity mask and the extent of the processor ID space are all this operation
+        // reads - it never enumerates the machine - and the ID space is remembered after the
+        // first reading, so the mask that describes it is read once for both calls below.
+        fs.expect_get_possible_cpus_contents()
+            .times(1)
+            .return_const(Some("0-2\n".to_string()));
 
         let platform = BuildTargetPlatform::new(
             BindingsFacade::from_mock(bindings),
@@ -1360,6 +2000,340 @@ mod tests {
         let current_thread_processors = platform.current_thread_processors();
         assert_eq!(current_thread_processors.len(), 1);
         assert_eq!(current_thread_processors[0], 2);
+    }
+
+    #[test]
+    fn current_thread_processors_widens_mask_until_operating_system_accepts_it() {
+        let mut bindings = MockBindings::new();
+
+        let narrow = CpuMask::default_words();
+        let wide = narrow.checked_mul(AFFINITY_MASK_GROWTH).unwrap();
+
+        // A mask too narrow to describe every processor is rejected as an invalid argument.
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words == narrow)
+            .times(1)
+            .returning(|_| Err(io::Error::from_raw_os_error(libc::EINVAL)));
+
+        let affinity = [1024, 1500, 2047];
+
+        // Both reads are expected to use the wider mask - the second one because the first one
+        // already established the width that this operating system wants.
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words == wide)
+            .times(2)
+            .returning(move |words| Ok(mask_of_width(words, affinity)));
+
+        let mut fs = MockFilesystem::new();
+
+        // Reading the affinity reads only the extent of the processor ID space, which comes from
+        // the possible-processor mask; the machine is never enumerated, so that mask is the only
+        // file this scenario sets up.
+        fs.expect_get_possible_cpus_contents()
+            .times(1)
+            .return_const(Some(format!(
+                "{}\n",
+                cpulist::emit(GIANT_MACHINE_PROCESSORS)
+            )));
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(bindings),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        for _ in 0..2 {
+            let current_thread_processors = platform.current_thread_processors();
+
+            assert_eq!(
+                current_thread_processors.iter().copied().collect_vec(),
+                vec![1024, 1500, 2047]
+            );
+        }
+    }
+
+    #[test]
+    fn current_thread_processors_widens_again_when_the_remembered_width_stops_working() {
+        let mut bindings = MockBindings::new();
+
+        let narrow = CpuMask::default_words();
+        let wide = narrow.checked_mul(AFFINITY_MASK_GROWTH).unwrap();
+
+        // Every processor here fits in the narrower mask, which is what makes the first read
+        // succeed at that width.
+        let before = [0, 1023];
+        let after = [1024, 1500, 2047];
+
+        // The first read settles on a width and it is remembered.
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words == narrow)
+            .times(1)
+            .returning(move |words| Ok(mask_of_width(words, before)));
+
+        // The machine can grow while the process runs, so a remembered width is a hint and not a
+        // conclusion - once it stops working, the search must widen again rather than give up.
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words == narrow)
+            .times(1)
+            .returning(|_| Err(io::Error::from_raw_os_error(libc::EINVAL)));
+
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words == wide)
+            .times(1)
+            .returning(move |words| Ok(mask_of_width(words, after)));
+
+        let mut fs = MockFilesystem::new();
+
+        // See the first widening test: only the possible-processor mask is read.
+        fs.expect_get_possible_cpus_contents()
+            .times(1)
+            .return_const(Some(format!(
+                "{}\n",
+                cpulist::emit(GIANT_MACHINE_PROCESSORS)
+            )));
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(bindings),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        assert_eq!(
+            platform
+                .current_thread_processors()
+                .iter()
+                .copied()
+                .collect_vec(),
+            vec![0, 1023]
+        );
+
+        assert_eq!(
+            platform
+                .current_thread_processors()
+                .iter()
+                .copied()
+                .collect_vec(),
+            vec![1024, 1500, 2047]
+        );
+    }
+
+    #[test]
+    fn current_thread_processors_shares_the_remembered_width_across_threads() {
+        // The remembered width is the one piece of shared mutable state in the platform, so it
+        // is read and written concurrently in practice. Every thread must come away with the
+        // same answer no matter how their reads interleave.
+        const READER_COUNT: usize = 8;
+        const READS_PER_READER: usize = 16;
+
+        let mut bindings = MockBindings::new();
+
+        let narrow = CpuMask::default_words();
+        let wide = narrow.checked_mul(AFFINITY_MASK_GROWTH).unwrap();
+        let affinity = [1024, 1500, 2047];
+
+        // How many threads try the narrower width before one of them establishes the wider one
+        // depends on how the threads interleave, so no count is expected here.
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words == narrow)
+            .returning(|_| Err(io::Error::from_raw_os_error(libc::EINVAL)));
+
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words == wide)
+            .returning(move |words| Ok(mask_of_width(words, affinity)));
+
+        let mut fs = MockFilesystem::new();
+
+        // See the first widening test: only the possible-processor mask is read, and the platform
+        // remembers it after the first reading even under concurrent readers.
+        fs.expect_get_possible_cpus_contents()
+            .times(1)
+            .return_const(Some(format!(
+                "{}\n",
+                cpulist::emit(GIANT_MACHINE_PROCESSORS)
+            )));
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(bindings),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        // Releasing every thread at once is what makes them contend for the remembered width.
+        let start = Barrier::new(READER_COUNT);
+
+        // The barrier and thread joins block, so a scheduling or mutation defect could hang the
+        // test rather than fail it; the watchdog turns such a hang into a failure instead.
+        with_watchdog(move || {
+            thread::scope(|scope| {
+                for _ in 0..READER_COUNT {
+                    scope.spawn(|| {
+                        start.wait();
+
+                        for _ in 0..READS_PER_READER {
+                            assert_eq!(
+                                platform
+                                    .current_thread_processors()
+                                    .iter()
+                                    .copied()
+                                    .collect_vec(),
+                                affinity.to_vec()
+                            );
+                        }
+                    });
+                }
+            });
+        });
+    }
+
+    #[test]
+    fn current_thread_processors_ignores_processors_beyond_the_known_hardware() {
+        // The operating system sizes its answer by the processors it could ever have, which can
+        // exceed the processors that the hardware inventory lists, so it may name a processor
+        // that the inventory knows nothing about.
+        const UNKNOWN_PROCESSOR: ProcessorId = 3000;
+
+        let mut bindings = MockBindings::new();
+
+        // Naming a processor beyond the known hardware takes a mask wide enough to describe one,
+        // so the operating system here is one that demands a mask two widenings out.
+        let accepted = CpuMask::default_words()
+            .checked_mul(AFFINITY_MASK_GROWTH)
+            .unwrap()
+            .checked_mul(AFFINITY_MASK_GROWTH)
+            .unwrap();
+
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words < accepted)
+            .times(2)
+            .returning(|_| Err(io::Error::from_raw_os_error(libc::EINVAL)));
+
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words == accepted)
+            .times(1)
+            .returning(|words| Ok(mask_of_width(words, [1024, UNKNOWN_PROCESSOR])));
+
+        let mut fs = MockFilesystem::new();
+
+        // See the first widening test: only the possible-processor mask is read, and it is what
+        // bounds the ID space so that a named processor beyond it is left out.
+        fs.expect_get_possible_cpus_contents()
+            .times(1)
+            .return_const(Some(format!(
+                "{}\n",
+                cpulist::emit(GIANT_MACHINE_PROCESSORS)
+            )));
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(bindings),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        let current_thread_processors = platform.current_thread_processors();
+
+        assert_eq!(
+            current_thread_processors.iter().copied().collect_vec(),
+            vec![1024]
+        );
+    }
+
+    #[test]
+    fn current_thread_processors_panics_on_unexpected_error() {
+        let mut bindings = MockBindings::new();
+
+        // Only an invalid argument suggests that a wider mask might help.
+        bindings
+            .expect_sched_getaffinity_current()
+            .times(1)
+            .returning(|_| Err(io::Error::from_raw_os_error(libc::EPERM)));
+
+        let mut fs = MockFilesystem::new();
+
+        // Reading the affinity reads only the possible-processor mask before it consults the
+        // operating system, so that mask is the one file this scenario sets up.
+        fs.expect_get_possible_cpus_contents()
+            .times(1)
+            .return_const(Some("0\n".to_string()));
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(bindings),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        assert_panics(|| platform.current_thread_processors());
+    }
+
+    #[test]
+    fn current_thread_processors_gives_up_when_no_mask_is_accepted() {
+        let mut bindings = MockBindings::new();
+
+        // An operating system that rejects every mask must not send us searching forever.
+        bindings
+            .expect_sched_getaffinity_current()
+            .times(AFFINITY_MASK_ATTEMPTS)
+            .returning(|_| Err(io::Error::from_raw_os_error(libc::EINVAL)));
+
+        let mut fs = MockFilesystem::new();
+
+        // See the unexpected-error test: only the possible-processor mask is read.
+        fs.expect_get_possible_cpus_contents()
+            .times(1)
+            .return_const(Some("0\n".to_string()));
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(bindings),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        assert_panics(|| platform.current_thread_processors());
+    }
+
+    #[test]
+    fn pin_current_thread_to_processor_beyond_fixed_size_mask() {
+        let mut bindings = MockBindings::new();
+
+        let expected_mask = mask_from([1500]);
+
+        bindings
+            .expect_sched_setaffinity_current()
+            .withf(move |mask| {
+                // A processor that the operating system's own fixed-size mask cannot describe
+                // must arrive in a mask that is wider than that.
+                *mask == expected_mask && mask.words() > CpuMask::default_words()
+            })
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let mut fs = MockFilesystem::new();
+        simulate_processor_layout(
+            &mut fs,
+            GIANT_MACHINE_PROCESSORS,
+            None,
+            None,
+            GIANT_MACHINE_MEMORY_REGIONS,
+            GIANT_MACHINE_BOGOMIPS,
+        );
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(bindings),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        let processors = platform.get_all_processors();
+        let target = NonEmpty::from_vec(
+            processors
+                .iter()
+                .filter(|processor| processor.as_target().id == 1500)
+                .collect_vec(),
+        )
+        .unwrap();
+
+        platform.pin_current_thread_to(&target);
     }
 
     #[test]
@@ -1724,6 +2698,7 @@ mod tests {
         assert_eq!(platform.current_processor_id(), 5);
         assert_eq!(platform.max_processor_id(), 8);
         assert_eq!(platform.max_memory_region_id(), 2);
+        assert_eq!(platform.get_all_processors().len(), 9);
     }
 
     #[test]
@@ -1763,12 +2738,12 @@ CPU revision    : 1
         fs.expect_get_numa_node_cpulist_contents()
             .withf(move |n| *n == 0)
             .times(1)
-            .return_const("0,1\n".to_string());
+            .return_const(Some("0,1\n".to_string()));
 
         fs.expect_get_cpu_online_contents()
             .withf(move |p| *p == 0)
             .times(1)
-            .return_const(Some("1\n".to_string()));
+            .return_const(None);
 
         fs.expect_get_cpu_online_contents()
             .withf(move |p| *p == 1)
@@ -2180,7 +3155,7 @@ model name      : Example Processor 9000
         fs.expect_get_numa_node_cpulist_contents()
             .withf(|node| *node == MEMORY_REGION)
             .times(1)
-            .return_const(format!("{cpulist}\n"));
+            .return_const(Some(format!("{cpulist}\n")));
 
         for processor_id in processor_ids {
             fs.expect_get_cpu_online_contents()
@@ -2230,7 +3205,7 @@ other           : ignored
         fs.expect_get_numa_node_cpulist_contents()
             .withf(move |n| *n == 0)
             .times(1)
-            .return_const("0,1\n".to_string());
+            .return_const(Some("0,1\n".to_string()));
 
         fs.expect_get_cpu_online_contents()
             .withf(move |p| *p == 0)

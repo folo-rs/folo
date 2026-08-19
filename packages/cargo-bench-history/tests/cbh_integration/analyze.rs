@@ -628,20 +628,33 @@ async fn analyze_ranks_findings_by_relative_move_across_benchmarks() {
     );
 }
 
+/// Branch mode reports a speedup as a finding in its own right: a tip that runs
+/// faster than the base is an improvement, counted apart from the regressions,
+/// and the improvement tally is stated because the mode looks in both directions.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_reports_improvement_without_regression() {
+async fn analyze_branch_mode_reports_an_improvement_without_regression() {
     let workspace = Workspace::repo(&storage_only_config());
-    workspace.seed_stepped_callgrind("2024-01-01", "c", 100.0, 70.0);
+    for (index, date) in sequential_dates("2024-01-01", MIN_SERIES_POINTS)
+        .into_iter()
+        .enumerate()
+    {
+        let label = format!("c{}", index + 1);
+        workspace.commit_dated(&date, &label);
+        workspace.seed_callgrind(&label, 100.0);
+    }
+    workspace.checkout_new_branch("feature");
+    workspace.commit_dated("2024-02-01", "f1");
+    workspace.seed_callgrind("f1", 70.0);
 
-    let report = workspace
-        .drive_json(&["analyze", "--include-improvements"])
-        .await;
+    let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(parsed["mode"], "branch", "{report}");
     assert_eq!(
         parsed["regressions"], 0,
         "a drop in instructions is not a regression: {report}"
     );
+    assert_eq!(parsed["improvements"], 1, "{report}");
     assert_eq!(parsed["findings"][0]["direction"], "improvement");
 }
 
@@ -1421,17 +1434,17 @@ async fn analyze_branch_mode_stays_silent_on_a_flat_branch() {
     );
 }
 
-/// History mode reports only regressions by default: steady improvement on the
-/// base branch over time is expected and not noteworthy, so a sustained drop is
-/// suppressed unless `--include-improvements` is given, which then surfaces it.
+/// History mode reports only regressions: steady improvement on the base branch
+/// over time is expected and not noteworthy, so a sustained drop never becomes a
+/// finding — and the report states no improvement tally rather than a zero it
+/// never looked for.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn analyze_history_mode_suppresses_improvements_by_default() {
+async fn analyze_history_mode_never_reports_improvements() {
     let workspace = Workspace::repo(&storage_only_config());
     // A clean base branch with a sustained downward step (an improvement).
     workspace.seed_stepped_callgrind("2024-01-01", "c", 100.0, 70.0);
 
-    // By default history mode stays silent about the improvement.
     let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["mode"], "history", "{report}");
@@ -1440,21 +1453,27 @@ async fn analyze_history_mode_suppresses_improvements_by_default() {
         "the improvement was judged and then withheld, not left untested: {report}"
     );
     assert_eq!(parsed["notable"], false, "{report}");
-    assert_eq!(parsed["improvements"], 0, "{report}");
+    // The key must be absent rather than null: `parsed["improvements"]` cannot tell the
+    // two apart, so the object is asked directly. Both the top-level document and every
+    // per-set entry carry the tally, so both must omit it.
+    let object = parsed.as_object().expect("the report is a JSON object");
+    assert!(
+        !object.contains_key("improvements"),
+        "history mode states no improvement tally: {report}"
+    );
+    for set in parsed["sets"]
+        .as_array()
+        .expect("the report lists its sets")
+    {
+        let set = set.as_object().expect("a set entry is a JSON object");
+        assert!(
+            !set.contains_key("improvements"),
+            "a history-mode set states no improvement tally: {report}"
+        );
+    }
     assert!(
         parsed["findings"].as_array().is_some_and(Vec::is_empty),
-        "improvements are suppressed by default in history mode: {report}"
-    );
-
-    // Opting in surfaces the very same improvement.
-    let report = workspace
-        .drive_json(&["analyze", "--include-improvements"])
-        .await;
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-    assert_eq!(parsed["improvements"], 1, "{report}");
-    assert_eq!(
-        parsed["findings"][0]["direction"], "improvement",
-        "{report}"
+        "improvements are never reported in history mode: {report}"
     );
 }
 

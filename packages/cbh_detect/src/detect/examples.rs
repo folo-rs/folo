@@ -8,14 +8,13 @@
 //!
 //! The values are metric-agnostic bare levels: [`series`] builds them into a [`Series`]
 //! of whichever kind and topology a caller needs. The verdict each series' documentation
-//! claims is the one history mode reaches under the default [`AnalysisConfig`].
+//! claims is the one history mode reaches under the fixed detection policy.
 //!
 //! Reproducibility is the whole point, so every series is a pure function of its own
 //! name: the scatter is drawn from [`seed_of`] applied to that name and is identical on
 //! every platform and every run.
 //!
 //! [`Series`]: crate::Series
-//! [`AnalysisConfig`]: crate::AnalysisConfig
 
 #![cfg_attr(coverage_nightly, coverage(off))]
 
@@ -26,14 +25,14 @@ use cbh_model::{BenchmarkId, DiscriminantSet, Engine, MetricKind};
 use nonempty::nonempty;
 
 use crate::detect::findings::count_to_f64;
-use crate::detect::noise_gates::MIN_REGIME;
+use crate::detect::noise_gates::{COMPARE_WINDOW, MIN_REGIME};
 pub use crate::detect::recorded::{
-    STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_HIGH, STATIONARY_BIMODAL_NOISE,
+    CONTENDED_RUNNER_BASE, CONTENDED_RUNNER_EXCURSION, CONTENDED_RUNNER_LEVEL,
+    CONTENDED_RUNNER_LEVEL_START, STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_HIGH,
+    STATIONARY_BIMODAL_NOISE,
 };
 pub use crate::detect::scatter::{TIMING_NOISE_CV, scattered, seed_of};
-use crate::detect::{
-    AnalysisConfig, AnalysisContext, AnalysisMode, Series, SeriesPoint, attach_base_windows,
-};
+use crate::detect::{AnalysisContext, AnalysisMode, Series, SeriesPoint, attach_base_windows};
 
 /// The level every example series starts from.
 ///
@@ -198,29 +197,28 @@ pub fn with_base_window(mut series: Series, base_ref_index: usize) -> Series {
     attach_base_windows(
         slice::from_mut(&mut series),
         slice::from_ref(&base),
-        AnalysisConfig::default().compare_window,
+        COMPARE_WINDOW,
     );
     series
 }
 
-/// A history-mode context over `series` under the default configuration: what a
-/// scheduled analysis of one benchmark's stored history runs.
+/// A history-mode context over `series`: what a scheduled analysis of one
+/// benchmark's stored history runs.
 ///
-/// Improvements are reported, so an example that moves in either direction is visible
-/// rather than silently filtered.
+/// History mode reports regressions only, so an example that moves downwards is a
+/// non-finding here; use [`branch_context`] for an example that must be visible in
+/// either direction.
 #[must_use]
 pub fn history_context(series: &Series) -> AnalysisContext {
     AnalysisContext {
         mode: AnalysisMode::History,
-        config: AnalysisConfig::default(),
         merge_base_index: None,
         base_ref_index: None,
         tip_index: tip_index_of(series),
-        include_improvements: true,
     }
 }
 
-/// A branch-mode context over `series` under the default configuration.
+/// A branch-mode context over `series`.
 ///
 /// Branch mode judges the latest state against the base window attached to
 /// `series`, so it reports both directions.
@@ -228,11 +226,9 @@ pub fn history_context(series: &Series) -> AnalysisContext {
 pub fn branch_context(series: &Series, merge_base_index: usize) -> AnalysisContext {
     AnalysisContext {
         mode: AnalysisMode::Branch,
-        config: AnalysisConfig::default(),
         merge_base_index: Some(merge_base_index),
         base_ref_index: Some(merge_base_index),
         tip_index: tip_index_of(series),
-        include_improvements: true,
     }
 }
 
