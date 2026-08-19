@@ -13,8 +13,11 @@ the resulting findings remains in `cbh_render`.
 
 Gating policy is centralized: every threshold a detector turns on lives in one module rather than
 at its point of use, so the policy can be reviewed as a whole and each value carries the reasoning
-that sets it. Detectors read those thresholds through the analysis configuration, which is what
-lets tests vary a single policy value in isolation.
+that sets it. The thresholds are fixed constants with no override mechanism, because the shipped
+tool exposes none — so tests exercise the exact policy production runs under rather than scenarios
+reachable only by retuning a threshold. Where a test needs to know which gate decided an outcome,
+the detectors record their gate evaluations to an optional log it can inspect, rather than relaxing
+a threshold to make the decision observable.
 
 Evidence selection is separated from evidence judgment. Deciding which base-window levels a branch
 comparison may see — discarding a stale prefix when the base itself moved, and discarding an
@@ -29,7 +32,7 @@ keeps the decision in exact correspondence with the public testability projectio
 and the false-discovery family is sized from. Narrowing that happens afterwards cannot make the
 census untruthful, because the floor was met before anything was discarded. It follows that no
 selection step may discard so much that the remainder falls under the minimum regime length; the
-configured removal allowance is set far below that margin.
+removal allowance is set far below that margin.
 
 Parallel work is supplied through an executor abstraction, preserving the same deterministic
 analysis logic for production execution and synchronous component tests.

@@ -42,7 +42,7 @@ pub(crate) const HARNESS_AUTO_MACHINE_KEY: &str = "harness-auto-machine";
 
 /// The minimum number of points a change-point regime (the flat side and the
 /// stepped side of a split) must hold before the history detector trusts the
-/// split. Mirrors `cbh_detect::AnalysisConfig::default().min_regime`; the
+/// split. Mirrors `cbh_detect::MIN_REGIME`; the
 /// [`fixture_gate_sizes_match_the_detector_defaults`] guard test keeps the two in
 /// lockstep. Fixtures build a flat regime and a stepped regime of this size so a
 /// seeded step clears the detector's per-regime persistence gate.
@@ -51,7 +51,7 @@ pub(crate) const MIN_REGIME: usize = 5;
 /// The minimum number of points a series must carry to be analysed at all — below
 /// it the series is not judged and is not even counted in the false-discovery
 /// family. Equal to two full regimes and mirrors
-/// `cbh_detect::AnalysisConfig::default().min_series_points` (also the value of
+/// `cbh_detect::MIN_SERIES_POINTS` (also the value of
 /// `DRIFT_MIN_POINTS` and the base-side commit-level floor branch mode demands).
 /// Fixtures seed at least this many points so their series is judged rather than
 /// silently skipped.
@@ -1838,13 +1838,14 @@ fn commit_dated_reuses_the_existing_commit() {
 /// silently seeding too little (or needless) history.
 #[test]
 fn fixture_gate_sizes_match_the_detector_defaults() {
-    let config = cbh_detect::AnalysisConfig::default();
     assert_eq!(
-        MIN_REGIME, config.min_regime,
+        MIN_REGIME,
+        cbh_detect::MIN_REGIME,
         "MIN_REGIME must match the detector's per-regime persistence gate"
     );
     assert_eq!(
-        MIN_SERIES_POINTS, config.min_series_points,
+        MIN_SERIES_POINTS,
+        cbh_detect::MIN_SERIES_POINTS,
         "MIN_SERIES_POINTS must match the detector's minimum-series-length gate"
     );
 }

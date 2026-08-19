@@ -26,8 +26,8 @@ use std::borrow::Cow;
 
 use cbh_stats as stats;
 
-use super::AnalysisConfig;
 use super::findings::relative_delta_of;
+use super::noise_gates;
 use super::series::BaseLevel;
 
 /// One base-window reading branch mode left out of a comparison.
@@ -55,13 +55,12 @@ pub struct DiscardedReading {
 ///
 /// Borrows `window` unchanged in the ordinary case, which is every window that holds no
 /// excursion at all.
-pub(super) fn cleaned_window<'a>(
-    window: &'a [BaseLevel],
+pub(super) fn cleaned_window(
+    window: &[BaseLevel],
     context_level: Option<f64>,
-    config: &AnalysisConfig,
-) -> (Cow<'a, [BaseLevel]>, Vec<DiscardedReading>) {
+) -> (Cow<'_, [BaseLevel]>, Vec<DiscardedReading>) {
     let levels: Vec<f64> = window.iter().map(|level| level.value).collect();
-    let discarded = isolated_excursions(&levels, context_level, config);
+    let discarded = isolated_excursions(&levels, context_level);
     if discarded.is_empty() {
         return (Cow::Borrowed(window), Vec::new());
     }
@@ -71,7 +70,8 @@ pub(super) fn cleaned_window<'a>(
         .iter()
         .filter_map(|&index| {
             let level = window.get(index)?;
-            let surroundings = Surroundings::around(index, &levels, config.excursion_neighbours)?;
+            let surroundings =
+                Surroundings::around(index, &levels, noise_gates::EXCURSION_NEIGHBOURS)?;
             Some(DiscardedReading {
                 topo_index: level.topo_index,
                 value: level.value,
@@ -95,15 +95,15 @@ pub(super) fn cleaned_window<'a>(
 ///
 /// 1. **Its surroundings agree with each other.** The levels immediately before it and
 ///    the levels immediately after it must describe the same level, within
-///    [`excursion_neighbour_agreement`](AnalysisConfig::excursion_neighbour_agreement).
+///    [`EXCURSION_NEIGHBOUR_AGREEMENT`](noise_gates::EXCURSION_NEIGHBOUR_AGREEMENT).
 ///    This is what separates a bad measurement from a real step: when the code genuinely
 ///    changes, the levels after the change sit at the *new* level and disagree with the
 ///    ones before it, so a step is never mistaken for an excursion however large it is.
 /// 2. **It stands far clear of them.** It must differ from its surroundings by at least
-///    [`excursion_relative_magnitude`](AnalysisConfig::excursion_relative_magnitude),
+///    [`EXCURSION_RELATIVE_MAGNITUDE`](noise_gates::EXCURSION_RELATIVE_MAGNITUDE),
 ///    which is set well above ordinary measurement wobble.
 /// 3. **It is the only one, and the context run does not agree with it.** If more than
-///    [`excursion_max_removals`](AnalysisConfig::excursion_max_removals) levels qualify,
+///    [`EXCURSION_MAX_REMOVALS`](noise_gates::EXCURSION_MAX_REMOVALS) levels qualify,
 ///    nothing is removed at all, and a level the context run itself sits at is never
 ///    removed. Either way the window has shown the level twice, and twice is a level the
 ///    series reaches rather than a moment its runner lost. Stripping a recurring level
@@ -120,33 +120,30 @@ pub(super) fn cleaned_window<'a>(
 /// exactly across runs of unchanged code, so an isolated excursion in one is as much a
 /// measurement artifact as it is in a timing series, and is as unrepresentative of the
 /// level a pull request would merge into.
-pub(super) fn isolated_excursions(
-    levels: &[f64],
-    context_level: Option<f64>,
-    config: &AnalysisConfig,
-) -> Vec<usize> {
+pub(super) fn isolated_excursions(levels: &[f64], context_level: Option<f64>) -> Vec<usize> {
     let mut found = Vec::new();
     for index in 0..levels.len() {
-        let Some(surroundings) = Surroundings::around(index, levels, config.excursion_neighbours)
+        let Some(surroundings) =
+            Surroundings::around(index, levels, noise_gates::EXCURSION_NEIGHBOURS)
         else {
             continue;
         };
-        if !surroundings.agree(config.excursion_neighbour_agreement) {
+        if !surroundings.agree(noise_gates::EXCURSION_NEIGHBOUR_AGREEMENT) {
             continue;
         }
         let Some(&level) = levels.get(index) else {
             continue;
         };
-        if !surroundings.stands_clear(level, config.excursion_relative_magnitude) {
+        if !surroundings.stands_clear(level, noise_gates::EXCURSION_RELATIVE_MAGNITUDE) {
             continue;
         }
         if context_level.is_some_and(|context| {
-            surroundings.same_level(level, context, config.excursion_neighbour_agreement)
+            surroundings.same_level(level, context, noise_gates::EXCURSION_NEIGHBOUR_AGREEMENT)
         }) {
             continue;
         }
         found.push(index);
-        if found.len() > config.excursion_max_removals {
+        if found.len() > noise_gates::EXCURSION_MAX_REMOVALS {
             return Vec::new();
         }
     }
@@ -219,6 +216,7 @@ mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
 
     use super::*;
+    use crate::detect::noise_gates::{EXCURSION_NEIGHBOURS, EXCURSION_RELATIVE_MAGNITUDE};
     use crate::detect::recorded::{
         CONTENDED_RUNNER_BASE, CONTENDED_RUNNER_EXCURSION, CONTENDED_RUNNER_LEVEL_START,
         STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_NOISE,
@@ -230,31 +228,27 @@ mod tests {
     /// The level the synthetic windows sit at when nothing is happening.
     const LEVEL: f64 = 100.0;
 
-    fn config() -> AnalysisConfig {
-        AnalysisConfig::default()
-    }
-
     fn flat(count: usize) -> Vec<f64> {
         vec![LEVEL; count]
     }
 
     #[test]
     fn a_flat_window_has_no_excursions() {
-        assert!(isolated_excursions(&flat(16), None, &config()).is_empty());
+        assert!(isolated_excursions(&flat(16), None).is_empty());
     }
 
     #[test]
     fn a_lone_excursion_is_found() {
         let mut levels = flat(16);
         levels[8] = EXCURSION;
-        assert_eq!(isolated_excursions(&levels, None, &config()), vec![8]);
+        assert_eq!(isolated_excursions(&levels, None), vec![8]);
     }
 
     #[test]
     fn a_lone_dip_is_found_as_readily_as_a_spike() {
         let mut levels = flat(16);
         levels[8] = LEVEL / 2.0;
-        assert_eq!(isolated_excursions(&levels, None, &config()), vec![8]);
+        assert_eq!(isolated_excursions(&levels, None), vec![8]);
     }
 
     #[test]
@@ -262,7 +256,7 @@ mod tests {
         // Every level past the step sits at the new level, so no level's surroundings
         // agree across it — which is the whole point: a real change must survive.
         let levels: Vec<f64> = flat(8).into_iter().chain(vec![EXCURSION; 8]).collect();
-        assert!(isolated_excursions(&levels, None, &config()).is_empty());
+        assert!(isolated_excursions(&levels, None).is_empty());
     }
 
     #[test]
@@ -277,34 +271,31 @@ mod tests {
         // discarded as a bad reading, tightening the window against the very move that just
         // landed.
         let levels: Vec<f64> = flat(11).into_iter().chain(vec![EXCURSION; 3]).collect();
-        assert!(isolated_excursions(&levels, None, &config()).is_empty());
+        assert!(isolated_excursions(&levels, None).is_empty());
     }
 
     #[test]
     fn a_move_below_the_magnitude_is_ordinary_scatter() {
-        let config = config();
         let mut levels = flat(16);
-        levels[8] = LEVEL * (1.0 + config.excursion_relative_magnitude / 2.0);
-        assert!(isolated_excursions(&levels, None, &config).is_empty());
+        levels[8] = LEVEL * (1.0 + EXCURSION_RELATIVE_MAGNITUDE / 2.0);
+        assert!(isolated_excursions(&levels, None).is_empty());
     }
 
     #[test]
     fn levels_without_full_surroundings_are_never_removed() {
-        // The outer `excursion_neighbours` levels at each end have no complete side to be
+        // The outer `EXCURSION_NEIGHBOURS` levels at each end have no complete side to be
         // judged against, so an excursion there is kept however far it stands out. Each
         // position is tried in an otherwise clean window, so the test fails if a
         // truncated neighbourhood is ever consulted instead of the position being skipped.
-        let config = config();
         let length = 16;
         let last = length - 1;
-        let protected =
-            (0..config.excursion_neighbours).chain((last - config.excursion_neighbours + 1)..=last);
+        let protected = (0..EXCURSION_NEIGHBOURS).chain((last - EXCURSION_NEIGHBOURS + 1)..=last);
 
         for index in protected {
             let mut levels = flat(length);
             levels[index] = EXCURSION;
             assert!(
-                isolated_excursions(&levels, None, &config).is_empty(),
+                isolated_excursions(&levels, None).is_empty(),
                 "index {index} has no complete surroundings and must be kept",
             );
         }
@@ -314,11 +305,10 @@ mod tests {
     fn a_level_with_complete_surroundings_just_inside_the_edge_is_removable() {
         // The counterpart of the test above: protection stops exactly where complete
         // surroundings begin, so the guard cannot quietly widen into the window.
-        let config = config();
-        let index = config.excursion_neighbours;
+        let index = EXCURSION_NEIGHBOURS;
         let mut levels = flat(16);
         levels[index] = EXCURSION;
-        assert_eq!(isolated_excursions(&levels, None, &config), vec![index]);
+        assert_eq!(isolated_excursions(&levels, None), vec![index]);
     }
 
     #[test]
@@ -327,11 +317,10 @@ mod tests {
         // benchmark that visits more than one level, which the comparison must account
         // for rather than edit away. This is the sparse counterpart of the bimodal
         // recording below, where the second level is too rare to look like a mode.
-        let config = config();
         let mut levels = flat(16);
         levels[5] = EXCURSION;
         levels[11] = EXCURSION;
-        assert!(isolated_excursions(&levels, None, &config).is_empty());
+        assert!(isolated_excursions(&levels, None).is_empty());
     }
 
     #[test]
@@ -341,10 +330,9 @@ mod tests {
         // Discarding it would leave the window describing a level the series does not
         // reliably hold, and the context run would read as a large, certain regression
         // against what remained.
-        let config = config();
         let mut levels = flat(16);
         levels[8] = EXCURSION;
-        assert!(isolated_excursions(&levels, Some(EXCURSION), &config).is_empty());
+        assert!(isolated_excursions(&levels, Some(EXCURSION)).is_empty());
     }
 
     #[test]
@@ -352,14 +340,10 @@ mod tests {
         // Only a context run at the candidate's own level is evidence of recurrence. One
         // that moved somewhere else says nothing about it, and the window is still
         // cleaned — which is the ordinary case the rule exists to serve.
-        let config = config();
         let mut levels = flat(16);
         levels[8] = EXCURSION;
-        let elsewhere = LEVEL * (1.0 + config.excursion_relative_magnitude / 2.0);
-        assert_eq!(
-            isolated_excursions(&levels, Some(elsewhere), &config),
-            vec![8]
-        );
+        let elsewhere = LEVEL * (1.0 + EXCURSION_RELATIVE_MAGNITUDE / 2.0);
+        assert_eq!(isolated_excursions(&levels, Some(elsewhere)), vec![8]);
     }
 
     #[test]
@@ -368,7 +352,7 @@ mod tests {
         for index in [5, 11, 16] {
             levels[index] = EXCURSION;
         }
-        assert!(isolated_excursions(&levels, None, &config()).is_empty());
+        assert!(isolated_excursions(&levels, None).is_empty());
     }
 
     #[test]
@@ -379,7 +363,7 @@ mod tests {
         let window = STATIONARY_BIMODAL_NOISE
             .get(..STATIONARY_BIMODAL_BASE)
             .expect("the base prefix is within the recording");
-        assert!(isolated_excursions(window, None, &config()).is_empty());
+        assert!(isolated_excursions(window, None).is_empty());
     }
 
     #[test]
@@ -393,7 +377,7 @@ mod tests {
             .max_by(|(_, left), (_, right)| left.total_cmp(right))
             .map(|(index, _)| index)
             .expect("the window is not empty");
-        assert_eq!(isolated_excursions(window, None, &config()), vec![expected]);
+        assert_eq!(isolated_excursions(window, None), vec![expected]);
     }
 
     #[test]
@@ -403,12 +387,12 @@ mod tests {
         // whose magnitude gate is inert there.
         let mut levels = vec![0.0; 16];
         levels[8] = 1.0;
-        assert!(isolated_excursions(&levels, None, &config()).is_empty());
+        assert!(isolated_excursions(&levels, None).is_empty());
     }
 
     #[test]
     fn an_all_zero_window_has_no_excursions() {
-        assert!(isolated_excursions(&[0.0; 16], None, &config()).is_empty());
+        assert!(isolated_excursions(&[0.0; 16], None).is_empty());
     }
 
     #[test]
@@ -417,17 +401,13 @@ mod tests {
         // than that plus the candidate itself has nowhere a level could be judged. Each
         // length is tried with a genuine excursion at every position, so the test would
         // fail if a short window fell back to judging against what neighbours it has.
-        let config = config();
-        let shortest_with_interior = config
-            .excursion_neighbours
-            .saturating_mul(2)
-            .saturating_add(1);
+        let shortest_with_interior = EXCURSION_NEIGHBOURS.saturating_mul(2).saturating_add(1);
         for length in 0..shortest_with_interior {
             for index in 0..length {
                 let mut levels = flat(length);
                 levels[index] = EXCURSION;
                 assert!(
-                    isolated_excursions(&levels, None, &config).is_empty(),
+                    isolated_excursions(&levels, None).is_empty(),
                     "a window of {length} level(s) has no judgeable interior at {index}",
                 );
             }
@@ -449,7 +429,7 @@ mod tests {
     #[test]
     fn a_clean_window_is_passed_through_without_copying() {
         let window = window_of(&flat(16));
-        let (cleaned, discarded) = cleaned_window(&window, None, &config());
+        let (cleaned, discarded) = cleaned_window(&window, None);
         assert!(matches!(cleaned, Cow::Borrowed(_)));
         assert_eq!(cleaned.as_ref(), window.as_slice());
         assert!(discarded.is_empty());
@@ -460,7 +440,7 @@ mod tests {
         let mut levels = flat(16);
         levels[8] = EXCURSION;
         let window = window_of(&levels);
-        let (cleaned, discarded) = cleaned_window(&window, None, &config());
+        let (cleaned, discarded) = cleaned_window(&window, None);
         let expected: Vec<BaseLevel> = window
             .iter()
             .filter(|level| level.topo_index != 8)

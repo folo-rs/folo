@@ -6,7 +6,10 @@
 //! in detection behaviour therefore changes these assets, and the freshness check turns
 //! that into a failing test rather than into prose that has quietly become wrong.
 
-use cbh_detect::{AnalysisConfig, AnalysisMode, Finding, Series, evaluate_with_log, examples};
+use cbh_detect::{
+    AnalysisMode, CHANGE_ALPHA, COMPARE_WINDOW, DRIFT_MIN_POINTS, Finding, MIN_REGIME,
+    MIN_SERIES_POINTS, Series, evaluate_with_log, examples,
+};
 use cbh_model::MetricKind;
 use cbh_stats::{mean, sample_std_dev, student_t_two_sided_p};
 use plotters::style::RGBColor;
@@ -117,17 +120,16 @@ const BRANCH_CASES: [(&str, f64, &str); 2] = [
 /// This is the detector's prediction interval at its own significance level, not an
 /// illustrative width: from the same cleaned base sample the significance gate reads, it is
 /// the range a single further measurement stays inside unless its two-sided Student-t
-/// p-value falls below `change_alpha`. A context run drawn outside this band is therefore
-/// exactly one the significance gate rejects, so the band is the real cutoff the figure's
-/// verdict turns on.
+/// p-value falls below [`CHANGE_ALPHA`](cbh_detect::CHANGE_ALPHA). A context run drawn
+/// outside this band is therefore exactly one the significance gate rejects, so the band is
+/// the real cutoff the figure's verdict turns on.
 fn branch_prediction_band(values: &[f64]) -> (f64, f64) {
     let centre = mean(values).expect("the branch figure's base window is not empty");
     let scatter = sample_std_dev(values)
         .expect("the branch figure's base window has enough points to estimate scatter");
     let sample_count = crate::coord::of(values.len());
     let standard_error = scatter * (1.0 + 1.0 / sample_count).sqrt();
-    let half_width =
-        standard_error * critical_t(AnalysisConfig::default().change_alpha, sample_count - 1.0);
+    let half_width = standard_error * critical_t(CHANGE_ALPHA, sample_count - 1.0);
     (centre - half_width, centre + half_width)
 }
 
@@ -312,7 +314,7 @@ fn branch_contended_runner() -> Vec<Asset> {
          unusual reading is discarded, so it must report",
     );
     let tip_index = values.len().saturating_sub(1);
-    let window_start = tip_index.saturating_sub(AnalysisConfig::default().compare_window);
+    let window_start = tip_index.saturating_sub(COMPARE_WINDOW);
     let prediction = branch_prediction_band(
         &values
             .get(window_start..tip_index)
@@ -389,15 +391,14 @@ const LOWER_CONFIDENCE_INTRA_REGIME_SPACING: f64 = 1.0;
 
 /// A fully separated step with the minimum allowed regime length on each side.
 fn lower_confidence_step_values() -> Vec<f64> {
-    let config = AnalysisConfig::default();
     let elevated = LOWER_CONFIDENCE_BASELINE * (1.0 + LOWER_CONFIDENCE_STEP_RELATIVE);
-    let midpoint = (crate::coord::of(config.min_regime) - 1.0) / 2.0;
-    (0..config.min_regime)
+    let midpoint = (crate::coord::of(MIN_REGIME) - 1.0) / 2.0;
+    (0..MIN_REGIME)
         .map(|index| {
             LOWER_CONFIDENCE_BASELINE
                 + (crate::coord::of(index) - midpoint) * LOWER_CONFIDENCE_INTRA_REGIME_SPACING
         })
-        .chain((0..config.min_regime).map(|index| {
+        .chain((0..MIN_REGIME).map(|index| {
             elevated + (crate::coord::of(index) - midpoint) * LOWER_CONFIDENCE_INTRA_REGIME_SPACING
         }))
         .collect()
@@ -555,9 +556,7 @@ const MULTI_STEP_LEVELS: [f64; 3] = [100.0, 140.0, 160.0];
 
 /// A series with several steps, where the detector still reports one boundary.
 fn multi_step() -> Vec<Asset> {
-    let regime = AnalysisConfig::default()
-        .min_regime
-        .saturating_mul(MULTI_STEP_REGIME_MULTIPLE);
+    let regime = MIN_REGIME.saturating_mul(MULTI_STEP_REGIME_MULTIPLE);
     let levels: Vec<f64> = MULTI_STEP_LEVELS
         .into_iter()
         .flat_map(|level| std::iter::repeat_n(level, regime))
@@ -685,9 +684,7 @@ const RETURNED_EXCURSION_BASELINE: f64 = 100.0;
 
 /// The returned-excursion values, shared by the figure and its lockstep test.
 fn returned_excursion_values() -> Vec<f64> {
-    let regime = AnalysisConfig::default()
-        .min_regime
-        .saturating_mul(RETURNED_EXCURSION_REGIME_MULTIPLE);
+    let regime = MIN_REGIME.saturating_mul(RETURNED_EXCURSION_REGIME_MULTIPLE);
     let levels: Vec<f64> = [
         RETURNED_EXCURSION_BASELINE,
         RETURNED_EXCURSION_LEVEL,
@@ -707,9 +704,7 @@ fn returned_excursion_values() -> Vec<f64> {
 fn returned_excursion() -> Vec<Asset> {
     let values = returned_excursion_values();
     let (_, finding) = judge_history("regex_cache", &values, MetricKind::WallTime);
-    let regime = AnalysisConfig::default()
-        .min_regime
-        .saturating_mul(RETURNED_EXCURSION_REGIME_MULTIPLE);
+    let regime = MIN_REGIME.saturating_mul(RETURNED_EXCURSION_REGIME_MULTIPLE);
     let elevated_start = regime;
     let elevated_end = regime.saturating_mul(2).saturating_sub(1);
 
@@ -769,18 +764,17 @@ fn flat_noisy() -> Vec<Asset> {
     ]
 }
 
-/// The minimum evidence each detector demands, read from the shipped defaults.
+/// The minimum evidence each detector demands, read from the detection policy.
 fn minimums() -> Vec<Asset> {
-    let config = AnalysisConfig::default();
     let markdown = format!(
         "| Detector | Needs |\n|---|---|\n\
          | History change point | {} in the analyzed window, and {} on each side of the split |\n\
          | History drift | {} in the analyzed window |\n\
          | Branch comparison | {} on the base side, collapsed to one level each |\n",
-        points(config.min_series_points),
-        points(config.min_regime),
-        points(config.drift_min_points),
-        commits(config.min_series_points),
+        points(MIN_SERIES_POINTS),
+        points(MIN_REGIME),
+        points(DRIFT_MIN_POINTS),
+        commits(MIN_SERIES_POINTS),
     );
 
     vec![Asset::new("detection-minimums.md", markdown)]

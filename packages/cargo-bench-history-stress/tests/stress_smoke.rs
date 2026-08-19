@@ -23,7 +23,7 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
 
-use cbh_detect::AnalysisConfig;
+use cbh_detect::{COMPARE_WINDOW, DRIFT_MIN_POINTS, MIN_REGIME, MIN_SERIES_POINTS};
 
 /// Benchmark cases the scenario seeds per discriminant set: one per timeline-shape
 /// family, so every seeded shape — including the stable one, which must raise
@@ -45,6 +45,27 @@ const COMMITS: usize = 8 * REGIME_POINTS;
 /// Feature-branch commits the scenario seeds. Branch mode judges only the tip
 /// commit's state, so the branch itself stays short.
 const BRANCH_COMMITS: usize = 2;
+
+// The scenario sizes above are derived from the gates rather than picked for
+// speed. Bind them to the gates here, so moving a gate fails the build instead
+// of silently leaving this suite judging a history the detectors abstain on.
+const _: () = assert!(
+    REGIME_POINTS == MIN_REGIME,
+    "each side of a seeded step must hold a full regime"
+);
+const _: () = assert!(
+    COMMITS >= 4 * MIN_SERIES_POINTS,
+    "half the seeded commits carry a run, and the fixture keeps twice the points a \
+     judged series needs"
+);
+const _: () = assert!(
+    COMMITS >= 4 * DRIFT_MIN_POINTS,
+    "the fixture keeps twice the run-carrying commits the seeded drift needs to be seen"
+);
+const _: () = assert!(
+    COMPARE_WINDOW >= MIN_SERIES_POINTS,
+    "branch mode's base window must be able to hold the levels its test demands"
+);
 
 /// Dirty (uncommitted-tree) snapshots the scenario seeds on the feature tip.
 const DIRTY_RUNS: usize = 1;
@@ -252,9 +273,8 @@ fn assert_seeded_ground_truth(stdout: &str, modes: &[&str]) {
     // Everything else here is downstream of the history being long enough to judge
     // at all: below this floor every detector abstains and every count is a
     // vacuous zero.
-    let config = AnalysisConfig::default();
     assert!(
-        with_runs >= config.min_series_points,
+        with_runs >= MIN_SERIES_POINTS,
         "the seeded history must clear the detectors' evidence floor: {stdout}"
     );
 
@@ -270,31 +290,6 @@ fn assert_seeded_ground_truth(stdout: &str, modes: &[&str]) {
             .unwrap_or_else(|| panic!("the {mode} row was just matched: {stdout}"));
         assert_eq!(*row, expected_row(mode, with_runs), "mode {mode}: {stdout}");
     }
-}
-
-#[test]
-fn fixture_sizes_match_the_analysis_gates() {
-    // The scenario sizes above are derived from the gates rather than picked for
-    // speed. Bind them to the gates here, so moving a gate fails loudly instead of
-    // silently leaving this suite judging a history the detectors abstain on.
-    let config = AnalysisConfig::default();
-    assert_eq!(
-        REGIME_POINTS, config.min_regime,
-        "each side of a seeded step must hold a full regime"
-    );
-    assert!(
-        COMMITS >= 4 * config.min_series_points,
-        "half the seeded commits carry a run, and the fixture keeps twice the points a \
-         judged series needs"
-    );
-    assert!(
-        COMMITS >= 4 * config.drift_min_points,
-        "the fixture keeps twice the run-carrying commits the seeded drift needs to be seen"
-    );
-    assert!(
-        config.compare_window >= config.min_series_points,
-        "branch mode's base window must be able to hold the levels its test demands"
-    );
 }
 
 #[test]
