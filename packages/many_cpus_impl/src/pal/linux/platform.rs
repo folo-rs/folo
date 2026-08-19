@@ -715,7 +715,7 @@ mod tests {
     use std::sync::Barrier;
     use std::{io, thread};
 
-    use testing::{assert_panics, f64_diff_abs};
+    use testing::{assert_panics, f64_diff_abs, with_watchdog};
 
     use super::*;
     use crate::pal::linux::{MockBindings, MockFilesystem};
@@ -1593,23 +1593,27 @@ mod tests {
         // Releasing every thread at once is what makes them contend for the remembered width.
         let start = Barrier::new(READER_COUNT);
 
-        thread::scope(|scope| {
-            for _ in 0..READER_COUNT {
-                scope.spawn(|| {
-                    start.wait();
+        // The barrier and thread joins block, so a scheduling or mutation defect could hang the
+        // test rather than fail it; the watchdog turns such a hang into a failure instead.
+        with_watchdog(move || {
+            thread::scope(|scope| {
+                for _ in 0..READER_COUNT {
+                    scope.spawn(|| {
+                        start.wait();
 
-                    for _ in 0..READS_PER_READER {
-                        assert_eq!(
-                            platform
-                                .current_thread_processors()
-                                .iter()
-                                .copied()
-                                .collect_vec(),
-                            affinity.to_vec()
-                        );
-                    }
-                });
-            }
+                        for _ in 0..READS_PER_READER {
+                            assert_eq!(
+                                platform
+                                    .current_thread_processors()
+                                    .iter()
+                                    .copied()
+                                    .collect_vec(),
+                                affinity.to_vec()
+                            );
+                        }
+                    });
+                }
+            });
         });
     }
 

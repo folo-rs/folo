@@ -438,12 +438,15 @@ mod tests {
         }
 
         // SAFETY: A `cpu_set_t` holds no padding, so all of its bytes are initialized, and the
-        // borrow keeps it alive for as long as the slice.
+        // borrow keeps it alive for as long as the slice. `expected` is a local that nothing
+        // mutates while `expected_bytes` is live, so the shared borrow has no aliasing conflict.
         let expected_bytes = unsafe {
             slice::from_raw_parts((&raw const expected).cast::<u8>(), size_of::<cpu_set_t>())
         };
 
-        // SAFETY: The mask owns this many initialized bytes and outlives the slice.
+        // SAFETY: The mask owns this many initialized bytes and outlives the slice. `mask` is a
+        // local that nothing mutates while `actual_bytes` is live, so the shared borrow has no
+        // aliasing conflict.
         let actual_bytes =
             unsafe { slice::from_raw_parts(mask.as_ptr().cast::<u8>(), mask.len_bytes()) };
 
