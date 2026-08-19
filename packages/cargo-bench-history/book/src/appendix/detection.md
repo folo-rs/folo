@@ -191,12 +191,13 @@ out the range a single further measurement was expected to land in, and asks whe
 landed outside it. That is a different question from "are these two groups different" —
 there is only one context observation, not a group.
 
-In the figures below, the shaded value band illustrates that predicted range. It is drawn at a
-fixed width around the base window's centre rather than at the exact cutoff the tool computes,
-which is a chance level rather than a plotted boundary; every verdict shown beneath a figure is
-the real one. The base window itself is the recent base-ref first-parent commit sample for the
-same discriminant set, capped by the branch comparison window. It is anchored at the base ref,
-not at the merge base.
+In the figures below, the shaded value band is that predicted range: the interval a single
+further measurement stays inside unless the tool judges it a change. Its edges are the real
+cutoff, computed from the same base window the tool uses — a context run drawn outside the band
+is one the tool reports, and one drawn inside is one it passes over. Every verdict shown beneath
+a figure is the real one. The base window itself is the recent base-ref first-parent commit
+sample for the same discriminant set, capped by the branch comparison window. It is anchored at
+the base ref, not at the merge base.
 
 {{#include generated/detection-branch-reported.svg}}
 

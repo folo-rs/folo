@@ -8,7 +8,7 @@
 
 use cbh_detect::{AnalysisConfig, AnalysisMode, Finding, Series, evaluate_with_log, examples};
 use cbh_model::MetricKind;
-use cbh_stats::{mean, sample_std_dev};
+use cbh_stats::{mean, sample_std_dev, student_t_two_sided_p};
 use plotters::style::RGBColor;
 
 use crate::assets::Asset;
@@ -112,20 +112,45 @@ const BRANCH_CASES: [(&str, f64, &str); 2] = [
     ),
 ];
 
-/// How wide the branch figures draw their illustrative prediction range.
-///
-/// The detector records the p-value, not a plotted cutoff. This multiple makes the range
-/// visibly cover ordinary base scatter while keeping the reporting context run outside it.
-const BRANCH_PREDICTION_SIGMAS: f64 = 3.0;
-
 /// The value interval the branch figures shade as the base window's prediction.
+///
+/// This is the detector's prediction interval at its own significance level, not an
+/// illustrative width: from the same cleaned base sample the significance gate reads, it is
+/// the range a single further measurement stays inside unless its two-sided Student-t
+/// p-value falls below `change_alpha`. A context run drawn outside this band is therefore
+/// exactly one the significance gate rejects, so the band is the real cutoff the figure's
+/// verdict turns on.
 fn branch_prediction_band(values: &[f64]) -> (f64, f64) {
     let centre = mean(values).expect("the branch figure's base window is not empty");
     let scatter = sample_std_dev(values)
         .expect("the branch figure's base window has enough points to estimate scatter");
     let sample_count = crate::coord::of(values.len());
-    let half_width = scatter * (1.0 + 1.0 / sample_count).sqrt() * BRANCH_PREDICTION_SIGMAS;
+    let standard_error = scatter * (1.0 + 1.0 / sample_count).sqrt();
+    let half_width =
+        standard_error * critical_t(AnalysisConfig::default().change_alpha, sample_count - 1.0);
     (centre - half_width, centre + half_width)
+}
+
+/// The two-sided Student-t statistic whose p-value equals `alpha`.
+///
+/// [`student_t_two_sided_p`] has no closed form to invert, but it falls monotonically from
+/// `1.0` at `t = 0` toward `0.0`, so bisection converges on the one statistic that yields
+/// `alpha`. That statistic is the significance gate's cutoff: a measurement falls outside
+/// the prediction interval exactly when its own statistic exceeds it.
+fn critical_t(alpha: f64, degrees_of_freedom: f64) -> f64 {
+    // `t = 0` gives `p = 1.0`, above any `alpha`; this upper bound gives a p-value far below
+    // it, so the two bracket the root. Halving to convergence needs a fixed, generous count.
+    let mut low = 0.0_f64;
+    let mut high = 1.0e6_f64;
+    for _ in 0..100 {
+        let mid = f64::midpoint(low, high);
+        if student_t_two_sided_p(mid, degrees_of_freedom) > alpha {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    f64::midpoint(low, high)
 }
 
 /// Runs the real branch detector over the shared base window with `tip` appended, and
