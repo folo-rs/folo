@@ -18,9 +18,9 @@ lets tests vary a single policy value in isolation.
 
 Evidence selection is separated from evidence judgment. Deciding which base-window levels a branch
 comparison may see — discarding a stale prefix when the base itself moved, and discarding an
-isolated measurement excursion — happens before any comparison gate runs, so those gates judge one
-already-chosen sample and the prediction interval's centre and scatter always come from that same
-sample. This is a hard constraint rather than a tidiness preference: a robust scale estimator
+isolated measurement excursion — happens once, before the comparison itself is judged, so the
+judgment gates see one already-chosen sample and the prediction interval's centre and scatter
+always come from that same sample. This is a hard constraint rather than a tidiness preference: a robust scale estimator
 paired with a non-robust centre was measured to invent regressions on unchanged code.
 
 Selection is nonetheless bounded by the eligibility gate rather than the reverse. That one gate

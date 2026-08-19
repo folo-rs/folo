@@ -1983,18 +1983,12 @@ fn evaluate_branch(
     // which is what the census counts and what sizes the false-discovery family, and it
     // is the same order the regime narrowing below already follows: the question this
     // gate asks is whether the series has a recent base history at all, and it does.
-    let recorded_spans = level_spans(
-        &series
-            .base_window
-            .iter()
-            .map(|level| level.value)
-            .collect::<Vec<f64>>(),
-    );
+    let recorded_levels = series.base_window.len();
     if !log.stage(GateStage::Branch).numeric(
         Gate::MinBaseCommits,
-        count_to_f64(recorded_spans.len()),
+        count_to_f64(recorded_levels),
         count_to_f64(config.min_series_points),
-        recorded_spans.len() >= config.min_series_points,
+        recorded_levels >= config.min_series_points,
     ) {
         return None;
     }
