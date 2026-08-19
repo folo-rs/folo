@@ -2109,9 +2109,10 @@ mod tests {
     use super::*;
     use crate::detect::gate_log::GateOutcome;
     use crate::detect::noise_gates::{
-        CHANGE_ALPHA, COMPARE_WINDOW, DRIFT_ALPHA, DRIFT_MIN_POINTS, DRIFT_NOISE_MULTIPLE,
-        EXCURSION_MAX_REMOVALS, FDR_Q, MIN_BASE_SPLIT_SEPARATION, MIN_REGIME, MIN_REGIME_SEPARATION,
-        MIN_SERIES_POINTS, PRACTICAL_ABSOLUTE_COUNT, PRACTICAL_RELATIVE, RESIDUAL_NOISE_MULTIPLE,
+        BRANCH_PRACTICAL_RELATIVE, CHANGE_ALPHA, COMPARE_WINDOW, DRIFT_ALPHA, DRIFT_MIN_POINTS,
+        DRIFT_NOISE_MULTIPLE, EXCURSION_MAX_REMOVALS, FDR_Q, MIN_BASE_SPLIT_SEPARATION, MIN_REGIME,
+        MIN_REGIME_SEPARATION, MIN_SERIES_POINTS, PRACTICAL_ABSOLUTE_COUNT, PRACTICAL_RELATIVE,
+        RESIDUAL_NOISE_MULTIPLE,
     };
     use crate::detect::recorded::{
         STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_HIGH, STATIONARY_BIMODAL_NOISE,
@@ -3832,7 +3833,7 @@ mod tests {
     /// The amount a fixture base window wobbles around its level from commit to
     /// commit, in the metric's own units.
     ///
-    /// The [`compare_with`] fixtures run on a wall-time series, whose scatter is not
+    /// The [`compare`] fixtures run on a wall-time series, whose scatter is not
     /// floored at all (time has no quantum), so a base window repeating one value
     /// leaves the prediction interval no distribution to place the context run in. Real
     /// timing series never repeat a value, so the window alternates by this much instead.
@@ -3870,10 +3871,23 @@ mod tests {
         // The relative move (5%) is exactly BRANCH_PRACTICAL_RELATIVE, the floor branch
         // mode holds moves to: the `relative < floor` gate must be a strict `<` (a
         // `<=`/`==` mutant would suppress it). The move then clears the residual band and
-        // the prediction interval, so it is reported.
+        // the prediction interval, so it is reported. The recorded gate pins that the
+        // fixture sits exactly on the floor, so the boundary is genuinely under test.
+        let series = wall_series(&[100.0], 1.0);
         let before = base_window(100.0, 0.5);
         let after = pts(&[(105.0, 0.5)]);
-        assert!(compare(&before, &after).is_some());
+        let before_refs: Vec<&SeriesPoint> = before.iter().collect();
+        let after_refs: Vec<&SeriesPoint> = after.iter().collect();
+
+        let mut log = GateLog::recording();
+        assert!(compare_samples(&series, &before_refs, &after_refs, &mut log).is_some());
+        let (relative, floor) =
+            gate_value(&log, Gate::RelativeFloor).expect("the relative-floor gate ran");
+        assert_eq!(floor, BRANCH_PRACTICAL_RELATIVE);
+        assert_eq!(
+            relative, floor,
+            "the fixture must land exactly on the floor for the boundary to be under test"
+        );
     }
 
     #[test]
