@@ -119,13 +119,7 @@ impl JobBuilder {
         // We are just going to assume that the primary processor group of this process
         // has a sufficient number of processors to satisfy the request. Good enough
         // for test/example purposes, though obviously not production-quality logic.
-
-        // We set the first `processor_count` bits of the processor affinity mask to 1.
-        #[expect(
-            clippy::arithmetic_side_effects,
-            reason = "side effects are intentional here"
-        )]
-        let affinity_mask = (1_usize << processor_count.get()) - 1;
+        let affinity_mask = low_processor_bits_mask(processor_count);
 
         self.processor_affinity_mask(
             NonZero::new(affinity_mask).expect("a nonzero processor count sets at least one bit"),
@@ -243,6 +237,26 @@ impl JobBuilder {
     }
 }
 
+/// Builds an affinity mask whose lowest `count` bits are set.
+///
+/// A Windows processor group holds at most `usize::BITS` processors, so a request for the full
+/// group width sets every bit. The narrow case is handled apart because `1 << count` overflows the
+/// shift once `count` reaches the integer width.
+fn low_processor_bits_mask(count: NonZero<u32>) -> usize {
+    let count = count.get();
+
+    if count >= usize::BITS {
+        usize::MAX
+    } else {
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "count < usize::BITS here, so the shift and subtraction cannot overflow"
+        )]
+        let mask = (1_usize << count) - 1;
+        mask
+    }
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -255,6 +269,22 @@ mod tests {
 
     assert_impl_all!(Job<'static>: UnwindSafe, RefUnwindSafe);
     assert_impl_all!(JobBuilder: UnwindSafe, RefUnwindSafe);
+
+    #[test]
+    fn low_processor_bits_mask_sets_expected_bits() {
+        assert_eq!(low_processor_bits_mask(nz!(1)), 0b1);
+        assert_eq!(low_processor_bits_mask(nz!(2)), 0b11);
+
+        // The widest request that still leaves the top bit clear.
+        let widest = NonZero::new(usize::BITS.wrapping_sub(1)).unwrap();
+        assert_eq!(low_processor_bits_mask(widest), usize::MAX >> 1);
+
+        // At and beyond the integer width every bit is set, without overflowing the shift.
+        let full = NonZero::new(usize::BITS).unwrap();
+        let over = NonZero::new(usize::BITS.wrapping_add(1)).unwrap();
+        assert_eq!(low_processor_bits_mask(full), usize::MAX);
+        assert_eq!(low_processor_bits_mask(over), usize::MAX);
+    }
 
     #[test]
     #[cfg_attr(miri, ignore)] // Miri cannot use the real operating system APIs.
