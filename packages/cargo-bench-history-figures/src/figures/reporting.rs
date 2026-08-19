@@ -163,10 +163,15 @@ fn silent_suite() -> Vec<Series> {
 
 /// One batch detection pass over `suite`, with ghosts accounted for after the pass.
 fn detect_suite(suite: &[Series]) -> Detection {
-    let Detection { findings, census } = find_changes(suite, &suite_context(suite));
+    let Detection {
+        findings,
+        census,
+        discarded,
+    } = find_changes(suite, &suite_context(suite));
     Detection {
         findings,
         census: attach_ghosts(census),
+        discarded,
     }
 }
 
@@ -263,7 +268,9 @@ fn judge_branch(name: &str, values: &[f64], kind: MetricKind) -> Finding {
 /// The worked analysis the chapter's report excerpts are rendered from: one batch
 /// detection pass, so the findings and the census are the same account.
 fn worked_analysis() -> Analysis {
-    let Detection { findings, census } = detect_suite(&worked_suite());
+    let Detection {
+        findings, census, ..
+    } = detect_suite(&worked_suite());
     Analysis {
         mode: AnalysisMode::History,
         set: worked_set(),
@@ -275,7 +282,9 @@ fn worked_analysis() -> Analysis {
 
 /// The same kind of pass with nothing to report: the case the coverage line exists for.
 fn silent_analysis() -> Analysis {
-    let Detection { findings, census } = detect_suite(&silent_suite());
+    let Detection {
+        findings, census, ..
+    } = detect_suite(&silent_suite());
     Analysis {
         mode: AnalysisMode::History,
         set: worked_set(),

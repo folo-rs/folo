@@ -28,7 +28,9 @@ use nonempty::nonempty;
 use crate::detect::findings::count_to_f64;
 use crate::detect::noise_gates::MIN_REGIME;
 pub use crate::detect::recorded::{
-    STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_HIGH, STATIONARY_BIMODAL_NOISE,
+    CONTENDED_RUNNER_BASE, CONTENDED_RUNNER_EXCURSION, CONTENDED_RUNNER_LEVEL,
+    CONTENDED_RUNNER_LEVEL_START, STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_HIGH,
+    STATIONARY_BIMODAL_NOISE,
 };
 pub use crate::detect::scatter::{TIMING_NOISE_CV, scattered, seed_of};
 use crate::detect::{

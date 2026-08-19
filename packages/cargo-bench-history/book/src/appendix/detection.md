@@ -191,9 +191,13 @@ out the range a single further measurement was expected to land in, and asks whe
 landed outside it. That is a different question from "are these two groups different" —
 there is only one context observation, not a group.
 
-In the figures below, the shaded value band is that predicted range. The base window itself
-is the recent base-ref first-parent commit sample for the same discriminant set, capped by the
-branch comparison window. It is anchored at the base ref, not at the merge base.
+In the figures below, the shaded value band is that predicted range: the interval a single
+further measurement stays inside unless the tool judges it a change. Its edges are the real
+cutoff, computed from the same base window the tool uses — a context run drawn outside the band
+is one the tool reports, and one drawn inside is one it passes over. Every verdict shown beneath
+a figure is the real one. The base window itself is the recent base-ref first-parent commit
+sample for the same discriminant set, capped by the branch comparison window. It is anchored at
+the base ref, not at the merge base.
 
 {{#include generated/detection-branch-reported.svg}}
 
@@ -229,6 +233,42 @@ checks. Accepting a boundary *throws evidence away*: the comparison sample shrin
 scatter is re-estimated from what remains. A wrong boundary can collapse a noisy window's scatter
 to almost nothing and make the next tip read as certain. A decision that discards data has to be
 more certain than one that merely reports something.
+
+### When one reading came from a disturbed runner
+
+A base window is a sample of what the base ref measures, and a shared machine occasionally
+contributes a reading that measures something else — another job on the same host, a thermal
+event, a noisy neighbour. Such a reading is not a level and not a trend: it stands well clear of
+its neighbours in one direction and is gone at the very next commit.
+
+Averaging one in would be quietly expensive. It drags the window's center toward the tip and
+inflates the window's apparent scatter several times over, and a wider predicted range is a range
+almost nothing falls outside of. The window would still look like a window, and the comparison
+would still run, but it would have lost most of its ability to see an ordinary move.
+
+So branch mode leaves such a reading out of the comparison. A reading qualifies only when the
+commits on either side of it agree with each other, it stands far clear of them, and it is the only
+one in the window — a window offering a second is a benchmark that visits more than one level, and
+how often it does so is exactly what the context run is being measured against.
+
+One more thing can disqualify it: the run being judged standing at that same level. That run is
+evidence consistent with the window's odd reading being a level the series returns to, and a level
+it may return to cannot safely be dropped from the description of what the series does. Dropping it
+would leave the window describing a steadiness the benchmark does not actually hold, and the very
+run that contradicted it would then be read as a large, confident regression against what remained.
+
+{{#include generated/detection-branch-contended.svg}}
+
+{{#include generated/detection-branch-contended.md}}
+
+The reading is left out of the comparison only. It is still stored, still charted, and still
+counted as one of the commits whose existence lets the window be judged at all — a window is
+never made eligible by discarding. `--verbose` names each reading left out, what it measured,
+and the level its neighbours agreed on, so a narrowed comparison can be told from an ordinary
+one and the removal judged rather than merely discovered.
+
+History mode does not do this. Its arithmetic is built on medians and ranks, which a lone
+reading barely moves, so it has nothing to gain and evidence to lose.
 
 ## Confidence, and what it is not
 

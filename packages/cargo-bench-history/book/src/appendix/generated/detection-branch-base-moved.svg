@@ -94,8 +94,8 @@ commit position
 <text x="74" y="34" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#969BA0">
 discarded older base level
 </text>
-<rect x="353" y="78" width="314" height="61" opacity="0.15" fill="#9664BE" stroke="none"/>
-<text x="353" y="78" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#9664BE">
+<rect x="353" y="84" width="314" height="48" opacity="0.15" fill="#9664BE" stroke="none"/>
+<text x="353" y="84" dy="0.76em" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#9664BE">
 predicted range from current base
 </text>
 <polyline fill="none" opacity="1" stroke="#D64541" stroke-width="2" points="353,253 353,34 "/>

@@ -73,9 +73,10 @@ use cbh_model::{BenchmarkId, DiscriminantSet, MetricKind};
 use cbh_stats as stats;
 use serde::Serialize;
 
+use crate::detect::excursions::DiscardedReading;
 use crate::detect::gate_log::{Gate, GateLog, GateStage, StageLog};
 use crate::detect::parallel::{balanced_chunk_sizes, worker_count};
-use crate::detect::{BaseLevel, Series, SeriesPoint, noise_gates};
+use crate::detect::{BaseLevel, Series, SeriesPoint, excursions, noise_gates};
 
 /// Tunable parameters of the engine-aware analysis.
 ///
@@ -274,6 +275,53 @@ pub struct AnalysisConfig {
     /// precise probability: with the smallest regimes on both sides it admits one
     /// contradicting pair in twenty-five and no more.
     pub min_base_split_separation: f64,
+    /// How far a base-window level must stand from its surroundings for branch mode to
+    /// read it as a measurement excursion and discard it.
+    ///
+    /// A shared runner occasionally loses time to something else and records one commit
+    /// far above the level its neighbours agree on. Such a level describes the runner
+    /// rather than the code, and left in the window it both displaces the comparison's
+    /// centre and inflates its scatter, silently costing branch mode much of its
+    /// sensitivity. Discarding it is guarded by
+    /// [`excursion_neighbour_agreement`](Self::excursion_neighbour_agreement) and
+    /// [`excursion_max_removals`](Self::excursion_max_removals), which together confine
+    /// it to levels that are genuinely isolated.
+    ///
+    /// Raising this admits more interference into the comparison; lowering it starts
+    /// discarding the ordinary scatter that comparison is judged against, and every level
+    /// discarded tightens the window and makes branch mode readier to report.
+    pub excursion_relative_magnitude: f64,
+    /// How closely the levels on either side of a candidate excursion must agree before
+    /// it may be discarded.
+    ///
+    /// This is what keeps a genuine level shift out of the excursion rule: after a real
+    /// change the levels following it sit at the new level and disagree with those
+    /// before it, so its opening level is kept however large the step is. Only a level
+    /// its own surroundings straddle can be discarded.
+    pub excursion_neighbour_agreement: f64,
+    /// How many levels on each side of a candidate excursion form the surroundings it is
+    /// judged against.
+    ///
+    /// The candidate is judged locally rather than against the whole window, because a
+    /// window may legitimately span a level shift, and measured against such a window's
+    /// middle the ordinary levels of both regimes stand clear.
+    ///
+    /// A level without this many neighbours on *both* sides is never discarded, so the
+    /// window's outermost levels are always kept.
+    pub excursion_neighbours: usize,
+    /// How many excursions a base window may contain before it is left alone entirely.
+    ///
+    /// Above this the window is read as a benchmark that visits more than one level
+    /// rather than as a clean window with a bad reading in it. Removing levels from such
+    /// a window would leave a spuriously tight comparison in which the benchmark's own
+    /// ordinary values read as large, certain regressions — so it is left exactly as
+    /// measured.
+    ///
+    /// Keep it far below the difference between [`min_series_points`](Self::min_series_points)
+    /// and [`min_regime`](Self::min_regime): eligibility is settled on the window as
+    /// recorded, so a window that gave up more than that margin would be counted as judged
+    /// while holding too little evidence to compare.
+    pub excursion_max_removals: usize,
 }
 
 impl Default for AnalysisConfig {
@@ -299,6 +347,10 @@ impl Default for AnalysisConfig {
             residual_noise_multiple: noise_gates::RESIDUAL_NOISE_MULTIPLE,
             min_regime_separation: noise_gates::MIN_REGIME_SEPARATION,
             min_base_split_separation: noise_gates::MIN_BASE_SPLIT_SEPARATION,
+            excursion_relative_magnitude: noise_gates::EXCURSION_RELATIVE_MAGNITUDE,
+            excursion_neighbour_agreement: noise_gates::EXCURSION_NEIGHBOUR_AGREEMENT,
+            excursion_neighbours: noise_gates::EXCURSION_NEIGHBOURS,
+            excursion_max_removals: noise_gates::EXCURSION_MAX_REMOVALS,
         }
     }
 }
@@ -564,6 +616,29 @@ pub struct Detection {
     pub findings: Vec<Finding>,
     /// What the pass judged, and why it left the rest unjudged.
     pub census: SeriesCensus,
+    /// Base-window readings branch mode left out of a comparison, in series order.
+    ///
+    /// Discarding narrows the evidence a verdict rests on without declining anything, so
+    /// it is reported here rather than through the gate log, which speaks only of gates
+    /// that declined.
+    pub discarded: Vec<DiscardedBaseReading>,
+}
+
+/// One base-window reading branch mode left out of a comparison, and the series it
+/// belongs to.
+///
+/// Carries its own identity because discards are collected across the whole pass, well
+/// away from the series that produced them.
+#[derive(Clone, Debug)]
+pub struct DiscardedBaseReading {
+    /// The comparable discriminant set the series belongs to.
+    pub set: DiscriminantSet,
+    /// The benchmark identity.
+    pub id: BenchmarkId,
+    /// The category of the metric whose reading was discarded.
+    pub kind: MetricKind,
+    /// What was discarded, and what it stood clear of.
+    pub reading: DiscardedReading,
 }
 
 /// Which detector produced a finding.
@@ -812,7 +887,7 @@ fn direction_of(delta: f64) -> Direction {
 ///
 /// A move away from a (near-)zero baseline is proportionally unbounded; its sign
 /// is returned as a full-magnitude move so it ranks as major.
-fn relative_delta_of(delta: f64, baseline: f64) -> f64 {
+pub(super) fn relative_delta_of(delta: f64, baseline: f64) -> f64 {
     if baseline.abs() <= f64::EPSILON {
         delta.signum()
     } else {
@@ -1887,11 +1962,12 @@ fn test_base_levels(points: &[&SeriesPoint]) -> Vec<BaseLevel> {
 /// in the base. A new benchmark introduced on the context (no base-ref points) or
 /// an empty context yields nothing, since there is no baseline to compare.
 ///
-/// The recent base window is first collapsed to per-commit levels and checked for
-/// enough evidence as a whole. If that window contains a genuine level shift, located
+/// The recent base window is first checked, exactly as recorded, for enough evidence as a
+/// whole. Only then is it narrowed: isolated measurement excursions are discarded (see
+/// [`excursions`]), and if what remains contains a genuine level shift, located
 /// with Pettitt and accepted only by the same Mann–Whitney significance, separation,
 /// relative-floor, and absolute-floor gates that make such a split trustworthy, the
-/// stale prefix before the newest accepted split is discarded. The prediction interval
+/// stale prefix before the newest accepted split is discarded too. The prediction interval
 /// then compares the context run against the trailing regime, moving its centre and
 /// scatter together onto the base level the context would merge into.
 fn evaluate_branch(
@@ -1899,21 +1975,42 @@ fn evaluate_branch(
     config: &AnalysisConfig,
     context_index: usize,
     log: &mut GateLog,
+    discarded: &mut Vec<DiscardedReading>,
 ) -> Option<Candidate> {
     // The base window arrives already capped to the recent `compare_window` levels
     // (attach_base_windows/`base_window_levels` own that truncation), so detection reads
     // it whole rather than re-slicing it here.
-    let base_window = &series.base_window[..];
-    let levels: Vec<f64> = base_window.iter().map(|level| level.value).collect();
-    let base_spans = level_spans(&levels);
+    //
+    // The evidence floor is applied to the window as recorded, before anything is
+    // discarded from it. That keeps this gate in exact correspondence with `testability`,
+    // which is what the census counts and what sizes the false-discovery family, and it
+    // is the same order the regime narrowing below already follows: the question this
+    // gate asks is whether the series has a recent base history at all, and it does.
+    let recorded_levels = series.base_window.len();
     if !log.stage(GateStage::Branch).numeric(
         Gate::MinBaseCommits,
-        count_to_f64(base_spans.len()),
+        count_to_f64(recorded_levels),
         count_to_f64(config.min_series_points),
-        base_spans.len() >= config.min_series_points,
+        recorded_levels >= config.min_series_points,
     ) {
         return None;
     }
+    // Isolated measurement excursions come out before the window is searched for a regime
+    // boundary or compared against, because a reading that describes the runner rather
+    // than the code would otherwise both invite a spurious boundary and distort the
+    // comparison's centre and scatter. The context run's own level is part of that
+    // judgment, so it is established first.
+    let latest_points = latest_context_run(&series.points, context_index);
+    // `latest_context_run` yields the single run a merge would land — at most one point —
+    // so the context level is that point's value directly, with no median over a one-element
+    // sample and no allocation on the analysis path. Ref: docs/performance.md, no allocation
+    // on the hot path.
+    let context_level = latest_points.first().map(|point| point.value);
+    let (base_window, removed) =
+        excursions::cleaned_window(&series.base_window, context_level, config);
+    discarded.extend(removed);
+    let levels: Vec<f64> = base_window.iter().map(|level| level.value).collect();
+    let base_spans = level_spans(&levels);
     let comparison_start = current_base_regime_start(
         series,
         &base_spans,
@@ -1921,7 +2018,6 @@ fn evaluate_branch(
         config.branch_practical_relative,
     );
     let comparison_base = base_window.get(comparison_start..).unwrap_or_default();
-    let latest_points = latest_context_run(&series.points, context_index);
     let commit = latest_points.last().and_then(|point| owned_commit(point));
     // The newest base-ref point in the selected comparison sample is this series'
     // comparison base. Truncating stale levels changes the sample's start, not this
@@ -1998,9 +2094,13 @@ pub fn short_commit(commit: &str) -> String {
 #[cfg(any(test, feature = "private-test-util"))]
 #[must_use]
 pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Detection {
-    let (candidates, census) = detect_all(series, context);
+    let (candidates, census, discarded) = detect_all(series, context);
     let findings = finalize_findings(candidates, &census, series, context);
-    Detection { findings, census }
+    Detection {
+        findings,
+        census,
+        discarded,
+    }
 }
 
 /// Evaluates every series and returns the surviving findings, ranked
@@ -2033,9 +2133,13 @@ pub async fn find_changes_spawned(
     context: AnalysisContext,
     spawner: &Spawner,
 ) -> Detection {
-    let (candidates, census) = detect_all_spawned(&series, context, spawner).await;
+    let (candidates, census, discarded) = detect_all_spawned(&series, context, spawner).await;
     let findings = finalize_findings(candidates, &census, &series, &context);
-    Detection { findings, census }
+    Detection {
+        findings,
+        census,
+        discarded,
+    }
 }
 
 /// Whether `series` carries enough evidence for its mode's detector to reach a
@@ -2066,10 +2170,11 @@ pub fn testability(series: &Series, context: &AnalysisContext) -> Testability {
                 return Testability::Unjudged(UnjudgedReason::NotMeasuredOnBranch);
             }
             // Testability asks whether the full recent base window contains enough
-            // evidence to run a branch comparison at all. Detection may then narrow to
-            // a `min_regime`-sized trailing regime after an accepted base-side shift;
-            // that does not make this census reason untruthful, because the evidence
-            // floor was met before any history was discarded.
+            // evidence to run a branch comparison at all. Detection may then narrow it —
+            // discarding isolated measurement excursions, and narrowing to a
+            // `min_regime`-sized trailing regime after an accepted base-side shift. That
+            // does not make this census reason untruthful, because the evidence floor was
+            // met before any of it was discarded.
             let base_points = series.base_window.len().min(config.compare_window);
             if base_points < config.min_series_points {
                 return Testability::Unjudged(UnjudgedReason::TooFewBaseCommits);
@@ -2162,7 +2267,10 @@ fn finalize_findings(
 /// order — the order [`finalize_findings`] relies on — and the census of what was
 /// judged.
 #[cfg(any(test, feature = "private-test-util"))]
-fn detect_all(series: &[Series], context: &AnalysisContext) -> (Vec<Candidate>, SeriesCensus) {
+fn detect_all(
+    series: &[Series],
+    context: &AnalysisContext,
+) -> (Vec<Candidate>, SeriesCensus, Vec<DiscardedBaseReading>) {
     detect_range(series, 0..series.len(), context, &mut GateLog::disabled())
 }
 
@@ -2180,7 +2288,7 @@ async fn detect_all_spawned(
     series: &Arc<[Series]>,
     context: AnalysisContext,
     spawner: &Spawner,
-) -> (Vec<Candidate>, SeriesCensus) {
+) -> (Vec<Candidate>, SeriesCensus, Vec<DiscardedBaseReading>) {
     let len = series.len();
     let workers = worker_count(len);
 
@@ -2202,12 +2310,14 @@ async fn detect_all_spawned(
     // must be absorbed or the family would shrink to whatever one worker saw.
     let mut candidates = Vec::new();
     let mut census = SeriesCensus::default();
+    let mut discarded = Vec::new();
     for handle in handles {
-        let (chunk_candidates, chunk_census) = handle.await;
+        let (chunk_candidates, chunk_census, chunk_discarded) = handle.await;
         candidates.extend(chunk_candidates);
         census.merge(&chunk_census);
+        discarded.extend(chunk_discarded);
     }
-    (candidates, census)
+    (candidates, census, discarded)
 }
 
 /// Detects the series in `range`, returning the raised candidates in index order and
@@ -2221,9 +2331,10 @@ fn detect_range(
     range: Range<usize>,
     context: &AnalysisContext,
     log: &mut GateLog,
-) -> (Vec<Candidate>, SeriesCensus) {
+) -> (Vec<Candidate>, SeriesCensus, Vec<DiscardedBaseReading>) {
     let mut candidates = Vec::new();
     let mut census = SeriesCensus::default();
+    let mut discarded = Vec::new();
     for index in range {
         let one = series
             .get(index)
@@ -2233,12 +2344,12 @@ fn detect_range(
         // Judging and counting are the same decision, so a series the census reports
         // as unjudged provably never reached a detector.
         if verdict.is_judged()
-            && let Some(candidate) = detect_one(index, one, context, log)
+            && let Some(candidate) = detect_one(index, one, context, log, &mut discarded)
         {
             candidates.push(candidate);
         }
     }
-    (candidates, census)
+    (candidates, census, discarded)
 }
 
 /// Runs the mode-appropriate detector on the series at `index` and returns its
@@ -2256,6 +2367,7 @@ fn detect_one(
     one: &Series,
     context: &AnalysisContext,
     log: &mut GateLog,
+    discarded: &mut Vec<DiscardedBaseReading>,
 ) -> Option<Candidate> {
     let config = &context.config;
     let candidate = match context.mode {
@@ -2271,7 +2383,17 @@ fn detect_one(
                 candidate
             })
         }
-        AnalysisMode::Branch => evaluate_branch(one, config, context.tip_index, log),
+        AnalysisMode::Branch => {
+            let mut readings = Vec::new();
+            let candidate = evaluate_branch(one, config, context.tip_index, log, &mut readings);
+            discarded.extend(readings.into_iter().map(|reading| DiscardedBaseReading {
+                set: one.set.clone(),
+                id: one.id.clone(),
+                kind: one.kind,
+                reading,
+            }));
+            candidate
+        }
     };
     candidate.map(|mut candidate| {
         candidate.source_index = index;
@@ -2299,7 +2421,7 @@ fn detect_one(
 pub fn evaluate_with_log(series: &Series, context: &AnalysisContext) -> (Option<Finding>, GateLog) {
     let mut log = GateLog::recording();
     let batch = slice::from_ref(series);
-    let (candidates, census) = detect_range(batch, 0..batch.len(), context, &mut log);
+    let (candidates, census, _) = detect_range(batch, 0..batch.len(), context, &mut log);
     let findings = finalize_findings(candidates, &census, batch, context);
     (findings.into_iter().next(), log)
 }
@@ -2518,12 +2640,13 @@ mod tests {
         log: &mut GateLog,
     ) -> Option<Candidate> {
         let context_index = max_topo_index(slice::from_ref(series));
+        let mut discarded = Vec::new();
         if series.base_window.is_empty() {
             let mut series = series.clone();
             attach_test_base_windows(slice::from_mut(&mut series), context_index.checked_sub(1));
-            return super::evaluate_branch(&series, config, context_index, log);
+            return super::evaluate_branch(&series, config, context_index, log, &mut discarded);
         }
-        super::evaluate_branch(series, config, context_index, log)
+        super::evaluate_branch(series, config, context_index, log, &mut discarded)
     }
 
     /// Runs the history-mode detector with default config.
@@ -5698,6 +5821,46 @@ mod tests {
         let detection = find_changes(&judged, &context);
         assert_eq!(detection.findings.len(), 1);
         assert_eq!(detection.census.judged(), 1);
+    }
+
+    #[test]
+    fn a_window_at_the_evidence_floor_is_judged_despite_an_excursion_in_it() {
+        // The evidence floor is answered on the window as recorded. Applying it to what
+        // survives excursion cleaning instead would let a discarded reading silence a
+        // series that `testability` — and so the census, and the false-discovery family
+        // sized from it — has already counted as judged.
+        //
+        // The finding is the other half of the statement: the excursion is gone from the
+        // comparison, so the context run is judged against the level the base actually
+        // sits at rather than against a window that reading has widened and pulled up.
+        let mut points = base_run(100.0);
+        let excursion_at = MIN_SERIES_POINTS.checked_div(2).unwrap();
+        points[excursion_at].1 = 200.0;
+        points.push((MIN_SERIES_POINTS, 130.0, false));
+        let mut series = placed_series(&points);
+        attach_test_base_windows(slice::from_mut(&mut series), Some(base_merge_base()));
+        let series = [series];
+        let context = branch_context(&series, Some(base_merge_base()));
+        assert_eq!(testability(&series[0], &context), Testability::Judged);
+        let detection = find_changes(&series, &context);
+        assert_eq!(detection.census.judged(), 1);
+        assert_eq!(detection.findings.len(), 1);
+    }
+
+    #[test]
+    fn the_removal_allowance_cannot_starve_a_window_that_was_judged_eligible() {
+        // Eligibility is settled on the window as recorded, so the levels cleaning may
+        // take have to come out of the margin between the evidence floor and the minimum
+        // a comparison needs. Were the allowance set above that margin, a window could be
+        // counted as judged and then hold too little evidence to compare — the census and
+        // the false-discovery family would both be describing work that cannot happen.
+        let config = AnalysisConfig::default();
+        let margin = config
+            .min_series_points
+            .checked_sub(config.min_regime)
+            .expect("the evidence floor is at least the minimum regime length");
+
+        assert!(config.excursion_max_removals <= margin);
     }
 
     #[test]

@@ -129,6 +129,59 @@ pub(crate) const COMPARE_WINDOW: usize = 16;
 /// raised above the history floor, to keep pull-request false positives down.
 pub(crate) const BRANCH_PRACTICAL_RELATIVE: f64 = 0.05;
 
+/// Default `excursion_relative_magnitude`: how far a base-window level must stand from
+/// its surroundings before branch mode treats it as a measurement excursion rather than
+/// as evidence.
+///
+/// Set where measurement wobble stops and runner interference starts, measured on this
+/// project's own stored history: across the wall-time series, isolated levels straying up
+/// to roughly a quarter from their surroundings stray high and low about equally often —
+/// the two-sided signature of ordinary measurement scatter — while beyond this threshold
+/// they are almost exclusively *slow*, which is the one-sided signature of a runner
+/// losing time to something else. Setting it lower would discard ordinary scatter, which
+/// is the sample's own dispersion and the very thing the comparison is judged against.
+///
+/// It also sits far above [`BRANCH_PRACTICAL_RELATIVE`], so no level a branch move could
+/// be reported against is anywhere near being treated as an excursion.
+pub(crate) const EXCURSION_RELATIVE_MAGNITUDE: f64 = 0.30;
+
+/// Default `excursion_neighbour_agreement`: how closely the levels on either side of a
+/// candidate excursion must agree before it can be discarded.
+///
+/// Held equal to [`BRANCH_PRACTICAL_RELATIVE`] because that is the smallest move branch
+/// mode would report: surroundings that agree to within it describe one level as far as
+/// any verdict is concerned, and surroundings that do not are a level shift, whose levels
+/// must be kept whatever their magnitude.
+pub(crate) const EXCURSION_NEIGHBOUR_AGREEMENT: f64 = BRANCH_PRACTICAL_RELATIVE;
+
+/// Default `excursion_neighbours`: how many levels on each side of a candidate form the
+/// surroundings it is judged against.
+///
+/// Enough that one *further* excursion adjacent to the candidate cannot by itself decide
+/// what a side says, since these arrive in clusters, and few enough that the surroundings
+/// stay local to the candidate rather than reaching across a level shift the window may
+/// legitimately contain.
+///
+/// A candidate without this many levels on *both* sides is never discarded. Judging one
+/// against a shorter side would let a single adjacent level speak for a whole side, which
+/// is precisely the case this count exists to outvote.
+pub(crate) const EXCURSION_NEIGHBOURS: usize = 3;
+
+/// Default `excursion_max_removals`: how many excursions a window may contain before it
+/// is left alone entirely.
+///
+/// One. A window offering a second is not a clean window with a bad reading in it: two
+/// separated levels agreeing on a value their surroundings do not is the signature of a
+/// benchmark that visits more than one level, and how often it does so is exactly what the
+/// comparison measures the context run against. Discarding a recurring level would leave a
+/// spuriously tight window in which the benchmark's own ordinary values read as large,
+/// certain regressions — the failure this whole rule exists to avoid causing.
+///
+/// Runner interference is rare enough per window that requiring uniqueness costs almost
+/// nothing: the stored history puts a second excursion inside the same window at well
+/// under a percent of comparisons.
+pub(crate) const EXCURSION_MAX_REMOVALS: usize = 1;
+
 /// Default `branch_noise_multiple`: multiple of the per-measurement noise floor a
 /// branch move must exceed where the engine reports per-point confidence intervals.
 ///

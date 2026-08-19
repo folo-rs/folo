@@ -1038,6 +1038,33 @@ whose baseline is a couple of nanoseconds turns scheduling jitter into a double-
 percentage move; without the relative floor a large baseline would flag on a move that is
 noise at its scale.
 
+Branch mode also **discards a single isolated measurement excursion** from the base window before
+it compares anything. A shared runner occasionally loses time to something else and records one
+commit far above the level its neighbours agree on; left in the window, that reading drags the
+comparison's centre and inflates its scatter, so a genuine regression passes silently unreported.
+
+A level is discarded only when three conditions hold together — its neighbours on either side
+agree with one another, it stands far clear of them, and it is the window's only such level:
+*the series was doing one thing, this one commit was not, and then it went back*. The rule is
+deliberately narrow, because discarding **tightens** the window and so makes the mode readier to
+report. These are therefore left exactly as measured:
+
+* a window offering a **second** candidate, which is a benchmark visiting more than one level —
+  precisely what the context run is measured against — not a clean window with one bad reading;
+* a level near the window's **ends**, which lacks the neighbours on both sides the judgment
+  consults;
+* a level the **context run itself stands at**, since the series may return to that level and so
+  it cannot be dropped from the description of what the series does.
+
+Two tenets bound the behaviour. Whether a series is judged at all is decided on the window **as
+recorded**, before anything is discarded — that check only asks whether a recent base history
+exists to compare against. And a discarded reading is named under `--verbose`, with what it
+measured and its neighbours' level, since narrowing a window changes a verdict without any gate
+declining and would otherwise leave no trace.
+
+History mode does not clean its evidence: its gates take their level and scatter from medians,
+which absorb a single wild reading on their own.
+
 The gate thresholds are centralized as a single policy rather than embedded throughout the
 detectors, so maintainers can review and tune the complete policy together. Each threshold is
 documented there with the reasoning that sets its value; this document describes the rules
