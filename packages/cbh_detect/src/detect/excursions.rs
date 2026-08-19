@@ -30,7 +30,24 @@ use super::AnalysisConfig;
 use super::findings::relative_delta_of;
 use super::series::BaseLevel;
 
-/// `window` with its isolated measurement excursion removed, oldest first.
+/// One base-window reading branch mode left out of a comparison.
+///
+/// Discarding a reading changes a verdict without declining anything, so no gate records
+/// it and it would otherwise be invisible. This carries what a reader needs to reconstruct
+/// the decision — which commit, what it measured, and the level its neighbours agreed on
+/// that it stood clear of — so `--verbose` can explain a comparison that silently narrowed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DiscardedReading {
+    /// First-parent topological index of the base-ref commit the reading came from.
+    pub topo_index: usize,
+    /// The value that was left out.
+    pub value: f64,
+    /// The level its neighbours on both sides agreed on, which it stood clear of.
+    pub neighbour_level: f64,
+}
+
+/// `window` with its isolated measurement excursion removed, oldest first, and what was
+/// removed.
 ///
 /// `context_level` is the level the context run sits at, which is evidence about the
 /// window: a candidate the context run agrees with is a level this series reaches rather
@@ -42,20 +59,33 @@ pub(super) fn cleaned_window<'a>(
     window: &'a [BaseLevel],
     context_level: Option<f64>,
     config: &AnalysisConfig,
-) -> Cow<'a, [BaseLevel]> {
+) -> (Cow<'a, [BaseLevel]>, Vec<DiscardedReading>) {
     let levels: Vec<f64> = window.iter().map(|level| level.value).collect();
     let discarded = isolated_excursions(&levels, context_level, config);
     if discarded.is_empty() {
-        return Cow::Borrowed(window);
+        return (Cow::Borrowed(window), Vec::new());
     }
-    Cow::Owned(
-        window
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| !discarded.contains(index))
-            .map(|(_, level)| level.clone())
-            .collect(),
-    )
+    // Reported against the same neighbourhood the judgment consulted, so the explanation
+    // and the decision cannot describe different surroundings.
+    let reported = discarded
+        .iter()
+        .filter_map(|&index| {
+            let level = window.get(index)?;
+            let surroundings = Surroundings::around(index, &levels, config.excursion_neighbours)?;
+            Some(DiscardedReading {
+                topo_index: level.topo_index,
+                value: level.value,
+                neighbour_level: surroundings.level,
+            })
+        })
+        .collect();
+    let kept = window
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !discarded.contains(index))
+        .map(|(_, level)| level.clone())
+        .collect();
+    (Cow::Owned(kept), reported)
 }
 
 /// The indices of `levels` that are isolated measurement excursions, oldest first.
@@ -404,9 +434,10 @@ mod tests {
     #[test]
     fn a_clean_window_is_passed_through_without_copying() {
         let window = window_of(&flat(16));
-        let cleaned = cleaned_window(&window, None, &config());
+        let (cleaned, discarded) = cleaned_window(&window, None, &config());
         assert!(matches!(cleaned, Cow::Borrowed(_)));
         assert_eq!(cleaned.as_ref(), window.as_slice());
+        assert!(discarded.is_empty());
     }
 
     #[test]
@@ -414,12 +445,22 @@ mod tests {
         let mut levels = flat(16);
         levels[8] = EXCURSION;
         let window = window_of(&levels);
-        let cleaned = cleaned_window(&window, None, &config());
+        let (cleaned, discarded) = cleaned_window(&window, None, &config());
         let expected: Vec<BaseLevel> = window
             .iter()
             .filter(|level| level.topo_index != 8)
             .cloned()
             .collect();
         assert_eq!(cleaned.as_ref(), expected.as_slice());
+        assert_eq!(
+            discarded,
+            vec![DiscardedReading {
+                topo_index: 8,
+                value: EXCURSION,
+                neighbour_level: LEVEL,
+            }],
+            "what was reported must be exactly what was removed, described against the \
+             neighbourhood the judgment consulted"
+        );
     }
 }

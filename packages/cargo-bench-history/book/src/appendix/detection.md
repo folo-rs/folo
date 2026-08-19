@@ -250,13 +250,21 @@ commits on either side of it agree with each other, it stands far clear of them,
 one in the window — a window offering a second is a benchmark that visits more than one level, and
 how often it does so is exactly what the context run is being measured against.
 
+One more thing can disqualify it: the run being judged standing at that same level. That run is
+evidence consistent with the window's odd reading being a level the series returns to, and a level
+it may return to cannot safely be dropped from the description of what the series does. Dropping it
+would leave the window describing a steadiness the benchmark does not actually hold, and the very
+run that contradicted it would then be read as a large, confident regression against what remained.
+
 {{#include generated/detection-branch-contended.svg}}
 
 {{#include generated/detection-branch-contended.md}}
 
 The reading is left out of the comparison only. It is still stored, still charted, and still
 counted as one of the commits whose existence lets the window be judged at all — a window is
-never made eligible by discarding.
+never made eligible by discarding. `--verbose` names each reading left out, what it measured,
+and the level its neighbours agreed on, so a narrowed comparison can be told from an ordinary
+one and the removal judged rather than merely discovered.
 
 History mode does not do this. Its arithmetic is built on medians and ranks, which a lone
 reading barely moves, so it has nothing to gain and evidence to lose.

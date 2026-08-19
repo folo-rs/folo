@@ -1051,11 +1051,17 @@ thing, this one commit was not, and then it went back to doing it". A window off
 candidate is not a clean window with a bad reading in it but a benchmark that visits more than
 one level, and how often it does so is exactly what the context run is measured against; such a
 window is left exactly as measured. So are levels near the window's ends, which lack the
-surroundings on both sides that the judgment consults. Discarding a level *tightens* the window
-and so makes the mode readier to report, which is why the rule is this narrow.
+surroundings on both sides that the judgment consults. And so is a level the context run itself
+stands at: the run being judged is evidence consistent with the base window's level recurring,
+and a level the series may well return to cannot safely be discarded from the description of
+what it does. Discarding a level *tightens* the window and so makes the mode readier to report,
+which is why the rule is this narrow.
 Whether a series is judged at all is decided on its window as recorded, before anything is
 discarded from it: that floor asks whether the series has a recent base history to be compared
 against, and a bad reading within that history does not change the answer.
+A discarded reading is named under `--verbose`, along with what it measured and the level its
+neighbours agreed on, since narrowing a window changes a verdict without any gate declining and
+would otherwise leave no trace.
 History mode does not clean its evidence, because its gates take their level and their scatter
 from medians, which absorb a single wild reading on their own.
 

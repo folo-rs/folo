@@ -87,15 +87,21 @@
 //! Shapes like that reach this suite as declared values instead — recorded from a real
 //! series where one exists, and hand-built where the case needs a shape stated exactly.
 //!
-//! Two cases are exempt from the model: the `stationary_bimodal_noise` rows are verbatim
-//! recordings of one real series and carry the dispersion it was measured with — flatly
-//! bimodal, oscillating between two levels, which is the pathological shape the generator
-//! cannot produce and the one the noise gates are most easily fooled by. A human
-//! reading its chart answers "noisy, but nothing changed" without hesitation, so it is
-//! exactly the kind of obvious-answer input this suite exists to pin — and it guards the
-//! noise gates against reading structured jitter as a step. The pair puts it in front of
-//! both detectors: one row hands the whole recording to history mode, the other cuts it
-//! into a base window and a tip so branch mode judges it too.
+//! Among the declared cases, some are verbatim recordings. The `stationary_bimodal_noise`
+//! rows carry one real series' own dispersion — flatly bimodal, oscillating between two
+//! levels, which is the pathological shape the generator cannot produce and the one the
+//! noise gates are most easily fooled by. A human reading its chart answers "noisy, but
+//! nothing changed" without hesitation, so it is exactly the kind of obvious-answer input
+//! this suite exists to pin — and it guards the noise gates against reading structured
+//! jitter as a step. The pair puts it in front of both detectors: one row hands the whole
+//! recording to history mode, the other cuts it into a base window and a tip so branch
+//! mode judges it too. The `contended_runner_*` rows are likewise real, taken from a
+//! series a shared runner disturbed for exactly one commit.
+//!
+//! The rest are hand-built, because what they pin is a shape rather than a dispersion:
+//! how many times a window visits a level, and where those visits sit relative to the run
+//! being judged. Generated scatter would blur exactly the structure under test, so those
+//! rows state their values outright.
 
 #![cfg_attr(coverage_nightly, coverage(off))]
 

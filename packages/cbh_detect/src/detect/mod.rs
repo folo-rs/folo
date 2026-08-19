@@ -27,10 +27,11 @@ pub(crate) mod series;
 mod signal_validation;
 
 pub use discriminant::{DiscriminantFilter, DiscriminantSetQuery};
+pub use excursions::DiscardedReading;
 pub use findings::{
-    AnalysisConfig, AnalysisContext, AnalysisMode, Detection, Direction, Finding, FindingMethod,
-    SeriesCensus, SeriesValue, Testability, UnjudgedReason, find_changes_spawned, short_commit,
-    testability,
+    AnalysisConfig, AnalysisContext, AnalysisMode, Detection, Direction, DiscardedBaseReading,
+    Finding, FindingMethod, SeriesCensus, SeriesValue, Testability, UnjudgedReason,
+    find_changes_spawned, short_commit, testability,
 };
 #[cfg(any(test, feature = "private-test-util"))]
 pub use findings::{evaluate_with_log, find_changes};

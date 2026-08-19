@@ -71,6 +71,7 @@ use cbh_model::{BenchmarkId, DiscriminantSet, MetricKind};
 use cbh_stats as stats;
 use serde::Serialize;
 
+use crate::detect::excursions::DiscardedReading;
 use crate::detect::gate_log::{Gate, GateLog, GateStage, StageLog};
 use crate::detect::parallel::{balanced_chunk_sizes, worker_count};
 use crate::detect::{BaseLevel, Series, SeriesPoint, excursions, noise_gates};
@@ -612,6 +613,29 @@ pub struct Detection {
     pub findings: Vec<Finding>,
     /// What the pass judged, and why it left the rest unjudged.
     pub census: SeriesCensus,
+    /// Base-window readings branch mode left out of a comparison, in series order.
+    ///
+    /// Discarding narrows the evidence a verdict rests on without declining anything, so
+    /// it is reported here rather than through the gate log, which speaks only of gates
+    /// that declined.
+    pub discarded: Vec<DiscardedBaseReading>,
+}
+
+/// One base-window reading branch mode left out of a comparison, and the series it
+/// belongs to.
+///
+/// Carries its own identity because discards are collected across the whole pass, well
+/// away from the series that produced them.
+#[derive(Clone, Debug)]
+pub struct DiscardedBaseReading {
+    /// The comparable discriminant set the series belongs to.
+    pub set: DiscriminantSet,
+    /// The benchmark identity.
+    pub id: BenchmarkId,
+    /// The category of the metric whose reading was discarded.
+    pub kind: MetricKind,
+    /// What was discarded, and what it stood clear of.
+    pub reading: DiscardedReading,
 }
 
 /// Which detector produced a finding.
@@ -1948,6 +1972,7 @@ fn evaluate_branch(
     config: &AnalysisConfig,
     context_index: usize,
     log: &mut GateLog,
+    discarded: &mut Vec<DiscardedReading>,
 ) -> Option<Candidate> {
     // The base window arrives already capped to the recent `compare_window` levels
     // (attach_base_windows/`base_window_levels` own that truncation), so detection reads
@@ -1985,7 +2010,9 @@ fn evaluate_branch(
             .map(|point| point.value)
             .collect::<Vec<f64>>(),
     );
-    let base_window = excursions::cleaned_window(&series.base_window, context_level, config);
+    let (base_window, removed) =
+        excursions::cleaned_window(&series.base_window, context_level, config);
+    discarded.extend(removed);
     let levels: Vec<f64> = base_window.iter().map(|level| level.value).collect();
     let base_spans = level_spans(&levels);
     let comparison_start = current_base_regime_start(
@@ -2071,9 +2098,13 @@ pub fn short_commit(commit: &str) -> String {
 #[cfg(any(test, feature = "private-test-util"))]
 #[must_use]
 pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Detection {
-    let (candidates, census) = detect_all(series, context);
+    let (candidates, census, discarded) = detect_all(series, context);
     let findings = finalize_findings(candidates, &census, series, context);
-    Detection { findings, census }
+    Detection {
+        findings,
+        census,
+        discarded,
+    }
 }
 
 /// Evaluates every series and returns the surviving findings, ranked
@@ -2106,9 +2137,13 @@ pub async fn find_changes_spawned(
     context: AnalysisContext,
     spawner: &Spawner,
 ) -> Detection {
-    let (candidates, census) = detect_all_spawned(&series, context, spawner).await;
+    let (candidates, census, discarded) = detect_all_spawned(&series, context, spawner).await;
     let findings = finalize_findings(candidates, &census, &series, &context);
-    Detection { findings, census }
+    Detection {
+        findings,
+        census,
+        discarded,
+    }
 }
 
 /// Whether `series` carries enough evidence for its mode's detector to reach a
@@ -2225,7 +2260,10 @@ fn finalize_findings(
 /// order — the order [`finalize_findings`] relies on — and the census of what was
 /// judged.
 #[cfg(any(test, feature = "private-test-util"))]
-fn detect_all(series: &[Series], context: &AnalysisContext) -> (Vec<Candidate>, SeriesCensus) {
+fn detect_all(
+    series: &[Series],
+    context: &AnalysisContext,
+) -> (Vec<Candidate>, SeriesCensus, Vec<DiscardedBaseReading>) {
     detect_range(series, 0..series.len(), context, &mut GateLog::disabled())
 }
 
@@ -2243,7 +2281,7 @@ async fn detect_all_spawned(
     series: &Arc<[Series]>,
     context: AnalysisContext,
     spawner: &Spawner,
-) -> (Vec<Candidate>, SeriesCensus) {
+) -> (Vec<Candidate>, SeriesCensus, Vec<DiscardedBaseReading>) {
     let len = series.len();
     let workers = worker_count(len);
 
@@ -2265,12 +2303,14 @@ async fn detect_all_spawned(
     // must be absorbed or the family would shrink to whatever one worker saw.
     let mut candidates = Vec::new();
     let mut census = SeriesCensus::default();
+    let mut discarded = Vec::new();
     for handle in handles {
-        let (chunk_candidates, chunk_census) = handle.await;
+        let (chunk_candidates, chunk_census, chunk_discarded) = handle.await;
         candidates.extend(chunk_candidates);
         census.merge(&chunk_census);
+        discarded.extend(chunk_discarded);
     }
-    (candidates, census)
+    (candidates, census, discarded)
 }
 
 /// Detects the series in `range`, returning the raised candidates in index order and
@@ -2284,9 +2324,10 @@ fn detect_range(
     range: Range<usize>,
     context: &AnalysisContext,
     log: &mut GateLog,
-) -> (Vec<Candidate>, SeriesCensus) {
+) -> (Vec<Candidate>, SeriesCensus, Vec<DiscardedBaseReading>) {
     let mut candidates = Vec::new();
     let mut census = SeriesCensus::default();
+    let mut discarded = Vec::new();
     for index in range {
         let one = series
             .get(index)
@@ -2296,12 +2337,12 @@ fn detect_range(
         // Judging and counting are the same decision, so a series the census reports
         // as unjudged provably never reached a detector.
         if verdict.is_judged()
-            && let Some(candidate) = detect_one(index, one, context, log)
+            && let Some(candidate) = detect_one(index, one, context, log, &mut discarded)
         {
             candidates.push(candidate);
         }
     }
-    (candidates, census)
+    (candidates, census, discarded)
 }
 
 /// Runs the mode-appropriate detector on the series at `index` and returns its
@@ -2319,6 +2360,7 @@ fn detect_one(
     one: &Series,
     context: &AnalysisContext,
     log: &mut GateLog,
+    discarded: &mut Vec<DiscardedBaseReading>,
 ) -> Option<Candidate> {
     let config = &context.config;
     let candidate = match context.mode {
@@ -2334,7 +2376,17 @@ fn detect_one(
                 candidate
             })
         }
-        AnalysisMode::Branch => evaluate_branch(one, config, context.tip_index, log),
+        AnalysisMode::Branch => {
+            let mut readings = Vec::new();
+            let candidate = evaluate_branch(one, config, context.tip_index, log, &mut readings);
+            discarded.extend(readings.into_iter().map(|reading| DiscardedBaseReading {
+                set: one.set.clone(),
+                id: one.id.clone(),
+                kind: one.kind,
+                reading,
+            }));
+            candidate
+        }
     };
     candidate.map(|mut candidate| {
         candidate.source_index = index;
@@ -2362,7 +2414,7 @@ fn detect_one(
 pub fn evaluate_with_log(series: &Series, context: &AnalysisContext) -> (Option<Finding>, GateLog) {
     let mut log = GateLog::recording();
     let batch = slice::from_ref(series);
-    let (candidates, census) = detect_range(batch, 0..batch.len(), context, &mut log);
+    let (candidates, census, _) = detect_range(batch, 0..batch.len(), context, &mut log);
     let findings = finalize_findings(candidates, &census, batch, context);
     (findings.into_iter().next(), log)
 }
@@ -2581,12 +2633,13 @@ mod tests {
         log: &mut GateLog,
     ) -> Option<Candidate> {
         let context_index = max_topo_index(slice::from_ref(series));
+        let mut discarded = Vec::new();
         if series.base_window.is_empty() {
             let mut series = series.clone();
             attach_test_base_windows(slice::from_mut(&mut series), context_index.checked_sub(1));
-            return super::evaluate_branch(&series, config, context_index, log);
+            return super::evaluate_branch(&series, config, context_index, log, &mut discarded);
         }
-        super::evaluate_branch(series, config, context_index, log)
+        super::evaluate_branch(series, config, context_index, log, &mut discarded)
     }
 
     /// Runs the history-mode detector with default config, reporting both
