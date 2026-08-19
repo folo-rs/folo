@@ -45,9 +45,20 @@ const FINGERPRINT_HEX_LEN: usize = 16;
 /// partitioned by; the rest are provenance recorded beside them.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HardwareProfile {
-    /// Maximum number of logical processors the system reports.
+    /// Number of logical processors active on the system.
+    ///
+    /// Counted rather than taken from the width of the processor ID space, which the
+    /// kernel is free to pad with IDs reserved for processors that could be hot-added
+    /// later. That padding is a property of the kernel build rather than of the
+    /// hardware, and virtual machines commonly pad to one fixed width whatever their
+    /// size, which would file guests of quite different capacity under a single key.
     pub processors: usize,
     /// Maximum number of NUMA memory regions the system reports.
+    ///
+    /// The ID space width, unlike [`processors`][Self::processors] above, because the
+    /// count of regions that actually hold processors is only reachable through the
+    /// enumerated processors, which on some platforms are filtered by the affinity of
+    /// the probing process — making the key depend on how the probe was launched.
     pub memory_regions: usize,
     /// Distinct processor model strings the system reports, sorted ascending.
     ///
@@ -192,7 +203,7 @@ pub(crate) fn system_profile() -> HardwareProfile {
     let hardware = many_cpus::SystemHardware::current();
     let all_processors = hardware.all_processors();
     HardwareProfile {
-        processors: hardware.max_processor_count(),
+        processors: hardware.active_processor_count(),
         memory_regions: hardware.max_memory_region_count(),
         processor_models: distinct_models(
             all_processors
@@ -413,6 +424,19 @@ mod tests {
         assert!(hardware.memory_regions >= 1, "{hardware:?}");
         // The fingerprint of whatever this machine is must be well-formed.
         assert_eq!(fingerprint(&hardware).len(), FINGERPRINT_HEX_LEN);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Queries real hardware, which Miri cannot model.
+    fn system_profile_counts_processors_rather_than_the_id_space() {
+        // On a machine whose processor ID space is padded — with IDs reserved for
+        // hot-add, or left behind by a processor taken offline — the two differ, and
+        // only the count says how much machine there is to measure with.
+        let hardware = many_cpus::SystemHardware::current();
+        assert_eq!(
+            system_profile().processors,
+            hardware.active_processor_count()
+        );
     }
 
     #[test]
