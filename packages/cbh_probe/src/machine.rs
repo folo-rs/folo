@@ -17,6 +17,11 @@
 //! history into incomparable pieces, which is the failure the fingerprint exists
 //! to prevent.
 //!
+//! The counts describe the hardware the current process can actually use rather
+//! than everything the system could hold. A run confined to part of a machine
+//! measures that part, so it is a different machine for comparison purposes and
+//! belongs under its own key.
+//!
 //! The key is surfaced two ways for operators. [`resolve_machine_key`] yields the
 //! key `collect`, `import`, and `backfill` stamp every result with (the same key the
 //! `machine-key` command prints), while [`describe_fingerprint_components`] renders the
@@ -45,9 +50,20 @@ const FINGERPRINT_HEX_LEN: usize = 16;
 /// partitioned by; the rest are provenance recorded beside them.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HardwareProfile {
-    /// Maximum number of logical processors the system reports.
+    /// Number of logical processors the current process can use.
+    ///
+    /// Counted from the processors the process may actually run on, rather than taken
+    /// from the width of the processor ID space. The kernel pads that space with IDs
+    /// reserved for processors that could be hot-added later, which is a property of
+    /// the kernel build rather than of the hardware; virtual machines commonly pad to
+    /// one fixed width whatever their size, which would file guests of quite different
+    /// capacity under a single key.
     pub processors: usize,
-    /// Maximum number of NUMA memory regions the system reports.
+    /// Number of NUMA memory regions holding processors the current process can use.
+    ///
+    /// Counted from the same processors as [`processors`][Self::processors], so both
+    /// factors describe the same hardware, and for the same reason: the ID space is
+    /// padded with regions that need hold nothing.
     pub memory_regions: usize,
     /// Distinct processor model strings the system reports, sorted ascending.
     ///
@@ -133,6 +149,13 @@ fn distinct_models(models: impl IntoIterator<Item = String>) -> Vec<String> {
     distinct.into_iter().collect()
 }
 
+/// Counts the distinct memory regions a sequence of per-processor region IDs covers
+/// (pure). The IDs are those of the processors the process can use, so regions that hold
+/// no such processor are not counted no matter how the ID space is numbered.
+fn distinct_memory_regions(regions: impl IntoIterator<Item = many_cpus::MemoryRegionId>) -> usize {
+    regions.into_iter().collect::<BTreeSet<_>>().len()
+}
+
 /// The stable machine fingerprint of `profile`: the lowercase hex of the first
 /// [`FINGERPRINT_HEX_LEN`] characters of the SHA-256 of its canonical string.
 pub(crate) fn fingerprint(profile: &HardwareProfile) -> String {
@@ -184,16 +207,20 @@ pub fn describe_fingerprint_components(profile: &HardwareProfile) -> String {
 
 /// Profiles the host hardware (best effort).
 ///
-/// The processor and memory-region counts, the distinct processor models and the
-/// per-processor speed histogram all come from `many_cpus`, so the fingerprint and the
-/// provenance recorded beside it are built from a single, consistent hardware source.
+/// Every factor is counted from one set of processors — those the current process can
+/// use — so the fingerprint describes the hardware the measurements were actually taken
+/// on, and the provenance recorded beside it comes from that same consistent source.
 #[cfg_attr(test, mutants::skip)] // Queries the host; the pure logic it feeds is tested.
 pub(crate) fn system_profile() -> HardwareProfile {
     let hardware = many_cpus::SystemHardware::current();
     let all_processors = hardware.all_processors();
     HardwareProfile {
-        processors: hardware.max_processor_count(),
-        memory_regions: hardware.max_memory_region_count(),
+        processors: all_processors.len(),
+        memory_regions: distinct_memory_regions(
+            all_processors
+                .iter()
+                .map(many_cpus::Processor::memory_region_id),
+        ),
         processor_models: distinct_models(
             all_processors
                 .iter()
@@ -413,6 +440,44 @@ mod tests {
         assert!(hardware.memory_regions >= 1, "{hardware:?}");
         // The fingerprint of whatever this machine is must be well-formed.
         assert_eq!(fingerprint(&hardware).len(), FINGERPRINT_HEX_LEN);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Queries real hardware, which Miri cannot model.
+    fn system_profile_counts_usable_hardware_rather_than_the_id_space() {
+        // The ID space is padded — with IDs reserved for hot-add, or left behind by a
+        // processor taken offline — and covers hardware this process may not touch.
+        // Only a count of the usable processors says how much machine there is to
+        // measure with, so the factors must track that count and not the space.
+        let hardware = many_cpus::SystemHardware::current();
+        let usable = hardware.all_processors();
+        let profile = system_profile();
+
+        assert_eq!(profile.processors, usable.len(), "{profile:?}");
+        assert!(
+            profile.processors <= hardware.max_processor_count(),
+            "{profile:?}"
+        );
+
+        let usable_regions = usable
+            .iter()
+            .map(many_cpus::Processor::memory_region_id)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(profile.memory_regions, usable_regions.len(), "{profile:?}");
+        assert!(
+            profile.memory_regions <= hardware.max_memory_region_count(),
+            "{profile:?}"
+        );
+    }
+
+    #[test]
+    fn distinct_memory_regions_counts_each_region_once() {
+        // Several processors share a region, so the count is of regions and not of
+        // processors; the IDs need not be contiguous or start at zero, because the
+        // padded ID space is exactly what this count avoids inheriting.
+        assert_eq!(distinct_memory_regions([0, 0, 0]), 1);
+        assert_eq!(distinct_memory_regions([3, 0, 3, 7]), 3);
+        assert_eq!(distinct_memory_regions([]), 0);
     }
 
     #[test]

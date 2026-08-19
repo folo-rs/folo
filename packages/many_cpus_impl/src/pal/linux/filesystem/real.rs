@@ -20,13 +20,20 @@ impl Filesystem for BuildTargetFilesystem {
             .expect("failed to read /proc/cpuinfo - cannot continue execution")
     }
 
+    fn get_possible_cpus_contents(&self) -> Option<String> {
+        fs::read_to_string("/sys/devices/system/cpu/possible").ok()
+    }
+
+    fn get_online_cpus_contents(&self) -> Option<String> {
+        fs::read_to_string("/sys/devices/system/cpu/online").ok()
+    }
+
     fn get_numa_node_possible_contents(&self) -> Option<String> {
         fs::read_to_string("/sys/devices/system/node/possible").ok()
     }
 
-    fn get_numa_node_cpulist_contents(&self, node_index: u32) -> String {
-        fs::read_to_string(format!("/sys/devices/system/node/node{node_index}/cpulist"))
-            .expect("failed to read NUMA node cpulist - cannot continue execution")
+    fn get_numa_node_cpulist_contents(&self, node_index: u32) -> Option<String> {
+        fs::read_to_string(format!("/sys/devices/system/node/node{node_index}/cpulist")).ok()
     }
 
     fn get_cpu_online_contents(&self, cpu_index: u32) -> Option<String> {

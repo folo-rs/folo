@@ -476,7 +476,10 @@ impl SystemHardware {
 
     /// Returns the highest possible value for a processor ID.
     ///
-    /// Processor IDs are in the range `0..=max_processor_id()`.
+    /// Processor IDs are in the range `0..=max_processor_id()`. The ID space covers every
+    /// processor the system could have, including processors that are inactive and processors
+    /// the current process is not permitted to use, and does not change over the lifetime of
+    /// the system.
     ///
     /// # Example
     ///
@@ -495,7 +498,10 @@ impl SystemHardware {
 
     /// Returns the highest possible value for a memory region ID.
     ///
-    /// Memory region IDs are in the range `0..=max_memory_region_id()`.
+    /// Memory region IDs are in the range `0..=max_memory_region_id()`. The ID space covers
+    /// every memory region the system could have, including regions that hold no active
+    /// processor and regions the current process is not permitted to use, and does not change
+    /// over the lifetime of the system.
     ///
     /// # Example
     ///

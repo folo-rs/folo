@@ -20,6 +20,27 @@ speed and its model — is descriptive metadata about that processor, not part o
 identity. Two handles to the same processor are the same processor even if the metadata
 they carry was gathered differently.
 
+## The ID space is larger than what a caller can see
+
+Processor IDs are drawn from an ID space whose extent the package reports separately from
+the processors it describes. Every processor a caller can observe has an ID within that
+space, but the reverse does not hold: an ID in the space need not name a processor the
+caller can observe, because the machine may be described more generously than any single
+process is permitted to use it. A process constrained to a subset of the machine therefore
+sees a sparse set of IDs with holes where the processors it may not use would have been.
+Holes also appear where a processor exists but is inactive, and the extent of the space
+stays the same whether such a processor is activated or deactivated.
+
+A caller that keeps per-processor state indexed by processor ID sizes that state by the
+extent of the ID space and tolerates unoccupied entries. It must not assume that the
+processors it sees are numbered consecutively, that the lowest ID is zero, or that the
+count of processors it sees says anything about the extent of the ID space. Memory region
+IDs behave the same way and carry the same reservations.
+
+Separately from the processors a caller may use, the package reports how many processors
+the system currently has active. That count describes the machine, so a constraint on
+which processors the current process may use does not change it.
+
 ## Processor model
 
 The model is a human-oriented label that identifies the kind of silicon a processor is.
