@@ -1039,31 +1039,32 @@ whose baseline is a couple of nanoseconds turns scheduling jitter into a double-
 percentage move; without the relative floor a large baseline would flag on a move that is
 noise at its scale.
 
-Branch mode also **discards an isolated measurement excursion** from the base window before it
-compares anything. A shared runner occasionally loses time to something else and records one
-commit far above the level its neighbours agree on; that reading describes the runner rather
-than the code, and left in the window it both pulls the comparison's centre toward itself and
-inflates the scatter the move is judged against, so a genuine regression passes unreported.
-The failure is silent, which is what makes it worth correcting rather than tolerating. A level
-is discarded only when the levels on either side of it agree with one another, it stands far
-clear of them, and it is the window's only such level — jointly, "the series was doing one
-thing, this one commit was not, and then it went back to doing it". A window offering a second
-candidate is not a clean window with a bad reading in it but a benchmark that visits more than
-one level, and how often it does so is exactly what the context run is measured against; such a
-window is left exactly as measured. So are levels near the window's ends, which lack the
-surroundings on both sides that the judgment consults. And so is a level the context run itself
-stands at: the run being judged is evidence consistent with the base window's level recurring,
-and a level the series may well return to cannot safely be discarded from the description of
-what it does. Discarding a level *tightens* the window and so makes the mode readier to report,
-which is why the rule is this narrow.
-Whether a series is judged at all is decided on its window as recorded, before anything is
-discarded from it: that floor asks whether the series has a recent base history to be compared
-against, and a bad reading within that history does not change the answer.
-A discarded reading is named under `--verbose`, along with what it measured and the level its
-neighbours agreed on, since narrowing a window changes a verdict without any gate declining and
-would otherwise leave no trace.
-History mode does not clean its evidence, because its gates take their level and their scatter
-from medians, which absorb a single wild reading on their own.
+Branch mode also **discards a single isolated measurement excursion** from the base window before
+it compares anything. A shared runner occasionally loses time to something else and records one
+commit far above the level its neighbours agree on; left in the window, that reading drags the
+comparison's centre and inflates its scatter, so a genuine regression passes silently unreported.
+
+A level is discarded only when three conditions hold together — its neighbours on either side
+agree with one another, it stands far clear of them, and it is the window's only such level:
+*the series was doing one thing, this one commit was not, and then it went back*. The rule is
+deliberately narrow, because discarding **tightens** the window and so makes the mode readier to
+report. These are therefore left exactly as measured:
+
+* a window offering a **second** candidate, which is a benchmark visiting more than one level —
+  precisely what the context run is measured against — not a clean window with one bad reading;
+* a level near the window's **ends**, which lacks the neighbours on both sides the judgment
+  consults;
+* a level the **context run itself stands at**, since the series may return to that level and so
+  it cannot be dropped from the description of what the series does.
+
+Two tenets bound the behaviour. Whether a series is judged at all is decided on the window **as
+recorded**, before anything is discarded — that check only asks whether a recent base history
+exists to compare against. And a discarded reading is named under `--verbose`, with what it
+measured and its neighbours' level, since narrowing a window changes a verdict without any gate
+declining and would otherwise leave no trace.
+
+History mode does not clean its evidence: its gates take their level and scatter from medians,
+which absorb a single wild reading on their own.
 
 The gate thresholds are centralized as a single policy rather than embedded throughout the
 detectors, so maintainers can review and tune the complete policy together. Each threshold is
