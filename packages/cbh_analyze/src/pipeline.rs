@@ -1537,7 +1537,10 @@ mod tests {
         // sides — the shape the filter exists for.
         let excursion_at = BASE_COMMITS.checked_div(2).unwrap();
         let mut base = vec![100.0; BASE_COMMITS];
-        base[excursion_at] = 200.0;
+        // Half again above its neighbours: clear of the magnitude floor, and a ratio the
+        // reported percentage cannot match by accident, so the trail must have computed it
+        // from the reading rather than emitting a constant.
+        base[excursion_at] = 150.0;
         seed_feature_over(&storage, &base);
 
         let (report, _, reporter) = analyze_json(&branch_git(), &storage, "folo", &options());
@@ -1549,8 +1552,8 @@ mod tests {
         );
         assert!(
             reporter.contains(
-                "it measured 200, while the commits on both sides of it agree on \
-                 100 — an isolated excursion of +100.0%"
+                "it measured 150, while the commits on both sides of it agree on \
+                 100 — an isolated excursion of +50.0%"
             ),
             "the trail must state what was discarded and what it stood clear of: {report}"
         );

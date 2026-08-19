@@ -266,6 +266,21 @@ mod tests {
     }
 
     #[test]
+    fn a_step_reaching_the_window_end_is_never_an_excursion() {
+        // The new level fills only the window's trailing edge, which is never a candidate,
+        // so the last commit at the old level is the *only* position with a full set of
+        // neighbours — and those neighbours disagree, its own side at the old level and the
+        // far side at the new. The surroundings-agree test is therefore the sole thing
+        // between this step and being read as a lone excursion: unlike the centred step
+        // above, there is no second qualifying candidate to trip the removal limit and mask
+        // a bypassed agreement check. Were that check dropped, this commit would be
+        // discarded as a bad reading, tightening the window against the very move that just
+        // landed.
+        let levels: Vec<f64> = flat(11).into_iter().chain(vec![EXCURSION; 3]).collect();
+        assert!(isolated_excursions(&levels, None, &config()).is_empty());
+    }
+
+    #[test]
     fn a_move_below_the_magnitude_is_ordinary_scatter() {
         let config = config();
         let mut levels = flat(16);
