@@ -28,7 +28,9 @@ use nonempty::nonempty;
 use crate::detect::findings::count_to_f64;
 use crate::detect::noise_gates::MIN_REGIME;
 pub use crate::detect::recorded::{
-    STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_HIGH, STATIONARY_BIMODAL_NOISE,
+    CONTENDED_RUNNER_BASE, CONTENDED_RUNNER_EXCURSION, CONTENDED_RUNNER_LEVEL,
+    CONTENDED_RUNNER_LEVEL_START, STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_HIGH,
+    STATIONARY_BIMODAL_NOISE,
 };
 pub use crate::detect::scatter::{TIMING_NOISE_CV, scattered, seed_of};
 use crate::detect::{
@@ -206,8 +208,9 @@ pub fn with_base_window(mut series: Series, base_ref_index: usize) -> Series {
 /// A history-mode context over `series` under the default configuration: what a
 /// scheduled analysis of one benchmark's stored history runs.
 ///
-/// Improvements are reported, so an example that moves in either direction is visible
-/// rather than silently filtered.
+/// History mode reports regressions only, so an example that moves downwards is a
+/// non-finding here; use [`branch_context`] for an example that must be visible in
+/// either direction.
 #[must_use]
 pub fn history_context(series: &Series) -> AnalysisContext {
     AnalysisContext {
@@ -216,7 +219,6 @@ pub fn history_context(series: &Series) -> AnalysisContext {
         merge_base_index: None,
         base_ref_index: None,
         tip_index: tip_index_of(series),
-        include_improvements: true,
     }
 }
 
@@ -232,7 +234,6 @@ pub fn branch_context(series: &Series, merge_base_index: usize) -> AnalysisConte
         merge_base_index: Some(merge_base_index),
         base_ref_index: Some(merge_base_index),
         tip_index: tip_index_of(series),
-        include_improvements: true,
     }
 }
 

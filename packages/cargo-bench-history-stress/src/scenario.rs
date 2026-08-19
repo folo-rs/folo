@@ -19,7 +19,8 @@
 //! * family 0 — a gradual upward drift across the whole history (a `history`-mode
 //!   drift finding),
 //! * family 1 — a sustained step up at the midpoint (a `history`-mode regression),
-//! * family 2 — a sustained step down at ~70% (a `history`-mode improvement),
+//! * family 2 — a sustained step down at ~70% (a real move `history` mode judges and
+//!   declines to report, since it watches for regressions only),
 //! * family 3 — a sustained step up at ~75% that a blessing re-baselines in some
 //!   sets but not others (so the same step is suppressed in blessed sets and
 //!   flagged elsewhere),
