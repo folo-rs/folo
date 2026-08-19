@@ -110,7 +110,7 @@ mod tests {
                 Err(error) => {
                     // The only rejection we expect is the one that says the mask is too narrow.
                     // Any other rejection would mean the search rests on a false premise.
-                    assert_eq!(error.raw_os_error(), Some(libc::EINVAL), "{error}");
+                    assert_eq!(error.raw_os_error(), Some(libc::EINVAL));
                 }
             }
         }
@@ -122,11 +122,10 @@ mod tests {
     fn affinity_is_readable_once_the_mask_is_wide_enough() {
         let (_, mask) = read_affinity_by_widening();
 
-        let current_processor = ProcessorId::try_from(BuildTargetBindings.sched_getcpu())
-            .expect("the current thread runs on a processor with a valid identifier");
+        let current_processor = ProcessorId::try_from(BuildTargetBindings.sched_getcpu()).unwrap();
 
         // A thread is always allowed to run where it is already running.
-        assert!(mask.contains(current_processor), "{mask:?}");
+        assert!(mask.contains(current_processor));
     }
 
     #[test]
@@ -137,7 +136,7 @@ mod tests {
         // test, while still exercising the full path into the operating system.
         BuildTargetBindings
             .sched_setaffinity_current(&mask)
-            .expect("the operating system accepts the affinity it just reported");
+            .unwrap();
     }
 
     #[test]
@@ -147,11 +146,11 @@ mod tests {
         // beyond the fixed-size mask exercises it on every machine.
         let words = CpuMask::default_words()
             .checked_mul(OVERSIZED_MASK_GROWTH)
-            .expect("a mask a few times the platform mask cannot overflow a machine word");
+            .unwrap();
 
         let mask = BuildTargetBindings
             .sched_getaffinity_current(words)
-            .expect("a mask wider than the operating system needs is wide enough for it");
+            .unwrap();
 
         assert_eq!(mask.words(), words);
 
@@ -161,6 +160,6 @@ mod tests {
 
         BuildTargetBindings
             .sched_setaffinity_current(&mask)
-            .expect("the operating system accepts the affinity it just reported");
+            .unwrap();
     }
 }

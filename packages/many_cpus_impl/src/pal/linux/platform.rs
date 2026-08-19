@@ -38,11 +38,15 @@ pub(crate) struct BuildTargetPlatform {
 
     /// Width, in machine words, of the affinity mask that the operating system last accepted.
     ///
-    /// Zero means that no width has been established yet. This is a hint and not a conclusion:
-    /// the required width can grow while the process runs, so a width that stops working merely
-    /// sends the search widening again from there.
+    /// This is a hint and not a conclusion: the required width can grow while the process runs,
+    /// so a width that stops working merely sends the search widening again from there.
     affinity_mask_words: AtomicUsize,
 }
+
+/// The value of `affinity_mask_words` before the operating system has accepted any width.
+///
+/// A mask is never zero words wide, so zero cannot be mistaken for a width that worked.
+const AFFINITY_MASK_WIDTH_UNKNOWN: usize = 0;
 
 /// How many affinity mask widths to try before giving up on reading a thread's affinity.
 ///
@@ -136,7 +140,7 @@ impl BuildTargetPlatform {
             all_active_processors: OnceLock::new(),
             max_processor_id: OnceLock::new(),
             max_memory_region_id: OnceLock::new(),
-            affinity_mask_words: AtomicUsize::new(0),
+            affinity_mask_words: AtomicUsize::new(AFFINITY_MASK_WIDTH_UNKNOWN),
         }
     }
 
@@ -708,7 +712,8 @@ mod tests {
         reason = "we need not worry in tests"
     )]
     use std::fmt::Write;
-    use std::io;
+    use std::sync::Barrier;
+    use std::{io, thread};
 
     use testing::{assert_panics, f64_diff_abs};
 
@@ -1369,22 +1374,39 @@ mod tests {
         mask
     }
 
+    /// A mask as the operating system would have filled it: exactly as wide as it was asked to be.
+    ///
+    /// The real bindings hand over a buffer of the requested width and the operating system fills
+    /// that buffer, so it can never answer with a processor that the requested width cannot
+    /// describe. A mock that answers otherwise describes something that cannot happen, which
+    /// would let a test pass on an impossible response, so the width is enforced here.
+    fn mask_of_width<const PROCESSOR_COUNT: usize>(
+        words: NonZero<usize>,
+        processors: [ProcessorId; PROCESSOR_COUNT],
+    ) -> CpuMask {
+        let mut mask = CpuMask::with_words(words);
+
+        for processor in processors {
+            mask.insert(processor);
+            assert_eq!(mask.words(), words);
+        }
+
+        mask
+    }
+
     #[test]
     fn current_thread_processors_smoke_test() {
         let mut bindings = MockBindings::new();
 
-        let expected_mask_1 = mask_from([0, 1]);
-        let expected_mask_2 = mask_from([2]);
+        bindings
+            .expect_sched_getaffinity_current()
+            .times(1)
+            .returning(|words| Ok(mask_of_width(words, [0, 1])));
 
         bindings
             .expect_sched_getaffinity_current()
             .times(1)
-            .returning(move |_| Ok(expected_mask_1.clone()));
-
-        bindings
-            .expect_sched_getaffinity_current()
-            .times(1)
-            .returning(move |_| Ok(expected_mask_2.clone()));
+            .returning(|words| Ok(mask_of_width(words, [2])));
 
         let mut fs = MockFilesystem::new();
         simulate_processor_layout(
@@ -1425,7 +1447,7 @@ mod tests {
             .times(1)
             .returning(|_| Err(io::Error::from_raw_os_error(libc::EINVAL)));
 
-        let affinity = mask_from([1024, 1500, 2047]);
+        let affinity = [1024, 1500, 2047];
 
         // Both reads are expected to use the wider mask - the second one because the first one
         // already established the width that this operating system wants.
@@ -1433,7 +1455,7 @@ mod tests {
             .expect_sched_getaffinity_current()
             .withf(move |words| *words == wide)
             .times(2)
-            .returning(move |_| Ok(affinity.clone()));
+            .returning(move |words| Ok(mask_of_width(words, affinity)));
 
         let mut fs = MockFilesystem::new();
         simulate_processor_layout(
@@ -1467,15 +1489,17 @@ mod tests {
         let narrow = CpuMask::default_words();
         let wide = narrow.checked_mul(AFFINITY_MASK_GROWTH).unwrap();
 
-        let before = mask_from([1024]);
-        let after = mask_from([1024, 1500, 2047]);
+        // Every processor here fits in the narrower mask, which is what makes the first read
+        // succeed at that width.
+        let before = [0, 1023];
+        let after = [1024, 1500, 2047];
 
         // The first read settles on a width and it is remembered.
         bindings
             .expect_sched_getaffinity_current()
             .withf(move |words| *words == narrow)
             .times(1)
-            .returning(move |_| Ok(before.clone()));
+            .returning(move |words| Ok(mask_of_width(words, before)));
 
         // The machine can grow while the process runs, so a remembered width is a hint and not a
         // conclusion - once it stops working, the search must widen again rather than give up.
@@ -1489,7 +1513,7 @@ mod tests {
             .expect_sched_getaffinity_current()
             .withf(move |words| *words == wide)
             .times(1)
-            .returning(move |_| Ok(after.clone()));
+            .returning(move |words| Ok(mask_of_width(words, after)));
 
         let mut fs = MockFilesystem::new();
         simulate_processor_layout(
@@ -1512,7 +1536,7 @@ mod tests {
                 .iter()
                 .copied()
                 .collect_vec(),
-            vec![1024]
+            vec![0, 1023]
         );
 
         assert_eq!(
@@ -1526,17 +1550,97 @@ mod tests {
     }
 
     #[test]
-    fn current_thread_processors_ignores_processors_beyond_the_known_hardware() {
+    fn current_thread_processors_shares_the_remembered_width_across_threads() {
+        // The remembered width is the one piece of shared mutable state in the platform, so it
+        // is read and written concurrently in practice. Every thread must come away with the
+        // same answer no matter how their reads interleave.
+        const READER_COUNT: usize = 8;
+        const READS_PER_READER: usize = 16;
+
         let mut bindings = MockBindings::new();
 
-        // The operating system may know of processors that the hardware inventory does not, as
-        // the two are read at different moments.
-        let affinity = mask_from([1024, 4096]);
+        let narrow = CpuMask::default_words();
+        let wide = narrow.checked_mul(AFFINITY_MASK_GROWTH).unwrap();
+        let affinity = [1024, 1500, 2047];
+
+        // How many threads try the narrower width before one of them establishes the wider one
+        // depends on how the threads interleave, so no count is expected here.
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words == narrow)
+            .returning(|_| Err(io::Error::from_raw_os_error(libc::EINVAL)));
 
         bindings
             .expect_sched_getaffinity_current()
+            .withf(move |words| *words == wide)
+            .returning(move |words| Ok(mask_of_width(words, affinity)));
+
+        let mut fs = MockFilesystem::new();
+        simulate_processor_layout(
+            &mut fs,
+            GIANT_MACHINE_PROCESSORS,
+            None,
+            None,
+            GIANT_MACHINE_MEMORY_REGIONS,
+            GIANT_MACHINE_BOGOMIPS,
+        );
+
+        let platform = BuildTargetPlatform::new(
+            BindingsFacade::from_mock(bindings),
+            FilesystemFacade::from_mock(fs),
+        );
+
+        // Releasing every thread at once is what makes them contend for the remembered width.
+        let start = Barrier::new(READER_COUNT);
+
+        thread::scope(|scope| {
+            for _ in 0..READER_COUNT {
+                scope.spawn(|| {
+                    start.wait();
+
+                    for _ in 0..READS_PER_READER {
+                        assert_eq!(
+                            platform
+                                .current_thread_processors()
+                                .iter()
+                                .copied()
+                                .collect_vec(),
+                            affinity.to_vec()
+                        );
+                    }
+                });
+            }
+        });
+    }
+
+    #[test]
+    fn current_thread_processors_ignores_processors_beyond_the_known_hardware() {
+        // The operating system sizes its answer by the processors it could ever have, which can
+        // exceed the processors that the hardware inventory lists, so it may name a processor
+        // that the inventory knows nothing about.
+        const UNKNOWN_PROCESSOR: ProcessorId = 3000;
+
+        let mut bindings = MockBindings::new();
+
+        // Naming a processor beyond the known hardware takes a mask wide enough to describe one,
+        // so the operating system here is one that demands a mask two widenings out.
+        let accepted = CpuMask::default_words()
+            .checked_mul(AFFINITY_MASK_GROWTH)
+            .unwrap()
+            .checked_mul(AFFINITY_MASK_GROWTH)
+            .unwrap();
+
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words < accepted)
+            .times(2)
+            .returning(|_| Err(io::Error::from_raw_os_error(libc::EINVAL)));
+
+        bindings
+            .expect_sched_getaffinity_current()
+            .withf(move |words| *words == accepted)
             .times(1)
-            .returning(move |_| Ok(affinity.clone()));
+            .returning(|words| Ok(mask_of_width(words, [1024, UNKNOWN_PROCESSOR])));
 
         let mut fs = MockFilesystem::new();
         simulate_processor_layout(

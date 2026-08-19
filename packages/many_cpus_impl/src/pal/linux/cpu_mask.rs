@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::fmt::{self, Debug, Formatter};
 use std::num::NonZero;
 
@@ -122,6 +123,12 @@ impl CpuMask {
             .iter()
             .copied()
             .enumerate()
+            // The width of a mask is chosen by the operating system and can far exceed the
+            // processors in it: a process confined to a few processors on a very large machine
+            // is still answered in the machine's terms. Empty words are therefore the common
+            // case on exactly the machines this mask exists for, and skipping them keeps the
+            // cost of a read close to the number of processors rather than the width.
+            .filter(|(_, bits)| *bits != EMPTY_WORD)
             .flat_map(|(word, bits)| {
                 (0..WORD_BITS)
                     .map(move |offset| BitPosition { word, offset })
@@ -222,7 +229,7 @@ impl Debug for CpuMask {
         write!(
             f,
             "{}({})",
-            std::any::type_name::<Self>(),
+            type_name::<Self>(),
             cpulist::emit(self.processor_ids())
         )
     }
@@ -306,14 +313,21 @@ mod tests {
     #[test]
     fn processor_beyond_inline_width_widens_the_mask() {
         let mut mask = CpuMask::new();
+        mask.insert(0);
+        mask.insert(LAST_INLINE_PROCESSOR);
 
         mask.insert(INLINE_BITS);
 
         assert!(mask.contains(INLINE_BITS));
         assert_eq!(mask.words().get(), INLINE_WORDS + 1);
 
-        // The processors that were already representable are unaffected by the widening.
-        assert!(!mask.contains(LAST_INLINE_PROCESSOR));
+        // Widening moves no bits: the processors already in the mask are still in it.
+        assert!(mask.contains(0));
+        assert!(mask.contains(LAST_INLINE_PROCESSOR));
+        assert_eq!(
+            mask.processor_ids().collect::<Vec<_>>(),
+            vec![0, LAST_INLINE_PROCESSOR, INLINE_BITS]
+        );
     }
 
     #[test]
@@ -388,8 +402,8 @@ mod tests {
 
         let rendered = format!("{mask:?}");
 
-        assert!(rendered.contains("0-2"), "{rendered}");
-        assert!(rendered.contains('5'), "{rendered}");
+        assert!(rendered.contains("0-2"));
+        assert!(rendered.contains('5'));
     }
 
     #[test]
