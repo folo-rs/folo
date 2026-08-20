@@ -270,36 +270,26 @@ one and the removal judged rather than merely discovered.
 History mode does not do this. Its arithmetic is built on medians and ranks, which a lone
 reading barely moves, so it has nothing to gain and evidence to lose.
 
-## Confidence, and what it is not
+## Chance levels, not a confidence score
 
-Every finding carries a confidence, and it is **one minus the chance level of whichever test
-confirmed it**.
+A finding does **not** carry a confidence or certainty number. Every reported finding has
+already cleared its test, so any such number would read as near-certainty on all of them: a
+finding whose chance level is one in a million and one that barely cleared would round to the
+same reassuring figure. It would rank almost nothing, so the report omits it and ranks by *size
+of move* instead.
 
-That makes it a statement about evidence strength — how poorly chance explains the pattern —
-and it is easy to over-read.
-
-{{#include generated/detection-confidence-high.svg}}
-
-{{#include generated/detection-confidence-high.md}}
-
-{{#include generated/detection-confidence-lower.svg}}
-
-{{#include generated/detection-confidence-lower.md}}
-
-Both are accepted findings. The lower number is still high; it comes from the minimum
-regime length, where even a clean split has fewer ranks to compare.
-
-Four things it is not:
+What governed each decision is still available. Under `--verbose` the chance level each gate
+weighed is printed beside that gate, so a finding that barely cleared can be told from one that
+cleared by a mile. A chance level is **how poorly chance explains the pattern** — and it is easy
+to over-read. Four things it is not:
 
 - **Not the probability that the finding is correct.** It says chance is a poor explanation.
   It says nothing about whether the cause is your code or the machine.
-- **Not a dial you tune.** Every reported finding has already cleared its test, so an emitted
-  confidence is always high — and is displayed rounded, so a finding whose chance level is
-  one in a million reads as 100%. It does not rank importance; the report ranks by *size of
-  move* for exactly that reason.
+- **Not a dial you tune.** Every reported finding has already cleared its gate, so the ranking
+  of importance is left to the *size of move*, not to how small a chance level came out.
 - **Not adjusted for how much was tested.** The [group-wide correction](coverage.md) runs
-  afterwards and does not feed back into this number.
-- **Not comparable across modes.** History and branch confidences come from different tests
+  afterwards and does not feed back into it.
+- **Not comparable across modes.** History and branch chance levels come from different tests
   answering different questions.
 
 ## Minimum evidence

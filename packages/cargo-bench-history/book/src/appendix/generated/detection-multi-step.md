@@ -1,4 +1,4 @@
-> **Reported.** A regression of +54.07% via change point, first seen at `commit15`, at 100% confidence.
+> **Reported.** A regression of +54.07% via change point, first seen at `commit15`.
 >
 > The level moved from 102.2 to 157.4.
 >

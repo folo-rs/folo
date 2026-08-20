@@ -927,6 +927,28 @@ for reported findings, and branch mode uses the same effect-size gate — at a s
 for the reasons below — when deciding whether a base-side split is strong enough to define the
 current comparison regime.
 
+**Exact significance for short series.** The Mann–Whitney significance above is computed
+*exactly* on the short histories this tool targets, not from the textbook large-sample
+approximation. That approximation assumes many points on each side; on a history of dozens of
+points it is systematically **too pessimistic in the deep tail**, overstating the p-value of a
+clean, well-separated step by orders of magnitude and so hiding a real regression behind the
+significance gate. The exact value instead enumerates every way the combined points could have
+been divided into a "before" and an "after" of the observed sizes and counts the fraction of
+those divisions at least as lopsided as the one seen — the plain definition of a p-value, with
+no distributional assumption. This enumeration is decided split by split, not once per series.
+The work of enumerating a split grows with its *smaller* side, so a lopsided split — few points on
+one side — is counted exactly however long the whole history is, and only the near-balanced splits
+of a long history exceed what can be counted exactly and keep the approximation. The distinction
+matters in both tail directions. Where one side is small and its values repeat — routine for
+integer instruction counts — the approximation does not merely overstate the p-value; it can
+**understate** a cleanly separated step by orders of magnitude, and the exact tail is what keeps
+that step honest. Where a split is near-balanced and the approximation is kept, it cannot mislead:
+a history long enough to reach that regime has an honest smallest p-value already below the
+reporting floor, so no verdict there turns on the approximation. The exact treatment is therefore
+spent exactly where it can change a verdict. The selection adjustment (§8.3) is calibrated against
+this same exact procedure, so the honest p-value and the correction applied to it describe one
+and the same test.
+
 The residual pool draws only from samples long enough to describe scatter. A sample of a single
 point is its own median, so it contributes a residual of exactly zero that says nothing about the
 dispersion the point was drawn from and only pulls the pooled median down. Leaving it out keeps
@@ -1033,9 +1055,15 @@ per-point dispersion, two further vetoes apply: the base and context intervals m
 and the move must clear a multiple of the measurement noise band. Like every interval-derived check,
 both can only *suppress* a candidate the other gates would report.
 
-Whichever test produces a finding also fixes its reported **confidence**, in both modes: the
-complement of that test's p-value. Confidence therefore states the strength of the evidence,
-never the threshold the finding had to clear.
+The chance level a finding must clear is **selection-adjusted in history mode**. A history
+series is examined by both detectors and at every interior split, so the raw significance of
+the split the detectors *chose* overstates how surprising it is; history mode corrects for
+that search, and for running two detectors, before applying the gate (§8.3), so the
+significance level means what it says. Branch mode makes one predetermined comparison and needs
+no such adjustment. Neither mode reports a "confidence" figure: every finding already cleared a
+small chance level, so such a number would read as near-certainty on all of them while
+discriminating between almost none; the chance levels that governed each decision are surfaced
+under `--verbose` instead, beside the gate they fed.
 
 The **practical-magnitude floor** is a hard threshold below which no finding surfaces,
 regardless of engine, direction, mode, or how confidently it was measured. A change too small
@@ -1114,6 +1142,24 @@ rate under it.
 Because every mode's verdict rests on a real p-value and on that one family definition, the
 correction applies uniformly to history and branch analysis rather than being a history-mode
 concept.
+
+**History mode carries a second, upstream correction.** The Benjamini–Hochberg family above
+controls false discoveries *across* benchmarks; it assumes each benchmark handed it an honest
+per-series chance level. In history mode that per-series number must itself be corrected first,
+because judging one series already involved two internal selections: the change-point detector
+tried every eligible split and kept the most striking, and the tool ran two detectors
+(change-point and drift) and reported whichever fit the data better. Both make a flat,
+unchanging series look more surprising than it is, so an uncorrected significance gate would
+admit far more false alarms than its nominal level suggests — most on the recent, short-regime
+regressions the tool most wants to get right. History mode therefore adjusts the change-point's
+raw significance for the split search — using a distribution-free calibration that depends only
+on the series length, so it is a derived constant a reader can reproduce rather than a fit to
+our data — and then doubles both detectors' chance levels to account for the two-detector
+choice. The result is the honest per-series chance level that the significance gate and the
+family correction both consume. Branch mode makes one predetermined comparison and searches no
+split, so it carries neither adjustment. This correction is what the supported upper series
+length (§8) exists to bound: the calibration is defined for every length the pipeline can
+present, and the cap guarantees no series exceeds it.
 
 That same predicate is what every report accounts for (§8.9): a series is judged, counted in
 the family, and reported as judged together, or it is none of the three.
@@ -1231,7 +1277,7 @@ of history the findings describe — annotated `+ uncommitted changes` when the 
 was dirty, so a reader (or the auto-filed regression issue) can tie the report to an exact
 commit. Text goes to stdout as one paragraph per finding — the benchmark id on its own
 line as a chapter title, then a direction-colored headline pairing the relative-change
-percent with the metric and its confidence, a dimmed detail line, and a small line chart
+percent with the metric, a dimmed detail line, and a small line chart
 of the series — the whole series in history mode, only the bounded baseline-and-tail
 comparison in branch mode — the chart itself always uncolored, with headline color
 enabled only when stdout is a terminal and not disabled by environment. The text and Markdown reports

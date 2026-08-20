@@ -7,27 +7,30 @@
 //!
 //! That procedure is: locate the split with **Pettitt** (over every interior position), reject it
 //! unless the shorter side has at least [`MIN_REGIME`] points, and otherwise score it with the
-//! two-sided **Mann–Whitney** p-value at that split. On a permutation of `1..=n` the ranks *are*
-//! the values, so both steps close to O(n) arithmetic with no ties — which is what makes tabulating
-//! every `n` up to a thousand affordable. The closed form here is proven equal to the production
-//! `cbh_stats` primitives by the crate's `matches_production` test, so the table cannot drift from
-//! the code it describes.
+//! two-sided **Mann–Whitney** p-value at that split — exact at every split whose smaller side keeps
+//! the subset count inside f64's exact-integer range, the normal approximation only at the
+//! near-balanced wide splits that overflow it, mirroring `cbh_stats::MannWhitneyU`. On a permutation
+//! of `1..=n` the ranks *are* the values and the joint ranking at any split is the whole set, so
+//! the exact tail depends only on the split size and the left rank sum; a [`SplitScorer`]
+//! precomputes it per split size once, keeping an exact row as cheap to tabulate as an approximate
+//! one. The kernel is proven equal to the production `cbh_stats` primitives by the crate's
+//! `matches_production` test, so the table cannot drift from the code it describes.
 
 use std::collections::HashMap;
 
-use crate::normal::two_sided_p_from_z;
+use crate::normal::{clamp_p_value, two_sided_p_from_z};
 use crate::{
     FNV_OFFSET_BASIS, FNV_PRIME, MIN_REGIME, SPLITMIX_GAMMA, SPLITMIX_MIX_A, SPLITMIX_MIX_B,
     count_f64,
 };
 
-/// The p-value the production change-point procedure reports for one rank ordering, or `None`
-/// when the located split is rejected for having too short a regime.
+/// Locates the split a rank ordering reports, returning `(size, left rank sum)` of the shorter-side
+/// regime, or `None` when the located split is rejected for having too short a regime.
 ///
 /// `ranks[i]` is the rank of the `i`-th value; on a permutation of `1..=n` that is the value
-/// itself. Reproduces `cbh_stats::pettitt` (location, stats.rs:193-231) followed by
-/// `cbh_stats::MannWhitneyU` (significance, stats.rs:307-320) with the tie term identically zero.
-pub(crate) fn located_split_p(ranks: &[f64]) -> Option<f64> {
+/// itself. Reproduces `cbh_stats::pettitt` (location, stats.rs:193-231) and its `MIN_REGIME`
+/// rejection (findings.rs:1013-1020); the scorer then turns the located split into a p-value.
+fn locate(ranks: &[f64]) -> Option<(usize, f64)> {
     let n = ranks.len();
     let last = n.checked_sub(1)?;
     if last == 0 {
@@ -66,19 +69,221 @@ pub(crate) fn located_split_p(ranks: &[f64]) -> Option<f64> {
     if shorter < MIN_REGIME {
         return None;
     }
+    Some((best_t, rank_sum_left))
+}
 
-    // Mann–Whitney at the located split. The joint ranking of the two sides is the whole
-    // permutation, so `rank_sum_left` is already the left rank sum and every tie group is a
-    // singleton (`tie_term = 0`).
+/// The exact subset-count ceiling: above `2^53` an `f64` no longer holds consecutive integers, so
+/// the knapsack's counts would round. Mirrors `cbh_stats::stats::EXACT_COUNT_LIMIT`.
+const EXACT_COUNT_LIMIT: u128 = 1 << 53;
+
+/// Whether the exact two-sided Mann–Whitney tail is representable in f64 for a split of these two
+/// side sizes, i.e. `C(n1+n2, min(n1, n2)) < 2^53`.
+///
+/// Mirrors `cbh_stats::stats::exact_mw_feasible`, so the table scores each split exactly on
+/// precisely the splits the detector does.
+#[expect(
+    clippy::arithmetic_side_effects,
+    clippy::integer_division,
+    reason = "n >= k, so `n - k` cannot underflow; the running value is the integer binomial \
+              C(n-k+i, i), so dividing by i is exact; and count stays below 2^53 until the early \
+              return, keeping the product far inside u128"
+)]
+fn exact_mw_feasible(n1: usize, n2: usize) -> bool {
+    let n = n1.saturating_add(n2);
+    let k = n1.min(n2);
+    let mut count: u128 = 1;
+    for i in 1..=k {
+        count = count * (n - k + i) as u128 / i as u128;
+        if count >= EXACT_COUNT_LIMIT {
+            return false;
+        }
+    }
+    true
+}
+
+/// The largest smaller-side size whose subset count `C(n, k)` still fits f64's exact-integer range.
+///
+/// `C(n, k)` rises with `k` up to the balanced split, so the exact-feasible smaller sides are the
+/// prefix `0..=k_lo`; this returns that `k_lo`. Splits with a smaller side above it are the
+/// near-balanced ones the normal approximation must cover.
+fn max_exact_side(n: usize) -> usize {
+    let mut k_lo: usize = 0;
+    let mut k: usize = 1;
+    while k.saturating_mul(2) <= n && exact_mw_feasible(k, n.saturating_sub(k)) {
+        k_lo = k;
+        k = k.saturating_add(1);
+    }
+    k_lo
+}
+
+/// Scores the located split of a rank ordering with the p-value the production detector reports,
+/// for one series length.
+///
+/// For a tie-free ordering of `1..=n` the joint ranking at any split is the whole set `1..=n`, so
+/// the exact two-sided Mann–Whitney p-value depends only on the split size and its rank sum. The
+/// scorer precomputes it per split size, turning each ordering's score into a table lookup — what
+/// keeps an exact Monte Carlo row as cheap as the approximate one it replaces.
+///
+/// The exact tail counts the size-`k` subsets of `1..=n`, of which there are `C(n, k)`; f64 counts
+/// them exactly only below `2^53`. `C(n, k)` peaks at the balanced split, so a split is exact
+/// precisely when its *smaller* side `min(k, n − k)` is at most `k_lo`, the largest side whose
+/// count still fits. The scorer tabulates the smaller-side subset sums up to `k_lo` and scores
+/// every split from them — a smaller-side split from its own rank sum, a wide split through its
+/// complementary smaller side — leaving only the near-balanced splits above `k_lo` to the normal
+/// approximation. The choice is per split, not per series: a long series still earns the exact tail
+/// at a lopsided split, exactly mirroring `cbh_stats::MannWhitneyU`.
+pub(crate) struct SplitScorer {
+    /// The series length.
+    n: usize,
+    /// The series length as `f64`, for the normal approximation's mean and variance.
+    n_f: f64,
+    /// The total rank sum `n·(n+1)/2`, mapping a wide split's left rank sum to its complementary
+    /// smaller side's rank sum.
+    total_rank_sum: f64,
+    /// The largest smaller-side size still counted exactly in f64; splits whose smaller side is at
+    /// most this are scored exactly, wider ones by the normal approximation.
+    k_lo: usize,
+    /// Per smaller-side size `k` in `MIN_REGIME..=k_lo`, the exact two-sided p indexed by that
+    /// side's rank sum; other indices are empty.
+    by_size: Vec<Vec<f64>>,
+}
+
+impl SplitScorer {
+    /// Builds the scorer for length `n`.
+    ///
+    /// The exact table counts, for every smaller-side size `k` up to `k_lo` and rank sum `s`, the
+    /// size-`k` subsets of `1..=n` summing to `s` (one shared cardinality knapsack over the items
+    /// `1..=n`), then turns each column into the doubled minority tail — the same statistic
+    /// `cbh_stats::MannWhitneyU` computes, reached by the same arithmetic so the two agree to the
+    /// last bit. Enumerating only up to `k_lo` keeps every subset count at most `C(n, k_lo) < 2^53`,
+    /// so the counts never leave f64's exact-integer range even for a long series.
+    #[expect(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::integer_division,
+        reason = "the knapsack indices stay within the allocated `k_lo × max_sum` grid by \
+                  construction: `size` runs `0..=k_lo`, `sum` runs `0..=max_sum`, and each access \
+                  subtracts a value in `1..=n` from a sum at least that large, so no index or \
+                  subtraction escapes; a size-`k_lo` subset sums to at most `k_lo·n`, and \
+                  `k_lo·(k_lo−1)` is a product of consecutive integers, so halving it is exact"
+    )]
+    pub(crate) fn for_length(n: usize) -> Self {
+        let n_f = count_f64(n as u64);
+        let total_rank_sum = n_f * (n_f + 1.0) / 2.0;
+        let k_lo = max_exact_side(n);
+
+        // `counts[size][sum]` counts the size-`size` subsets of the values seen so far that sum to
+        // `sum`. Folding the values `1..=n` in one at a time while walking `size` and `sum` downward
+        // spends each value at most once per subset (the 0/1-knapsack order). Only the smaller-side
+        // sizes `0..=k_lo` are built; a size-`k_lo` subset reaches at most the sum of the `k_lo`
+        // largest values, which bounds the sum axis.
+        let max_sum = k_lo * n - k_lo * (k_lo - 1) / 2;
+        let mut counts: Vec<Vec<f64>> = vec![vec![0.0_f64; max_sum + 1]; k_lo + 1];
+        counts[0][0] = 1.0;
+        for value in 1..=n {
+            for size in (1..=k_lo).rev() {
+                for sum in (value..=max_sum).rev() {
+                    counts[size][sum] += counts[size - 1][sum - value];
+                }
+            }
+        }
+
+        // A smaller-side split leaves `n − k ≥ n − k_lo ≥ MIN_REGIME` on the other side, so every
+        // size `MIN_REGIME..=k_lo` is reportable; wider splits are scored through their complement.
+        let mut by_size: Vec<Vec<f64>> = vec![Vec::new(); k_lo + 1];
+        for size in MIN_REGIME..=k_lo {
+            by_size[size] = tail_p_by_sum(&counts[size]);
+        }
+        Self {
+            n,
+            n_f,
+            total_rank_sum,
+            k_lo,
+            by_size,
+        }
+    }
+
+    /// The p-value the production procedure reports for one rank ordering, or `None` when the
+    /// located split is rejected for having too short a regime.
+    ///
+    /// A split whose smaller side is at most `k_lo` is scored exactly — a smaller-side split from
+    /// its own rank sum, a wide split from its complementary smaller side's rank sum (the total
+    /// less the left sum). The near-balanced splits above `k_lo` fall to the normal approximation,
+    /// the same per-split choice `cbh_stats::MannWhitneyU` makes.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "an exact branch reads `by_size[k]` only for a smaller-side size `k` in \
+                  `MIN_REGIME..=k_lo`, a populated row, at `[sum_index]` of a real subset's rank \
+                  sum — both in range by construction"
+    )]
+    pub(crate) fn located_split_p(&self, ranks: &[f64]) -> Option<f64> {
+        let (best_t, rank_sum_left) = locate(ranks)?;
+        let p = if best_t <= self.k_lo {
+            self.by_size[best_t][sum_index(rank_sum_left)]
+        } else if best_t >= self.n.saturating_sub(self.k_lo) {
+            let small = self.n.saturating_sub(best_t);
+            self.by_size[small][sum_index(self.total_rank_sum - rank_sum_left)]
+        } else {
+            normal_split_p(self.n_f, best_t, rank_sum_left)
+        };
+        Some(p)
+    }
+}
+
+/// The doubled minority tail for every left rank sum of one split size.
+///
+/// `counts[s]` is the number of subsets whose rank sum is `s`; the two-sided p at an observed `s`
+/// is `2 · min(P(sum ≤ s), P(sum ≥ s))`, capped at one and floored like the production clamp. The
+/// running counts are exact integers below `2^53`, so the reals here equal
+/// `cbh_stats::stats::exact_two_sided_p`'s to the last bit.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "`p` is allocated to `counts.len()` and `sum` is its own enumeration index, so the \
+              write is in range by construction"
+)]
+fn tail_p_by_sum(counts: &[f64]) -> Vec<f64> {
+    let total: f64 = counts.iter().sum();
+    let mut cumulative = 0.0_f64;
+    let mut p = vec![0.0_f64; counts.len()];
+    for (sum, &count) in counts.iter().enumerate() {
+        cumulative += count;
+        let lower = cumulative;
+        let upper = total - cumulative + count;
+        p[sum] = if total > 0.0 {
+            clamp_p_value((2.0 * lower.min(upper) / total).min(1.0))
+        } else {
+            1.0
+        };
+    }
+    p
+}
+
+/// The array index for a left rank sum, which is an exact non-negative integer.
+fn sum_index(rank_sum_left: f64) -> usize {
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a left rank sum of integer ranks is a non-negative integer far below usize::MAX, \
+                  so the rounded cast is exact"
+    )]
+    let index = rank_sum_left.round() as usize;
+    index
+}
+
+/// The tie-free normal-approximation two-sided p at a located split.
+///
+/// Reproduces `cbh_stats::MannWhitneyU::two_sided_p_value` for a permutation of `1..=n`, where
+/// every tie group is a singleton so the tie term is identically zero.
+fn normal_split_p(n_f: f64, best_t: usize, rank_sum_left: f64) -> f64 {
     let n1 = count_f64(best_t as u64);
-    let n2 = count_f64(n.saturating_sub(best_t) as u64);
+    let n2 = n_f - n1;
     let u1 = rank_sum_left - n1 * (n1 + 1.0) / 2.0;
     let u2 = n1 * n2 - u1;
     let u = u1.min(u2);
     let mean_u = n1 * n2 / 2.0;
     let variance = (n1 * n2 / 12.0) * (n_f + 1.0);
     let z = ((mean_u - u) - 0.5).max(0.0) / variance.sqrt();
-    Some(two_sided_p_from_z(z))
+    two_sided_p_from_z(z)
 }
 
 /// The empirical distribution of finding p-values for one series length.
@@ -124,24 +329,50 @@ impl FindingDist {
         }
     }
 
-    /// The `k`-th smallest finding p-value, `1 <= k <= findings()`.
+    /// The largest finding p-value whose entire equal-valued mass fits within the first `limit`
+    /// findings, or `0.0` when even the smallest finding value already spills past it.
+    ///
+    /// This is the honest conservative inverse of the finding CDF. Mann–Whitney p-values are
+    /// heavily discrete, so many orderings share one value; a rung may claim that value only once
+    /// *all* of its orderings fit under the rung's allowance. Crediting it the moment its first
+    /// ordering fit would let the rung report more significance than the value truly commands,
+    /// breaking `P(adjusted <= a) <= a` (the anti-conservative failure the ladder must avoid).
     #[expect(
         clippy::indexing_slicing,
         clippy::arithmetic_side_effects,
-        reason = "k is in 1..=findings() (asserted); `k - 1` and the partition index are valid \
-                  positions into a slice of that length"
+        reason = "every index below is guarded: `partition_point` returns a count in `0..=len`, and \
+                  each subtraction is applied only after a `> 0` / `< len` check, so it stays in range"
     )]
-    pub(crate) fn nth_smallest(&self, k: u64) -> f64 {
-        debug_assert!(k >= 1 && k <= self.findings(), "quantile rank out of range");
+    pub(crate) fn largest_within(&self, limit: u64) -> f64 {
         match self {
             Self::Samples { sorted, .. } => {
-                let index = usize::try_from(k - 1).expect("finding rank fits usize");
-                sorted[index]
+                let limit = usize::try_from(limit).expect("a finding count fits usize");
+                if limit == 0 {
+                    return 0.0;
+                }
+                if limit >= sorted.len() {
+                    return sorted.last().copied().unwrap_or(0.0);
+                }
+                let candidate = sorted[limit - 1];
+                // `candidate`'s tied block may run past `limit`; if it does, the value does not fit
+                // and the answer is the largest value strictly below it, whose block ends earlier.
+                let at_or_below = sorted.partition_point(|&value| value <= candidate);
+                if at_or_below <= limit {
+                    candidate
+                } else {
+                    let below = sorted.partition_point(|&value| value < candidate);
+                    if below == 0 { 0.0 } else { sorted[below - 1] }
+                }
             }
             Self::Counts { cumulative, .. } => {
-                // The smallest p whose running count reaches `k`.
-                let index = cumulative.partition_point(|&(_, running)| running < k);
-                cumulative[index].0
+                // Each entry's running count already includes its full mass, so the last entry
+                // whose running count is within `limit` is exactly the largest value that fits.
+                let count = cumulative.partition_point(|&(_, running)| running <= limit);
+                if count == 0 {
+                    0.0
+                } else {
+                    cumulative[count - 1].0
+                }
             }
         }
     }
@@ -152,12 +383,13 @@ impl FindingDist {
 /// Feasible only for small `n` (the caller restricts it to `n <= EXACT_MAX_N`). Counts by p-value
 /// bits, so its memory is the number of *distinct* p-values — a few hundred — not `n!`.
 pub(crate) fn collect_exact(n: usize) -> FindingDist {
+    let scorer = SplitScorer::for_length(n);
     let mut counts: HashMap<u64, u64> = HashMap::new();
     let mut total = 0_u64;
     let mut ranks: Vec<f64> = (1..=n).map(|value| count_f64(value as u64)).collect();
     for_each_permutation(&mut ranks, |permutation| {
         total = total.saturating_add(1);
-        if let Some(p) = located_split_p(permutation) {
+        if let Some(p) = scorer.located_split_p(permutation) {
             counts
                 .entry(p.to_bits())
                 .and_modify(|count| *count = count.saturating_add(1))
@@ -186,12 +418,13 @@ pub(crate) fn collect_exact(n: usize) -> FindingDist {
 ///
 /// The stream is a pure function of `seed`, so the row reproduces bit-for-bit on every platform.
 pub(crate) fn collect_monte_carlo(n: usize, samples: u64, seed: u64) -> FindingDist {
+    let scorer = SplitScorer::for_length(n);
     let mut rng = SplitMix64::new(seed);
     let mut ranks: Vec<f64> = (1..=n).map(|value| count_f64(value as u64)).collect();
     let mut sorted: Vec<f64> = Vec::new();
     for _ in 0..samples {
         shuffle(&mut ranks, &mut rng);
-        if let Some(p) = located_split_p(&ranks) {
+        if let Some(p) = scorer.located_split_p(&ranks) {
             sorted.push(p);
         }
     }
@@ -269,7 +502,11 @@ fn for_each_permutation(values: &mut [f64], mut visit: impl FnMut(&[f64])) {
     let mut index = 0_usize;
     while index < n {
         if counters[index] < index {
-            let swap_with = if index.is_multiple_of(2) { 0 } else { counters[index] };
+            let swap_with = if index.is_multiple_of(2) {
+                0
+            } else {
+                counters[index]
+            };
             values.swap(swap_with, index);
             visit(values);
             counters[index] += 1;
@@ -293,7 +530,10 @@ mod tests {
         let n = values.len();
         let change = cbh_stats::pettitt(values)?;
         let tau = change.index;
-        let shorter = tau.min(n.checked_sub(tau).expect("Pettitt locates a split within the series"));
+        let shorter = tau.min(
+            n.checked_sub(tau)
+                .expect("Pettitt locates a split within the series"),
+        );
         if shorter < MIN_REGIME {
             return None;
         }
@@ -309,19 +549,29 @@ mod tests {
     /// divergence.
     #[test]
     fn matches_production_over_random_permutations() {
-        for n in [MIN_SERIES_LEN, 11, 17, 32, 64, 200] {
+        // The lengths straddle both regimes the kernel switches on: `EXACT_MAX_N` (exact
+        // enumeration vs Monte Carlo) and the per-split exactness cutoff (the exact tail at a
+        // feasible split, the normal approximation at a near-balanced wide one), so a drift in
+        // either between the kernel and production would surface here.
+        for n in [MIN_SERIES_LEN, 11, 17, 32, 55, 56, 57, 58, 64, 200] {
+            let scorer = SplitScorer::for_length(n);
             let mut ranks: Vec<f64> = (1..=n).map(|value| count_f64(value as u64)).collect();
             let mut rng = SplitMix64::new(row_seed(n));
             for _ in 0..2_000 {
                 shuffle(&mut ranks, &mut rng);
-                match (located_split_p(&ranks), production_located_split_p(&ranks)) {
+                match (
+                    scorer.located_split_p(&ranks),
+                    production_located_split_p(&ranks),
+                ) {
                     (None, None) => {}
                     (Some(ours), Some(theirs)) => assert!(
                         (ours - theirs).abs() <= 1e-12,
                         "n={n}: kernel p {ours} disagrees with production p {theirs}"
                     ),
                     (ours, theirs) => {
-                        panic!("n={n}: eligibility disagreed: kernel {ours:?} vs production {theirs:?}")
+                        panic!(
+                            "n={n}: eligibility disagreed: kernel {ours:?} vs production {theirs:?}"
+                        )
                     }
                 }
             }

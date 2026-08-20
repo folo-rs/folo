@@ -7,15 +7,11 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use cargo_bench_history_calibration::{
-    PRODUCTION_SAMPLES, TABLE_PATH, check, derive_table, write,
-};
+use cargo_bench_history_calibration::{PRODUCTION_SAMPLES, TABLE_PATH, check, derive_table, write};
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
-#[command(
-    about = "Generates the selection-adjustment calibration table embedded in cbh_stats"
-)]
+#[command(about = "Generates the selection-adjustment calibration table embedded in cbh_stats")]
 struct Args {
     #[command(subcommand)]
     command: Command,

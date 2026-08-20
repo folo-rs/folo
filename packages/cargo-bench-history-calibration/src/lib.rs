@@ -8,21 +8,21 @@
 //! striking-looking split somewhere. The honest, selection-adjusted answer is a mathematical
 //! constant of the series length `n` — the null distribution, over all `n!` rank orderings, of the
 //! p-value the detector reports — and this crate computes it and writes it into a committed table
-//! that [`cbh_stats::selection`] reads at run time.
+//! that `cbh_stats::selection` reads at run time.
 //!
 //! It mirrors `cargo-bench-history-figures` exactly: a `write` / `check` / `verify` binary over a
 //! single generated Rust source file, with a freshness test so a stale table fails `just test`.
-//! See `docs/design.md` (the book's data-pipeline appendix) for the reader-facing account.
+//! See the book's "Selection adjustment" appendix for the reader-facing account.
 //!
 //! # Layout
 //!
-//! * [`permutation`] — the null-distribution kernel: the detector's procedure evaluated on a rank
+//! * `permutation` — the null-distribution kernel: the detector's procedure evaluated on a rank
 //!   ordering, plus exact enumeration and Monte Carlo sampling of it.
-//! * [`normal`] — the standard-normal p-value, copied bit-for-bit from `cbh_stats` so the table is
+//! * `normal` — the standard-normal p-value, copied bit-for-bit from `cbh_stats` so the table is
 //!   faithful.
-//! * [`derive`] — the adjusted-level grid, the conservativeness margin, and the row-by-row ladder
+//! * `derive` — the adjusted-level grid, the conservativeness margin, and the row-by-row ladder
 //!   construction.
-//! * [`render`] — turns a derived table into the committed source file, and the write/check
+//! * `render` — turns a derived table into the committed source file, and the write/check
 //!   contract over it.
 
 mod derive;

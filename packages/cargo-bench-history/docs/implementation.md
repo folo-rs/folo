@@ -43,6 +43,12 @@ private-use crates own the capabilities composed into the application:
   registry, fixtures derived from production projections, presentation styles, and preview
   rendering. It is book infrastructure, not part of the application binary; dependencies run from
   the generator to the production projections, never from the shipped application to the generator.
+* `cargo-bench-history-calibration` owns the offline derivation and certification of the
+  selection-adjustment calibration table that `cbh_stats` embeds and reads at run time. It computes
+  the null distribution of the change-point search per series length, builds the critical-value
+  ladder, writes the committed table source, and fails the build when that source drifts from a
+  re-derivation. Like the figures generator it is offline tooling, not part of the application
+  binary; dependencies run from the generator to the shipped table, never the reverse.
 
 These boundaries are directional: component crates do not depend on the shell, and behavioral
 policy remains with the application even when a component implements it. More detailed analysis

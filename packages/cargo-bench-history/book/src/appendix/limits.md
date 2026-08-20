@@ -64,13 +64,15 @@ attribution the tool refuses to guess at.
 look for the common cause before investigating any of them individually. That pattern is itself
 diagnostic — see [Insights](insights.md).
 
-## Confidence is not comparable, and not corrected
+## Chance levels are not comparable, and not corrected
 
-A finding's confidence comes from whichever test confirmed it. History and branch findings are
-confirmed by different tests answering different questions, so their confidences are not on a
-common scale. Neither is adjusted by the group-wide correction that runs afterwards.
+The report gives no confidence or certainty score; what it can surface, under `--verbose`, is
+the chance level each gate weighed. That number comes from whichever test confirmed the finding.
+History and branch findings are confirmed by different tests answering different questions, so
+their chance levels are not on a common scale. Neither is adjusted by the group-wide correction
+that runs afterwards.
 
-*What to do:* use confidence as "how poorly does chance explain this", nothing more. The
+*What to do:* read a chance level as "how poorly does chance explain this", nothing more. The
 report ranks by size of move, which is the comparable quantity.
 
 ## Branch mode ignores blessings

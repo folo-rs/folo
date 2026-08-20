@@ -5,10 +5,9 @@
 //! tainted p-value that still deserves that level once the detector's every-position search is
 //! accounted for. Monte Carlo rows carry a Dvoretzky–Kiefer–Wolfowitz margin so the committed
 //! numbers err, family-wide and to a stated certainty, toward reporting fewer findings rather than
-//! more (design.md, "Selection-adjusted change-point p-values").
+//! more (the book's "Selection adjustment" appendix).
 
-use std::num::NonZero;
-use std::thread;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use crate::permutation::{FindingDist, collect_exact, collect_monte_carlo, row_seed};
 use crate::{
@@ -19,7 +18,7 @@ use crate::{
 /// The committed calibration table: the adjusted-level grid shared by every row, and one ladder
 /// of critical tainted-p values per series length.
 ///
-/// It is the in-memory form of `cbh_stats/src/selection/table.rs`; [`crate::render`] serializes it
+/// It is the in-memory form of `cbh_stats/src/selection/table.rs`; `crate::render` serializes it
 /// and the run-time primitive `cbh_stats::selection::change_point_adjusted_p` reads the serialized
 /// arrays back. Rows run from [`MIN_SERIES_LEN`] to [`MAX_SERIES_LEN`] with no gaps, so a lookup is
 /// an exact row index with no interpolation.
@@ -47,34 +46,33 @@ impl Table {
 /// Builds the whole committed table, drawing `samples` orderings for each Monte Carlo row.
 ///
 /// Rows up to [`EXACT_MAX_N`] are counted exactly and carry no margin; longer rows are sampled and
-/// share one Dvoretzky–Kiefer–Wolfowitz margin. Rows are independent, so they are derived across
-/// the available CPUs.
+/// share one Dvoretzky–Kiefer–Wolfowitz margin. Rows are independent, so they are derived in
+/// parallel across the available CPUs.
 #[must_use]
 pub fn derive_table(samples: u64) -> Table {
     let levels = adjusted_levels();
     let lengths: Vec<usize> = (MIN_SERIES_LEN..=MAX_SERIES_LEN).collect();
     let monte_carlo_rows = lengths.iter().filter(|&&n| n > EXACT_MAX_N).count();
-    let margin = dkw_margin(samples, monte_carlo_rows);
-
-    let mut rows: Vec<Vec<f64>> = vec![Vec::new(); lengths.len()];
-    let threads = thread::available_parallelism().map_or(1, NonZero::get);
-    let chunk = lengths.len().div_ceil(threads).max(1);
+    let dkw = dkw_margin(samples, monte_carlo_rows);
     let levels_ref = &levels;
-    thread::scope(|scope| {
-        for (length_chunk, row_chunk) in lengths.chunks(chunk).zip(rows.chunks_mut(chunk)) {
-            scope.spawn(move || {
-                for (&n, row) in length_chunk.iter().zip(row_chunk.iter_mut()) {
-                    let (distribution, margin) = if n <= EXACT_MAX_N {
-                        // Exhaustive counting is exact, so an exact row needs no margin.
-                        (collect_exact(n), 0.0)
-                    } else {
-                        (collect_monte_carlo(n, samples, row_seed(n)), margin)
-                    };
-                    *row = ladder(&distribution, margin, levels_ref);
-                }
-            });
-        }
-    });
+
+    // A row's cost grows with `n` (each of the `samples` orderings does O(n) work), so a static
+    // split would leave the long-series rows running as a single-threaded tail. Each row is an
+    // independent task, so Rayon's work-stealing keeps every core busy despite that skew. A row's
+    // output is a pure function of `n` (its `row_seed(n)` stream), so the table is identical
+    // regardless of the order the scheduler happens to run the rows in.
+    let rows: Vec<Vec<f64>> = lengths
+        .par_iter()
+        .map(|&n| {
+            let (distribution, margin) = if n <= EXACT_MAX_N {
+                // Exhaustive counting is exact, so an exact row needs no margin.
+                (collect_exact(n), 0.0)
+            } else {
+                (collect_monte_carlo(n, samples, row_seed(n)), dkw)
+            };
+            ladder(&distribution, margin, levels_ref)
+        })
+        .collect();
 
     Table { levels, rows }
 }
@@ -141,10 +139,12 @@ pub(crate) fn dkw_margin(samples: u64, monte_carlo_rows: usize) -> f64 {
 ///
 /// For adjusted level `a`, the honest bar is: at most a fraction `a` of *all* orderings may be a
 /// finding whose tainted p-value is at or below the returned critical value. Reading the
-/// conservative CDF `G_hat + margin` against `a`, that allows `floor((a − margin)·total)` findings,
-/// so the critical value is that-ranked smallest finding p-value — `0.0` when even one finding
-/// would breach the bar (an unreachable rung), `1.0` when every finding fits (a rung that accepts
-/// any input).
+/// conservative CDF `G_hat + margin` against `a` allows `floor((a − margin)·total)` findings, so the
+/// critical value is the largest finding p-value whose *entire* equal-valued mass fits within that
+/// count — `0.0` when even the smallest finding value spills past it (an unreachable rung), `1.0`
+/// when every finding fits (a rung that accepts any input). Requiring the full mass to fit, rather
+/// than crediting a value the moment its first ordering does, is what keeps the row conservative on
+/// the Mann–Whitney statistic's heavily tied p-values.
 fn ladder(distribution: &FindingDist, margin: f64, levels: &[f64]) -> Vec<f64> {
     let total = count_f64(distribution.total());
     let findings = distribution.findings();
@@ -167,7 +167,7 @@ fn ladder(distribution: &FindingDist, margin: f64, levels: &[f64]) -> Vec<f64> {
             if target >= findings_f {
                 return 1.0;
             }
-            distribution.nth_smallest(floored_count(target))
+            distribution.largest_within(floored_count(target))
         })
         .collect()
 }
@@ -177,7 +177,10 @@ fn ladder(distribution: &FindingDist, margin: f64, levels: &[f64]) -> Vec<f64> {
 /// Callers pass `x.floor()` of a value known to be below `total` (at most `n!`, far inside
 /// `f64`'s exact-integer range), so the conversion neither truncates a fraction nor overflows.
 fn floored_count(value: f64) -> u64 {
-    debug_assert!(value >= 0.0 && value.is_finite(), "count must be a finite non-negative");
+    debug_assert!(
+        value >= 0.0 && value.is_finite(),
+        "count must be a finite non-negative"
+    );
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -197,7 +200,40 @@ mod tests {
     /// Compares two `f64` slices for exact bit equality, so the freshness assertions do not trip
     /// the float-comparison lint and pin the committed bytes to the last digit.
     fn same_bits(left: &[f64], right: &[f64]) -> bool {
-        left.iter().map(|value| value.to_bits()).eq(right.iter().map(|value| value.to_bits()))
+        left.iter()
+            .map(|value| value.to_bits())
+            .eq(right.iter().map(|value| value.to_bits()))
+    }
+
+    /// The committed table, read through the production primitive, must never report a change point
+    /// as *more* significant than the exact null distribution allows. For every reachable exact row
+    /// this enumerates the true null and checks `change_point_adjusted_p(v, n, sp) >= F(v)` at every
+    /// distinct finding p-value, where `F` is the exact finding CDF. A failure here means the
+    /// calibration ladder credited a discrete p-value before its full mass fit — the
+    /// anti-conservative defect the `largest_within` inverse exists to prevent.
+    #[test]
+    #[cfg_attr(miri, ignore = "exhaustive enumeration is far too slow under Miri")]
+    fn committed_exact_rows_are_conservative() {
+        for series_len in MIN_SERIES_LEN..=EXACT_MAX_N {
+            let FindingDist::Counts {
+                cumulative, total, ..
+            } = collect_exact(series_len)
+            else {
+                panic!("rows up to EXACT_MAX_N enumerate exactly");
+            };
+            let total_f = count_f64(total);
+            let searched = series_len
+                .saturating_sub(crate::MIN_REGIME.saturating_mul(2))
+                .saturating_add(1);
+            for (value, cumulative_mass) in &cumulative {
+                let honest = count_f64(*cumulative_mass) / total_f;
+                let adjusted = selection::change_point_adjusted_p(*value, series_len, searched);
+                assert!(
+                    adjusted >= honest,
+                    "n={series_len}: adjusted p {adjusted} < honest CDF {honest} at tainted p {value}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -212,7 +248,10 @@ mod tests {
     /// pins it to the committed table. Any change to the derivation or to the shipped data fails
     /// `just test` without waiting for the full-table `check` recipe (design.md §6.4).
     #[test]
-    #[cfg_attr(miri, ignore = "the 3.6M-ordering enumeration exceeds the Miri time budget")]
+    #[cfg_attr(
+        miri,
+        ignore = "the 3.6M-ordering enumeration exceeds the Miri time budget"
+    )]
     fn first_row_reproduces_the_committed_table() {
         let row = ladder(&collect_exact(MIN_SERIES_LEN), 0.0, &adjusted_levels());
         let committed = selection::CRITICAL_TAINTED_P

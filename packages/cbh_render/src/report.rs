@@ -291,9 +291,6 @@ struct JsonFinding<'a> {
     latest: f64,
     /// The change relative to the baseline (`(latest - baseline) / baseline`).
     relative_delta: f64,
-    /// The detector's confidence (`1 - p_value`), approaching `1.0` as the change
-    /// becomes statistically unambiguous.
-    confidence: f64,
     /// Commit the change is attributed to, if known. For a drift this is the newest
     /// commit the trend reached; `window_start` names where it began.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -322,7 +319,6 @@ impl<'a> JsonFinding<'a> {
             baseline: finding.baseline,
             latest: finding.latest,
             relative_delta: finding.relative_delta,
-            confidence: finding.confidence,
             commit: finding.commit.as_deref(),
             window_start: finding.window_start_commit.as_deref(),
             blessed_at: finding.blessed_at.as_deref(),
@@ -564,8 +560,8 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
 }
 
 /// Appends one finding as a paragraph: the benchmark id on its own line as a
-/// chapter title, then a direction-colored `percentage metric (confidence)`
-/// headline, a dimmed detail line, an optional blessing note, and a chart
+/// chapter title, then a direction-colored `percentage metric` headline, a
+/// dimmed detail line, an optional blessing note, and a chart
 /// of the metric over commits, scoped per [`ChartScope`].
 fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, scope: ChartScope) {
     lines.push(String::new());
@@ -579,11 +575,7 @@ fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, scope: ChartSc
         Direction::Regression => percent.red().bold(),
         Direction::Improvement => percent.green().bold(),
     };
-    lines.push(format!(
-        "  {headline} {} ({} confidence)",
-        finding.kind.as_str(),
-        format_confidence(finding.confidence),
-    ));
+    lines.push(format!("  {headline} {}", finding.kind.as_str()));
 
     lines.push(format!("    {}", detail_text(finding)).dimmed().to_string());
 
@@ -659,9 +651,8 @@ fn runs_with_span(runs: usize, span: Option<(&str, &str)>) -> String {
 /// The plain-text detail body shared by the text and Markdown reports: the
 /// direction, detector, the `baseline → latest` move, and the commit it is attributed
 /// to. A drift belongs to its whole window rather than one commit, so it names the
-/// range it accumulated over (`from … to …`) instead of a single commit. Confidence
-/// rides on the headline line instead. Carries no styling and no leading indent; each
-/// format applies its own.
+/// range it accumulated over (`from … to …`) instead of a single commit. Carries no
+/// styling and no leading indent; each format applies its own.
 fn detail_text(finding: &Finding) -> String {
     format!(
         "{} via {} · {} → {} · {}",
@@ -1095,8 +1086,8 @@ fn push_set_filter_footer(lines: &mut Vec<String>, set: &DiscriminantSet) {
 }
 
 /// Appends one finding as a Markdown block mirroring the text report: the benchmark
-/// id as a `heading` (a chapter title), then a bold `percentage metric (confidence)`
-/// line, the shared detail line, an optional blessing note, and the metric chart in a
+/// id as a `heading` (a chapter title), then a bold `percentage metric` line, the
+/// shared detail line, an optional blessing note, and the metric chart in a
 /// fenced `text` block so it survives Markdown rendering, scoped per [`ChartScope`].
 /// `heading` carries the ATX prefix (`##`/`###`) so the block nests correctly —
 /// top-level in the summary, one level under the set heading in the full report.
@@ -1113,10 +1104,9 @@ fn push_finding_markdown(
     lines.push(format!("{heading} `{}`", describe_id(&finding.id)));
 
     lines.push(format!(
-        "**{}** `{}` ({} confidence)",
+        "**{}** `{}`",
         format_percent(finding.relative_delta),
         finding.kind.as_str(),
-        format_confidence(finding.confidence),
     ));
 
     lines.push(String::new());
@@ -1200,11 +1190,6 @@ fn method_label(method: FindingMethod) -> &'static str {
         FindingMethod::ChangePoint => "change point",
         FindingMethod::Drift => "drift",
     }
-}
-
-/// Formats a detector's confidence as a whole-number percentage.
-fn format_confidence(confidence: f64) -> String {
-    format!("{:.0}%", (confidence * 100.0).clamp(0.0, 100.0))
 }
 
 /// Renders a benchmark identity as `package/group/case/value`, omitting absent
@@ -1306,7 +1291,6 @@ mod tests {
             latest: 130.0,
             delta: 30.0,
             relative_delta: 0.30,
-            confidence: 1.0,
             commit: Some("deadbee".to_owned()),
             window_start_commit: None,
             blessed_at: None,
@@ -2091,18 +2075,15 @@ mod tests {
         assert!(report.contains("+30.00%"), "{report}");
         assert!(!report.contains("[major]"), "{report}");
         // The benchmark id leads on its own chapter-title line; the change headline
-        // that follows carries the metric and confidence, no longer the id.
+        // that follows carries the metric, no longer the id.
         assert!(report.contains("nm/nm::observe/pull"), "{report}");
-        assert!(
-            report.contains("+30.00% instruction_count (100% confidence)"),
-            "{report}"
-        );
-        // Confidence rides on the headline now, so the detail line drops it.
+        assert!(report.contains("+30.00% instruction_count"), "{report}");
+        // The report no longer surfaces a confidence figure anywhere.
         assert!(
             report.contains("regression via change point · 100 → 130"),
             "{report}"
         );
-        assert!(!report.contains("100% confidence · 100"), "{report}");
+        assert!(!report.contains("confidence"), "{report}");
     }
 
     #[test]
@@ -2249,17 +2230,17 @@ mod tests {
         // (`##`), so it reads as a chapter title; the change headline follows.
         assert!(report.contains("### `nm/nm::observe/pull`"), "{report}");
         assert!(
-            report.contains("**+30.00%** `instruction_count` (100% confidence)"),
+            report.contains("**+30.00%** `instruction_count`"),
             "{report}"
         );
         // The old inline em-dash headline is gone.
         assert!(!report.contains("—"), "{report}");
-        // Confidence rides on the headline now, so the detail line drops it.
+        // The report no longer surfaces a confidence figure anywhere.
         assert!(
             report.contains("regression via change point · 100 → 130"),
             "{report}"
         );
-        assert!(!report.contains("100% confidence · 100"), "{report}");
+        assert!(!report.contains("confidence"), "{report}");
     }
 
     #[test]
@@ -3465,16 +3446,10 @@ mod tests {
         // The metric name is a keyword-like identifier, so Markdown renders it as inline
         // code (backticks) rather than bare prose. The text report carries no such markup.
         let markdown = render(&input, ReportFormat::Markdown, false);
-        assert!(
-            markdown.contains("`instruction_count` (100% confidence)"),
-            "{markdown}"
-        );
+        assert!(markdown.contains("`instruction_count`"), "{markdown}");
 
         let text = render(&input, ReportFormat::Text, false);
-        assert!(
-            text.contains("instruction_count (100% confidence)"),
-            "{text}"
-        );
+        assert!(text.contains("instruction_count"), "{text}");
         assert!(!text.contains("`instruction_count`"), "{text}");
     }
 }

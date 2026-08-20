@@ -66,7 +66,7 @@
 //!
 //! The check itself is deliberately coarse — "did the analysis report any finding?" —
 //! because these inputs are chosen so the *presence* of a finding is the whole
-//! question. Detector internals, confidence, and magnitude are covered by the
+//! question. Detector internals and magnitude are covered by the
 //! finer-grained unit tests in [`findings`](super::findings).
 //!
 //! Curated series carry the measurement scatter their metric kind actually shows.
@@ -983,20 +983,20 @@ fn a_batch_of_flat_noisy_series_raises_nothing() {
     // series reached them.
     //
     // The batch is sized so that the false-discovery correction is what produces the
-    // silence. Two of these series wander far enough for the per-series gates to raise a
-    // candidate — a drift and a change point, both below `change_alpha` — so both are
-    // reported by a detector judging each series on its own. A judged family of forty puts
-    // the rank-one threshold at 0.0025 and rejects them. The positive control below pins
-    // that: shrink the family and this fixture reports two regressions that never happened.
+    // silence. One of these series wanders far enough for the per-series gates to raise a
+    // candidate on its own, so a detector judging each series in isolation reports it. A
+    // judged family of forty puts the rank-one threshold at 0.0025 and rejects it. The
+    // positive control below pins that: shrink the family and this fixture reports a
+    // regression that never happened.
     //
     // Silence here is a property of this fixture rather than a universal guarantee: the
     // correction bounds the false-discovery rate at `fdr_q` instead of driving it to
     // zero, so a stationary batch may legitimately surface a discovery, and varying this
     // fixture's series length finds lengths where one does. What this test pins is that
-    // the correction is what suppresses the candidates above — not that noise can never
+    // the correction is what suppresses the candidate above — not that noise can never
     // produce a finding.
     const FLAT_SERIES: usize = 40;
-    const POINTS: usize = 20;
+    const POINTS: usize = 21;
     const MERGE_BASE: usize = 15;
     const LEVEL: f64 = 100.0;
 
@@ -1024,7 +1024,7 @@ fn a_batch_of_flat_noisy_series_raises_nothing() {
         );
 
         // The positive control: the same series judged one at a time, where the family is
-        // one and the correction is inert. Two of them then report a regression that never
+        // one and the correction is inert. One of them then reports a regression that never
         // happened, which is what makes the silence above a property of the correction
         // rather than of series that never reached it.
         let solo: Vec<(Direction, String)> = batch
@@ -1033,10 +1033,7 @@ fn a_batch_of_flat_noisy_series_raises_nothing() {
             .map(|finding| (finding.direction, finding.id.qualified()))
             .collect();
         let expected: &[(Direction, &str)] = match mode {
-            Mode::History => &[
-                (Direction::Regression, "flat3/case"),
-                (Direction::Regression, "flat25/case"),
-            ],
+            Mode::History => &[(Direction::Regression, "flat3/case")],
             Mode::Branch => &[],
         };
         assert_eq!(

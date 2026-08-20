@@ -17,9 +17,9 @@ matters more than a 40% regression in a rarely-used one is a judgment about your
 the tool does not have the information to make it. It sorts by the one quantity it can
 measure, and leaves the ranking of importance to you.
 
-Note in particular that findings are **not** sorted by confidence. Every reported finding
-already cleared its test, so confidences are uniformly high and would rank almost nothing —
-see [Detection](detection.md#confidence-and-what-it-is-not).
+Note in particular that findings carry **no** confidence score to sort by. Every reported
+finding already cleared its test, so any such number would be uniformly high and would rank
+almost nothing — see [Detection](detection.md#chance-levels-not-a-confidence-score).
 
 ## Reading a finding
 

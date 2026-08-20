@@ -10,7 +10,7 @@
 
 use std::fmt::Write as _;
 
-use cbh_detect::{TARGET_FALSE_DISCOVERY_RATE, SeriesCensus, Testability, UnjudgedReason};
+use cbh_detect::{SeriesCensus, TARGET_FALSE_DISCOVERY_RATE, Testability, UnjudgedReason};
 use cbh_render::{Coverage, CoverageState};
 use plotters::style::RGBColor;
 

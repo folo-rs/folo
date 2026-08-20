@@ -285,9 +285,9 @@ async fn analyze_markdown_output_renders_blocks() {
     // Findings render as heading + bold-headline blocks; there is no table.
     assert!(!report.contains("| Change | Direction |"), "{report}");
     // Each finding leads with its benchmark id as a `###` chapter title (nested under
-    // the set `##`), then a bold percentage headline carrying the confidence.
+    // the set `##`), then a bold percentage headline naming the metric.
     assert!(report.contains("\n### `"), "{report}");
-    assert!(report.contains("% confidence)"), "{report}");
+    assert!(report.contains("** `"), "{report}");
     assert!(report.contains("via change point"), "{report}");
 }
 
@@ -345,10 +345,10 @@ async fn analyze_markdown_summary_renders_a_flat_report() {
         "{summary}"
     );
     // Each finding leads with its benchmark id as a `##` chapter title, then a bold
-    // percentage headline carrying the confidence — the same block the full report
+    // percentage headline naming the metric — the same block the full report
     // uses, one heading level up.
     assert!(summary.contains("\n## `"), "{summary}");
-    assert!(summary.contains("% confidence)"), "{summary}");
+    assert!(summary.contains("** `"), "{summary}");
     // A single seeded regression is well within the top-20 cap, so no truncation note
     // is added.
     assert!(
@@ -412,14 +412,15 @@ async fn analyze_markdown_summary_caps_findings_and_names_the_total() {
         "{summary}"
     );
     // Exactly the cap of finding headlines survives in the summary. Each finding
-    // headline carries the confidence, which appears nowhere else, so it counts blocks.
-    let summary_blocks = summary.matches("% confidence)").count();
+    // headline carries a bold metric name (`** ` before the backtick), which appears
+    // nowhere else, so it counts blocks.
+    let summary_blocks = summary.matches("** `").count();
     assert_eq!(
         summary_blocks, 10,
         "summary should keep only the cap: {summary}"
     );
     // The full report from the same run still lists every finding.
-    let full_blocks = full.matches("% confidence)").count();
+    let full_blocks = full.matches("** `").count();
     assert_eq!(
         full_blocks, 25,
         "full report should keep every finding: {full}"

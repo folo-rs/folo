@@ -65,10 +65,16 @@ pub(crate) fn render(table: &Table) -> String {
     let mut source = String::new();
     source.push_str(&header(num_levels, rows.len()));
 
-    writeln!(source, "pub const MIN_SERIES_LEN: usize = {MIN_SERIES_LEN};")
-        .expect("writing to a String never fails");
-    writeln!(source, "pub const MAX_SERIES_LEN: usize = {MAX_SERIES_LEN};")
-        .expect("writing to a String never fails");
+    writeln!(
+        source,
+        "pub const MIN_SERIES_LEN: usize = {MIN_SERIES_LEN};"
+    )
+    .expect("writing to a String never fails");
+    writeln!(
+        source,
+        "pub const MAX_SERIES_LEN: usize = {MAX_SERIES_LEN};"
+    )
+    .expect("writing to a String never fails");
     writeln!(source, "pub const NUM_LEVELS: usize = {num_levels};")
         .expect("writing to a String never fails");
     source.push('\n');

@@ -45,7 +45,7 @@ fn normal_cdf(z: f64) -> f64 {
 
 /// Clamps a computed tail probability into the reportable range; mirrors
 /// `cbh_stats::p_value::clamp_p_value`.
-fn clamp_p_value(p: f64) -> f64 {
+pub(crate) fn clamp_p_value(p: f64) -> f64 {
     if !p.is_finite() {
         return 1.0;
     }

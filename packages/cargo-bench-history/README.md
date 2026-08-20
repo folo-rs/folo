@@ -28,7 +28,7 @@ callgrind/x86_64-unknown-linux-gnu/a1b2c3d4e5f60718
   filter: --engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key a1b2c3d4e5f60718
 
 many_cpus/hardware_info/query
-  +13.00% instruction_count (99% confidence)
+  +13.00% instruction_count
     regression via change point · 100 → 113 · @ 4f2a1c9
  113 ┤                               ╭───────────────
  110 ┤                             ╭─╯
@@ -37,7 +37,7 @@ many_cpus/hardware_info/query
  100 ┼─────────────────────────╯
 
 events_once/emit/one_subscriber
-  -15.00% instruction_count (98% confidence)
+  -15.00% instruction_count
     improvement via change point · 50 → 42.5 · @ 4f2a1c9
  50.44 ┼─────────────────────────╮
  48.45 ┤                         ╰─╮
@@ -50,7 +50,7 @@ What you get out of it:
 
 - **High signal-to-noise.** No benchmark engine is deterministic, so every metric
   is treated as noisy and gated hard — the tool would rather stay quiet than cry
-  wolf. Each finding carries its confidence and the commit it is attributed to.
+  wolf. Each finding names the commit it is attributed to.
 - **Regressions *and* improvements**, each judged at the branch tip and charted
   against its baseline so you can see the size and shape of the change at a glance.
 - **A machine-readable verdict.** The same analysis emits JSON for automation;

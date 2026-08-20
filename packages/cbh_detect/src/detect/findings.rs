@@ -399,7 +399,7 @@ pub struct SeriesValue {
     pub topo_index: usize,
 }
 
-/// One flagged change: where it is, what moved, by how much, and how sure we are.
+/// One flagged change: where it is, what moved, by how much, and where.
 #[derive(Clone, Debug)]
 pub struct Finding {
     /// The comparable discriminant set the series belongs to.
@@ -420,9 +420,6 @@ pub struct Finding {
     pub delta: f64,
     /// The change relative to the baseline (`delta / baseline`).
     pub relative_delta: f64,
-    /// How confident the detector is (`1 - p_value` of the significance test that
-    /// confirmed the move).
-    pub confidence: f64,
     /// Commit the change is attributed to, if known. For a change point this is the
     /// first commit of the new level; for a branch comparison it is the context
     /// commit; for a drift it is the newest commit the trend reached (paired with
@@ -983,6 +980,25 @@ fn arbitrate(
     }
 }
 
+/// Doubles a history detector's chance level to account for the tool running *both* the
+/// change-point and drift detectors on every series and reporting whichever fits better
+/// (decision D4).
+///
+/// Reporting only the better-fitting of two detectors is itself a selection: across a
+/// corpus of series with no real change, "the better of two detectors looked striking"
+/// happens about twice as often as a single fixed detector would. Doubling the reported
+/// chance level cancels that inflation. The factor is a conservative ceiling ("at most
+/// about twice as often"), so it holds however strongly the two detectors agree, and it is
+/// applied to both before each detector's significance gate so a candidate cannot clear the
+/// gate on an uncorrected value. Ref: docs/DESIGN.md, "Supported series length"; the
+/// selection-adjustment design.
+///
+/// The result is clamped to `1.0`, since a chance level cannot exceed certainty. Branch
+/// mode runs no arbitration, so the factor does not apply there.
+fn across_both_detectors(chance_level: f64) -> f64 {
+    (2.0 * chance_level).min(1.0)
+}
+
 /// Locates a sustained level shift in `series`, returning a [`Candidate`] when the
 /// noise-aware gates pass.
 ///
@@ -1030,12 +1046,30 @@ fn evaluate_change_point(series: &Series, values: &[f64], log: &mut GateLog) -> 
     let relative_delta = relative_delta_of(delta, baseline);
 
     let mann_whitney_u = stats::MannWhitneyU::new(before, after);
-    let mann_whitney = mann_whitney_u.map_or(1.0, |ranked| ranked.two_sided_p_value());
+    let tainted_p = mann_whitney_u.map_or(1.0, |ranked| ranked.two_sided_p_value());
+    // The split search chose the most striking of many interior positions, so `tainted_p`
+    // understates how often chance alone yields a split this extreme. Two honest bounds correct
+    // for that search — the calibrated table (tight near the gate) and the union bound over the
+    // reportable splits (no resolution floor, so it carries strong signals the table cannot) — and
+    // the primitive keeps the smaller. The reportable splits are the interior positions leaving at
+    // least `min_regime` points on each side, matching what the table's calibration counts. Ref:
+    // docs/DESIGN.md, "Supported series length"; the primitive is `cbh_stats::change_point_adjusted_p`.
+    let searched_positions = n
+        .saturating_sub(noise_gates::MIN_REGIME.saturating_mul(2))
+        .saturating_add(1);
+    let adjusted_p = log.adjustment(
+        Gate::SelectionAdjustment,
+        tainted_p,
+        stats::selection::change_point_adjusted_p(tainted_p, n, searched_positions),
+    );
+    // Both history detectors run on every series and the better-fitting one is reported, a
+    // second selection that inflates the false-alarm rate about twofold (decision D4).
+    let effective_p = across_both_detectors(adjusted_p);
     if !log.numeric(
         Gate::Significance,
-        mann_whitney,
+        effective_p,
         noise_gates::MAX_CHANGE_CHANCE_LEVEL,
-        mann_whitney < noise_gates::MAX_CHANGE_CHANCE_LEVEL,
+        effective_p < noise_gates::MAX_CHANGE_CHANCE_LEVEL,
     ) {
         return None;
     }
@@ -1066,7 +1100,6 @@ fn evaluate_change_point(series: &Series, values: &[f64], log: &mut GateLog) -> 
     if !regime_intervals_are_disjoint(&before_points, &after_points, &mut log) {
         return None;
     }
-    let effective_p = mann_whitney;
 
     let commit = points.get(tau).and_then(owned_commit);
     Some(Candidate {
@@ -1080,7 +1113,6 @@ fn evaluate_change_point(series: &Series, values: &[f64], log: &mut GateLog) -> 
             latest,
             delta,
             relative_delta,
-            confidence: (1.0 - effective_p).clamp(0.0, 1.0),
             commit,
             window_start_commit: None,
             blessed_at: None,
@@ -1121,11 +1153,16 @@ fn evaluate_drift(series: &Series, values: &[f64], log: &mut GateLog) -> Option<
     }
 
     let trend = stats::mann_kendall(values);
+    // The drift detector fits one predetermined trend line and runs no split search, so its
+    // p-value is not search-tainted and the table does not apply. It still shares the series
+    // with the change-point detector, and the better-fitting result is reported, so it takes
+    // the same two-detector factor (decision D4).
+    let effective_p = across_both_detectors(trend.p_value);
     if !log.numeric(
         Gate::Significance,
-        trend.p_value,
+        effective_p,
         noise_gates::MAX_DRIFT_CHANCE_LEVEL,
-        trend.p_value < noise_gates::MAX_DRIFT_CHANCE_LEVEL,
+        effective_p < noise_gates::MAX_DRIFT_CHANCE_LEVEL,
     ) {
         return None;
     }
@@ -1176,7 +1213,6 @@ fn evaluate_drift(series: &Series, values: &[f64], log: &mut GateLog) -> Option<
             latest,
             delta,
             relative_delta,
-            confidence: (1.0 - trend.p_value).clamp(0.0, 1.0),
             commit,
             window_start_commit,
             blessed_at: None,
@@ -1186,7 +1222,7 @@ fn evaluate_drift(series: &Series, values: &[f64], log: &mut GateLog) -> Option<
             chart_base_ref: None,
         },
         source_index: 0,
-        bh_p: trend.p_value,
+        bh_p: effective_p,
         split: None,
         line: Some((slope, intercept)),
     })
@@ -1589,7 +1625,6 @@ fn compare_branch_levels(
             latest,
             delta,
             relative_delta,
-            confidence: (1.0 - effective_p).clamp(0.0, 1.0),
             commit,
             window_start_commit: None,
             blessed_at: None,
@@ -1707,19 +1742,24 @@ fn evaluate_branch(
     Some(candidate)
 }
 
-/// The post-blessing window of `series` as a standalone series for detection.
+/// The post-blessing window of `series` as a standalone series for detection, capped to
+/// the most recent [`MAX_SERIES_POINTS`](noise_gates::MAX_SERIES_POINTS) points.
 ///
 /// History-mode detection runs on this view so a blessed (re-baselined) series is
 /// only judged from the blessed commit onward; the full series is restored on the
 /// finding afterwards for charting. An unblessed series (`active_start == 0`) yields
 /// an equivalent copy.
+///
+/// The cap drops the oldest points beyond the supported length so both detectors and the
+/// selection-adjustment table see the same bounded `n`: the table carries a row for every
+/// length up to the cap, so a capped series always has an exact calibration. The tool is
+/// built for series of dozens to a few hundred points, so the cap changes nothing in
+/// ordinary use. Ref: docs/DESIGN.md, "Supported series length".
 fn active_view(series: &Series) -> Series {
-    if series.active_start == 0 {
-        return series.clone();
-    }
-    let points = series
-        .points
-        .get(series.active_start..)
+    let active = series.points.get(series.active_start..).unwrap_or_default();
+    let keep_from = active.len().saturating_sub(noise_gates::MAX_SERIES_POINTS);
+    let points = active
+        .get(keep_from..)
         .map(<[SeriesPoint]>::to_vec)
         .unwrap_or_default();
     Series {
@@ -1890,7 +1930,11 @@ fn finalize_findings(
     // what the census counted as judged.
     let family_size = census.judged();
     let candidate_p: Vec<f64> = candidates.iter().map(|candidate| candidate.bh_p).collect();
-    let keep = stats::benjamini_hochberg(&candidate_p, noise_gates::TARGET_FALSE_DISCOVERY_RATE, family_size);
+    let keep = stats::benjamini_hochberg(
+        &candidate_p,
+        noise_gates::TARGET_FALSE_DISCOVERY_RATE,
+        family_size,
+    );
     let mut keep_iter = keep.into_iter();
 
     // `candidates` and `candidate_p` were built in the same order, so advancing
@@ -2111,10 +2155,11 @@ mod tests {
     use super::*;
     use crate::detect::gate_log::GateOutcome;
     use crate::detect::noise_gates::{
-        BRANCH_PRACTICAL_RELATIVE, MAX_CHANGE_CHANCE_LEVEL, COMPARE_WINDOW, MAX_DRIFT_CHANCE_LEVEL, DRIFT_MIN_POINTS,
-        DRIFT_NOISE_MULTIPLE, EXCURSION_MAX_REMOVALS, TARGET_FALSE_DISCOVERY_RATE, MIN_BASE_SPLIT_SEPARATION, MIN_REGIME,
-        MIN_REGIME_SEPARATION, MIN_SERIES_POINTS, PRACTICAL_ABSOLUTE_COUNT, PRACTICAL_RELATIVE,
-        RESIDUAL_NOISE_MULTIPLE,
+        BRANCH_PRACTICAL_RELATIVE, COMPARE_WINDOW, DRIFT_MIN_POINTS, DRIFT_NOISE_MULTIPLE,
+        EXCURSION_MAX_REMOVALS, MAX_CHANGE_CHANCE_LEVEL, MAX_DRIFT_CHANCE_LEVEL,
+        MIN_BASE_SPLIT_SEPARATION, MIN_REGIME, MIN_REGIME_SEPARATION, MIN_SERIES_POINTS,
+        PRACTICAL_ABSOLUTE_COUNT, PRACTICAL_RELATIVE, RESIDUAL_NOISE_MULTIPLE,
+        TARGET_FALSE_DISCOVERY_RATE,
     };
     use crate::detect::recorded::{
         STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_HIGH, STATIONARY_BIMODAL_NOISE,
@@ -2272,7 +2317,6 @@ mod tests {
                 latest: 0.0,
                 delta: 0.0,
                 relative_delta: 0.0,
-                confidence: 1.0,
                 commit: None,
                 window_start_commit: None,
                 blessed_at: None,
@@ -2782,20 +2826,19 @@ mod tests {
     fn change_point_across_interleaved_regimes_is_suppressed() {
         // The real-world series that motivated the separation gate: a wall-time metric
         // that oscillates between ~13 and ~25-29 throughout its whole history, so no
-        // commit marks a real level shift. Pettitt aligns the split with each side's
-        // dominant mode, collapsing the median-absolute residual so the residual gate
-        // is fooled and (before this gate) a spurious "regression via change point"
-        // was emitted. The regimes overlap heavily (probability of superiority ~0.72),
-        // so the separation gate rejects it — and the recorded chain attributes the
-        // silence to exactly that gate: every earlier gate passes and RegimeSeparation
-        // is the first to decline.
+        // commit marks a real level shift. Pettitt still aligns a split with each side's
+        // dominant mode, but that split was chosen from the whole interior; once its
+        // rank-test p-value is corrected for that search it is no longer significant. So
+        // the selection-adjusted significance gate is now the first to decline, and the
+        // spurious "regression via change point" this recording once produced never
+        // reaches the effect-size gate below it.
         let values = STATIONARY_BIMODAL_NOISE.to_vec();
         let series = series_of(&values);
         let mut log = GateLog::recording();
         assert!(evaluate_change_point(&series, &values, &mut log).is_none());
         assert_eq!(
             log.declined_by_stage(GateStage::ChangePoint),
-            Some(Gate::RegimeSeparation),
+            Some(Gate::Significance),
         );
     }
 
@@ -2811,9 +2854,7 @@ mod tests {
         assert_eq!(finding.latest, 130.0);
         assert_eq!(finding.delta, 30.0);
         assert!((finding.relative_delta - 0.30).abs() <= 1e-9);
-        // Confidence derives from the rank-test p-value (below 1) and the change is
-        // attributed to the first commit of the after regime.
-        assert!(finding.confidence > 0.9 && finding.confidence < 1.0);
+        // The change is attributed to the first commit of the after regime.
         assert_eq!(
             finding.commit.as_deref(),
             Some(format!("commit{MIN_REGIME}").as_str())
@@ -2837,7 +2878,6 @@ mod tests {
         assert_eq!(finding.method, FindingMethod::ChangePoint);
         assert_eq!(finding.delta, 30.0);
         assert!((finding.relative_delta - 0.03).abs() <= 1e-9);
-        assert!(finding.confidence > 0.9 && finding.confidence < 1.0);
     }
 
     #[test]
@@ -3013,9 +3053,6 @@ mod tests {
         assert_eq!(finding.direction, Direction::Regression);
         assert_eq!(finding.baseline, 100.0);
         assert_eq!(finding.latest, 130.0);
-        // A genuinely significant step reports high (but sub-unit) confidence.
-        assert!(finding.confidence > 0.95, "{}", finding.confidence);
-        assert!(finding.confidence < 1.0, "{}", finding.confidence);
     }
 
     #[test]
@@ -3416,7 +3453,11 @@ mod tests {
             evaluate_branch(&series, &mut GateLog::disabled()).expect("48 bytes is a move");
         assert_eq!(candidate.finding.direction, Direction::Regression);
         assert_eq!(candidate.finding.latest, 48.0);
-        assert!(candidate.bh_p < MAX_CHANGE_CHANCE_LEVEL, "{}", candidate.bh_p);
+        assert!(
+            candidate.bh_p < MAX_CHANGE_CHANCE_LEVEL,
+            "{}",
+            candidate.bh_p
+        );
     }
 
     #[test]
@@ -3476,7 +3517,11 @@ mod tests {
         let candidate = evaluate_branch(&series, &mut GateLog::disabled())
             .expect("an 8% move on a quiet base is detectable");
         assert_eq!(candidate.finding.direction, Direction::Regression);
-        assert!(candidate.bh_p < MAX_CHANGE_CHANCE_LEVEL, "{}", candidate.bh_p);
+        assert!(
+            candidate.bh_p < MAX_CHANGE_CHANCE_LEVEL,
+            "{}",
+            candidate.bh_p
+        );
     }
 
     #[test]
@@ -3978,18 +4023,18 @@ mod tests {
     }
 
     #[test]
-    fn compare_samples_confidence_tracks_the_strength_of_the_evidence() {
-        // Branch confidence is `1 - p` from the prediction interval, so it must move
-        // with the size of the move rather than being pinned to a constant: the same
-        // base window judges a 6% move less confidently than a 10% one. Both stay
-        // below 1 (a mutated `1 + p` / `1 / p` would clamp to 1) and neither lands on
-        // `1 - MAX_CHANGE_CHANCE_LEVEL`, the placeholder confidence a fixed p-value would give.
+    fn compare_samples_p_value_tracks_the_strength_of_the_evidence() {
+        // The branch p-value from the prediction interval must move with the size of the
+        // move rather than being pinned to a constant: the same base window judges a 6%
+        // move less decisively (a larger p) than a 10% one. Both stay above 0 (a mutated
+        // `-p` / `p - 1` would clamp to 0) and neither lands on `MAX_CHANGE_CHANCE_LEVEL`,
+        // the fixed p-value a placeholder would report.
         let before = base_window(100.0, 0.5);
         let modest = compare(&before, &pts(&[(106.0, 0.5)])).unwrap();
         let large = compare(&before, &pts(&[(110.0, 0.5)])).unwrap();
-        assert!(modest.finding.confidence < large.finding.confidence);
-        assert!(large.finding.confidence < 1.0);
-        assert!(modest.finding.confidence > 1.0 - MAX_CHANGE_CHANCE_LEVEL);
+        assert!(modest.bh_p > large.bh_p);
+        assert!(large.bh_p > 0.0);
+        assert!(modest.bh_p < MAX_CHANGE_CHANCE_LEVEL);
     }
 
     #[test]
@@ -4081,17 +4126,17 @@ mod tests {
     }
 
     #[test]
-    fn drift_at_the_practical_floor_is_flagged_with_real_confidence() {
+    fn drift_at_the_practical_floor_is_flagged_with_a_real_p_value() {
         // A steady climb whose relative drift is exactly PRACTICAL_RELATIVE (3%): the
-        // floor gate must be a strict `<`, not a `<=`. Its confidence is 1 - p with
-        // p > 0, so a mutated `1 + p` / `1 / p` would clamp to 1. The nine-unit rise
-        // over a baseline of 300 lands the relative move on the floor exactly.
+        // floor gate must be a strict `<`, not a `<=`. Its p-value is above 0, so a
+        // mutated `-p` / `p - 1` would clamp to 0. The nine-unit rise over a baseline
+        // of 300 lands the relative move on the floor exactly.
         let series = series_of(&ramp(300.0, 1.0, MIN_SERIES_POINTS));
         let candidate =
             evaluate_drift(&series, &values_of(&series), &mut GateLog::disabled()).unwrap();
         assert_eq!(candidate.finding.method, FindingMethod::Drift);
         assert_eq!(candidate.finding.relative_delta, PRACTICAL_RELATIVE);
-        assert!(candidate.finding.confidence < 1.0);
+        assert!(candidate.bh_p > 0.0);
     }
 
     #[test]
@@ -4158,13 +4203,14 @@ mod tests {
 
     #[test]
     fn drift_within_its_own_residual_scatter_is_suppressed() {
-        // A climbing zigzag whose net rise is real — Mann-Kendall significant and clear
-        // of the relative and absolute floors — but which swings a fixed four units
-        // either side of its Theil-Sen line. The nine-unit fitted move does not exceed
-        // RESIDUAL_NOISE_MULTIPLE times that four-unit scatter, so the trend is buried in
-        // its own residual and refused by the residual gate.
+        // A climbing zigzag whose net rise is real — Mann-Kendall significant even after
+        // the two-detector factor, and clear of the relative and absolute floors — but
+        // which swings a fixed four units either side of its Theil-Sen line. The
+        // eleven-unit fitted move does not exceed RESIDUAL_NOISE_MULTIPLE times that
+        // four-unit scatter, so the trend is buried in its own residual and refused by the
+        // residual gate.
         let series = series_of(&[
-            96.0, 105.0, 98.0, 107.0, 100.0, 109.0, 102.0, 111.0, 104.0, 113.0,
+            96.0, 105.0, 98.0, 107.0, 100.0, 109.0, 102.0, 111.0, 104.0, 113.0, 106.0, 115.0,
         ]);
         let mut log = GateLog::recording();
         assert!(evaluate_drift(&series, &values_of(&series), &mut log).is_none());
@@ -4259,7 +4305,6 @@ mod tests {
                 latest: 110.0,
                 delta: 10.0,
                 relative_delta: 0.1,
-                confidence: 1.0 - bh_p,
                 commit: None,
                 window_start_commit: None,
                 blessed_at: None,
@@ -4472,7 +4517,10 @@ mod tests {
         let large = prediction_interval_p(&flat, 1005.0, 1.0).unwrap();
         assert!(large < MAX_CHANGE_CHANCE_LEVEL, "{large}");
         let at_the_quantum = prediction_interval_p(&flat, 1001.0, 1.0).unwrap();
-        assert!(at_the_quantum >= MAX_CHANGE_CHANCE_LEVEL, "{at_the_quantum}");
+        assert!(
+            at_the_quantum >= MAX_CHANGE_CHANCE_LEVEL,
+            "{at_the_quantum}"
+        );
     }
 
     #[test]
@@ -5018,27 +5066,6 @@ mod tests {
     }
 
     #[test]
-    fn branch_confidence_varies_with_the_strength_of_the_evidence() {
-        // A branch finding's confidence comes from the prediction interval, so it
-        // grows with the size of the move rather than being pinned to a constant.
-        // The same flat base judges a 20% move less confidently than a 40% one, and
-        // neither lands on `1 - change_alpha`, the fixed confidence a placeholder
-        // p-value would report.
-        let modest = only(branch_changes(
-            &[branch_over_base(100.0, 120.0, 1)],
-            Some(base_merge_base()),
-        ));
-        let large = only(branch_changes(
-            &[branch_over_base(100.0, 140.0, 1)],
-            Some(base_merge_base()),
-        ));
-        let placeholder = 1.0 - MAX_CHANGE_CHANCE_LEVEL;
-        assert!(modest.confidence < large.confidence);
-        assert!(large.confidence < 1.0);
-        assert!((modest.confidence - placeholder).abs() > 1e-9, "{modest:?}");
-    }
-
-    #[test]
     fn testability_agrees_with_detection_in_history_mode() {
         // Detection and family membership share one definition, so a series that is
         // not judged raises nothing and a judged one is evaluated on its merits. The
@@ -5295,8 +5322,8 @@ mod tests {
         // raises exactly the one candidate; the only thing that differs is whether the
         // silent companions join the family. Flat companions are judged and do count,
         // while companions one point too short are not judged and do not.
-        const FAMILY_THAT_REPORTS: usize = 8;
-        const FAMILY_THAT_REJECTS: usize = 9;
+        const FAMILY_THAT_REPORTS: usize = 6;
+        const FAMILY_THAT_REJECTS: usize = 7;
 
         let stepped = named_series(
             "stepped",
@@ -5371,6 +5398,17 @@ mod tests {
         let noisy_step = [
             98.0, 100.0, 102.0, 99.0, 101.0, 128.0, 130.0, 132.0, 129.0, 131.0,
         ];
+        // Two levels that both recur in each half of the history: the first half sits mostly
+        // on the low level with a few high commits, the second half mostly on the high level
+        // with a few low ones. The majority shifts, so the move is real and — at this length —
+        // significant even after the search correction, yet the levels overlap enough that the
+        // probability of superiority (0.80) stays under the separation gate. Each half is
+        // ordered high-then-low so no trend survives for the drift detector to read.
+        let mut overlapping_regimes: Vec<f64> = Vec::new();
+        overlapping_regimes.extend(std::iter::repeat_n(130.0, 4));
+        overlapping_regimes.extend(std::iter::repeat_n(100.0, 16));
+        overlapping_regimes.extend(std::iter::repeat_n(130.0, 16));
+        overlapping_regimes.extend(std::iter::repeat_n(100.0, 4));
 
         vec![
             DeclinedCase {
@@ -5415,22 +5453,22 @@ mod tests {
             },
             DeclinedCase {
                 shape: "a step no larger than its own residual scatter",
-                series: wall_series(
-                    &[
-                        1000.0, 1040.0, 1000.0, 1040.0, 1020.0, 1040.0, 1080.0, 1040.0, 1080.0,
-                        1060.0,
-                    ],
-                    40.0,
-                ),
+                // Two rank-separated regimes, so the rank test is decisive and the chain
+                // reaches the residual gate. Each regime descends internally, which cancels
+                // any Theil-Sen slope so the drift detector reads no trend and the series is
+                // silent overall rather than reported as drift.
+                series: series_of(&[
+                    1000.0, 1000.0, 950.0, 900.0, 900.0, 1100.0, 1100.0, 1050.0, 1001.0, 1001.0,
+                ]),
                 stage: GateStage::ChangePoint,
                 gate: Gate::ResidualNoise,
-                // A 40-unit move against three times the 20-unit median absolute residual
+                // A 100-unit move against three times the 50-unit median absolute residual
                 // the same two-regime model leaves behind.
-                compared: Some((40.0, RESIDUAL_NOISE_MULTIPLE * 20.0)),
+                compared: Some((100.0, RESIDUAL_NOISE_MULTIPLE * 50.0)),
             },
             DeclinedCase {
-                shape: "a history that oscillates between two levels throughout",
-                series: series_of(&STATIONARY_BIMODAL_NOISE),
+                shape: "two levels that both recur in each half of the history",
+                series: series_of(&overlapping_regimes),
                 stage: GateStage::ChangePoint,
                 gate: Gate::RegimeSeparation,
                 compared: None,
@@ -5552,6 +5590,7 @@ mod tests {
                 Gate::SplitLocated,
                 Gate::MinRegime,
                 Gate::NonZeroDelta,
+                Gate::SelectionAdjustment,
                 Gate::Significance,
                 Gate::RelativeFloor,
                 Gate::AbsoluteFloor,

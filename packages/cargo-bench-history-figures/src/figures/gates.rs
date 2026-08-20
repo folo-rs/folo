@@ -10,10 +10,10 @@ use std::fmt::Write as _;
 use std::iter;
 
 use cbh_detect::{
-    BRANCH_NOISE_MULTIPLE, BRANCH_PRACTICAL_RELATIVE, MAX_CHANGE_CHANCE_LEVEL, MAX_DRIFT_CHANCE_LEVEL, DRIFT_MIN_POINTS,
-    DRIFT_NOISE_MULTIPLE, Finding, Gate, GateLog, GateOutcome, GateStage, MIN_REGIME,
-    MIN_REGIME_SEPARATION, MIN_SERIES_POINTS, PRACTICAL_RELATIVE, RESIDUAL_NOISE_MULTIPLE, Series,
-    evaluate_with_log, examples,
+    BRANCH_NOISE_MULTIPLE, BRANCH_PRACTICAL_RELATIVE, DRIFT_MIN_POINTS, DRIFT_NOISE_MULTIPLE,
+    Finding, Gate, GateLog, GateOutcome, GateStage, MAX_CHANGE_CHANCE_LEVEL,
+    MAX_DRIFT_CHANCE_LEVEL, MIN_REGIME, MIN_REGIME_SEPARATION, MIN_SERIES_POINTS,
+    PRACTICAL_RELATIVE, RESIDUAL_NOISE_MULTIPLE, Series, evaluate_with_log, examples,
 };
 use cbh_model::MetricKind;
 
@@ -52,10 +52,11 @@ const STAGES: [GateStage; 3] = [GateStage::ChangePoint, GateStage::Drift, GateSt
 /// no single example gets to. A test compares each declared order against what the
 /// detector records, so a reordering in the code fails here instead of quietly
 /// contradicting the chapter.
-const CHANGE_POINT_GATES: [Gate; 9] = [
+const CHANGE_POINT_GATES: [Gate; 10] = [
     Gate::SplitLocated,
     Gate::MinRegime,
     Gate::NonZeroDelta,
+    Gate::SelectionAdjustment,
     Gate::Significance,
     Gate::RelativeFloor,
     Gate::AbsoluteFloor,
@@ -151,6 +152,7 @@ fn demanded(gate: Gate, stage: GateStage) -> String {
             GateStage::ChangePoint | GateStage::Drift => points(MIN_REGIME),
         },
         Gate::NonZeroDelta => "above zero".to_owned(),
+        Gate::SelectionAdjustment => "corrects the level; never declines".to_owned(),
         Gate::RelativeFloor => match stage {
             GateStage::Branch => percent(BRANCH_PRACTICAL_RELATIVE),
             _ => percent(PRACTICAL_RELATIVE),
@@ -197,6 +199,9 @@ fn compares(gate: Gate, stage: GateStage) -> &'static str {
             GateStage::Drift => "Whether the fitted line moved across the window.",
             GateStage::Branch => "Whether the context run differs from the base level at all.",
         },
+        Gate::SelectionAdjustment => {
+            "The change-point's rank-test chance level, before the split-search correction."
+        }
         Gate::RelativeFloor => "The move as a fraction of the baseline.",
         Gate::AbsoluteFloor => "The move in the metric's own units.",
         Gate::ResidualNoise => "The move against the series' own typical residual.",
@@ -279,6 +284,9 @@ enum Reading {
     /// A chance level against its alpha.
     Chance,
 
+    /// A chance level corrected into another chance level: a mapping, not a bar.
+    Correction,
+
     /// A probability of superiority against its floor.
     Share,
 
@@ -338,6 +346,7 @@ fn reading(gate: Gate) -> Reading {
         Gate::NonZeroDelta => Reading::NonZero,
         Gate::AbsoluteFloor | Gate::ResidualNoise | Gate::IntervalNoiseBand => Reading::Magnitude,
         Gate::Significance => Reading::Chance,
+        Gate::SelectionAdjustment => Reading::Correction,
         Gate::RegimeSeparation => Reading::Share,
     }
 }
@@ -353,6 +362,14 @@ fn reading_of(outcome: &GateOutcome, kind: MetricKind) -> (String, String) {
         Reading::Chance => (
             format!("p = {}", rendered(value, chance)),
             format!("p < {}", rendered(threshold, chance)),
+        ),
+        Reading::Correction => (
+            format!(
+                "p = {} → p = {}",
+                rendered(value, chance),
+                rendered(threshold, chance)
+            ),
+            "corrected for the search".to_owned(),
         ),
         Reading::Share => (rendered(value, share), rendered(threshold, share)),
         Reading::Points => (
@@ -742,7 +759,7 @@ fn agreement_grids() -> Vec<Asset> {
             "gates-agreement-oscillating.svg",
             grid(
                 "a series that revisits both levels",
-                &examples::STATIONARY_BIMODAL_NOISE,
+                &examples::overlapping_regimes(),
             ),
         ),
     ]
@@ -1248,7 +1265,7 @@ mod tests {
         let floor = MIN_REGIME_SEPARATION;
 
         let separated = agreement("separated", &examples::clean_step()).share();
-        let oscillating = agreement("oscillating", &examples::STATIONARY_BIMODAL_NOISE).share();
+        let oscillating = agreement("oscillating", &examples::overlapping_regimes()).share();
 
         assert!(
             separated >= floor,
@@ -1270,7 +1287,7 @@ mod tests {
             ("gates-agreement-separated.svg", examples::clean_step()),
             (
                 "gates-agreement-oscillating.svg",
-                examples::STATIONARY_BIMODAL_NOISE.to_vec(),
+                examples::overlapping_regimes(),
             ),
         ] {
             let svg = content(path);
@@ -1284,7 +1301,7 @@ mod tests {
     /// The grid is only evidence if it is drawing the same quantity the gate judged.
     #[test]
     fn the_oscillating_grid_draws_the_share_the_detector_computed() {
-        let values = examples::STATIONARY_BIMODAL_NOISE.to_vec();
+        let values = examples::overlapping_regimes();
         let series = examples::series("bimodal", &values, EXAMPLE_KIND, 0);
         let (_, log) = judge(&series);
         let judged = outcome_of(&log, GateStage::ChangePoint, Gate::RegimeSeparation)
@@ -1301,7 +1318,7 @@ mod tests {
 
     #[test]
     fn the_oscillating_series_is_declined_by_the_separation_gate() {
-        let values = examples::STATIONARY_BIMODAL_NOISE.to_vec();
+        let values = examples::overlapping_regimes();
         let series = examples::series("bimodal", &values, EXAMPLE_KIND, 0);
 
         let (_, log) = judge(&series);

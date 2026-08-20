@@ -142,3 +142,45 @@ book-figures-preview:
     $PSNativeCommandUseErrorActionPreference = $true
 
     cargo run --package cargo-bench-history-figures --bin cbh-figures -- preview
+
+# Regenerates the selection-adjustment calibration table embedded in cbh_stats
+# (packages/cbh_stats/src/selection/table.rs). The table is the change-point detector's honest,
+# search-corrected significance, derived per series length from the null distribution of the whole
+# procedure. Run this only when the detector's search, the series-length bounds, or the ladder
+# constants change; the derivation draws millions of orderings per row, so it is a deliberate,
+# reviewed action and never part of `just test`. Built in release: a debug derivation is far too
+# slow to be practical.
+[group('book')]
+[script]
+bench-history-calibration-write:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    cargo run --release --package cargo-bench-history-calibration --bin cbh-calibration -- write
+
+# Fails if the checked-in calibration table differs from freshly generated content. A lightweight
+# freshness test (first row re-derived exactly, plus the grid) already fails `just test` on drift;
+# this recipe runs the full multi-million-sample re-derivation, the exhaustive check the fast test
+# stands in for. Built in release for the same reason as the write recipe.
+[group('book')]
+[script]
+bench-history-calibration-check:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    cargo run --release --package cargo-bench-history-calibration --bin cbh-calibration -- check
+
+# Re-derives the calibration table from scratch and confirms it reproduces the checked-in copy
+# byte-for-byte. It is the reproducibility claim behind the committed numbers: anyone can run this
+# and observe the same table fall out. Equivalent to `-check`, named to state the intent; built in
+# release for the same reason.
+[group('book')]
+[script]
+bench-history-calibration-verify:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    cargo run --release --package cargo-bench-history-calibration --bin cbh-calibration -- verify
