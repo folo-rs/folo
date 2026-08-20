@@ -27,13 +27,33 @@ pub const MIN_REGIME: usize = 5;
 /// only produce noise.
 pub const MIN_SERIES_POINTS: usize = 2 * MIN_REGIME;
 
-/// Default `change_alpha`: the significance level a change-point's Mann–Whitney
-/// rank test must clear.
-pub const CHANGE_ALPHA: f64 = 0.05;
+/// The most points any one series is analyzed over: older points beyond this count are
+/// dropped before analysis, keeping only the most recent window.
+///
+/// The tool is designed for series of dozens to a few hundred points; see
+/// `docs/DESIGN.md`, "Supported series length". The cap bounds how far the search for a
+/// step looks back, which is what the selection correction is calibrated against — the
+/// correction table (`cbh_stats::change_point_adjusted_p`) carries a row for every length
+/// up to this value, so a capped series always has an exact calibration and no input can
+/// exceed the table. The value sits well above any realistic history, so the cap changes
+/// nothing in ordinary use; it exists so an unusually long series cannot outrun the table.
+pub const MAX_SERIES_POINTS: usize = 1000;
 
-/// Default `fdr_q`: the Benjamini–Hochberg target false-discovery rate over a batch
-/// of candidates.
-pub const FDR_Q: f64 = 0.10;
+/// The largest selection-adjusted chance level a change-point's Mann–Whitney rank test
+/// may report and still be treated as a finding.
+///
+/// The conventional 5% significance level: a finding this gate admits would arise by
+/// chance at most about one time in twenty on a series with no real step.
+pub const MAX_CHANGE_CHANCE_LEVEL: f64 = 0.05;
+
+/// The Benjamini–Hochberg target false-discovery rate over a batch of candidates: at most
+/// this fraction of the reported findings is expected to be a false alarm.
+///
+/// Set looser than [`MAX_CHANGE_CHANCE_LEVEL`] because it governs the expected *proportion*
+/// of false findings across a whole batch rather than the chance of any single false
+/// finding, and a 10% false-discovery rate keeps the reported set trustworthy without
+/// discarding genuine regressions that a stricter rate would cull.
+pub const TARGET_FALSE_DISCOVERY_RATE: f64 = 0.10;
 
 /// Default `drift_min_points`: a series needs at least this many points before a
 /// slow-drift finding is considered.
@@ -42,9 +62,12 @@ pub const FDR_Q: f64 = 0.10;
 /// minimum evidence and a series is either evaluable by both or by neither.
 pub const DRIFT_MIN_POINTS: usize = MIN_SERIES_POINTS;
 
-/// Default `drift_alpha`: the significance level a drift's Mann–Kendall trend must
-/// clear.
-pub const DRIFT_ALPHA: f64 = 0.05;
+/// The largest selection-adjusted chance level a drift's Mann–Kendall trend test may
+/// report and still be treated as a finding.
+///
+/// Held equal to [`MAX_CHANGE_CHANCE_LEVEL`] so both history detectors admit a finding at
+/// the same conventional 5% significance level.
+pub const MAX_DRIFT_CHANCE_LEVEL: f64 = 0.05;
 
 /// Default `practical_relative`: a history move must shift the level by at least
 /// this fraction to matter in practice, regardless of significance.

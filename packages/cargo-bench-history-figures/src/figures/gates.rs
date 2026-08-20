@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 use std::iter;
 
 use cbh_detect::{
-    BRANCH_NOISE_MULTIPLE, BRANCH_PRACTICAL_RELATIVE, CHANGE_ALPHA, DRIFT_ALPHA, DRIFT_MIN_POINTS,
+    BRANCH_NOISE_MULTIPLE, BRANCH_PRACTICAL_RELATIVE, MAX_CHANGE_CHANCE_LEVEL, MAX_DRIFT_CHANCE_LEVEL, DRIFT_MIN_POINTS,
     DRIFT_NOISE_MULTIPLE, Finding, Gate, GateLog, GateOutcome, GateStage, MIN_REGIME,
     MIN_REGIME_SEPARATION, MIN_SERIES_POINTS, PRACTICAL_RELATIVE, RESIDUAL_NOISE_MULTIPLE, Series,
     evaluate_with_log, examples,
@@ -163,8 +163,8 @@ fn demanded(gate: Gate, stage: GateStage) -> String {
         )
         .to_owned(),
         Gate::Significance => match stage {
-            GateStage::Drift => format!("p < {}", chance(DRIFT_ALPHA)),
-            _ => format!("p < {}", chance(CHANGE_ALPHA)),
+            GateStage::Drift => format!("p < {}", chance(MAX_DRIFT_CHANCE_LEVEL)),
+            _ => format!("p < {}", chance(MAX_CHANGE_CHANCE_LEVEL)),
         },
         Gate::RegimeSeparation => share(MIN_REGIME_SEPARATION),
         Gate::IntervalDisjoint => "the two intervals must not overlap".to_owned(),
@@ -1163,8 +1163,8 @@ mod tests {
             commits(MIN_SERIES_POINTS),
             percent(PRACTICAL_RELATIVE),
             percent(BRANCH_PRACTICAL_RELATIVE),
-            format!("p < {}", chance(CHANGE_ALPHA)),
-            format!("p < {}", chance(DRIFT_ALPHA)),
+            format!("p < {}", chance(MAX_CHANGE_CHANCE_LEVEL)),
+            format!("p < {}", chance(MAX_DRIFT_CHANCE_LEVEL)),
             format!("{}× the typical residual", number(RESIDUAL_NOISE_MULTIPLE)),
             format!("{}× the reported half-width", number(DRIFT_NOISE_MULTIPLE)),
             format!("{}× the reported half-width", number(BRANCH_NOISE_MULTIPLE)),

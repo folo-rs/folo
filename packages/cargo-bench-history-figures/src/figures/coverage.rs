@@ -10,7 +10,7 @@
 
 use std::fmt::Write as _;
 
-use cbh_detect::{FDR_Q, SeriesCensus, Testability, UnjudgedReason};
+use cbh_detect::{TARGET_FALSE_DISCOVERY_RATE, SeriesCensus, Testability, UnjudgedReason};
 use cbh_render::{Coverage, CoverageState};
 use plotters::style::RGBColor;
 
@@ -99,7 +99,7 @@ fn judge(candidates: &[(&str, f64)], family_size: usize) -> Vec<Judged> {
 
 /// The target expected false-discovery proportion for reported findings.
 fn fdr_q() -> f64 {
-    FDR_Q
+    TARGET_FALSE_DISCOVERY_RATE
 }
 
 /// The threshold associated with `rank` in a family of `family_size`.
@@ -771,12 +771,12 @@ mod tests {
     /// the share it derives from is the policy one.
     #[test]
     fn every_threshold_derives_from_the_policy_false_discovery_share() {
-        assert!((fdr_q() - FDR_Q).abs() < f64::EPSILON);
+        assert!((fdr_q() - TARGET_FALSE_DISCOVERY_RATE).abs() < f64::EPSILON);
         assert!(
-            (threshold_at(1, 1) - FDR_Q).abs() < f64::EPSILON,
+            (threshold_at(1, 1) - TARGET_FALSE_DISCOVERY_RATE).abs() < f64::EPSILON,
             "the last rank's threshold in a family of one is the share itself"
         );
-        assert!(content("coverage-staircase.md").contains(&percent(FDR_Q)));
+        assert!(content("coverage-staircase.md").contains(&percent(TARGET_FALSE_DISCOVERY_RATE)));
     }
 
     /// The census figure is an account, so every series it draws must be one the census

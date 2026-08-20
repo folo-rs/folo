@@ -1034,8 +1034,8 @@ fn evaluate_change_point(series: &Series, values: &[f64], log: &mut GateLog) -> 
     if !log.numeric(
         Gate::Significance,
         mann_whitney,
-        noise_gates::CHANGE_ALPHA,
-        mann_whitney < noise_gates::CHANGE_ALPHA,
+        noise_gates::MAX_CHANGE_CHANCE_LEVEL,
+        mann_whitney < noise_gates::MAX_CHANGE_CHANCE_LEVEL,
     ) {
         return None;
     }
@@ -1124,8 +1124,8 @@ fn evaluate_drift(series: &Series, values: &[f64], log: &mut GateLog) -> Option<
     if !log.numeric(
         Gate::Significance,
         trend.p_value,
-        noise_gates::DRIFT_ALPHA,
-        trend.p_value < noise_gates::DRIFT_ALPHA,
+        noise_gates::MAX_DRIFT_CHANCE_LEVEL,
+        trend.p_value < noise_gates::MAX_DRIFT_CHANCE_LEVEL,
     ) {
         return None;
     }
@@ -1404,7 +1404,7 @@ fn base_regime_split_qualifies(series: &Series, levels: &[f64], split: usize) ->
     }
     let mann_whitney_u = stats::MannWhitneyU::new(before, after);
     let mann_whitney = mann_whitney_u.map_or(1.0, |ranked| ranked.two_sided_p_value());
-    if mann_whitney >= noise_gates::CHANGE_ALPHA {
+    if mann_whitney >= noise_gates::MAX_CHANGE_CHANCE_LEVEL {
         return false;
     }
     regimes_are_separated(
@@ -1558,8 +1558,8 @@ fn compare_branch_levels(
     if !log.numeric(
         Gate::Significance,
         effective_p,
-        noise_gates::CHANGE_ALPHA,
-        effective_p < noise_gates::CHANGE_ALPHA,
+        noise_gates::MAX_CHANGE_CHANCE_LEVEL,
+        effective_p < noise_gates::MAX_CHANGE_CHANCE_LEVEL,
     ) {
         return None;
     }
@@ -1783,7 +1783,7 @@ pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Detection {
 /// [`testability`]) is never evaluated and is accounted for in the returned
 /// [`SeriesCensus`] instead.
 /// Surviving candidates are screened to the directions the mode reports and then pass
-/// a Benjamini–Hochberg false-discovery filter at [`FDR_Q`](noise_gates::FDR_Q), so
+/// a Benjamini–Hochberg false-discovery filter at [`TARGET_FALSE_DISCOVERY_RATE`](noise_gates::TARGET_FALSE_DISCOVERY_RATE), so
 /// every reported finding is one the correction rejected. Findings are ordered by
 /// descending relative move, then method, then a stable identity tie-break.
 ///
@@ -1890,7 +1890,7 @@ fn finalize_findings(
     // what the census counted as judged.
     let family_size = census.judged();
     let candidate_p: Vec<f64> = candidates.iter().map(|candidate| candidate.bh_p).collect();
-    let keep = stats::benjamini_hochberg(&candidate_p, noise_gates::FDR_Q, family_size);
+    let keep = stats::benjamini_hochberg(&candidate_p, noise_gates::TARGET_FALSE_DISCOVERY_RATE, family_size);
     let mut keep_iter = keep.into_iter();
 
     // `candidates` and `candidate_p` were built in the same order, so advancing
@@ -2111,8 +2111,8 @@ mod tests {
     use super::*;
     use crate::detect::gate_log::GateOutcome;
     use crate::detect::noise_gates::{
-        BRANCH_PRACTICAL_RELATIVE, CHANGE_ALPHA, COMPARE_WINDOW, DRIFT_ALPHA, DRIFT_MIN_POINTS,
-        DRIFT_NOISE_MULTIPLE, EXCURSION_MAX_REMOVALS, FDR_Q, MIN_BASE_SPLIT_SEPARATION, MIN_REGIME,
+        BRANCH_PRACTICAL_RELATIVE, MAX_CHANGE_CHANCE_LEVEL, COMPARE_WINDOW, MAX_DRIFT_CHANCE_LEVEL, DRIFT_MIN_POINTS,
+        DRIFT_NOISE_MULTIPLE, EXCURSION_MAX_REMOVALS, TARGET_FALSE_DISCOVERY_RATE, MIN_BASE_SPLIT_SEPARATION, MIN_REGIME,
         MIN_REGIME_SEPARATION, MIN_SERIES_POINTS, PRACTICAL_ABSOLUTE_COUNT, PRACTICAL_RELATIVE,
         RESIDUAL_NOISE_MULTIPLE,
     };
@@ -2666,7 +2666,7 @@ mod tests {
     #[test]
     fn change_point_significance_is_measured_against_the_fixed_alpha() {
         // The rank-test gate compares the Mann–Whitney p-value against the fixed
-        // CHANGE_ALPHA. A clean step reports, and its recorded p sits strictly below
+        // MAX_CHANGE_CHANCE_LEVEL. A clean step reports, and its recorded p sits strictly below
         // that alpha — so the gate's comparison and its direction are pinned without
         // relying on a per-run alpha. (The `<`-vs-`<=` distinction at a p landing
         // exactly on alpha is not reachable: the rank statistic's p-values are discrete
@@ -2681,11 +2681,11 @@ mod tests {
         );
         let (p, alpha) = gate_value(&log, Gate::Significance).expect("the significance gate ran");
         assert_eq!(
-            alpha, CHANGE_ALPHA,
+            alpha, MAX_CHANGE_CHANCE_LEVEL,
             "the gate compares against the fixed alpha"
         );
         assert!(
-            p < CHANGE_ALPHA,
+            p < MAX_CHANGE_CHANCE_LEVEL,
             "the reported step's p sits below alpha: {p}"
         );
     }
@@ -3416,7 +3416,7 @@ mod tests {
             evaluate_branch(&series, &mut GateLog::disabled()).expect("48 bytes is a move");
         assert_eq!(candidate.finding.direction, Direction::Regression);
         assert_eq!(candidate.finding.latest, 48.0);
-        assert!(candidate.bh_p < CHANGE_ALPHA, "{}", candidate.bh_p);
+        assert!(candidate.bh_p < MAX_CHANGE_CHANCE_LEVEL, "{}", candidate.bh_p);
     }
 
     #[test]
@@ -3476,7 +3476,7 @@ mod tests {
         let candidate = evaluate_branch(&series, &mut GateLog::disabled())
             .expect("an 8% move on a quiet base is detectable");
         assert_eq!(candidate.finding.direction, Direction::Regression);
-        assert!(candidate.bh_p < CHANGE_ALPHA, "{}", candidate.bh_p);
+        assert!(candidate.bh_p < MAX_CHANGE_CHANCE_LEVEL, "{}", candidate.bh_p);
     }
 
     #[test]
@@ -3900,7 +3900,7 @@ mod tests {
     #[test]
     fn compare_samples_significance_is_measured_against_the_fixed_alpha() {
         // Branch significance is the prediction-interval p-value tested against
-        // CHANGE_ALPHA. An 8% move on a quiet base clears it decisively; the recorded
+        // MAX_CHANGE_CHANCE_LEVEL. An 8% move on a quiet base clears it decisively; the recorded
         // gate pins both the threshold and that the move sits below it.
         let series = wall_series(&[100.0], 1.0);
         let before = base_window(100.0, 0.5);
@@ -3915,8 +3915,8 @@ mod tests {
         );
         let (p, threshold) =
             gate_value(&log, Gate::Significance).expect("the significance gate ran");
-        assert_eq!(threshold, CHANGE_ALPHA);
-        assert!(p < CHANGE_ALPHA, "{p}");
+        assert_eq!(threshold, MAX_CHANGE_CHANCE_LEVEL);
+        assert!(p < MAX_CHANGE_CHANCE_LEVEL, "{p}");
     }
 
     #[test]
@@ -3983,13 +3983,13 @@ mod tests {
         // with the size of the move rather than being pinned to a constant: the same
         // base window judges a 6% move less confidently than a 10% one. Both stay
         // below 1 (a mutated `1 + p` / `1 / p` would clamp to 1) and neither lands on
-        // `1 - CHANGE_ALPHA`, the placeholder confidence a fixed p-value would give.
+        // `1 - MAX_CHANGE_CHANCE_LEVEL`, the placeholder confidence a fixed p-value would give.
         let before = base_window(100.0, 0.5);
         let modest = compare(&before, &pts(&[(106.0, 0.5)])).unwrap();
         let large = compare(&before, &pts(&[(110.0, 0.5)])).unwrap();
         assert!(modest.finding.confidence < large.finding.confidence);
         assert!(large.finding.confidence < 1.0);
-        assert!(modest.finding.confidence > 1.0 - CHANGE_ALPHA);
+        assert!(modest.finding.confidence > 1.0 - MAX_CHANGE_CHANCE_LEVEL);
     }
 
     #[test]
@@ -4096,7 +4096,7 @@ mod tests {
 
     #[test]
     fn drift_significance_is_measured_against_the_fixed_alpha() {
-        // The Mann–Kendall gate tests the trend p-value against DRIFT_ALPHA. A clean
+        // The Mann–Kendall gate tests the trend p-value against MAX_DRIFT_CHANCE_LEVEL. A clean
         // ramp clears it decisively; the recorded gate pins both the threshold and that
         // the trend sits below it.
         let series = series_of(&ramp(100.0, 4.0, MIN_SERIES_POINTS));
@@ -4107,8 +4107,8 @@ mod tests {
         );
         let (p, threshold) =
             gate_value(&log, Gate::Significance).expect("the significance gate ran");
-        assert_eq!(threshold, DRIFT_ALPHA);
-        assert!(p < DRIFT_ALPHA, "{p}");
+        assert_eq!(threshold, MAX_DRIFT_CHANCE_LEVEL);
+        assert!(p < MAX_DRIFT_CHANCE_LEVEL, "{p}");
     }
 
     #[test]
@@ -4220,17 +4220,17 @@ mod tests {
     }
 
     /// The judged family the direction-order case is corrected against. Ten makes the
-    /// first two Benjamini–Hochberg thresholds `FDR_Q / 10` and `FDR_Q / 5`, far enough
+    /// first two Benjamini–Hochberg thresholds `TARGET_FALSE_DISCOVERY_RATE / 10` and `TARGET_FALSE_DISCOVERY_RATE / 5`, far enough
     /// apart to seat a p-value strictly between them.
     const DIRECTION_ORDER_FAMILY: usize = 10;
 
-    /// The improvement's p-value, as a fraction of `FDR_Q`. Well under the rank-1
-    /// threshold (`FDR_Q / 10`), so it is rejected under either order and always takes
+    /// The improvement's p-value, as a fraction of `TARGET_FALSE_DISCOVERY_RATE`. Well under the rank-1
+    /// threshold (`TARGET_FALSE_DISCOVERY_RATE / 10`), so it is rejected under either order and always takes
     /// rank 1 away from the regression.
     const DIRECTION_ORDER_IMPROVEMENT_P: f64 = 0.01;
 
-    /// The regression's p-value, as a fraction of `FDR_Q`. Chosen to sit strictly
-    /// between the rank-1 threshold (`FDR_Q / 10`) and the rank-2 one (`FDR_Q / 5`), so
+    /// The regression's p-value, as a fraction of `TARGET_FALSE_DISCOVERY_RATE`. Chosen to sit strictly
+    /// between the rank-1 threshold (`TARGET_FALSE_DISCOVERY_RATE / 10`) and the rank-2 one (`TARGET_FALSE_DISCOVERY_RATE / 5`), so
     /// its survival depends entirely on which rank it lands at — which is exactly what
     /// the screening order decides.
     const DIRECTION_ORDER_REGRESSION_P: f64 = 0.15;
@@ -4286,15 +4286,15 @@ mod tests {
     /// screen is a no-op — must report both.
     #[test]
     fn history_screens_direction_before_the_correction() {
-        let improvement_p = FDR_Q * DIRECTION_ORDER_IMPROVEMENT_P;
-        let regression_p = FDR_Q * DIRECTION_ORDER_REGRESSION_P;
+        let improvement_p = TARGET_FALSE_DISCOVERY_RATE * DIRECTION_ORDER_IMPROVEMENT_P;
+        let regression_p = TARGET_FALSE_DISCOVERY_RATE * DIRECTION_ORDER_REGRESSION_P;
 
         // Bind the case to the thresholds it is built around, so a moved gate fails here
         // rather than silently leaving the two orders in agreement.
         let family = count_to_f64(DIRECTION_ORDER_FAMILY);
-        assert!(improvement_p < FDR_Q / family);
-        assert!(regression_p > FDR_Q / family);
-        assert!(regression_p < FDR_Q * 2.0 / family);
+        assert!(improvement_p < TARGET_FALSE_DISCOVERY_RATE / family);
+        assert!(regression_p > TARGET_FALSE_DISCOVERY_RATE / family);
+        assert!(regression_p < TARGET_FALSE_DISCOVERY_RATE * 2.0 / family);
 
         let series = vec![
             named_series("improving", &[100.0, 70.0]),
@@ -4470,9 +4470,9 @@ mod tests {
         assert_eq!(stats::sample_std_dev(&flat), Some(0.0));
         assert_eq!(prediction_interval_p(&flat, 1005.0, 0.0), None);
         let large = prediction_interval_p(&flat, 1005.0, 1.0).unwrap();
-        assert!(large < CHANGE_ALPHA, "{large}");
+        assert!(large < MAX_CHANGE_CHANCE_LEVEL, "{large}");
         let at_the_quantum = prediction_interval_p(&flat, 1001.0, 1.0).unwrap();
-        assert!(at_the_quantum >= CHANGE_ALPHA, "{at_the_quantum}");
+        assert!(at_the_quantum >= MAX_CHANGE_CHANCE_LEVEL, "{at_the_quantum}");
     }
 
     #[test]
@@ -5032,7 +5032,7 @@ mod tests {
             &[branch_over_base(100.0, 140.0, 1)],
             Some(base_merge_base()),
         ));
-        let placeholder = 1.0 - CHANGE_ALPHA;
+        let placeholder = 1.0 - MAX_CHANGE_CHANCE_LEVEL;
         assert!(modest.confidence < large.confidence);
         assert!(large.confidence < 1.0);
         assert!((modest.confidence - placeholder).abs() > 1e-9, "{modest:?}");
@@ -5448,7 +5448,7 @@ mod tests {
                 stage: GateStage::Drift,
                 gate: Gate::Significance,
                 // No pair of points is ordered, so the rank test reports no trend at all.
-                compared: Some((1.0, DRIFT_ALPHA)),
+                compared: Some((1.0, MAX_DRIFT_CHANCE_LEVEL)),
             },
             DeclinedCase {
                 shape: "a climb smaller than the measurement noise band",

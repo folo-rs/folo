@@ -7,7 +7,7 @@
 //! that into a failing test rather than into prose that has quietly become wrong.
 
 use cbh_detect::{
-    AnalysisMode, CHANGE_ALPHA, COMPARE_WINDOW, DRIFT_MIN_POINTS, Finding, MIN_REGIME,
+    AnalysisMode, MAX_CHANGE_CHANCE_LEVEL, COMPARE_WINDOW, DRIFT_MIN_POINTS, Finding, MIN_REGIME,
     MIN_SERIES_POINTS, Series, evaluate_with_log, examples,
 };
 use cbh_model::MetricKind;
@@ -120,7 +120,7 @@ const BRANCH_CASES: [(&str, f64, &str); 2] = [
 /// This is the detector's prediction interval at its own significance level, not an
 /// illustrative width: from the same cleaned base sample the significance gate reads, it is
 /// the range a single further measurement stays inside unless its two-sided Student-t
-/// p-value falls below [`CHANGE_ALPHA`](cbh_detect::CHANGE_ALPHA). A context run drawn
+/// p-value falls below [`MAX_CHANGE_CHANCE_LEVEL`](cbh_detect::MAX_CHANGE_CHANCE_LEVEL). A context run drawn
 /// outside this band is therefore exactly one the significance gate rejects, so the band is
 /// the real cutoff the figure's verdict turns on.
 fn branch_prediction_band(values: &[f64]) -> (f64, f64) {
@@ -129,7 +129,7 @@ fn branch_prediction_band(values: &[f64]) -> (f64, f64) {
         .expect("the branch figure's base window has enough points to estimate scatter");
     let sample_count = crate::coord::of(values.len());
     let standard_error = scatter * (1.0 + 1.0 / sample_count).sqrt();
-    let half_width = standard_error * critical_t(CHANGE_ALPHA, sample_count - 1.0);
+    let half_width = standard_error * critical_t(MAX_CHANGE_CHANCE_LEVEL, sample_count - 1.0);
     (centre - half_width, centre + half_width)
 }
 
