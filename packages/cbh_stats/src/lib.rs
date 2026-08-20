@@ -25,6 +25,7 @@
 
 mod normal;
 mod p_value;
+pub mod selection;
 mod stats;
 mod student_t;
 

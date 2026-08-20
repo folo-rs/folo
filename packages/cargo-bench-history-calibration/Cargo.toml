@@ -1,0 +1,27 @@
+# Cargo expects dashes in tool-style crate names. Okay.
+[package]
+name = "cargo-bench-history-calibration"
+description = "Generates the selection-adjustment calibration table embedded in cbh_stats"
+publish = false
+version = "0.0.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+
+# The generator drives no other workspace crate at build time: its statistical core is
+# self-contained (see `src/permutation.rs`) so the `write` binary can regenerate the committed
+# table even when `cbh_stats` does not yet compile. The equivalence to production is proven in
+# tests instead, which is why `cbh_stats` and `cbh_detect` are dev-dependencies only.
+[dev-dependencies]
+cbh_detect = { path = "../cbh_detect", default-features = false }
+cbh_stats = { path = "../cbh_stats", default-features = false }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
