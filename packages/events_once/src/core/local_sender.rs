@@ -39,8 +39,12 @@ where
         let mut this = ManuallyDrop::new(self);
 
         if LocalEvent::set(&this.event_ref, value) == Err(Disconnected) {
-            // The other endpoint has disconnected, so we need to clean up the event.
-            this.event_ref.release_event();
+            // SAFETY: `set()` reported that the receiver had already disconnected, which is the
+            // transition that grants this sender sole cleanup responsibility, and we do not
+            // access the event afterwards.
+            unsafe {
+                this.event_ref.release_event();
+            }
         }
 
         // SAFETY: The field contains a valid object of the right type. We avoid a double-drop
@@ -59,8 +63,12 @@ where
     #[inline]
     fn drop(&mut self) {
         if LocalEvent::sender_dropped_without_set(&self.event_ref) == Err(Disconnected) {
-            // The other endpoint has disconnected, so we need to clean up the event.
-            self.event_ref.release_event();
+            // SAFETY: `sender_dropped_without_set()` reported that the receiver had already
+            // disconnected, which is the transition that grants this sender sole cleanup
+            // responsibility, and we do not access the event afterwards.
+            unsafe {
+                self.event_ref.release_event();
+            }
         }
     }
 }

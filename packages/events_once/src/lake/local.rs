@@ -49,9 +49,16 @@ pub struct LocalEventLake {
     core: Rc<Core>,
 }
 
-// The RefCell inside Core causes !RefUnwindSafe via auto-trait inference
-// through Rc. The pool map is only borrowed momentarily for rent/return
-// operations and cannot be observed in an inconsistent state during unwind.
+// The RefCell inside Core disables auto-trait inference for UnwindSafe/RefUnwindSafe (through
+// Rc). The only mutation of `pools` reachable through `&LocalEventLake` is the
+// `entry(...).or_insert_with(...)` call in `rent()`, and it fully constructs and inserts the
+// `PoolWrapper<T>` entry before ever delegating to the nested pool's own `rent()` (which has its
+// own, independently established unwind-safety proof). A panic unwinding out of that nested call
+// therefore finds `pools` already in the same complete state a successful `rent()` call would
+// have left behind; no half-inserted entry is ever observable. `is_empty()`, `len()`, and
+// `awaiter_backtraces()` only take a shared borrow and mutate nothing, so they cannot leave
+// behind an inconsistent map either. A caller that catches a panic from any of these paths and
+// keeps using the lake therefore always observes a valid, self-consistent map.
 impl UnwindSafe for LocalEventLake {}
 impl RefUnwindSafe for LocalEventLake {}
 

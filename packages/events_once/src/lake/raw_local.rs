@@ -79,21 +79,28 @@ impl RawLocalEventLake {
             pools: RefCell::new(HashedMap::default()),
         };
 
+        // This exact pointer is reconstructed into an owning `Box` exactly once, in
+        // `Drop::drop()` below, and nowhere else.
         let core_ptr = Box::into_raw(Box::new(UnsafeCell::new(core)));
 
         Self {
-            // SAFETY: Boxed object is never null.
+            // SAFETY: `Box::into_raw` never returns a null pointer.
             core: unsafe { NonNull::new_unchecked(core_ptr) },
         }
     }
 
     /// Returns a shared reference to the core.
     fn core(&self) -> &Core {
-        // SAFETY: We are the owner of the core, so we know it remains valid.
+        // SAFETY: `self.core` is the pointer produced by `Box::into_raw` in `new()`; no method
+        // reassigns or moves out of this field, so it remains valid, non-null and properly
+        // aligned for `UnsafeCell<Core>` for as long as `self` is alive. Only shared references
+        // to the pointee are ever formed (here and via `core_cell.get()` below), never `&mut
+        // Core`, so this shared reborrow cannot alias a conflicting exclusive reference.
         let core_cell = unsafe { self.core.as_ref() };
 
-        // SAFETY: We only ever create shared references to the core, so no conflicting exclusive
-        // references can exist.
+        // SAFETY: The cell holds a live, initialized `Core` per the above. We only ever create
+        // shared references to its contents, never `&mut Core`, so no conflicting exclusive
+        // reference can exist concurrently.
         unsafe { &*core_cell.get() }
     }
 
@@ -188,17 +195,28 @@ impl Default for RawLocalEventLake {
 
 impl Drop for RawLocalEventLake {
     fn drop(&mut self) {
-        // SAFETY: We are the owner of the core, so we know it remains valid.
-        // Anyone calling rent() has to promise that we outlive the rented event
-        // which means that we must be the last remaining user of the core.
+        // SAFETY: `self.core` is the unchanged pointer returned by `Box::into_raw` in `new()` —
+        // no method replaces this field and moving `self` does not move the pointee, so this is
+        // the unique place that ever converts it back into an owning `Box`, and it happens
+        // exactly once (in `Drop::drop`, which the language guarantees runs at most once).
+        // `rent()` requires callers to keep the lake alive until every rented endpoint is gone,
+        // so by the time this destructor runs, no endpoint still references the allocation and
+        // we have exclusive access to reclaim it.
         drop(unsafe { Box::from_raw(self.core.as_ptr()) });
     }
 }
 
-// The NonNull<UnsafeCell<Core>> field disables auto-trait inference for
-// UnwindSafe/RefUnwindSafe. The pointed-to data is owned by this type and
-// protected by a RefCell, so shared references cannot observe inconsistent
-// state during unwind.
+// The NonNull<UnsafeCell<Core>> field disables auto-trait inference for UnwindSafe/
+// RefUnwindSafe, the same way any raw pointer field does. The only mutation reachable through
+// `&RawLocalEventLake` is the `entry(...).or_insert_with(...)` call in `rent()`, and it fully
+// constructs and inserts the `PoolWrapper<T>` entry into `pools` before ever delegating to the
+// nested pool's own `rent()` (which has its own, independently established unwind-safety proof).
+// A panic unwinding out of that nested call therefore finds `pools` already in the same complete
+// state a successful `rent()` call would have left behind; no half-inserted entry is ever
+// observable. `is_empty()`, `len()`, and `awaiter_backtraces()` only take a shared borrow and
+// mutate nothing, so they cannot leave behind an inconsistent map either. A caller that catches a
+// panic from any of these paths and keeps using the lake therefore always observes a valid,
+// self-consistent map.
 impl UnwindSafe for RawLocalEventLake {}
 impl RefUnwindSafe for RawLocalEventLake {}
 
@@ -214,10 +232,18 @@ impl<T: 'static> PoolWrapper<T> {
     }
 
     fn rent(self: Pin<&Self>) -> (RawLocalPooledSender<T>, RawLocalPooledReceiver<T>) {
-        // SAFETY: Nothing is being moved here, we are just using the inner pinned value.
+        // SAFETY: The wrapper is reached only as `Pin<&PoolWrapper<T>>` (see `rent()` on
+        // `RawLocalEventLake`, which pins the value once it is stored in the map and never moves
+        // it out again). `inner` is a private, directly-owned field that no method ever replaces,
+        // swaps or moves out of, so it cannot move independently of the wrapper while the wrapper
+        // remains pinned. Projecting to `&inner` is therefore a valid structural pin projection.
         let inner = unsafe { self.map_unchecked(|s| &s.inner) };
 
-        // SAFETY: Forwarding safety guarantees from caller of top-level rent().
+        // SAFETY: The top-level `RawLocalEventLake::rent()` caller promises the lake outlives
+        // the returned endpoints. The lake owns the pools map and, transitively through this
+        // `PoolWrapper`, the `inner` pool for as long as the lake itself lives (the map entry is
+        // never removed except when the whole lake is dropped), so that same caller guarantee
+        // covers `inner` for the duration required by `RawLocalEventPool::rent()`.
         unsafe { inner.rent() }
     }
 }

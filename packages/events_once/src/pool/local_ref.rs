@@ -10,9 +10,14 @@ use std::rc::Rc;
 use crate::LocalPoolCore;
 use crate::{LocalEvent, LocalRef, destroy_local_event};
 
+/// References an event rented from a [`LocalEventPool`][crate::LocalEventPool].
+///
+/// The slot of a rented event is owned by the pointer to it, not by the pool, so releasing the
+/// event needs neither the pool nor a borrow of it (see `local_state.rs`). The shared owner of
+/// the pool core exists only in debug builds, where the event must be removed from the pool's
+/// diagnostic registry before it is destroyed.
 pub(crate) struct PooledLocalRef<T: 'static> {
-    // Releasing an event does not need the pool, so this only exists in debug builds, where the
-    // event must be removed from the pool's diagnostic registry before it is destroyed.
+    // Only debug builds need the core, to reach the diagnostic registry.
     #[cfg(debug_assertions)]
     core: Rc<LocalPoolCore<T>>,
 
@@ -20,8 +25,15 @@ pub(crate) struct PooledLocalRef<T: 'static> {
 }
 
 impl<T: 'static> PooledLocalRef<T> {
+    /// Creates a reference to an event rented from a pool.
+    ///
+    /// # Safety
+    ///
+    /// The event must be one that `LocalPoolState::rent()` returned and that has not yet been
+    /// released, in debug builds from the state inside `core`. Nothing may create an exclusive
+    /// reference to the event while any endpoint created from this reference can access it.
     #[must_use]
-    pub(crate) fn new(
+    pub(crate) unsafe fn new(
         #[cfg(debug_assertions)] core: Rc<LocalPoolCore<T>>,
         event: NonNull<UnsafeCell<LocalEvent<T>>>,
     ) -> Self {
@@ -43,15 +55,22 @@ impl<T: 'static> Clone for PooledLocalRef<T> {
     }
 }
 
-impl<T: 'static> LocalRef<T> for PooledLocalRef<T> {
+// SAFETY: The caller of `new()` guaranteed that the event was rented from the pool and has not
+// been released, so it is initialized and stays at a fixed address in the pool's storage, which
+// outlives every event rented from it. Everything that reaches the event - the endpoints holding
+// this reference and its clones, plus the pool's diagnostic registry in debug builds - creates
+// only shared references, and the caller guaranteed that nothing creates an exclusive one.
+// `release_event()` returns the slot through `destroy_local_event()`, the release operation of
+// this storage strategy, and the reference does not touch the event afterwards.
+unsafe impl<T: 'static> LocalRef<T> for PooledLocalRef<T> {
     #[inline]
-    fn release_event(&self) {
+    unsafe fn release_event(&self) {
         #[cfg(debug_assertions)]
         self.core.state.borrow_mut().unregister(self.event);
 
-        // SAFETY: The event state machine guarantees that nothing references the event once it
-        // signals that it needs to be cleaned up now, so we hold the last reference and this is
-        // the only release of this event.
+        // SAFETY: The pointer came from the pool state's `rent()`, as the `new()` contract
+        // requires. The caller was granted sole cleanup ownership of the event by the state
+        // machine, so this is the only release of this event and nothing accesses it afterwards.
         unsafe {
             destroy_local_event(self.event);
         }
@@ -62,8 +81,12 @@ impl<T: 'static> Deref for PooledLocalRef<T> {
     type Target = UnsafeCell<LocalEvent<T>>;
 
     fn deref(&self) -> &Self::Target {
-        // SAFETY: The event state machine guarantees that the event stays alive for as long as
-        // any endpoint references it.
+        // SAFETY: Validity: the `new()` contract gives us a rented, initialized event that keeps
+        // its address in pool storage that outlives it, and cleanup ownership is granted to a
+        // single endpoint, so the event is not yet released while any endpoint can call this.
+        // Aliasing: the event is reached only through shared references, whether from an
+        // endpoint or from the pool's debug-only registry, which is what its interior mutability
+        // requires.
         unsafe { self.event.as_ref() }
     }
 }

@@ -5,7 +5,7 @@
 )]
 #[derive(Debug, Eq, PartialEq)]
 pub enum IntoValueError<R> {
-    /// The value has not yet been sent.
+    /// The event has not completed yet, so neither a value nor a disconnection is available.
     ///
     /// This error returns the receiver `R` to the caller so they can try again later.
     Pending(R),
@@ -19,10 +19,13 @@ pub enum IntoValueError<R> {
 mod tests {
     use std::panic::{RefUnwindSafe, UnwindSafe};
 
-    use static_assertions::assert_impl_all;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::*;
 
-    // IntoValueError is UnwindSafe/RefUnwindSafe when R is.
+    // This type carries the receiver and adds no state of its own, so unwind safety is exactly
+    // the receiver's. The negative case uses a minimally qualified stand-in that lacks unwind
+    // safety, pinning that the enum neither adds nor removes the property.
     assert_impl_all!(IntoValueError<u32>: UnwindSafe, RefUnwindSafe);
+    assert_not_impl_any!(IntoValueError<Box<dyn Send>>: UnwindSafe, RefUnwindSafe);
 }

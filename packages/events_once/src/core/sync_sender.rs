@@ -48,7 +48,13 @@ where
 
         if Event::set(&this.event_ref, value) == Err(Disconnected) {
             // The other endpoint has disconnected, so we need to clean up the event.
-            this.event_ref.release_event();
+
+            // SAFETY: `set` reporting disconnection is how the state machine assigns cleanup
+            // ownership to the sender, which by then is the last endpoint. The sender is
+            // consumed here, so nothing accesses the event after this call.
+            unsafe {
+                this.event_ref.release_event();
+            }
         }
 
         // SAFETY: The field contains a valid object of the right type. We avoid a double-drop
@@ -68,7 +74,13 @@ where
     fn drop(&mut self) {
         if Event::sender_dropped_without_set(&self.event_ref) == Err(Disconnected) {
             // The other endpoint has disconnected, so we need to clean up the event.
-            self.event_ref.release_event();
+
+            // SAFETY: `sender_dropped_without_set` reporting disconnection is how the state
+            // machine assigns cleanup ownership to the sender, which by then is the last
+            // endpoint. The sender is being dropped, so nothing accesses the event afterwards.
+            unsafe {
+                self.event_ref.release_event();
+            }
         }
     }
 }
