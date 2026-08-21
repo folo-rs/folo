@@ -4,11 +4,11 @@
 //! ratios of active futures, and a steady-state churn shape at a small and a large
 //! long-lived population.
 //!
-//! The churn scenarios (`*_transient_churn`) primarily guard allocation behaviour. They
-//! hold a population of futures that never complete while repeatedly pushing, polling and
-//! popping a transient future of the same layout. An allocator with per-object reuse stops
-//! requesting backing allocations after warm-up. An allocator that only reclaims whole
-//! chunks continues requesting storage because the long-lived futures pin those chunks.
+//! The churn scenarios (`*_transient_churn`) guard steady-state allocation and execution
+//! costs. They hold a population of futures that never complete while repeatedly pushing,
+//! polling and popping a transient future of the same layout. The allocation report confirms
+//! that the bounded workload stops requesting backing storage after warm-up, while the low
+//! and high populations expose any occupancy-sensitive execution cost.
 //!
 //! Allocation counts and processor time are tracked alongside the wall-clock measurement
 //! and reported when the benchmark run finishes.
