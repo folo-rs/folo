@@ -70,6 +70,9 @@ impl<T> FutureDequeCore<T> {
     }
 
     /// Adds a pre-erased future handle to the back of the deque.
+    // Inlining keeps pooled waker allocation and deque insertion in the caller; the
+    // Callgrind push benchmarks exercise this hot path directly.
+    #[inline]
     pub(crate) fn push_back_handle(&mut self, handle: ErasedFutureHandle<T>) {
         let meta = waker_meta::create_waker_meta(&self.shared_parent);
         let waker = waker_meta::make_waker(meta);
@@ -81,6 +84,8 @@ impl<T> FutureDequeCore<T> {
     }
 
     /// Adds a pre-erased future handle to the front of the deque.
+    // Inlining mirrors the measured back-insertion path so both ends have the same cost model.
+    #[inline]
     pub(crate) fn push_front_handle(&mut self, handle: ErasedFutureHandle<T>) {
         let meta = waker_meta::create_waker_meta(&self.shared_parent);
         let waker = waker_meta::make_waker(meta);
