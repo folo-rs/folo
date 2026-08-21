@@ -126,10 +126,12 @@ deterministic, so the same series produces the same verdict on every platform. W
 counting is practical it is exact; where it is not, observed and shuffled histories use the same
 approximation, and their comparison supplies the trustworthy chance level.
 
-This correction belongs inside Detection because it repairs how one detector searched **within
-one series**. It is not the later [multiplicity control](coverage.md), which accounts for testing
-many series. Branch mode names its comparison in advance and therefore needs no split-search
-correction.
+This correction belongs inside Detection because it repairs how the history step detector searched
+**within one series**. It is not the later [multiplicity control](coverage.md), which accounts for
+testing many series. Branch mode does not use this correction. Its final context-versus-base
+comparison is named in advance, but its optional base-window narrowing searches suffixes and split
+positions; the chance level produced after that narrowing is not adjusted for the search. See
+[Limits](limits.md#branch-mode-base-window-narrowing-is-not-selection-adjusted).
 
 ### Finding a drift
 
@@ -285,6 +287,10 @@ scatter is re-estimated from what remains. A wrong boundary can collapse a noisy
 to almost nothing and make the next tip read as certain. A decision that discards data has to be
 more certain than one that merely reports something.
 
+The stricter gates reduce that risk, but they do not correct for trying several suffixes and split
+positions before choosing the trailing regime. The resulting chance level has the
+[branch-mode narrowing limitation](limits.md#branch-mode-base-window-narrowing-is-not-selection-adjusted).
+
 ### When one reading came from a disturbed runner
 
 A base window is a sample of what the base ref measures, and a shared machine occasionally
@@ -362,7 +368,8 @@ happening while still judging any series with a genuine history behind it.
 ## What detection hands on
 
 A candidate: the series it came from, the method that found it, the direction and size of the
-move, the commit it is attributed to, and a chance level already corrected for the detector's
-within-series choices.
+move, the commit it is attributed to, and the detector's chance level. History chance levels
+already account for the detector's within-series choices; branch chance levels carry the
+[base-window narrowing limitation](limits.md#branch-mode-base-window-narrowing-is-not-selection-adjusted).
 
 None of them is a finding yet. Next: [Noise gates](gates.md).

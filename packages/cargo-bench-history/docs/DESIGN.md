@@ -1053,11 +1053,12 @@ The chance level a finding must clear is **selection-adjusted in history mode**.
 series is examined by both detectors and at every interior split, so the raw significance of
 the split the detectors *chose* overstates how surprising it is; history mode corrects for
 that search, and for running two detectors, before applying the gate (§8.3), so the
-significance level means what it says. Branch mode makes one predetermined comparison and needs
-no such adjustment. Neither mode reports a "confidence" figure: every finding already cleared a
-small chance level, so such a number would read as near-certainty on all of them while
-discriminating between almost none. Chance levels remain internal decision inputs rather than
-finding fields; reports rank findings by the size of the move.
+significance level means what it says. Branch mode's final context-versus-base comparison is
+predetermined, but its optional base-window narrowing searches suffixes and split positions. Its
+chance level is not adjusted for that baseline selection. Neither mode reports a "confidence"
+figure: every finding already cleared a small chance level, so such a number would read as
+near-certainty on all of them while discriminating between almost none. Chance levels remain
+internal decision inputs rather than finding fields; reports rank findings by the size of the move.
 
 The **practical-magnitude floor** is a hard threshold below which no finding surfaces,
 regardless of engine, direction, mode, or how confidently it was measured. A change too small
@@ -1133,9 +1134,10 @@ has at most half the chance of raising a candidate in a direction chosen in adva
 does of raising one either way; the target is an upper bound, and this order keeps the true
 rate under it.
 
-Because every mode's verdict rests on a real p-value and on that one family definition, the
-correction applies uniformly to history and branch analysis rather than being a history-mode
-concept.
+Every candidate supplies a p-value and uses the same family definition, so the correction applies
+mechanically to history and branch analysis rather than being a history-mode concept. Its
+false-discovery guarantee still depends on each input p-value being calibrated; branch mode's
+data-selected base-window narrowing does not currently satisfy that premise.
 
 **History mode carries a second, upstream correction.** The Benjamini–Hochberg family above
 controls false discoveries *across* benchmarks; it assumes each benchmark handed it an honest
@@ -1165,9 +1167,10 @@ returns no evidence rather than estimating a favourable answer from a partial ru
 
 After this split-search adjustment, history mode doubles both detectors' chance levels to account
 for choosing between change-point and drift. The result is the honest per-series chance level that
-the significance gate and family correction both consume. Branch mode makes one predetermined
-comparison and searches no split, so it carries neither adjustment. The supported upper series
-length (§8) bounds the runtime work of scoring each permutation.
+the significance gate and family correction both consume. Branch mode does not use these history
+adjustments. Its final comparison is predetermined, but optional base-window narrowing searches
+suffixes and split positions and is not selection-adjusted. The supported upper series length (§8)
+bounds the runtime work of scoring each permutation.
 
 That same predicate is what every report accounts for (§8.9): a series is judged, counted in
 the family, and reported as judged together, or it is none of the three.

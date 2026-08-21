@@ -1,8 +1,11 @@
 # Multiplicity and coverage
 
-A gate-passing candidate has cleared every check that looks at it *individually*. Detection has
-already corrected for choices made within that series, such as searching across possible change
-points. One question remains, and no amount of scrutiny of a single series can answer it:
+A gate-passing candidate has cleared every check that looks at it *individually*. History
+detection has also corrected for choices made within that series, such as searching across
+possible change points. Branch mode has a
+[known exception](limits.md#branch-mode-base-window-narrowing-is-not-selection-adjusted) when it
+narrows the base window. One question remains, and no amount of scrutiny of a single series can
+answer it:
 
 **Given how many things were tested, should we believe this one?**
 
