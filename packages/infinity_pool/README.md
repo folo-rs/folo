@@ -6,9 +6,10 @@ Object pools with trait object support and multiple access models. Provides fast
 
 This package receives maintenance only.
 
-For the pinned pooling scenario, prefer [`plurality`](https://crates.io/crates/plurality), whose `Pool<T>` is an equivalent of `PinnedPool`. It pools a single named type, so it is not an alternative to `OpaquePool` or `BlindPool`.
-
-Where all the objects can be reclaimed together, an arena allocator such as [`multitude`](https://crates.io/crates/multitude) can take the place of a type-agnostic pool, trading per-object slot reuse for cheaper allocation.
+For owned pinned values, prefer [`plurality`](https://crates.io/crates/plurality). It offers
+`Pool<T>` for one concrete type and `MultiPool` for heterogeneous types, with detachable owning
+handles that can be type-erased. `infinity_pool` remains available where its raw manual-lifetime
+handles or macro-generated trait-object casting are required.
 
 ## Pool types
 
