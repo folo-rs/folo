@@ -180,7 +180,7 @@ against and what a user reads when a finding does not make sense.
 | 2. Collection | What `collect` and `backfill` actually do, and how runs land on commits — including the gaps a heterogeneous runner pool leaves. |
 | 3. Selection | Which stored objects are even eligible, decided from keys and topology alone; discriminant filters, `--since`, base/context, and how mode is auto-detected. |
 | 4. Reconstruction | How runs fold into series, and the four things that change what detection sees: ordering, gaps, ghosts, blessings. |
-| 5. Detection | What a signal is, which detector establishes it, and what each mode does and does not do. |
+| 5. Detection | What a signal is, which detector establishes it, how a history change point is tested fairly after searching across possible splits, and what each mode does and does not do. |
 | 6. Noise gates | Every gate, in application order, with its computation and its threshold — and that gates short-circuit. |
 | 7. Multiplicity and coverage | Why a per-series test is not enough; what the false-discovery family is and why it includes series that raised nothing; what the report means by *judged*. |
 | 8. Reporting | Ranking, the three formats plus the lossy summary, charts, comparison-base lag, and why findings never fail a build. |

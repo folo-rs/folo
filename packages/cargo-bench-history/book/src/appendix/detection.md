@@ -53,19 +53,17 @@ The step detector works in three moves.
 
 1. **Locate.** A split search scans every place the series could have changed level and picks
    the single most likely one.
-2. **Test.** A rank comparison asks, two-sided, whether the before and after regimes
-   differ. If they do not, there is no step. This is a significance test: it asks whether
-   the sides differ, not how completely they separate.
+2. **Test fairly.** A rank comparison asks, two-sided, whether the before and after regimes
+   differ. The result is corrected for having chosen the strongest of many possible splits.
 3. **Size.** Each side's median becomes its level, and the difference between them is the
    move. Medians rather than averages, so one outlier cannot invent a step or hide one.
 
 The change is attributed to **the first commit of the after-side** — the earliest commit that
 already shows the new level.
 
-> The split search reports a chance level of its own, and the tool deliberately ignores it.
-> On series this short it is far too conservative and would reject steps the rank comparison
-> establishes comfortably. The split search is used only to *locate* the boundary; the rank
-> comparison decides whether to believe it.
+> The split search's own chance level is not used as evidence. It only locates the boundary.
+> The rank comparison decides whether the regimes differ, and the correction below makes that
+> comparison fair despite the search that chose its boundary.
 
 Here is a series that steps, and the detector's own answer for it.
 
@@ -79,6 +77,59 @@ and later gates judge that single candidate.
 {{#include generated/detection-multi-step.svg}}
 
 {{#include generated/detection-multi-step.md}}
+
+### Making the winning split a fair test
+
+The step detector chooses a split **because it looked strongest**. Treating that winner as though
+someone had named it before seeing the data would give it an unfair advantage: even an unchanged
+noisy series offers many chances for one split to look persuasive by accident.
+
+```mermaid
+flowchart LR
+    S["One unchanged,<br/>noisy series"] --> A["Try split A"]
+    S --> B["Try split B"]
+    S --> C["Try split C …"]
+    A --> W{"Keep the<br/>strongest"}
+    B --> W
+    C --> W
+    W --> L["A lucky winner<br/>can look convincing"]
+```
+
+Detection corrects that advantage by comparing **winner against winner**. It repeatedly shuffles
+the same measurements into other time orders and runs the entire split search again. If shuffled
+histories often produce a winner at least as strong as the observed one, chance explains the
+apparent step. If they rarely do, the step has credible evidence.
+
+```mermaid
+flowchart LR
+    O["Observed order"] --> OS["Run the full<br/>step search"]
+    V["Same measurements,<br/>shuffled into other orders"] --> NS["Run the same full<br/>step search each time"]
+    OS --> C{"How often is a<br/>shuffled winner at<br/>least as strong?"}
+    NS --> C
+    C --> AC["Search-adjusted<br/>step chance level"]
+
+    D["Drift detector's<br/>chance level"] --> TWO["Account for trying<br/>step and drift"]
+    AC --> TWO
+    TWO --> CAN["Detection candidate"]
+    CAN --> G["Remaining noise gates"]
+```
+
+History tries both the step and drift shapes, then keeps whichever model fits the series better.
+That gives chance another opportunity to offer a lucky answer, so each detector's chance level is
+doubled before its significance gate. The correction applies whether only one detector raises a
+candidate or both do; it accounts for giving either detector an opportunity to report, and does
+not change which model wins the fit comparison.
+
+Reusing the actual measurements preserves repeated values and quantization: an integer counter
+with many ties is judged against shuffled histories with those same ties. The shuffles are
+deterministic, so the same series produces the same verdict on every platform. Where direct rank
+counting is practical it is exact; where it is not, observed and shuffled histories use the same
+approximation, and their comparison supplies the trustworthy chance level.
+
+This correction belongs inside Detection because it repairs how one detector searched **within
+one series**. It is not the later [multiplicity control](coverage.md), which accounts for testing
+many series. Branch mode names its comparison in advance and therefore needs no split-search
+correction.
 
 ### Finding a drift
 
@@ -287,8 +338,9 @@ to over-read. Four things it is not:
   It says nothing about whether the cause is your code or the machine.
 - **Not a dial you tune.** Every reported finding has already cleared its gate, so the ranking
   of importance is left to the *size of move*, not to how small a chance level came out.
-- **Not adjusted for how much was tested.** The [group-wide correction](coverage.md) runs
-  afterwards and does not feed back into it.
+- **Not the family-wide result.** A history change point has already been corrected for its
+  internal split search. The [group-wide correction](coverage.md) runs afterwards to account for
+  how many series were tested and does not feed back into this chance level.
 - **Not comparable across modes.** History and branch chance levels come from different tests
   answering different questions.
 
@@ -310,6 +362,7 @@ happening while still judging any series with a genuine history behind it.
 ## What detection hands on
 
 A candidate: the series it came from, the method that found it, the direction and size of the
-move, the commit it is attributed to, and the chance level of the confirming test.
+move, the commit it is attributed to, and a chance level already corrected for the detector's
+within-series choices.
 
 None of them is a finding yet. Next: [Noise gates](gates.md).

@@ -1,7 +1,8 @@
 # Noise gates
 
-[Detection](detection.md) produces candidates. This chapter is the set of checks that decides
-which of them are worth your attention.
+[Detection](detection.md) produces candidates whose chance levels already account for the
+detector's within-series choices, including the step detector's search across possible change
+points. This chapter is the set of checks that decides which candidates are worth your attention.
 
 Every gate answers the same underlying question in a different way: **is this move larger than
 what could be explained by measurement process noise?** A benchmark that reports 100 ns will
@@ -41,6 +42,11 @@ at a different point in their own sequence. The questions are the part worth lea
 | Do the two before-and-after sides genuinely separate? | `regime_separation` |
 | Does the engine's own precision explain the move? | `interval_disjoint`, `interval_noise_band` |
 | Can the base comparison even be formed? | `base_scatter` |
+
+The diagnostic ladder starts with Detection's own setup and test rows so it can explain the whole
+verdict in one place. `selection_adjustment` is one of those rows: it is the within-series
+correction described in [Detection](detection.md#making-the-winning-split-a-fair-test), surfaced
+here for visibility. It changes the chance level and never declines a candidate by itself.
 
 ## Each detector has its own sequence
 
@@ -202,6 +208,6 @@ and [Insights](insights.md) turns it into a checklist.
 
 ## What the gates hand on
 
-The candidates that survived, each still carrying the chance level of the test that confirmed
-it. One question remains, and it is not about any individual candidate:
+The candidates that survived, each still carrying the within-series-adjusted chance level from
+Detection. One question remains, and it is not about any individual candidate:
 [given how many things were tested, should we believe this one?](coverage.md)

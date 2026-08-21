@@ -35,7 +35,6 @@
   - [Reconstruction](appendix/reconstruction.md)
   - [Detection](appendix/detection.md)
   - [Noise gates](appendix/gates.md)
-  - [Selection adjustment](appendix/selection-adjustment.md)
   - [Multiplicity and coverage](appendix/coverage.md)
   - [Reporting](appendix/reporting.md)
   - [Insights](appendix/insights.md)

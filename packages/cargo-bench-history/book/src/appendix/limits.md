@@ -8,6 +8,16 @@ Knowing them is what keeps you from waiting for a report that will never come.
 The first few are stated in full in the chapter that owns them; they are listed here so that one
 page answers "what will this tool not tell me?".
 
+## Very long histories use the newest 1,000 points
+
+Detection is designed for histories from dozens to a few hundred measurements. When a series grows
+beyond 1,000 points, only its newest 1,000 influence the verdict. The older measurements remain
+stored and visible in charts; they simply stop pulling the detector toward performance levels that
+are no longer current.
+
+*What to do:* use [`examine`](../commands/examine.md) when you need the full recorded shape. To
+judge an older era rather than the current one, move the analysis context to a commit in that era.
+
 ## Distance between commits is invisible
 
 Detection is **positional**: a series with ten observations spread across a thousand commits and
