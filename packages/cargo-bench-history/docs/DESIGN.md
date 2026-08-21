@@ -1056,8 +1056,8 @@ that search, and for running two detectors, before applying the gate (§8.3), so
 significance level means what it says. Branch mode makes one predetermined comparison and needs
 no such adjustment. Neither mode reports a "confidence" figure: every finding already cleared a
 small chance level, so such a number would read as near-certainty on all of them while
-discriminating between almost none; the chance levels that governed each decision are surfaced
-under `--verbose` instead, beside the gate they fed.
+discriminating between almost none. Chance levels remain internal decision inputs rather than
+finding fields; reports rank findings by the size of the move.
 
 The **practical-magnitude floor** is a hard threshold below which no finding surfaces,
 regardless of engine, direction, mode, or how confidently it was measured. A change too small

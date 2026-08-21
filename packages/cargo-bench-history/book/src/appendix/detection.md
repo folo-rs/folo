@@ -329,10 +329,10 @@ finding whose chance level is one in a million and one that barely cleared would
 same reassuring figure. It would rank almost nothing, so the report omits it and ranks by *size
 of move* instead.
 
-What governed each decision is still available. Under `--verbose` the chance level each gate
-weighed is printed beside that gate, so a finding that barely cleared can be told from one that
-cleared by a mile. A chance level is **how poorly chance explains the pattern** — and it is easy
-to over-read. Four things it is not:
+The detector still uses chance levels as internal decision inputs; they are not retained as
+finding fields or printed by `--verbose`. This chapter explains them so the verdict logic can be
+understood, not to provide another number for ranking findings. A chance level is **how poorly
+chance explains the pattern** — and it is easy to over-read. Four things it is not:
 
 - **Not the probability that the finding is correct.** It says chance is a poor explanation.
   It says nothing about whether the cause is your code or the machine.

@@ -74,16 +74,14 @@ attribution the tool refuses to guess at.
 look for the common cause before investigating any of them individually. That pattern is itself
 diagnostic — see [Insights](insights.md).
 
-## Chance levels are not comparable, and not corrected
+## No certainty score is reported
 
-The report gives no confidence or certainty score; what it can surface, under `--verbose`, is
-the chance level each gate weighed. That number comes from whichever test confirmed the finding.
-History and branch findings are confirmed by different tests answering different questions, so
-their chance levels are not on a common scale. Neither is adjusted by the group-wide correction
-that runs afterwards.
+The report gives no confidence or certainty score. The chance levels used inside history and
+branch detection come from different tests answering different questions, so they are not on a
+common scale. The group-wide correction that runs afterwards does not turn them into a comparable
+finding score.
 
-*What to do:* read a chance level as "how poorly does chance explain this", nothing more. The
-report ranks by size of move, which is the comparable quantity.
+*What to do:* rank findings by size of move, which is the comparable quantity the report provides.
 
 ## Branch mode ignores blessings
 
