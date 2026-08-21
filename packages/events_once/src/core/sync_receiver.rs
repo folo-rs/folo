@@ -10,7 +10,7 @@ use std::task::{self, Poll};
 
 use crate::{
     Disconnected, EVENT_AWAITING, EVENT_BOUND, EVENT_DISCONNECTED, EVENT_SET, EVENT_SIGNALING,
-    Event, EventRef, IntoValueError, ReleaseGuard,
+    Event, EventRef, IntoValueError,
 };
 
 /// Receives a single value from the sender connected to the same event.
@@ -114,15 +114,7 @@ where
                      wrapping self in ManuallyDrop can clear it",
                 );
 
-                let (result, awaiter) = Event::final_poll(&event_ref);
-
-                debug_assert!(
-                    awaiter.is_none(),
-                    "a receiver inspected in a terminal state cannot still own an awaiter"
-                );
-                drop(awaiter);
-
-                match result {
+                match Event::final_poll(&event_ref) {
                     Ok(Some(value)) => {
                         // SAFETY: `final_poll` returning a value means the state machine made
                         // the receiver the last endpoint and assigned it cleanup ownership. We
@@ -214,30 +206,24 @@ where
     #[inline]
     fn drop(&mut self) {
         if let Some(event_ref) = self.event_ref.take() {
-            let (result, awaiter) = Event::final_poll(&event_ref);
-
-            match result {
+            match Event::final_poll(&event_ref) {
                 Ok(None) => {
                     // Nothing for us to do - the sender was still connected and had not
                     // sent any value, so it will perform the cleanup on its own.
-                    drop(awaiter);
                 }
-                result => {
+                _ => {
                     // Either a value was waiting for us or the sender has disconnected. Both
                     // outcomes leave the receiver as the last endpoint, so we release the event.
-                    let _release = ReleaseGuard::new(|| {
-                        // SAFETY: `final_poll` returned a terminal outcome, which is how the state
-                        // machine assigns cleanup ownership to the receiver. The guard runs at
-                        // most once and the receiver no longer contains the reference.
-                        unsafe {
-                            event_ref.release_event();
-                        }
-                    });
+                    // A value delivered here is intentionally discarded with the match
+                    // temporary - nobody is left to receive it.
 
-                    // Both destructors run user code. The event is already terminal and the
-                    // release guard owns cleanup if either destructor unwinds.
-                    drop(awaiter);
-                    drop(result);
+                    // SAFETY: `final_poll` returned a terminal outcome, which is how the state
+                    // machine assigns cleanup ownership to the receiver. The receiver is being
+                    // dropped and its reference goes out of scope, so nothing accesses the event
+                    // after this call.
+                    unsafe {
+                        event_ref.release_event();
+                    }
                 }
             }
         }

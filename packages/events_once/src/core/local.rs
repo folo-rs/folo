@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::cell::{Cell, UnsafeCell};
 use std::fmt;
 use std::marker::{PhantomData, PhantomPinned};
-use std::mem::MaybeUninit;
+use std::mem::{MaybeUninit, offset_of};
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
@@ -95,15 +95,30 @@ impl<T: 'static> LocalEvent<T> {
     /// wire up the sender and receiver after doing the initialization. An event
     /// without a sender and receiver is invalid.
     pub(crate) fn new_in_inner(place: &mut UnsafeCell<MaybeUninit<Self>>) {
-        place.get_mut().write(Self {
-            state: Cell::new(EVENT_BOUND),
-            awaiter: UnsafeCell::new(MaybeUninit::uninit()),
-            value: UnsafeCell::new(MaybeUninit::uninit()),
-            #[cfg(debug_assertions)]
-            backtrace: RefCell::new(None),
-            _single_threaded: PhantomData,
-            _requires_pinning: PhantomPinned,
-        });
+        // We can skip initializing the MaybeUninit fields because they start uninitialized
+        // by design and the UnsafeCell wrapper is transparent, only affecting accesses and
+        // not the contents.
+        let base_ptr = place.get_mut().as_mut_ptr();
+
+        // SAFETY: We are making a pointer to a known field at a compiler-guaranteed offset.
+        let state_ptr = unsafe { base_ptr.byte_add(offset_of!(Self, state)) }.cast::<Cell<u8>>();
+
+        // SAFETY: This is the matching field of the type we are initializing, so valid for writes.
+        unsafe {
+            state_ptr.write(Cell::new(EVENT_BOUND));
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            // SAFETY: We are making a pointer to a known field at a compiler-guaranteed offset.
+            let backtrace_ptr = unsafe { base_ptr.byte_add(offset_of!(Self, backtrace)) }
+                .cast::<RefCell<Option<BacktraceType>>>();
+
+            // SAFETY: This is the matching field of the type we are initializing, so valid for writes.
+            unsafe {
+                backtrace_ptr.write(RefCell::new(None));
+            }
+        }
     }
 
     #[must_use]
@@ -267,8 +282,8 @@ impl<T: 'static> LocalEvent<T> {
 
     /// Sets the value of the event and notifies the awaiter, if there is one.
     ///
-    /// Returns the undelivered value if the receiver has already disconnected and the caller must
-    /// clean up the event now.
+    /// Returns `Err` if the receiver has already disconnected and the caller must clean up the
+    /// event now.
     ///
     /// The event arrives as an `&UnsafeCell<Self>` rather than as `&self` because the wake
     /// callback performed here is free to release the event storage. A `&self` argument stays
@@ -277,7 +292,7 @@ impl<T: 'static> LocalEvent<T> {
     /// may dangle. The event is therefore not touched after the callback runs.
     /// Ref: docs/callback-safety.md.
     #[inline]
-    pub(crate) fn set(event_cell: &UnsafeCell<Self>, value: T) -> Result<(), T> {
+    pub(crate) fn set(event_cell: &UnsafeCell<Self>, value: T) -> Result<(), Disconnected> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
         // still exist because something was able to call this method.
@@ -345,9 +360,8 @@ impl<T: 'static> LocalEvent<T> {
                 Ok(())
             }
             EVENT_DISCONNECTED => {
-                // The receiver has already disconnected, so the caller must clean up the event.
-                // Move the undelivered value back out before running its destructor so the state
-                // and storage agree throughout that callback.
+                // The receiver has already disconnected, so we can clean up the event now.
+                // We have to first drop the value that we inserted into the event, though.
 
                 // SAFETY: The only other potential references to the field are other short-lived
                 // references in this type, which cannot exist at the moment because
@@ -356,14 +370,14 @@ impl<T: 'static> LocalEvent<T> {
                 // SAFETY: UnsafeCell pointer is never null.
                 let value_cell = unsafe { value_cell_maybe.unwrap_unchecked() };
 
-                // We extract the value and consider the cell uninitialized.
+                // We drop the value and consider the cell uninitialized.
                 //
                 // SAFETY: We were in EVENT_SET which guarantees there is a value in there.
-                let value = unsafe { value_cell.assume_init_read() };
+                unsafe {
+                    value_cell.assume_init_drop();
+                }
 
-                event.state.set(EVENT_DISCONNECTED);
-
-                Err(value)
+                Err(Disconnected)
             }
             // Defensive: state machine guarantees this is unreachable.
             _ => {
@@ -644,19 +658,28 @@ impl<T: 'static> LocalEvent<T> {
     /// Returns `Err` if the sender has already disconnected without sending a value.
     /// In both of these cases, the receiver must clean up the event now.
     ///
-    /// The optional waker is returned instead of dropped here so the endpoint core can install a
-    /// storage-release guard before invoking its destructor.
+    /// See [`set()`][Self::set] for why the event arrives as an `&UnsafeCell<Self>`; here it is
+    /// the waker's destructor rather than `wake()` that may release the event storage.
     #[inline]
-    pub(crate) fn final_poll(
-        event_cell: &UnsafeCell<Self>,
-    ) -> (Result<Option<T>, Disconnected>, Option<Waker>) {
+    pub(crate) fn final_poll(event_cell: &UnsafeCell<Self>) -> Result<Option<T>, Disconnected> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
         // still exist because something was able to call this method.
         let event = unsafe { &*event_cell.get() };
 
-        let previous_state = event.state.get();
-        let awaiter = if previous_state == EVENT_AWAITING {
+        // If we are still awaiting, the receiver (the caller) owns the stored waker and must
+        // destroy it before disconnecting. We revert to EVENT_BOUND *before* dropping the waker
+        // so that a reentrant sender drop triggered by the waker's destructor observes a live,
+        // non-terminal event and defers cleanup, rather than deallocating the storage we are
+        // about to read from again. Only once the waker is gone do we read the resulting state
+        // and transition to EVENT_DISCONNECTED.
+        //
+        // This mirrors the sync `Event::final_poll`, which reverts AWAITING -> BOUND before
+        // destroying the awaiter, and follows docs/callback-safety.md ("No callbacks under
+        // borrows of shared state"; symmetric handoff vs. cleanup ordering).
+        if event.state.get() == EVENT_AWAITING {
+            event.state.set(EVENT_BOUND);
+
             // SAFETY: The only other potential references to the field are other short-lived
             // references in this type, which cannot exist at the moment because
             // the type is single-threaded and does not let any references escape.
@@ -664,22 +687,27 @@ impl<T: 'static> LocalEvent<T> {
             // SAFETY: UnsafeCell pointer is never null.
             let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
 
-            // We extract the waker and consider the field uninitialized again.
+            // We drop the waker and consider the field uninitialized again.
             // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker in there.
-            Some(unsafe { awaiter_cell.assume_init_read() })
-        } else {
-            None
-        };
+            unsafe {
+                awaiter_cell.assume_init_drop();
+            }
+        }
 
-        // No user code has run while the event was borrowed. Publish the terminal state before
-        // returning the extracted waker so its destructor can re-enter through the sender only
-        // after `final_poll` has finished. Ref: docs/callback-safety.md.
+        // Re-read the state: a reentrant sender drop during the waker's destructor above may
+        // have advanced us from EVENT_BOUND to EVENT_DISCONNECTED. In this single-threaded
+        // design the reentrant sender is the only actor that could have changed the state while
+        // we were dropping the waker.
+        let previous_state = event.state.get();
+
+        // We can immediately set this because this is a single-threaded event, so there cannot
+        // be any race condition causing us issues with the receiver seeing this too early.
         event.state.set(EVENT_DISCONNECTED);
 
-        let result = match previous_state {
-            EVENT_BOUND | EVENT_AWAITING => {
-                // The sender had not yet set any value. It remains the cleanup owner and will
-                // release the event when the endpoint core destroys the returned waker.
+        match previous_state {
+            EVENT_BOUND => {
+                // The sender had not yet set any value (nor did a reentrant sender drop
+                // disconnect while we dropped the waker). It will clean up the event later.
                 Ok(None)
             }
             EVENT_SET => {
@@ -715,9 +743,7 @@ impl<T: 'static> LocalEvent<T> {
                     type_name::<Self>()
                 );
             }
-        };
-
-        (result, awaiter)
+        }
     }
 }
 

@@ -57,7 +57,7 @@ impl<T: 'static> fmt::Debug for PooledLocalSender<T> {
 /// Cloning a waker during polling may synchronously send through or drop the sender. Waking or
 /// dropping a registered waker during completion or cancellation may synchronously poll this
 /// receiver to completion or drop an endpoint. The event publishes the resulting state before
-/// each callback, and catching a callback panic returns its slot to the pool once cleanup completes.
+/// each callback.
 pub struct PooledLocalReceiver<T: 'static> {
     inner: LocalReceiverCore<PooledLocalRef<T>, T>,
 }

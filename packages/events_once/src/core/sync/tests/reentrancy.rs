@@ -186,9 +186,9 @@ fn boxed_receiver_cancel_with_sender_dropping_waker_preserves_storage() {
     drop(waker);
     assert!(!sender_dropped.get());
 
-    // Dropping the receiver cancels the wait: `final_poll` returns the stored waker after
-    // publishing DISCONNECTED, then the endpoint core drops it under a release guard. Its
-    // destructor drops the sender, which performs the sole cleanup.
+    // Dropping the receiver cancels the wait. `final_poll` returns the event to BOUND before
+    // dropping the stored waker, whose destructor drops the sender. The sender publishes
+    // DISCONNECTED and leaves the receiver to perform the sole cleanup.
     drop(receiver);
 
     assert!(sender_dropped.get(), "{REENTRANCY_REQUIRED}");

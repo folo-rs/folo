@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::{fmt, ptr};
 
-use crate::{Disconnected, LocalEvent, LocalRef, ReleaseGuard};
+use crate::{Disconnected, LocalEvent, LocalRef};
 
 /// Delivers a single value to the receiver connected to the same event.
 pub(crate) struct LocalSenderCore<E, T>
@@ -35,32 +35,22 @@ where
     /// there is a receiver waiting.
     #[inline]
     pub(crate) fn send(self, value: T) {
-        // The sender's Drop path signals disconnection, which must not run after sending.
+        // The drop logic is different before/after set(), so we switch to manual drop here.
         let mut this = ManuallyDrop::new(self);
-        let event_ref_ptr = &raw mut this.event_ref;
-        let _drop_event_ref = ReleaseGuard::new(|| {
-            // SAFETY: The pointer targets the initialized endpoint handle in `this`. The sender is
-            // manually dropped, this guard runs exactly once, and no later code accesses the field.
+
+        if LocalEvent::set(&this.event_ref, value) == Err(Disconnected) {
+            // SAFETY: `set()` reported that the receiver had already disconnected, which is the
+            // transition that grants this sender sole cleanup responsibility, and we do not
+            // access the event afterwards.
             unsafe {
-                ptr::drop_in_place(event_ref_ptr);
+                this.event_ref.release_event();
             }
-        });
+        }
 
-        // SAFETY: The pointer targets the initialized endpoint handle above. Only shared access is
-        // created before the drop guard destroys it at the end of this method or during unwinding.
-        let event_ref = unsafe { &*event_ref_ptr };
-
-        if let Err(value) = LocalEvent::set(event_ref, value) {
-            let _release = ReleaseGuard::new(|| {
-                // SAFETY: `set()` returned the undelivered value after observing that the receiver
-                // had disconnected, which grants this sender sole cleanup responsibility. The
-                // guard runs at most once and this method never accesses the event afterwards.
-                unsafe {
-                    event_ref.release_event();
-                }
-            });
-
-            drop(value);
+        // SAFETY: The field contains a valid object of the right type. We avoid a double-drop
+        // via ManuallyDrop above. We consume `self` so nothing further can happen.
+        unsafe {
+            ptr::drop_in_place(&raw mut this.event_ref);
         }
     }
 }

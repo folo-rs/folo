@@ -58,7 +58,7 @@ impl<T: Send + 'static> fmt::Debug for BoxedSender<T> {
 /// Cloning a waker during polling may synchronously send through or drop the sender. Waking or
 /// dropping a registered waker during completion or cancellation may synchronously poll this
 /// receiver to completion or drop an endpoint. The event publishes the resulting state before
-/// each callback, and catching a callback panic leaves its storage available for cleanup.
+/// each callback.
 pub struct BoxedReceiver<T: Send + 'static> {
     inner: ReceiverCore<BoxedRef<T>, T>,
 }
@@ -200,7 +200,7 @@ impl<T: Send + 'static> fmt::Debug for RawSender<T> {
 /// Cloning a waker during polling may synchronously send through or drop the sender. Waking or
 /// dropping a registered waker during completion or cancellation may synchronously poll this
 /// receiver to completion or drop an endpoint. The event publishes the resulting state before
-/// each callback, and catching a callback panic leaves its storage available for cleanup.
+/// each callback.
 pub struct RawReceiver<T: Send + 'static> {
     inner: ReceiverCore<PtrRef<T>, T>,
 }

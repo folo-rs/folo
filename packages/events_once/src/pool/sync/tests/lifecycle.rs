@@ -1,35 +1,6 @@
 use super::*;
 
 #[test]
-fn disconnected_send_releases_slot_when_payload_drop_panics() {
-    let pool = EventPool::<PanicsOnDrop>::new();
-    let (sender, receiver) = pool.rent();
-    drop(receiver);
-
-    assert_panics(|| sender.send(PanicsOnDrop));
-    assert!(pool.is_empty());
-}
-
-#[test]
-fn receiver_drop_releases_slot_when_waker_drop_panics() {
-    let pool = EventPool::<i32>::new();
-    let (sender, receiver) = pool.rent();
-    let mut receiver = Box::pin(receiver);
-
-    // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
-    let (waker, cloned) = unsafe { clone_action_waker_panicking_on_clone_release(|| {}) };
-    let mut cx = task::Context::from_waker(&waker);
-    assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
-    assert!(cloned.get());
-    drop(waker);
-
-    assert_panics(|| drop(receiver));
-    drop(sender);
-
-    assert!(pool.is_empty());
-}
-
-#[test]
 fn concurrent_rentals_share_pool_core_mt() {
     // The smallest group that guarantees competing rentals.
     const WORKER_COUNT: usize = 2;

@@ -16,7 +16,7 @@ mod watchdog;
 pub use assert_panics::{assert_panics, assert_panics_with};
 pub use clone_waker::{clone_action_waker, clone_action_waker_panicking_on_clone_release};
 pub use cwd_guard::CwdGuard;
-pub use drop_waker::{DropOnWakerRelease, PanicsOnDrop, drop_waker};
+pub use drop_waker::{DropOnWakerRelease, drop_waker};
 pub use float::f64_diff_abs;
 pub use reentrant_waker::ReentrantWakerData;
 pub use wake_action_waker::wake_action_waker;

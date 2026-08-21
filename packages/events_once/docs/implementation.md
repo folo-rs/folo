@@ -69,18 +69,6 @@ records this, which lets the receiver cores project a pinned reference to themse
 unsafe code, and turns any future pin-sensitive state into a compile error rather than a silent
 change of an assumption.
 
-## Callback cleanup ownership
-
-The event state machine never destroys an undelivered payload or a receiver-owned waker while it
-still needs to access event storage. It moves that value back to the endpoint core after
-publishing the terminal state. The core then arms a storage-release guard before running the
-destructor.
-
-If the endpoint owns cleanup, the guard releases boxed, placed or pooled storage during
-unwinding. If the peer endpoint still owns cleanup, the terminal state directs that peer to
-release storage later. This keeps callback execution outside event borrows and pool locks while
-preserving exactly one release owner.
-
 ## Diagnostics are a debug-build concern
 
 The awaiter backtrace that pools and lakes expose for leak investigation exists only in debug

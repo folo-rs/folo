@@ -112,11 +112,11 @@ fn boxed_sender_drop_with_reentrant_waker_observes_disconnected() {
     });
 }
 
-// Regression test for cancellation through a reentrant waker destructor. `final_poll` extracts
-// the stored waker and publishes DISCONNECTED without running user code. The endpoint core then
-// drops the waker under a release guard; its destructor drops the sender, which observes the
-// terminal state and releases the event exactly once. Ref: docs/callback-safety.md. This runs
-// under Miri so an ordering regression that accesses released storage is detected.
+// Regression test for cancellation through a reentrant waker destructor. `final_poll` returns
+// the event to BOUND while the receiver retains cleanup ownership, then drops the stored waker.
+// Its destructor drops the sender, which publishes DISCONNECTED and defers cleanup to the
+// receiver. Ref: docs/callback-safety.md. This runs under Miri so an ordering regression that
+// accesses released storage is detected.
 #[test]
 fn boxed_receiver_cancel_with_sender_dropping_waker_preserves_storage() {
     let (sender, receiver) = LocalEvent::<i32>::boxed();
@@ -136,9 +136,8 @@ fn boxed_receiver_cancel_with_sender_dropping_waker_preserves_storage() {
     drop(waker);
     assert!(!sender_dropped.get());
 
-    // Dropping the receiver extracts the waker and publishes DISCONNECTED. The endpoint core
-    // drops the waker under a release guard, so its destructor can drop the sender and perform
-    // the sole cleanup before the receiver drop returns.
+    // Dropping the receiver releases the stored waker. Its destructor drops the sender, which
+    // publishes DISCONNECTED and leaves the receiver to perform the sole cleanup.
     drop(receiver);
 
     assert!(sender_dropped.get(), "{REENTRANCY_REQUIRED}");

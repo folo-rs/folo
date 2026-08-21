@@ -223,7 +223,6 @@ mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
     #[cfg(debug_assertions)]
     use testing::assert_panics_with;
-    use testing::{PanicsOnDrop, assert_panics, clone_action_waker_panicking_on_clone_release};
 
     use super::*;
     use crate::Disconnected;
@@ -236,37 +235,6 @@ mod tests {
     // The payload satisfies only the bound that the pool's API requires (`'static`) and is
     // neither `UnwindSafe` nor `RefUnwindSafe`, so both traits come from the pool itself.
     assert_impl_all!(RawLocalEventPool<Rc<RefCell<u32>>>: UnwindSafe, RefUnwindSafe);
-
-    #[test]
-    fn disconnected_send_releases_slot_when_payload_drop_panics() {
-        let pool = Box::pin(RawLocalEventPool::<PanicsOnDrop>::new());
-        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
-        let (sender, receiver) = unsafe { pool.as_ref().rent() };
-        drop(receiver);
-
-        assert_panics(|| sender.send(PanicsOnDrop));
-        assert!(pool.is_empty());
-    }
-
-    #[test]
-    fn receiver_drop_releases_slot_when_waker_drop_panics() {
-        let pool = Box::pin(RawLocalEventPool::<i32>::new());
-        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
-        let (sender, receiver) = unsafe { pool.as_ref().rent() };
-        let mut receiver = Box::pin(receiver);
-
-        // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
-        let (waker, cloned) = unsafe { clone_action_waker_panicking_on_clone_release(|| {}) };
-        let mut cx = task::Context::from_waker(&waker);
-        assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
-        assert!(cloned.get());
-        drop(waker);
-
-        assert_panics(|| drop(receiver));
-        drop(sender);
-
-        assert!(pool.is_empty());
-    }
 
     #[test]
     fn len() {

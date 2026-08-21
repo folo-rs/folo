@@ -9,9 +9,7 @@ use futures::executor::block_on;
 use static_assertions::assert_impl_all;
 #[cfg(debug_assertions)]
 use testing::assert_panics_with;
-use testing::{
-    PanicsOnDrop, assert_panics, clone_action_waker_panicking_on_clone_release, with_watchdog,
-};
+use testing::with_watchdog;
 
 use super::*;
 use crate::Disconnected;

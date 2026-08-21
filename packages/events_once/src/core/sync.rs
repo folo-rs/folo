@@ -5,7 +5,7 @@ use std::cell::UnsafeCell;
 use std::fmt;
 use std::hint::spin_loop;
 use std::marker::PhantomPinned;
-use std::mem::MaybeUninit;
+use std::mem::{MaybeUninit, offset_of};
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
@@ -93,9 +93,9 @@ pub struct Event<T> {
 //   invokes any callback. An unwind can therefore never strand the event in `EVENT_SIGNALING`
 //   and leave another endpoint waiting for a transition that will not come.
 // * User-controlled code that can unwind - waker clones, wakes, waker drops and payload drops -
-//   therefore always runs where state and storage agree. Cleanup owners guard storage release
-//   across destructor callbacks, so a caught panic leaves the pool or allocation reusable. The
-//   unwinding regression tests below exercise this.
+//   therefore always runs where state and storage agree, so a caught panic leaves an event that
+//   the remaining endpoint can still complete or clean up. The worst outcome is that the event
+//   storage is leaked, which is safe. The unwinding regression tests exercise this.
 impl<T: Send + 'static> UnwindSafe for Event<T> {}
 impl<T: Send + 'static> RefUnwindSafe for Event<T> {}
 
@@ -109,14 +109,39 @@ where
     /// wire up the sender and receiver after doing the initialization. An event
     /// without a sender and receiver is invalid.
     pub(crate) fn new_in_inner(place: &mut UnsafeCell<MaybeUninit<Self>>) {
-        place.get_mut().write(Self {
-            state: AtomicU8::new(EVENT_BOUND),
-            awaiter: UnsafeCell::new(MaybeUninit::uninit()),
-            value: UnsafeCell::new(MaybeUninit::uninit()),
-            #[cfg(debug_assertions)]
-            backtrace: Mutex::new(None),
-            _requires_pinning: PhantomPinned,
-        });
+        // The key here is that we can skip initializing the MaybeUninit fields because
+        // they start uninitialized by design and the UnsafeCell wrapper is transparent,
+        // only affecting accesses and not the contents.
+        let base_ptr = place.get_mut().as_mut_ptr();
+
+        // SAFETY: We are making a pointer to a known field at a compiler-guaranteed offset.
+        let state_ptr = unsafe { base_ptr.byte_add(offset_of!(Self, state)) }.cast::<AtomicU8>();
+
+        // SAFETY: `place` is an exclusive reference to storage laid out and aligned as
+        // `MaybeUninit<Self>`, `get_mut()` preserves that exclusive access and `as_mut_ptr()`
+        // yields its base address, so `offset_of!` selects the in-bounds `state` field with the
+        // alignment of that field. The event lifecycle guarantees that no endpoint of an earlier
+        // event in this storage is still active, so nothing else accesses these bytes. `write`
+        // initializes the field without reading or dropping the previous bytes, which is what
+        // lets us leave `awaiter` and `value` uninitialized.
+        unsafe {
+            state_ptr.write(AtomicU8::new(EVENT_BOUND));
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            // SAFETY: We are making a pointer to a known field at a compiler-guaranteed offset.
+            let backtrace_ptr = unsafe { base_ptr.byte_add(offset_of!(Self, backtrace)) }
+                .cast::<Mutex<Option<BacktraceType>>>();
+
+            // SAFETY: Same as the `state` write above - the exclusive `MaybeUninit<Self>` storage
+            // is aligned writable storage for `Self` that no active event aliases, `offset_of!`
+            // selects the in-bounds `backtrace` field with that field's alignment, and `write`
+            // initializes it without reading or dropping the previous bytes.
+            unsafe {
+                backtrace_ptr.write(Mutex::new(None));
+            }
+        }
     }
 
     #[must_use]
@@ -286,10 +311,10 @@ where
 
     /// Sets the value of the event and notifies the receiver's awaiter, if there is one.
     ///
-    /// Returns the undelivered value if the receiver has already disconnected and the caller must
-    /// clean up the event now.
+    /// Returns `Err` if the receiver has already disconnected and the caller must clean up the
+    /// event now.
     #[inline]
-    pub(crate) fn set(event_cell: &UnsafeCell<Self>, value: T) -> Result<(), T> {
+    pub(crate) fn set(event_cell: &UnsafeCell<Self>, value: T) -> Result<(), Disconnected> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
         // still exist because something was able to call this method.
@@ -379,17 +404,15 @@ where
             }
             EVENT_DISCONNECTED => {
                 // The receiver has already been dropped, so we need to clean up the event.
-                // Move the undelivered value back out before running its destructor so the state
-                // and storage agree throughout that callback.
+                // We have to first drop the value that we inserted into the event, though.
 
-                // The receiver is gone, so nobody else can touch the event. The value was just
-                // inserted and the event never entered a state that allowed the receiver to
-                // extract it.
-                let value = event.poll_set();
-
-                event
-                    .state
-                    .store(EVENT_DISCONNECTED, atomic::Ordering::Relaxed);
+                // SAFETY: The receiver is gone - there is nobody else who might be touching
+                // the event anymore, we are essentially in a single-threaded mode now.
+                // We also just inserted the value, so it must still be there because we never
+                // entered a state where the receiver had the permission to extract the value.
+                unsafe {
+                    event.destroy_value();
+                }
 
                 // Before it is safe to destroy the event, we need to synchronize with whatever
                 // writes the receiver may have done into its state (e.g. it may have removed
@@ -397,7 +420,7 @@ where
                 atomic::fence(atomic::Ordering::Acquire);
 
                 // The sender (the caller) needs to clean up the event.
-                Err(value)
+                Err(Disconnected)
             }
             // Defensive: state machine guarantees this is unreachable.
             _ => {
@@ -819,13 +842,8 @@ where
     /// Returns `Ok(Some(value))` if the sender sender has already sent a value.
     /// Returns `Err` if the sender has already disconnected without sending a value.
     /// In both of these cases, the receiver must clean up the event now.
-    ///
-    /// The optional waker is returned instead of dropped here so the endpoint core can install a
-    /// storage-release guard before invoking its destructor.
     #[inline]
-    pub(crate) fn final_poll(
-        event_cell: &UnsafeCell<Self>,
-    ) -> (Result<Option<T>, Disconnected>, Option<Waker>) {
+    pub(crate) fn final_poll(event_cell: &UnsafeCell<Self>) -> Result<Option<T>, Disconnected> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
         // still exist because something was able to call this method.
@@ -840,11 +858,13 @@ where
             .expect(NEVER_POISONED)
             .replace(capture_backtrace());
 
-        // The receiver may still own a stored waker. Reverting AWAITING -> BOUND acquires
-        // exclusive access to that cell so we can extract the waker without running its
-        // destructor. The terminal transition below is published before the endpoint core
-        // invokes that destructor.
-        let awaiter = if event
+        // The receiver (who is calling this) may still own the waker if the waker has not
+        // been used. If this is the case, we need to destroy the waker before proceeding.
+        // This is only the case if we are in the AWAITING state - in all other states, we
+        // either do not have a waker or the sender will destroy it.
+        // We implement this check by attempting to revert ourselves back to the BOUND state.
+        // If successful, we know we were in AWAITING and can destroy the waker.
+        if event
             .state
             .compare_exchange(
                 EVENT_AWAITING,
@@ -857,10 +877,10 @@ where
             // SAFETY: The `awaiter` is guaranteed to be present because we just came from
             // `EVENT_AWAITING`. The sender will only touch the awaiter in `EVENT_SIGNALING`,
             // which never entered. Therefore, we are the only one who can touch the awaiter now.
-            Some(unsafe { event.take_awaiter() })
-        } else {
-            None
-        };
+            unsafe {
+                event.destroy_awaiter();
+            }
+        }
 
         // We must transition the event into DISCONNECTED, but we cannot do so while the
         // sender is in the middle of a SIGNALING transition — writing DISCONNECTED via swap
@@ -897,7 +917,7 @@ where
             }
         };
 
-        let result = match previous_state {
+        match previous_state {
             EVENT_BOUND => {
                 // The sender had not yet set any value. It will clean up the event later.
                 Ok(None)
@@ -929,25 +949,7 @@ where
                     type_name::<Self>()
                 );
             }
-        };
-
-        (result, awaiter)
-    }
-
-    /// Takes the waker registered in `awaiter`, leaving that cell uninitialized.
-    ///
-    /// # Safety
-    ///
-    /// The caller must have acquired the synchronization block for `awaiter` and `awaiter` must
-    /// hold an initialized waker.
-    unsafe fn take_awaiter(&self) -> Waker {
-        // SAFETY: Forwarding guarantees from the caller.
-        let awaiter_cell_maybe = unsafe { self.awaiter.get().as_mut() };
-        // SAFETY: UnsafeCell pointer is never null.
-        let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
-
-        // SAFETY: Forwarding guarantees from the caller.
-        unsafe { awaiter_cell.assume_init_read() }
+        }
     }
 
     /// Drops the waker registered in `awaiter`, leaving that cell uninitialized.
@@ -965,6 +967,24 @@ where
         // SAFETY: Forwarding guarantees from the caller.
         unsafe {
             awaiter_cell.assume_init_drop();
+        }
+    }
+
+    /// Drops the payload stored in `value`, leaving that cell uninitialized.
+    ///
+    /// # Safety
+    ///
+    /// The caller must have acquired the synchronization block for `value` and `value` must hold
+    /// an initialized payload.
+    unsafe fn destroy_value(&self) {
+        // SAFETY: Forwarding guarantees from the caller.
+        let value_cell_maybe = unsafe { self.value.get().as_mut() };
+        // SAFETY: UnsafeCell pointer is never null.
+        let value_cell = unsafe { value_cell_maybe.unwrap_unchecked() };
+
+        // SAFETY: Forwarding guarantees from the caller.
+        unsafe {
+            value_cell.assume_init_drop();
         }
     }
 }

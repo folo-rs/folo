@@ -69,7 +69,3 @@ A waker cloned while a receiver is being polled may send through or drop the cor
 sender. A registered waker that runs while an event completes or is cancelled may poll the
 receiver to completion or drop either endpoint. These operations observe the state published
 before the callback.
-
-Event and endpoint types are unwind-safe. If caller code catches a panic from one of these
-callbacks, the remaining endpoint can still complete cleanup. In particular, a pooled slot is
-returned after its cleanup owner encounters a panicking payload or waker destructor.
