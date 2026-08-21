@@ -107,6 +107,7 @@ fn count_to_f64(count: usize) -> f64 {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 
