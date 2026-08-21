@@ -116,7 +116,7 @@ plotters = { version = "0.3.7", default-features = false, features = [
     "point_series",
     "svg_backend",
 ] }
-plurality = { version = "0.2.1", default-features = false, features = ["std"] }
+plurality = { version = "0.2.2", default-features = false, features = ["std"] }
 proc-macro2 = { version = "1.0.106", default-features = false }
 quote = { version = "1.0.45", default-features = false }
 rand = { version = "0.10.1", default-features = false, features = ["std"] }
