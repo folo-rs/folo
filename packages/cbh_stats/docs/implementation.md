@@ -49,10 +49,10 @@ here — decides *how* to turn them into a two-sided p-value based on the joint 
 computing that p-value once at construction.
 
 For a split whose *smaller* side keeps the exact permutation count `C(n1+n2, min(n1, n2))` inside
-`f64`'s exact-integer range (below `2^53`) it computes the **exact permutation tail**: it
+`f64`'s consecutive exact-integer range (at or below `2^53`) it computes the **exact permutation tail**: it
 enumerates the size-`min(n1, n2)` subsets of the joint ranking and sums the mass at least as
-extreme as the observed split. This is the behavior the design's "Exact significance for short
-series" section promises. The near-balanced splits, whose central subset count overflows, fall
+extreme as the observed split. This is the behavior the design's "Exact significance where
+feasible" section promises. The near-balanced splits, whose central subset count overflows, fall
 back to the tie- and continuity-corrected **normal approximation**.
 
 The choice is made per split, not per series (`exact_mw_feasible`): the count peaks at the balanced

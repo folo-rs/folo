@@ -24,6 +24,9 @@ use crate::{
     normal_mann_whitney_p, pettitt_rank_location, scaled_average_ranks,
 };
 
+/// Largest integer through which binary64 represents every integer exactly.
+const MAX_EXACT_F64_INTEGER: u128 = 1 << f64::MANTISSA_DIGITS;
+
 /// A located change point with its selected and selection-adjusted statistics.
 ///
 /// This is the complete statistical handoff needed by the detector: the split
@@ -132,11 +135,13 @@ impl SplitScorer {
 
 /// Locates and selection-adjusts a change point by conditional permutation.
 ///
-/// `permutations` is the fixed Monte Carlo budget. `reject_at_or_above` is the
-/// largest adjusted p-value that could still pass the caller's next gate. The
-/// function may stop early and return `1.0` once the final fixed-budget p-value
-/// cannot fall below that boundary; this only rejects work that cannot affect
-/// the verdict.
+/// `permutations` is the fixed Monte Carlo budget. It must leave room for the
+/// plus-one correction in `usize`, and that corrected denominator must be no
+/// greater than the largest integer represented exactly by `f64`.
+/// `reject_at_or_above` is the largest adjusted p-value that could still pass
+/// the caller's next gate. The function may stop early and return `1.0` once
+/// the final fixed-budget p-value cannot fall below that boundary; this only
+/// rejects work that cannot affect the verdict.
 ///
 /// A shuffled ordering whose selected split violates `min_regime` contributes
 /// the no-evidence score `1.0` and remains in the denominator. The reported
@@ -149,7 +154,9 @@ impl SplitScorer {
 ///
 /// # Panics
 ///
-/// Panics if `min_regime` is zero or `reject_at_or_above` is outside `(0, 1]`.
+/// Panics if `min_regime` is zero, `reject_at_or_above` is outside `(0, 1]`,
+/// or the permutation budget cannot be incremented and represented exactly as
+/// an `f64` denominator.
 #[must_use]
 pub fn selection_adjusted_change_point(
     values: &[f64],
@@ -161,6 +168,18 @@ pub fn selection_adjusted_change_point(
     assert!(
         reject_at_or_above > 0.0 && reject_at_or_above <= 1.0,
         "the rejection boundary must be in (0, 1]"
+    );
+    assert!(
+        permutations.get() < usize::MAX,
+        "the permutation budget must leave room for the plus-one correction"
+    );
+    let total = permutations
+        .get()
+        .checked_add(1)
+        .expect("the validated permutation budget leaves room for plus one");
+    assert!(
+        total as u128 <= MAX_EXACT_F64_INTEGER,
+        "the plus-one permutation denominator must be exactly representable as f64"
     );
 
     let observed_ranks = scaled_average_ranks(values);
@@ -177,10 +196,6 @@ pub fn selection_adjusted_change_point(
         return Some(result(observed, NO_EVIDENCE));
     }
 
-    let total = permutations
-        .get()
-        .checked_add(1)
-        .expect("the permutation budget fits usize with its plus-one correction");
     let total_f = count_to_f64(total);
     let mut rng = SplitMix64::new(seed);
     let mut shuffled = sorted_ranks;
@@ -213,7 +228,7 @@ fn result(score: SelectedScore, adjusted_p: f64) -> SelectionAdjustedChangePoint
 /// Casts a bounded count to `f64`.
 #[expect(
     clippy::cast_precision_loss,
-    reason = "series lengths and permutation budgets are far below 2^53"
+    reason = "series lengths are bounded and permutation denominators are validated at or below 2^53"
 )]
 fn count_to_f64(count: usize) -> f64 {
     count as f64
@@ -271,6 +286,25 @@ mod tests {
         let first = selection_adjusted_change_point(&values, 5, budget, 0.025);
         let second = selection_adjusted_change_point(&values, 5, budget, 0.025);
         assert_eq!(first, second);
+    }
+
+    #[test]
+    #[should_panic(expected = "must leave room for the plus-one correction")]
+    fn maximum_usize_permutation_budget_is_rejected() {
+        let budget = NonZero::new(usize::MAX).expect("usize::MAX is nonzero");
+        let _result = selection_adjusted_change_point(&[1.0, 2.0], 1, budget, 0.5);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    #[should_panic(expected = "denominator must be exactly representable as f64")]
+    fn inexact_permutation_denominator_is_rejected() {
+        let budget = NonZero::new(
+            usize::try_from(MAX_EXACT_F64_INTEGER)
+                .expect("the binary64 exact-integer limit fits 64-bit usize"),
+        )
+        .expect("the binary64 exact-integer limit is nonzero");
+        let _result = selection_adjusted_change_point(&[1.0, 2.0], 1, budget, 0.5);
     }
 
     #[test]

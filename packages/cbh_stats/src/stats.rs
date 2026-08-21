@@ -278,10 +278,10 @@ pub struct MannWhitneyU {
     two_sided_p: f64,
 }
 
-/// The largest integer f64 represents exactly. The exact permutation tail counts
-/// rank subsets as f64, so it is trustworthy only while those counts stay below
-/// this. Ref: `packages/cargo-bench-history/docs/DESIGN.md`, "Exact significance
-/// for short series".
+/// The largest integer through which f64 represents every integer exactly. The
+/// exact permutation tail counts rank subsets as f64, so it is trustworthy only
+/// while those counts stay at or below this. Ref:
+/// `packages/cargo-bench-history/docs/DESIGN.md`, "Exact significance where feasible".
 const EXACT_COUNT_LIMIT: u128 = 1 << 53;
 
 /// Whether the exact two-sided Mann–Whitney tail is representable in f64 for a
@@ -298,8 +298,8 @@ const EXACT_COUNT_LIMIT: u128 = 1 << 53;
 /// count overflows, keep the approximation, and there the smallest honest p-value
 /// already sits below the reporting clamp, so the approximation cannot report a
 /// dishonestly small verdict. Ref:
-/// `packages/cargo-bench-history/docs/DESIGN.md`, "Exact significance for short
-/// series".
+/// `packages/cargo-bench-history/docs/DESIGN.md`, "Exact significance where
+/// feasible".
 pub(crate) fn exact_mw_feasible(n1: usize, n2: usize) -> bool {
     let n = n1.saturating_add(n2);
     let k = n1.min(n2);

@@ -95,10 +95,11 @@ mod tests {
         let left_values = [5.0, 2.0, 5.0, 8.0, 2.0];
         let right_values = [8.0, 5.0, 2.0, 2.0, 5.0];
         let ranks = [3, 3, 7, 7, 10];
-        assert_eq!(
-            permutation_seed(&left_values, &ranks, 2),
-            permutation_seed(&right_values, &ranks, 2)
-        );
+        let seed = permutation_seed(&left_values, &ranks, 2);
+        assert_eq!(seed, permutation_seed(&right_values, &ranks, 2));
+        // Pin the documented cross-platform stream, not merely equality between two
+        // executions that could both be wrong.
+        assert_eq!(seed, 0x8c56_a402_bcb9_aa34);
     }
 
     #[test]
@@ -111,15 +112,19 @@ mod tests {
     }
 
     #[test]
-    fn shuffle_stream_is_reproducible() {
-        let mut left = vec![1, 2, 3, 4, 5, 6];
-        let mut right = left.clone();
-        let mut left_rng = SplitMix64::new(42);
-        let mut right_rng = SplitMix64::new(42);
-        for _ in 0..20 {
-            shuffle(&mut left, &mut left_rng);
-            shuffle(&mut right, &mut right_rng);
-            assert_eq!(left, right);
-        }
+    fn splitmix_stream_matches_the_stable_reference() {
+        let mut rng = SplitMix64::new(42);
+        assert_eq!(rng.next_u64(), 0xbdd7_3226_2feb_6e95);
+        assert_eq!(rng.next_u64(), 0x28ef_e333_b266_f103);
+        assert_eq!(rng.next_u64(), 0x4752_6757_130f_9f52);
+        assert_eq!(rng.next_u64(), 0x581c_e1ff_0e4a_e394);
+        assert_eq!(rng.next_u64(), 0x09bc_585a_2448_23f2);
+    }
+
+    #[test]
+    fn shuffle_matches_the_stable_reference() {
+        let mut values = vec![1, 2, 3, 4, 5, 6];
+        shuffle(&mut values, &mut SplitMix64::new(42));
+        assert_eq!(values, vec![5, 4, 1, 3, 6, 2]);
     }
 }

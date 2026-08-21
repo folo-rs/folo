@@ -2205,7 +2205,7 @@ mod tests {
     use crate::detect::gate_log::GateOutcome;
     use crate::detect::noise_gates::{
         BRANCH_PRACTICAL_RELATIVE, COMPARE_WINDOW, DRIFT_MIN_POINTS, DRIFT_NOISE_MULTIPLE,
-        EXCURSION_MAX_REMOVALS, MAX_CHANGE_CHANCE_LEVEL, MAX_DRIFT_CHANCE_LEVEL,
+        EXCURSION_MAX_REMOVALS, MAX_CHANGE_CHANCE_LEVEL, MAX_DRIFT_CHANCE_LEVEL, MAX_SERIES_POINTS,
         MIN_BASE_SPLIT_SEPARATION, MIN_REGIME, MIN_REGIME_SEPARATION, MIN_SERIES_POINTS,
         PRACTICAL_ABSOLUTE_COUNT, PRACTICAL_RELATIVE, RESIDUAL_NOISE_MULTIPLE,
         TARGET_FALSE_DISCOVERY_RATE,
@@ -2923,6 +2923,72 @@ mod tests {
         assert_eq!(
             finding.commit.as_deref(),
             Some(format!("commit{MIN_REGIME}").as_str())
+        );
+    }
+
+    #[test]
+    // The production cap deliberately makes this fixture too large for Miri.
+    #[cfg_attr(miri, ignore)]
+    fn history_detection_uses_the_newest_capped_active_window_and_keeps_the_full_chart() {
+        // A nonzero prefix proves re-baselining is applied before the cap. The following
+        // old active regime is also discarded by the cap; if either prefix reached
+        // detection, its much higher level would change the statistics and attribution.
+        const INACTIVE_PREFIX: usize = 7;
+        let half_cap = MAX_SERIES_POINTS
+            .checked_div(2)
+            .expect("the divisor is nonzero");
+        let discarded_active = half_cap;
+        let before = half_cap;
+        let after = MAX_SERIES_POINTS.saturating_sub(before);
+
+        let mut values = vec![999.0; INACTIVE_PREFIX];
+        values.extend(std::iter::repeat_n(900.0, discarded_active));
+        values.extend(std::iter::repeat_n(100.0, before));
+        values.extend(std::iter::repeat_n(200.0, after));
+        let mut series = series_of(&values);
+        series.active_start = INACTIVE_PREFIX;
+
+        let active = active_view(&series);
+        assert_eq!(active.points.len(), MAX_SERIES_POINTS);
+        assert_eq!(
+            active
+                .points
+                .first()
+                .map(|point| (point.topo_index, point.value)),
+            Some((INACTIVE_PREFIX + discarded_active, 100.0))
+        );
+        assert_eq!(
+            active
+                .points
+                .last()
+                .map(|point| (point.topo_index, point.value)),
+            Some((values.len() - 1, 200.0))
+        );
+
+        let finding = only(changes(slice::from_ref(&series)));
+        assert_eq!(finding.baseline, 100.0);
+        assert_eq!(finding.latest, 200.0);
+        assert_eq!(
+            finding.commit.as_deref(),
+            Some(format!("commit{}", INACTIVE_PREFIX + discarded_active + before).as_str())
+        );
+
+        // Detection used the capped view, but charting restored the untouched source.
+        assert_eq!(series.points.len(), values.len());
+        assert_eq!(finding.series.len(), values.len());
+        assert_eq!(
+            finding
+                .series
+                .first()
+                .map(|point| (point.topo_index, point.value)),
+            Some((0, 999.0))
+        );
+        assert_eq!(
+            finding
+                .series
+                .last()
+                .map(|point| (point.topo_index, point.value)),
+            Some((values.len() - 1, 200.0))
         );
     }
 
