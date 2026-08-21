@@ -1,0 +1,62 @@
+use std::cell::RefCell;
+use std::mem;
+use std::pin::Pin;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::task::{self, Poll};
+
+use static_assertions::{assert_impl_all, assert_not_impl_any};
+use testing::{
+    DropOnWakerRelease, assert_panics, assert_panics_with, clone_action_waker,
+    clone_action_waker_panicking_on_clone_release, drop_waker, wake_action_waker, with_watchdog,
+};
+
+use super::*;
+use crate::IntoValueError;
+
+assert_not_impl_any!(LocalEvent<i32>: Send, Sync);
+
+// The payload is one that is itself neither `UnwindSafe` nor `RefUnwindSafe`, so the
+// assertion can only pass if the event supplies both regardless of what it carries.
+assert_impl_all!(LocalEvent<Rc<RefCell<u32>>>: UnwindSafe, RefUnwindSafe);
+
+/// Places an event into freshly allocated pinned storage, returning the storage together
+/// with the endpoints, so that every test does not have to repeat the placement proof.
+///
+/// The storage comes first in the returned tuple, which makes it outlive the endpoints
+/// bound alongside it.
+fn placed<T: 'static>() -> (
+    Pin<Box<EmbeddedLocalEvent<T>>>,
+    RawLocalSender<T>,
+    RawLocalReceiver<T>,
+) {
+    let mut place = Box::pin(EmbeddedLocalEvent::<T>::new());
+
+    // SAFETY: The container was created right here, so no other event is using it. It is
+    // returned to the caller alongside the endpoints and is dropped after them, so it stays
+    // alive and writable for their entire lifetime, and `Box::pin` keeps the event at a
+    // stable address for that time.
+    let (sender, receiver) = unsafe { LocalEvent::placed(place.as_mut()) };
+
+    (place, sender, receiver)
+}
+
+/// Reads the event out of the storage it was placed into, so a test can inspect state that
+/// the endpoints do not expose.
+///
+/// The only such state is the diagnostic backtrace, which exists in debug builds only.
+#[cfg(debug_assertions)]
+fn placed_event<T: 'static>(place: &EmbeddedLocalEvent<T>) -> &LocalEvent<T> {
+    // SAFETY: The container is only ever accessed through shared references, matching the
+    // access that the endpoints make, and the pointer of an `UnsafeCell` is never null.
+    let event = unsafe { &*place.inner.get() };
+
+    // SAFETY: The caller obtained this container from `placed()`, which initialized an event
+    // into it. Releasing an event does not deinitialize the storage.
+    unsafe { event.assume_init_ref() }
+}
+
+#[cfg(debug_assertions)]
+mod diagnostics;
+mod lifecycle;
+mod reentrancy;

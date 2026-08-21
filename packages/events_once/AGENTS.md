@@ -67,6 +67,7 @@ and its models, so the table below identifies every row that exists:
 
 | Group | Cases | Storage rows | Models | Callgrind coverage |
 | --- | --- | --- | --- | --- |
+| `rent` | one: acquire endpoints from warmed storage | pooled | local, sync | every row (2) |
 | `lifecycle` | one: acquire, send, poll out the value, release | boxed, embedded, pooled, raw_pooled, lake, raw_lake | local, sync, plus one `oneshot` leaf | every local and sync row (12) |
 | `lifecycle_await_first` | one: acquire, poll (pending), send, poll out the value, release | as above | local, sync, plus one `oneshot` leaf | pooled only (2) |
 | `send` | `bound`, `awaiting`, `disconnected` | boxed | local, sync | every row (6) |
@@ -75,12 +76,15 @@ and its models, so the table below identifies every row that exists:
 | `is_ready` | `pending`, `ready`, `disconnected` | boxed | local, sync | none |
 | `cancel` | `sender_first_bound`, `sender_first_awaiting`, `receiver_first_bound` | boxed, embedded, pooled, raw_pooled, lake, raw_lake | local, sync | every row (36) |
 
-That is 86 Criterion rows and 68 Callgrind rows. The `oneshot` leaves are an
+That is 88 Criterion rows and 70 Callgrind rows. The `oneshot` leaves are an
 external reference point for the same lifecycle; they live in the same group so
 Criterion reports them alongside our own numbers.
 
 What each group puts inside the measured region:
 
+* `rent` measures one rental from a warmed managed pool. Endpoint destruction and
+  the pool-handle drop happen after the measured region, so the row isolates
+  reusable-slot acquisition, in-place initialization and endpoint construction.
 * `lifecycle` and `lifecycle_await_first` measure acquisition through final
   release. For boxed events acquisition allocates and release frees; for the
   embedded rows acquisition is `Event::placed` into caller-owned storage that

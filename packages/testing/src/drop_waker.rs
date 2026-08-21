@@ -5,6 +5,20 @@ use std::sync::Arc;
 use std::task::{RawWaker, RawWakerVTable, Waker};
 use std::{fmt, mem};
 
+/// Panics when dropped so tests can exercise cleanup across user destructors that unwind.
+#[allow(
+    clippy::exhaustive_structs,
+    reason = "unit construction is the complete API of this test helper"
+)]
+#[derive(Debug)]
+pub struct PanicsOnDrop;
+
+impl Drop for PanicsOnDrop {
+    fn drop(&mut self) {
+        panic!("intentional panic from a test payload destructor");
+    }
+}
+
 /// Creates a [`Waker`] that owns one reference to `data`, whose `wake()` and destructor both
 /// merely release that reference.
 ///

@@ -91,6 +91,7 @@ impl LocalEventLake {
     /// Rents an event from the lake, returning its endpoints.
     ///
     /// The event will be returned to the lake when both endpoints are dropped.
+    /// See [`PooledLocalReceiver`] for the receiver's callback and reentrancy contract.
     #[must_use]
     pub fn rent<T: 'static>(&self) -> (PooledLocalSender<T>, PooledLocalReceiver<T>) {
         let type_id = TypeId::of::<T>();

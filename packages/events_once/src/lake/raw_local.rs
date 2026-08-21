@@ -38,7 +38,8 @@ use crate::{RawLocalEventPool, RawLocalPooledReceiver, RawLocalPooledSender};
 /// where
 ///     T: Debug + 'static,
 /// {
-///     // SAFETY: We promise the lake outlives both the returned endpoints.
+///     // SAFETY: The lake is pinned outside this call, and both endpoints are consumed before
+///     // the function returns, so their backing pool remains alive and stationary.
 ///     let (tx, rx) = unsafe { lake.rent::<T>() };
 ///
 ///     tx.send(payload);
@@ -107,6 +108,7 @@ impl RawLocalEventLake {
     /// Rents an event from the lake, returning its endpoints.
     ///
     /// The event will be returned to the lake when both endpoints are dropped.
+    /// See [`RawLocalPooledReceiver`] for the receiver's callback and reentrancy contract.
     ///
     /// # Safety
     ///
@@ -291,7 +293,6 @@ impl<T: 'static> ErasedPool for PoolWrapper<T> {
 }
 
 #[cfg(test)]
-#[allow(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use core::task;
@@ -318,12 +319,15 @@ mod tests {
 
         assert_eq!(lake.len(), 0);
 
+        // SAFETY: The lake remains alive until both returned endpoints are dropped.
         let (sender1, receiver1) = unsafe { lake.rent::<String>() };
         assert_eq!(lake.len(), 1);
 
+        // SAFETY: The lake remains alive until both returned endpoints are dropped.
         let (sender2, receiver2) = unsafe { lake.rent::<i32>() };
         assert_eq!(lake.len(), 2);
 
+        // SAFETY: The lake remains alive until both returned endpoints are dropped.
         let (sender3, receiver3) = unsafe { lake.rent::<String>() };
         assert_eq!(lake.len(), 3);
 
@@ -346,7 +350,9 @@ mod tests {
 
         assert!(lake.is_empty());
 
+        // SAFETY: The lake remains alive until both returned endpoints are dropped.
         let (sender1, receiver1) = unsafe { lake.rent::<String>() };
+        // SAFETY: The lake remains alive until both returned endpoints are dropped.
         let (sender2, receiver2) = unsafe { lake.rent::<i32>() };
 
         assert!(!lake.is_empty());
@@ -376,8 +382,11 @@ mod tests {
         let lake = RawLocalEventLake::new();
 
         // 2 events that are awaited and one that is not.
+        // SAFETY: The lake remains alive until both returned endpoints are dropped.
         let (sender1, receiver1) = unsafe { lake.rent::<String>() };
+        // SAFETY: The lake remains alive until both returned endpoints are dropped.
         let (_sender2, receiver2) = unsafe { lake.rent::<i32>() };
+        // SAFETY: The lake remains alive until both returned endpoints are dropped.
         let (_sender3, _receiver3) = unsafe { lake.rent::<f64>() };
 
         let mut receiver1 = Box::pin(receiver1);
@@ -414,6 +423,7 @@ mod tests {
     fn inspect_awaiters_propagates_panic_from_closure() {
         let lake = RawLocalEventLake::new();
 
+        // SAFETY: The lake remains alive until both returned endpoints are dropped.
         let (_sender, receiver) = unsafe { lake.rent::<i32>() };
         let mut receiver = Box::pin(receiver);
 
@@ -444,6 +454,7 @@ mod tests {
     fn inspect_awaiters_closure_may_reenter_lake() {
         let lake = RawLocalEventLake::new();
 
+        // SAFETY: The lake remains alive until both returned endpoints are dropped.
         let (_sender, receiver) = unsafe { lake.rent::<i32>() };
         let mut receiver = Box::pin(receiver);
 
@@ -452,6 +463,7 @@ mod tests {
 
         assert_inspect_awaiters_is_reentrant(&|f| lake.inspect_awaiters(f), &|| {
             // A payload type the lake has no pool for yet, to also exercise pool insertion.
+            // SAFETY: The lake remains alive until both returned endpoints are dropped.
             let (sender, receiver) = unsafe { lake.rent::<u8>() };
             drop(sender);
             drop(receiver);
@@ -465,7 +477,9 @@ mod tests {
 
         let mut cx = task::Context::from_waker(Waker::noop());
 
+        // SAFETY: The lake remains alive until both returned endpoints are dropped.
         let (sender1, receiver1) = unsafe { lake.rent::<i32>() };
+        // SAFETY: The lake remains alive until both returned endpoints are dropped.
         let (sender2, receiver2) = unsafe { lake.rent::<i32>() };
 
         let mut receiver1 = Box::pin(receiver1);
