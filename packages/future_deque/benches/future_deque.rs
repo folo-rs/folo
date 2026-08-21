@@ -4,19 +4,16 @@
 //! ratios of active futures, and a steady-state churn shape at a small and a large
 //! long-lived population.
 //!
-//! The churn scenarios (`*_transient_churn`) exist to guard allocation behaviour rather
-//! than wall-clock time. The arena allocator behind both deques reclaims backing memory a
-//! whole chunk at a time rather than a slot at a time, so a single long-lived value is
-//! enough to pin an entire chunk. These scenarios hold a population of futures that never
-//! complete while repeatedly pushing, polling and popping a transient future, and the
-//! tracked allocation count per iteration must plateau after warm-up: reclaimed slots are
-//! reused, so the per-iteration cost stays flat and independent of both the iteration count
-//! and the size of the long-lived population. Churn that cannot reuse reclaimed storage
-//! shows up here as a per-iteration allocation count that grows with the run.
+//! The churn scenarios (`*_transient_churn`) primarily guard allocation behaviour. They
+//! hold a population of futures that never complete while repeatedly pushing, polling and
+//! popping a transient future of the same layout. An allocator with per-object reuse stops
+//! requesting backing allocations after warm-up. An allocator that only reclaims whole
+//! chunks continues requesting storage because the long-lived futures pin those chunks.
 //!
 //! Allocation counts and processor time are tracked alongside the wall-clock measurement
 //! and reported when the benchmark run finishes.
 
+use std::alloc::Layout;
 use std::future::Future;
 use std::hint::black_box;
 use std::pin::Pin;
@@ -63,18 +60,22 @@ impl Future for CountdownFuture {
 /// A future that never completes and never wakes itself.
 ///
 /// The churn scenarios use it for the long-lived population: because it never signals
-/// activation, it is polled exactly once and then merely occupies its arena slot, which is
-/// precisely the state that pins backing storage for the whole run.
+/// activation, it is polled exactly once and then retains its allocation for the whole run.
 ///
 /// It carries a payload so that it occupies real storage; a zero-sized future would pin
-/// nothing and the scenario would lose its point.
+/// nothing and the scenario would lose its point. Its fields match [`CountdownFuture`] so
+/// the resident and transient allocations exercise the same allocator size class.
 struct NeverReadyFuture {
+    remaining: usize,
     value: u64,
 }
 
 impl NeverReadyFuture {
     fn new(value: u64) -> Self {
-        Self { value }
+        Self {
+            remaining: INACTIVE_POLL_COUNT,
+            value,
+        }
     }
 }
 
@@ -82,23 +83,40 @@ impl Future for NeverReadyFuture {
     type Output = u64;
 
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<u64> {
-        // Touching the payload keeps the future non-empty in practice as well as in
-        // layout, so the optimizer cannot reduce it back to a zero-sized value.
-        _ = black_box(self.value);
+        // Touching the fields keeps the future's layout observable to the optimizer.
+        _ = black_box((self.remaining, self.value));
         Poll::Pending
     }
 }
 
+/// Keeps the low case large enough to exercise deque traversal without dominating setup.
 const FEW_ITEMS: usize = 8;
+
+/// Exposes scaling and allocator-capacity behaviour in the high case.
 const MANY_ITEMS: usize = 1000;
+
+/// Represents a sparse active population in the high case.
 const ACTIVE_RATIO_LOW: usize = 10;
+
+/// Represents a dense active population in the high case.
 const ACTIVE_RATIO_HIGH: usize = 900;
 
 /// Payload of the transient future in the churn scenarios. Only its determinism matters.
 const CHURN_VALUE: u64 = 42;
 
+/// Keeps inactive futures pending throughout each benchmark iteration.
+const INACTIVE_POLL_COUNT: usize = 1000;
+
 /// Poll budget that makes the transient future complete the first time it is polled.
 const READY_ON_FIRST_POLL: usize = 0;
+
+/// Guards the allocator-size-class assumption underpinning the churn scenarios.
+fn assert_churn_layouts_match() {
+    assert_eq!(
+        Layout::new::<NeverReadyFuture>(),
+        Layout::new::<CountdownFuture>()
+    );
+}
 
 /// Builds the steady state shared by the churn scenarios: `long_lived` futures that never
 /// complete, polled once so all of them are resident and registered.
@@ -107,6 +125,8 @@ const READY_ON_FIRST_POLL: usize = 0;
 /// reused across every iteration of that sample, so the long-lived allocations are never
 /// attributed to the churn measurement and pin their backing storage for the whole sample.
 fn local_deque_with_long_lived(long_lived: usize) -> LocalFutureDeque<u64> {
+    assert_churn_layouts_match();
+
     let mut deque = LocalFutureDeque::new();
 
     for i in 0..long_lived {
@@ -128,6 +148,8 @@ fn local_deque_with_long_lived(long_lived: usize) -> LocalFutureDeque<u64> {
 
 /// The [`FutureDeque`] counterpart of [`local_deque_with_long_lived`].
 fn sync_deque_with_long_lived(long_lived: usize) -> FutureDeque<u64> {
+    assert_churn_layouts_match();
+
     let mut deque = FutureDeque::new();
 
     for i in 0..long_lived {
@@ -164,7 +186,7 @@ fn bench_local_future_deque(c: &mut Criterion, allocs: &AllocSession, times: &Ti
             for _ in 0..iterations {
                 let mut deque = LocalFutureDeque::new();
                 for i in 0..FEW_ITEMS {
-                    deque.push_back(CountdownFuture::new(0, i as u64));
+                    deque.push_back(CountdownFuture::new(READY_ON_FIRST_POLL, i as u64));
                 }
                 let waker = Waker::noop();
                 let cx = &mut Context::from_waker(waker);
@@ -196,7 +218,11 @@ fn bench_local_future_deque(c: &mut Criterion, allocs: &AllocSession, times: &Ti
             for _ in 0..iterations {
                 let mut deque = LocalFutureDeque::new();
                 for i in 0..MANY_ITEMS {
-                    let remaining = if i < ACTIVE_RATIO_LOW { 0 } else { 1000 };
+                    let remaining = if i < ACTIVE_RATIO_LOW {
+                        READY_ON_FIRST_POLL
+                    } else {
+                        INACTIVE_POLL_COUNT
+                    };
                     deque.push_back(CountdownFuture::new(remaining, i as u64));
                 }
                 let waker = Waker::noop();
@@ -231,7 +257,11 @@ fn bench_local_future_deque(c: &mut Criterion, allocs: &AllocSession, times: &Ti
             for _ in 0..iterations {
                 let mut deque = LocalFutureDeque::new();
                 for i in 0..MANY_ITEMS {
-                    let remaining = if i < ACTIVE_RATIO_HIGH { 0 } else { 1000 };
+                    let remaining = if i < ACTIVE_RATIO_HIGH {
+                        READY_ON_FIRST_POLL
+                    } else {
+                        INACTIVE_POLL_COUNT
+                    };
                     deque.push_back(CountdownFuture::new(remaining, i as u64));
                 }
                 let waker = Waker::noop();
@@ -328,7 +358,7 @@ fn bench_future_deque(c: &mut Criterion, allocs: &AllocSession, times: &TimeSess
             for _ in 0..iterations {
                 let mut deque = FutureDeque::new();
                 for i in 0..FEW_ITEMS {
-                    deque.push_back(CountdownFuture::new(0, i as u64));
+                    deque.push_back(CountdownFuture::new(READY_ON_FIRST_POLL, i as u64));
                 }
                 let waker = Waker::noop();
                 let cx = &mut Context::from_waker(waker);
@@ -360,7 +390,11 @@ fn bench_future_deque(c: &mut Criterion, allocs: &AllocSession, times: &TimeSess
             for _ in 0..iterations {
                 let mut deque = FutureDeque::new();
                 for i in 0..MANY_ITEMS {
-                    let remaining = if i < ACTIVE_RATIO_LOW { 0 } else { 1000 };
+                    let remaining = if i < ACTIVE_RATIO_LOW {
+                        READY_ON_FIRST_POLL
+                    } else {
+                        INACTIVE_POLL_COUNT
+                    };
                     deque.push_back(CountdownFuture::new(remaining, i as u64));
                 }
                 let waker = Waker::noop();
@@ -393,7 +427,11 @@ fn bench_future_deque(c: &mut Criterion, allocs: &AllocSession, times: &TimeSess
             for _ in 0..iterations {
                 let mut deque = FutureDeque::new();
                 for i in 0..MANY_ITEMS {
-                    let remaining = if i < ACTIVE_RATIO_HIGH { 0 } else { 1000 };
+                    let remaining = if i < ACTIVE_RATIO_HIGH {
+                        READY_ON_FIRST_POLL
+                    } else {
+                        INACTIVE_POLL_COUNT
+                    };
                     deque.push_back(CountdownFuture::new(remaining, i as u64));
                 }
                 let waker = Waker::noop();
