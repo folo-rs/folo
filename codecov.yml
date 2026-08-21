@@ -39,5 +39,14 @@ codecov:
 # covered, and the book build fails on a broken include) plus the book build itself — not by line
 # coverage of its SVG rendering and its `cbh-figures` generator binary, which line coverage cannot
 # meaningfully measure. Excluding it keeps the coverage signal focused on shipped logic.
+#
+# `cargo-bench-history-calibration` is unpublished infrastructure of the same kind: an offline
+# generator that derives the committed selection-adjustment table (`cbh_stats`'s `table.rs`). Its
+# correctness is guaranteed by freshness tests (the checked-in table must match regenerated output,
+# and the committed exact rows must stay conservative) — not by line coverage of its Monte Carlo
+# derivation, its table renderer, and its `cbh-calibration` generator binary, none of which the
+# freshness tests execute at full scale. The shipped consumer of the table lives in `cbh_stats` and
+# is covered by that crate's own tests.
 ignore:
   - "packages/cargo-bench-history-figures"
+  - "packages/cargo-bench-history-calibration"

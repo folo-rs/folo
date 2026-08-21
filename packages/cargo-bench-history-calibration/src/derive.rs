@@ -82,18 +82,19 @@ pub fn derive_table(samples: u64) -> Table {
 /// Geometric with ratio [`LADDER_RATIO`], anchored exactly on [`ANCHOR_LEVEL`] so the significance
 /// gate compares against the very bits it uses rather than a rounded neighbor (§6.1). It spans
 /// down to [`LADDER_FLOOR`] and ends with an explicit `1.0` rung that accepts everything. Each rung
-/// is computed independently as `anchor · ratio^k` so no rounding accumulates across the grid.
+/// is computed independently as `anchor · ratio^k`, the power spelled out by [`int_pow`] so the
+/// grid reproduces bit-for-bit on every platform, so no rounding accumulates across the grid.
 pub(crate) fn adjusted_levels() -> Vec<f64> {
     let down_steps = grid_steps(ANCHOR_LEVEL / LADDER_FLOOR);
     let up_steps = grid_steps(1.0 / ANCHOR_LEVEL);
 
     let mut levels = Vec::with_capacity(down_steps.saturating_add(up_steps).saturating_add(2));
     for k in (1..=down_steps).rev() {
-        levels.push(ANCHOR_LEVEL / LADDER_RATIO.powi(exponent(k)));
+        levels.push(ANCHOR_LEVEL / int_pow(LADDER_RATIO, k));
     }
     levels.push(ANCHOR_LEVEL);
     for k in 1..=up_steps {
-        levels.push(ANCHOR_LEVEL * LADDER_RATIO.powi(exponent(k)));
+        levels.push(ANCHOR_LEVEL * int_pow(LADDER_RATIO, k));
     }
     levels.push(1.0);
     levels
@@ -115,12 +116,25 @@ fn grid_steps(span: f64) -> usize {
     count
 }
 
-/// A small grid exponent as `i32` for [`f64::powi`].
+/// `base` raised to a small non-negative integer power, by explicit binary exponentiation.
 ///
-/// Grid exponents are at most a few dozen, so the conversion cannot fail; it is fallible only to
-/// satisfy the workspace's ban on truncating `as` casts.
-fn exponent(step: usize) -> i32 {
-    i32::try_from(step).expect("grid exponents are a few dozen at most")
+/// [`f64::powi`] lowers to a platform intrinsic whose multiplication schedule is not fixed across
+/// targets, so its result can differ in the last bit from one operating system to the next. The
+/// committed level grid is pinned to the last bit and re-derived by a freshness test that runs on
+/// every platform (§6.1), so the grid must reproduce byte-for-byte everywhere. Spelling the
+/// exponentiation out as a fixed sequence of IEEE-754 multiplications — each individually portable
+/// — makes the derived bits independent of the host. Exponents here are a few dozen at most, well
+/// inside the loop's reach.
+fn int_pow(mut base: f64, mut exp: usize) -> f64 {
+    let mut acc = 1.0;
+    while exp > 0 {
+        if exp & 1 == 1 {
+            acc *= base;
+        }
+        base *= base;
+        exp >>= 1;
+    }
+    acc
 }
 
 /// The one-sided Dvoretzky–Kiefer–Wolfowitz margin that makes a Monte Carlo row conservative
