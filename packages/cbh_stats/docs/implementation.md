@@ -19,27 +19,50 @@ and retaining the strongest taints the Mann–Whitney p-value at that split. A c
 on length is insufficient because benchmark series commonly contain repeated integer values, and
 different tie patterns have different null distributions.
 
-`selection_adjusted_change_point` therefore ranks the observed values once and conditionally
-permutes that exact rank multiset at runtime. One shared `SplitScorer` evaluates the observed and
-every shuffled ordering: Pettitt first-maximum location, minimum-regime rejection, and the same
-exact-or-normal Mann–Whitney score. Rejected shuffled splits contribute the no-evidence score while
-remaining in the denominator. The result uses the fixed-budget plus-one Monte Carlo p-value and is
-never allowed below the observed tainted score.
+`selection_adjusted_change_point` therefore combines an analytic certificate with conditional
+permutation over the exact observed rank multiset. Both are valid p-value components and receive
+predeclared Bonferroni weights; taking the smaller weighted component is valid without assuming
+they are independent. The result is never allowed below the observed tainted score.
+
+The analytic component applies a union bound over every admissible split. At sizes where
+Mann–Whitney is exact, the fixed-split p-value bounds its own contribution. At approximate sizes,
+the normal score is used only to invert the lower and upper doubled-rank-sum rejection thresholds.
+Each threshold's probability is then bounded under sampling without replacement. Doubled ranks are
+normalized to `[0, 1]`, and a sample-mean tail at `x` receives the bound
+`exp(-k * D(x || mean))`, where `D` is Bernoulli relative entropy. Hoeffding's convex-order
+comparison makes the with-replacement Chernoff bound conservative for the finite population. The
+implementation also evaluates Serfling's bounded-mean inequality, which tightens Hoeffding with
+the sampling-without-replacement fraction, and keeps the smaller valid tail bound. Summing those
+fixed-split tails is conservative regardless of Pettitt's selection rule: a selected score at least
+as striking as the observation must occur at one of the splits in the union.
+[Hoeffding's comparison theorem] and [Serfling's inequality] supply the finite-population bounds.
 
 The scorer caches every property invariant under permutation. Doubled average ranks make Pettitt
 prefix sums and exact subset sums integral; the tie correction and total rank sum are computed
-once. Exact Mann–Whitney tail tables are built lazily and jointly for every feasible smaller-side
-size only if a selected split needs one. Near-balanced long splits use the same normal scorer as
-the production primitive. The final conditional p-value remains meaningful even when that internal
-score is approximate because calibration compares like with like over the observed tie pattern.
+once. The analytic split scan accumulates its smallest and largest attainable rank sums as the
+smaller-side size grows instead of rescanning the sorted ranks for every size. Exact Mann–Whitney
+tail tables are built lazily and jointly for every feasible smaller-side size only if a selected
+split needs one. Near-balanced long splits use the same normal scorer as the production primitive.
+The final conditional p-value remains meaningful even when that internal score is approximate
+because calibration compares like with like over the observed tie pattern.
 
 Permutation order comes from a committed FNV-1a seed derivation, SplitMix64 stream, and
 Fisher–Yates shuffle. The seed hashes sorted canonical value bits, sorted doubled ranks, and the
 minimum-regime rule, so it is stable across platforms and invariant to the observed ordering.
 Signed zero is canonicalized before hashing while the rank multiset retains the actual tie pattern.
-The caller supplies the fixed budget and the next rejection boundary. Early rejection compares
-accumulated exceedances against the *final* fixed denominator and returns no evidence only when no
-remaining shuffle could bring the result below that boundary.
+
+One shared `SplitScorer` evaluates the observed and every shuffled ordering: Pettitt first-maximum
+location, minimum-regime rejection, and the same exact-or-normal Mann–Whitney score. Rejected
+shuffled splits contribute the no-evidence score while remaining in the denominator. Sequential
+Monte Carlo stops at a predeclared count `h` of shuffled scores at least as extreme and returns
+`h / draws`; when the maximum budget arrives first it returns the fixed-budget plus-one value.
+This [Besag-Clifford] stopping rule is valid under the conditional permutation null and avoids
+spending the maximum on ordinary null series. The caller may also skip permutation when the
+weighted analytic component already clears a predeclared acceptance boundary.
+
+[Besag-Clifford]: https://doi.org/10.1093/biomet/78.2.301
+[Hoeffding's comparison theorem]: https://doi.org/10.1080/01621459.1963.10500830
+[Serfling's inequality]: https://doi.org/10.1214/aos/1176342611
 
 ## Rank-test significance
 
@@ -64,3 +87,8 @@ enumerating the larger side would overflow at its half-size subsets even when th
 is small. Because the count is done in `f64`, no big-integer dependency is pulled in and the kernel
 stays Miri-safe. History-mode selection adjustment calibrates whichever path this split-level
 scorer takes against the same path over conditional permutations.
+
+The detector's early population-separation gate needs only Mann–Whitney superiority, not
+significance. `mann_whitney_superiority` therefore shares the joint-ranking calculation but omits
+exact-tail enumeration. Selection calibration computes significance later only for a preferred
+step, avoiding duplicate exact work for candidates that a cheaper gate or the drift fit discards.

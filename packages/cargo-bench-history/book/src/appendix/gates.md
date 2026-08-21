@@ -54,9 +54,9 @@ here for visibility. It changes the chance level and never declines a candidate 
 ## Each detector has its own sequence
 
 There is no single gate order. Each detector applies the gates its own question needs, in the
-order that makes sense for it — a change point tests significance before checking magnitude,
-while a branch comparison cannot test significance until it has formed its interval, so it
-checks magnitude first.
+order that makes sense for it. A change point checks inexpensive magnitude and noise evidence
+before running its bounded search correction; a branch comparison cannot test significance until
+it has formed its interval, so it checks magnitude first.
 
 A candidate **stops at the first gate that declines it**. Nothing after that runs, which is why
 a gate ladder is often short. That is an accurate picture, not a truncated one.
@@ -197,6 +197,10 @@ that declines it. The tables below show one row per gate, in the order the detec
 The demand is what the gate required, the computed value is what the candidate supplied, and the
 verdict states the outcome. A numeric gate passes when the computed value clears the demand. A
 boolean gate must simply hold. Once a gate declines, the rows below it show `not run`.
+
+History compares the step and drift models after their cheap gates. If drift fits better, the step
+ladder can end with selection adjustment and significance marked `not run` even though no earlier
+step gate declined: the detector chose the better-fitting drift before paying for step calibration.
 
 A candidate that clears every gate:
 

@@ -278,6 +278,19 @@ pub struct MannWhitneyU {
     two_sided_p: f64,
 }
 
+/// Joint ranks and U statistic shared by Mann–Whitney outputs.
+///
+/// Ranking is the common expensive step for significance and superiority. This
+/// internal result lets callers that need only the effect size avoid exact-tail
+/// enumeration while [`MannWhitneyU`] reuses the same values for both outputs.
+struct RankedMannWhitney {
+    n1: usize,
+    n2: usize,
+    rank_sum_left: f64,
+    u2: f64,
+    scaled_ranks: Vec<usize>,
+}
+
 /// The largest integer through which f64 represents every integer exactly. The
 /// exact permutation tail counts rank subsets as f64, so it is trustworthy only
 /// while those counts stay at or below this. Ref:
@@ -300,6 +313,10 @@ const EXACT_COUNT_LIMIT: u128 = 1 << 53;
 /// dishonestly small verdict. Ref:
 /// `packages/cargo-bench-history/docs/DESIGN.md`, "Exact significance where
 /// feasible".
+// Mutating this guard can route large samples into combinatorial exact enumeration.
+// Detecting that noncompletion would require the real-time timeout tests forbid; the
+// feasibility boundary itself is covered directly.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn exact_mw_feasible(n1: usize, n2: usize) -> bool {
     let n = n1.saturating_add(n2);
     let k = n1.min(n2);
@@ -331,39 +348,28 @@ impl MannWhitneyU {
     /// points on both sides.
     #[must_use]
     pub fn new(left: &[f64], right: &[f64]) -> Option<Self> {
-        let n1 = left.len();
-        let n2 = right.len();
-        if n1 == 0 || n2 == 0 {
-            return None;
-        }
-        let mut combined = Vec::with_capacity(n1.saturating_add(n2));
-        combined.extend_from_slice(left);
-        combined.extend_from_slice(right);
-        let scaled_ranks = scaled_average_ranks(&combined);
-
-        let rank_sum_left =
-            count_to_f64(scaled_ranks.iter().take(n1).copied().sum::<usize>()) / 2.0;
-        let n1_f = count_to_f64(n1);
-        let n2_f = count_to_f64(n2);
-
-        // `u1 = R_left − n1·(n1+1)/2` counts the `(left, right)` pairs with `left >
-        // right` (ties as one half); the complementary `u2` counts `right > left`.
-        let u1 = rank_sum_left - n1_f * (n1_f + 1.0) / 2.0;
-        let u2 = n1_f * n2_f - u1;
+        let ranked = rank_mann_whitney(left, right)?;
+        let n1_f = count_to_f64(ranked.n1);
+        let n2_f = count_to_f64(ranked.n2);
 
         // A split whose smaller side is few enough points earns the exact
         // permutation tail; a near-balanced long split keeps the normal
         // approximation. Ref: [`exact_mw_feasible`].
-        let two_sided_p = if exact_mw_feasible(n1, n2) {
-            exact_two_sided_p(&scaled_ranks, n1)
+        let two_sided_p = if exact_mw_feasible(ranked.n1, ranked.n2) {
+            exact_two_sided_p(&ranked.scaled_ranks, ranked.n1)
         } else {
-            normal_mann_whitney_p(n1, n2, rank_sum_left, mann_whitney_tie_term(&scaled_ranks))
+            normal_mann_whitney_p(
+                ranked.n1,
+                ranked.n2,
+                ranked.rank_sum_left,
+                mann_whitney_tie_term(&ranked.scaled_ranks),
+            )
         };
 
         Some(Self {
             n1: n1_f,
             n2: n2_f,
-            u2,
+            u2: ranked.u2,
             two_sided_p,
         })
     }
@@ -402,6 +408,49 @@ impl MannWhitneyU {
     pub fn superiority(&self) -> f64 {
         self.u2 / (self.n1 * self.n2)
     }
+}
+
+/// Computes only the Mann–Whitney probability-of-superiority effect size.
+///
+/// Unlike [`MannWhitneyU::new`], this does not enumerate or approximate a
+/// significance tail. Use it when a caller needs regime separation but another
+/// procedure owns significance.
+#[must_use]
+pub fn mann_whitney_superiority(left: &[f64], right: &[f64]) -> Option<f64> {
+    rank_mann_whitney(left, right).map(|ranked| ranked.superiority())
+}
+
+impl RankedMannWhitney {
+    fn superiority(&self) -> f64 {
+        self.u2 / (count_to_f64(self.n1) * count_to_f64(self.n2))
+    }
+}
+
+fn rank_mann_whitney(left: &[f64], right: &[f64]) -> Option<RankedMannWhitney> {
+    let n1 = left.len();
+    let n2 = right.len();
+    if n1 == 0 || n2 == 0 {
+        return None;
+    }
+    let mut combined = Vec::with_capacity(n1.saturating_add(n2));
+    combined.extend_from_slice(left);
+    combined.extend_from_slice(right);
+    let scaled_ranks = scaled_average_ranks(&combined);
+    let rank_sum_left = count_to_f64(scaled_ranks.iter().take(n1).copied().sum::<usize>()) / 2.0;
+    let n1_f = count_to_f64(n1);
+    let n2_f = count_to_f64(n2);
+
+    // `u1 = R_left − n1·(n1+1)/2` counts the `(left, right)` pairs with `left >
+    // right` (ties as one half); the complementary `u2` counts `right > left`.
+    let u1 = rank_sum_left - n1_f * (n1_f + 1.0) / 2.0;
+    let u2 = n1_f * n2_f - u1;
+    Some(RankedMannWhitney {
+        n1,
+        n2,
+        rank_sum_left,
+        u2,
+        scaled_ranks,
+    })
 }
 
 /// The exact two-sided Mann–Whitney p-value from doubled joint average ranks.
@@ -955,9 +1004,8 @@ mod tests {
     fn mann_whitney_superiority_is_one_when_right_dominates() {
         // Every `right` value exceeds every `left` value: all 3×3 pairs favour
         // `right`, so the probability of superiority is exactly 1.
-        let s = MannWhitneyU::new(&[1.0, 2.0, 3.0], &[4.0, 5.0, 6.0])
-            .unwrap()
-            .superiority();
+        let s = mann_whitney_superiority(&[1.0, 2.0, 3.0], &[4.0, 5.0, 6.0])
+            .expect("both samples are nonempty");
         assert_eq!(s, 1.0);
     }
 
@@ -986,9 +1034,8 @@ mod tests {
         // `right` = {2, 4} against `left` = {1, 3}: pairs (2>1), (4>1), (4>3) favour
         // right and (2<3) favours left, so 3 of 4 pairs favour right → 0.75. This is
         // the interleaving case a stationary-but-noisy series produces.
-        let s = MannWhitneyU::new(&[1.0, 3.0], &[2.0, 4.0])
-            .unwrap()
-            .superiority();
+        let s =
+            mann_whitney_superiority(&[1.0, 3.0], &[2.0, 4.0]).expect("both samples are nonempty");
         assert_eq!(s, 0.75);
     }
 
@@ -1017,6 +1064,8 @@ mod tests {
         // statistics at all, so neither the p-value nor the effect size exists.
         assert!(MannWhitneyU::new(&[], &[1.0, 2.0]).is_none());
         assert!(MannWhitneyU::new(&[1.0, 2.0], &[]).is_none());
+        assert!(mann_whitney_superiority(&[], &[1.0, 2.0]).is_none());
+        assert!(mann_whitney_superiority(&[1.0, 2.0], &[]).is_none());
     }
 
     /// Every size-`k` combination of the indices `0..n`, for the brute-force tail.

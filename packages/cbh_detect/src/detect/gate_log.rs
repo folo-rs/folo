@@ -295,10 +295,10 @@ impl Gate {
         Self::AbsoluteFloor,
         Self::ResidualNoise,
         Self::BaseScatter,
-        Self::SelectionAdjustment,
-        Self::Significance,
         Self::RegimeSeparation,
         Self::IntervalDisjoint,
+        Self::SelectionAdjustment,
+        Self::Significance,
         Self::IntervalNoiseBand,
     ];
 }
@@ -345,8 +345,8 @@ impl StageLog<'_> {
 
     /// Records a gate that reports how it transformed a chance level rather than deciding
     /// on it — `from` before the correction, `to` after — and always survives. The
-    /// selection adjustment corrects a value rather than testing it, so a `--verbose` run
-    /// can explain the step rather than only its conclusion (`docs/standalone-binaries.md`).
+    /// selection adjustment corrects a value rather than testing it, so diagnostics can
+    /// explain the step rather than only its conclusion.
     /// Returns `to`, so a call site both records and consumes the corrected value from one
     /// expression and the two cannot drift apart.
     pub(crate) fn adjustment(&mut self, gate: Gate, from: f64, to: f64) -> f64 {

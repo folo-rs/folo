@@ -1147,30 +1147,52 @@ tried every eligible split and kept the most striking, and the tool ran two dete
 (change-point and drift) and reported whichever fit the data better. Both make a flat,
 unchanging series look more surprising than it is, so an uncorrected significance gate would
 admit far more false alarms than its nominal level suggests — most on the recent, short-regime
-regressions the tool most wants to get right. History mode therefore adjusts the change-point's tainted split score by **conditional
-permutation**. It repeatedly shuffles the series' actual rank multiset, including every repeated
-value, and runs the complete production procedure on each ordering: Pettitt first-maximum split
-selection, minimum-regime rejection, and exact-or-normal Mann–Whitney scoring. The adjusted
-chance level is the plus-one fraction of shuffled procedures at least as striking as the observed
-one. A shuffled ordering whose selected split is too short remains in the denominator as
-no evidence; dropping it would condition on finding a reportable split and make the result
-optimistic.
+regressions the tool most wants to get right. History mode therefore adjusts the change-point's tainted split score with two conservative
+components. The **analytic component** considers every eligible split and adds an upper bound for
+the chance that its fixed-split rank score would be at least as striking as the observed winner.
+Exactly scored splits contribute their valid fixed-split chance level. Approximately scored splits
+use the approximation only to identify the rank-sum tails that count as equally striking, then
+bound those tails with finite-population concentration inequalities. Adding the per-split bounds
+is conservative regardless of which split Pettitt selected.
+
+The **conditional-permutation component** repeatedly shuffles the series' actual rank multiset,
+including every repeated value, and runs the complete production procedure on each ordering:
+Pettitt first-maximum split selection, minimum-regime rejection, and exact-or-normal Mann–Whitney
+scoring. A shuffled ordering whose selected split is too short remains in the denominator as no
+evidence; dropping it would condition on finding a reportable split and make the result optimistic.
+The analytic and permutation components receive fixed portions of the available chance level and
+are combined by weighted Bonferroni, so either may provide the stronger answer without requiring
+them to be independent. The analytic component receives `0.10`, permutation receives `0.90`, and
+the combined split-search chance level is
+`min(analytic / 0.10, permutation / 0.90, 1)`.
 
 The permutation stream is reproducible and invariant to the observed ordering: its stable seed is
 derived from sorted canonical value bits, the sorted rank multiset, and the fixed regime rule.
-The sample budget scales with the complete judged family because the smallest
-Benjamini–Hochberg threshold scales inversely with that family. The production budget gives about
-30 expected null observations at that hardest threshold and a plus-one resolution comfortably
-below it. The detector may stop early only after the accumulated exceedances make passing the
-later significance gate mathematically impossible under the full fixed denominator; it then
-returns no evidence rather than estimating a favourable answer from a partial run.
+An analytic answer that already clears the strictest possible family threshold needs no shuffles.
+Otherwise sequential permutation stops after 30 shuffled winners are at least as striking and
+returns `30 / draws`, while a candidate that does not reach that count uses the plus-one estimate
+`(1 + exceedances) / (1 + maximum)` at its maximum budget. For a judged family of size `m`, that
+maximum is `min(600m, 500000)`. At the ceiling, a zero-exceedance permutation component still
+clears the rank-1 boundary of the 20,000-series stress family after its weight and the
+two-detector correction. With the current weights and false-discovery target, permutation alone has
+enough resolution through 22,500 judged series. The ceiling prevents a large family from
+multiplying its size into every series' work, making total permutation work linear in family size
+once it applies. It can make an isolated, ambiguous candidate in a larger family too coarse to
+survive the strictest family threshold; that candidate stays silent rather than borrowing certainty
+the bounded calculation did not establish.
+
+Permutation-independent gates run before this calibration, and a change point is calibrated only
+when its fitted step is at least as good as the drift model. These reorderings do not loosen the
+detector: every earlier gate is conjunctive, a better-fitting drift needs no step calibration, and a
+drift that already passed remains the fallback if the preferred step fails significance.
 
 After this split-search adjustment, history mode doubles both detectors' chance levels to account
 for choosing between change-point and drift. The result is the honest per-series chance level that
-the significance gate and family correction both consume. Branch mode does not use these history
-adjustments. Its final comparison is predetermined, but optional base-window narrowing searches
-suffixes and split positions and is not selection-adjusted. The supported upper series length (§8)
-bounds the runtime work of scoring each permutation.
+the significance gate and family correction both consume. Branch mode does not use these history adjustments. Its final comparison is predetermined, but
+optional base-window narrowing searches suffixes and split positions and is not selection-adjusted.
+The supported upper series length (§8) and the per-candidate permutation ceiling jointly bound the
+work of history calibration. This is a worst-case bound rather than a uniform speed promise: an
+ambiguous maximum-length series may use the full ceiling.
 
 That same predicate is what every report accounts for (§8.9): a series is judged, counted in
 the family, and reported as judged together, or it is none of the three.

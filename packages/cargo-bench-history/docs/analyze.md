@@ -118,11 +118,13 @@ flowchart TD
   FIN["finalize"] --> FLAT["flatten to a series list"]
   FLAT --> SS["sort series, then sort each series' points by topology\n— serial —"]
   SS --> CENSUS["classify testability + size family\n— serial metadata prepass —"]
-  CENSUS --> DALL["detect: one chunk of series per worker\n(spawned)"]
+  CENSUS --> DALL["cheap gates + model fit:\none chunk of series per worker\n(spawned)"]
   DALL --> CANDS["candidate findings"]
+  DALL --> CAL["bounded selection calibration\n(clear-step analytic certificate;\nsequential conditional permutation)"]
+  CAL --> CANDS
   CANDS --> BH["false-discovery filter — serial —"]
   CENSUS -->|series census: judged + reasons| BH
-  CENSUS -->|family-sized permutation budget| DALL
+  CENSUS -->|family size sets bounded\npermutation precision| CAL
   BH --> MAT["materialize surviving findings' chart points"]
   MAT --> SF["sort findings by magnitude, method, identity — serial —"]
   SF --> FINDINGS[("findings")]
@@ -142,12 +144,21 @@ The false-discovery filter's family is every series that was **testable**, inclu
 raised no candidate (DESIGN.md §8.3). A cheap serial prepass evaluates the mode-aware testability
 predicate, builds the **series census** — judged, and one reason per series it declined — and makes
 the final family size available before statistical work starts. This ordering is required because
-history change-point calibration scales its permutation budget to the same family that
-Benjamini–Hochberg later filters. Workers evaluate the same pure predicate to short-circuit
-unjudged series, so the count and execution decision cannot diverge. The census outlives
-detection: the pipeline records the ghost-filtered series into it too (their exclusion happens
-before detection ever sees them) and hands it to the renderers, which is how a report states what
-it judged (DESIGN.md §8.9).
+history change-point calibration uses that family size to choose its bounded permutation precision
+and the analytic acceptance boundary that guarantees survival even at the strictest family rank.
+Workers evaluate the same pure predicate to short-circuit unjudged series, so the count and
+execution decision cannot diverge. The census outlives detection: the pipeline records the
+ghost-filtered series into it too (their exclusion happens before detection ever sees them) and
+hands it to the renderers, which is how a report states what it judged (DESIGN.md §8.9).
+
+History change points pass permutation-independent magnitude, residual, population-separation, and
+interval gates before calibration. The step is calibrated only when it fits at least as well as the
+already-evaluated drift; a qualified drift remains the fallback if significance then rejects the
+step. Clear steps can finish through the analytic split-union certificate. Remaining candidates use
+conditional permutation, which stops after its predeclared exceedance count for ordinary nulls and
+has an absolute per-candidate ceiling for strong or ambiguous tails. Every series remains
+independent of the others, preserving the dependence assumptions of the final
+Benjamini–Hochberg pass.
 
 The statistical kernels are chosen to keep the tens-of-millions-of-points path affordable —
 an in-place unstable sort for the median (no scratch buffer, and ties are bit-identical so
@@ -188,7 +199,7 @@ second listing:
 | Merge per-worker builders | serial | per worker partial |
 | Series sort + point sort | serial | the series list / per series |
 | Testability census | serial | per series metadata |
-| **Detect** | **CPU-parallel (spawned)** | one chunk of series per worker |
+| **Detect + bounded calibration** | **CPU-parallel (spawned)** | one chunk of series per worker |
 | Blessing-sidecar fetch | I/O-concurrent (one task) | per object, bounded in flight |
 | False-discovery filter + finding sort + render | serial | the candidate list + the merged census |
 

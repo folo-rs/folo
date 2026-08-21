@@ -56,13 +56,13 @@ const CHANGE_POINT_GATES: [Gate; 10] = [
     Gate::SplitLocated,
     Gate::MinRegime,
     Gate::NonZeroDelta,
-    Gate::SelectionAdjustment,
-    Gate::Significance,
     Gate::RelativeFloor,
     Gate::AbsoluteFloor,
     Gate::ResidualNoise,
     Gate::RegimeSeparation,
     Gate::IntervalDisjoint,
+    Gate::SelectionAdjustment,
+    Gate::Significance,
 ];
 
 /// The drift detector's gates, in the order it applies them.

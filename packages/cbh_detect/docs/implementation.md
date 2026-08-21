@@ -35,17 +35,23 @@ selection step may discard so much that the remainder falls under the minimum re
 removal allowance is set far below that margin.
 
 History-mode change-point calibration needs the size of the later false-discovery family before
-it can choose a permutation budget. Detection therefore begins with a serial, metadata-only
-testability prepass that builds the census and obtains its judged count. Workers evaluate the same
-pure predicate to short-circuit unjudged series, then run each judged series independently with a
-budget proportional to that shared family size. The expensive permutation work remains inside the
-existing per-series worker chunks; only the cheap classification pass is serial.
+it can choose its analytic acceptance boundary and permutation precision. Detection therefore
+begins with a serial, metadata-only testability prepass that builds the census and obtains its
+judged count. Workers evaluate the same pure predicate to short-circuit unjudged series, then run
+each judged series independently. The expensive statistical work remains inside the existing
+per-series worker chunks; only the cheap classification pass is serial.
 
-The budget provides enough plus-one resolution for the strictest rank-1 Benjamini–Hochberg
-threshold after the two-history-detector correction, while retaining about 30 expected null
-exceedances at that boundary. A series that accumulates enough exceedances that its final
-fixed-budget p-value cannot pass the significance gate stops early and returns no evidence. This
-is a conservative verdict shortcut, not a variable-precision estimate.
+Permutation-independent magnitude and noise gates run before selection adjustment. The detector
+also fits the drift before calibration and calibrates a step only when that model fits at least as
+well; a qualified drift remains the fallback if the step then fails significance. Calibration
+combines a conservative analytic split-union bound with conditional permutation under fixed
+Bonferroni weights. An analytic result that clears the rank-1 family boundary needs no shuffles.
+Otherwise the permutation calculation uses Besag-Clifford stopping at a predeclared exceedance
+count, with a family-scaled maximum held under an absolute per-candidate ceiling. This bounds
+strong-candidate work without introducing cross-series allocation decisions that would change the
+dependence assumptions of Benjamini–Hochberg. The ceiling is a hard bound, not a claim that every
+candidate is cheap: an ambiguous maximum-length series may consume the full budget, while clear
+steps and ordinary nulls take the analytic and sequential exits respectively.
 
 Parallel work is supplied through an executor abstraction, preserving the same deterministic
 analysis logic for production execution and synchronous component tests.

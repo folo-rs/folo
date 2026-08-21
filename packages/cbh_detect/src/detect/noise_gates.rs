@@ -61,15 +61,41 @@ pub const TARGET_FALSE_DISCOVERY_RATE: f64 = 0.10;
 /// "Choosing between a step and a drift".
 pub const HISTORY_DETECTOR_COUNT: usize = 2;
 
-/// Conditional permutations sampled for each judged series in the
-/// false-discovery family.
+/// Conditional permutations added for each judged series in the false-discovery
+/// family, up to [`MAX_CHANGE_PERMUTATIONS`].
 ///
 /// At the hardest rank-1 Benjamini-Hochberg boundary, the pre-arbitration
 /// change-point p-value must be below `TARGET_FALSE_DISCOVERY_RATE /
 /// (HISTORY_DETECTOR_COUNT * family_size)`. This budget gives the null sample
-/// about 30 expected observations at that boundary, while its plus-one floor
-/// remains well below it. Ref: `docs/DESIGN.md`, "Selection adjustment".
+/// enough expected observations at that boundary to estimate it stably until the
+/// absolute cap takes over. Ref: `docs/DESIGN.md`, "Selection adjustment".
 pub const PERMUTATIONS_PER_JUDGED_SERIES: usize = 600;
+
+/// Absolute conditional-permutation budget for one selected change point.
+///
+/// The cap keeps work per series independent of an arbitrarily large analysis
+/// family. Its plus-one floor can still resolve the rank-1 Benjamini-Hochberg
+/// boundary at the stress harness's large-family scale after the analytic/
+/// permutation weighting and two-detector correction. With the current policy,
+/// zero-exceedance permutation resolves rank one through 22,500 judged series;
+/// above that, a candidate needs help from the analytic component. Clear changes
+/// normally use that component instead, while null candidates stop sequentially.
+pub const MAX_CHANGE_PERMUTATIONS: usize = 500_000;
+
+/// Extreme shuffled procedures needed before sequential calibration may stop.
+///
+/// This retains the former calibration target at the hardest uncapped family
+/// boundary: enough observations to estimate a near-threshold tail without making
+/// null candidates consume the entire maximum budget.
+pub const CHANGE_PERMUTATION_EXCEEDANCES: usize = 30;
+
+/// Bonferroni weight allocated to the analytic selection-adjustment component.
+///
+/// The remaining weight goes to conditional permutation. Keeping most weight on
+/// permutation limits the ordinary power cost, while the analytic component needs
+/// only a small allocation to certify clear steps from an exponentially small
+/// finite-population tail bound.
+pub const CHANGE_ANALYTIC_WEIGHT: f64 = 0.10;
 
 /// Default `drift_min_points`: a series needs at least this many points before a
 /// slow-drift finding is considered.

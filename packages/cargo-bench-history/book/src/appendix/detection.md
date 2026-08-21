@@ -95,23 +95,26 @@ flowchart LR
     W --> L["A lucky winner<br/>can look convincing"]
 ```
 
-Detection corrects that advantage by comparing **winner against winner**. It repeatedly shuffles
-the same measurements into other time orders and runs the entire split search again. If shuffled
-histories often produce a winner at least as strong as the observed one, chance explains the
-apparent step. If they rarely do, the step has credible evidence.
+Detection corrects that advantage by asking how often chance could produce **a winner at least this
+strong**. It has two conservative ways to answer. A mathematical bound over every possible split
+can certify an especially clear step immediately. Otherwise the detector shuffles the same
+measurements into other time orders and runs the entire split search again. Frequent equally strong
+shuffled winners explain the apparent step; rare ones support it.
 
 ```mermaid
 flowchart LR
-    O["Observed order"] --> OS["Run the full<br/>step search"]
-    V["Same measurements,<br/>shuffled into other orders"] --> NS["Run the same full<br/>step search each time"]
-    OS --> C{"How often is a<br/>shuffled winner at<br/>least as strong?"}
-    NS --> C
-    C --> AC["Search-adjusted<br/>step chance level"]
-
-    D["Drift detector's<br/>chance level"] --> TWO["Account for trying<br/>step and drift"]
-    AC --> TWO
+    O["Observed order"] --> G["Magnitude + noise gates"]
+    G --> FIT{"Step fits at least<br/>as well as drift?"}
+    FIT -->|no| D["Use qualified drift"]
+    FIT -->|yes| A["Bound every possible<br/>split mathematically"]
+    A -->|clear enough| AC["Search-adjusted<br/>step chance level"]
+    A -->|needs more resolution| S["Shuffle the same values;<br/>repeat the full search"]
+    S --> C{"Enough equally strong<br/>shuffled winners?"}
+    C -->|yes: ordinary null| AC
+    C -->|no: maximum reached| AC
+    AC --> TWO["Account for trying<br/>step and drift"]
+    D --> TWO
     TWO --> CAN["Detection candidate"]
-    CAN --> G["Remaining noise gates"]
 ```
 
 History tries both the step and drift shapes, then keeps whichever model fits the series better.
@@ -125,6 +128,15 @@ with many ties is judged against shuffled histories with those same ties. The sh
 deterministic, so the same series produces the same verdict on every platform. Where direct rank
 counting is practical it is exact; where it is not, observed and shuffled histories use the same
 approximation, and their comparison supplies the trustworthy chance level.
+
+The calculation is deliberately bounded. Ordinary unchanged series stop after enough shuffled
+winners show that chance explains them. Clear changes often need no shuffles because the
+mathematical bound already settles the question. Ambiguous cases have a fixed maximum rather than a
+budget that grows without limit with the number of benchmarks. If that maximum cannot distinguish
+an isolated candidate from chance at the strict group-wide threshold, the tool stays silent; it
+does not turn missing computation into confidence. The bound prevents runaway work; it does not
+promise that every difficult series is cheap. An ambiguous series at the supported history-length
+limit may use the full shuffle maximum.
 
 This correction belongs inside Detection because it repairs how the history step detector searched
 **within one series**. It is not the later [multiplicity control](coverage.md), which accounts for

@@ -79,6 +79,9 @@ use crate::detect::gate_log::{Gate, GateLog, GateStage, StageLog};
 use crate::detect::parallel::{balanced_chunk_sizes, worker_count};
 use crate::detect::{BaseLevel, Series, SeriesPoint, excursions, noise_gates};
 
+/// Chance level carrying no evidence against the null hypothesis.
+const NO_EVIDENCE: f64 = 1.0;
+
 /// Which analysis a [`find_changes_spawned`] pass performs.
 ///
 /// The mode is auto-detected by the caller from git topology and the admitted data
@@ -948,11 +951,16 @@ fn regimes_are_separated(
 /// a gradual ramp leaves a flat residual under the line — so we keep the candidate
 /// with the smaller median absolute residual (ties favour the more specific
 /// change-point). When only one fires, it is kept.
+///
+/// The second result is a drift fallback when the change-point fits at least as
+/// well. Calibration may still reject that preferred change, in which case the
+/// already-qualified drift is the result, matching arbitration over two fully
+/// evaluated candidates without calibrating a change that loses on fit.
 fn arbitrate(
     values: &[f64],
     change: Option<Candidate>,
     drift: Option<Candidate>,
-) -> Option<Candidate> {
+) -> (Option<Candidate>, Option<Candidate>) {
     match (change, drift) {
         (Some(change), Some(drift)) => {
             let step_residual = change
@@ -962,12 +970,12 @@ fn arbitrate(
                 .line
                 .and_then(|(slope, intercept)| line_model_residual(values, slope, intercept));
             match (step_residual, line_residual) {
-                (Some(step), Some(line)) if line < step => Some(drift),
-                _ => Some(change),
+                (Some(step), Some(line)) if line < step => (Some(drift), None),
+                _ => (Some(change), Some(drift)),
             }
         }
-        (Some(change), None) => Some(change),
-        (None, drift) => drift,
+        (Some(change), None) => (Some(change), None),
+        (None, drift) => (drift, None),
     }
 }
 
@@ -989,19 +997,29 @@ fn across_both_detectors(chance_level: f64) -> f64 {
     (count_to_f64(noise_gates::HISTORY_DETECTOR_COUNT) * chance_level).min(1.0)
 }
 
-/// Fixed permutation budget for one change-point test in this analysis family.
+/// Bounded permutation budget for one change-point test in this analysis family.
 fn change_point_permutation_budget(family_size: usize) -> NonZero<usize> {
     NonZero::new(
         family_size
-            .checked_mul(noise_gates::PERMUTATIONS_PER_JUDGED_SERIES)
-            .expect("the capped analysis family has a representable permutation budget"),
+            .saturating_mul(noise_gates::PERMUTATIONS_PER_JUDGED_SERIES)
+            .min(noise_gates::MAX_CHANGE_PERMUTATIONS),
     )
     .expect("an evaluated series belongs to a nonempty judged family")
+}
+
+/// Rank-1 Benjamini-Hochberg boundary before the two-detector correction.
+fn smallest_family_chance_level(family_size: usize) -> f64 {
+    noise_gates::TARGET_FALSE_DISCOVERY_RATE
+        / (count_to_f64(noise_gates::HISTORY_DETECTOR_COUNT) * count_to_f64(family_size))
 }
 
 /// Largest selection-adjusted chance level that can pass detector arbitration.
 fn max_selection_adjusted_chance_level() -> f64 {
     noise_gates::MAX_CHANGE_CHANCE_LEVEL / count_to_f64(noise_gates::HISTORY_DETECTOR_COUNT)
+}
+
+fn passes_significance(chance_level: f64, limit: f64) -> bool {
+    chance_level < limit
 }
 
 /// Locates a sustained level shift in `series`, returning a [`Candidate`] when the
@@ -1017,12 +1035,7 @@ fn max_selection_adjusted_chance_level() -> f64 {
 /// gate that rejects a noisy-but-stable series whose levels interleave), and — when
 /// the engine reports per-point confidence intervals — separate the two regimes'
 /// intervals.
-fn evaluate_change_point(
-    series: &Series,
-    values: &[f64],
-    family_size: usize,
-    log: &mut GateLog,
-) -> Option<Candidate> {
+fn evaluate_change_point(series: &Series, values: &[f64], log: &mut GateLog) -> Option<Candidate> {
     let mut log = log.stage(GateStage::ChangePoint);
     let points = &series.points;
     let n = points.len();
@@ -1054,46 +1067,6 @@ fn evaluate_change_point(
         return None;
     }
     let relative_delta = relative_delta_of(delta, baseline);
-
-    // The split search chose the most striking interior position, so the selected
-    // Mann-Whitney score is not an honest standalone p-value. Re-run the complete
-    // selection and scoring procedure over permutations of this series' actual
-    // rank multiset, preserving its ties. The fixed budget scales with the full
-    // judged family so its plus-one resolution can reach the hardest downstream
-    // Benjamini-Hochberg threshold. Ref: docs/DESIGN.md, "Selection adjustment".
-    let reject_at_or_above = max_selection_adjusted_chance_level();
-    debug_assert!(
-        across_both_detectors(reject_at_or_above)
-            .total_cmp(&noise_gates::MAX_CHANGE_CHANCE_LEVEL)
-            .is_eq(),
-        "the early-rejection boundary must invert detector arbitration"
-    );
-    let selection = stats::selection_adjusted_change_point(
-        values,
-        noise_gates::MIN_REGIME,
-        change_point_permutation_budget(family_size),
-        reject_at_or_above,
-    )?;
-    debug_assert_eq!(
-        selection.index, tau,
-        "the observed ordering must use the same Pettitt scorer as calibration"
-    );
-    let adjusted_p = log.adjustment(
-        Gate::SelectionAdjustment,
-        selection.tainted_p,
-        selection.adjusted_p,
-    );
-    // Both history detectors run on every series and the better-fitting one is reported, a
-    // second selection that inflates the false-alarm rate about twofold (decision D4).
-    let effective_p = across_both_detectors(adjusted_p);
-    if !log.numeric(
-        Gate::Significance,
-        effective_p,
-        noise_gates::MAX_CHANGE_CHANCE_LEVEL,
-        effective_p < noise_gates::MAX_CHANGE_CHANCE_LEVEL,
-    ) {
-        return None;
-    }
     if !log.numeric(
         Gate::RelativeFloor,
         relative_delta.abs(),
@@ -1109,7 +1082,7 @@ fn evaluate_change_point(
         return None;
     }
     if !regimes_are_separated(
-        Some(selection.superiority),
+        stats::mann_whitney_superiority(before, after),
         delta,
         noise_gates::MIN_REGIME_SEPARATION,
         &mut log,
@@ -1143,10 +1116,60 @@ fn evaluate_change_point(
             chart_base_ref: None,
         },
         source_index: 0,
-        bh_p: effective_p,
+        bh_p: NO_EVIDENCE,
         split: Some(tau),
         line: None,
     })
+}
+
+/// Selection-adjusts a preferred change-point candidate after cheap gates and arbitration.
+fn calibrate_change_point(
+    values: &[f64],
+    family_size: usize,
+    mut candidate: Candidate,
+    log: &mut GateLog,
+) -> Option<Candidate> {
+    let mut log = log.stage(GateStage::ChangePoint);
+    let reject_at_or_above = max_selection_adjusted_chance_level();
+    debug_assert!(
+        across_both_detectors(reject_at_or_above)
+            .total_cmp(&noise_gates::MAX_CHANGE_CHANCE_LEVEL)
+            .is_eq(),
+        "the early-rejection boundary must invert detector arbitration"
+    );
+    let calibration = stats::SelectionCalibration {
+        permutations: change_point_permutation_budget(family_size),
+        exceedances: NonZero::new(noise_gates::CHANGE_PERMUTATION_EXCEEDANCES)
+            .expect("the configured exceedance limit is nonzero"),
+        analytic_weight: noise_gates::CHANGE_ANALYTIC_WEIGHT,
+        accept_analytic_below: smallest_family_chance_level(family_size).min(reject_at_or_above),
+        reject_at_or_above,
+    };
+    let selection =
+        stats::selection_adjusted_change_point(values, noise_gates::MIN_REGIME, calibration)?;
+    debug_assert_eq!(
+        candidate.split,
+        Some(selection.index),
+        "the observed ordering must use the same Pettitt scorer as calibration"
+    );
+    let adjusted_p = log.adjustment(
+        Gate::SelectionAdjustment,
+        selection.tainted_p,
+        selection.adjusted_p,
+    );
+    // Both history detectors run on every series and the better-fitting one is reported, a
+    // second selection that inflates the false-alarm rate about twofold (decision D4).
+    let effective_p = across_both_detectors(adjusted_p);
+    if !log.numeric(
+        Gate::Significance,
+        effective_p,
+        noise_gates::MAX_CHANGE_CHANCE_LEVEL,
+        passes_significance(effective_p, noise_gates::MAX_CHANGE_CHANCE_LEVEL),
+    ) {
+        return None;
+    }
+    candidate.bh_p = effective_p;
+    Some(candidate)
 }
 
 /// Locates a slow monotonic drift in `series`, returning a [`Candidate`] when the
@@ -1183,7 +1206,7 @@ fn evaluate_drift(series: &Series, values: &[f64], log: &mut GateLog) -> Option<
         Gate::Significance,
         effective_p,
         noise_gates::MAX_DRIFT_CHANCE_LEVEL,
-        effective_p < noise_gates::MAX_DRIFT_CHANCE_LEVEL,
+        passes_significance(effective_p, noise_gates::MAX_DRIFT_CHANCE_LEVEL),
     ) {
         return None;
     }
@@ -1461,7 +1484,7 @@ fn base_regime_split_qualifies(series: &Series, levels: &[f64], split: usize) ->
     }
     let mann_whitney_u = stats::MannWhitneyU::new(before, after);
     let mann_whitney = mann_whitney_u.map_or(1.0, |ranked| ranked.two_sided_p_value());
-    if mann_whitney >= noise_gates::MAX_CHANGE_CHANCE_LEVEL {
+    if !passes_significance(mann_whitney, noise_gates::MAX_CHANGE_CHANCE_LEVEL) {
         return false;
     }
     regimes_are_separated(
@@ -1616,7 +1639,7 @@ fn compare_branch_levels(
         Gate::Significance,
         effective_p,
         noise_gates::MAX_CHANGE_CHANCE_LEVEL,
-        effective_p < noise_gates::MAX_CHANGE_CHANCE_LEVEL,
+        passes_significance(effective_p, noise_gates::MAX_CHANGE_CHANCE_LEVEL),
     ) {
         return None;
     }
@@ -2134,9 +2157,17 @@ fn detect_one(
             // The point values are projected once here and shared by every history
             // detector, rather than each rebuilding the same `Vec<f64>`.
             let values: Vec<f64> = active.points.iter().map(|point| point.value).collect();
-            let change = evaluate_change_point(&active, &values, family_size, log);
+            let change = evaluate_change_point(&active, &values, log);
             let drift = evaluate_drift(&active, &values, log);
-            arbitrate(&values, change, drift).map(|mut candidate| {
+            let (preferred, fallback) = arbitrate(&values, change, drift);
+            let preferred = preferred.and_then(|candidate| {
+                if candidate.finding.method == FindingMethod::ChangePoint {
+                    calibrate_change_point(&values, family_size, candidate, log).or(fallback)
+                } else {
+                    Some(candidate)
+                }
+            });
+            preferred.map(|mut candidate| {
                 stamp_history(&mut candidate.finding, one);
                 candidate
             })
@@ -2204,11 +2235,12 @@ mod tests {
     use super::*;
     use crate::detect::gate_log::GateOutcome;
     use crate::detect::noise_gates::{
-        BRANCH_PRACTICAL_RELATIVE, COMPARE_WINDOW, DRIFT_MIN_POINTS, DRIFT_NOISE_MULTIPLE,
-        EXCURSION_MAX_REMOVALS, MAX_CHANGE_CHANCE_LEVEL, MAX_DRIFT_CHANCE_LEVEL, MAX_SERIES_POINTS,
+        BRANCH_PRACTICAL_RELATIVE, CHANGE_ANALYTIC_WEIGHT, COMPARE_WINDOW, DRIFT_MIN_POINTS,
+        DRIFT_NOISE_MULTIPLE, EXCURSION_MAX_REMOVALS, MAX_CHANGE_CHANCE_LEVEL,
+        MAX_CHANGE_PERMUTATIONS, MAX_DRIFT_CHANCE_LEVEL, MAX_SERIES_POINTS,
         MIN_BASE_SPLIT_SEPARATION, MIN_REGIME, MIN_REGIME_SEPARATION, MIN_SERIES_POINTS,
-        PRACTICAL_ABSOLUTE_COUNT, PRACTICAL_RELATIVE, RESIDUAL_NOISE_MULTIPLE,
-        TARGET_FALSE_DISCOVERY_RATE,
+        PERMUTATIONS_PER_JUDGED_SERIES, PRACTICAL_ABSOLUTE_COUNT, PRACTICAL_RELATIVE,
+        RESIDUAL_NOISE_MULTIPLE, TARGET_FALSE_DISCOVERY_RATE,
     };
     use crate::detect::recorded::{
         STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_HIGH, STATIONARY_BIMODAL_NOISE,
@@ -2381,6 +2413,17 @@ mod tests {
         }
     }
 
+    /// Runs both phases of history change-point evaluation for focused gate tests.
+    fn evaluate_change_point_fully(
+        series: &Series,
+        values: &[f64],
+        family_size: usize,
+        log: &mut GateLog,
+    ) -> Option<Candidate> {
+        let candidate = evaluate_change_point(series, values, log)?;
+        calibrate_change_point(values, family_size, candidate, log)
+    }
+
     /// The largest `topo_index` across every point of `series`, the realistic context
     /// index for a history-mode [`AnalysisContext`] over this test fixture. Zero when
     /// there are no points.
@@ -2440,6 +2483,44 @@ mod tests {
         // The change-point gate allows 0.05 after the approved two-detector correction,
         // so the selection-adjusted result must be below half of that before arbitration.
         assert_eq!(max_selection_adjusted_chance_level(), 0.025);
+    }
+
+    #[test]
+    fn significance_limit_is_strict() {
+        assert!(passes_significance(0.04, 0.05));
+        assert!(!passes_significance(0.05, 0.05));
+        assert!(!passes_significance(0.06, 0.05));
+    }
+
+    #[test]
+    fn change_point_permutation_budget_is_capped() {
+        assert_eq!(
+            change_point_permutation_budget(1).get(),
+            PERMUTATIONS_PER_JUDGED_SERIES
+        );
+        assert_eq!(
+            change_point_permutation_budget(MAX_CHANGE_PERMUTATIONS).get(),
+            MAX_CHANGE_PERMUTATIONS
+        );
+    }
+
+    #[test]
+    fn capped_zero_exceedance_permutation_resolves_the_default_stress_family() {
+        // The stress harness's default large family is the scale promised by the
+        // permutation-cap documentation. Pin that cross-package scenario here so a
+        // budget or weight change cannot silently make rank one unresolvable.
+        const DEFAULT_STRESS_FAMILY_SIZE: usize = 20_000;
+        const DOCUMENTED_RESOLUTION_LIMIT: usize = 22_500;
+
+        let permutation_weight = 1.0 - CHANGE_ANALYTIC_WEIGHT;
+        let weighted_floor =
+            1.0 / (count_to_f64(MAX_CHANGE_PERMUTATIONS.saturating_add(1)) * permutation_weight);
+        assert!(weighted_floor < smallest_family_chance_level(DEFAULT_STRESS_FAMILY_SIZE));
+        assert!(weighted_floor < smallest_family_chance_level(DOCUMENTED_RESOLUTION_LIMIT));
+        assert!(
+            weighted_floor
+                >= smallest_family_chance_level(DOCUMENTED_RESOLUTION_LIMIT.saturating_add(1))
+        );
     }
 
     #[test]
@@ -2661,7 +2742,9 @@ mod tests {
         let values = [0.0, 0.0, 0.0, 0.0];
         let change = candidate(FindingMethod::ChangePoint, Some(2), None);
         let drift = candidate(FindingMethod::Drift, None, Some((0.0, 0.0)));
-        let chosen = arbitrate(&values, Some(change), Some(drift)).unwrap();
+        let chosen = arbitrate(&values, Some(change), Some(drift))
+            .0
+            .expect("one candidate wins");
         assert_eq!(chosen.finding.method, FindingMethod::ChangePoint);
     }
 
@@ -2672,7 +2755,9 @@ mod tests {
         let values = [0.0, 1.0, 2.0, 3.0];
         let change = candidate(FindingMethod::ChangePoint, Some(2), None);
         let drift = candidate(FindingMethod::Drift, None, Some((1.0, 0.0)));
-        let chosen = arbitrate(&values, Some(change), Some(drift)).unwrap();
+        let chosen = arbitrate(&values, Some(change), Some(drift))
+            .0
+            .expect("one candidate wins");
         assert_eq!(chosen.finding.method, FindingMethod::Drift);
     }
 
@@ -2680,14 +2765,18 @@ mod tests {
     fn arbitrate_keeps_the_sole_candidate_that_fires() {
         let values = [0.0, 0.0, 5.0, 5.0];
         let change = candidate(FindingMethod::ChangePoint, Some(2), None);
-        let only_change = arbitrate(&values, Some(change), None).unwrap();
+        let only_change = arbitrate(&values, Some(change), None)
+            .0
+            .expect("the change is retained");
         assert_eq!(only_change.finding.method, FindingMethod::ChangePoint);
 
         let drift = candidate(FindingMethod::Drift, None, Some((1.0, 0.0)));
-        let only_drift = arbitrate(&values, None, Some(drift)).unwrap();
+        let only_drift = arbitrate(&values, None, Some(drift))
+            .0
+            .expect("the drift is retained");
         assert_eq!(only_drift.finding.method, FindingMethod::Drift);
 
-        assert!(arbitrate(&values, None, None).is_none());
+        assert!(arbitrate(&values, None, None).0.is_none());
     }
 
     #[test]
@@ -2729,7 +2818,7 @@ mod tests {
         values.extend(std::iter::repeat_n(130.0, MIN_REGIME));
         let series = series_of(&values);
         let mut log = GateLog::recording();
-        assert!(evaluate_change_point(&series, &values_of(&series), 1, &mut log).is_none());
+        assert!(evaluate_change_point_fully(&series, &values_of(&series), 1, &mut log).is_none());
         assert_eq!(
             log.declined_by_stage(GateStage::ChangePoint),
             Some(Gate::MinRegime),
@@ -2745,7 +2834,7 @@ mod tests {
             100.0, 104.0, 100.0, 104.0, 102.0, 130.0, 134.0, 130.0, 134.0, 132.0,
         ]);
         assert!(
-            evaluate_change_point(&clear, &values_of(&clear), 1, &mut GateLog::disabled())
+            evaluate_change_point_fully(&clear, &values_of(&clear), 1, &mut GateLog::disabled())
                 .is_some()
         );
 
@@ -2759,7 +2848,7 @@ mod tests {
             90.0, 90.0, 100.0, 110.0, 110.0, 120.0, 120.0, 130.0, 140.0, 140.0,
         ]);
         let mut log = GateLog::recording();
-        assert!(evaluate_change_point(&buried, &values_of(&buried), 1, &mut log).is_none());
+        assert!(evaluate_change_point_fully(&buried, &values_of(&buried), 1, &mut log).is_none());
         assert_eq!(
             log.declined_by_stage(GateStage::ChangePoint),
             Some(Gate::ResidualNoise),
@@ -2779,7 +2868,7 @@ mod tests {
         ]);
         let mut log = GateLog::recording();
         assert!(
-            evaluate_change_point(&series, &values_of(&series), 1, &mut log).is_some(),
+            evaluate_change_point_fully(&series, &values_of(&series), 1, &mut log).is_some(),
             "the fixture must report under the fixed alpha"
         );
         let (p, alpha) = gate_value(&log, Gate::Significance).expect("the significance gate ran");
@@ -2892,18 +2981,15 @@ mod tests {
         // The real-world series that motivated the separation gate: a wall-time metric
         // that oscillates between ~13 and ~25-29 throughout its whole history, so no
         // commit marks a real level shift. Pettitt still aligns a split with each side's
-        // dominant mode, but that split was chosen from the whole interior; once its
-        // rank-test p-value is corrected for that search it is no longer significant. So
-        // the selection-adjusted significance gate is now the first to decline, and the
-        // spurious "regression via change point" this recording once produced never
-        // reaches the effect-size gate below it.
+        // dominant mode, but the populations remain heavily interleaved. The cheap
+        // separation gate rejects that shape before permutation calibration starts.
         let values = STATIONARY_BIMODAL_NOISE.to_vec();
         let series = series_of(&values);
         let mut log = GateLog::recording();
-        assert!(evaluate_change_point(&series, &values, 1, &mut log).is_none());
+        assert!(evaluate_change_point_fully(&series, &values, 1, &mut log).is_none());
         assert_eq!(
             log.declined_by_stage(GateStage::ChangePoint),
-            Some(Gate::Significance),
+            Some(Gate::RegimeSeparation),
         );
     }
 
@@ -3052,7 +3138,7 @@ mod tests {
         let series = wall_series(&step_values(2.49, 3.12), 0.05);
         judged_but_silent(slice::from_ref(&series));
         let mut log = GateLog::recording();
-        assert!(evaluate_change_point(&series, &values_of(&series), 1, &mut log).is_none());
+        assert!(evaluate_change_point_fully(&series, &values_of(&series), 1, &mut log).is_none());
         assert_eq!(
             log.declined_by_stage(GateStage::ChangePoint),
             Some(Gate::AbsoluteFloor),
@@ -3215,7 +3301,7 @@ mod tests {
             0.5,
         );
         let candidate =
-            evaluate_change_point(&series, &values_of(&series), 1, &mut GateLog::disabled())
+            evaluate_change_point_fully(&series, &values_of(&series), 1, &mut GateLog::disabled())
                 .unwrap();
         assert_eq!(candidate.finding.baseline, 100.0);
         assert_eq!(candidate.finding.latest, 103.0);
@@ -5446,10 +5532,11 @@ mod tests {
         // decisions for the family sizes below. Every batch raises exactly the
         // one candidate; the only input that differs is whether the silent
         // companions join the family (and therefore its calibration budget and
-        // BH denominator). Flat companions are judged and do count, while
-        // companions one point too short are not judged and do not.
-        const FAMILY_THAT_REPORTS: usize = 6;
-        const FAMILY_THAT_REJECTS: usize = 7;
+        // BH denominator). The permutation component's 90% Bonferroni weight is
+        // already reflected in that chance level. Flat companions are judged and
+        // do count, while companions one point too short are not judged and do not.
+        const FAMILY_THAT_REPORTS: usize = 5;
+        const FAMILY_THAT_REJECTS: usize = 6;
 
         let stepped = named_series(
             "stepped",
@@ -5716,12 +5803,12 @@ mod tests {
                 Gate::SplitLocated,
                 Gate::MinRegime,
                 Gate::NonZeroDelta,
-                Gate::SelectionAdjustment,
-                Gate::Significance,
                 Gate::RelativeFloor,
                 Gate::AbsoluteFloor,
                 Gate::ResidualNoise,
                 Gate::RegimeSeparation,
+                Gate::SelectionAdjustment,
+                Gate::Significance,
             ]
         );
         assert!(log.entries().iter().all(|entry| entry.passed));
