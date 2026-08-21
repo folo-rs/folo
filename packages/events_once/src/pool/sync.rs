@@ -2,7 +2,6 @@ use std::any::type_name;
 #[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
 use std::fmt;
-use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use crate::{
@@ -32,8 +31,6 @@ use crate::{
 /// ```
 pub struct EventPool<T: 'static> {
     core: Arc<EventPoolCore<T>>,
-
-    _owns_some: PhantomData<T>,
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
@@ -57,7 +54,6 @@ impl<T: Send + 'static> EventPool<T> {
             core: Arc::new(EventPoolCore {
                 state: Mutex::new(PoolState::new()),
             }),
-            _owns_some: PhantomData,
         }
     }
 
@@ -69,11 +65,19 @@ impl<T: Send + 'static> EventPool<T> {
     pub fn rent(&self) -> (PooledSender<T>, PooledReceiver<T>) {
         let event = self.core.state.lock().expect(NEVER_POISONED).rent();
 
-        let event_ref = PooledRef::new(
-            #[cfg(debug_assertions)]
-            Arc::clone(&self.core),
-            event,
-        );
+        #[cfg(debug_assertions)]
+        let core = Arc::clone(&self.core);
+
+        // SAFETY: The event was just rented from this pool's state and has not been released.
+        // The endpoints below and the pool's debug-only registry are the only reachers of the
+        // event, and none of them creates an exclusive reference to it.
+        let event_ref = unsafe {
+            PooledRef::new(
+                #[cfg(debug_assertions)]
+                core,
+                event,
+            )
+        };
 
         let inner_sender = SenderCore::new(event_ref.clone());
         let inner_receiver = ReceiverCore::new(event_ref);
@@ -143,7 +147,6 @@ impl<T: Send + 'static> Clone for EventPool<T> {
     fn clone(&self) -> Self {
         Self {
             core: Arc::clone(&self.core),
-            _owns_some: PhantomData,
         }
     }
 }
@@ -178,14 +181,11 @@ mod tests {
     #[cfg(debug_assertions)]
     use crate::assert_inspect_awaiters_is_reentrant;
 
-    assert_impl_all!(EventPool<u32>: Send, Sync);
-
-    // Trait object payloads must preserve Send + Sync (regression test for #142).
-    assert_impl_all!(EventPool<Box<dyn Send + Sync>>: Send, Sync);
-
-    assert_impl_all!(
-        EventPool<u32>: UnwindSafe, RefUnwindSafe
-    );
+    // The payload satisfies only the bound that the pool's API requires (`Send`) and lacks every
+    // trait asserted here, so each of them is supplied by the pool's own synchronization and
+    // storage rather than inherited from the payload. A trait object payload also has to preserve
+    // the thread-safety traits (regression test for #142).
+    assert_impl_all!(EventPool<Box<dyn Send>>: Send, Sync, UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn len() {
@@ -750,18 +750,22 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn inspect_awaiters_closure_may_reenter_pool() {
-        let pool = EventPool::<i32>::new();
+        // The callback re-enters the pool, so a regression that calls it under the pool lock
+        // deadlocks on the non-reentrant mutex. The watchdog turns that into a bounded failure.
+        with_watchdog(|| {
+            let pool = EventPool::<i32>::new();
 
-        let (_sender, receiver) = pool.rent();
-        let mut receiver = Box::pin(receiver);
+            let (_sender, receiver) = pool.rent();
+            let mut receiver = Box::pin(receiver);
 
-        let mut cx = task::Context::from_waker(Waker::noop());
-        _ = receiver.as_mut().poll(&mut cx);
+            let mut cx = task::Context::from_waker(Waker::noop());
+            _ = receiver.as_mut().poll(&mut cx);
 
-        assert_inspect_awaiters_is_reentrant(&|f| pool.inspect_awaiters(f), &|| {
-            let (sender, receiver) = pool.rent();
-            drop(sender);
-            drop(receiver);
+            assert_inspect_awaiters_is_reentrant(&|f| pool.inspect_awaiters(f), &|| {
+                let (sender, receiver) = pool.rent();
+                drop(sender);
+                drop(receiver);
+            });
         });
     }
 
@@ -770,31 +774,35 @@ mod tests {
     fn inspect_awaiters_tolerates_endpoint_drop_from_closure() {
         const EVENT_COUNT: usize = 3;
 
-        let pool = EventPool::<i32>::new();
+        // Dropping endpoints from the callback returns events to the pool, which takes the pool
+        // lock. The watchdog bounds the deadlock that a callback-under-lock regression causes.
+        with_watchdog(|| {
+            let pool = EventPool::<i32>::new();
 
-        let mut cx = task::Context::from_waker(Waker::noop());
+            let mut cx = task::Context::from_waker(Waker::noop());
 
-        let mut endpoints = Vec::with_capacity(EVENT_COUNT);
+            let mut endpoints = Vec::with_capacity(EVENT_COUNT);
 
-        for _ in 0..EVENT_COUNT {
-            let (sender, receiver) = pool.rent();
-            let mut receiver = Box::pin(receiver);
-            _ = receiver.as_mut().poll(&mut cx);
-            endpoints.push((sender, receiver));
-        }
+            for _ in 0..EVENT_COUNT {
+                let (sender, receiver) = pool.rent();
+                let mut receiver = Box::pin(receiver);
+                _ = receiver.as_mut().poll(&mut cx);
+                endpoints.push((sender, receiver));
+            }
 
-        // The closure releases the events it is inspecting. The backtraces it receives are
-        // snapshots, so they remain valid and each event is still visited exactly once.
-        let endpoints = RefCell::new(endpoints);
-        let mut inspected_count = 0;
+            // The closure releases the events it is inspecting. The backtraces it receives are
+            // snapshots, so they remain valid and each event is still visited exactly once.
+            let endpoints = RefCell::new(endpoints);
+            let mut inspected_count = 0;
 
-        pool.inspect_awaiters(|_bt| {
-            inspected_count += 1;
-            drop(endpoints.borrow_mut().pop());
+            pool.inspect_awaiters(|_bt| {
+                inspected_count += 1;
+                drop(endpoints.borrow_mut().pop());
+            });
+
+            assert_eq!(inspected_count, EVENT_COUNT);
+            assert!(pool.is_empty());
         });
-
-        assert_eq!(inspected_count, EVENT_COUNT);
-        assert!(pool.is_empty());
     }
 
     #[cfg(debug_assertions)]

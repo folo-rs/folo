@@ -37,7 +37,23 @@ where
         }
     }
 
-    /// Checks whether a value is ready to be received.
+    /// Derives the shared event reference that every operation of this endpoint works through.
+    fn event(event_ref: &E) -> &LocalEvent<T> {
+        // SAFETY: Validity: the `LocalRef` contract guarantees that dereferencing yields one
+        // initialized and aligned event that stays valid for as long as this endpoint can access
+        // it, which includes the returned reference. Aliasing: the same contract limits all
+        // access to shared references, and the event manages its interior fields itself, so no
+        // exclusive reference to the event can exist.
+        unsafe { &*event_ref.get() }
+    }
+
+    /// Checks whether the event has completed, in which case reception can finish immediately.
+    ///
+    /// Completion means either that a value has been sent or that the sender disconnected
+    /// without sending one, so a completed event does not necessarily yield a value. See
+    /// `state.rs` for the canonical meaning of the event states.
+    ///
+    /// Only valid before the receiver has completed.
     ///
     /// # Panics
     ///
@@ -45,73 +61,85 @@ where
     #[must_use]
     pub(crate) fn is_ready(&self) -> bool {
         let Some(event_ref) = &self.event_ref else {
-            panic!("receiver queried after completion");
+            panic!("receiver inspected after completion");
         };
 
-        // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
-        // The event lives until both sender and receiver are dropped or inert, so we know it must
-        // still exist because something was able to call this method with `Some(event_ref)`.
-        let event = unsafe { &*event_ref.get() };
-
-        event.is_set()
+        Self::event(event_ref).is_set()
     }
 
-    /// Consumes the receiver and transforms it into the received value, if the value is available.
+    /// Consumes the receiver and returns the value, if the event has completed with one.
     ///
     /// This method provides an alternative to awaiting the receiver when you want to check for
     /// an immediately available value without blocking. It returns `Ok(value)` if a value has
-    /// already been sent, or returns the receiver if no value is currently available.
+    /// been sent, `Err(IntoValueError::Pending(self))` if the event has not completed yet, and
+    /// `Err(IntoValueError::Disconnected)` if the sender disconnected without sending a value.
+    ///
+    /// Only valid before the receiver has completed.
     ///
     /// # Panics
     ///
-    /// Panics if the value has already been received via `Future::poll()`.
+    /// Panics if called after `poll()` has returned `Ready`.
     pub(crate) fn into_value(self) -> Result<T, IntoValueError<Self>> {
-        let event_ref = self
-            .event_ref
-            .as_ref()
-            .expect("receiver polled after completion: Future trait contract violated");
+        let Some(event_ref) = self.event_ref.as_ref() else {
+            panic!("receiver consumed after completion");
+        };
 
-        // Check the current state directly to decide what to do
-        //
-        // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
-        // The event lives until both sender and receiver are dropped or inert, so we know it must
-        // still exist because something was able to call this method with `Some(event_ref)`.
-        let event = unsafe { &*event_ref.get() };
-
-        let current_state = event.state.get();
+        let current_state = Self::event(event_ref).state.get();
 
         match current_state {
             EVENT_BOUND | EVENT_AWAITING => {
-                // No value available yet - return the receiver
+                // The event has not completed, so we return the receiver to the caller and the
+                // event remains in the care of both endpoints.
                 Err(IntoValueError::Pending(self))
             }
             EVENT_SET | EVENT_DISCONNECTED => {
-                // Value available or disconnected - consume self and let final_poll decide
+                // The event has completed - consume self and
+                // let final_poll decide which endpoint performs the cleanup.
                 let mut this = ManuallyDrop::new(self);
-                let event_ref = this.event_ref.take().unwrap();
+                let event_ref = this.event_ref.take().expect(
+                    "event_ref was proven present above and neither the state inspection nor \
+                     wrapping self in ManuallyDrop can clear it",
+                );
 
                 match LocalEvent::final_poll(&event_ref) {
                     Ok(Some(value)) => {
-                        event_ref.release_event();
+                        // SAFETY: `final_poll` returning a value means the state machine made
+                        // the receiver the last endpoint and assigned it cleanup ownership. We
+                        // do not access the event after this call - the receiver is consumed
+                        // and its reference goes out of scope.
+                        unsafe {
+                            event_ref.release_event();
+                        }
+
                         Ok(value)
                     }
-                    // Defensive: state machine guarantees final_poll
-                    // always returns Some or Err when state is SET or
-                    // DISCONNECTED.
                     Ok(None) => {
                         // Defensive: state machine guarantees final_poll
-                        // always returns Some or Err when state is SET or DISCONNECTED.
-                        unreachable!("final_poll returned None")
+                        // always returns Some or Err when the event has completed.
+                        unreachable!(
+                            "{} reported no result on value extraction from a terminal state",
+                            type_name::<LocalEvent<T>>()
+                        )
                     }
                     Err(Disconnected) => {
-                        event_ref.release_event();
+                        // SAFETY: `final_poll` reporting disconnection means the state machine
+                        // made the receiver the last endpoint and assigned it cleanup ownership.
+                        // We do not access the event after this call - the receiver is consumed
+                        // and its reference goes out of scope.
+                        unsafe {
+                            event_ref.release_event();
+                        }
+
                         Err(IntoValueError::Disconnected)
                     }
                 }
             }
             // Defensive: state machine guarantees this is unreachable.
             _ => {
-                unreachable!("Invalid event state: {}", current_state)
+                unreachable!(
+                    "unreachable {} state on value extraction: {current_state}",
+                    type_name::<LocalEvent<T>>()
+                )
             }
         }
     }
@@ -126,33 +154,39 @@ where
 
     #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-        let event_ref = self
-            .event_ref
-            .as_ref()
-            .expect("receiver polled after completion: Future trait contract violated");
+        // The receiver core is never structurally pinned: it holds an endpoint reference, which
+        // is a pointer handle, and refers to the payload only through markers. Projecting via
+        // `get_mut` keeps that fact compiler-verified instead of assumed.
+        let this = self.get_mut();
 
         let inner_poll_result = {
-            // SAFETY: We only ever create shared references to the event, so no aliasing
-            // conflicts. The event lives until both sender and receiver are dropped or inert, so
-            // we know it must still exist because something was able to call this method with
-            // `Some(event_ref)`.
-            let event = unsafe { &*event_ref.get() };
+            let Some(event_ref) = this.event_ref.as_ref() else {
+                panic!("receiver polled after completion: Future trait contract violated");
+            };
 
-            event.poll(cx.waker())
+            Self::event(event_ref).poll(cx.waker())
         };
 
-        // If the poll returns `Some`, we need to clean up the event.
         if inner_poll_result.is_some() {
-            // We have a slight problem here, though, because if we release the event here and
-            // the memory is freed, what happens if someone foolishly tries to poll again? That
-            // could lead to a memory safety violation if we did it naively. Therefore, we have
-            // to guard against double polling via an `Option`.
-            event_ref.release_event();
+            // A result means the event reached a terminal state, and it may have handed us a
+            // payload out of storage that the state still advertises as initialized (see
+            // `LocalEvent::poll_set()`). We therefore release the event right here, with no
+            // user-controlled code in between and no further state-driven cleanup.
 
-            // SAFETY: We are not moving anything, merely updating a field.
-            let this = unsafe { self.get_unchecked_mut() };
-            // This makes `drop()` a no-op.
-            this.event_ref = None;
+            // We remove the reference from the receiver before releasing the event, which is
+            // what makes any later operation on the receiver panic instead of reaching released
+            // storage.
+            let event_ref = this.event_ref.take().expect(
+                "the poll above panics unless the reference is present, and it cannot be \
+                 cleared while the poll holds an exclusive reference to the receiver",
+            );
+
+            // SAFETY: A result from `poll` means the state machine reached a terminal state and
+            // assigned cleanup ownership to the receiver. The reference no longer belongs to the
+            // receiver, so nothing accesses the event after this call.
+            unsafe {
+                event_ref.release_event();
+            }
         }
 
         inner_poll_result.map_or_else(|| Poll::Pending, Poll::Ready)
@@ -173,8 +207,18 @@ where
                     // sent any value, so it will perform the cleanup on its own.
                 }
                 _ => {
-                    // The sender has already disconnected, so we need to clean up the event.
-                    event_ref.release_event();
+                    // Either a value was waiting for us or the sender has disconnected. Both
+                    // outcomes leave the receiver as the last endpoint, so we release the event.
+                    // A value delivered here is intentionally discarded with the match
+                    // temporary - nobody is left to receive it.
+
+                    // SAFETY: `final_poll` returned a terminal outcome, which is how the state
+                    // machine assigns cleanup ownership to the receiver. The receiver is being
+                    // dropped and its reference goes out of scope, so nothing accesses the event
+                    // after this call.
+                    unsafe {
+                        event_ref.release_event();
+                    }
                 }
             }
         }

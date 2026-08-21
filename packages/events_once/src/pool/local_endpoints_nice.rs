@@ -64,7 +64,11 @@ impl<T: 'static> PooledLocalReceiver<T> {
         Self { inner }
     }
 
-    /// Checks whether a value is ready to be received.
+    /// Checks whether the receiver has reached a terminal state: either a value has been sent
+    /// or the sender has disconnected.
+    ///
+    /// Valid to call only before `Future::poll` has returned `Ready`, whether that completion
+    /// is a successful receive or a disconnection.
     ///
     /// # Panics
     ///
@@ -74,39 +78,39 @@ impl<T: 'static> PooledLocalReceiver<T> {
         self.inner.is_ready()
     }
 
-    /// Consumes the receiver and transforms it into the received value, if the value is available.
+    /// Consumes the receiver and returns the received value if it is already available.
     ///
     /// This method provides an alternative to awaiting the receiver when you want to check for
-    /// an immediately available value without blocking. It returns `Ok(value)` if a value has
-    /// already been sent, or returns the receiver if no value is currently available.
+    /// an immediately available result without blocking. It returns `Ok(value)` once a value
+    /// has been sent, `Err(IntoValueError::Disconnected)` once the sender has disconnected
+    /// without sending a value, and otherwise `Err(IntoValueError::Pending(self))`, returning
+    /// the receiver so the caller can try again later.
+    ///
+    /// Valid to call only before `Future::poll` has returned `Ready`, whether that completion
+    /// is a successful receive or a disconnection.
     ///
     /// # Panics
     ///
-    /// Panics if the value has already been received via `Future::poll()`.
+    /// Panics if called after `poll()` has returned `Ready`.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use events_once::{Event, IntoValueError};
+    /// use events_once::{IntoValueError, LocalEventPool};
     ///
-    /// #[tokio::main]
-    /// async fn main() {
-    ///     let (sender, receiver) = Event::<String>::boxed();
+    /// fn main() {
+    ///     let pool = LocalEventPool::<String>::new();
+    ///     let (sender, receiver) = pool.rent();
     ///
-    ///     // into_value() is designed for synchronous scenarios where you do not want to wait but
-    ///     // simply want to either obtain the received value or do nothing. First, we do nothing.
-    ///     //
-    ///     // If no value has been sent yet, into_value() returns Err(IntoValueError::Pending(self)).
+    ///     // into_value() is for synchronous checks: it never blocks or requires polling.
+    ///     // Before a value is sent, it returns the receiver so the caller can try again later.
     ///     let Err(IntoValueError::Pending(receiver)) = receiver.into_value() else {
-    ///         panic!(
-    ///             "Expected receiver to indicate that it is still waiting for a payload to be sent."
-    ///         );
+    ///         panic!("expected the receiver to still be waiting for a value");
     ///     };
     ///
     ///     sender.send("Hello, world!".to_string());
     ///
     ///     let message = receiver.into_value().unwrap();
-    ///
     ///     println!("Received message: {message}");
     /// }
     /// ```
@@ -123,10 +127,9 @@ impl<T: 'static> Future for PooledLocalReceiver<T> {
     type Output = Result<T, Disconnected>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-        // SAFETY: We never move out of `self`, only access its inner field.
-        let inner = unsafe { self.map_unchecked_mut(|x| &mut x.inner) };
+        let this = self.get_mut();
 
-        inner.poll(cx)
+        Pin::new(&mut this.inner).poll(cx)
     }
 }
 

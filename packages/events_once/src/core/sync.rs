@@ -6,7 +6,7 @@ use std::fmt;
 use std::hint::spin_loop;
 use std::marker::PhantomPinned;
 use std::mem::{MaybeUninit, offset_of};
-use std::panic::RefUnwindSafe;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
 #[cfg(any(debug_assertions, test))]
@@ -25,34 +25,6 @@ use crate::{
     EVENT_DISCONNECTED, EVENT_SET, EVENT_SIGNALING, EmbeddedEvent, PtrRef, RawReceiver, RawSender,
     ReceiverCore, SenderCore,
 };
-
-#[cfg(test)]
-type HookFn = dyn Fn() + Send + Sync;
-
-// Test hooks allow deterministic testing of race-condition branches by injecting a
-// synchronization point (typically a pair of barriers) between two operations that
-// normally execute without interruption. Each hook is an optional closure stored
-// behind a Mutex. Tests that install hooks must hold HOOK_SERIALIZATION_MUTEX to
-// prevent interference between concurrent hook-based tests.
-//
-// Only threads that have set the HOOK_PARTICIPANT thread-local to `true` will trigger
-// the hooks. This prevents unrelated tests that happen to poll concurrently from
-// accidentally entering a barrier and causing deadlocks.
-#[cfg(test)]
-static HOOK_SERIALIZATION_MUTEX: Mutex<()> = Mutex::new(());
-#[cfg(test)]
-static HOOK_POLL_BOUND_PRE_CAS: Mutex<Option<Arc<HookFn>>> = Mutex::new(None);
-#[cfg(test)]
-static HOOK_POLL_AWAITING_PRE_CAS: Mutex<Option<Arc<HookFn>>> = Mutex::new(None);
-#[cfg(test)]
-static HOOK_SET_IN_SIGNALING: Mutex<Option<Arc<HookFn>>> = Mutex::new(None);
-
-#[cfg(test)]
-thread_local! {
-    /// Marks the current thread as a participant in a hook-based test. Only threads with
-    /// this flag set to `true` will trigger test hooks when they reach a hook callsite.
-    static HOOK_PARTICIPANT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
 
 /// Coordinates delivery of a `T` at most once from a sender to a receiver on any thread.
 ///
@@ -103,10 +75,28 @@ pub struct Event<T> {
     _requires_pinning: PhantomPinned,
 }
 
-// The UnsafeCell fields (awaiter, value) cause auto-trait inference to
-// mark Event as !RefUnwindSafe. However, a shared reference to an Event
-// cannot observe inconsistent state during unwind because the atomic
-// state machine prevents concurrent access to those cells.
+// The `UnsafeCell` fields (`awaiter`, `value`) cause auto-trait inference to mark `Event` as
+// `!RefUnwindSafe`, and a payload that is not itself `UnwindSafe` would additionally make it
+// `!UnwindSafe`. The event supplies both regardless of the payload because every mutation it
+// performs is panic-atomic:
+//
+// * The payload and the waker are moved into and out of their cells as whole values. The event
+//   never hands out a reference through which user code could leave either of them partially
+//   modified, so the only user code that can unwind while a cell is live is a destructor, which
+//   runs when the state machine has already given that cell up.
+// * The `state` that records which cell is initialized is published by a single atomic operation
+//   ordered after the corresponding move, so a panic lands either before that publication (state
+//   and storage agree that the cell is uninitialized) or after it (they agree that it is
+//   initialized).
+// * The transient `EVENT_SIGNALING` window, in which the sender owns the awaiter, contains no
+//   user-controlled code: the sender takes the waker and publishes the terminal state before it
+//   invokes any callback. An unwind can therefore never strand the event in `EVENT_SIGNALING`
+//   and leave another endpoint waiting for a transition that will not come.
+// * User-controlled code that can unwind - waker clones, wakes, waker drops and payload drops -
+//   therefore always runs where state and storage agree, so a caught panic leaves an event that
+//   the remaining endpoint can still complete or clean up. The worst outcome is that the event
+//   storage is leaked, which is safe. The unwinding regression tests below exercise this.
+impl<T: Send + 'static> UnwindSafe for Event<T> {}
 impl<T: Send + 'static> RefUnwindSafe for Event<T> {}
 
 impl<T> Event<T>
@@ -127,7 +117,13 @@ where
         // SAFETY: We are making a pointer to a known field at a compiler-guaranteed offset.
         let state_ptr = unsafe { base_ptr.byte_add(offset_of!(Self, state)) }.cast::<AtomicU8>();
 
-        // SAFETY: This is the matching field of the type we are initializing, so valid for writes.
+        // SAFETY: `place` is an exclusive reference to storage laid out and aligned as
+        // `MaybeUninit<Self>`, `get_mut()` preserves that exclusive access and `as_mut_ptr()`
+        // yields its base address, so `offset_of!` selects the in-bounds `state` field with the
+        // alignment of that field. The event lifecycle guarantees that no endpoint of an earlier
+        // event in this storage is still active, so nothing else accesses these bytes. `write`
+        // initializes the field without reading or dropping the previous bytes, which is what
+        // lets us leave `awaiter` and `value` uninitialized.
         unsafe {
             state_ptr.write(AtomicU8::new(EVENT_BOUND));
         }
@@ -138,7 +134,10 @@ where
             let backtrace_ptr = unsafe { base_ptr.byte_add(offset_of!(Self, backtrace)) }
                 .cast::<Mutex<Option<BacktraceType>>>();
 
-            // SAFETY: This is the matching field of the type we are initializing, so valid for writes.
+            // SAFETY: Same as the `state` write above - the exclusive `MaybeUninit<Self>` storage
+            // is aligned writable storage for `Self` that no active event aliases, `offset_of!`
+            // selects the in-bounds `backtrace` field with that field's alignment, and `write`
+            // initializes it without reading or dropping the previous bytes.
             unsafe {
                 backtrace_ptr.write(Mutex::new(None));
             }
@@ -187,6 +186,15 @@ where
         )
     }
 
+    /// # Safety
+    ///
+    /// The caller must guarantee that:
+    ///
+    /// * The referenced place remains valid for writes for the entire lifetime of the returned
+    ///   sender and receiver cores.
+    /// * The referenced place remains pinned for the entire lifetime of the returned sender and
+    ///   receiver cores.
+    /// * The referenced place is not already in use by another instance of the event.
     #[must_use]
     pub(crate) unsafe fn placed_core(
         place: Pin<&mut UnsafeCell<MaybeUninit<Self>>>,
@@ -199,9 +207,19 @@ where
         // We cast away the MaybeUninit wrapper because it is now initialized.
         let event = NonNull::from_mut(place_mut).cast::<UnsafeCell<Self>>();
 
+        // SAFETY: `new_in_inner` just initialized the event in this place and the exclusive
+        // borrow of the place ends here, so nothing accesses the storage through an exclusive
+        // reference while the endpoints exist. The caller guarantees that the place stays valid
+        // and pinned until both endpoints have released it and that no other event uses it.
+        let sender_event_ref = unsafe { PtrRef::new(event) };
+
+        // SAFETY: Same as for the sender's reference above - the contract is discharged
+        // independently for each endpoint from the same caller guarantees.
+        let receiver_event_ref = unsafe { PtrRef::new(event) };
+
         (
-            SenderCore::new(PtrRef::new(event)),
-            ReceiverCore::new(PtrRef::new(event)),
+            SenderCore::new(sender_event_ref),
+            ReceiverCore::new(receiver_event_ref),
         )
     }
 
@@ -226,7 +244,11 @@ where
     /// # async fn main() {
     /// let mut place = Box::pin(EmbeddedEvent::<String>::new());
     ///
-    /// // SAFETY: We promise that `place` lives longer than the endpoints.
+    /// // SAFETY: `place` is a freshly created container, so it holds no other event, and the
+    /// // box keeps its storage allocated and writable at a stable address. It is box-pinned, so
+    /// // it cannot move while the endpoints below hold pointers to it, and it stays in scope
+    /// // until after both endpoints have been consumed. We do not touch the container itself
+    /// // while the endpoints are alive.
     /// let (sender, receiver) = unsafe { Event::placed(place.as_mut()) };
     ///
     /// sender.send("Hello from embedded event!".to_string());
@@ -237,7 +259,13 @@ where
     /// ```
     #[must_use]
     pub unsafe fn placed(place: Pin<&mut EmbeddedEvent<T>>) -> (RawSender<T>, RawReceiver<T>) {
-        // SAFETY: Not moving anything, just breaking through the public wrapper API.
+        // SAFETY: `inner` is an inline field of `EmbeddedEvent`, so its address is fixed relative
+        // to the container and pinning the container pins the field - this projection is
+        // structural. The closure returns that field directly, without moving or replacing it,
+        // and no operation on the container replaces `inner` while an event lives there. The raw
+        // endpoint pointers derived from the projection outlive this temporary `Pin<&mut _>`;
+        // their validity comes from the caller's obligation to keep the container pinned and
+        // valid for as long as the endpoints exist.
         let place = unsafe { place.map_unchecked_mut(|container| &mut container.inner) };
 
         // SAFETY: Forwarding safety guarantees from the caller.
@@ -348,11 +376,7 @@ where
                 // Test hook: pause here while the sender is in SIGNALING state, so a
                 // concurrent test thread can observe and act on the SIGNALING state.
                 #[cfg(test)]
-                if HOOK_PARTICIPANT.get()
-                    && let Some(hook) = HOOK_SET_IN_SIGNALING.lock().unwrap().clone()
-                {
-                    hook();
-                }
+                test_hooks::set_in_signaling();
 
                 // Before we send the wake signal we must transition into the `EVENT_SET` state
                 // so that the receiver can directly pick up the result when it comes back.
@@ -399,7 +423,10 @@ where
             }
             // Defensive: state machine guarantees this is unreachable.
             _ => {
-                unreachable!("unreachable Event state on set: {previous_state}");
+                unreachable!(
+                    "unreachable {} state on set: {previous_state}",
+                    type_name::<Self>()
+                );
             }
         }
     }
@@ -490,7 +517,10 @@ where
             }
             // Defensive: state machine guarantees this is unreachable.
             _ => {
-                unreachable!("unreachable Event state on sender disconnect: {previous_state}");
+                unreachable!(
+                    "unreachable {} state on sender disconnect: {previous_state}",
+                    type_name::<Self>()
+                );
             }
         }
     }
@@ -521,7 +551,7 @@ where
             }
             // Defensive: state machine guarantees this is unreachable.
             state => {
-                unreachable!("unreachable Event state on poll: {state}");
+                unreachable!("unreachable {} state on poll: {state}", type_name::<Self>());
             }
         }
     }
@@ -547,11 +577,7 @@ where
         // Test hook: pause here so a concurrent test thread can change the event
         // state before we attempt the CAS below.
         #[cfg(test)]
-        if HOOK_PARTICIPANT.get()
-            && let Some(hook) = HOOK_POLL_BOUND_PRE_CAS.lock().unwrap().clone()
-        {
-            hook();
-        }
+        test_hooks::poll_bound_pre_cas();
 
         // The sender is concurrently racing us to either EVENT_SET or EVENT_DISCONNECTED
         // or EVENT_SIGNALING. Note that it is legal for the sender to enter EVENT_SIGNALING
@@ -577,10 +603,11 @@ where
                 // We know that the sender will have gone away by this point.
                 // We need to clean up our awaiter and pick up the value.
 
-                // SAFETY: The sender is gone - there is nobody else who might be touching
-                // the event anymore, we are essentially in a single-threaded mode now.
-                // We also just set the value there previously and the event
-                // has undergone a transition that could not have affected this value.
+                // SAFETY: We wrote the cloned waker into `awaiter` above, so it is initialized.
+                // The sender reached `EVENT_SET` from `EVENT_BOUND` (its `fetch_add` observed
+                // `EVENT_BOUND`, which is the only predecessor of `EVENT_SET`), and that branch
+                // publishes the value without reading or taking the awaiter. The receiver is
+                // !Sync, so there is no other accessor and we have exclusive access here.
                 unsafe {
                     self.destroy_awaiter();
                 }
@@ -593,9 +620,10 @@ where
                 // the swap, so the sender saw `previous = BOUND` and will not touch the
                 // awaiter field. We must clean up the waker we just wrote ourselves.
 
-                // SAFETY: The sender is not touching the awaiter (it swapped from BOUND).
-                // The receiver is !Sync, so we have the only reference.
-                // We wrote the waker above, so it is initialized.
+                // SAFETY: We wrote the cloned waker into `awaiter` above, so it is initialized.
+                // The sender's swap observed `EVENT_BOUND`, and that branch disconnects without
+                // accessing the awaiter. The receiver is !Sync, so there is no other accessor
+                // and we have exclusive access here.
                 unsafe {
                     self.destroy_awaiter();
                 }
@@ -606,10 +634,11 @@ where
                 // The sender was dropped without setting the event.
                 // We need to clean up our awaiter and return an error.
 
-                // SAFETY: The sender is gone - there is nobody else who might be touching
-                // the event anymore, we are essentially in a single-threaded mode now.
-                // We also just set the value there previously and the event
-                // has undergone a transition that could not have affected this value.
+                // SAFETY: We wrote the cloned waker into `awaiter` above, so it is initialized.
+                // The sender reached `EVENT_DISCONNECTED` from `EVENT_BOUND` (its swap observed
+                // `EVENT_BOUND`), and that branch publishes disconnection without accessing the
+                // awaiter. The receiver is !Sync, so there is no other accessor and we have
+                // exclusive access here.
                 unsafe {
                     self.destroy_awaiter();
                 }
@@ -619,7 +648,8 @@ where
             // Defensive: state machine guarantees this is unreachable.
             Err(state) => {
                 unreachable!(
-                    "unreachable Event state on poll state transition that followed EVENT_BOUND: {state}"
+                    "unreachable {} state on poll transition from EVENT_BOUND: {state}",
+                    type_name::<Self>()
                 );
             }
         }
@@ -669,11 +699,7 @@ where
         // Test hook: pause here so a concurrent test thread can change the event
         // state before we attempt the CAS below.
         #[cfg(test)]
-        if HOOK_PARTICIPANT.get()
-            && let Some(hook) = HOOK_POLL_AWAITING_PRE_CAS.lock().unwrap().clone()
-        {
-            hook();
-        }
+        test_hooks::poll_awaiting_pre_cas();
 
         match self.state.compare_exchange(
             EVENT_AWAITING,
@@ -734,7 +760,8 @@ where
             // Defensive: state machine guarantees this is unreachable.
             Err(state) => {
                 unreachable!(
-                    "unreachable Event state on poll state transition that followed EVENT_AWAITING: {state}"
+                    "unreachable {} state on poll transition from EVENT_AWAITING: {state}",
+                    type_name::<Self>()
                 );
             }
         }
@@ -778,12 +805,16 @@ where
             // Defensive: state machine guarantees this is unreachable.
             _ => {
                 unreachable!(
-                    "unreachable OnceEvent post-signaling state on receiver disconnect: {state}"
+                    "unreachable {} post-signaling state: {state}",
+                    type_name::<Self>()
                 )
             }
         }
     }
 
+    /// Whether the event has reached a terminal state, meaning `EVENT_SET` or
+    /// `EVENT_DISCONNECTED` (see `state.rs`). A terminal state is what makes an outcome - a value
+    /// or a disconnect - immediately retrievable.
     #[must_use]
     pub(crate) fn is_set(&self) -> bool {
         // We use Relaxed ordering because this is independent of any other data.
@@ -912,17 +943,20 @@ where
             // Defensive: state machine guarantees this is unreachable because the CAS loop
             // spins on SIGNALING and only breaks on BOUND, SET, or DISCONNECTED.
             _ => {
-                unreachable!("unreachable Event state on receiver disconnect: {previous_state}");
+                unreachable!(
+                    "unreachable {} state on receiver disconnect: {previous_state}",
+                    type_name::<Self>()
+                );
             }
         }
     }
 
-    /// Drops the current awaiter.
+    /// Drops the waker registered in `awaiter`, leaving that cell uninitialized.
     ///
     /// # Safety
     ///
-    /// Assumes acquired synchronization block for `awaiter`.
-    /// Assumes there is a value in `awaiter`.
+    /// The caller must have acquired the synchronization block for `awaiter` and `awaiter` must
+    /// hold an initialized waker.
     unsafe fn destroy_awaiter(&self) {
         // SAFETY: Forwarding guarantees from the caller.
         let awaiter_cell_maybe = unsafe { self.awaiter.get().as_mut() };
@@ -935,12 +969,12 @@ where
         }
     }
 
-    /// Drops the current value.
+    /// Drops the payload stored in `value`, leaving that cell uninitialized.
     ///
     /// # Safety
     ///
-    /// Assumes acquired synchronization block for `value`.
-    /// Assumes there is a value in `value`.
+    /// The caller must have acquired the synchronization block for `value` and `value` must hold
+    /// an initialized payload.
     unsafe fn destroy_value(&self) {
         // SAFETY: Forwarding guarantees from the caller.
         let value_cell_maybe = unsafe { self.value.get().as_mut() };
@@ -954,9 +988,18 @@ where
     }
 }
 
-// SAFETY: We are a synchronization primitive, so we do our own synchronization.
-// The `'static` bound is already on the struct, so it is not repeated here. Repeating it
-// would trigger a rustc bug (rust-lang/rust#110338) in async generator Send inference
+// SAFETY: Shared references to an event may be used from any thread because every access to the
+// `UnsafeCell` fields is arbitrated by the atomic `state`. There is at most one sender and one
+// receiver, and their core types are !Sync, so neither endpoint is used from two threads at once.
+// The receiver writes `awaiter` only while the event is `EVENT_BOUND` and publishes it with the
+// Release transition to `EVENT_AWAITING`; a sender that wants the awaiter first enters
+// `EVENT_SIGNALING`, which locks the receiver out of the field, and reads it behind an Acquire
+// fence. The sender writes `value` before the Release transition that publishes `EVENT_SET`, and
+// the receiver reads it only after an Acquire load or fence has observed that state. `T: Send`
+// is what permits the payload to be handed from the sender's thread to the receiver's thread.
+// We do not repeat the `'static` bound of the inherent impls here: this proof does not need it
+// and an unnecessary bound on an unsafe impl triggers a rustc bug (rust-lang/rust#110338) in
+// async generator Send inference with trait object type params.
 unsafe impl<T: Send> Sync for Event<T> {}
 
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
@@ -978,12 +1021,76 @@ impl<T: Send + 'static> fmt::Debug for Event<T> {
     }
 }
 
+/// Synchronization points that let a test pause an [`Event`] operation between two steps that
+/// normally execute without interruption, making the race-condition branches of the state
+/// machine deterministically reachable.
+///
+/// The storage and selection logic lives here instead of inline in the [`Event`] methods so that
+/// the test harness does not become part of the coverage signal of the state machine - each
+/// method only calls the matching helper. Ref: docs/testing.md, "Test coverage".
+///
+/// A hook only fires on threads that have marked themselves as participants via
+/// [`HOOK_PARTICIPANT`], so a test that happens to run concurrently cannot wander into another
+/// test's barrier. Tests that install hooks hold [`HOOK_SERIALIZATION_MUTEX`] for the duration.
 #[cfg(test)]
-#[allow(
-    clippy::undocumented_unsafe_blocks,
-    clippy::multiple_unsafe_ops_per_block,
-    reason = "test code, be concise"
-)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod test_hooks {
+    use std::cell::Cell;
+    use std::sync::{Arc, Mutex};
+
+    use crate::NEVER_POISONED;
+
+    /// A hook closure, shared between the test that installs it and the thread that runs it.
+    pub(super) type HookFn = dyn Fn() + Send + Sync;
+
+    /// Held by a test for as long as it has any hook installed, so that hook-based tests cannot
+    /// observe each other's hooks.
+    pub(super) static HOOK_SERIALIZATION_MUTEX: Mutex<()> = Mutex::new(());
+
+    pub(super) static HOOK_POLL_BOUND_PRE_CAS: Mutex<Option<Arc<HookFn>>> = Mutex::new(None);
+    pub(super) static HOOK_POLL_AWAITING_PRE_CAS: Mutex<Option<Arc<HookFn>>> = Mutex::new(None);
+    pub(super) static HOOK_SET_IN_SIGNALING: Mutex<Option<Arc<HookFn>>> = Mutex::new(None);
+
+    thread_local! {
+        /// Marks the current thread as a participant in a hook-based test. Only threads with
+        /// this flag set to `true` trigger hooks when they reach a hook callsite.
+        pub(super) static HOOK_PARTICIPANT: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// Runs in `Event::poll_bound()` after the waker has been written into the event but before
+    /// the state transition that publishes it to the sender.
+    pub(super) fn poll_bound_pre_cas() {
+        run(&HOOK_POLL_BOUND_PRE_CAS);
+    }
+
+    /// Runs in `Event::poll_awaiting()` before the state transition that takes the previously
+    /// registered waker back from the sender.
+    pub(super) fn poll_awaiting_pre_cas() {
+        run(&HOOK_POLL_AWAITING_PRE_CAS);
+    }
+
+    /// Runs in `Event::set()` while the event is in the transient `EVENT_SIGNALING` state, after
+    /// the sender has taken the awaiter and before it publishes `EVENT_SET`.
+    pub(super) fn set_in_signaling() {
+        run(&HOOK_SET_IN_SIGNALING);
+    }
+
+    fn run(hook: &Mutex<Option<Arc<HookFn>>>) {
+        if !HOOK_PARTICIPANT.get() {
+            return;
+        }
+
+        // We take a copy of the hook so that no lock is held while the hook runs - a hook
+        // typically blocks on a barrier until another thread has done its part.
+        let hook = hook.lock().expect(NEVER_POISONED).clone();
+
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+}
+
+#[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::cell::RefCell;
@@ -1000,13 +1107,24 @@ mod tests {
         clone_action_waker_panicking_on_clone_release, drop_waker, with_watchdog,
     };
 
+    use super::test_hooks::{
+        HOOK_PARTICIPANT, HOOK_POLL_AWAITING_PRE_CAS, HOOK_POLL_BOUND_PRE_CAS,
+        HOOK_SERIALIZATION_MUTEX, HOOK_SET_IN_SIGNALING, HookFn,
+    };
     use super::*;
     use crate::IntoValueError;
 
     assert_impl_all!(Event<u32>: Send, Sync, UnwindSafe, RefUnwindSafe);
 
-    // Trait object payloads must preserve Send + Sync (regression test for #142).
-    assert_impl_all!(Event<Box<dyn Send>>: Send, Sync);
+    // `Box<dyn Send>` and `&'static mut u32` satisfy the payload bounds of the public API
+    // (`Send + 'static`) while lacking auto traits of their own: the trait object is neither
+    // `Sync` nor unwind-safe in either form, and the exclusive reference is not `UnwindSafe`.
+    // These assertions therefore only pass if the event supplies thread safety and unwind safety
+    // through its own state machine instead of inheriting them structurally from the payload,
+    // which is the contract the endpoints and containers depend on. Preserving `Send` for a trait
+    // object payload is also a regression test for #142.
+    assert_impl_all!(Event<Box<dyn Send>>: Send, Sync, UnwindSafe, RefUnwindSafe);
+    assert_impl_all!(Event<&'static mut u32>: Send, Sync, UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn boxed_send_receive() {
@@ -1269,6 +1387,9 @@ mod tests {
     #[test]
     fn placed_send_receive() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+        // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+        // its storage stays allocated, writable and at a stable address until the end of
+        // the test, which outlives both endpoints.
         let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
@@ -1283,6 +1404,9 @@ mod tests {
     #[test]
     fn placed_receive_send_receive() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+        // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+        // its storage stays allocated, writable and at a stable address until the end of
+        // the test, which outlives both endpoints.
         let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
@@ -1300,6 +1424,9 @@ mod tests {
     #[test]
     fn placed_drop_send() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+        // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+        // its storage stays allocated, writable and at a stable address until the end of
+        // the test, which outlives both endpoints.
         let (sender, _) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
         sender.send(42);
@@ -1308,6 +1435,9 @@ mod tests {
     #[test]
     fn placed_drop_receive() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+        // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+        // its storage stays allocated, writable and at a stable address until the end of
+        // the test, which outlives both endpoints.
         let (_, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
@@ -1320,6 +1450,9 @@ mod tests {
     #[test]
     fn placed_receive_drop_receive() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+        // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+        // its storage stays allocated, writable and at a stable address until the end of
+        // the test, which outlives both endpoints.
         let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
@@ -1337,6 +1470,9 @@ mod tests {
     #[test]
     fn placed_receive_drop_send() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+        // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+        // its storage stays allocated, writable and at a stable address until the end of
+        // the test, which outlives both endpoints.
         let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
@@ -1353,6 +1489,9 @@ mod tests {
     #[test]
     fn placed_receive_drop_drop_receiver_first() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+        // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+        // its storage stays allocated, writable and at a stable address until the end of
+        // the test, which outlives both endpoints.
         let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
@@ -1368,6 +1507,9 @@ mod tests {
     #[test]
     fn placed_receive_drop_drop_sender_first() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+        // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+        // its storage stays allocated, writable and at a stable address until the end of
+        // the test, which outlives both endpoints.
         let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
@@ -1383,6 +1525,9 @@ mod tests {
     #[test]
     fn placed_drop_drop_receiver_first() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+        // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+        // its storage stays allocated, writable and at a stable address until the end of
+        // the test, which outlives both endpoints.
         let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
         drop(receiver);
@@ -1392,6 +1537,9 @@ mod tests {
     #[test]
     fn placed_drop_drop_sender_first() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+        // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+        // its storage stays allocated, writable and at a stable address until the end of
+        // the test, which outlives both endpoints.
         let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
         drop(sender);
@@ -1401,6 +1549,9 @@ mod tests {
     #[test]
     fn placed_is_ready() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+        // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+        // its storage stays allocated, writable and at a stable address until the end of
+        // the test, which outlives both endpoints.
         let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
@@ -1419,6 +1570,9 @@ mod tests {
     #[test]
     fn placed_drop_is_ready() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+        // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+        // its storage stays allocated, writable and at a stable address until the end of
+        // the test, which outlives both endpoints.
         let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
@@ -1437,6 +1591,9 @@ mod tests {
     #[test]
     fn placed_into_value() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+        // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+        // its storage stays allocated, writable and at a stable address until the end of
+        // the test, which outlives both endpoints.
         let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
         let Err(IntoValueError::Pending(receiver)) = receiver.into_value() else {
@@ -1451,6 +1608,9 @@ mod tests {
     #[test]
     fn placed_drop_into_value() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+        // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+        // its storage stays allocated, writable and at a stable address until the end of
+        // the test, which outlives both endpoints.
         let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
         drop(sender);
@@ -1465,6 +1625,9 @@ mod tests {
     #[should_panic]
     fn placed_panic_poll_after_completion() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+        // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+        // its storage stays allocated, writable and at a stable address until the end of
+        // the test, which outlives both endpoints.
         let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
@@ -1485,6 +1648,9 @@ mod tests {
     #[should_panic]
     fn placed_panic_is_ready_after_completion() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+        // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+        // its storage stays allocated, writable and at a stable address until the end of
+        // the test, which outlives both endpoints.
         let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 
@@ -1623,6 +1789,9 @@ mod tests {
     fn placed_send_receive_mt() {
         with_watchdog(|| {
             let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+            // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+            // its storage stays allocated, writable and at a stable address until the end of
+            // the test, which outlives both endpoints.
             let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
             thread::spawn(move || {
@@ -1643,7 +1812,12 @@ mod tests {
         });
     }
 
+    // The repeated thread creation and storage reuse in this test is native-run stress: every
+    // iteration exercises the same lifecycle, so interpreting all of them under each Miri
+    // scheduler seed costs a great deal without reaching new behavior. Miri still covers a single
+    // placed lifecycle via `placed_send_receive_mt` and the other placed tests.
     #[test]
+    #[cfg_attr(miri, ignore)] // Repeated thread creation and reuse loop is for native runs only.
     fn placed_send_receive_reused_mt() {
         with_watchdog(|| {
             const ITERATIONS: usize = 123;
@@ -1651,6 +1825,10 @@ mod tests {
             let mut place = Box::pin(EmbeddedEvent::<i32>::new());
 
             for _ in 0..ITERATIONS {
+                // SAFETY: `place` is box-pinned, so its storage stays allocated, writable and at
+                // a stable address until the end of the test, which outlives every endpoint. The
+                // endpoints of the previous iteration are both dropped before we get here, so no
+                // other event is using this storage.
                 let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
                 thread::spawn(move || {
@@ -1676,6 +1854,9 @@ mod tests {
     fn placed_receive_send_receive_mt() {
         with_watchdog(|| {
             let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+            // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+            // its storage stays allocated, writable and at a stable address until the end of
+            // the test, which outlives both endpoints.
             let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
             let first_poll_completed = Arc::new(Barrier::new(2));
@@ -1712,6 +1893,9 @@ mod tests {
     fn placed_send_receive_unbiased_mt() {
         with_watchdog(|| {
             let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+            // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+            // its storage stays allocated, writable and at a stable address until the end of
+            // the test, which outlives both endpoints.
             let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
             let receive_thread = thread::spawn(move || {
@@ -1734,6 +1918,9 @@ mod tests {
     fn placed_drop_receive_unbiased_mt() {
         with_watchdog(|| {
             let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+            // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+            // its storage stays allocated, writable and at a stable address until the end of
+            // the test, which outlives both endpoints.
             let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
             let receive_thread = thread::spawn(move || {
@@ -1756,6 +1943,9 @@ mod tests {
     fn placed_drop_send_unbiased_mt() {
         with_watchdog(|| {
             let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+            // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+            // its storage stays allocated, writable and at a stable address until the end of
+            // the test, which outlives both endpoints.
             let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
             let receive_thread = thread::spawn(move || {
@@ -1771,14 +1961,42 @@ mod tests {
         });
     }
 
+    /// Returns a shared reference to the event placed in `place`, so a test can inspect
+    /// diagnostic state that the endpoints do not expose.
+    ///
+    /// # Safety
+    ///
+    /// An event must have been placed in `place` by [`Event::placed`] and that storage must not
+    /// have been reused for another event since. No exclusive reference to the event storage may
+    /// exist for the lifetime of the returned reference.
+    #[cfg(debug_assertions)]
+    unsafe fn placed_event(place: &EmbeddedEvent<i32>) -> &Event<i32> {
+        // SAFETY: The caller guarantees that an event was placed in this storage, so the pointer
+        // is non-null and aligned for `Event<i32>`, and the storage lives as long as the borrow
+        // of the container. Every access to a placed event - here and in the endpoints - goes
+        // through shared references, and the caller guarantees that no exclusive reference to the
+        // storage exists, so this shared reference cannot conflict with another borrow.
+        let cell = unsafe { place.inner.get().as_ref() }.expect("UnsafeCell pointer is never null");
+
+        // SAFETY: `Event::placed` initialized the event in this storage. Releasing an event only
+        // clears its diagnostic state and never deinitializes those bytes, so the event remains
+        // initialized for as long as the storage exists.
+        unsafe { cell.assume_init_ref() }
+    }
+
     #[cfg(debug_assertions)]
     #[test]
     fn awaiter_backtrace_no_awaiter() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+        // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+        // its storage stays allocated, writable and at a stable address until the end of
+        // the test, which outlives both endpoints.
         let _endpoints = unsafe { Event::<i32>::placed(place.as_mut()) };
 
-        let backtrace =
-            unsafe { place.inner.get().as_ref().unwrap().assume_init_ref() }.awaiter_backtrace();
+        // SAFETY: We placed an event in this storage just above and did not reuse the storage.
+        // The endpoints hold only raw pointers and the placement borrow has ended, so there is no
+        // exclusive reference to the storage.
+        let backtrace = unsafe { placed_event(&place) }.awaiter_backtrace();
 
         assert!(backtrace.is_none());
     }
@@ -1787,14 +2005,19 @@ mod tests {
     #[test]
     fn awaiter_backtrace_with_awaiter() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+        // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+        // its storage stays allocated, writable and at a stable address until the end of
+        // the test, which outlives both endpoints.
         let (_sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
         let mut cx = task::Context::from_waker(Waker::noop());
         let mut receiver = Box::pin(receiver);
         _ = receiver.as_mut().poll(&mut cx);
 
-        let backtrace =
-            unsafe { place.inner.get().as_ref().unwrap().assume_init_ref() }.awaiter_backtrace();
+        // SAFETY: We placed an event in this storage above and did not reuse the storage. The
+        // endpoints hold only raw pointers and the placement borrow has ended, so there is no
+        // exclusive reference to the storage.
+        let backtrace = unsafe { placed_event(&place) }.awaiter_backtrace();
 
         assert!(backtrace.is_some());
     }
@@ -1803,6 +2026,9 @@ mod tests {
     #[test]
     fn awaiter_backtrace_after_sender_drop() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+        // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+        // its storage stays allocated, writable and at a stable address until the end of
+        // the test, which outlives both endpoints.
         let (sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1811,8 +2037,10 @@ mod tests {
 
         drop(sender);
 
-        let backtrace =
-            unsafe { place.inner.get().as_ref().unwrap().assume_init_ref() }.awaiter_backtrace();
+        // SAFETY: We placed an event in this storage above and did not reuse the storage. The
+        // receiver is still an endpoint of it and holds only a raw pointer, so there is no
+        // exclusive reference to the storage.
+        let backtrace = unsafe { placed_event(&place) }.awaiter_backtrace();
 
         assert!(backtrace.is_some());
     }
@@ -1821,6 +2049,9 @@ mod tests {
     #[test]
     fn awaiter_backtrace_after_receiver_drop() {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+        // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+        // its storage stays allocated, writable and at a stable address until the end of
+        // the test, which outlives both endpoints.
         let (_sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
         let mut cx = task::Context::from_waker(Waker::noop());
@@ -1829,8 +2060,10 @@ mod tests {
 
         drop(receiver);
 
-        let backtrace =
-            unsafe { place.inner.get().as_ref().unwrap().assume_init_ref() }.awaiter_backtrace();
+        // SAFETY: We placed an event in this storage above and did not reuse the storage. The
+        // sender is still an endpoint of it and holds only a raw pointer, so there is no
+        // exclusive reference to the storage.
+        let backtrace = unsafe { placed_event(&place) }.awaiter_backtrace();
 
         assert!(backtrace.is_some());
     }
@@ -1840,13 +2073,19 @@ mod tests {
     fn awaiter_backtrace_outlives_event() {
         let backtrace = {
             let mut place = Box::pin(EmbeddedEvent::<i32>::new());
+            // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+            // its storage stays allocated, writable and at a stable address until the end of
+            // the test, which outlives both endpoints.
             let (_sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
             let mut cx = task::Context::from_waker(Waker::noop());
             let mut receiver = Box::pin(receiver);
             _ = receiver.as_mut().poll(&mut cx);
 
-            unsafe { place.inner.get().as_ref().unwrap().assume_init_ref() }
+            // SAFETY: We placed an event in this storage above and did not reuse the storage.
+            // The endpoints hold only raw pointers and the placement borrow has ended, so there
+            // is no exclusive reference to the storage.
+            unsafe { placed_event(&place) }
                 .awaiter_backtrace()
                 .expect("the event has been awaited")
         };
@@ -1861,6 +2100,9 @@ mod tests {
         let mut place = Box::pin(EmbeddedEvent::<i32>::new());
 
         {
+            // SAFETY: `place` is a fresh container that holds no other event, box-pinned so
+            // its storage stays allocated, writable and at a stable address until the end of
+            // the test, which outlives both endpoints.
             let (_sender, receiver) = unsafe { Event::<i32>::placed(place.as_mut()) };
 
             let mut cx = task::Context::from_waker(Waker::noop());
@@ -1870,7 +2112,11 @@ mod tests {
 
         // The event has been released but its storage is still ours to inspect. Releasing an
         // event releases its backtrace, because the storage may be reused without dropping it.
-        let event = unsafe { place.inner.get().as_ref().unwrap().assume_init_ref() };
+        //
+        // SAFETY: We placed an event in this storage above and did not reuse the storage.
+        // Releasing the event left it initialized, both endpoints are gone and nothing holds an
+        // exclusive reference to the storage.
+        let event = unsafe { placed_event(&place) };
 
         assert!(event.awaiter_backtrace().is_none());
     }
@@ -2052,7 +2298,10 @@ mod tests {
     // DISCONNECTED. The receiver-drop must happen on a separate thread because `final_poll`
     // will spin until the sender completes, and the sender is blocked on the hook barrier.
     #[test]
-    #[cfg_attr(miri, ignore)] // Barrier-heavy threading pattern is too slow for Miri.
+    // The receiver's `final_poll` spins while the event is in SIGNALING, and here the sender only
+    // leaves SIGNALING once the test releases its barrier. Miri's interpreter makes such a
+    // cross-thread spin extremely slow, so this scenario is reserved for native runs.
+    #[cfg_attr(miri, ignore)]
     fn boxed_final_poll_races_sender_signaling() {
         with_watchdog(|| {
             let BarrierHook {
@@ -2104,7 +2353,6 @@ mod tests {
     // reports `Pending` there. The two must agree. `EVENT_SIGNALING` is not a terminal
     // state, so it must count as "not ready".
     #[test]
-    #[cfg_attr(miri, ignore)] // Barrier-heavy threading pattern is too slow for Miri.
     fn boxed_is_ready_false_while_sender_signaling() {
         with_watchdog(|| {
             let BarrierHook {
@@ -2122,9 +2370,10 @@ mod tests {
                 let poll_result = receiver.as_mut().poll(&mut cx);
                 assert!(matches!(poll_result, Poll::Pending));
 
-                // Sender sends on a separate thread. The swap transitions
-                // AWAITING -> SIGNALING, then the sender pauses at the hook while
-                // still in the SIGNALING state.
+                // Sender sends on a separate thread. The `fetch_add` in `set` transitions
+                // AWAITING -> SIGNALING, then the sender pauses at the hook while still in the
+                // SIGNALING state. (The sender-disconnect path reaches SIGNALING via `swap`
+                // instead; see `sender_dropped_without_set`.)
                 let send_thread = thread::spawn(move || {
                     HOOK_PARTICIPANT.set(true);
                     sender.send(42);
@@ -2145,6 +2394,74 @@ mod tests {
                 assert!(receiver.is_ready());
                 let poll_result = receiver.as_mut().poll(&mut cx);
                 assert!(matches!(poll_result, Poll::Ready(Ok(42))));
+            });
+        });
+    }
+
+    // Synchronous extraction has a concurrency boundary that `Future::poll` does not cover: it
+    // classifies the observed state and, for a terminal state, finalizes the event and may
+    // release its storage while the sender is still acting. The transient SIGNALING state is the
+    // interesting classification, because there the sender owns the event fields but has not
+    // published an outcome yet - an extraction must report pending and hand back a usable
+    // receiver. The hook that parks a sender in SIGNALING is private to this module, which is why
+    // this test lives here rather than beside the other `into_value` tests in `sync_receiver.rs`.
+    // Ref: docs/testing.md, "Testing atomic operations and custom synchronization".
+    #[test]
+    fn boxed_into_value_pending_while_sender_signaling() {
+        with_watchdog(|| {
+            let BarrierHook {
+                entered,
+                proceed,
+                hook,
+            } = barrier_hook();
+            with_hook(&HOOK_SET_IN_SIGNALING, hook, || {
+                let (sender, mut receiver) = Event::<i32>::boxed();
+
+                // First poll transitions BOUND -> AWAITING, which is what routes the sender's
+                // `set` through SIGNALING.
+                let mut cx = task::Context::from_waker(Waker::noop());
+                assert!(matches!(
+                    Pin::new(&mut receiver).poll(&mut cx),
+                    Poll::Pending
+                ));
+
+                let send_thread = thread::spawn(move || {
+                    HOOK_PARTICIPANT.set(true);
+                    sender.send(42);
+                });
+
+                // Wait for the hook to fire (sender is parked in SIGNALING, holding the awaiter).
+                entered.wait();
+
+                if receiver.is_ready() {
+                    // Consuming or dropping the receiver now would finalize the event, which
+                    // spins until the sender leaves SIGNALING - and only this thread can release
+                    // the sender. We leak the receiver, release the sender and fail, so that a
+                    // regression is reported instead of hanging when no watchdog is active.
+                    mem::forget(receiver);
+                    proceed.wait();
+                    send_thread.join().unwrap();
+
+                    panic!("SIGNALING must not be reported as a completed event");
+                }
+
+                let extraction = receiver.into_value();
+
+                // Release the sender before asserting, so that a failure cannot leave it parked
+                // in the hook.
+                proceed.wait();
+                send_thread.join().unwrap();
+
+                let Err(IntoValueError::Pending(receiver)) = extraction else {
+                    panic!("the value must not be extractable while the sender is signaling");
+                };
+
+                // The retained receiver is still connected to the event, so it observes the value
+                // that the sender has since published.
+                assert_eq!(
+                    receiver.into_value().expect("the sender published a value"),
+                    42
+                );
             });
         });
     }
@@ -2293,55 +2610,162 @@ mod tests {
         assert!(sender_dropped.get(), "{REENTRANCY_REQUIRED}");
     }
 
+    /// Owns a receiver on behalf of a waker payload and drops it only once the event has reached
+    /// a terminal state.
+    ///
+    /// The reentrancy tests below release this from inside a sender operation, where dropping the
+    /// receiver re-enters `Event::final_poll`. That call spins while the event is in the
+    /// transient `EVENT_SIGNALING` state, and the sender that would leave that state is the very
+    /// operation blocked in this destructor - so a regression in terminal-state publication would
+    /// hang the test instead of failing it. Checking readiness first turns that regression into a
+    /// deterministic failure, which is what mutation testing needs given that watchdogs are
+    /// disabled there. Ref: docs/testing.md, "Tests must not hang".
+    struct TerminalStateReceiverDrop {
+        receiver: Option<Pin<Box<BoxedReceiver<i32>>>>,
+    }
+
+    impl TerminalStateReceiverDrop {
+        fn new(receiver: BoxedReceiver<i32>) -> Self {
+            Self {
+                receiver: Some(Box::pin(receiver)),
+            }
+        }
+
+        fn receiver_mut(&mut self) -> Pin<&mut BoxedReceiver<i32>> {
+            self.receiver
+                .as_mut()
+                .expect("the receiver is only taken while dropping")
+                .as_mut()
+        }
+    }
+
+    impl Drop for TerminalStateReceiverDrop {
+        fn drop(&mut self) {
+            let receiver = self
+                .receiver
+                .take()
+                .expect("the receiver is only taken while dropping");
+
+            if receiver.is_ready() {
+                drop(receiver);
+                return;
+            }
+
+            // The event has not published a terminal state, so dropping the receiver here would
+            // spin forever waiting for the sender that is blocked in this destructor. We leak the
+            // receiver instead and report the defect.
+            mem::forget(receiver);
+
+            assert!(
+                thread::panicking(),
+                "the sender must publish a terminal state before releasing the stored waker"
+            );
+        }
+    }
+
     #[test]
     fn boxed_send_with_reentrant_receiver_drop_releases_storage() {
-        let (sender, receiver) = Event::<i32>::boxed();
+        with_watchdog(|| {
+            let (sender, receiver) = Event::<i32>::boxed();
 
-        let (data, receiver_dropped) = DropOnWakerRelease::new(Box::pin(receiver));
-        // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
-        let waker = unsafe { drop_waker(Arc::clone(&data)) };
+            let (data, receiver_dropped) =
+                DropOnWakerRelease::new(TerminalStateReceiverDrop::new(receiver));
+            // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
+            let waker = unsafe { drop_waker(Arc::clone(&data)) };
 
-        // First poll transitions BOUND -> AWAITING and stores a clone of the waker in the event.
-        data.with_value(|receiver| {
-            let mut cx = task::Context::from_waker(&waker);
-            assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
+            // First poll transitions BOUND -> AWAITING and stores a clone of the waker in the
+            // event.
+            data.with_value(|holder| {
+                let mut cx = task::Context::from_waker(&waker);
+                assert!(matches!(holder.receiver_mut().poll(&mut cx), Poll::Pending));
+            });
+
+            // Leave the event's stored clone as the only reference, so waking it runs the
+            // reentrant drop.
+            drop(waker);
+            drop(data);
+            assert!(!receiver_dropped.get());
+
+            // `set` stores the value, reaches a terminal state and wakes, which drops the
+            // receiver, which consumes the value and frees the event.
+            sender.send(42);
+
+            assert!(receiver_dropped.get(), "{REENTRANCY_REQUIRED}");
         });
-
-        // Leave the event's stored clone as the only reference, so waking it runs the reentrant
-        // drop.
-        drop(waker);
-        drop(data);
-        assert!(!receiver_dropped.get());
-
-        // `set` stores the value, reaches a terminal state and wakes, which drops the receiver,
-        // which consumes the value and frees the event.
-        sender.send(42);
-
-        assert!(receiver_dropped.get(), "{REENTRANCY_REQUIRED}");
     }
 
     #[test]
     fn boxed_sender_drop_with_reentrant_receiver_drop_releases_storage() {
-        let (sender, receiver) = Event::<i32>::boxed();
+        with_watchdog(|| {
+            let (sender, receiver) = Event::<i32>::boxed();
 
-        let (data, receiver_dropped) = DropOnWakerRelease::new(Box::pin(receiver));
-        // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
-        let waker = unsafe { drop_waker(Arc::clone(&data)) };
+            let (data, receiver_dropped) =
+                DropOnWakerRelease::new(TerminalStateReceiverDrop::new(receiver));
+            // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
+            let waker = unsafe { drop_waker(Arc::clone(&data)) };
 
-        data.with_value(|receiver| {
-            let mut cx = task::Context::from_waker(&waker);
-            assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
+            data.with_value(|holder| {
+                let mut cx = task::Context::from_waker(&waker);
+                assert!(matches!(holder.receiver_mut().poll(&mut cx), Poll::Pending));
+            });
+
+            drop(waker);
+            drop(data);
+            assert!(!receiver_dropped.get());
+
+            // `sender_dropped_without_set` reaches DISCONNECTED and wakes, which drops the
+            // receiver, which frees the event.
+            drop(sender);
+
+            assert!(receiver_dropped.get(), "{REENTRANCY_REQUIRED}");
         });
+    }
 
-        drop(waker);
-        drop(data);
-        assert!(!receiver_dropped.get());
+    // The re-poll path destroys the registration made by the previous poll before it registers
+    // the replacement. Releasing that registration is user code that may drop the sender, which
+    // completes the event from inside the re-poll: the sender observes EVENT_BOUND and publishes
+    // EVENT_DISCONNECTED without touching the awaiter, so the re-poll must observe that state,
+    // release the replacement it made and report the disconnect.
+    // Ref: docs/callback-safety.md.
+    #[test]
+    fn boxed_repoll_with_reentrant_sender_drop_during_previous_waker_release_observes_disconnected()
+    {
+        with_watchdog(|| {
+            let (sender, receiver) = Event::<i32>::boxed();
+            let mut receiver = Box::pin(receiver);
 
-        // `sender_dropped_without_set` reaches DISCONNECTED and wakes, which drops the receiver,
-        // which frees the event.
-        drop(sender);
+            let (data, sender_dropped) = DropOnWakerRelease::new(sender);
+            // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
+            let previous_waker = unsafe { drop_waker(data) };
 
-        assert!(receiver_dropped.get(), "{REENTRANCY_REQUIRED}");
+            // First poll transitions BOUND -> AWAITING and registers a clone of `previous_waker`.
+            let mut cx = task::Context::from_waker(&previous_waker);
+            assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
+
+            // Release our own reference so that the registration inside the event is the last
+            // one, and destroying it drops the sender it carries.
+            drop(previous_waker);
+            assert!(!sender_dropped.get());
+
+            let (replacement_data, replacement_released) = DropOnWakerRelease::new(());
+            // SAFETY: The payload is not `Send`, and this test keeps the waker on one thread.
+            let replacement_waker = unsafe { drop_waker(Arc::clone(&replacement_data)) };
+
+            let mut cx = task::Context::from_waker(&replacement_waker);
+            let poll_result = receiver.as_mut().poll(&mut cx);
+
+            assert!(sender_dropped.get(), "{REENTRANCY_REQUIRED}");
+            assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
+
+            // The event completed, so it must not have kept the replacement registration - once
+            // we release our own references, the payload is dropped.
+            drop(replacement_waker);
+            drop(replacement_data);
+            assert!(
+                replacement_released.get(),
+                "the re-poll must release the replacement registration it made"
+            );
+        });
     }
 
     /// Explains a failure to reach the reentrant drop that a regression test exists to exercise.

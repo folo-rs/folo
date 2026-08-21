@@ -36,23 +36,11 @@ gungraun = { workspace = true, features = ["default"] }
 workspace = true
 
 [[bench]]
-name = "events_once_local"
+name = "events_once_ops"
 harness = false
 
 [[bench]]
-name = "events_once_sync"
-harness = false
-
-[[bench]]
-name = "events_once_vs_3p"
-harness = false
-
-[[bench]]
-name = "events_once_local_cg"
-harness = false
-
-[[bench]]
-name = "events_once_sync_cg"
+name = "events_once_ops_cg"
 harness = false
 
 
