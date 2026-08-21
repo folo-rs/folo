@@ -270,3 +270,22 @@ fn tip_index_of(series: &Series) -> usize {
         .max()
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overlapping_regimes_has_the_declared_crossovers_and_majorities() {
+        let majority = 2 * REGIME - OVERLAP_CROSSOVER;
+        let expected = [
+            vec![ELEVATED; OVERLAP_CROSSOVER],
+            vec![BASELINE; majority],
+            vec![ELEVATED; majority],
+            vec![BASELINE; OVERLAP_CROSSOVER],
+        ]
+        .concat();
+
+        assert_eq!(overlapping_regimes(), expected);
+    }
+}

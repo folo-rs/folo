@@ -117,10 +117,12 @@ without re-measuring the parallel load.
 flowchart TD
   FIN["finalize"] --> FLAT["flatten to a series list"]
   FLAT --> SS["sort series, then sort each series' points by topology\n— serial —"]
-  SS --> DALL["detect: one chunk of series per worker\n(spawned)"]
+  SS --> CENSUS["classify testability + size family\n— serial metadata prepass —"]
+  CENSUS --> DALL["detect: one chunk of series per worker\n(spawned)"]
   DALL --> CANDS["candidate findings"]
   CANDS --> BH["false-discovery filter — serial —"]
-  DALL -->|series census: judged + reasons| BH
+  CENSUS -->|series census: judged + reasons| BH
+  CENSUS -->|family-sized permutation budget| DALL
   BH --> MAT["materialize surviving findings' chart points"]
   MAT --> SF["sort findings by magnitude, method, identity — serial —"]
   SF --> FINDINGS[("findings")]
@@ -137,14 +139,15 @@ move, since narrowing discards evidence (DESIGN.md §8.2) — and judges the tip
 regime's prediction interval.
 
 The false-discovery filter's family is every series that was **testable**, including those that
-raised no candidate (DESIGN.md §8.3). The detect workers already evaluate that predicate to
-decide whether to run at all, so each worker tallies its chunk into a **series census** —
-judged, and one reason per series it declined — which the driver merges alongside the
-candidates. The family size is read straight off that census, so the count and the
-short-circuit can never disagree, and no second pass over the series list is needed. The census
-outlives detection: the pipeline records the ghost-filtered series into it too (their exclusion
-happens before detection ever sees them) and hands it to the renderers, which is how a report
-states what it judged (DESIGN.md §8.9).
+raised no candidate (DESIGN.md §8.3). A cheap serial prepass evaluates the mode-aware testability
+predicate, builds the **series census** — judged, and one reason per series it declined — and makes
+the final family size available before statistical work starts. This ordering is required because
+history change-point calibration scales its permutation budget to the same family that
+Benjamini–Hochberg later filters. Workers evaluate the same pure predicate to short-circuit
+unjudged series, so the count and execution decision cannot diverge. The census outlives
+detection: the pipeline records the ghost-filtered series into it too (their exclusion happens
+before detection ever sees them) and hands it to the renderers, which is how a report states what
+it judged (DESIGN.md §8.9).
 
 The statistical kernels are chosen to keep the tens-of-millions-of-points path affordable —
 an in-place unstable sort for the median (no scratch buffer, and ties are bit-identical so
@@ -184,6 +187,7 @@ second listing:
 | **Fetch + parse + fold (runs)** | **CPU-parallel (spawned)** | one chunk of survivors per worker |
 | Merge per-worker builders | serial | per worker partial |
 | Series sort + point sort | serial | the series list / per series |
+| Testability census | serial | per series metadata |
 | **Detect** | **CPU-parallel (spawned)** | one chunk of series per worker |
 | Blessing-sidecar fetch | I/O-concurrent (one task) | per object, bounded in flight |
 | False-discovery filter + finding sort + render | serial | the candidate list + the merged census |

@@ -63,6 +63,7 @@
 //! [`Direction::Regression`] and a fall is a [`Direction::Improvement`].
 
 use std::collections::BTreeMap;
+use std::num::NonZero;
 use std::ops::Range;
 #[cfg(any(test, feature = "private-test-util"))]
 use std::slice;
@@ -283,15 +284,6 @@ impl SeriesCensus {
         *counted = counted.saturating_add(series);
     }
 
-    /// Absorbs another census, so a pass split across workers can recombine into one
-    /// account.
-    fn merge(&mut self, other: &Self) {
-        self.judged = self.judged.saturating_add(other.judged);
-        for (&reason, &series) in &other.unjudged {
-            self.record_unjudged(reason, series);
-        }
-    }
-
     /// How many series the detectors reached a verdict on — the false-discovery
     /// family size.
     #[must_use]
@@ -399,7 +391,7 @@ pub struct SeriesValue {
     pub topo_index: usize,
 }
 
-/// One flagged change: where it is, what moved, by how much, and where.
+/// One flagged change: what moved, by how much, and where.
 #[derive(Clone, Debug)]
 pub struct Finding {
     /// The comparable discriminant set the series belongs to.
@@ -924,16 +916,15 @@ fn exceeds_residual_noise(delta: f64, residual: Option<f64>, log: &mut StageLog<
 /// regime boundary — which discards the levels before it — is held to the stricter
 /// `min_base_split_separation`.
 fn regimes_are_separated(
-    mann_whitney: Option<stats::MannWhitneyU>,
+    superiority: Option<f64>,
     delta: f64,
     floor: f64,
     log: &mut StageLog<'_>,
 ) -> bool {
-    match mann_whitney {
+    match superiority {
         // `superiority` is P(after > before); a fall is judged by the complementary
         // P(before > after), so both directions are measured against the same floor.
-        Some(mann_whitney) => {
-            let superiority = mann_whitney.superiority();
+        Some(superiority) => {
             let directional = if delta >= 0.0 {
                 superiority
             } else {
@@ -990,13 +981,27 @@ fn arbitrate(
 /// chance level cancels that inflation. The factor is a conservative ceiling ("at most
 /// about twice as often"), so it holds however strongly the two detectors agree, and it is
 /// applied to both before each detector's significance gate so a candidate cannot clear the
-/// gate on an uncorrected value. Ref: docs/DESIGN.md, "Supported series length"; the
-/// selection-adjustment design.
+/// gate on an uncorrected value. Ref: docs/DESIGN.md, "Multiple-comparison discipline".
 ///
 /// The result is clamped to `1.0`, since a chance level cannot exceed certainty. Branch
 /// mode runs no arbitration, so the factor does not apply there.
 fn across_both_detectors(chance_level: f64) -> f64 {
-    (2.0 * chance_level).min(1.0)
+    (count_to_f64(noise_gates::HISTORY_DETECTOR_COUNT) * chance_level).min(1.0)
+}
+
+/// Fixed permutation budget for one change-point test in this analysis family.
+fn change_point_permutation_budget(family_size: usize) -> NonZero<usize> {
+    NonZero::new(
+        family_size
+            .checked_mul(noise_gates::PERMUTATIONS_PER_JUDGED_SERIES)
+            .expect("the capped analysis family has a representable permutation budget"),
+    )
+    .expect("an evaluated series belongs to a nonempty judged family")
+}
+
+/// Largest selection-adjusted chance level that can pass detector arbitration.
+fn max_selection_adjusted_chance_level() -> f64 {
+    noise_gates::MAX_CHANGE_CHANCE_LEVEL / count_to_f64(noise_gates::HISTORY_DETECTOR_COUNT)
 }
 
 /// Locates a sustained level shift in `series`, returning a [`Candidate`] when the
@@ -1012,7 +1017,12 @@ fn across_both_detectors(chance_level: f64) -> f64 {
 /// gate that rejects a noisy-but-stable series whose levels interleave), and — when
 /// the engine reports per-point confidence intervals — separate the two regimes'
 /// intervals.
-fn evaluate_change_point(series: &Series, values: &[f64], log: &mut GateLog) -> Option<Candidate> {
+fn evaluate_change_point(
+    series: &Series,
+    values: &[f64],
+    family_size: usize,
+    log: &mut GateLog,
+) -> Option<Candidate> {
     let mut log = log.stage(GateStage::ChangePoint);
     let points = &series.points;
     let n = points.len();
@@ -1045,22 +1055,33 @@ fn evaluate_change_point(series: &Series, values: &[f64], log: &mut GateLog) -> 
     }
     let relative_delta = relative_delta_of(delta, baseline);
 
-    let mann_whitney_u = stats::MannWhitneyU::new(before, after);
-    let tainted_p = mann_whitney_u.map_or(1.0, |ranked| ranked.two_sided_p_value());
-    // The split search chose the most striking of many interior positions, so `tainted_p`
-    // understates how often chance alone yields a split this extreme. Two honest bounds correct
-    // for that search — the calibrated table (tight near the gate) and the union bound over the
-    // reportable splits (no resolution floor, so it carries strong signals the table cannot) — and
-    // the primitive keeps the smaller. The reportable splits are the interior positions leaving at
-    // least `min_regime` points on each side, matching what the table's calibration counts. Ref:
-    // docs/DESIGN.md, "Supported series length"; the primitive is `cbh_stats::change_point_adjusted_p`.
-    let searched_positions = n
-        .saturating_sub(noise_gates::MIN_REGIME.saturating_mul(2))
-        .saturating_add(1);
+    // The split search chose the most striking interior position, so the selected
+    // Mann-Whitney score is not an honest standalone p-value. Re-run the complete
+    // selection and scoring procedure over permutations of this series' actual
+    // rank multiset, preserving its ties. The fixed budget scales with the full
+    // judged family so its plus-one resolution can reach the hardest downstream
+    // Benjamini-Hochberg threshold. Ref: docs/DESIGN.md, "Selection adjustment".
+    let reject_at_or_above = max_selection_adjusted_chance_level();
+    debug_assert!(
+        across_both_detectors(reject_at_or_above)
+            .total_cmp(&noise_gates::MAX_CHANGE_CHANCE_LEVEL)
+            .is_eq(),
+        "the early-rejection boundary must invert detector arbitration"
+    );
+    let selection = stats::selection_adjusted_change_point(
+        values,
+        noise_gates::MIN_REGIME,
+        change_point_permutation_budget(family_size),
+        reject_at_or_above,
+    )?;
+    debug_assert_eq!(
+        selection.index, tau,
+        "the observed ordering must use the same Pettitt scorer as calibration"
+    );
     let adjusted_p = log.adjustment(
         Gate::SelectionAdjustment,
-        tainted_p,
-        stats::selection::change_point_adjusted_p(tainted_p, n, searched_positions),
+        selection.tainted_p,
+        selection.adjusted_p,
     );
     // Both history detectors run on every series and the better-fitting one is reported, a
     // second selection that inflates the false-alarm rate about twofold (decision D4).
@@ -1088,7 +1109,7 @@ fn evaluate_change_point(series: &Series, values: &[f64], log: &mut GateLog) -> 
         return None;
     }
     if !regimes_are_separated(
-        mann_whitney_u,
+        Some(selection.superiority),
         delta,
         noise_gates::MIN_REGIME_SEPARATION,
         &mut log,
@@ -1154,9 +1175,9 @@ fn evaluate_drift(series: &Series, values: &[f64], log: &mut GateLog) -> Option<
 
     let trend = stats::mann_kendall(values);
     // The drift detector fits one predetermined trend line and runs no split search, so its
-    // p-value is not search-tainted and the table does not apply. It still shares the series
-    // with the change-point detector, and the better-fitting result is reported, so it takes
-    // the same two-detector factor (decision D4).
+    // p-value is not search-tainted and needs no selection adjustment. It still shares the
+    // series with the change-point detector, and the better-fitting result is reported, so it
+    // takes the same two-detector factor (decision D4).
     let effective_p = across_both_detectors(trend.p_value);
     if !log.numeric(
         Gate::Significance,
@@ -1444,7 +1465,7 @@ fn base_regime_split_qualifies(series: &Series, levels: &[f64], split: usize) ->
         return false;
     }
     regimes_are_separated(
-        mann_whitney_u,
+        mann_whitney_u.map(|ranked| ranked.superiority()),
         delta,
         noise_gates::MIN_BASE_SPLIT_SEPARATION,
         &mut log,
@@ -1747,14 +1768,13 @@ fn evaluate_branch(
 ///
 /// History-mode detection runs on this view so a blessed (re-baselined) series is
 /// only judged from the blessed commit onward; the full series is restored on the
-/// finding afterwards for charting. An unblessed series (`active_start == 0`) yields
-/// an equivalent copy.
+/// finding afterwards for charting. An unblessed series (`active_start == 0`) starts
+/// at its first point, but still loses its oldest points if it exceeds the cap.
 ///
-/// The cap drops the oldest points beyond the supported length so both detectors and the
-/// selection-adjustment table see the same bounded `n`: the table carries a row for every
-/// length up to the cap, so a capped series always has an exact calibration. The tool is
-/// built for series of dozens to a few hundred points, so the cap changes nothing in
-/// ordinary use. Ref: docs/DESIGN.md, "Supported series length".
+/// The cap drops the oldest points beyond the supported length so both detectors
+/// and runtime permutation calibration see the same bounded `n`. The tool is
+/// built for series of dozens to a few hundred points, so the cap changes
+/// nothing in ordinary use. Ref: docs/DESIGN.md, "Supported series length".
 fn active_view(series: &Series) -> Series {
     let active = series.points.get(series.active_start..).unwrap_or_default();
     let keep_from = active.len().saturating_sub(noise_gates::MAX_SERIES_POINTS);
@@ -1804,7 +1824,8 @@ pub fn short_commit(commit: &str) -> String {
 #[cfg(any(test, feature = "private-test-util"))]
 #[must_use]
 pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Detection {
-    let (candidates, census, discarded) = detect_all(series, context);
+    let census = census_of(series, context);
+    let (candidates, discarded) = detect_all(series, context, census.judged());
     let findings = finalize_findings(candidates, &census, series, context);
     Detection {
         findings,
@@ -1830,10 +1851,12 @@ pub fn find_changes(series: &[Series], context: &AnalysisContext) -> Detection {
 /// Detection is per-series independent, so the series are split into one balanced
 /// contiguous chunk per worker and each chunk runs on its own blocking task via
 /// `spawner`, then recombined in series order; the result is identical to a plain
-/// serial scan but spread across cores. A single available CPU (which is what Miri
-/// reports) yields a single worker — one chunk, one task over every series. The
-/// false-discovery filtering and final ranking that follow are cheap and stay on the
-/// calling thread.
+/// serial scan but spread across cores. A cheap serial testability prepass first
+/// builds the census and provides the family size needed by change-point
+/// permutation calibration. A single available CPU (which is what Miri reports)
+/// yields a single worker — one chunk, one task over every series. The
+/// false-discovery filtering and final ranking that follow are cheap and stay on
+/// the calling thread.
 ///
 /// The series are taken as an `Arc<[Series]>` so each blocking task can share them
 /// without copying. Production passes a Tokio-backed spawner; tests and Miri pass an
@@ -1843,7 +1866,9 @@ pub async fn find_changes_spawned(
     context: AnalysisContext,
     spawner: &Spawner,
 ) -> Detection {
-    let (candidates, census, discarded) = detect_all_spawned(&series, context, spawner).await;
+    let census = census_of(&series, &context);
+    let (candidates, discarded) =
+        detect_all_spawned(&series, context, census.judged(), spawner).await;
     let findings = finalize_findings(candidates, &census, &series, &context);
     Detection {
         findings,
@@ -1874,6 +1899,7 @@ pub fn testability(series: &Series, context: &AnalysisContext) -> Testability {
                 Testability::Unjudged(UnjudgedReason::TooFewPoints)
             }
         }
+
         AnalysisMode::Branch => {
             if latest_context_run(&series.points, context.tip_index).is_empty() {
                 return Testability::Unjudged(UnjudgedReason::NotMeasuredOnBranch);
@@ -1891,6 +1917,20 @@ pub fn testability(series: &Series, context: &AnalysisContext) -> Testability {
             Testability::Judged
         }
     }
+}
+
+/// Classifies the complete analysis family before per-series detection.
+///
+/// Change-point permutation precision depends on the number of judged
+/// hypotheses that Benjamini-Hochberg will later filter. Testability is a cheap
+/// metadata-only decision, so this prepass makes that family size available to
+/// every parallel worker without moving statistical work out of the workers.
+fn census_of(series: &[Series], context: &AnalysisContext) -> SeriesCensus {
+    let mut census = SeriesCensus::default();
+    for one in series {
+        census.record(testability(one, context));
+    }
+    census
 }
 
 /// Applies the false-discovery filter, materialises the surviving findings' charting
@@ -1981,15 +2021,21 @@ fn finalize_findings(
 fn detect_all(
     series: &[Series],
     context: &AnalysisContext,
-) -> (Vec<Candidate>, SeriesCensus, Vec<DiscardedBaseReading>) {
-    detect_range(series, 0..series.len(), context, &mut GateLog::disabled())
+    family_size: usize,
+) -> (Vec<Candidate>, Vec<DiscardedBaseReading>) {
+    detect_range(
+        series,
+        0..series.len(),
+        context,
+        family_size,
+        &mut GateLog::disabled(),
+    )
 }
 
 /// Detects every series, distributed across workers: splits the series into one
 /// balanced contiguous chunk per worker (the worker count is the available
 /// parallelism capped at the series count), runs each chunk on its own blocking task
-/// via `spawner`, and recombines the candidates in series order and the per-chunk
-/// censuses into one.
+/// via `spawner`, and recombines the candidates in series order.
 ///
 /// A single available CPU (which is what Miri reports) yields a single worker — one
 /// chunk, one task covering every series — so the one-worker case is just the
@@ -1998,8 +2044,9 @@ fn detect_all(
 async fn detect_all_spawned(
     series: &Arc<[Series]>,
     context: AnalysisContext,
+    family_size: usize,
     spawner: &Spawner,
-) -> (Vec<Candidate>, SeriesCensus, Vec<DiscardedBaseReading>) {
+) -> (Vec<Candidate>, Vec<DiscardedBaseReading>) {
     let len = series.len();
     let workers = worker_count(len);
 
@@ -2011,28 +2058,30 @@ async fn detect_all_spawned(
         let end = start.saturating_add(size);
         let chunk = Arc::clone(series);
         handles.push(spawner.spawn_blocking(move || {
-            detect_range(&chunk, start..end, &context, &mut GateLog::disabled())
+            detect_range(
+                &chunk,
+                start..end,
+                &context,
+                family_size,
+                &mut GateLog::disabled(),
+            )
         }));
         start = end;
     }
 
     // Concatenate in spawn order, which is series order, so the candidate sequence is
-    // identical to the serial pass. The census is order-insensitive, but every chunk
-    // must be absorbed or the family would shrink to whatever one worker saw.
+    // identical to the serial pass.
     let mut candidates = Vec::new();
-    let mut census = SeriesCensus::default();
     let mut discarded = Vec::new();
     for handle in handles {
-        let (chunk_candidates, chunk_census, chunk_discarded) = handle.await;
+        let (chunk_candidates, chunk_discarded) = handle.await;
         candidates.extend(chunk_candidates);
-        census.merge(&chunk_census);
         discarded.extend(chunk_discarded);
     }
-    (candidates, census, discarded)
+    (candidates, discarded)
 }
 
-/// Detects the series in `range`, returning the raised candidates in index order and
-/// the census of which of them were judged.
+/// Detects the series in `range`, returning the raised candidates in index order.
 ///
 /// `log` observes the gates of every series in `range`, so a caller that wants a
 /// readable log passes a range covering exactly one series (see [`evaluate_with_log`]);
@@ -2041,26 +2090,24 @@ fn detect_range(
     series: &[Series],
     range: Range<usize>,
     context: &AnalysisContext,
+    family_size: usize,
     log: &mut GateLog,
-) -> (Vec<Candidate>, SeriesCensus, Vec<DiscardedBaseReading>) {
+) -> (Vec<Candidate>, Vec<DiscardedBaseReading>) {
     let mut candidates = Vec::new();
-    let mut census = SeriesCensus::default();
     let mut discarded = Vec::new();
     for index in range {
         let one = series
             .get(index)
             .expect("the range is within the series slice");
         let verdict = testability(one, context);
-        census.record(verdict);
-        // Judging and counting are the same decision, so a series the census reports
-        // as unjudged provably never reached a detector.
         if verdict.is_judged()
-            && let Some(candidate) = detect_one(index, one, context, log, &mut discarded)
+            && let Some(candidate) =
+                detect_one(index, one, context, family_size, log, &mut discarded)
         {
             candidates.push(candidate);
         }
     }
-    (candidates, census, discarded)
+    (candidates, discarded)
 }
 
 /// Runs the mode-appropriate detector on the series at `index` and returns its
@@ -2077,6 +2124,7 @@ fn detect_one(
     index: usize,
     one: &Series,
     context: &AnalysisContext,
+    family_size: usize,
     log: &mut GateLog,
     discarded: &mut Vec<DiscardedBaseReading>,
 ) -> Option<Candidate> {
@@ -2086,7 +2134,7 @@ fn detect_one(
             // The point values are projected once here and shared by every history
             // detector, rather than each rebuilding the same `Vec<f64>`.
             let values: Vec<f64> = active.points.iter().map(|point| point.value).collect();
-            let change = evaluate_change_point(&active, &values, log);
+            let change = evaluate_change_point(&active, &values, family_size, log);
             let drift = evaluate_drift(&active, &values, log);
             arbitrate(&values, change, drift).map(|mut candidate| {
                 stamp_history(&mut candidate.finding, one);
@@ -2131,7 +2179,8 @@ fn detect_one(
 pub fn evaluate_with_log(series: &Series, context: &AnalysisContext) -> (Option<Finding>, GateLog) {
     let mut log = GateLog::recording();
     let batch = slice::from_ref(series);
-    let (candidates, census, _) = detect_range(batch, 0..batch.len(), context, &mut log);
+    let census = census_of(batch, context);
+    let (candidates, _) = detect_range(batch, 0..batch.len(), context, census.judged(), &mut log);
     let findings = finalize_findings(candidates, &census, batch, context);
     (findings.into_iter().next(), log)
 }
@@ -2387,6 +2436,13 @@ mod tests {
     }
 
     #[test]
+    fn selection_adjustment_boundary_accounts_for_detector_arbitration() {
+        // The change-point gate allows 0.05 after the approved two-detector correction,
+        // so the selection-adjusted result must be below half of that before arbitration.
+        assert_eq!(max_selection_adjusted_chance_level(), 0.025);
+    }
+
+    #[test]
     fn change_point_method_sorts_before_drift() {
         assert!(FindingMethod::ChangePoint < FindingMethod::Drift);
     }
@@ -2396,6 +2452,8 @@ mod tests {
     /// exercises the chunked spawn-and-recombine path across several chunks; under
     /// Miri, which reports one CPU, it exercises the single-worker chunk. Either way
     /// the synchronous spawner runs each chunk inline on the calling thread.
+    // The production permutation budget makes this large batch impractical under Miri.
+    #[cfg_attr(miri, ignore)]
     #[cfg(feature = "private-test-util")]
     #[test]
     fn find_changes_spawned_matches_the_serial_pass() {
@@ -2671,7 +2729,7 @@ mod tests {
         values.extend(std::iter::repeat_n(130.0, MIN_REGIME));
         let series = series_of(&values);
         let mut log = GateLog::recording();
-        assert!(evaluate_change_point(&series, &values_of(&series), &mut log).is_none());
+        assert!(evaluate_change_point(&series, &values_of(&series), 1, &mut log).is_none());
         assert_eq!(
             log.declined_by_stage(GateStage::ChangePoint),
             Some(Gate::MinRegime),
@@ -2687,7 +2745,8 @@ mod tests {
             100.0, 104.0, 100.0, 104.0, 102.0, 130.0, 134.0, 130.0, 134.0, 132.0,
         ]);
         assert!(
-            evaluate_change_point(&clear, &values_of(&clear), &mut GateLog::disabled()).is_some()
+            evaluate_change_point(&clear, &values_of(&clear), 1, &mut GateLog::disabled())
+                .is_some()
         );
 
         // The mirror: a cleanly separated step whose regimes wobble by 10 around
@@ -2700,7 +2759,7 @@ mod tests {
             90.0, 90.0, 100.0, 110.0, 110.0, 120.0, 120.0, 130.0, 140.0, 140.0,
         ]);
         let mut log = GateLog::recording();
-        assert!(evaluate_change_point(&buried, &values_of(&buried), &mut log).is_none());
+        assert!(evaluate_change_point(&buried, &values_of(&buried), 1, &mut log).is_none());
         assert_eq!(
             log.declined_by_stage(GateStage::ChangePoint),
             Some(Gate::ResidualNoise),
@@ -2720,7 +2779,7 @@ mod tests {
         ]);
         let mut log = GateLog::recording();
         assert!(
-            evaluate_change_point(&series, &values_of(&series), &mut log).is_some(),
+            evaluate_change_point(&series, &values_of(&series), 1, &mut log).is_some(),
             "the fixture must report under the fixed alpha"
         );
         let (p, alpha) = gate_value(&log, Gate::Significance).expect("the significance gate ran");
@@ -2741,14 +2800,16 @@ mod tests {
         let mut log = unobserved.stage(GateStage::ChangePoint);
         // A clean rise: every after-point exceeds every before-point (superiority 1).
         assert!(regimes_are_separated(
-            stats::MannWhitneyU::new(&[10.0, 11.0, 12.0], &[20.0, 21.0, 22.0]),
+            stats::MannWhitneyU::new(&[10.0, 11.0, 12.0], &[20.0, 21.0, 22.0])
+                .map(|ranked| ranked.superiority()),
             10.0,
             floor,
             &mut log,
         ));
         // A clean fall: judged by the complementary direction, still fully separated.
         assert!(regimes_are_separated(
-            stats::MannWhitneyU::new(&[20.0, 21.0, 22.0], &[10.0, 11.0, 12.0]),
+            stats::MannWhitneyU::new(&[20.0, 21.0, 22.0], &[10.0, 11.0, 12.0])
+                .map(|ranked| ranked.superiority()),
             -10.0,
             floor,
             &mut log,
@@ -2756,7 +2817,8 @@ mod tests {
         // Two levels that recur on both sides: only 0.75 of the after-vs-before pairs
         // move in the rise's direction, below the 0.85 floor, so it is not separated.
         assert!(!regimes_are_separated(
-            stats::MannWhitneyU::new(&[10.0, 10.0, 10.0, 30.0], &[30.0, 30.0, 30.0, 10.0]),
+            stats::MannWhitneyU::new(&[10.0, 10.0, 10.0, 30.0], &[30.0, 30.0, 30.0, 10.0],)
+                .map(|ranked| ranked.superiority()),
             20.0,
             floor,
             &mut log,
@@ -2768,7 +2830,8 @@ mod tests {
         // the fall branch at a fractional superiority (0.25), so the complementary
         // `1 − 0.25 = 0.75 < 0.85` is exercised as a genuine subtraction.
         assert!(!regimes_are_separated(
-            stats::MannWhitneyU::new(&[30.0, 30.0, 30.0, 10.0], &[10.0, 10.0, 10.0, 30.0]),
+            stats::MannWhitneyU::new(&[30.0, 30.0, 30.0, 10.0], &[10.0, 10.0, 10.0, 30.0],)
+                .map(|ranked| ranked.superiority()),
             -20.0,
             floor,
             &mut log,
@@ -2790,15 +2853,16 @@ mod tests {
         // pairs fall, a superiority of ~0.971.
         let after = [10.0, 11.0, 12.0, 13.0, 14.0];
         let before = [30.0, 31.0, 32.0, 33.0, 34.0, 35.0, 13.5];
-        let ranked = stats::MannWhitneyU::new(&before, &after);
+        let superiority =
+            stats::MannWhitneyU::new(&before, &after).map(|ranked| ranked.superiority());
         assert!(regimes_are_separated(
-            ranked,
+            superiority,
             -20.0,
             MIN_REGIME_SEPARATION,
             &mut log,
         ));
         assert!(regimes_are_separated(
-            ranked,
+            superiority,
             -20.0,
             MIN_BASE_SPLIT_SEPARATION,
             &mut log,
@@ -2807,15 +2871,16 @@ mod tests {
         // The same shape with that stray level one step lower, so it sits under two of
         // the after-levels: 33 of 35 pairs fall, ~0.943.
         let before = [30.0, 31.0, 32.0, 33.0, 34.0, 35.0, 12.5];
-        let ranked = stats::MannWhitneyU::new(&before, &after);
+        let superiority =
+            stats::MannWhitneyU::new(&before, &after).map(|ranked| ranked.superiority());
         assert!(regimes_are_separated(
-            ranked,
+            superiority,
             -20.0,
             MIN_REGIME_SEPARATION,
             &mut log,
         ));
         assert!(!regimes_are_separated(
-            ranked,
+            superiority,
             -20.0,
             MIN_BASE_SPLIT_SEPARATION,
             &mut log,
@@ -2835,7 +2900,7 @@ mod tests {
         let values = STATIONARY_BIMODAL_NOISE.to_vec();
         let series = series_of(&values);
         let mut log = GateLog::recording();
-        assert!(evaluate_change_point(&series, &values, &mut log).is_none());
+        assert!(evaluate_change_point(&series, &values, 1, &mut log).is_none());
         assert_eq!(
             log.declined_by_stage(GateStage::ChangePoint),
             Some(Gate::Significance),
@@ -2921,7 +2986,7 @@ mod tests {
         let series = wall_series(&step_values(2.49, 3.12), 0.05);
         judged_but_silent(slice::from_ref(&series));
         let mut log = GateLog::recording();
-        assert!(evaluate_change_point(&series, &values_of(&series), &mut log).is_none());
+        assert!(evaluate_change_point(&series, &values_of(&series), 1, &mut log).is_none());
         assert_eq!(
             log.declined_by_stage(GateStage::ChangePoint),
             Some(Gate::AbsoluteFloor),
@@ -2949,6 +3014,8 @@ mod tests {
     }
 
     #[test]
+    // The production permutation budget makes this large batch impractical under Miri.
+    #[cfg_attr(miri, ignore)]
     fn many_independent_series_are_detected_in_a_stable_order() {
         // `find_changes` runs the per-series detection sequentially. The work is
         // embarrassingly parallel — no series depends on another — so this guards
@@ -3082,7 +3149,8 @@ mod tests {
             0.5,
         );
         let candidate =
-            evaluate_change_point(&series, &values_of(&series), &mut GateLog::disabled()).unwrap();
+            evaluate_change_point(&series, &values_of(&series), 1, &mut GateLog::disabled())
+                .unwrap();
         assert_eq!(candidate.finding.baseline, 100.0);
         assert_eq!(candidate.finding.latest, 103.0);
         assert_eq!(candidate.finding.relative_delta, PRACTICAL_RELATIVE);
@@ -5231,28 +5299,19 @@ mod tests {
     }
 
     #[test]
-    fn a_census_absorbs_another_and_ignores_an_empty_tally() {
-        // Detection recombines one census per worker chunk, so merging must be total;
-        // and the stages that record in bulk pass whatever count they dropped, so a
-        // zero must leave no trace of a reason that accounts for nothing.
-        let mut left = SeriesCensus::default();
-        left.record(Testability::Judged);
-        left.record(Testability::Unjudged(UnjudgedReason::TooFewPoints));
-        let mut right = SeriesCensus::default();
-        right.record(Testability::Judged);
-        right.record(Testability::Unjudged(UnjudgedReason::TooFewPoints));
-        right.record_unjudged(UnjudgedReason::Ghost, 3);
-        right.record_unjudged(UnjudgedReason::NotMeasuredOnBranch, 0);
+    fn a_census_ignores_an_empty_tally() {
+        // Stages that record in bulk pass whatever count they dropped, so a zero
+        // must leave no trace of a reason that accounts for nothing.
+        let mut census = SeriesCensus::default();
+        census.record(Testability::Judged);
+        census.record_unjudged(UnjudgedReason::Ghost, 3);
+        census.record_unjudged(UnjudgedReason::NotMeasuredOnBranch, 0);
 
-        left.merge(&right);
-        assert_eq!(left.judged(), 2);
-        assert_eq!(left.total(), 7);
+        assert_eq!(census.judged(), 1);
+        assert_eq!(census.total(), 4);
         assert_eq!(
-            left.reasons().collect::<Vec<_>>(),
-            vec![
-                (UnjudgedReason::Ghost, 3),
-                (UnjudgedReason::TooFewPoints, 2),
-            ]
+            census.reasons().collect::<Vec<_>>(),
+            vec![(UnjudgedReason::Ghost, 3)]
         );
     }
 
@@ -5316,12 +5375,13 @@ mod tests {
         // only its own survivors would make it a no-op, since every survivor has
         // already cleared `change_alpha`.
         //
-        // The stepped series is real but modest, and its rank-test p-value falls
-        // between the Benjamini-Hochberg thresholds `(1 / m) * fdr_q` for the two
-        // family sizes below, so the family size alone decides its fate. Every batch
-        // raises exactly the one candidate; the only thing that differs is whether the
-        // silent companions join the family. Flat companions are judged and do count,
-        // while companions one point too short are not judged and do not.
+        // The stepped series is real but modest, and its selection-adjusted
+        // chance level falls on opposite sides of the Benjamini-Hochberg
+        // decisions for the family sizes below. Every batch raises exactly the
+        // one candidate; the only input that differs is whether the silent
+        // companions join the family (and therefore its calibration budget and
+        // BH denominator). Flat companions are judged and do count, while
+        // companions one point too short are not judged and do not.
         const FAMILY_THAT_REPORTS: usize = 6;
         const FAMILY_THAT_REJECTS: usize = 7;
 
@@ -5610,7 +5670,7 @@ mod tests {
         for case in declined_cases() {
             let context = observed_context(&case.series);
             let batch = slice::from_ref(&case.series);
-            let _ = detect_range(batch, 0..batch.len(), &context, &mut log);
+            let _ = detect_range(batch, 0..batch.len(), &context, 1, &mut log);
         }
         assert!(log.entries().is_empty());
         assert_eq!(log.declined_by(), None);

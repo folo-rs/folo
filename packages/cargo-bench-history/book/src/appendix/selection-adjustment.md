@@ -2,119 +2,135 @@
 
 The change-point detector finds where a series stepped by **trying every interior split and
 keeping the most convincing one**. That search is the source of a subtle dishonesty, and this
-chapter is how the tool corrects for it before any gate or family-wide correction sees the number.
+chapter explains how the tool corrects it before any gate or family-wide correction sees the
+number.
 
 > **Two unrelated things are called "selection" in this book.** The
 > [Selection](selection.md) chapter is about *which stored runs are eligible* for an analysis.
 > This chapter is about a statistical effect — the detector *selecting* the most striking split
 > out of many — and has nothing to do with run eligibility. It is also distinct from the
 > [family-wide correction](coverage.md), which accounts for how many *series* were tested; this
-> one accounts for how many *splits within one series* were tried.
+> one accounts for searching within one series.
 
-## In plain terms: searching finds a pattern in noise
+## In plain terms: compare the winner with fair reruns
 
-Give the detector a completely flat, unchanging series and it will still try dozens of places to
-cut it in two, then report the single most lopsided cut it found. With enough places to look,
-one of them looks surprising by chance alone. The p-value the detector reports at that chosen
-split — this book calls it the **tainted p** — is therefore optimistic: it answers "how
-surprising is *this* split?" while ignoring that the split was the winner of a search.
+Give the detector an unchanged but noisy series and it will still try many places to cut it in
+two, then retain whichever cut happened to look most different. The p-value at that winning split
+answers "how surprising is this split?" while ignoring that many alternatives lost the contest.
+This book calls that intermediate number the **tainted p**: it is useful as a score, but it is not
+an honest chance level for the search that produced it.
 
-Read literally, an uncorrected tainted p would let far more unchanged series through the
-significance gate than its threshold claims — and mostly the recent, short-regime series the tool
-most wants to judge well. So history mode replaces the tainted p with an **honest,
-selection-adjusted chance level** before anything downstream consumes it. Branch mode makes one
-predetermined comparison, searches no split, and needs no adjustment.
+The correction reruns the same contest after shuffling the observed measurements into other time
+orders. If an unchanged series often produces a winner at least as impressive as the real one,
+the apparent step is ordinary chance. If almost none of the shuffled histories can match it, the
+step has strong evidence. The fraction that match or beat the real winner is the
+**selection-adjusted chance level**.
 
-## The honest number is a property of the series length
+This is like checking the winner of a card game by repeatedly redealing the same deck. The cards
+do not change; only their order does. Reusing the actual deck matters because a benchmark series
+often repeats the same integer count many times. A hypothetical deck with all distinct cards can
+behave very differently and would give the wrong answer for those ties.
 
-Under the null hypothesis — no real step — a series' values matter only through their order, and
-every order is equally likely. So the honest adjusted chance level is a **mathematical constant
-of the series length `n`**: the distribution, over all `n!` orderings, of the tainted p the
-detector's whole procedure would report. It is not fitted to your data or ours; it is derived
-once and looked up.
+## What one shuffled rerun does
 
-That procedure, evaluated on one ordering, is exactly what production does: locate the split with
-Pettitt over every interior position, reject it unless the shorter side reaches the minimum
-regime length, otherwise score it with the two-sided Mann–Whitney p-value at that split. The
-committed table is the tabulated distribution of that procedure's output, one row per length.
+The observed series and every shuffled ordering go through exactly the same scorer:
 
-## Two bounds, and the tool keeps the smaller
+1. Rank the values, assigning tied values their shared average rank.
+2. Let Pettitt inspect every interior position and retain the first strongest split.
+3. Treat the ordering as no evidence if either resulting regime is shorter than the production
+   minimum.
+4. Otherwise score the chosen regimes with the production two-sided Mann–Whitney calculation.
 
-The adjusted chance level is the smaller of two independently valid **upper bounds** on the honest
-number. Each is at least the truth, so their minimum is at least the truth too — still an honest
-p-value, never more significant than it should be.
+A shuffle rejected by the minimum-regime rule stays in the total as a no-evidence result. Removing
+such shuffles would ask "how surprising is the observed winner, assuming a shuffle first produced
+a usable winner?" That extra condition would make chance look rarer than it is.
 
-- **A calibrated table.** Per series length, it records where the honest chance level sits for any
-  tainted p. It is tight where it matters most — right around the decision boundary, where a
-  finding is won or lost.
-- **A union bound.** If the detector could have reported any of `k` splits, then reporting the most
-  extreme of them can inflate the apparent significance by at most a factor of `k`, so
-  `k × tainted p` is a valid honest level. (`k` is the count of interior splits that leave a full
-  regime on each side.) This is the plain "multiply by how many chances you took" argument.
+The adjusted value is `(1 + matching shuffles) / (1 + all shuffles)`. Adding the observed case to
+both parts prevents a finite sample from claiming an impossible zero chance. The result is also
+never allowed below the tainted p, because correcting for a search must not make evidence look
+stronger.
 
-**Why keep both?** The table is built by sampling (below), so it cannot resolve chance levels
-below its sampling margin — roughly one in a thousand — no matter how strong the evidence: every
-row bottoms out at that floor. Handed straight to the [family-wide correction](coverage.md), that
-floor would silently bury obvious regressions in any suite of more than a couple of dozen series.
-The union bound has no floor — it scales straight down with the tainted p — so it carries the deep
-tail the table cannot reach, while the table stays tighter than the union bound near the boundary.
-Each covers the other's weakness.
+## Why this is calculated at runtime
 
-## Then both detectors are accounted for
+The honest null distribution depends on the measurements' **tie pattern**, not only on how many
+measurements exist. A series of twelve distinct values, six pairs, and two repeated levels all
+have the same length but produce different rank-score distributions when shuffled. One
+length-indexed lookup table cannot honestly represent all of them.
 
-History runs two detectors — the change-point detector and the drift detector — and reports
-whichever fits the data better. That is a second selection, on top of the split search, and it
-inflates the false-alarm rate about twofold. So the adjusted chance level of **each** detector is
-doubled before the significance gate. It is a deliberately blunt, defensible factor rather than a
-fitted one.
+Runtime calibration conditions on the exact rank multiset of the series being judged. It therefore
+handles integer counters, quantized measurements, and fully distinct timing values through the
+same rule without pretending their null distributions are interchangeable.
 
-The result of all this is the honest per-series chance level that the significance gate and the
-family-wide correction both consume. You can see the step in a [gate ladder](gates.md#reading-a-gate-ladder):
-it corrects the level and never declines a candidate on its own.
+## How much shuffling is enough
 
-## Exact significance for short series
+The adjusted chance level later enters
+[Benjamini–Hochberg family filtering](coverage.md). Its strictest boundary becomes smaller as the
+number of judged series grows, so a fixed sample count would eventually become too coarse to let
+even overwhelming evidence through.
 
-The tainted p itself is computed **exactly** wherever a split is lopsided enough to count exactly —
-whenever the *smaller* of the two sides is small, however long the whole series is. Rather than
-lean on the normal approximation, the tool enumerates the permutation tail directly: it counts the
-orderings at least as extreme as the observed split and divides. The calibration models this same
-exact procedure, so the honest number and the tainted number describe the same computation.
+The tool first counts every testable series in the family, then samples 600 shuffled orderings per
+judged series for each change-point calculation. If the family has `m` judged series, the budget is
+therefore `600 × m`. This gives the finite-sample result enough resolution to pass the strictest
+family boundary and expects about 30 matching null orderings at that boundary, rather than basing a
+borderline decision on one or two accidents.
 
-The choice is made split by split, and it matters most when one side is short and its values repeat
-— routine for integer instruction counts. There the normal approximation can report a p-value far
-**smaller** than the exact permutation count supports, overstating how significant a repeated-value
-split is; enumerating the short side reins that back to the honest value. Only the near-balanced
-splits of a long series exceed what a double-precision integer can count exactly, and there the
-approximation is kept — safely, because a series that long already has an honest smallest p-value
-below the reporting floor, so no verdict turns on it.
+Most unchanged or weak series do not spend the full budget. Once enough shuffled orderings have
+matched the observed score that the final fixed-budget value cannot possibly clear the later
+significance gate, the tool safely stops and returns no evidence. Strong findings use the complete
+budget because their deep-tail value matters to the family filter.
 
-## Why you can trust the numbers
+## Then both history detectors are accounted for
 
-The whole point of a committed table is that a reader can check it rather than take it on faith.
+History runs a change-point detector and a drift detector, then reports whichever model fits the
+data better. That is another opportunity to choose a lucky-looking result. The tool therefore
+doubles each detector's chance level before its significance gate. This is a conservative
+correction for choosing between the two detectors, separate from the shuffling that corrects the
+change-point's internal split search.
 
-- **Short rows are exact.** For the shortest series every one of the `n!` orderings is enumerated,
-  so those rows carry no sampling error at all.
-- **Longer rows are sampled, and honest about it.** Above the exact range the distribution is
-  estimated by Monte Carlo, and each such row carries a Dvoretzky–Kiefer–Wolfowitz margin: a
-  stated, family-wide confidence that the committed critical values err toward reporting *fewer*
-  findings, not more.
-- **It is reproducible bit-for-bit.** The derivation is fully deterministic — the same fixed seeds
-  produce the same table every time. Anyone can re-derive it from scratch and confirm it matches
-  the committed copy, and a freshness test fails the build if the two ever drift apart.
+The resulting per-series chance level is what both the significance gate and the family-wide
+filter consume. Branch mode makes one predetermined comparison, searches no split, and needs
+neither history-mode correction.
 
-The derivation and every constant behind it live in the `cargo-bench-history-calibration` generator
-crate; this chapter is the account of *what* it produces and *why*, not the code.
+## Exact and approximate split scores
 
-## What bounds all of this
+Mann–Whitney scoring is exact whenever the smaller regime has few enough points for all possible
+group assignments to be counted exactly. This includes lopsided splits in long histories and is
+especially important for repeated integer values, where a textbook large-sample approximation can
+be badly wrong.
 
-The correction is defined for every length the pipeline can present, because analysis caps each
-series at its most recent points (a low four-figure ceiling) and drops anything older. That ceiling
-is what guarantees no series is ever longer than the table's last row. It sits comfortably above the
-range the tool is built for — dozens to a few hundred points per series — where the honest
-correction is most needed and most accurate.
+Near-balanced splits of long histories exceed that counting range and use the tie-corrected normal
+score. The tool does not trust this approximate intermediate score as an honest p-value on its
+own. It applies the same approximation to the observed ordering and every shuffle, so the final
+selection-adjusted value comes from how unusual that score is for this series' actual values. The
+score only needs to order the observed and shuffled outcomes consistently; the permutation
+distribution supplies the honest chance level.
+
+## Why you can trust and reproduce it
+
+The procedure has no fitted constants or external reference data. Its inputs are the series'
+doubled average ranks, the production minimum-regime rule, the judged family size, and named
+production significance policies.
+
+The pseudo-random sequence is deliberately stable: a fixed FNV-1a hash of sorted canonical value
+bits, the sorted doubled-rank multiset, and the regime rule seeds a fixed SplitMix64 stream; a
+fixed Fisher–Yates shuffle turns that stream into orderings. Sorting before hashing means the
+observed time order cannot choose a friendlier sample. Signed zero is canonicalized before
+hashing, while the ranks retain the actual tie pattern. The same input and policy therefore
+reproduce the same result across runs and platforms.
+
+Tests compare the shared scorer with the production Pettitt and Mann–Whitney primitives, cover tied
+and untied series, pin the random stream's reproducibility, and exercise the end-to-end detector
+with the production constants.
+
+## What bounds the work
+
+Analysis keeps at most the most recent 1,000 points of a series. The tool is designed for dozens to
+a few hundred points, so that ceiling is generous in ordinary use while bounding every shuffled
+scoring pass and the exact-tail cache. Histories below the evidence floor remain unjudged;
+histories beyond the cap deliberately lose their oldest points.
 
 ## What this stage hands on
 
-A single honest chance level per series, in place of the tainted one. It flows unchanged into the
+One honest chance level per series, in place of the tainted score. It flows into the
 [significance gate](gates.md) and then the [family-wide correction](coverage.md), so every later
-stage reasons about a number that already tells the truth about the search that produced it.
+stage reasons about a number that already accounts for how its change point was chosen.

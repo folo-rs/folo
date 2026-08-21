@@ -131,25 +131,36 @@ pub fn sample_std_dev(values: &[f64]) -> Option<f64> {
 
 /// Average (fractional) ranks of `values`, 1-based, with ties sharing the mean
 /// of the ranks they span.
+#[cfg(test)]
 fn average_ranks(values: &[f64]) -> Vec<f64> {
+    scaled_average_ranks(values)
+        .into_iter()
+        .map(|rank| count_to_f64(rank) / 2.0)
+        .collect()
+}
+
+/// Doubled average ranks of `values`, in original order.
+///
+/// Average ranks are always whole or half integers. Doubling them keeps Pettitt
+/// prefix sums and exact Mann-Whitney subset sums integral, so the observed
+/// ordering and permutation calibration share one lossless representation.
+pub(crate) fn scaled_average_ranks(values: &[f64]) -> Vec<usize> {
     let mut indexed: Vec<(usize, f64)> = values.iter().copied().enumerate().collect();
     // Unstable sort: ties are resolved explicitly below by spanning every element
     // of equal value, so the relative order within a tie run is irrelevant and the
     // in-place sort avoids the stable sort's scratch allocation.
     indexed.sort_unstable_by(|left, right| left.1.total_cmp(&right.1));
 
-    let mut ranks = vec![0.0_f64; values.len()];
+    let mut ranks = vec![0_usize; values.len()];
     let mut start = 0_usize;
     for group in indexed.chunk_by(|left, right| same(left.1, right.1)) {
         let end = start.saturating_add(group.len());
         // The 1-based ranks spanned by the tie run are `start+1 ..= end`; their
-        // mean is the midpoint of the first and last.
-        let first = count_to_f64(start.saturating_add(1));
-        let last = count_to_f64(end);
-        let average = f64::midpoint(first, last);
+        // doubled mean is their first rank plus their last rank.
+        let scaled_average = start.saturating_add(1).saturating_add(end);
         for &(original_index, _) in group {
             if let Some(slot) = ranks.get_mut(original_index) {
-                *slot = average;
+                *slot = scaled_average;
             }
         }
         start = end;
@@ -192,35 +203,10 @@ pub struct ChangePoint {
 #[must_use]
 pub fn pettitt(values: &[f64]) -> Option<ChangePoint> {
     let n = values.len();
-    if n < 2 {
-        return None;
-    }
-    let ranks = average_ranks(values);
+    let ranks = scaled_average_ranks(values);
+    let (best_index, _, k) = pettitt_rank_location(&ranks)?;
     let n_f = count_to_f64(n);
 
-    let mut prefix_rank_sum = 0.0_f64;
-    let mut best_index = 1_usize;
-    let mut best_abs = -1.0_f64;
-    let mut best_u = 0.0_f64;
-    // `t` runs over the candidate split positions `1 ..= n-1`.
-    let last = n.checked_sub(1)?;
-    for (position, &rank) in ranks.iter().enumerate() {
-        prefix_rank_sum += rank;
-        let t = position.saturating_add(1);
-        if t > last {
-            break;
-        }
-        let t_f = count_to_f64(t);
-        let u = 2.0 * prefix_rank_sum - t_f * (n_f + 1.0);
-        let abs = u.abs();
-        if abs > best_abs {
-            best_abs = abs;
-            best_index = t;
-            best_u = u;
-        }
-    }
-
-    let k = best_u.abs();
     let denominator = n_f * n_f * n_f + n_f * n_f;
     let p_value = clamp_p_value(2.0 * (-6.0 * k * k / denominator).exp());
     Some(ChangePoint {
@@ -228,6 +214,41 @@ pub fn pettitt(values: &[f64]) -> Option<ChangePoint> {
         k_statistic: k,
         p_value,
     })
+}
+
+/// Locates Pettitt's first maximum from doubled average ranks.
+///
+/// Returns `(split_index, scaled_rank_sum_left, k_statistic)`. The rank sum is
+/// retained because the selection-adjustment scorer feeds the same chosen split
+/// directly into Mann-Whitney without ranking again.
+pub(crate) fn pettitt_rank_location(ranks: &[usize]) -> Option<(usize, usize, f64)> {
+    let n = ranks.len();
+    if n < 2 {
+        return None;
+    }
+    let n_f = count_to_f64(n);
+    let mut prefix_rank_sum = 0_usize;
+    let mut best_index = 1_usize;
+    let mut best_rank_sum = 0_usize;
+    let mut best_abs = -1.0_f64;
+    let last = n.checked_sub(1)?;
+    for (position, &rank) in ranks.iter().enumerate() {
+        prefix_rank_sum = prefix_rank_sum.saturating_add(rank);
+        let split = position.saturating_add(1);
+        if split > last {
+            break;
+        }
+        // `prefix_rank_sum` is twice the ordinary rank sum, so this is exactly
+        // Pettitt's `2*R_t - t*(n+1)` statistic.
+        let u = count_to_f64(prefix_rank_sum) - count_to_f64(split) * (n_f + 1.0);
+        let abs = u.abs();
+        if abs > best_abs {
+            best_abs = abs;
+            best_index = split;
+            best_rank_sum = prefix_rank_sum;
+        }
+    }
+    Some((best_index, best_rank_sum, best_abs))
 }
 
 /// The Mann–Whitney U statistics of two samples, ranked jointly once.
@@ -248,7 +269,8 @@ pub struct MannWhitneyU {
     /// The size of the `right` sample, as `f64`.
     n2: f64,
     /// U for `right`: the `(left, right)` pairs with `right > left`, ties as one
-    /// half — the complement `n1·n2 − u1` of the left statistic.
+    /// half. Every cross-sample pair contributes one unit split between the two
+    /// statistics, so this complements the left statistic to `n1·n2`.
     u2: f64,
     /// The two-sided significance, computed once at construction: the exact
     /// permutation tail whenever the split's central subset count fits f64 exactly
@@ -258,7 +280,8 @@ pub struct MannWhitneyU {
 
 /// The largest integer f64 represents exactly. The exact permutation tail counts
 /// rank subsets as f64, so it is trustworthy only while those counts stay below
-/// this. Ref: `docs/design.md`, "Exact significance for short series".
+/// this. Ref: `packages/cargo-bench-history/docs/DESIGN.md`, "Exact significance
+/// for short series".
 const EXACT_COUNT_LIMIT: u128 = 1 << 53;
 
 /// Whether the exact two-sided Mann–Whitney tail is representable in f64 for a
@@ -274,9 +297,10 @@ const EXACT_COUNT_LIMIT: u128 = 1 << 53;
 /// value split's p-value by orders of magnitude. Only near-balanced splits, whose
 /// count overflows, keep the approximation, and there the smallest honest p-value
 /// already sits below the reporting clamp, so the approximation cannot report a
-/// dishonestly small verdict. Ref: `docs/design.md`, "Exact significance for short
+/// dishonestly small verdict. Ref:
+/// `packages/cargo-bench-history/docs/DESIGN.md`, "Exact significance for short
 /// series".
-fn exact_mw_feasible(n1: usize, n2: usize) -> bool {
+pub(crate) fn exact_mw_feasible(n1: usize, n2: usize) -> bool {
     let n = n1.saturating_add(n2);
     let k = n1.min(n2);
     // `C(n, k)` accumulated as the exact integer sequence `C(n-k+i, i)`, aborting the moment it
@@ -315,9 +339,10 @@ impl MannWhitneyU {
         let mut combined = Vec::with_capacity(n1.saturating_add(n2));
         combined.extend_from_slice(left);
         combined.extend_from_slice(right);
-        let ranks = average_ranks(&combined);
+        let scaled_ranks = scaled_average_ranks(&combined);
 
-        let rank_sum_left: f64 = ranks.iter().take(n1).sum();
+        let rank_sum_left =
+            count_to_f64(scaled_ranks.iter().take(n1).copied().sum::<usize>()) / 2.0;
         let n1_f = count_to_f64(n1);
         let n2_f = count_to_f64(n2);
 
@@ -328,12 +353,11 @@ impl MannWhitneyU {
 
         // A split whose smaller side is few enough points earns the exact
         // permutation tail; a near-balanced long split keeps the normal
-        // approximation, which is accurate wherever it still decides a verdict.
-        // Ref: [`exact_mw_feasible`].
+        // approximation. Ref: [`exact_mw_feasible`].
         let two_sided_p = if exact_mw_feasible(n1, n2) {
-            exact_two_sided_p(&ranks, n1)
+            exact_two_sided_p(&scaled_ranks, n1)
         } else {
-            normal_two_sided_p(&combined, n1_f, n2_f, u1, u2)
+            normal_mann_whitney_p(n1, n2, rank_sum_left, mann_whitney_tie_term(&scaled_ranks))
         };
 
         Some(Self {
@@ -380,49 +404,64 @@ impl MannWhitneyU {
     }
 }
 
-/// The exact two-sided Mann–Whitney p-value from the joint average ranks.
+/// The exact two-sided Mann–Whitney p-value from doubled joint average ranks.
 ///
-/// `ranks` holds the average ranks of the combined sample in `left ++ right`
-/// order, so its first `n1` entries are the left ranks. Under the null either group
-/// is a uniformly random subset of the joint ranks, so the p-value is the tail of
-/// that group's rank sum over all such subsets, doubled for two sidedness and
-/// capped at `1`. The enumeration runs over the *smaller* side: its subset count
+/// `scaled_ranks` holds twice the average ranks of the combined sample in
+/// `left ++ right` order, so its first `n1` entries are the left ranks. Under the
+/// null either group is a uniformly random subset of the joint ranks, so the
+/// p-value is the tail of that group's rank sum over all such subsets, doubled
+/// for two sidedness and capped at `1`. The enumeration runs over the *smaller* side: its subset count
 /// `C(n1+n2, min(n1, n2))` is the one [`exact_mw_feasible`] bounds below
 /// [`EXACT_COUNT_LIMIT`], so every intermediate subset count stays exact in f64 —
 /// which a lopsided split would break if the larger side were enumerated, its
 /// half-size subsets overflowing well before the reported answer. The two-sided
 /// tail is symmetric in the two sides, so the smaller side yields the same p.
-/// Average ranks are multiples of one half, so scaling every rank by two makes the
-/// subset sums integers. Every observation tying leaves one attainable sum, which
+/// Every observation tying leaves one attainable sum, which
 /// returns `1.0` — the same no-evidence answer the approximation gives for zero
 /// variance.
-fn exact_two_sided_p(ranks: &[f64], n1: usize) -> f64 {
-    let scaled: Vec<usize> = ranks.iter().copied().map(scaled_rank).collect();
-    let n2 = scaled.len().saturating_sub(n1);
+fn exact_two_sided_p(scaled_ranks: &[usize], n1: usize) -> f64 {
+    let n2 = scaled_ranks.len().saturating_sub(n1);
     // Enumerate the smaller side, whose subset count is the one held exact.
     let subset_size = n1.min(n2);
     let observed: usize = if n1 <= n2 {
-        scaled
+        scaled_ranks
             .iter()
             .take(n1)
             .copied()
             .fold(0, usize::saturating_add)
     } else {
-        scaled
+        scaled_ranks
             .iter()
             .skip(n1)
             .copied()
             .fold(0, usize::saturating_add)
     };
+    exact_rank_sum_p_values(scaled_ranks, subset_size)
+        .get(subset_size)
+        .and_then(|row| row.get(observed))
+        .copied()
+        .unwrap_or(NO_EVIDENCE)
+}
 
+/// Exact two-sided Mann-Whitney p-values indexed by subset size and doubled rank sum.
+///
+/// Rows through `max_subset_size` are built together because the subset-sum
+/// recurrence for a larger size necessarily builds every smaller size. Runtime
+/// permutation calibration can therefore cache all exact split sizes after the
+/// first permutation that needs one.
+pub(crate) fn exact_rank_sum_p_values(
+    scaled_ranks: &[usize],
+    max_subset_size: usize,
+) -> Vec<Vec<f64>> {
     // A size-`subset_size` subset reaches at most the sum of the `subset_size`
     // largest ranks, so the count grid needs no wider a sum axis than that — a tight
     // bound for a lopsided split, where the enumerated side is small.
-    let mut descending = scaled.clone();
-    descending.sort_unstable_by(|left, right| right.cmp(left));
-    let max_subset_sum: usize = descending
+    let mut sorted = scaled_ranks.to_vec();
+    sorted.sort_unstable();
+    let max_subset_sum: usize = sorted
         .iter()
-        .take(subset_size)
+        .rev()
+        .take(max_subset_size)
         .copied()
         .fold(0, usize::saturating_add);
 
@@ -430,15 +469,27 @@ fn exact_two_sided_p(ranks: &[f64], n1: usize) -> f64 {
     // is `sum`. Folding the ranks in one at a time while walking `taken` downward
     // spends each rank at most once per subset (the 0/1-knapsack order).
     let width = max_subset_sum.saturating_add(1);
-    let mut subsets: Vec<Vec<f64>> = vec![vec![0.0_f64; width]; subset_size.saturating_add(1)];
+    let mut subsets: Vec<Vec<f64>> = vec![vec![0.0_f64; width]; max_subset_size.saturating_add(1)];
     if let Some(first) = subsets.first_mut().and_then(|row| row.first_mut()) {
         *first = 1.0;
     }
-    for &rank in &scaled {
-        for taken in (0..subset_size).rev() {
+    // Each row is nonzero only between the smallest and largest sums reached so far. Tracking that
+    // active range avoids scanning the full final sum axis for every rank, which matters most for
+    // the exact lopsided splits of a capped 1,000-point series.
+    let mut active_sums: Vec<Option<(usize, usize)>> =
+        vec![None; max_subset_size.saturating_add(1)];
+    if let Some(first) = active_sums.first_mut() {
+        *first = Some((0, 0));
+    }
+    for rank in sorted {
+        for taken in (0..max_subset_size).rev() {
+            let Some((first_sum, last_sum)) = active_sums.get(taken).copied().flatten() else {
+                continue;
+            };
+            let previous_target_range = active_sums.get(taken.saturating_add(1)).copied().flatten();
             let (lower, upper) = subsets.split_at_mut(taken.saturating_add(1));
             if let (Some(source), Some(target)) = (lower.get(taken), upper.first_mut()) {
-                for sum in 0..width.saturating_sub(rank) {
+                for sum in first_sum..=last_sum {
                     let count = source.get(sum).copied().unwrap_or(0.0);
                     if count == 0.0 {
                         continue;
@@ -447,56 +498,76 @@ fn exact_two_sided_p(ranks: &[f64], n1: usize) -> f64 {
                         *slot += count;
                     }
                 }
+                let next_range = (
+                    first_sum.saturating_add(rank),
+                    last_sum.saturating_add(rank),
+                );
+                if let Some(target_range) = active_sums.get_mut(taken.saturating_add(1)) {
+                    *target_range = Some(previous_target_range.map_or(next_range, |previous| {
+                        (previous.0.min(next_range.0), previous.1.max(next_range.1))
+                    }));
+                }
             }
         }
     }
 
-    let Some(counts) = subsets.get(subset_size) else {
-        return NO_EVIDENCE;
-    };
+    subsets
+        .into_iter()
+        .map(|counts| exact_tail_p_values(&counts))
+        .collect()
+}
+
+/// Doubled minority-tail p-values for every attainable sum in one exact distribution.
+fn exact_tail_p_values(counts: &[f64]) -> Vec<f64> {
     let total: f64 = counts.iter().sum();
     if total <= 0.0 {
-        return NO_EVIDENCE;
+        return vec![NO_EVIDENCE; counts.len()];
     }
-    // The observed sum belongs to both tails, so summing `..=observed` and
-    // `observed..` and taking the smaller gives the doubled minority tail.
-    let lower_tail: f64 = counts.iter().take(observed.saturating_add(1)).sum();
-    let upper_tail: f64 = counts.iter().skip(observed).sum();
-    clamp_p_value((2.0 * lower_tail.min(upper_tail) / total).min(1.0))
-}
-
-/// Doubles a half-integral average rank into the exact integer the subset-sum
-/// counter indexes on.
-fn scaled_rank(rank: f64) -> usize {
-    // Average ranks are multiples of one half, so `2·rank` is a non-negative
-    // integer far below `usize::MAX`; rounding absorbs only the halving's last bit.
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "2·rank is a non-negative integer (ranks are multiples of one half), so the \
-                  rounded cast is exact and well below usize::MAX"
-    )]
-    let scaled = (rank * 2.0).round() as usize;
-    scaled
-}
-
-/// The two-sided p-value via the tie- and continuity-corrected normal
-/// approximation, for joint samples too large to enumerate exactly.
-///
-/// Returns `1.0` (no evidence of a difference) when the corrected variance is
-/// zero, as happens when every observation ties.
-fn normal_two_sided_p(combined: &[f64], n1: f64, n2: f64, u1: f64, u2: f64) -> f64 {
-    let n_f = n1 + n2;
-    let u = u1.min(u2);
-    let mean_u = n1 * n2 / 2.0;
-    let tie_term: f64 = tie_group_sizes(combined)
-        .into_iter()
-        .map(|size| {
-            let t = count_to_f64(size);
-            t * t * t - t
+    let mut cumulative = 0.0_f64;
+    counts
+        .iter()
+        .map(|&count| {
+            cumulative += count;
+            let lower = cumulative;
+            let upper = total - cumulative + count;
+            clamp_p_value((2.0 * lower.min(upper) / total).min(1.0))
         })
-        .sum();
-    let variance = (n1 * n2 / 12.0) * ((n_f + 1.0) - tie_term / (n_f * (n_f - 1.0)));
+        .collect()
+}
+
+/// The Mann-Whitney tie-correction term from doubled average ranks.
+///
+/// The value depends only on the rank multiset, so permutation calibration
+/// computes it once and reuses it for every shuffled ordering.
+pub(crate) fn mann_whitney_tie_term(scaled_ranks: &[usize]) -> f64 {
+    let mut sorted = scaled_ranks.to_vec();
+    sorted.sort_unstable();
+    sorted
+        .chunk_by(|left, right| left == right)
+        .map(|group| {
+            let size = count_to_f64(group.len());
+            size * size * size - size
+        })
+        .sum()
+}
+
+/// The tie- and continuity-corrected normal Mann-Whitney p-value from one rank sum.
+///
+/// Returns `1.0` when every observation ties and the corrected variance is zero.
+pub(crate) fn normal_mann_whitney_p(
+    n1: usize,
+    n2: usize,
+    rank_sum_left: f64,
+    tie_term: f64,
+) -> f64 {
+    let n1_f = count_to_f64(n1);
+    let n2_f = count_to_f64(n2);
+    let n_f = n1_f + n2_f;
+    let u1 = rank_sum_left - n1_f * (n1_f + 1.0) / 2.0;
+    let u2 = n1_f * n2_f - u1;
+    let u = u1.min(u2);
+    let mean_u = n1_f * n2_f / 2.0;
+    let variance = (n1_f * n2_f / 12.0) * ((n_f + 1.0) - tie_term / (n_f * (n_f - 1.0)));
     if variance <= 0.0 {
         return NO_EVIDENCE;
     }
@@ -838,6 +909,36 @@ mod tests {
     fn mann_whitney_empty_sample_is_one() {
         assert_eq!(mann_whitney_u_pvalue(&[], &[1.0, 2.0]), 1.0);
         assert_eq!(mann_whitney_u_pvalue(&[1.0, 2.0], &[]), 1.0);
+    }
+
+    #[test]
+    fn mann_whitney_exact_feasibility_tracks_the_binomial_count_limit() {
+        // The production cap's 6-vs-994 split has C(1000, 6) subsets below the exact
+        // integer limit, while adding one point to the smaller side crosses it.
+        assert!(exact_mw_feasible(6, 994));
+        assert!(!exact_mw_feasible(7, 993));
+        assert!(exact_mw_feasible(994, 6));
+
+        // A balanced 29-vs-29 split is the first equal split whose central binomial
+        // coefficient exceeds the exact integer limit.
+        assert!(exact_mw_feasible(28, 28));
+        assert!(!exact_mw_feasible(29, 29));
+    }
+
+    #[test]
+    fn mann_whitney_tie_term_sums_cubic_group_contributions() {
+        // Tie groups of three, two, and one contribute (27 - 3) + (8 - 2) + 0.
+        assert_eq!(mann_whitney_tie_term(&[2, 8, 2, 10, 8, 2]), 30.0);
+    }
+
+    #[test]
+    fn normal_mann_whitney_matches_a_hand_computed_tied_case() {
+        // n1=8, n2=12, left rank sum 60, and tie term 30 give U=24,
+        // variance=3180/19, and continuity-corrected z=1.8164820170425562. The
+        // complementary rank sum 108 makes the other U statistic the smaller one.
+        let expected = 0.069_296_464_029_822_27;
+        close(normal_mann_whitney_p(8, 12, 60.0, 30.0), expected, 1e-12);
+        close(normal_mann_whitney_p(8, 12, 108.0, 30.0), expected, 1e-12);
     }
 
     #[test]

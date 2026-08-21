@@ -814,6 +814,8 @@ fn scaled(values: &[f64], scale: f64) -> Vec<f64> {
 }
 
 #[test]
+// The production permutation budget makes this large matrix impractical under Miri.
+#[cfg_attr(miri, ignore)]
 fn curated_signals_match_expected_verdicts() {
     for case in cases() {
         let values = case.values();
@@ -929,6 +931,8 @@ fn scaling_a_sub_nanosecond_move_can_clear_the_absolute_floor() {
 }
 
 #[test]
+// The production permutation budget makes these large crowds impractical under Miri.
+#[cfg_attr(miri, ignore)]
 fn companion_crowds_report_nothing_of_their_own() {
     // Dimension 3 collapses the crowd outcome to a single boolean per case, which is only
     // meaningful if a crowd contributes no finding of its own. That is enforced here
@@ -969,6 +973,8 @@ fn companion_crowds_report_nothing_of_their_own() {
 }
 
 #[test]
+// The production permutation budget makes this large batch impractical under Miri.
+#[cfg_attr(miri, ignore)]
 fn a_batch_of_flat_noisy_series_raises_nothing() {
     // The direct analogue of issue #428: a batch of roughly 300 real series reported 17
     // "regressions" and — every single time — exactly zero improvements, a rotating cast

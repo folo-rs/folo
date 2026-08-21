@@ -34,6 +34,19 @@ census untruthful, because the floor was met before anything was discarded. It f
 selection step may discard so much that the remainder falls under the minimum regime length; the
 removal allowance is set far below that margin.
 
+History-mode change-point calibration needs the size of the later false-discovery family before
+it can choose a permutation budget. Detection therefore begins with a serial, metadata-only
+testability prepass that builds the census and obtains its judged count. Workers evaluate the same
+pure predicate to short-circuit unjudged series, then run each judged series independently with a
+budget proportional to that shared family size. The expensive permutation work remains inside the
+existing per-series worker chunks; only the cheap classification pass is serial.
+
+The budget provides enough plus-one resolution for the strictest rank-1 Benjamini–Hochberg
+threshold after the two-history-detector correction, while retaining about 30 expected null
+exceedances at that boundary. A series that accumulates enough exceedances that its final
+fixed-budget p-value cannot pass the significance gate stops early and returns no evidence. This
+is a conservative verdict shortcut, not a variable-precision estimate.
+
 Parallel work is supplied through an executor abstraction, preserving the same deterministic
 analysis logic for production execution and synchronous component tests.
 

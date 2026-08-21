@@ -32,11 +32,10 @@ pub const MIN_SERIES_POINTS: usize = 2 * MIN_REGIME;
 ///
 /// The tool is designed for series of dozens to a few hundred points; see
 /// `docs/DESIGN.md`, "Supported series length". The cap bounds how far the search for a
-/// step looks back, which is what the selection correction is calibrated against — the
-/// correction table (`cbh_stats::change_point_adjusted_p`) carries a row for every length
-/// up to this value, so a capped series always has an exact calibration and no input can
-/// exceed the table. The value sits well above any realistic history, so the cap changes
-/// nothing in ordinary use; it exists so an unusually long series cannot outrun the table.
+/// step looks back and therefore bounds the work done by runtime permutation
+/// calibration. The value sits well above any realistic history, so the cap changes
+/// nothing in ordinary use; it prevents an unusually long series from consuming
+/// unbounded analysis time.
 pub const MAX_SERIES_POINTS: usize = 1000;
 
 /// The largest selection-adjusted chance level a change-point's Mann–Whitney rank test
@@ -54,6 +53,23 @@ pub const MAX_CHANGE_CHANCE_LEVEL: f64 = 0.05;
 /// finding, and a 10% false-discovery rate keeps the reported set trustworthy without
 /// discarding genuine regressions that a stricter rate would cull.
 pub const TARGET_FALSE_DISCOVERY_RATE: f64 = 0.10;
+
+/// The history detectors run as a pair and the better-fitting model is reported.
+///
+/// Their individual p-values are multiplied by this count before gating to
+/// conservatively account for choosing between them. Ref: `docs/DESIGN.md`,
+/// "Choosing between a step and a drift".
+pub const HISTORY_DETECTOR_COUNT: usize = 2;
+
+/// Conditional permutations sampled for each judged series in the
+/// false-discovery family.
+///
+/// At the hardest rank-1 Benjamini-Hochberg boundary, the pre-arbitration
+/// change-point p-value must be below `TARGET_FALSE_DISCOVERY_RATE /
+/// (HISTORY_DETECTOR_COUNT * family_size)`. This budget gives the null sample
+/// about 30 expected observations at that boundary, while its plus-one floor
+/// remains well below it. Ref: `docs/DESIGN.md`, "Selection adjustment".
+pub const PERMUTATIONS_PER_JUDGED_SERIES: usize = 600;
 
 /// Default `drift_min_points`: a series needs at least this many points before a
 /// slow-drift finding is considered.

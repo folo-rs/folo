@@ -927,27 +927,21 @@ for reported findings, and branch mode uses the same effect-size gate — at a s
 for the reasons below — when deciding whether a base-side split is strong enough to define the
 current comparison regime.
 
-**Exact significance for short series.** The Mann–Whitney significance above is computed
-*exactly* on the short histories this tool targets, not from the textbook large-sample
-approximation. That approximation assumes many points on each side; on a history of dozens of
-points it is systematically **too pessimistic in the deep tail**, overstating the p-value of a
-clean, well-separated step by orders of magnitude and so hiding a real regression behind the
-significance gate. The exact value instead enumerates every way the combined points could have
-been divided into a "before" and an "after" of the observed sizes and counts the fraction of
-those divisions at least as lopsided as the one seen — the plain definition of a p-value, with
-no distributional assumption. This enumeration is decided split by split, not once per series.
-The work of enumerating a split grows with its *smaller* side, so a lopsided split — few points on
-one side — is counted exactly however long the whole history is, and only the near-balanced splits
-of a long history exceed what can be counted exactly and keep the approximation. The distinction
-matters in both tail directions. Where one side is small and its values repeat — routine for
-integer instruction counts — the approximation does not merely overstate the p-value; it can
-**understate** a cleanly separated step by orders of magnitude, and the exact tail is what keeps
-that step honest. Where a split is near-balanced and the approximation is kept, it cannot mislead:
-a history long enough to reach that regime has an honest smallest p-value already below the
-reporting floor, so no verdict there turns on the approximation. The exact treatment is therefore
-spent exactly where it can change a verdict. The selection adjustment (§8.3) is calibrated against
-this same exact procedure, so the honest p-value and the correction applied to it describe one
-and the same test.
+**Exact significance where feasible.** The Mann–Whitney score above is computed exactly whenever
+the number of possible before/after assignments fits in a double-precision integer. The exact
+value enumerates every way the combined points could have been divided into groups of the observed
+sizes and counts the fraction at least as lopsided as the split seen. Feasibility is decided split
+by split: the work grows with the *smaller* side, so a lopsided split can be counted exactly even
+in a long history. This matters especially when values repeat — routine for integer instruction
+counts — because a large-sample approximation can be badly wrong in either direction there.
+
+Near-balanced splits of long histories exceed the exact counting range and retain the tie- and
+continuity-corrected normal score. History mode does not trust that approximate score as an honest
+p-value by itself: the selection adjustment (§8.3) applies the same exact-or-normal scorer to the
+observed ordering and to permutations of that series' actual values. The final chance level is
+therefore measured from the score's conditional null distribution, including the observed tie
+pattern. Exact scoring is retained where affordable for resolution and power; conditional
+calibration is what makes the complete history verdict honest in both scoring paths.
 
 The residual pool draws only from samples long enough to describe scatter. A sample of a single
 point is its own median, so it contributes a residual of exactly zero that says nothing about the
@@ -1151,15 +1145,29 @@ tried every eligible split and kept the most striking, and the tool ran two dete
 (change-point and drift) and reported whichever fit the data better. Both make a flat,
 unchanging series look more surprising than it is, so an uncorrected significance gate would
 admit far more false alarms than its nominal level suggests — most on the recent, short-regime
-regressions the tool most wants to get right. History mode therefore adjusts the change-point's
-raw significance for the split search — using a distribution-free calibration that depends only
-on the series length, so it is a derived constant a reader can reproduce rather than a fit to
-our data — and then doubles both detectors' chance levels to account for the two-detector
-choice. The result is the honest per-series chance level that the significance gate and the
-family correction both consume. Branch mode makes one predetermined comparison and searches no
-split, so it carries neither adjustment. This correction is what the supported upper series
-length (§8) exists to bound: the calibration is defined for every length the pipeline can
-present, and the cap guarantees no series exceeds it.
+regressions the tool most wants to get right. History mode therefore adjusts the change-point's tainted split score by **conditional
+permutation**. It repeatedly shuffles the series' actual rank multiset, including every repeated
+value, and runs the complete production procedure on each ordering: Pettitt first-maximum split
+selection, minimum-regime rejection, and exact-or-normal Mann–Whitney scoring. The adjusted
+chance level is the plus-one fraction of shuffled procedures at least as striking as the observed
+one. A shuffled ordering whose selected split is too short remains in the denominator as
+no evidence; dropping it would condition on finding a reportable split and make the result
+optimistic.
+
+The permutation stream is reproducible and invariant to the observed ordering: its stable seed is
+derived from sorted canonical value bits, the sorted rank multiset, and the fixed regime rule.
+The sample budget scales with the complete judged family because the smallest
+Benjamini–Hochberg threshold scales inversely with that family. The production budget gives about
+30 expected null observations at that hardest threshold and a plus-one resolution comfortably
+below it. The detector may stop early only after the accumulated exceedances make passing the
+later significance gate mathematically impossible under the full fixed denominator; it then
+returns no evidence rather than estimating a favourable answer from a partial run.
+
+After this split-search adjustment, history mode doubles both detectors' chance levels to account
+for choosing between change-point and drift. The result is the honest per-series chance level that
+the significance gate and family correction both consume. Branch mode makes one predetermined
+comparison and searches no split, so it carries neither adjustment. The supported upper series
+length (§8) bounds the runtime work of scoring each permutation.
 
 That same predicate is what every report accounts for (§8.9): a series is judged, counted in
 the family, and reported as judged together, or it is none of the three.

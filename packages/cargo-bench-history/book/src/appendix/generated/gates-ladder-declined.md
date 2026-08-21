@@ -5,8 +5,8 @@
 | `split_located` | must hold | held | pass |
 | `min_regime` | 5 points | 10 points | pass |
 | `non_zero_delta` | above zero | 15.97 ns | pass |
-| `selection_adjustment` | corrected for the search | p = 0.0011 → p = 0.0082 | pass |
-| `significance` | p < 0.05 | p = 0.0164 | pass |
+| `selection_adjustment` | corrected for the search | p = 0.0011 → p = 0.0083 | pass |
+| `significance` | p < 0.05 | p = 0.0166 | pass |
 | `relative_floor` | 3.0% | 15.7% | pass |
 | `absolute_floor` | 1 ns | 15.97 ns | pass |
 | `residual_noise` | 17.38 ns | 15.97 ns | **declined** |
