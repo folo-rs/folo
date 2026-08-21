@@ -54,39 +54,30 @@ Criterion".
 
 ## Canonical benchmark scenario matrix
 
-The package's benchmarks live in three files. `benches/events_once_ops.rs`
+The package's benchmarks live in two paired files: `benches/events_once_ops.rs`
 (Criterion, wall clock) and `benches/events_once_ops_cg.rs` (Callgrind,
-instruction counts) are the canonical internal paired matrix: every scenario
-they cover is our own implementation measured against itself. A scenario is
-identified by the group it belongs to, the threading model, the storage
-strategy, the start state, the timed operation and the cleanup boundary. The
-Criterion identifier is `events_once_ops/<group>/<model>[/<storage>]/<case>`;
-its Callgrind twin is the same identifier with the file prefix dropped and `/`
-replaced by `_`.
-
-`benches/events_once_vs_3p.rs` is a separate, first-class Criterion benchmark
-that compares our implementations against competing third-party channel crates
-in the same benchmark groups. It has no Callgrind twin. See "Third-party
-competitor comparison (`events_once_vs_3p.rs`)" below for its scenario matrix
-and the policy governing this file.
+instruction counts). A scenario is identified by the group it belongs to, the
+threading model, the storage strategy, the start state, the timed operation and
+the cleanup boundary. The Criterion identifier is
+`events_once_ops/<group>/<model>[/<storage>]/<case>`; its Callgrind twin is the
+same identifier with the file prefix dropped and `/` replaced by `_`.
 
 Each group registers the **full cross product** of its cases, its storage rows
 and its models, so the table below identifies every row that exists:
 
 | Group | Cases | Storage rows | Models | Callgrind coverage |
 | --- | --- | --- | --- | --- |
-| `lifecycle` | one: acquire, send, poll out the value, release | boxed, embedded, pooled, raw_pooled, lake, raw_lake | local, sync | every local and sync row (12) |
-| `lifecycle_await_first` | one: acquire, poll (pending), send, poll out the value, release | as above | local, sync | pooled only (2) |
+| `lifecycle` | one: acquire, send, poll out the value, release | boxed, embedded, pooled, raw_pooled, lake, raw_lake | local, sync, plus one `oneshot` leaf | every local and sync row (12) |
+| `lifecycle_await_first` | one: acquire, poll (pending), send, poll out the value, release | as above | local, sync, plus one `oneshot` leaf | pooled only (2) |
 | `send` | `bound`, `awaiting`, `disconnected` | boxed | local, sync | every row (6) |
 | `poll` | `pending_first`, `pending_repeat`, `disconnected` | boxed | local, sync | every row (6) |
 | `into_value` | `pending`, `ready`, `disconnected` | boxed | local, sync | every row (6) |
 | `is_ready` | `pending`, `ready`, `disconnected` | boxed | local, sync | none |
 | `cancel` | `sender_first_bound`, `sender_first_awaiting`, `receiver_first_bound` | boxed, embedded, pooled, raw_pooled, lake, raw_lake | local, sync | every row (36) |
 
-That is 84 Criterion rows and 68 Callgrind rows. This matrix covers only our
-own implementations; `oneshot` is not part of it. The third-party comparison
-lives exclusively in `events_once_vs_3p.rs`, so a third-party reference point
-never dilutes the internal cross product above.
+That is 86 Criterion rows and 68 Callgrind rows. The `oneshot` leaves are an
+external reference point for the same lifecycle; they live in the same group so
+Criterion reports them alongside our own numbers.
 
 What each group puts inside the measured region:
 
@@ -129,8 +120,7 @@ Rules that keep the matrix coherent:
   what distinguishes it from the send-first lifecycle lives in the event state
   machine, which every storage strategy shares, and pooled is the package's
   primary performance target. Its Criterion group keeps the full storage sweep
-  to mirror `lifecycle`, so the local-vs-sync claim above holds across every
-  storage strategy, not just the primary target.
+  because it also hosts the third-party comparison.
 * `is_ready` is measured on real hardware only: it is a single state read, so
   an instruction count at that magnitude reports the harness, not the operation.
 * Correctness assertions never appear inside a measured region. Results are
@@ -140,58 +130,6 @@ When undertaking optimization work in this package, fill any scenario the
 matrix promises but does not yet register, and extend the matrix itself when a
 new operation or storage strategy appears. Do not gate optimization on the
 absence of a benchmark — add the row, then measure, then decide.
-
-## Third-party competitor comparison (`events_once_vs_3p.rs`)
-
-`benches/events_once_vs_3p.rs` is the evidence that justifies choosing
-`events_once` over a competing crate. It registers a send-then-poll-to-ready
-scenario for the boxed, pooled, raw-pooled, lake and raw-lake storage
-strategies, each in the local and thread-safe models, alongside the equivalent
-scenario from the `oneshot` crate, once with a single poll and once with an
-initial pending poll before the send, so the comparison holds under both the
-immediately-ready and the awaited-then-woken access pattern.
-
-Embedded storage is deliberately excluded from this file. Its setup requires
-caller-owned storage prepared per iteration with `iter_batched`, and no
-third-party competitor has an equivalent storage shape to set up the same way;
-an embedded row would have nothing comparable to sit beside it in the same
-group, which would make its in-group timing incomparable to the rest of the
-group's rows.
-
-Every row in this file is registered in the same benchmark group and the same
-Criterion harness invocation as its competitor row: that is what makes the
-comparison valid, and it is also why our own lifecycle scenarios are
-duplicated here instead of being referenced from `events_once_ops.rs` —
-Criterion cannot produce a comparable number across a group boundary or a
-separate binary.
-
-| Group | Storage rows | Models | External reference | Rows |
-| --- | --- | --- | --- | --- |
-| `single_poll` | boxed, pooled, raw_pooled, lake, raw_lake | local, sync | one `oneshot` leaf | 11 |
-| `two_poll` | boxed, pooled, raw_pooled, lake, raw_lake | local, sync | one `oneshot` leaf | 11 |
-
-That is 22 Criterion rows and no Callgrind coverage: this file answers "are we
-faster than the alternative", not "which of our own code paths explains the
-difference", so an instruction-count twin would not serve its purpose.
-
-This file, its group names (`events_once_vs_3p/single_poll`,
-`events_once_vs_3p/two_poll`) and its function names are stable identifiers
-that preserve benchmark-history continuity: do not rename or consolidate this
-file into `events_once_ops.rs`, and do not delete it as duplicative of the
-internal matrix — doing so breaks history continuity for every one of its rows
-and removes the only benchmark that substantiates a competitive claim against
-third-party alternatives. Add new competitor crates or storage strategies as
-new rows in this file rather than replacing it.
-
-Stable identifiers preserve where a scenario's history lives, not what its
-recorded samples mean. This file's measured region excludes correctness
-assertions and constructs the polling `Context` once per row outside `b.iter`,
-consistent with the rules in "Canonical benchmark scenario matrix" above. A
-sample recorded under a different measured-region shape — for example, one
-that included an assertion or a per-iteration `Context` construction — is not
-value-comparable to a sample recorded under the current shape, even though
-both carry the same identifier; only samples produced under the same
-measured-region shape may be compared against each other.
 
 ## `#[inline]` annotations have outsized impact in this package
 

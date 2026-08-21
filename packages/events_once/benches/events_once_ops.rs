@@ -17,9 +17,9 @@
 //!
 //! Equivalent `LocalEvent` and `Event` scenarios are registered as leaves of the same
 //! group so that Criterion reports them side by side: the package requires the
-//! single-threaded variant to stay at least as fast as the thread-safe one. This file
-//! measures our own operations only; the comparison against the third-party `oneshot`
-//! crate lives in `events_once_vs_3p.rs`.
+//! single-threaded variant to stay at least as fast as the thread-safe one. The
+//! lifecycle groups additionally carry a third-party `oneshot` leaf, which is the
+//! external reference point for the same lifecycle.
 //!
 //! Correctness is the test suite's job. Measured closures consume their results
 //! through `black_box` and never assert, so that no benchmark pays for validation
@@ -571,6 +571,22 @@ fn lifecycle(c: &mut Criterion) {
     bench_lifecycle_send_first!(g, "local/raw_lake", unsafe { local_raw_lake.rent::<i32>() });
     bench_lifecycle_send_first!(g, "sync/raw_lake", unsafe { sync_raw_lake.rent::<i32>() });
 
+    // External reference point. `oneshot` reports send failures, so the result is
+    // consumed through `black_box` instead of being unwrapped: an unwrap would add a
+    // branch that the infallible `events_once` senders do not have.
+    g.bench_function("oneshot", |b| {
+        let mut cx = noop_context();
+
+        b.iter(|| {
+            let (sender, receiver) = black_box(oneshot::channel::<i32>());
+            let mut receiver = pin!(receiver.into_future());
+
+            _ = black_box(sender.send(black_box(PAYLOAD)));
+
+            _ = black_box(receiver.as_mut().poll(&mut cx));
+        });
+    });
+
     g.finish();
 }
 
@@ -662,6 +678,21 @@ fn lifecycle_await_first(c: &mut Criterion) {
 
     bench_lifecycle_await_first!(g, "local/raw_lake", unsafe { local_raw_lake.rent::<i32>() });
     bench_lifecycle_await_first!(g, "sync/raw_lake", unsafe { sync_raw_lake.rent::<i32>() });
+
+    g.bench_function("oneshot", |b| {
+        let mut cx = noop_context();
+
+        b.iter(|| {
+            let (sender, receiver) = black_box(oneshot::channel::<i32>());
+            let mut receiver = pin!(receiver.into_future());
+
+            _ = black_box(receiver.as_mut().poll(&mut cx));
+
+            _ = black_box(sender.send(black_box(PAYLOAD)));
+
+            _ = black_box(receiver.as_mut().poll(&mut cx));
+        });
+    });
 
     g.finish();
 }

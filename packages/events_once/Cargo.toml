@@ -43,10 +43,6 @@ harness = false
 name = "events_once_ops_cg"
 harness = false
 
-[[bench]]
-name = "events_once_vs_3p"
-harness = false
-
 
 
 
