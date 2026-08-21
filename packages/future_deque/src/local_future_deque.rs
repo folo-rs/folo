@@ -4,16 +4,15 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use multitude::Arena;
+use plurality::MultiPool;
 
 use crate::erased_future::alloc_future;
 use crate::future_deque_core::FutureDequeCore;
 
-// Thread-local arena for storing type-erased futures in the `!Send` variant. It is separate
-// from the arena used by `FutureDeque` so that the two variants do not share chunks and
-// their allocation behaviour stays independent.
+// This pool is separate from the pool used by `FutureDeque` so the variants do not share
+// storage and their allocation behaviour stays independent.
 thread_local! {
-    static LOCAL_FUTURES_ARENA: Arena = Arena::new();
+    static LOCAL_FUTURES_POOL: MultiPool = MultiPool::new();
 }
 
 /// A deque of futures with deterministic front-to-back polling order (single-threaded).
@@ -108,13 +107,13 @@ impl<T> LocalFutureDeque<T> {
 
     /// Adds a future to the back of the deque.
     pub fn push_back(&mut self, future: impl Future<Output = T> + 'static) {
-        let handle = LOCAL_FUTURES_ARENA.with(|arena| alloc_future(arena, future));
+        let handle = LOCAL_FUTURES_POOL.with(|pool| alloc_future(pool, future));
         self.core.push_back_handle(handle);
     }
 
     /// Adds a future to the front of the deque.
     pub fn push_front(&mut self, future: impl Future<Output = T> + 'static) {
-        let handle = LOCAL_FUTURES_ARENA.with(|arena| alloc_future(arena, future));
+        let handle = LOCAL_FUTURES_POOL.with(|pool| alloc_future(pool, future));
         self.core.push_front_handle(handle);
     }
 

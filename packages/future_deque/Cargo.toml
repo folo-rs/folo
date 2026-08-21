@@ -24,7 +24,6 @@ futures-stream = ["dep:futures-core"]
 
 [dependencies]
 futures-core = { workspace = true, optional = true }
-multitude = { workspace = true, features = ["dst"] }
 plurality = { workspace = true }
 
 [dev-dependencies]
@@ -51,4 +50,3 @@ harness = false
 [[bench]]
 name = "future_deque_cg"
 harness = false
-

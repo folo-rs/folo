@@ -1373,7 +1373,6 @@ dependencies = [
  "futures",
  "futures-core",
  "gungraun",
- "multitude",
  "mutants",
  "plurality",
  "static_assertions",
