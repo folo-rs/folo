@@ -73,6 +73,7 @@ impl<T: 'static> LocalEventPool<T> {
     /// Rents an event from the pool, returning its endpoints.
     ///
     /// The event will be returned to the pool when both endpoints are dropped.
+    /// See [`PooledLocalReceiver`] for the receiver's callback and reentrancy contract.
     #[inline]
     #[must_use]
     pub fn rent(&self) -> (PooledLocalSender<T>, PooledLocalReceiver<T>) {

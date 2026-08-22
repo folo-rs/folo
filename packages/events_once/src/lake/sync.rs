@@ -73,6 +73,7 @@ impl EventLake {
     /// Rents an event from the lake, returning its endpoints.
     ///
     /// The event will be returned to the lake when both endpoints are dropped.
+    /// See [`PooledReceiver`] for the receiver's callback and reentrancy contract.
     #[must_use]
     pub fn rent<T: Send + 'static>(&self) -> (PooledSender<T>, PooledReceiver<T>) {
         let type_id = TypeId::of::<T>();
@@ -215,12 +216,13 @@ mod tests {
     #[cfg(debug_assertions)]
     use std::cell::RefCell;
     use std::panic::{RefUnwindSafe, UnwindSafe};
+    use std::sync::Barrier;
     use std::task::Waker;
+    use std::thread;
 
     use static_assertions::assert_impl_all;
     #[cfg(debug_assertions)]
     use testing::assert_panics_with;
-    #[cfg(debug_assertions)]
     use testing::with_watchdog;
 
     use super::*;
@@ -232,6 +234,84 @@ mod tests {
     assert_impl_all!(
         EventLake: UnwindSafe, RefUnwindSafe
     );
+
+    #[test]
+    fn concurrent_same_type_rentals_are_usable_across_threads() {
+        // The smallest group that guarantees competing map and pool access.
+        const WORKER_COUNT: usize = 2;
+
+        with_watchdog(|| {
+            let lake = EventLake::new();
+            let barrier = Barrier::new(WORKER_COUNT);
+
+            thread::scope(|scope| {
+                for _ in 0..WORKER_COUNT {
+                    let lake = lake.clone();
+                    let barrier = &barrier;
+
+                    scope.spawn(move || {
+                        barrier.wait();
+
+                        let (sender, receiver) = lake.rent::<i32>();
+                        thread::scope(|scope| {
+                            scope.spawn(move || sender.send(42)).join().unwrap();
+                        });
+
+                        assert_eq!(receiver.into_value().unwrap(), 42);
+                    });
+                }
+            });
+
+            assert!(lake.is_empty());
+        });
+    }
+
+    #[test]
+    fn concurrent_distinct_type_rentals_are_usable_across_threads() {
+        with_watchdog(|| {
+            let lake = EventLake::new();
+            let barrier = Barrier::new(2);
+
+            thread::scope(|scope| {
+                scope.spawn({
+                    let lake = lake.clone();
+                    let barrier = &barrier;
+
+                    move || {
+                        barrier.wait();
+
+                        let (sender, receiver) = lake.rent::<i32>();
+                        thread::scope(|scope| {
+                            scope.spawn(move || sender.send(42)).join().unwrap();
+                        });
+
+                        assert_eq!(receiver.into_value().unwrap(), 42);
+                    }
+                });
+
+                scope.spawn({
+                    let lake = lake.clone();
+                    let barrier = &barrier;
+
+                    move || {
+                        barrier.wait();
+
+                        let (sender, receiver) = lake.rent::<String>();
+                        thread::scope(|scope| {
+                            scope
+                                .spawn(move || sender.send("payload".to_owned()))
+                                .join()
+                                .unwrap();
+                        });
+
+                        assert_eq!(receiver.into_value().unwrap(), "payload");
+                    }
+                });
+            });
+
+            assert!(lake.is_empty());
+        });
+    }
 
     #[test]
     fn len() {

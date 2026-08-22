@@ -57,3 +57,15 @@ guarantee that the embedding container remains pinned and writable, and is not a
 another live event in that field, for as long as the endpoints returned by `Event::placed()`
 exist. Endpoints obtained this way are otherwise indistinguishable in behavior from endpoints
 obtained through any other construction path.
+
+## Callback reentrancy and unwinding
+
+Waker cloning, waking and destruction, together with payload destruction, are callback
+boundaries because they can execute caller code. Before invoking one, an event completes the
+observable state transition that led to it and releases every borrow or lock that callback code
+could re-enter.
+
+A waker cloned while a receiver is being polled may send through or drop the corresponding
+sender. A registered waker that runs while an event completes or is cancelled may poll the
+receiver to completion or drop either endpoint. These operations observe the state published
+before the callback.

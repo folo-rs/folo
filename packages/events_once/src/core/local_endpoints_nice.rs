@@ -54,6 +54,13 @@ impl<T: 'static> fmt::Debug for BoxedLocalSender<T> {
 ///
 /// This kind of endpoint is used for boxed events, which are heap-allocated and automatically
 /// destroyed when both the sender and receiver are dropped.
+///
+/// # Reentrancy
+///
+/// Cloning a waker during polling may synchronously send through or drop the sender. Waking or
+/// dropping a registered waker during completion or cancellation may synchronously poll this
+/// receiver to completion or drop an endpoint. The event publishes the resulting state before
+/// each callback.
 pub struct BoxedLocalReceiver<T: 'static> {
     inner: LocalReceiverCore<BoxedLocalRef<T>, T>,
 }
@@ -189,6 +196,13 @@ impl<T: 'static> fmt::Debug for RawLocalSender<T> {
 /// This kind of endpoint is used with events for which the storage is provided by the
 /// owner of the endpoint. They are also responsible for ensuring that the event that
 /// connects the sender-receiver pair outlives both endpoints.
+///
+/// # Reentrancy
+///
+/// Cloning a waker during polling may synchronously send through or drop the sender. Waking or
+/// dropping a registered waker during completion or cancellation may synchronously poll this
+/// receiver to completion or drop an endpoint. The event publishes the resulting state before
+/// each callback.
 pub struct RawLocalReceiver<T: 'static> {
     inner: LocalReceiverCore<PtrLocalRef<T>, T>,
 }

@@ -83,9 +83,13 @@ impl<T: 'static> Deref for PtrLocalRef<T> {
     type Target = UnsafeCell<LocalEvent<T>>;
 
     fn deref(&self) -> &Self::Target {
-        // SAFETY: The creator of this reference guaranteed that the event is initialized and
-        // stays at this address for as long as any endpoint can reach it, and that it is only
-        // ever accessed through shared references, so no exclusive reference can alias this one.
+        // SAFETY: Validity: `LocalEvent::placed_core()` derives this pointer from pinned
+        // `EmbeddedLocalEvent<T>` storage with the matching type and alignment, initializes the
+        // complete outer event, and ends its exclusive initialization borrow before creating the
+        // endpoints. The placement caller promises not to move, destroy or reuse that storage
+        // while an endpoint can access it. Aliasing: initialization has ended and every later
+        // event access is through shared references to the outer `UnsafeCell`, while the placement
+        // contract excludes another event or exclusive reference in the same storage.
         unsafe { self.event.as_ref() }
     }
 }
@@ -133,11 +137,12 @@ impl<T: 'static> BoxedLocalRef<T> {
     }
 }
 
-// SAFETY: The allocation is made here, for exactly one event that is initialized before any
-// reference to it escapes, and a heap allocation never moves, so both references identify the
-// same valid event at a stable address for as long as an endpoint holds one. The only references
-// handed out are the shared ones from `deref()`. Releasing frees that allocation once and does
-// not touch the event afterwards.
+// SAFETY: The allocation is made here with the exact event layout and initialized before any
+// reference escapes, so both handles preserve its type, alignment and stable address. Event
+// methods scope their last dereference before any callback that may perform the single state-
+// machine-authorized release, and never dereference afterwards. The only references handed out
+// are shared references to the outer `UnsafeCell`; initialization's exclusive borrow has ended.
+// Releasing frees the matching allocation once and does not touch the event afterwards.
 unsafe impl<T: 'static> LocalRef<T> for BoxedLocalRef<T> {
     unsafe fn release_event(&self) {
         // The caller tells us that they are the last endpoint, so nothing else can possibly
@@ -161,9 +166,13 @@ impl<T: 'static> Deref for BoxedLocalRef<T> {
     type Target = UnsafeCell<LocalEvent<T>>;
 
     fn deref(&self) -> &Self::Target {
-        // SAFETY: The event was initialized into this allocation in `new_pair()` and the
-        // allocation is only freed once an endpoint is told it is the last one, so it is valid
-        // here. We only ever hand out shared references to it, so no exclusive reference aliases.
+        // SAFETY: Validity: `new_pair()` allocated this exact layout, preserved its alignment and
+        // type while casting, initialized the complete outer event and ended the exclusive
+        // initialization borrow before either handle escaped. The state machine permits one
+        // release, and every callback-capable event method makes this dereference its last access
+        // before that callback, so no earlier callback can have freed the allocation here.
+        // Aliasing: every post-initialization access is through a shared reference to the outer
+        // `UnsafeCell`; no exclusive reference exists.
         unsafe { self.event.as_ref() }
     }
 }

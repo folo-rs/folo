@@ -388,6 +388,24 @@ mod linux {
         receiver
     }
 
+    // Steady-state rental from warmed managed pools. Returning the pool and endpoints keeps every
+    // destructor outside the measured region, so the count isolates slot acquisition, event
+    // initialization and endpoint construction.
+
+    #[library_benchmark]
+    #[bench::warm(warm_local_pool())]
+    fn rent_local_pooled(pool: LocalEventPool<i32>) -> (LocalEventPool<i32>, LocalPooledEndpoints) {
+        let endpoints = black_box(pool.rent());
+        black_box((pool, endpoints))
+    }
+
+    #[library_benchmark]
+    #[bench::warm(warm_sync_pool())]
+    fn rent_sync_pooled(pool: EventPool<i32>) -> (EventPool<i32>, SyncPooledEndpoints) {
+        let endpoints = black_box(pool.rent());
+        black_box((pool, endpoints))
+    }
+
     // Send-first lifecycle: acquire the endpoints, send, poll out the value and release
     // the storage - all inside the measured region.
     //
@@ -1212,6 +1230,11 @@ mod linux {
     }
 
     library_benchmark_group!(
+        name = rent,
+        benchmarks = [rent_local_pooled, rent_sync_pooled]
+    );
+
+    library_benchmark_group!(
         name = lifecycle,
         benchmarks = [
             lifecycle_local_boxed,
@@ -1319,7 +1342,7 @@ mod linux {
 #[cfg(target_os = "linux")]
 use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
 #[cfg(target_os = "linux")]
-pub use linux::{cancel, into_value, lifecycle, lifecycle_await_first, poll, send};
+pub use linux::{cancel, into_value, lifecycle, lifecycle_await_first, poll, rent, send};
 
 // `--collect-bus=yes` makes Callgrind emit the global bus event (`Ge`), which counts
 // lock-prefixed instructions and therefore the atomic read-modify-write operations
@@ -1333,5 +1356,5 @@ gungraun::main!(
             .args(["--branch-sim=yes", "--collect-bus=yes"])
             .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
     );
-    library_benchmark_groups = lifecycle, lifecycle_await_first, send, poll, into_value, cancel
+    library_benchmark_groups = rent, lifecycle, lifecycle_await_first, send, poll, into_value, cancel
 );

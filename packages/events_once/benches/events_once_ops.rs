@@ -372,6 +372,36 @@ fn sync_boxed_disconnected() -> BoxedReceiver<i32> {
     receiver
 }
 
+fn rent(c: &mut Criterion) {
+    let mut g = c.benchmark_group("events_once_ops/rent");
+    let local_pool = warm_local_pool();
+    let sync_pool = warm_sync_pool();
+
+    g.bench_function("local/pooled", |b| {
+        b.iter_batched(
+            || local_pool.clone(),
+            |pool| {
+                let endpoints = black_box(pool.rent());
+                black_box((pool, endpoints))
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    g.bench_function("sync/pooled", |b| {
+        b.iter_batched(
+            || sync_pool.clone(),
+            |pool| {
+                let endpoints = black_box(pool.rent());
+                black_box((pool, endpoints))
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    g.finish();
+}
+
 // Registers a send-first lifecycle: acquire the endpoints, send, poll out the value and
 // release the storage - all inside the measured region. The polling context is built
 // before `iter`, so no iteration pays for it.
@@ -1240,6 +1270,7 @@ fn cancel(c: &mut Criterion) {
 }
 
 fn entrypoint(c: &mut Criterion) {
+    rent(c);
     lifecycle(c);
     lifecycle_await_first(c);
     send(c);

@@ -51,6 +51,13 @@ impl<T: 'static> fmt::Debug for PooledLocalSender<T> {
 /// Awaiting the receiver will yield either the payload of type `T` or a [`Disconnected`] error.
 ///
 /// This kind of endpoint is used for events stored in a single-threaded event pool or event lake.
+///
+/// # Reentrancy
+///
+/// Cloning a waker during polling may synchronously send through or drop the sender. Waking or
+/// dropping a registered waker during completion or cancellation may synchronously poll this
+/// receiver to completion or drop an endpoint. The event publishes the resulting state before
+/// each callback.
 pub struct PooledLocalReceiver<T: 'static> {
     inner: LocalReceiverCore<PooledLocalRef<T>, T>,
 }

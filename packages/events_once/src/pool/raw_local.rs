@@ -27,7 +27,8 @@ use crate::{
 /// let pool = Box::pin(RawLocalEventPool::<String>::new());
 ///
 /// for i in 0..3 {
-///     // SAFETY: We promise the pool outlives both the returned endpoints.
+///     // SAFETY: The pool is pinned outside the loop, and both endpoints are consumed before
+///     // the iteration ends, so their storage remains alive and stationary.
 ///     let (tx, rx) = unsafe { pool.as_ref().rent() };
 ///
 ///     tx.send(format!("Message {i}"));
@@ -121,6 +122,7 @@ impl<T: 'static> RawLocalEventPool<T> {
     /// Rents an event from the pool, returning its endpoints.
     ///
     /// The event will be returned to the pool when both endpoints are dropped.
+    /// See [`RawLocalPooledReceiver`] for the receiver's callback and reentrancy contract.
     ///
     /// # Safety
     ///
@@ -211,7 +213,6 @@ impl<T: 'static> UnwindSafe for RawLocalEventPool<T> {}
 impl<T: 'static> RefUnwindSafe for RawLocalEventPool<T> {}
 
 #[cfg(test)]
-#[allow(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::iter;
@@ -241,9 +242,11 @@ mod tests {
 
         assert_eq!(pool.len(), 0);
 
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (sender1, receiver1) = unsafe { pool.as_ref().rent() };
         assert_eq!(pool.len(), 1);
 
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (sender2, receiver2) = unsafe { pool.as_ref().rent() };
         assert_eq!(pool.len(), 2);
 
@@ -262,6 +265,7 @@ mod tests {
 
         assert!(pool.is_empty());
 
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
 
         assert!(!pool.is_empty());
@@ -289,6 +293,7 @@ mod tests {
         assert!(pool.is_empty());
 
         for _ in 0..ITERATIONS {
+            // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
             let (sender, receiver) = unsafe { pool.as_ref().rent() };
             let mut receiver = Box::pin(receiver);
 
@@ -311,6 +316,7 @@ mod tests {
         let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
         for _ in 0..ITERATIONS {
+            // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
             let endpoints = iter::repeat_with(|| unsafe { pool.as_ref().rent() })
                 .take(BATCH_SIZE)
                 .collect::<Vec<_>>();
@@ -332,6 +338,7 @@ mod tests {
     fn drop_send() {
         let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (sender, _) = unsafe { pool.as_ref().rent() };
 
         sender.send(42);
@@ -341,6 +348,7 @@ mod tests {
     fn drop_receive() {
         let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (_, receiver) = unsafe { pool.as_ref().rent() };
         let mut receiver = Box::pin(receiver);
 
@@ -354,6 +362,7 @@ mod tests {
     fn receive_drop_receive() {
         let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
         let mut receiver = Box::pin(receiver);
 
@@ -372,6 +381,7 @@ mod tests {
     fn receive_drop_send() {
         let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
         let mut receiver = Box::pin(receiver);
 
@@ -389,6 +399,7 @@ mod tests {
     fn receive_drop_drop_receiver_first() {
         let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
         let mut receiver = Box::pin(receiver);
 
@@ -405,6 +416,7 @@ mod tests {
     fn receive_drop_drop_sender_first() {
         let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
         let mut receiver = Box::pin(receiver);
 
@@ -421,6 +433,7 @@ mod tests {
     fn drop_drop_receiver_first() {
         let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
 
         drop(receiver);
@@ -431,6 +444,7 @@ mod tests {
     fn drop_drop_sender_first() {
         let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
 
         drop(sender);
@@ -441,6 +455,7 @@ mod tests {
     fn is_ready() {
         let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
         let mut receiver = Box::pin(receiver);
 
@@ -460,6 +475,7 @@ mod tests {
     fn drop_is_ready() {
         let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
         let mut receiver = Box::pin(receiver);
 
@@ -479,6 +495,7 @@ mod tests {
     fn into_value() {
         let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
 
         let Err(crate::IntoValueError::Pending(receiver)) = receiver.into_value() else {
@@ -495,6 +512,7 @@ mod tests {
     fn panic_poll_after_completion() {
         let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
         let mut receiver = Box::pin(receiver);
 
@@ -515,6 +533,7 @@ mod tests {
     fn panic_is_ready_after_completion() {
         let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
         let mut receiver = Box::pin(receiver);
 
@@ -535,8 +554,11 @@ mod tests {
     fn inspect_awaiters_inspects_only_awaited() {
         let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (_sender1, receiver1) = unsafe { pool.as_ref().rent() };
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (sender2, receiver2) = unsafe { pool.as_ref().rent() };
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (_sender3, _receiver3) = unsafe { pool.as_ref().rent() };
 
         let mut receiver1 = Box::pin(receiver1);
@@ -572,6 +594,7 @@ mod tests {
 
         assert!(pool.is_empty());
 
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
         let mut receiver = Box::pin(receiver);
 
@@ -588,6 +611,7 @@ mod tests {
     fn inspect_awaiters_propagates_panic_from_closure() {
         let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (_sender, receiver) = unsafe { pool.as_ref().rent() };
         let mut receiver = Box::pin(receiver);
 
@@ -620,6 +644,7 @@ mod tests {
     fn inspect_awaiters_closure_may_reenter_pool() {
         let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (_sender, receiver) = unsafe { pool.as_ref().rent() };
         let mut receiver = Box::pin(receiver);
 
@@ -627,6 +652,7 @@ mod tests {
         _ = receiver.as_mut().poll(&mut cx);
 
         assert_inspect_awaiters_is_reentrant(&|f| pool.inspect_awaiters(f), &|| {
+            // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
             let (sender, receiver) = unsafe { pool.as_ref().rent() };
             drop(sender);
             drop(receiver);
@@ -645,6 +671,7 @@ mod tests {
         let mut endpoints = Vec::with_capacity(EVENT_COUNT);
 
         for _ in 0..EVENT_COUNT {
+            // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
             let (sender, receiver) = unsafe { pool.as_ref().rent() };
             let mut receiver = Box::pin(receiver);
             _ = receiver.as_mut().poll(&mut cx);
@@ -670,6 +697,7 @@ mod tests {
     fn released_event_releases_backtrace() {
         let pool = Box::pin(RawLocalEventPool::<i32>::new());
 
+        // SAFETY: The pinned pool remains alive until both returned endpoints are dropped.
         let (sender, receiver) = unsafe { pool.as_ref().rent() };
         let mut receiver = Box::pin(receiver);
 
