@@ -15,8 +15,12 @@ use super::*;
 #[cfg(debug_assertions)]
 use crate::assert_inspect_awaiters_is_reentrant;
 use crate::{
-    Disconnected, PanickingPayload, assert_disconnected_send_payload_panic_releases_event,
-    assert_receiver_waker_panic_handoff_releases_event, assert_unread_payload_panic_releases_event,
+    Disconnected,
+    PanickingPayload,
+    // Shared helpers keep callback-safety regression coverage consistent across containers.
+    assert_disconnected_send_payload_panic_releases_event,
+    assert_receiver_waker_panic_handoff_releases_event,
+    assert_unread_payload_panic_releases_event,
 };
 
 // The payload satisfies only the bound that the pool's API requires (`Send`) and lacks every

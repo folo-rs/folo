@@ -1,9 +1,9 @@
 //! This simply wraps the core endpoints with a nicer API surface that eliminates
 //! the outer generic type parameter, leaving only the inner T of the payload.
 //!
-//! Hot-path forwarders are inlined so this API layer does not interrupt the generic core's
-//! inlining chain. Ref: `packages/events_once/AGENTS.md`, "`#[inline]` annotations have outsized
-//! impact in this package".
+//! Hot-path forwarders are inlined so this API layer does not interrupt the
+//! generic core's inlining chain. Ref: `packages/events_once/AGENTS.md`,
+//! "`#[inline]` annotations have outsized impact in this package".
 
 use std::any::type_name;
 use std::panic::{RefUnwindSafe, UnwindSafe};
