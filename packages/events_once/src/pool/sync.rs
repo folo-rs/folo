@@ -139,9 +139,9 @@ impl<T: Send + 'static> EventPool<T> {
 
     /// Snapshots the backtrace of the most recent awaiter of each awaited event in the pool.
     ///
-    /// The pool lock is released before this returns, so the caller may pass the snapshots to
-    /// user-supplied code without holding any lock. Each snapshot is a shared owner of the
-    /// backtrace, so it stays valid even if its event is released in the meantime.
+    /// The diagnostic registry lock is released before this returns, so the caller may pass the
+    /// snapshots to user-supplied code without holding any lock. Each snapshot is a shared owner
+    /// of the backtrace, so it stays valid even if its event is released in the meantime.
     #[cfg(debug_assertions)]
     pub(crate) fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>> {
         self.core.registry.awaiter_backtraces()

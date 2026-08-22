@@ -11,8 +11,8 @@ use crate::{EVENT_COUNT_FITS_IN_USIZE, Event};
 /// The storage that backs a pool of thread-safe events.
 ///
 /// [`EventPool`][crate::EventPool] and [`RawEventPool`][crate::RawEventPool] differ only in how
-/// they keep this alive, so they share it. Both reach it through a mutex because plurality pools
-/// permit only one allocator at a time.
+/// they keep this alive, so they share it. `plurality::Pool` allocates through shared references
+/// but is not `Sync`, so both owners use a mutex to serialize access from different threads.
 ///
 /// Releasing an event does not go through here at all: a slot is owned by the pointer that
 /// [`rent()`][Self::rent] returns and is given back by [`destroy_event()`], which needs no pool

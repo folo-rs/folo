@@ -202,6 +202,9 @@ mod tests {
     #[cfg(debug_assertions)]
     use crate::assert_inspect_awaiters_is_reentrant;
 
+    /// Compatible event representations must share the same internal layout pool.
+    const EXPECTED_COMPATIBLE_LAYOUT_COUNT: usize = 1;
+
     assert_impl_all!(EventLake: Clone, Send, Sync);
 
     assert_impl_all!(
@@ -361,6 +364,10 @@ mod tests {
         sender.send(42);
         assert_eq!(receiver.into_value().unwrap(), 42);
         assert!(lake.is_empty());
+        assert_eq!(
+            lake.core.events.lock().expect(NEVER_POISONED).layouts(),
+            EXPECTED_COMPATIBLE_LAYOUT_COUNT
+        );
     }
 
     #[test]
@@ -445,7 +452,8 @@ mod tests {
             |message| assert!(message.contains("pass-through")),
         );
 
-        // The lake is still usable, which proves that the panic did not leave any lock behind.
+        // The lake is still usable, which proves that the panic did not leave the diagnostic
+        // registry locked.
         let mut call_count = 0;
 
         lake.inspect_awaiters(|_| {
@@ -459,10 +467,10 @@ mod tests {
     #[test]
     fn inspect_awaiters_closure_may_reenter_lake() {
         // The closure below reenters `inspect_awaiters()` and rents from the lake, both of
-        // which reacquire the lake's core `Mutex` (and the pool's own mutex) from the same
-        // thread. `inspect_awaiters()` must release every lock it holds before invoking the
-        // closure; a regression that invokes the closure under a held lock would deadlock this
-        // thread forever instead of failing an assertion, so we bound the test with a watchdog.
+        // which reacquire state from the same thread: inspection takes the diagnostic registry
+        // mutex, while renting takes the allocation mutex. `inspect_awaiters()` must release its
+        // registry lock before invoking the closure; otherwise this thread would deadlock instead
+        // of failing an assertion, so the watchdog bounds the test.
         with_watchdog(|| {
             let lake = EventLake::new();
 

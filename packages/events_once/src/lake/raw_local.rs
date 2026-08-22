@@ -53,11 +53,9 @@ use crate::{
 /// ```
 #[derive(Debug)]
 pub struct RawLocalEventLake {
-    // This is in an UnsafeCell to logically "detach" it from the parent object.
-    // We will create direct (shared) references to the contents of the cell not only from
-    // the pool but also from the event references themselves. This is safe as long as
-    // we never create conflicting references. We could not guarantee that for the parent
-    // object but we can guarantee it for the cell contents.
+    // The boxed core stays at a stable address so debug-only endpoint references can point to its
+    // registry. Methods form only shared core references; the multi pool and registry provide the
+    // interior mutability needed by their own operations.
     core: NonNull<UnsafeCell<Core>>,
 }
 
@@ -247,6 +245,9 @@ mod tests {
     #[cfg(debug_assertions)]
     use crate::assert_inspect_awaiters_is_reentrant;
 
+    /// Compatible event representations must share the same internal layout pool.
+    const EXPECTED_COMPATIBLE_LAYOUT_COUNT: usize = 1;
+
     assert_not_impl_any!(RawLocalEventLake: Send, Sync);
 
     assert_impl_all!(
@@ -334,6 +335,10 @@ mod tests {
         sender.send(42);
         assert_eq!(receiver.into_value().unwrap(), 42);
         assert!(lake.is_empty());
+        assert_eq!(
+            lake.core().events.layouts(),
+            EXPECTED_COMPATIBLE_LAYOUT_COUNT
+        );
     }
 
     #[test]
@@ -399,7 +404,8 @@ mod tests {
             |message| assert!(message.contains("pass-through")),
         );
 
-        // The lake is still usable, which proves that the panic did not leave any borrow behind.
+        // The lake is still usable, which proves that the panic did not leave the diagnostic
+        // registry borrowed.
         let mut call_count = 0;
 
         lake.inspect_awaiters(|_| {

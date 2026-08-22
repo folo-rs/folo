@@ -12,8 +12,8 @@ use crate::{EVENT_COUNT_FITS_IN_USIZE, LocalEvent};
 ///
 /// [`LocalEventPool`][crate::LocalEventPool] and
 /// [`RawLocalEventPool`][crate::RawLocalEventPool] differ only in how they keep this alive, so
-/// they share it. Both reach it through a cell because plurality pools permit only one allocator
-/// at a time.
+/// they share it. `plurality::Pool` allocates through shared references and is itself confined to
+/// the thread of its local owner.
 ///
 /// Releasing an event does not go through here at all: a slot is owned by the pointer that
 /// [`rent()`][Self::rent] returns and is given back by [`destroy_local_event()`], which needs

@@ -42,11 +42,9 @@ use crate::{
 /// # }
 /// ```
 pub struct RawEventPool<T: 'static> {
-    // This is in an UnsafeCell to logically "detach" it from the parent object.
-    // We will create direct (shared) references to the contents of the cell not only from
-    // the pool but also from the event references themselves. This is safe as long as
-    // we never create conflicting references. We could not guarantee that for the parent
-    // object but we can guarantee it for the cell contents.
+    // The boxed core stays at a stable address so debug-only endpoint references can point to its
+    // registry. Methods form only shared core references; the state and registry provide their
+    // own synchronization.
     core: NonNull<UnsafeCell<RawEventPoolCore<T>>>,
 
     // The pointer conveys no ownership, so this marker is what records that the pool owns the
@@ -126,10 +124,10 @@ impl<T: Send + 'static> RawEventPool<T> {
         // this shared borrow exists.
         let core_cell = unsafe { self.core.as_ref() };
 
-        // SAFETY: The core is reached only through this method and through the equivalent
-        // accessor on the event references, both of which produce shared references, so no
-        // exclusive reference to the core can alias this one. Mutation of the core happens
-        // exclusively behind its mutex.
+        // SAFETY: This method is the only path to the complete core, and it produces only shared
+        // references. Endpoints retain an event pointer and, in debug builds, a pointer to the
+        // registry rather than the core. Mutation of the state and registry is synchronized by
+        // their own mutexes.
         unsafe { &*core_cell.get() }
     }
 
@@ -212,9 +210,9 @@ impl<T: Send + 'static> RawEventPool<T> {
 
     /// Snapshots the backtrace of the most recent awaiter of each awaited event in the pool.
     ///
-    /// The pool lock is released before this returns, so the caller may pass the snapshots to
-    /// user-supplied code without holding any lock. Each snapshot is a shared owner of the
-    /// backtrace, so it stays valid even if its event is released in the meantime.
+    /// The diagnostic registry lock is released before this returns, so the caller may pass the
+    /// snapshots to user-supplied code without holding any lock. Each snapshot is a shared owner
+    /// of the backtrace, so it stays valid even if its event is released in the meantime.
     #[cfg(debug_assertions)]
     pub(crate) fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>> {
         self.core().registry.awaiter_backtraces()

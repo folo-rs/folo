@@ -8,12 +8,12 @@ use std::ptr::NonNull;
 use crate::EventRegistry;
 use crate::{Event, EventRef, destroy_event};
 
-/// References an event rented from a [`RawEventPool`][crate::RawEventPool].
+/// References a thread-safe event rented from a raw pool or lake.
 ///
-/// The slot of a rented event is owned by the pointer to it, not by the pool, so releasing the
-/// event needs neither the pool nor its lock (see `state.rs`). A registry pointer exists only in
-/// debug builds; unlike managed storage, raw pools and lakes rely on the caller's outlives promise
-/// to keep it valid until the event is removed.
+/// [`RawEventPool`][crate::RawEventPool] and [`RawEventLake`][crate::RawEventLake] use the same
+/// detached plurality-slot release path. The pointer owns the slot, so release needs neither
+/// allocation owner nor lock (see `state.rs`). In debug builds, the raw owner-outlives-endpoints
+/// contract keeps the registry pointer valid until the event is unregistered.
 pub(crate) struct RawPooledRef<T: 'static> {
     // Only debug builds need the registry for awaiter inspection.
     #[cfg(debug_assertions)]
@@ -23,7 +23,7 @@ pub(crate) struct RawPooledRef<T: 'static> {
 }
 
 impl<T: Send + 'static> RawPooledRef<T> {
-    /// Creates a reference to an event rented from a pool.
+    /// Creates a reference to an event rented from a raw pool or lake.
     ///
     /// # Safety
     ///
@@ -63,11 +63,11 @@ impl<T: Send + 'static> Clone for RawPooledRef<T> {
     }
 }
 
-// SAFETY: The caller of `new()` guaranteed that the event was rented from the pool and has not
-// been released, so it is initialized and stays at a fixed address in the pool's storage, which
-// outlives every event rented from it. Everything that reaches the event - the endpoints holding
-// this reference and its clones, plus the pool's diagnostic registry in debug builds - creates
-// only shared references, and the caller guaranteed that nothing creates an exclusive one.
+// SAFETY: The caller of `new()` guaranteed that the event occupies an initialized, detached
+// plurality slot and has not been released. The slot stays at a fixed address, and plurality keeps
+// its backing storage alive while it is detached. Everything that reaches the event - the
+// endpoints holding this reference and its clones, plus the diagnostic registry in debug builds -
+// creates only shared references, and the caller guaranteed that nothing creates an exclusive one.
 // `release_event()` returns the slot through `destroy_event()`, the release operation of this
 // storage strategy, and the reference does not touch the event afterwards.
 unsafe impl<T: Send + 'static> EventRef<T> for RawPooledRef<T> {
@@ -95,10 +95,10 @@ impl<T: Send + 'static> Deref for RawPooledRef<T> {
 
     fn deref(&self) -> &Self::Target {
         // SAFETY: Validity: the `new()` contract gives us a rented, initialized event that keeps
-        // its address in pool storage that outlives it, and cleanup ownership is granted to a
+        // its address in plurality storage that outlives it, and cleanup ownership is granted to a
         // single endpoint, so the event is not yet released while any endpoint can call this.
         // Aliasing: the event is reached only through shared references, whether from an
-        // endpoint or from the pool's debug-only registry; the event synchronizes access to its
+        // endpoint or from the debug-only registry; the event synchronizes access to its
         // own interior fields.
         unsafe { self.event.as_ref() }
     }
