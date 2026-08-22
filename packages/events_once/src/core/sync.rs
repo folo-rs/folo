@@ -886,10 +886,7 @@ where
             EVENT_DISCONNECTED => Err(Disconnected),
             // Defensive: the caller must have observed a terminal state.
             _ => {
-                unreachable!(
-                    "unreachable {} state on terminal result extraction: {previous_state}",
-                    type_name::<Self>()
-                );
+                unreachable!("invalid {} state: {previous_state}", type_name::<Self>());
             }
         }
     }
