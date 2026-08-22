@@ -143,7 +143,7 @@ impl<T: 'static> RawLocalEventPool<T> {
     #[must_use]
     pub unsafe fn rent(self: Pin<&Self>) -> (RawLocalPooledSender<T>, RawLocalPooledReceiver<T>) {
         let core = self.core();
-        let event = core.state.borrow_mut().rent();
+        let event = core.state.borrow().rent();
 
         #[cfg(debug_assertions)]
         {

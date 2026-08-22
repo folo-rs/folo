@@ -85,7 +85,7 @@ impl<T: 'static> LocalEventPool<T> {
     #[inline]
     #[must_use]
     pub fn rent(&self) -> (PooledLocalSender<T>, PooledLocalReceiver<T>) {
-        let event = self.core.state.borrow_mut().rent();
+        let event = self.core.state.borrow().rent();
 
         #[cfg(debug_assertions)]
         {
