@@ -9,7 +9,7 @@ use crate::waker_meta::{self, MetaPtr};
 /// and [`LocalFutureDeque`][crate::LocalFutureDeque].
 ///
 /// Both variants store the same erased handle type, so their behaviour is identical; they
-/// differ only in the thread-safety they advertise and in which thread-local arena their
+/// differ only in the thread-safety they advertise and in which thread-local pool their
 /// handles come from. The `Send` variant asserts thread-safety manually on the strength of
 /// the `Send` bound its push methods require, while the local variant inherits the handle's
 /// `!Send`ness.
@@ -70,6 +70,9 @@ impl<T> FutureDequeCore<T> {
     }
 
     /// Adds a pre-erased future handle to the back of the deque.
+    // Inlining keeps pooled waker allocation and deque insertion in the caller; the
+    // Callgrind push benchmarks exercise this hot path directly.
+    #[inline]
     pub(crate) fn push_back_handle(&mut self, handle: ErasedFutureHandle<T>) {
         let meta = waker_meta::create_waker_meta(&self.shared_parent);
         let waker = waker_meta::make_waker(meta);
@@ -81,6 +84,8 @@ impl<T> FutureDequeCore<T> {
     }
 
     /// Adds a pre-erased future handle to the front of the deque.
+    // Inlining mirrors the measured back-insertion path so both ends have the same cost model.
+    #[inline]
     pub(crate) fn push_front_handle(&mut self, handle: ErasedFutureHandle<T>) {
         let meta = waker_meta::create_waker_meta(&self.shared_parent);
         let waker = waker_meta::make_waker(meta);
@@ -165,7 +170,7 @@ impl<T> FutureDequeCore<T> {
 
                 let sub_cx = &mut Context::from_waker(waker);
 
-                handle.as_mut().poll_erased(sub_cx)
+                handle.as_pin_mut().poll_erased(sub_cx)
             };
 
             if let Poll::Ready(value) = poll_result {
@@ -182,7 +187,7 @@ impl<T> FutureDequeCore<T> {
                 let old = std::mem::replace(slot, Slot::Ready { value });
 
                 // Release the Slot's metadata reference. The handle is dropped as
-                // part of the old Slot destruction, which returns the future's arena
+                // part of the old Slot destruction, which returns the future's pool
                 // storage.
                 if let Slot::Pending { meta, .. } = old {
                     waker_meta::release_ref(meta);
@@ -235,7 +240,7 @@ impl<T> Drop for FutureDequeCore<T> {
     // metadata references are released so the waker metadata pool entries can be freed.
     //
     // The future handles in each slot are dropped as part of normal Slot destruction,
-    // which returns their arena storage.
+    // which returns their pool storage.
     #[cfg_attr(coverage_nightly, coverage(off))]
     // Only runs when deque is dropped with
     // pending slots, which is a cleanup path.
@@ -251,9 +256,8 @@ impl<T> Drop for FutureDequeCore<T> {
     }
 }
 
-// The futures stored in the deque are pinned by their arena allocations (stable addresses
-// that outlive the handle's owner), not by FutureDequeCore's own fields. The struct only
-// holds handles and result values, none of which require pinning guarantees.
+// The futures are pinned in stable-address pool slots, not by FutureDequeCore's own fields.
+// The struct only holds handles and result values, none of which require pinning guarantees.
 impl<T> Unpin for FutureDequeCore<T> {}
 
 #[cfg(test)]
@@ -1138,7 +1142,7 @@ mod tests {
                 move || {
                     let mut deque = FutureDeque::new();
 
-                    // Pushing allocates the future in this thread's futures arena and the
+                    // Pushing allocates the future in this thread's future pool and the
                     // per-slot waker metadata in this thread's metadata pool.
                     deque.push_back(WakerCaptureFuture {
                         waker_tx: Some(waker_tx),
@@ -1169,7 +1173,7 @@ mod tests {
             assert!(deque.is_empty());
 
             // The deque remains fully usable after its origin thread is gone: a push from
-            // here allocates in this thread's arena and metadata pool and drains normally.
+            // here allocates in this thread's future and metadata pools and drains normally.
             deque.push_back(std::future::ready(7));
             assert_eq!(deque.poll_front(cx), Poll::Ready(Some(7)));
             assert!(deque.is_empty());
@@ -1610,8 +1614,8 @@ mod tests {
 
     // --- Zero-sized futures ---
 
-    /// A future that occupies no storage at all, used to prove that the futures arena
-    /// accepts zero-sized payloads.
+    /// A future that occupies no storage at all, used to prove that the future pool accepts
+    /// zero-sized payloads.
     struct ZeroSizedFuture;
 
     impl Future for ZeroSizedFuture {

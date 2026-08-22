@@ -5,7 +5,10 @@ use std::sync::Arc;
 use tracing::trace;
 
 use crate::metrics::CLOCK;
-use crate::{JoinHandle, NEVER_POISONED, PoolInner, alloc_task, wrap_task};
+use crate::{
+    ErasedTaskHandle, JoinHandle, NEVER_POISONED, PoolInner, ProcessorState, VicinalTask,
+    init_task, wrap_task,
+};
 
 /// A handle for spawning tasks on a [`Pool`][crate::Pool].
 ///
@@ -162,12 +165,7 @@ impl Scheduler {
         // Wrap the task to capture panics and send the result.
         let wrapped = wrap_task(task, sender, spawn_time);
 
-        // Move the task into this processor's arena and erase its type. The arena lock is
-        // released before any queue lock is taken, so allocation never blocks a dequeue.
-        let dyn_task = {
-            let arena = state.task_arena.lock().expect(NEVER_POISONED);
-            alloc_task(&arena, wrapped)
-        };
+        let dyn_task = allocate_task(state, wrapped);
 
         // Push to the appropriate queue.
         if urgent {
@@ -225,12 +223,7 @@ impl Scheduler {
         // Wrap the task to capture panics and log them.
         let wrapped = wrap_task_and_forget(task, spawn_time);
 
-        // Move the task into this processor's arena and erase its type. The arena lock is
-        // released before any queue lock is taken, so allocation never blocks a dequeue.
-        let dyn_task = {
-            let arena = state.task_arena.lock().expect(NEVER_POISONED);
-            alloc_task(&arena, wrapped)
-        };
+        let dyn_task = allocate_task(state, wrapped);
 
         // Push to the appropriate queue.
         if urgent {
@@ -265,6 +258,21 @@ impl Scheduler {
         // Notify one worker that work is available.
         state.wake_event.notify(1);
     }
+}
+
+/// Allocates and initializes a task without invoking task code under the pool lock.
+fn allocate_task<T: VicinalTask>(state: &ProcessorState, task: T) -> ErasedTaskHandle {
+    let slot = {
+        let pool = state.task_pool.lock().expect(NEVER_POISONED);
+        pool.try_alloc_uninit_box()
+    };
+
+    let slot = match slot {
+        Ok(slot) => slot,
+        Err(error) => panic!("task pool allocation failed: {error}"),
+    };
+
+    init_task(slot, task)
 }
 
 #[cfg(test)]

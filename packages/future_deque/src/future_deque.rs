@@ -4,16 +4,15 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use multitude::Arena;
+use plurality::MultiPool;
 
 use crate::erased_future::alloc_future;
 use crate::future_deque_core::FutureDequeCore;
 
-// Thread-local arena for storing type-erased futures. Each thread allocates from its own
-// arena, and the resulting handles keep their backing chunks alive independently, so a
-// handle stays valid after the arena — and the thread that owned it — is gone.
+// Each thread allocates from its own pool to avoid synchronization. Handles own their slots,
+// so they remain valid after the pool and its thread are gone.
 thread_local! {
-    static FUTURES_ARENA: Arena = Arena::new();
+    static FUTURES_POOL: MultiPool = MultiPool::new();
 }
 
 /// A deque of futures with deterministic front-to-back polling order.
@@ -109,13 +108,13 @@ impl<T> FutureDeque<T> {
 
     /// Adds a future to the back of the deque.
     pub fn push_back(&mut self, future: impl Future<Output = T> + Send + 'static) {
-        let handle = FUTURES_ARENA.with(|arena| alloc_future(arena, future));
+        let handle = FUTURES_POOL.with(|pool| alloc_future(pool, future));
         self.core.push_back_handle(handle);
     }
 
     /// Adds a future to the front of the deque.
     pub fn push_front(&mut self, future: impl Future<Output = T> + Send + 'static) {
-        let handle = FUTURES_ARENA.with(|arena| alloc_future(arena, future));
+        let handle = FUTURES_POOL.with(|pool| alloc_future(pool, future));
         self.core.push_front_handle(handle);
     }
 
@@ -218,13 +217,13 @@ impl<T> futures_core::Stream for FutureDeque<T> {
 }
 
 // SAFETY: The erased type `dyn ErasedFuture<T>` does not carry a `Send` bound, so
-// `multitude::Box<dyn ErasedFuture<T>>` is not automatically `Send`. However, `push_back`
+// `plurality::Box<dyn ErasedFuture<T>>` is not automatically `Send`. However, `push_back`
 // and `push_front` both require `F: Future + Send + 'static`, guaranteeing that every value
 // behind the trait object is in fact `Send`. Erasure deliberately drops the marker bound so
-// that a single erased handle type serves both deque variants. The arena chunk backing each
-// handle is reference-counted and safe to release from any thread. All other state — result
-// values of type `T`, the shared parent waker behind `Arc<Mutex<Waker>>`, and the waker
-// metadata reached through `MetaPtr` (itself declared `Send`) — is `Send` given `T: Send`.
+// that a single erased handle type serves both deque variants. Pool slots can be released
+// from any thread. All other state — result values of type `T`, the shared parent waker
+// behind `Arc<Mutex<Waker>>`, and the waker metadata reached through `MetaPtr` (itself
+// declared `Send`) — is `Send` given `T: Send`.
 unsafe impl<T: Send> Send for FutureDeque<T> {}
 
 // SAFETY: `Sync` is likewise blocked only by the erased `dyn ErasedFuture<T>`. Sharing

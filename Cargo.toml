@@ -71,7 +71,6 @@ hash_hasher = { version = "2.0.0", default-features = false }
 hashbrown = { version = "0.17.1", default-features = false }
 heapless = { version = "0.9.1", default-features = false }
 http = { version = "1.2.0", default-features = false, features = ["std"] }
-infinity_pool = { version = "0.8.23", path = "packages/infinity_pool", default-features = false }
 itertools = { version = "0.15.0", default-features = false, features = [
     "use_std",
 ] }
@@ -84,7 +83,6 @@ many_cpus = { version = "2.4.15", path = "packages/many_cpus", default-features 
 many_cpus_impl = { version = "=2.4.15", path = "packages/many_cpus_impl", default-features = false }
 mimalloc = { version = "0.1.52", default-features = false }
 mockall = { version = "0.15.0", default-features = false }
-multitude = { version = "0.8.0", default-features = false, features = ["std"] }
 mutants = { version = "0.0.4", default-features = false }
 negative-impl = { version = "0.1.0", default-features = false }
 new_zealand = { version = "1.0.7", path = "packages/new_zealand", default-features = false }
@@ -116,7 +114,7 @@ plotters = { version = "0.3.7", default-features = false, features = [
     "point_series",
     "svg_backend",
 ] }
-plurality = { version = "0.2.1", default-features = false, features = ["std"] }
+plurality = { version = "0.2.2", default-features = false, features = ["std"] }
 proc-macro2 = { version = "1.0.106", default-features = false }
 quote = { version = "1.0.45", default-features = false }
 rand = { version = "0.10.1", default-features = false, features = ["std"] }

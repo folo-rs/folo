@@ -55,13 +55,13 @@ impl<'a> WorkerCore<'a> {
 
         let task = self.urgent_queue.lock().expect(NEVER_POISONED).pop_front();
         if let Some(mut task) = task {
-            task.as_mut().call();
+            task.as_pin_mut().call();
             return IterationResult::ExecutedUrgent;
         }
 
         let task = self.regular_queue.lock().expect(NEVER_POISONED).pop_front();
         if let Some(mut task) = task {
-            task.as_mut().call();
+            task.as_pin_mut().call();
             return IterationResult::ExecutedRegular;
         }
 
@@ -75,10 +75,14 @@ mod tests {
     use std::pin::Pin;
     use std::sync::atomic::AtomicU32;
 
-    use multitude::Arena;
+    use plurality::MultiPool;
 
     use super::*;
-    use crate::{VicinalTask, alloc_task};
+    use crate::{VicinalTask, init_task};
+
+    fn alloc_task(pool: &MultiPool, task: impl VicinalTask) -> ErasedTaskHandle {
+        init_task(pool.alloc_uninit_box(), task)
+    }
 
     /// A simple task that increments a counter when called.
     struct CountingTask {
@@ -132,12 +136,12 @@ mod tests {
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         COUNTER.store(0, Ordering::Relaxed);
 
-        let arena = Arena::new();
+        let pool = MultiPool::new();
         let urgent = Mutex::new(VecDeque::new());
         let regular = Mutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(false);
 
-        let task = alloc_task(&arena, CountingTask::new(&COUNTER));
+        let task = alloc_task(&pool, CountingTask::new(&COUNTER));
         urgent.lock().unwrap().push_back(task);
 
         let core = WorkerCore::new(&urgent, &regular, &shutdown);
@@ -153,13 +157,13 @@ mod tests {
         URGENT_COUNTER.store(0, Ordering::Relaxed);
         REGULAR_COUNTER.store(0, Ordering::Relaxed);
 
-        let arena = Arena::new();
+        let pool = MultiPool::new();
         let urgent = Mutex::new(VecDeque::new());
         let regular = Mutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(false);
 
-        let urgent_task = alloc_task(&arena, CountingTask::new(&URGENT_COUNTER));
-        let regular_task = alloc_task(&arena, CountingTask::new(&REGULAR_COUNTER));
+        let urgent_task = alloc_task(&pool, CountingTask::new(&URGENT_COUNTER));
+        let regular_task = alloc_task(&pool, CountingTask::new(&REGULAR_COUNTER));
         urgent.lock().unwrap().push_back(urgent_task);
         regular.lock().unwrap().push_back(regular_task);
 
@@ -176,12 +180,12 @@ mod tests {
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         COUNTER.store(0, Ordering::Relaxed);
 
-        let arena = Arena::new();
+        let pool = MultiPool::new();
         let urgent = Mutex::new(VecDeque::new());
         let regular = Mutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(false);
 
-        let task = alloc_task(&arena, CountingTask::new(&COUNTER));
+        let task = alloc_task(&pool, CountingTask::new(&COUNTER));
         regular.lock().unwrap().push_back(task);
 
         let core = WorkerCore::new(&urgent, &regular, &shutdown);
@@ -195,12 +199,12 @@ mod tests {
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         COUNTER.store(0, Ordering::Relaxed);
 
-        let arena = Arena::new();
+        let pool = MultiPool::new();
         let urgent = Mutex::new(VecDeque::new());
         let regular = Mutex::new(VecDeque::new());
         let shutdown = AtomicBool::new(true);
 
-        let task = alloc_task(&arena, CountingTask::new(&COUNTER));
+        let task = alloc_task(&pool, CountingTask::new(&COUNTER));
         regular.lock().unwrap().push_back(task);
 
         let core = WorkerCore::new(&urgent, &regular, &shutdown);

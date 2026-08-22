@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use event_listener::Event;
 use events_once::EventLake;
-use multitude::Arena;
+use plurality::MultiPool;
 
 use crate::ErasedTaskHandle;
 
@@ -36,11 +36,9 @@ pub(crate) struct ProcessorState {
 
     /// Backing storage for the task objects queued on this processor.
     ///
-    /// An arena is neither `Sync` nor cloneable, so the mutex is what lets every thread
-    /// spawning onto this processor share one arena. It is held for the duration of a single
-    /// allocation and released before the task is enqueued, so it never overlaps with either
-    /// queue lock and an allocation never delays a worker dequeuing work.
-    pub(crate) task_arena: Mutex<Arena>,
+    /// `MultiPool` is not `Sync`, so the mutex serializes allocation by scheduler threads.
+    /// Slot initialization, queueing, execution and release happen after this lock is released.
+    pub(crate) task_pool: Mutex<MultiPool>,
 
     /// Pool for storing oneshot channels used to return task results.
     pub(crate) result_channel_pool: EventLake,
@@ -57,7 +55,7 @@ impl ProcessorState {
             wake_event: Event::new(),
             shutdown_flag: AtomicBool::new(false),
             workers_spawned: AtomicBool::new(false),
-            task_arena: Mutex::new(Arena::new()),
+            task_pool: Mutex::new(MultiPool::new()),
             result_channel_pool: EventLake::new(),
             tasks_spawned: AtomicU64::new(0),
         }
@@ -86,7 +84,26 @@ impl ProcessorState {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::pin::Pin;
+    use std::sync::{Arc, Barrier};
+
     use super::*;
+    use crate::{VicinalTask, init_task};
+
+    /// Spans multiple allocation/release operations without making Miri runs expensive.
+    const CONCURRENT_TASK_COUNT: usize = 32;
+
+    /// Minimal task used to exercise cross-thread slot release.
+    struct NoopTask;
+
+    impl VicinalTask for NoopTask {
+        fn call(self: Pin<&mut Self>) {}
+    }
+
+    fn alloc_noop_task(state: &ProcessorState) -> ErasedTaskHandle {
+        let slot = state.task_pool.lock().unwrap().alloc_uninit_box();
+        init_task(slot, NoopTask)
+    }
 
     #[test]
     fn new_creates_empty_queues() {
@@ -128,5 +145,31 @@ mod tests {
         state.record_task_spawned();
 
         assert_eq!(state.get_tasks_spawned(), 3);
+    }
+
+    #[test]
+    fn task_slots_can_be_released_while_allocating() {
+        let state = Arc::new(ProcessorState::new());
+        let tasks = std::iter::repeat_with(|| alloc_noop_task(&state))
+            .take(CONCURRENT_TASK_COUNT)
+            .collect::<Vec<_>>();
+        let barrier = Arc::new(Barrier::new(2));
+
+        std::thread::scope(|scope| {
+            scope.spawn({
+                let barrier = Arc::clone(&barrier);
+                move || {
+                    barrier.wait();
+                    drop(tasks);
+                }
+            });
+
+            barrier.wait();
+            for _ in 0..CONCURRENT_TASK_COUNT {
+                drop(alloc_noop_task(&state));
+            }
+        });
+
+        assert!(state.task_pool.lock().unwrap().is_empty());
     }
 }
