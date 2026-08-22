@@ -15,9 +15,9 @@ pub struct PooledSender<T: Send + 'static> {
     inner: SenderCore<PooledRef<T>, T>,
 }
 
-// Senders are one-shot and consumed on use. The UnsafeCell fields in the
-// underlying event and pool are guarded by an atomic state machine and a
-// Mutex that prevent observing inconsistent state during unwind.
+// Senders are one-shot and consumed on use. The underlying event publishes stable state through
+// its atomic state machine before callbacks that may unwind, so the endpoint cannot expose an
+// inconsistent state across an unwind boundary.
 impl<T: Send + 'static> UnwindSafe for PooledSender<T> {}
 impl<T: Send + 'static> RefUnwindSafe for PooledSender<T> {}
 

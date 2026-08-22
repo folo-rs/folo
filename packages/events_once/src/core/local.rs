@@ -1,5 +1,5 @@
 use std::any::type_name;
-#[cfg(debug_assertions)]
+#[cfg(all(test, debug_assertions))]
 use std::backtrace::Backtrace;
 #[cfg(debug_assertions)]
 use std::cell::RefCell;
@@ -10,7 +10,7 @@ use std::mem::{MaybeUninit, offset_of};
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
-#[cfg(debug_assertions)]
+#[cfg(all(test, debug_assertions))]
 use std::sync::Arc;
 use std::task::Waker;
 
@@ -245,17 +245,30 @@ impl<T: 'static> LocalEvent<T> {
         )
     }
 
-    /// Returns a snapshot of the backtrace of the most recent awaiter of this event,
-    /// if there has been an awaiter and if backtrace capturing is enabled.
+    /// Returns the address of this event's type-independent diagnostic cell.
     ///
-    /// This method is only available in debug builds (`cfg(debug_assertions)`).
-    /// For any data to be present, `RUST_BACKTRACE=1` or `RUST_LIB_BACKTRACE=1` must be set.
+    /// # Safety
     ///
-    /// The snapshot is a shared owner of the backtrace and remains valid even if the event is
-    /// released afterwards. Callers that want to hand a backtrace to user code must take a
-    /// snapshot instead of inspecting the event under its borrow, so that no borrow is held
-    /// while user code runs.
+    /// `event` must point to an initialized event at a stable address. Until the returned pointer
+    /// is discarded, the event must remain alive at that address and no exclusive reference to it
+    /// may exist.
     #[cfg(debug_assertions)]
+    pub(crate) unsafe fn awaiter_backtrace_cell(
+        event: NonNull<UnsafeCell<Self>>,
+    ) -> NonNull<RefCell<Option<BacktraceType>>> {
+        // SAFETY: The caller guarantees validity, initialization and shared-only aliasing for the
+        // event. `UnsafeCell` permits this shared access to its initialized contents.
+        let event_cell = unsafe { event.as_ref() };
+
+        // SAFETY: The same caller guarantee excludes an exclusive reference while this shared
+        // reference exists, and the event outlives this function call.
+        let event = unsafe { &*event_cell.get() };
+
+        NonNull::from(&event.backtrace)
+    }
+
+    /// Returns a snapshot of the most recent awaiter backtrace.
+    #[cfg(all(test, debug_assertions))]
     pub(crate) fn awaiter_backtrace(&self) -> Option<Arc<Backtrace>> {
         let backtrace = self.backtrace.borrow();
 

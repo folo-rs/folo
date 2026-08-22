@@ -1232,7 +1232,6 @@ dependencies = [
  "criterion",
  "futures",
  "gungraun",
- "hash_hasher",
  "oneshot",
  "pin-project",
  "plurality",

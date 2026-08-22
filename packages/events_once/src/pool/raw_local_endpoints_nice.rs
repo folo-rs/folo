@@ -16,10 +16,9 @@ pub struct RawLocalPooledSender<T: 'static> {
     inner: LocalSenderCore<RawLocalPooledRef<T>, T>,
 }
 
-// The NonNull<UnsafeCell<...>> in RawLocalPooledRef causes
-// !RefUnwindSafe via auto-trait inference. The pointed-to pool core
-// is protected by a RefCell and cannot be observed in an inconsistent
-// state during unwind.
+// The endpoint reaches a local event through `UnsafeCell`, which disables `RefUnwindSafe`
+// inference. Event operations publish stable state before callbacks that may unwind, so the
+// endpoint cannot expose an inconsistent state across an unwind boundary.
 impl<T: 'static> UnwindSafe for RawLocalPooledSender<T> {}
 impl<T: 'static> RefUnwindSafe for RawLocalPooledSender<T> {}
 
