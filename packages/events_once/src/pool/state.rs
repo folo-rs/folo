@@ -1,33 +1,24 @@
 use std::any::type_name;
-#[cfg(debug_assertions)]
-use std::backtrace::Backtrace;
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::mem::MaybeUninit;
 use std::ptr::{self, NonNull};
-#[cfg(debug_assertions)]
-use std::sync::Arc;
 
-use plurality::Pool;
+use plurality::{Box as PoolBox, Pool};
 
-#[cfg(debug_assertions)]
-use crate::EventRegistry;
 use crate::{EVENT_COUNT_FITS_IN_USIZE, Event};
 
 /// The storage that backs a pool of thread-safe events.
 ///
 /// [`EventPool`][crate::EventPool] and [`RawEventPool`][crate::RawEventPool] differ only in how
-/// they keep this alive, so they share it. Both reach it through a mutex, which also covers the
-/// diagnostic registry - renting an event therefore registers it without taking a second lock.
+/// they keep this alive, so they share it. Both reach it through a mutex because plurality pools
+/// permit only one allocator at a time.
 ///
 /// Releasing an event does not go through here at all: a slot is owned by the pointer that
 /// [`rent()`][Self::rent] returns and is given back by [`destroy_event()`], which needs no pool
 /// and no lock.
 pub(crate) struct PoolState<T: 'static> {
     events: Pool<UnsafeCell<Event<T>>>,
-
-    #[cfg(debug_assertions)]
-    registry: EventRegistry<UnsafeCell<Event<T>>>,
 }
 
 impl<T: Send + 'static> PoolState<T> {
@@ -35,57 +26,15 @@ impl<T: Send + 'static> PoolState<T> {
     pub(crate) fn new() -> Self {
         Self {
             events: Pool::new(),
-            #[cfg(debug_assertions)]
-            registry: EventRegistry::new(),
         }
     }
 
     /// Allocates an event and initializes it, handing ownership of its slot to the caller.
     ///
-    /// The caller becomes responsible for passing the pointer to [`destroy_event()`] exactly
-    /// once, having first deregistered it via [`unregister()`][Self::unregister].
+    /// The caller becomes responsible for passing the pointer to [`destroy_event()`] exactly once.
     #[must_use]
-    #[cfg_attr(
-        not(debug_assertions),
-        expect(
-            clippy::needless_pass_by_ref_mut,
-            reason = "the diagnostic registry that requires exclusive access is debug-only; \
-                      the signature stays uniform so callers need not differ"
-        )
-    )]
-    pub(crate) fn rent(&mut self) -> NonNull<UnsafeCell<Event<T>>> {
-        let mut storage = self.events.alloc_uninit_box();
-
-        // SAFETY: The slot is still uninitialized, so it carries no pinning invariant that
-        // unwrapping the `Pin` could violate. We only use the reference to initialize the event
-        // in place, which moves nothing.
-        let place = unsafe { storage.as_pin_mut().get_unchecked_mut() };
-
-        let place = ptr::from_mut(place).cast::<UnsafeCell<MaybeUninit<Event<T>>>>();
-
-        // SAFETY: `MaybeUninit` and `UnsafeCell` are both transparent wrappers, so both nestings
-        // describe the same storage. We want the `UnsafeCell` on the outside because every
-        // reference to a live event goes through one.
-        let place = unsafe { &mut *place };
-
-        Event::new_in_inner(place);
-
-        // SAFETY: `new_in_inner()` initialized the event. The `MaybeUninit` fields inside the
-        // event are uninitialized by design and are not part of what this asserts.
-        let storage = unsafe { storage.assume_init() };
-
-        let event = plurality::Box::into_raw(storage);
-
-        #[cfg(debug_assertions)]
-        self.registry.register(event);
-
-        event
-    }
-
-    /// Stops enumerating an event that is about to be destroyed.
-    #[cfg(debug_assertions)]
-    pub(crate) fn unregister(&mut self, event: NonNull<UnsafeCell<Event<T>>>) {
-        self.registry.unregister(event);
+    pub(crate) fn rent(&self) -> NonNull<UnsafeCell<Event<T>>> {
+        initialize_event(self.events.alloc_uninit_box())
     }
 
     /// Whether no events have been rented and not yet released.
@@ -99,33 +48,33 @@ impl<T: Send + 'static> PoolState<T> {
     pub(crate) fn len(&self) -> usize {
         usize::try_from(self.events.len()).expect(EVENT_COUNT_FITS_IN_USIZE)
     }
+}
 
-    /// Snapshots the backtrace of the most recent awaiter of each awaited event in the pool.
-    ///
-    /// Each snapshot is a shared owner of the backtrace, so it stays valid even if its event is
-    /// released before the caller looks at it.
-    #[cfg(debug_assertions)]
-    #[must_use]
-    pub(crate) fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>> {
-        let mut backtraces = Vec::with_capacity(self.registry.len());
+/// Initializes an event in freshly allocated plurality storage.
+///
+/// Both typed pools and heterogeneous lakes use the same placement path so that endpoint
+/// references can release either source through [`destroy_event()`].
+#[must_use]
+pub(crate) fn initialize_event<T: Send + 'static>(
+    mut storage: PoolBox<MaybeUninit<UnsafeCell<Event<T>>>>,
+) -> NonNull<UnsafeCell<Event<T>>> {
+    // SAFETY: The slot is still uninitialized, so it carries no pinning invariant that unwrapping
+    // the `Pin` could violate. We only use the reference to initialize the event in place.
+    let place = unsafe { storage.as_pin_mut().get_unchecked_mut() };
 
-        for event in self.registry.iter() {
-            // SAFETY: An event is unregistered before it is destroyed, and unregistering
-            // requires the exclusive access to the registry that our caller's lock excludes, so
-            // every event still named here is initialized, aligned and not yet destroyed.
-            let event_cell = unsafe { event.as_ref() };
+    let place = ptr::from_mut(place).cast::<UnsafeCell<MaybeUninit<Event<T>>>>();
 
-            // SAFETY: An event is only ever reached through shared references, whether from an
-            // endpoint or from here, so no exclusive reference can alias this one.
-            let event = unsafe { &*event_cell.get() };
+    // SAFETY: `MaybeUninit` and `UnsafeCell` are transparent wrappers, so both nestings describe
+    // the same storage. No reference to the uninitialized slot remains from the owner above.
+    let place = unsafe { &mut *place };
 
-            if let Some(backtrace) = event.awaiter_backtrace() {
-                backtraces.push(backtrace);
-            }
-        }
+    Event::new_in_inner(place);
 
-        backtraces
-    }
+    // SAFETY: `new_in_inner()` initialized the event. Its internal `MaybeUninit` fields are
+    // intentionally uninitialized according to the event state and do not invalidate `Event<T>`.
+    let storage = unsafe { storage.assume_init() };
+
+    PoolBox::into_raw(storage)
 }
 
 /// Drops an event that was rented from a pool and returns its slot to the pool.
@@ -136,7 +85,7 @@ impl<T: Send + 'static> PoolState<T> {
 ///
 /// # Safety
 ///
-/// The pointer must come from [`PoolState::rent()`] and must not have been passed here before.
+/// The pointer must come from [`initialize_event()`] and must not have been passed here before.
 /// Nothing may reference the event afterwards.
 pub(crate) unsafe fn destroy_event<T: Send + 'static>(event: NonNull<UnsafeCell<Event<T>>>) {
     // SAFETY: Forwarding the guarantees of the caller, who promises that this is the single
@@ -147,11 +96,8 @@ pub(crate) unsafe fn destroy_event<T: Send + 'static>(event: NonNull<UnsafeCell<
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: Send + 'static> fmt::Debug for PoolState<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut f = f.debug_struct(type_name::<Self>());
-
-        #[cfg(debug_assertions)]
-        f.field("registry", &self.registry);
-
-        f.field("events", &self.events).finish()
+        f.debug_struct(type_name::<Self>())
+            .field("events", &self.events)
+            .finish()
     }
 }

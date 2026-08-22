@@ -69,9 +69,33 @@ records this, which lets the receiver cores project a pinned reference to themse
 unsafe code, and turns any future pin-sensitive state into a compile error rather than a silent
 change of an assumption.
 
+## Pools and lakes share the release boundary
+
+Typed event pools use `plurality::Pool<T>` because every slot has one known event type. Event
+lakes use `plurality::MultiPool`, which routes allocations by their size and alignment. Payload
+types whose complete event representations have compatible layouts can therefore reuse the same
+slots without a payload-type registry. Thread-safe lakes serialize allocation through their
+existing mutex because `MultiPool` has a single allocator, while local lakes rely on thread
+confinement.
+
+Renting detaches a `plurality::Box` from its owner and stores only its pointer in the endpoint
+references. Final endpoint cleanup reconstructs that box and returns the slot directly, without
+accessing the pool or lake. Plurality keeps the backing storage alive while detached boxes exist,
+which lets managed endpoints outlive their pool or lake handle. Raw variants retain their
+caller-enforced owner-outlives-endpoints contract.
+
 ## Diagnostics are a debug-build concern
 
 The awaiter backtrace that pools and lakes expose for leak investigation exists only in debug
-builds, along with the pool-side registry of live events that makes it reachable. The debug-only
-state is released by the same endpoint that releases the event, because event storage may be
-reused or freed without dropping the event.
+builds, along with a storage-independent registry of live events that makes it reachable. The
+registry stores pointers to the type-independent backtrace cell in each event, so one registry can
+inspect every payload type in a lake. Managed endpoints share ownership of the registry to keep it
+alive after the pool or lake handle is dropped; raw endpoints rely on their existing lifetime
+contract.
+
+Allocation and diagnostics use separate synchronization. Snapshotting retains the registry lock
+or borrow only while cloning the stored backtraces, then releases it before invoking user code.
+Final endpoint cleanup unregisters the backtrace cell before returning the plurality slot, so a
+snapshot can never observe storage after it has been released. Keeping the synchronization
+separate also permits diagnostic callbacks to rent or release events and to inspect the same owner
+again.

@@ -8,6 +8,8 @@ use std::rc::Rc;
 #[cfg(debug_assertions)]
 use std::sync::Arc;
 
+#[cfg(debug_assertions)]
+use crate::LocalEventRegistry;
 use crate::{
     LocalPoolState, LocalReceiverCore, LocalSenderCore, PooledLocalReceiver, PooledLocalRef,
     PooledLocalSender,
@@ -55,8 +57,12 @@ impl<T: 'static> fmt::Debug for LocalEventPool<T> {
     }
 }
 
+/// Owns typed local event storage and diagnostics shared by managed pool handles.
 pub(crate) struct LocalPoolCore<T: 'static> {
     pub(crate) state: RefCell<LocalPoolState<T>>,
+
+    #[cfg(debug_assertions)]
+    pub(crate) registry: Rc<LocalEventRegistry>,
 }
 
 impl<T: 'static> LocalEventPool<T> {
@@ -66,6 +72,8 @@ impl<T: 'static> LocalEventPool<T> {
         Self {
             core: Rc::new(LocalPoolCore {
                 state: RefCell::new(LocalPoolState::new()),
+                #[cfg(debug_assertions)]
+                registry: Rc::new(LocalEventRegistry::new()),
             }),
         }
     }
@@ -80,7 +88,13 @@ impl<T: 'static> LocalEventPool<T> {
         let event = self.core.state.borrow_mut().rent();
 
         #[cfg(debug_assertions)]
-        let core = Rc::clone(&self.core);
+        {
+            // SAFETY: The event was just initialized in this pool and remains alive until the
+            // endpoint that receives cleanup ownership unregisters it immediately before release.
+            unsafe {
+                self.core.registry.register(event);
+            }
+        }
 
         // SAFETY: The event was just rented from this pool's state and has not been released.
         // The endpoints below and the pool's debug-only registry are the only reachers of the
@@ -88,7 +102,7 @@ impl<T: 'static> LocalEventPool<T> {
         let event_ref = unsafe {
             PooledLocalRef::new(
                 #[cfg(debug_assertions)]
-                core,
+                Rc::clone(&self.core.registry),
                 event,
             )
         };
@@ -143,7 +157,7 @@ impl<T: 'static> LocalEventPool<T> {
     /// backtrace, so it stays valid even if its event is released in the meantime.
     #[cfg(debug_assertions)]
     pub(crate) fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>> {
-        self.core.state.borrow().awaiter_backtraces()
+        self.core.registry.awaiter_backtraces()
     }
 }
 
@@ -164,9 +178,14 @@ impl<T: 'static> Clone for LocalEventPool<T> {
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: 'static> fmt::Debug for LocalPoolCore<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct(type_name::<Self>())
-            .field("state", &self.state)
-            .finish()
+        let mut f = f.debug_struct(type_name::<Self>());
+
+        f.field("state", &self.state);
+
+        #[cfg(debug_assertions)]
+        f.field("registry", &self.registry);
+
+        f.finish()
     }
 }
 

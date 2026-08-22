@@ -27,7 +27,9 @@ cbh_model = { workspace = true }
 cbh_render = { workspace = true }
 cbh_stats = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-plotters = { workspace = true }
+# The figure generator renders SVG only. The default features are off at workspace level because
+# they select the host-dependent `font-kit` text backend. SVG emits `<text>` elements for browsers.
+plotters = { workspace = true, features = ["svg_backend"] }
 
 [dev-dependencies]
 cbh_probe = { path = "../cbh_probe", default-features = false }
@@ -35,5 +37,3 @@ tempfile = { workspace = true }
 
 [lints]
 workspace = true
-
-

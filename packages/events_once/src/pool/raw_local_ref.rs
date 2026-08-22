@@ -5,20 +5,19 @@ use std::ops::Deref;
 use std::ptr::NonNull;
 
 #[cfg(debug_assertions)]
-use crate::RawLocalEventPoolCore;
+use crate::LocalEventRegistry;
 use crate::{LocalEvent, LocalRef, destroy_local_event};
 
 /// References an event rented from a [`RawLocalEventPool`][crate::RawLocalEventPool].
 ///
 /// The slot of a rented event is owned by the pointer to it, not by the pool, so releasing the
-/// event needs neither the pool nor a borrow of it (see `local_state.rs`). The pointer to the
-/// pool core exists only in debug builds, where the event must be removed from the pool's
-/// diagnostic registry before it is destroyed; unlike the managed pool, the raw pool relies on
-/// the caller's promise that it outlives the endpoints to keep that pointer valid.
+/// event needs neither the pool nor a borrow of it (see `local_state.rs`). A registry pointer
+/// exists only in debug builds; unlike managed storage, raw pools and lakes rely on the caller's
+/// outlives promise to keep it valid until the event is removed.
 pub(crate) struct RawLocalPooledRef<T: 'static> {
-    // Only debug builds need the core, to reach the diagnostic registry.
+    // Only debug builds need the registry for awaiter inspection.
     #[cfg(debug_assertions)]
-    core: NonNull<UnsafeCell<RawLocalEventPoolCore<T>>>,
+    registry: NonNull<LocalEventRegistry>,
 
     event: NonNull<UnsafeCell<LocalEvent<T>>>,
 }
@@ -28,34 +27,29 @@ impl<T: 'static> RawLocalPooledRef<T> {
     ///
     /// # Safety
     ///
-    /// The event must be one that `LocalPoolState::rent()` returned and that has not yet been
-    /// released, in debug builds from the state inside `core`. Nothing may create an exclusive
-    /// reference to the event while any endpoint created from this reference can access it. In
-    /// debug builds, the pool that owns `core` must outlive every such endpoint.
+    /// The event must be one that `initialize_local_event()` returned and that has not yet been
+    /// released. In debug builds, it must be registered in `registry`, whose owner must outlive
+    /// every endpoint. Nothing may create an exclusive reference to the event while any endpoint
+    /// can access it.
     #[must_use]
     pub(crate) unsafe fn new(
-        #[cfg(debug_assertions)] core: NonNull<UnsafeCell<RawLocalEventPoolCore<T>>>,
+        #[cfg(debug_assertions)] registry: NonNull<LocalEventRegistry>,
         event: NonNull<UnsafeCell<LocalEvent<T>>>,
     ) -> Self {
         Self {
             #[cfg(debug_assertions)]
-            core,
+            registry,
             event,
         }
     }
 
-    /// Returns a shared reference to the pool's core.
+    /// Returns a shared reference to the diagnostic registry.
     #[cfg(debug_assertions)]
-    fn core(&self) -> &RawLocalEventPoolCore<T> {
-        // SAFETY: The `new()` contract requires the pool that owns the core to outlive every
-        // endpoint created from this reference, so the core is still live, initialized and
-        // aligned while any endpoint can reach it.
-        let core_cell = unsafe { self.core.as_ref() };
-
-        // SAFETY: The core is reached only through this accessor and the pool's own equivalent,
-        // both of which produce shared references, so no exclusive reference can alias this one.
-        // Mutation of the core happens exclusively behind its cell.
-        unsafe { &*core_cell.get() }
+    fn registry(&self) -> &LocalEventRegistry {
+        // SAFETY: Validity follows from `new()` requiring the registry owner to outlive every
+        // endpoint. Only shared references to the registry exist, and its `RefCell` mediates
+        // mutation on the one thread where the raw local owner may be used.
+        unsafe { self.registry.as_ref() }
     }
 }
 
@@ -63,7 +57,7 @@ impl<T: 'static> Clone for RawLocalPooledRef<T> {
     fn clone(&self) -> Self {
         Self {
             #[cfg(debug_assertions)]
-            core: self.core,
+            registry: self.registry,
             event: self.event,
         }
     }
@@ -79,9 +73,15 @@ impl<T: 'static> Clone for RawLocalPooledRef<T> {
 unsafe impl<T: 'static> LocalRef<T> for RawLocalPooledRef<T> {
     unsafe fn release_event(&self) {
         #[cfg(debug_assertions)]
-        self.core().state.borrow_mut().unregister(self.event);
+        {
+            // SAFETY: The `new()` contract requires this live event to be registered here, and
+            // the caller owns its sole cleanup right, so it remains live through unregistration.
+            unsafe {
+                self.registry().unregister(self.event);
+            }
+        }
 
-        // SAFETY: The pointer came from the pool state's `rent()`, as the `new()` contract
+        // SAFETY: The pointer came from `initialize_local_event()`, as the `new()` contract
         // requires. The caller was granted sole cleanup ownership of the event by the state
         // machine, so this is the only release of this event and nothing accesses it afterwards.
         unsafe {
@@ -110,7 +110,7 @@ impl<T: 'static> fmt::Debug for RawLocalPooledRef<T> {
         let mut f = f.debug_struct(type_name::<Self>());
 
         #[cfg(debug_assertions)]
-        f.field("core", &self.core);
+        f.field("registry", &self.registry);
 
         f.field("event", &self.event).finish()
     }

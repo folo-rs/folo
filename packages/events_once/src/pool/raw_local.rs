@@ -10,6 +10,8 @@ use std::ptr::NonNull;
 #[cfg(debug_assertions)]
 use std::sync::Arc;
 
+#[cfg(debug_assertions)]
+use crate::LocalEventRegistry;
 use crate::{
     LocalPoolState, LocalReceiverCore, LocalSenderCore, RawLocalPooledReceiver, RawLocalPooledRef,
     RawLocalPooledSender,
@@ -74,16 +76,25 @@ impl<T: 'static> Drop for RawLocalEventPool<T> {
     }
 }
 
+/// Owns typed local event storage and diagnostics at a stable address.
 pub(crate) struct RawLocalEventPoolCore<T: 'static> {
     pub(crate) state: RefCell<LocalPoolState<T>>,
+
+    #[cfg(debug_assertions)]
+    pub(crate) registry: LocalEventRegistry,
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: 'static> fmt::Debug for RawLocalEventPoolCore<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct(type_name::<Self>())
-            .field("state", &self.state)
-            .finish()
+        let mut f = f.debug_struct(type_name::<Self>());
+
+        f.field("state", &self.state);
+
+        #[cfg(debug_assertions)]
+        f.field("registry", &self.registry);
+
+        f.finish()
     }
 }
 
@@ -93,6 +104,8 @@ impl<T: 'static> RawLocalEventPool<T> {
     pub fn new() -> Self {
         let core = RawLocalEventPoolCore {
             state: RefCell::new(LocalPoolState::new()),
+            #[cfg(debug_assertions)]
+            registry: LocalEventRegistry::new(),
         };
 
         let core_ptr = Box::into_raw(Box::new(UnsafeCell::new(core)));
@@ -129,7 +142,17 @@ impl<T: 'static> RawLocalEventPool<T> {
     /// The caller must guarantee that the pool outlives the endpoints.
     #[must_use]
     pub unsafe fn rent(self: Pin<&Self>) -> (RawLocalPooledSender<T>, RawLocalPooledReceiver<T>) {
-        let event = self.core().state.borrow_mut().rent();
+        let core = self.core();
+        let event = core.state.borrow_mut().rent();
+
+        #[cfg(debug_assertions)]
+        {
+            // SAFETY: The event was just initialized in this pool and remains alive until the
+            // endpoint that receives cleanup ownership unregisters it immediately before release.
+            unsafe {
+                core.registry.register(event);
+            }
+        }
 
         // SAFETY: The event was just rented from this pool's state and has not been released.
         // The endpoints below and the pool's debug-only registry are the only reachers of the
@@ -138,7 +161,7 @@ impl<T: 'static> RawLocalEventPool<T> {
         let event_ref = unsafe {
             RawLocalPooledRef::new(
                 #[cfg(debug_assertions)]
-                self.core,
+                NonNull::from(&core.registry),
                 event,
             )
         };
@@ -193,7 +216,7 @@ impl<T: 'static> RawLocalEventPool<T> {
     /// backtrace, so it stays valid even if its event is released in the meantime.
     #[cfg(debug_assertions)]
     pub(crate) fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>> {
-        self.core().state.borrow().awaiter_backtraces()
+        self.core().registry.awaiter_backtraces()
     }
 }
 

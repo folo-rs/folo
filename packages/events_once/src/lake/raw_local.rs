@@ -1,17 +1,21 @@
-use std::any::{Any, TypeId, type_name};
+use std::any::type_name;
 #[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
-use std::cell::{RefCell, UnsafeCell};
+use std::cell::UnsafeCell;
 use std::fmt;
 use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::pin::Pin;
 use std::ptr::NonNull;
 #[cfg(debug_assertions)]
 use std::sync::Arc;
 
-use hash_hasher::HashedMap;
+use plurality::MultiPool;
 
-use crate::{RawLocalEventPool, RawLocalPooledReceiver, RawLocalPooledSender};
+#[cfg(debug_assertions)]
+use crate::LocalEventRegistry;
+use crate::{
+    EVENT_COUNT_FITS_IN_USIZE, LocalEvent, LocalReceiverCore, LocalSenderCore,
+    RawLocalPooledReceiver, RawLocalPooledRef, RawLocalPooledSender, initialize_local_event,
+};
 
 /// Rents out single-threaded events of different payloads.
 ///
@@ -57,18 +61,25 @@ pub struct RawLocalEventLake {
     core: NonNull<UnsafeCell<Core>>,
 }
 
+/// Owns heterogeneous event storage and diagnostics at a stable address.
 struct Core {
-    // This is a transparent HashMap, meaning it does not do any hashing.
-    // The reason is that the TypeId is already a hash, so hashing it again is redundant.
-    pools: RefCell<HashedMap<TypeId, Pin<Box<dyn ErasedPool>>>>,
+    events: MultiPool,
+
+    #[cfg(debug_assertions)]
+    registry: LocalEventRegistry,
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl fmt::Debug for Core {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct(type_name::<Self>())
-            .field("pools", &self.pools)
-            .finish()
+        let mut f = f.debug_struct(type_name::<Self>());
+
+        f.field("events", &self.events);
+
+        #[cfg(debug_assertions)]
+        f.field("registry", &self.registry);
+
+        f.finish()
     }
 }
 
@@ -77,7 +88,9 @@ impl RawLocalEventLake {
     #[must_use]
     pub fn new() -> Self {
         let core = Core {
-            pools: RefCell::new(HashedMap::default()),
+            events: MultiPool::new(),
+            #[cfg(debug_assertions)]
+            registry: LocalEventRegistry::new(),
         };
 
         // This exact pointer is reconstructed into an owning `Box` exactly once, in
@@ -115,39 +128,49 @@ impl RawLocalEventLake {
     /// The caller must guarantee that the lake outlives the endpoints.
     #[must_use]
     pub unsafe fn rent<T: 'static>(&self) -> (RawLocalPooledSender<T>, RawLocalPooledReceiver<T>) {
-        let type_id = TypeId::of::<T>();
+        let core = self.core();
+        let storage = core.events.alloc_uninit_box::<UnsafeCell<LocalEvent<T>>>();
+        let event = initialize_local_event(storage);
 
-        let mut pools = self.core().pools.borrow_mut();
+        #[cfg(debug_assertions)]
+        {
+            // SAFETY: The event was just initialized and remains alive until the endpoint with
+            // cleanup ownership unregisters it immediately before releasing the plurality slot.
+            unsafe {
+                core.registry.register(event);
+            }
+        }
 
-        let entry = pools
-            .entry(type_id)
-            .or_insert_with(|| Box::pin(PoolWrapper::<T>::new()));
+        // SAFETY: The event is initialized in an occupied plurality slot. Our caller promises the
+        // raw lake and its diagnostic registry outlive both endpoints. All access is shared until
+        // the state machine grants one endpoint sole cleanup ownership.
+        let event_ref = unsafe {
+            RawLocalPooledRef::new(
+                #[cfg(debug_assertions)]
+                NonNull::from(&core.registry),
+                event,
+            )
+        };
 
-        let pool = entry
-            .as_any()
-            .downcast_ref::<PoolWrapper<T>>()
-            .expect("guarded by TypeId");
+        let inner_sender = LocalSenderCore::new(event_ref.clone());
+        let inner_receiver = LocalReceiverCore::new(event_ref);
 
-        // SAFETY: All the pools are pinned, the wrapper just got lost in the downcast.
-        let pool = unsafe { Pin::new_unchecked(pool) };
-
-        pool.rent()
+        (
+            RawLocalPooledSender::new(inner_sender),
+            RawLocalPooledReceiver::new(inner_receiver),
+        )
     }
 
     /// Returns `true` if no events have currently been rented from the lake.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        let pools = self.core().pools.borrow();
-
-        pools.values().all(|x| x.is_empty())
+        self.core().events.is_empty()
     }
 
     /// Returns the number of events that have currently been rented from the lake.
     #[must_use]
     pub fn len(&self) -> usize {
-        let pools = self.core().pools.borrow();
-
-        pools.values().map(|x| x.len()).sum()
+        usize::try_from(self.core().events.len()).expect(EVENT_COUNT_FITS_IN_USIZE)
     }
 
     /// Uses the provided closure to inspect the backtraces of the most recent awaiter of each
@@ -174,18 +197,12 @@ impl RawLocalEventLake {
 
     /// Snapshots the backtrace of the most recent awaiter of each awaited event in the lake.
     ///
-    /// Both the lake borrow and the borrows of the pools it contains are released before this
-    /// returns, so the caller may pass the snapshots to user-supplied code without holding any
-    /// borrow. Each snapshot is a shared owner of the backtrace, so it stays valid even if its
-    /// event is released in the meantime.
+    /// The diagnostic registry borrow is released before this returns, so the caller may pass the
+    /// snapshots to user-supplied code without holding any borrow. Each snapshot is a shared owner
+    /// of the backtrace, so it stays valid even if its event is released in the meantime.
     #[cfg(debug_assertions)]
     fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>> {
-        let pools = self.core().pools.borrow();
-
-        pools
-            .values()
-            .flat_map(|entry| entry.awaiter_backtraces())
-            .collect()
+        self.core().registry.awaiter_backtraces()
     }
 }
 
@@ -208,94 +225,17 @@ impl Drop for RawLocalEventLake {
     }
 }
 
-// The NonNull<UnsafeCell<Core>> field disables auto-trait inference for UnwindSafe/
-// RefUnwindSafe, the same way any raw pointer field does. The only mutation reachable through
-// `&RawLocalEventLake` is the `entry(...).or_insert_with(...)` call in `rent()`, and it fully
-// constructs and inserts the `PoolWrapper<T>` entry into `pools` before ever delegating to the
-// nested pool's own `rent()` (which has its own, independently established unwind-safety proof).
-// A panic unwinding out of that nested call therefore finds `pools` already in the same complete
-// state a successful `rent()` call would have left behind; no half-inserted entry is ever
-// observable. `is_empty()`, `len()`, and `awaiter_backtraces()` only take a shared borrow and
-// mutate nothing, so they cannot leave behind an inconsistent map either. A caller that catches a
-// panic from any of these paths and keeps using the lake therefore always observes a valid,
-// self-consistent map.
+// The raw core pointer disables auto-trait inference. `MultiPool` and the diagnostic registry
+// leave their bookkeeping consistent if allocation or snapshotting unwinds, and payloads are
+// reachable only through their endpoints.
 impl UnwindSafe for RawLocalEventLake {}
 impl RefUnwindSafe for RawLocalEventLake {}
-
-struct PoolWrapper<T: 'static> {
-    inner: RawLocalEventPool<T>,
-}
-
-impl<T: 'static> PoolWrapper<T> {
-    fn new() -> Self {
-        Self {
-            inner: RawLocalEventPool::new(),
-        }
-    }
-
-    fn rent(self: Pin<&Self>) -> (RawLocalPooledSender<T>, RawLocalPooledReceiver<T>) {
-        // SAFETY: The wrapper is reached only as `Pin<&PoolWrapper<T>>` (see `rent()` on
-        // `RawLocalEventLake`, which pins the value once it is stored in the map and never moves
-        // it out again). `inner` is a private, directly-owned field that no method ever replaces,
-        // swaps or moves out of, so it cannot move independently of the wrapper while the wrapper
-        // remains pinned. Projecting to `&inner` is therefore a valid structural pin projection.
-        let inner = unsafe { self.map_unchecked(|s| &s.inner) };
-
-        // SAFETY: The top-level `RawLocalEventLake::rent()` caller promises the lake outlives
-        // the returned endpoints. The lake owns the pools map and, transitively through this
-        // `PoolWrapper`, the `inner` pool for as long as the lake itself lives (the map entry is
-        // never removed except when the whole lake is dropped), so that same caller guarantee
-        // covers `inner` for the duration required by `RawLocalEventPool::rent()`.
-        unsafe { inner.rent() }
-    }
-}
-
-#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
-impl<T: 'static> fmt::Debug for PoolWrapper<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct(type_name::<Self>())
-            .field("inner", &self.inner)
-            .finish()
-    }
-}
-
-/// A type-erased event pool for which we do not know the payload type any more.
-///
-/// We downcast from this to a specific pool wrapper when we need to rent events.
-trait ErasedPool: fmt::Debug {
-    fn as_any(&self) -> &dyn Any;
-
-    fn is_empty(&self) -> bool;
-
-    fn len(&self) -> usize;
-
-    #[cfg(debug_assertions)]
-    fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>>;
-}
-
-impl<T: 'static> ErasedPool for PoolWrapper<T> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
-    fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    #[cfg(debug_assertions)]
-    fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>> {
-        self.inner.awaiter_backtraces()
-    }
-}
-
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use core::task;
+    #[cfg(debug_assertions)]
+    use std::cell::RefCell;
     use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::task::Waker;
 
@@ -377,17 +317,37 @@ mod tests {
     }
 
     #[test]
+    fn reuses_compatible_storage_for_distinct_payload_types() {
+        assert_eq!(size_of::<LocalEvent<i32>>(), size_of::<LocalEvent<u32>>());
+        assert_eq!(align_of::<LocalEvent<i32>>(), align_of::<LocalEvent<u32>>());
+
+        let lake = RawLocalEventLake::new();
+
+        // SAFETY: The lake remains alive until both returned endpoints are consumed.
+        let (sender, receiver) = unsafe { lake.rent::<i32>() };
+        sender.send(-42);
+        assert_eq!(receiver.into_value().unwrap(), -42);
+        assert!(lake.is_empty());
+
+        // SAFETY: The lake remains alive until both returned endpoints are consumed.
+        let (sender, receiver) = unsafe { lake.rent::<u32>() };
+        sender.send(42);
+        assert_eq!(receiver.into_value().unwrap(), 42);
+        assert!(lake.is_empty());
+    }
+
+    #[test]
     #[cfg(debug_assertions)]
     fn inspect_awaiters_inspects_awaiters() {
         let lake = RawLocalEventLake::new();
 
         // 2 events that are awaited and one that is not.
         // SAFETY: The lake remains alive until both returned endpoints are dropped.
-        let (sender1, receiver1) = unsafe { lake.rent::<String>() };
+        let (sender1, receiver1) = unsafe { lake.rent::<i32>() };
         // SAFETY: The lake remains alive until both returned endpoints are dropped.
-        let (_sender2, receiver2) = unsafe { lake.rent::<i32>() };
+        let (_sender2, receiver2) = unsafe { lake.rent::<u32>() };
         // SAFETY: The lake remains alive until both returned endpoints are dropped.
-        let (_sender3, _receiver3) = unsafe { lake.rent::<f64>() };
+        let (_sender3, _receiver3) = unsafe { lake.rent::<String>() };
 
         let mut receiver1 = Box::pin(receiver1);
         let mut receiver2 = Box::pin(receiver2);
@@ -462,7 +422,7 @@ mod tests {
         _ = receiver.as_mut().poll(&mut cx);
 
         assert_inspect_awaiters_is_reentrant(&|f| lake.inspect_awaiters(f), &|| {
-            // A payload type the lake has no pool for yet, to also exercise pool insertion.
+            // A new payload layout also exercises heterogeneous slot routing.
             // SAFETY: The lake remains alive until both returned endpoints are dropped.
             let (sender, receiver) = unsafe { lake.rent::<u8>() };
             drop(sender);

@@ -4,6 +4,8 @@ use std::backtrace::Backtrace;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
+#[cfg(debug_assertions)]
+use crate::EventRegistry;
 use crate::{
     NEVER_POISONED, PoolState, PooledReceiver, PooledRef, PooledSender, ReceiverCore, SenderCore,
 };
@@ -42,8 +44,12 @@ impl<T: Send + 'static> fmt::Debug for EventPool<T> {
     }
 }
 
+/// Owns typed event storage and diagnostics shared by managed pool handles.
 pub(crate) struct EventPoolCore<T: 'static> {
     pub(crate) state: Mutex<PoolState<T>>,
+
+    #[cfg(debug_assertions)]
+    pub(crate) registry: Arc<EventRegistry>,
 }
 
 impl<T: Send + 'static> EventPool<T> {
@@ -53,6 +59,8 @@ impl<T: Send + 'static> EventPool<T> {
         Self {
             core: Arc::new(EventPoolCore {
                 state: Mutex::new(PoolState::new()),
+                #[cfg(debug_assertions)]
+                registry: Arc::new(EventRegistry::new()),
             }),
         }
     }
@@ -67,7 +75,13 @@ impl<T: Send + 'static> EventPool<T> {
         let event = self.core.state.lock().expect(NEVER_POISONED).rent();
 
         #[cfg(debug_assertions)]
-        let core = Arc::clone(&self.core);
+        {
+            // SAFETY: The event was just initialized in this pool and remains alive until the
+            // endpoint that receives cleanup ownership unregisters it immediately before release.
+            unsafe {
+                self.core.registry.register(event);
+            }
+        }
 
         // SAFETY: The event was just rented from this pool's state and has not been released.
         // The endpoints below and the pool's debug-only registry are the only reachers of the
@@ -75,7 +89,7 @@ impl<T: Send + 'static> EventPool<T> {
         let event_ref = unsafe {
             PooledRef::new(
                 #[cfg(debug_assertions)]
-                core,
+                Arc::clone(&self.core.registry),
                 event,
             )
         };
@@ -130,11 +144,7 @@ impl<T: Send + 'static> EventPool<T> {
     /// backtrace, so it stays valid even if its event is released in the meantime.
     #[cfg(debug_assertions)]
     pub(crate) fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>> {
-        self.core
-            .state
-            .lock()
-            .expect(NEVER_POISONED)
-            .awaiter_backtraces()
+        self.core.registry.awaiter_backtraces()
     }
 }
 
@@ -155,9 +165,14 @@ impl<T: Send + 'static> Clone for EventPool<T> {
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: Send + 'static> fmt::Debug for EventPoolCore<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct(type_name::<Self>())
-            .field("state", &self.state)
-            .finish()
+        let mut f = f.debug_struct(type_name::<Self>());
+
+        f.field("state", &self.state);
+
+        #[cfg(debug_assertions)]
+        f.field("registry", &self.registry);
+
+        f.finish()
     }
 }
 

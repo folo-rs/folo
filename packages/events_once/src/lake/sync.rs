@@ -1,17 +1,24 @@
-use std::any::{Any, TypeId, type_name};
+use std::any::type_name;
 #[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
+use std::cell::UnsafeCell;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use hash_hasher::HashedMap;
+use plurality::MultiPool;
 
-use crate::{EventPool, NEVER_POISONED, PooledReceiver, PooledSender};
+#[cfg(debug_assertions)]
+use crate::EventRegistry;
+use crate::{
+    EVENT_COUNT_FITS_IN_USIZE, Event, NEVER_POISONED, PooledReceiver, PooledRef, PooledSender,
+    ReceiverCore, SenderCore, initialize_event,
+};
 
 /// Rents out thread-safe events of different payloads.
 ///
 /// You can use this if you need to constantly create events with different/unknown payload types.
-/// Functionally, it is similar to [`EventPool`] but does not require any generic type parameters.
+/// Functionally, it is similar to [`EventPool`][crate::EventPool] but does not require generic
+/// type parameters.
 ///
 /// # Examples
 ///
@@ -44,18 +51,25 @@ pub struct EventLake {
     core: Arc<Core>,
 }
 
+/// Owns the heterogeneous event storage and diagnostics shared by lake handles.
 struct Core {
-    // This is a transparent HashMap, meaning it does not do any hashing.
-    // The reason is that the TypeId is already a hash, so hashing it again is redundant.
-    pools: Mutex<HashedMap<TypeId, Box<dyn ErasedPool>>>,
+    events: Mutex<MultiPool>,
+
+    #[cfg(debug_assertions)]
+    registry: Arc<EventRegistry>,
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl fmt::Debug for Core {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct(type_name::<Self>())
-            .field("pools", &self.pools)
-            .finish()
+        let mut f = f.debug_struct(type_name::<Self>());
+
+        f.field("events", &self.events);
+
+        #[cfg(debug_assertions)]
+        f.field("registry", &self.registry);
+
+        f.finish()
     }
 }
 
@@ -65,7 +79,9 @@ impl EventLake {
     pub fn new() -> Self {
         Self {
             core: Arc::new(Core {
-                pools: Mutex::new(HashedMap::default()),
+                events: Mutex::new(MultiPool::new()),
+                #[cfg(debug_assertions)]
+                registry: Arc::new(EventRegistry::new()),
             }),
         }
     }
@@ -76,34 +92,55 @@ impl EventLake {
     /// See [`PooledReceiver`] for the receiver's callback and reentrancy contract.
     #[must_use]
     pub fn rent<T: Send + 'static>(&self) -> (PooledSender<T>, PooledReceiver<T>) {
-        let type_id = TypeId::of::<T>();
+        let storage = self
+            .core
+            .events
+            .lock()
+            .expect(NEVER_POISONED)
+            .alloc_uninit_box::<UnsafeCell<Event<T>>>();
+        let event = initialize_event(storage);
 
-        let mut pools = self.core.pools.lock().expect(NEVER_POISONED);
+        #[cfg(debug_assertions)]
+        {
+            // SAFETY: The event was just initialized and remains alive until the endpoint with
+            // cleanup ownership unregisters it immediately before releasing the plurality slot.
+            unsafe {
+                self.core.registry.register(event);
+            }
+        }
 
-        let entry = pools
-            .entry(type_id)
-            .or_insert_with(|| Box::new(PoolWrapper::<T>::new()));
+        // SAFETY: The event is initialized in an occupied plurality slot. The endpoints and the
+        // debug registry create only shared references, and the slot remains occupied until the
+        // state machine grants one endpoint sole cleanup ownership.
+        let event_ref = unsafe {
+            PooledRef::new(
+                #[cfg(debug_assertions)]
+                Arc::clone(&self.core.registry),
+                event,
+            )
+        };
 
-        let pool = entry
-            .as_any()
-            .downcast_ref::<PoolWrapper<T>>()
-            .expect("guarded by TypeId");
+        let inner_sender = SenderCore::new(event_ref.clone());
+        let inner_receiver = ReceiverCore::new(event_ref);
 
-        pool.rent()
+        (
+            PooledSender::new(inner_sender),
+            PooledReceiver::new(inner_receiver),
+        )
     }
 
     /// Returns `true` if no events have currently been rented from the lake.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        let pools = self.core.pools.lock().expect(NEVER_POISONED);
-        pools.values().all(|x| x.is_empty())
+        self.core.events.lock().expect(NEVER_POISONED).is_empty()
     }
 
     /// Returns the number of events that have currently been rented from the lake.
     #[must_use]
     pub fn len(&self) -> usize {
-        let pools = self.core.pools.lock().expect(NEVER_POISONED);
-        pools.values().map(|x| x.len()).sum()
+        let len = self.core.events.lock().expect(NEVER_POISONED).len();
+
+        usize::try_from(len).expect(EVENT_COUNT_FITS_IN_USIZE)
     }
 
     /// Uses the provided closure to inspect the backtraces of the most recent awaiter of each
@@ -130,82 +167,18 @@ impl EventLake {
 
     /// Snapshots the backtrace of the most recent awaiter of each awaited event in the lake.
     ///
-    /// Both the lake lock and the locks of the pools it contains are released before this
-    /// returns, so the caller may pass the snapshots to user-supplied code without holding any
-    /// lock. Each snapshot is a shared owner of the backtrace, so it stays valid even if its
-    /// event is released in the meantime.
+    /// The diagnostic registry lock is released before this returns, so the caller may pass the
+    /// snapshots to user-supplied code without holding any lock. Each snapshot is a shared owner
+    /// of the backtrace, so it stays valid even if its event is released in the meantime.
     #[cfg(debug_assertions)]
     fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>> {
-        let pools = self.core.pools.lock().expect(NEVER_POISONED);
-
-        pools
-            .values()
-            .flat_map(|entry| entry.awaiter_backtraces())
-            .collect()
+        self.core.registry.awaiter_backtraces()
     }
 }
 
 impl Default for EventLake {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-struct PoolWrapper<T: 'static> {
-    inner: EventPool<T>,
-}
-
-impl<T: Send + 'static> PoolWrapper<T> {
-    fn new() -> Self {
-        Self {
-            inner: EventPool::new(),
-        }
-    }
-
-    fn rent(&self) -> (PooledSender<T>, PooledReceiver<T>) {
-        self.inner.rent()
-    }
-}
-
-#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
-impl<T: Send + 'static> fmt::Debug for PoolWrapper<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct(type_name::<Self>())
-            .field("inner", &self.inner)
-            .finish()
-    }
-}
-
-/// A type-erased event pool for which we do not know the payload type any more.
-///
-/// We downcast from this to a specific pool wrapper when we need to rent events.
-trait ErasedPool: fmt::Debug + Send {
-    fn as_any(&self) -> &dyn Any;
-
-    fn is_empty(&self) -> bool;
-
-    fn len(&self) -> usize;
-
-    #[cfg(debug_assertions)]
-    fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>>;
-}
-
-impl<T: Send + 'static> ErasedPool for PoolWrapper<T> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
-    fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    #[cfg(debug_assertions)]
-    fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>> {
-        self.inner.awaiter_backtraces()
     }
 }
 
@@ -237,7 +210,7 @@ mod tests {
 
     #[test]
     fn concurrent_same_type_rentals_are_usable_across_threads() {
-        // The smallest group that guarantees competing map and pool access.
+        // The smallest group that guarantees competing allocation access.
         const WORKER_COUNT: usize = 2;
 
         with_watchdog(|| {
@@ -267,8 +240,11 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_distinct_type_rentals_are_usable_across_threads() {
+    fn concurrent_same_layout_distinct_type_rentals_are_usable_across_threads() {
         with_watchdog(|| {
+            assert_eq!(size_of::<Event<i32>>(), size_of::<Event<u32>>());
+            assert_eq!(align_of::<Event<i32>>(), align_of::<Event<u32>>());
+
             let lake = EventLake::new();
             let barrier = Barrier::new(2);
 
@@ -296,15 +272,12 @@ mod tests {
                     move || {
                         barrier.wait();
 
-                        let (sender, receiver) = lake.rent::<String>();
+                        let (sender, receiver) = lake.rent::<u32>();
                         thread::scope(|scope| {
-                            scope
-                                .spawn(move || sender.send("payload".to_owned()))
-                                .join()
-                                .unwrap();
+                            scope.spawn(move || sender.send(24)).join().unwrap();
                         });
 
-                        assert_eq!(receiver.into_value().unwrap(), "payload");
+                        assert_eq!(receiver.into_value().unwrap(), 24);
                     }
                 });
             });
@@ -372,6 +345,25 @@ mod tests {
     }
 
     #[test]
+    fn reuses_compatible_storage_for_distinct_payload_types() {
+        assert_eq!(size_of::<Event<i32>>(), size_of::<Event<u32>>());
+        assert_eq!(align_of::<Event<i32>>(), align_of::<Event<u32>>());
+
+        let lake = EventLake::new();
+        let (sender, receiver) = lake.rent::<i32>();
+
+        sender.send(-42);
+        assert_eq!(receiver.into_value().unwrap(), -42);
+        assert!(lake.is_empty());
+
+        let (sender, receiver) = lake.rent::<u32>();
+
+        sender.send(42);
+        assert_eq!(receiver.into_value().unwrap(), 42);
+        assert!(lake.is_empty());
+    }
+
+    #[test]
     fn send_receive_after_lake_dropped() {
         let lake = EventLake::new();
 
@@ -401,9 +393,9 @@ mod tests {
         let lake = EventLake::new();
 
         // 2 events that are awaited and one that is not.
-        let (sender1, receiver1) = lake.rent::<String>();
-        let (_sender2, receiver2) = lake.rent::<i32>();
-        let (_sender3, _receiver3) = lake.rent::<f64>();
+        let (sender1, receiver1) = lake.rent::<i32>();
+        let (_sender2, receiver2) = lake.rent::<u32>();
+        let (_sender3, _receiver3) = lake.rent::<String>();
 
         let mut receiver1 = Box::pin(receiver1);
         let mut receiver2 = Box::pin(receiver2);
@@ -481,7 +473,7 @@ mod tests {
             _ = receiver.as_mut().poll(&mut cx);
 
             assert_inspect_awaiters_is_reentrant(&|f| lake.inspect_awaiters(f), &|| {
-                // A payload type the lake has no pool for yet, to also exercise pool insertion.
+                // A new payload layout also exercises heterogeneous slot routing.
                 let (sender, receiver) = lake.rent::<u8>();
                 drop(sender);
                 drop(receiver);
@@ -492,11 +484,10 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn inspect_awaiters_tolerates_endpoint_drop_from_closure() {
-        // The closure below drops the endpoints it is being told about, which returns their
-        // event to its pool and reacquires the pool's mutex from the same thread that is
-        // currently iterating `inspect_awaiters()`. As above, a regression that holds the
-        // relevant lock across the closure call would deadlock rather than panic, so this test
-        // is bounded by a watchdog.
+        // The closure below drops the endpoints it is being told about, which unregisters their
+        // diagnostics from the same thread that is iterating `inspect_awaiters()`. A regression
+        // that holds the registry lock across the closure call would deadlock rather than panic,
+        // so this test is bounded by a watchdog.
         with_watchdog(|| {
             let lake = EventLake::new();
 

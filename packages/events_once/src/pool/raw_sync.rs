@@ -11,6 +11,8 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+#[cfg(debug_assertions)]
+use crate::EventRegistry;
 use crate::{
     NEVER_POISONED, PoolState, RawPooledReceiver, RawPooledRef, RawPooledSender, ReceiverCore,
     SenderCore,
@@ -75,16 +77,25 @@ impl<T: 'static> Drop for RawEventPool<T> {
     }
 }
 
+/// Owns typed event storage and diagnostics at a stable address.
 pub(crate) struct RawEventPoolCore<T: 'static> {
     pub(crate) state: Mutex<PoolState<T>>,
+
+    #[cfg(debug_assertions)]
+    pub(crate) registry: EventRegistry,
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: Send + 'static> fmt::Debug for RawEventPoolCore<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct(type_name::<Self>())
-            .field("state", &self.state)
-            .finish()
+        let mut f = f.debug_struct(type_name::<Self>());
+
+        f.field("state", &self.state);
+
+        #[cfg(debug_assertions)]
+        f.field("registry", &self.registry);
+
+        f.finish()
     }
 }
 
@@ -94,6 +105,8 @@ impl<T: Send + 'static> RawEventPool<T> {
     pub fn new() -> Self {
         let core = RawEventPoolCore {
             state: Mutex::new(PoolState::new()),
+            #[cfg(debug_assertions)]
+            registry: EventRegistry::new(),
         };
 
         let core_ptr = Box::into_raw(Box::new(UnsafeCell::new(core)));
@@ -130,7 +143,17 @@ impl<T: Send + 'static> RawEventPool<T> {
     /// The caller must guarantee that the pool outlives the endpoints.
     #[must_use]
     pub unsafe fn rent(self: Pin<&Self>) -> (RawPooledSender<T>, RawPooledReceiver<T>) {
-        let event = self.core().state.lock().expect(NEVER_POISONED).rent();
+        let core = self.core();
+        let event = core.state.lock().expect(NEVER_POISONED).rent();
+
+        #[cfg(debug_assertions)]
+        {
+            // SAFETY: The event was just initialized in this pool and remains alive until the
+            // endpoint that receives cleanup ownership unregisters it immediately before release.
+            unsafe {
+                core.registry.register(event);
+            }
+        }
 
         // SAFETY: The event was just rented from this pool's state and has not been released.
         // The endpoints below and the pool's debug-only registry are the only reachers of the
@@ -139,7 +162,7 @@ impl<T: Send + 'static> RawEventPool<T> {
         let event_ref = unsafe {
             RawPooledRef::new(
                 #[cfg(debug_assertions)]
-                self.core,
+                NonNull::from(&core.registry),
                 event,
             )
         };
@@ -194,11 +217,7 @@ impl<T: Send + 'static> RawEventPool<T> {
     /// backtrace, so it stays valid even if its event is released in the meantime.
     #[cfg(debug_assertions)]
     pub(crate) fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>> {
-        self.core()
-            .state
-            .lock()
-            .expect(NEVER_POISONED)
-            .awaiter_backtraces()
+        self.core().registry.awaiter_backtraces()
     }
 }
 
@@ -219,11 +238,12 @@ impl<T: Send + 'static> Default for RawEventPool<T> {
 unsafe impl<T: Send> Send for RawEventPool<T> {}
 
 // SAFETY: Automatic inference is unavailable only because of the `NonNull` field. A shared
-// reference to the pool grants renting and diagnostics, all of which reach `PoolState` through
-// the core mutex; the debug-only registry that endpoints touch when releasing an event sits
-// behind the same mutex. Concurrent shared use therefore never produces unsynchronized access to
-// the core. Renting from several threads places values of `T` into events that other threads
-// observe, so the payload must be movable between threads.
+// reference to the pool grants renting and diagnostics. `PoolState` is protected by the core
+// mutex, while the debug-only registry independently synchronizes its pointer set and every
+// registered event synchronizes its backtrace cell. Concurrent shared use therefore never
+// produces unsynchronized access to the core or an event. Renting from several threads places
+// values of `T` into events that other threads observe, so the payload must be movable between
+// threads.
 unsafe impl<T: Send> Sync for RawEventPool<T> {}
 
 // The NonNull<UnsafeCell<RawEventPoolCore<T>>> field disables auto-trait inference for

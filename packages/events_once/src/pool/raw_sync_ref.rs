@@ -4,21 +4,20 @@ use std::fmt;
 use std::ops::Deref;
 use std::ptr::NonNull;
 
-use crate::{Event, EventRef, destroy_event};
 #[cfg(debug_assertions)]
-use crate::{NEVER_POISONED, RawEventPoolCore};
+use crate::EventRegistry;
+use crate::{Event, EventRef, destroy_event};
 
 /// References an event rented from a [`RawEventPool`][crate::RawEventPool].
 ///
 /// The slot of a rented event is owned by the pointer to it, not by the pool, so releasing the
-/// event needs neither the pool nor its lock (see `state.rs`). The pointer to the pool core
-/// exists only in debug builds, where the event must be removed from the pool's diagnostic
-/// registry before it is destroyed; unlike the managed pool, the raw pool relies on the caller's
-/// promise that it outlives the endpoints to keep that pointer valid.
+/// event needs neither the pool nor its lock (see `state.rs`). A registry pointer exists only in
+/// debug builds; unlike managed storage, raw pools and lakes rely on the caller's outlives promise
+/// to keep it valid until the event is removed.
 pub(crate) struct RawPooledRef<T: 'static> {
-    // Only debug builds need the core, to reach the diagnostic registry.
+    // Only debug builds need the registry for awaiter inspection.
     #[cfg(debug_assertions)]
-    core: NonNull<UnsafeCell<RawEventPoolCore<T>>>,
+    registry: NonNull<EventRegistry>,
 
     event: NonNull<UnsafeCell<Event<T>>>,
 }
@@ -28,34 +27,29 @@ impl<T: Send + 'static> RawPooledRef<T> {
     ///
     /// # Safety
     ///
-    /// The event must be one that `PoolState::rent()` returned and that has not yet been
-    /// released, in debug builds from the state inside `core`. Nothing may create an exclusive
-    /// reference to the event while any endpoint created from this reference can access it. In
-    /// debug builds, the pool that owns `core` must outlive every such endpoint.
+    /// The event must be one that `initialize_event()` returned and that has not yet been released.
+    /// In debug builds, it must be registered in `registry`, whose owner must outlive every
+    /// endpoint. Nothing may create an exclusive reference to the event while any endpoint can
+    /// access it.
     #[must_use]
     pub(crate) unsafe fn new(
-        #[cfg(debug_assertions)] core: NonNull<UnsafeCell<RawEventPoolCore<T>>>,
+        #[cfg(debug_assertions)] registry: NonNull<EventRegistry>,
         event: NonNull<UnsafeCell<Event<T>>>,
     ) -> Self {
         Self {
             #[cfg(debug_assertions)]
-            core,
+            registry,
             event,
         }
     }
 
-    /// Returns a shared reference to the pool's core.
+    /// Returns a shared reference to the diagnostic registry.
     #[cfg(debug_assertions)]
-    fn core(&self) -> &RawEventPoolCore<T> {
-        // SAFETY: The `new()` contract requires the pool that owns the core to outlive every
-        // endpoint created from this reference, so the core is still live, initialized and
-        // aligned while any endpoint can reach it.
-        let core_cell = unsafe { self.core.as_ref() };
-
-        // SAFETY: The core is reached only through this accessor and the pool's own equivalent,
-        // both of which produce shared references, so no exclusive reference can alias this one.
-        // Mutation of the core happens exclusively behind its mutex.
-        unsafe { &*core_cell.get() }
+    fn registry(&self) -> &EventRegistry {
+        // SAFETY: Validity follows from `new()` requiring the registry owner to outlive every
+        // endpoint. Only shared references to the registry exist, and it synchronizes mutation
+        // through its internal mutex.
+        unsafe { self.registry.as_ref() }
     }
 }
 
@@ -63,7 +57,7 @@ impl<T: Send + 'static> Clone for RawPooledRef<T> {
     fn clone(&self) -> Self {
         Self {
             #[cfg(debug_assertions)]
-            core: self.core,
+            registry: self.registry,
             event: self.event,
         }
     }
@@ -79,15 +73,17 @@ impl<T: Send + 'static> Clone for RawPooledRef<T> {
 unsafe impl<T: Send + 'static> EventRef<T> for RawPooledRef<T> {
     unsafe fn release_event(&self) {
         #[cfg(debug_assertions)]
-        self.core()
-            .state
-            .lock()
-            .expect(NEVER_POISONED)
-            .unregister(self.event);
+        {
+            // SAFETY: The `new()` contract requires this live event to be registered here, and
+            // the caller owns its sole cleanup right, so it remains live through unregistration.
+            unsafe {
+                self.registry().unregister(self.event);
+            }
+        }
 
-        // SAFETY: The pointer came from the pool state's `rent()`, as the `new()` contract
-        // requires. The caller was granted sole cleanup ownership of the event by the state
-        // machine, so this is the only release of this event and nothing accesses it afterwards.
+        // SAFETY: The pointer came from `initialize_event()`, as the `new()` contract requires.
+        // The caller was granted sole cleanup ownership of the event by the state machine, so
+        // this is the only release of this event and nothing accesses it afterwards.
         unsafe {
             destroy_event(self.event);
         }
@@ -114,7 +110,7 @@ impl<T: Send + 'static> fmt::Debug for RawPooledRef<T> {
         let mut f = f.debug_struct(type_name::<Self>());
 
         #[cfg(debug_assertions)]
-        f.field("core", &self.core);
+        f.field("registry", &self.registry);
 
         f.field("event", &self.event).finish()
     }
@@ -125,10 +121,8 @@ impl<T: Send + 'static> fmt::Debug for RawPooledRef<T> {
 // reference can carry a value of `T` to the destination thread, which is why `T: Send` is
 // required. Releasing the event from the destination thread hands the slot back through
 // `plurality::Box`, whose slot bookkeeping is atomic, so it needs no further synchronization.
-// The debug-only core pointer stays valid because the caller of `new()` promised that the pool
-// owning the core outlives every endpoint, and the registry behind it is only reached while
-// holding `RawEventPoolCore::state`, so unregistering an event from another thread is
-// synchronized.
+// The debug-only registry pointer stays valid under the raw owner's outlives contract, and the
+// registry synchronizes unregistration from any thread.
 // The reference is not synchronized as a whole, so it is not `Sync`: only moving it between
 // threads is permitted, not sharing it between them.
 // The `'static` bound is already on the struct, so it is not repeated here. Repeating it

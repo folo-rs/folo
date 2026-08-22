@@ -103,17 +103,7 @@ opentelemetry-stdout = { version = "0.32.0", default-features = false }
 opentelemetry_sdk = { version = "0.32.1", default-features = false }
 pastey = { version = "0.2.3", default-features = false }
 pin-project = { version = "1.1.0", default-features = false }
-# The figure generator for the cargo-bench-history book renders SVG only. The default
-# features are off because they select the `font-kit` text backend, which resolves fonts
-# from the host system - that would make generated figure bytes machine-dependent and
-# break the checked-in-figures freshness check. The SVG backend emits `<text>` elements
-# and leaves glyph rendering to the browser, so it needs no font library at all.
-plotters = { version = "0.3.7", default-features = false, features = [
-    "area_series",
-    "line_series",
-    "point_series",
-    "svg_backend",
-] }
+plotters = { version = "0.3.7", default-features = false }
 plurality = { version = "0.2.2", default-features = false, features = ["std"] }
 proc-macro2 = { version = "1.0.106", default-features = false }
 quote = { version = "1.0.45", default-features = false }
