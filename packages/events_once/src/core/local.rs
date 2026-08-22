@@ -249,9 +249,9 @@ impl<T: 'static> LocalEvent<T> {
     ///
     /// # Safety
     ///
-    /// `event` must point to an initialized event, and no exclusive reference to it may exist for
-    /// the duration of this call. The returned pointer must not be dereferenced after the event is
-    /// released.
+    /// `event` must point to an initialized event at a stable address. Until the returned pointer
+    /// is discarded, the event must remain alive at that address and no exclusive reference to it
+    /// may exist.
     #[cfg(debug_assertions)]
     pub(crate) unsafe fn awaiter_backtrace_cell(
         event: NonNull<UnsafeCell<Self>>,

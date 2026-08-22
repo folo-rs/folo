@@ -38,11 +38,13 @@ impl EventRegistry {
     ///
     /// # Safety
     ///
-    /// `event` must point to an initialized event that remains alive until the matching
-    /// [`unregister()`][Self::unregister] call.
+    /// `event` must point to an initialized event at a stable address. The event must remain alive
+    /// at that address, and only shared references to it may be created, until the matching
+    /// [`unregister()`][Self::unregister] call returns.
     pub(crate) unsafe fn register<T: Send + 'static>(&self, event: NonNull<UnsafeCell<Event<T>>>) {
-        // SAFETY: The caller guarantees that `event` is initialized and remains live until it is
-        // unregistered. The event is reached only through shared references after initialization.
+        // SAFETY: The caller guarantees that `event` is initialized at a stable address, remains
+        // live there until unregistration, and is reached only through shared references throughout
+        // that interval.
         let backtrace = unsafe { Event::awaiter_backtrace_cell(event) };
         let inserted = self
             .backtraces
@@ -58,12 +60,15 @@ impl EventRegistry {
     /// # Safety
     ///
     /// `event` must be the initialized event passed to the matching [`register()`][Self::register]
-    /// call, and it must remain alive until this method returns.
+    /// call. It must have remained alive at the same address and reachable only through shared
+    /// references since registration, and those conditions must hold until this method returns.
     pub(crate) unsafe fn unregister<T: Send + 'static>(
         &self,
         event: NonNull<UnsafeCell<Event<T>>>,
     ) {
-        // SAFETY: The caller guarantees that this is the same live event that was registered.
+        // SAFETY: The caller guarantees that this is the same initialized event at the stable
+        // address registered earlier and that only shared references have existed or can exist
+        // through this call.
         let backtrace = unsafe { Event::awaiter_backtrace_cell(event) };
         let removed = self
             .backtraces
@@ -133,11 +138,13 @@ impl LocalEventRegistry {
     ///
     /// # Safety
     ///
-    /// `event` must point to an initialized event that remains alive until the matching
-    /// [`unregister()`][Self::unregister] call.
+    /// `event` must point to an initialized event at a stable address. The event must remain alive
+    /// at that address, and only shared references to it may be created, until the matching
+    /// [`unregister()`][Self::unregister] call returns.
     pub(crate) unsafe fn register<T: 'static>(&self, event: NonNull<UnsafeCell<LocalEvent<T>>>) {
-        // SAFETY: The caller guarantees that `event` is initialized and remains live until it is
-        // unregistered. The event is reached only through shared references after initialization.
+        // SAFETY: The caller guarantees that `event` is initialized at a stable address, remains
+        // live there until unregistration, and is reached only through shared references throughout
+        // that interval.
         let backtrace = unsafe { LocalEvent::awaiter_backtrace_cell(event) };
         let inserted = self.backtraces.borrow_mut().insert(backtrace);
 
@@ -149,9 +156,12 @@ impl LocalEventRegistry {
     /// # Safety
     ///
     /// `event` must be the initialized event passed to the matching [`register()`][Self::register]
-    /// call, and it must remain alive until this method returns.
+    /// call. It must have remained alive at the same address and reachable only through shared
+    /// references since registration, and those conditions must hold until this method returns.
     pub(crate) unsafe fn unregister<T: 'static>(&self, event: NonNull<UnsafeCell<LocalEvent<T>>>) {
-        // SAFETY: The caller guarantees that this is the same live event that was registered.
+        // SAFETY: The caller guarantees that this is the same initialized event at the stable
+        // address registered earlier and that only shared references have existed or can exist
+        // through this call.
         let backtrace = unsafe { LocalEvent::awaiter_backtrace_cell(event) };
         let removed = self.backtraces.borrow_mut().remove(&backtrace);
 

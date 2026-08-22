@@ -137,8 +137,9 @@ impl RawEventLake {
 
         #[cfg(debug_assertions)]
         {
-            // SAFETY: The event was just initialized and remains alive until the endpoint with
-            // cleanup ownership unregisters it immediately before releasing the plurality slot.
+            // SAFETY: Plurality keeps this initialized slot at a stable address until release,
+            // which occurs only after unregistration. Endpoints and the registry create only shared
+            // references to the event throughout that interval.
             unsafe {
                 core.registry.register(event);
             }

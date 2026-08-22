@@ -75,8 +75,9 @@ unsafe impl<T: 'static> LocalRef<T> for RawLocalPooledRef<T> {
     unsafe fn release_event(&self) {
         #[cfg(debug_assertions)]
         {
-            // SAFETY: The `new()` contract requires this live event to be registered here, and
-            // the caller owns its sole cleanup right, so it remains live through unregistration.
+            // SAFETY: The `new()` contract requires this registered event to remain in its stable
+            // plurality slot with shared-only access. The caller owns its sole cleanup right, so
+            // those conditions hold until this unregistration returns.
             unsafe {
                 self.registry().unregister(self.event);
             }

@@ -76,8 +76,9 @@ impl<T: Send + 'static> EventPool<T> {
 
         #[cfg(debug_assertions)]
         {
-            // SAFETY: The event was just initialized in this pool and remains alive until the
-            // endpoint that receives cleanup ownership unregisters it immediately before release.
+            // SAFETY: Plurality keeps this initialized slot at a stable address until release,
+            // which occurs only after unregistration. Endpoints and the registry create only shared
+            // references to the event throughout that interval.
             unsafe {
                 self.core.registry.register(event);
             }
