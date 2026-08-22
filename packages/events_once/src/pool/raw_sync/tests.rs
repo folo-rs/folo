@@ -16,6 +16,7 @@ use super::*;
 use crate::assert_inspect_awaiters_is_reentrant;
 use crate::{
     Disconnected, PanickingPayload, assert_disconnected_send_payload_panic_releases_event,
+    assert_receiver_waker_panic_handoff_releases_event, assert_unread_payload_panic_releases_event,
 };
 
 // The payload satisfies only the bound that the pool's API requires (`Send`) and lacks every
@@ -31,7 +32,31 @@ fn disconnected_send_payload_panic_releases_event() {
     assert_disconnected_send_payload_panic_releases_event(
         // SAFETY: The pool remains pinned and alive until the helper consumes both endpoints.
         || unsafe { pool.as_ref().rent() },
-        |sender, value| sender.send(value),
+        RawPooledSender::send,
+        || pool.is_empty(),
+    );
+}
+
+#[test]
+fn receiver_waker_panic_handoff_releases_event() {
+    let pool = Box::pin(RawEventPool::<i32>::new());
+
+    assert_receiver_waker_panic_handoff_releases_event(
+        // SAFETY: The pool remains pinned and alive until the helper consumes both endpoints.
+        || unsafe { pool.as_ref().rent() },
+        RawPooledSender::send,
+        || pool.is_empty(),
+    );
+}
+
+#[test]
+fn unread_payload_panic_releases_event() {
+    let pool = Box::pin(RawEventPool::<PanickingPayload>::new());
+
+    assert_unread_payload_panic_releases_event(
+        // SAFETY: The pool remains pinned and alive until the helper consumes both endpoints.
+        || unsafe { pool.as_ref().rent() },
+        RawPooledSender::send,
         || pool.is_empty(),
     );
 }

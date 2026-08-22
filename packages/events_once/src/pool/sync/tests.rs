@@ -16,6 +16,7 @@ use super::*;
 use crate::assert_inspect_awaiters_is_reentrant;
 use crate::{
     Disconnected, PanickingPayload, assert_disconnected_send_payload_panic_releases_event,
+    assert_receiver_waker_panic_handoff_releases_event, assert_unread_payload_panic_releases_event,
 };
 
 // The payload satisfies only the bound that the pool's API requires (`Send`) and lacks every
@@ -30,7 +31,29 @@ fn disconnected_send_payload_panic_releases_event() {
 
     assert_disconnected_send_payload_panic_releases_event(
         || pool.rent(),
-        |sender, value| sender.send(value),
+        PooledSender::send,
+        || pool.is_empty(),
+    );
+}
+
+#[test]
+fn receiver_waker_panic_handoff_releases_event() {
+    let pool = EventPool::<i32>::new();
+
+    assert_receiver_waker_panic_handoff_releases_event(
+        || pool.rent(),
+        PooledSender::send,
+        || pool.is_empty(),
+    );
+}
+
+#[test]
+fn unread_payload_panic_releases_event() {
+    let pool = EventPool::<PanickingPayload>::new();
+
+    assert_unread_payload_panic_releases_event(
+        || pool.rent(),
+        PooledSender::send,
         || pool.is_empty(),
     );
 }

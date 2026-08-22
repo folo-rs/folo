@@ -245,7 +245,11 @@ mod tests {
     use super::*;
     #[cfg(debug_assertions)]
     use crate::assert_inspect_awaiters_is_reentrant;
-    use crate::{PanickingPayload, assert_disconnected_send_payload_panic_releases_event};
+    use crate::{
+        PanickingPayload, assert_disconnected_send_payload_panic_releases_event,
+        assert_receiver_waker_panic_handoff_releases_event,
+        assert_unread_payload_panic_releases_event,
+    };
 
     /// Compatible event representations must share the same internal layout pool.
     const EXPECTED_COMPATIBLE_LAYOUT_COUNT: usize = 1;
@@ -263,7 +267,31 @@ mod tests {
         assert_disconnected_send_payload_panic_releases_event(
             // SAFETY: The lake remains alive until the helper consumes both endpoints.
             || unsafe { lake.rent::<PanickingPayload>() },
-            |sender, value| sender.send(value),
+            RawLocalPooledSender::send,
+            || lake.is_empty(),
+        );
+    }
+
+    #[test]
+    fn receiver_waker_panic_handoff_releases_event() {
+        let lake = RawLocalEventLake::new();
+
+        assert_receiver_waker_panic_handoff_releases_event(
+            // SAFETY: The lake remains alive until the helper consumes both endpoints.
+            || unsafe { lake.rent::<i32>() },
+            RawLocalPooledSender::send,
+            || lake.is_empty(),
+        );
+    }
+
+    #[test]
+    fn unread_payload_panic_releases_event() {
+        let lake = RawLocalEventLake::new();
+
+        assert_unread_payload_panic_releases_event(
+            // SAFETY: The lake remains alive until the helper consumes both endpoints.
+            || unsafe { lake.rent::<PanickingPayload>() },
+            RawLocalPooledSender::send,
             || lake.is_empty(),
         );
     }

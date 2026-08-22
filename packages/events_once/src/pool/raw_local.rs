@@ -250,6 +250,8 @@ mod tests {
     use crate::assert_inspect_awaiters_is_reentrant;
     use crate::{
         Disconnected, PanickingPayload, assert_disconnected_send_payload_panic_releases_event,
+        assert_receiver_waker_panic_handoff_releases_event,
+        assert_unread_payload_panic_releases_event,
     };
 
     // The payload is itself thread-safe, so the pool is what confines this to one thread.
@@ -266,7 +268,31 @@ mod tests {
         assert_disconnected_send_payload_panic_releases_event(
             // SAFETY: The pool remains pinned and alive until the helper consumes both endpoints.
             || unsafe { pool.as_ref().rent() },
-            |sender, value| sender.send(value),
+            RawLocalPooledSender::send,
+            || pool.is_empty(),
+        );
+    }
+
+    #[test]
+    fn receiver_waker_panic_handoff_releases_event() {
+        let pool = Box::pin(RawLocalEventPool::<i32>::new());
+
+        assert_receiver_waker_panic_handoff_releases_event(
+            // SAFETY: The pool remains pinned and alive until the helper consumes both endpoints.
+            || unsafe { pool.as_ref().rent() },
+            RawLocalPooledSender::send,
+            || pool.is_empty(),
+        );
+    }
+
+    #[test]
+    fn unread_payload_panic_releases_event() {
+        let pool = Box::pin(RawLocalEventPool::<PanickingPayload>::new());
+
+        assert_unread_payload_panic_releases_event(
+            // SAFETY: The pool remains pinned and alive until the helper consumes both endpoints.
+            || unsafe { pool.as_ref().rent() },
+            RawLocalPooledSender::send,
             || pool.is_empty(),
         );
     }

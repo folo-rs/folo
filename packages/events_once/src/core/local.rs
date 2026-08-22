@@ -17,9 +17,9 @@ use std::task::Waker;
 #[cfg(debug_assertions)]
 use crate::{BacktraceType, capture_backtrace};
 use crate::{
-    BoxedLocalReceiver, BoxedLocalRef, BoxedLocalSender, Disconnected, EVENT_AWAITING, EVENT_BOUND,
-    EVENT_DISCONNECTED, EVENT_SET, EmbeddedLocalEvent, LocalReceiverCore, LocalSenderCore,
-    PtrLocalRef, RawLocalReceiver, RawLocalSender,
+    BoxedLocalReceiver, BoxedLocalRef, BoxedLocalSender, Cancellation, Disconnected,
+    EVENT_AWAITING, EVENT_BOUND, EVENT_DISCONNECTED, EVENT_SET, EmbeddedLocalEvent,
+    LocalReceiverCore, LocalSenderCore, PtrLocalRef, RawLocalReceiver, RawLocalSender,
 };
 
 /// Coordinates delivery of a `T` at most once from a sender to a receiver on the same thread.
@@ -35,6 +35,10 @@ use crate::{
 /// is likewise user-supplied code. Such a callback may operate on the sender endpoint of the event
 /// being polled: it may send a value and it may drop the sender. The poll observes the resulting
 /// state.
+///
+/// Destruction of a registered waker or discarded payload may also run arbitrary user code. The
+/// event completes any endpoint and storage cleanup that must survive unwinding before invoking
+/// such a destructor.
 pub struct LocalEvent<T> {
     /// The logical state of the event; see constants in `state.rs`.
     pub(crate) state: Cell<u8>,
@@ -496,7 +500,7 @@ impl<T: 'static> LocalEvent<T> {
     /// caller to close, so two obligations follow: every user-controlled callback (waker clone,
     /// drop or wake) must have finished before entry, and the caller must release the event on
     /// return without any further state-driven cleanup. Otherwise a callback that unwinds into
-    /// receiver cleanup reaches `final_poll()`, which trusts `EVENT_SET` and would read the
+    /// receiver cancellation reaches `cancel()`, which trusts `EVENT_SET` and would read the
     /// moved-out payload a second time. Ref: docs/callback-safety.md.
     #[must_use]
     fn poll_set(&self) -> T {
@@ -663,8 +667,46 @@ impl<T: 'static> LocalEvent<T> {
         matches!(self.state.get(), EVENT_SET | EVENT_DISCONNECTED)
     }
 
-    /// Attempts to obtain the value from the event, if one has been sent, while indicating
-    /// that no further polls will be performed by the receiver.
+    /// Extracts the terminal result after the receiver has observed a completed event.
+    ///
+    /// The receiver owns event cleanup after either result.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the event is not in a terminal state.
+    // Callgrind and disassembly show that terminal extraction must remain inline with
+    // `into_value()` to keep cancellation machinery off that hot path.
+    #[inline]
+    pub(crate) fn take_result(event_cell: &UnsafeCell<Self>) -> Result<T, Disconnected> {
+        // SAFETY: The event reference contract guarantees shared access through this outer
+        // UnsafeCell for as long as the receiver still owns its endpoint reference.
+        let event = unsafe { &*event_cell.get() };
+
+        let previous_state = event.state.replace(EVENT_DISCONNECTED);
+
+        match previous_state {
+            EVENT_SET => {
+                // SAFETY: EVENT_SET guarantees that the payload cell is initialized, and this
+                // terminal transition gives the receiver exclusive extraction rights.
+                let value_cell_maybe = unsafe { event.value.get().as_mut() };
+                // SAFETY: UnsafeCell pointer is never null.
+                let value_cell = unsafe { value_cell_maybe.unwrap_unchecked() };
+
+                // SAFETY: The state guarantee above proves the cell is initialized.
+                Ok(unsafe { value_cell.assume_init_read() })
+            }
+            EVENT_DISCONNECTED => Err(Disconnected),
+            // Defensive: the caller must have observed a terminal state.
+            _ => {
+                unreachable!(
+                    "unreachable {} state on terminal result extraction: {previous_state}",
+                    type_name::<Self>()
+                );
+            }
+        }
+    }
+
+    /// Cancels the receiver, returning the final event observation and any deferred callback.
     ///
     /// Returns `Ok(None)` if the sender has not yet sent a value. In this case, the sender will
     /// eventually clean up the event.
@@ -676,23 +718,19 @@ impl<T: 'static> LocalEvent<T> {
     /// See [`set()`][Self::set] for why the event arrives as an `&UnsafeCell<Self>`; here it is
     /// the waker's destructor rather than `wake()` that may release the event storage.
     #[inline]
-    pub(crate) fn final_poll(event_cell: &UnsafeCell<Self>) -> Result<Option<T>, Disconnected> {
+    pub(crate) fn cancel(event_cell: &UnsafeCell<Self>) -> Cancellation<T> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
         // still exist because something was able to call this method.
         let event = unsafe { &*event_cell.get() };
 
-        // If we are still awaiting, the receiver (the caller) owns the stored waker and must
-        // destroy it before disconnecting. We revert to EVENT_BOUND *before* dropping the waker
-        // so that a reentrant sender drop triggered by the waker's destructor observes a live,
-        // non-terminal event and defers cleanup, rather than deallocating the storage we are
-        // about to read from again. Only once the waker is gone do we read the resulting state
-        // and transition to EVENT_DISCONNECTED.
+        // If we are still awaiting, the receiver owns the stored waker. Move it out before
+        // disconnecting, but defer its destruction to the receiver core so no user code runs until
+        // the state transition and any storage release have completed.
         //
-        // This mirrors the sync `Event::final_poll`, which reverts AWAITING -> BOUND before
-        // destroying the awaiter, and follows docs/callback-safety.md ("No callbacks under
-        // borrows of shared state"; symmetric handoff vs. cleanup ordering).
-        if event.state.get() == EVENT_AWAITING {
+        // This mirrors the sync `Event::cancel`, which also reverts AWAITING -> BOUND before
+        // extracting the awaiter. Ref: docs/callback-safety.md.
+        let awaiter = if event.state.get() == EVENT_AWAITING {
             event.state.set(EVENT_BOUND);
 
             // SAFETY: The only other potential references to the field are other short-lived
@@ -702,27 +740,22 @@ impl<T: 'static> LocalEvent<T> {
             // SAFETY: UnsafeCell pointer is never null.
             let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
 
-            // We drop the waker and consider the field uninitialized again.
+            // We extract the waker and consider the field uninitialized again.
             // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker in there.
-            unsafe {
-                awaiter_cell.assume_init_drop();
-            }
-        }
+            Some(unsafe { awaiter_cell.assume_init_read() })
+        } else {
+            None
+        };
 
-        // Re-read the state: a reentrant sender drop during the waker's destructor above may
-        // have advanced us from EVENT_BOUND to EVENT_DISCONNECTED. In this single-threaded
-        // design the reentrant sender is the only actor that could have changed the state while
-        // we were dropping the waker.
         let previous_state = event.state.get();
 
         // We can immediately set this because this is a single-threaded event, so there cannot
         // be any race condition causing us issues with the receiver seeing this too early.
         event.state.set(EVENT_DISCONNECTED);
 
-        match previous_state {
+        let result = match previous_state {
             EVENT_BOUND => {
-                // The sender had not yet set any value (nor did a reentrant sender drop
-                // disconnect while we dropped the waker). It will clean up the event later.
+                // The sender had not yet set any value. It will clean up the event later.
                 Ok(None)
             }
             EVENT_SET => {
@@ -745,9 +778,7 @@ impl<T: 'static> LocalEvent<T> {
                 Ok(Some(value))
             }
             EVENT_DISCONNECTED => {
-                // The receiver is the last endpoint remaining, so it will clean up. This also
-                // covers the case where a reentrant sender drop disconnected while we dropped
-                // the waker above: the sender observed EVENT_BOUND and deferred cleanup to us.
+                // The receiver is the last endpoint remaining, so it will clean up.
                 Err(Disconnected)
             }
             // Defensive: state machine guarantees this is unreachable, since we already handled
@@ -758,6 +789,11 @@ impl<T: 'static> LocalEvent<T> {
                     type_name::<Self>()
                 );
             }
+        };
+
+        Cancellation {
+            result,
+            _awaiter: awaiter,
         }
     }
 }

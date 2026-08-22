@@ -1,5 +1,9 @@
 //! This simply wraps the core endpoints with a nicer API surface that eliminates
 //! the outer generic type parameter, leaving only the inner T of the payload.
+//!
+//! Hot-path forwarders are inlined so this API layer does not interrupt the generic core's
+//! inlining chain. Ref: `packages/events_once/AGENTS.md`, "`#[inline]` annotations have outsized
+//! impact in this package".
 
 use std::any::type_name;
 use std::panic::{RefUnwindSafe, UnwindSafe};
@@ -32,6 +36,7 @@ impl<T: Send + 'static> BoxedSender<T> {
     ///
     /// This method consumes the sender and always succeeds, regardless of whether
     /// there is a receiver waiting.
+    #[inline]
     pub fn send(self, value: T) {
         self.inner.send(value);
     }
@@ -56,9 +61,11 @@ impl<T: Send + 'static> fmt::Debug for BoxedSender<T> {
 /// # Reentrancy
 ///
 /// Cloning a waker during polling may synchronously send through or drop the sender. Waking or
-/// dropping a registered waker during completion or cancellation may synchronously poll this
-/// receiver to completion or drop an endpoint. The event publishes the resulting state before
-/// each callback.
+/// dropping a registered waker during completion may synchronously poll this receiver to completion
+/// or drop an endpoint. Destruction of a registered waker or discarded payload during cancellation
+/// may run arbitrary user code, including re-entering related user state or dropping a surviving
+/// endpoint. Before each callback, the event publishes the resulting state and completes any
+/// endpoint or storage cleanup that must survive unwinding.
 pub struct BoxedReceiver<T: Send + 'static> {
     inner: ReceiverCore<BoxedRef<T>, T>,
 }
@@ -83,6 +90,7 @@ impl<T: Send + 'static> BoxedReceiver<T> {
     /// # Panics
     ///
     /// Panics if called after `poll()` has returned `Ready`.
+    #[inline]
     #[must_use]
     pub fn is_ready(&self) -> bool {
         self.inner.is_ready()
@@ -135,6 +143,7 @@ impl<T: Send + 'static> BoxedReceiver<T> {
 impl<T: Send + 'static> Future for BoxedReceiver<T> {
     type Output = Result<T, Disconnected>;
 
+    #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
 
@@ -173,6 +182,7 @@ impl<T: Send + 'static> RawSender<T> {
     ///
     /// This method consumes the sender and always succeeds, regardless of whether
     /// there is a receiver waiting.
+    #[inline]
     pub fn send(self, value: T) {
         self.inner.send(value);
     }
@@ -198,9 +208,11 @@ impl<T: Send + 'static> fmt::Debug for RawSender<T> {
 /// # Reentrancy
 ///
 /// Cloning a waker during polling may synchronously send through or drop the sender. Waking or
-/// dropping a registered waker during completion or cancellation may synchronously poll this
-/// receiver to completion or drop an endpoint. The event publishes the resulting state before
-/// each callback.
+/// dropping a registered waker during completion may synchronously poll this receiver to completion
+/// or drop an endpoint. Destruction of a registered waker or discarded payload during cancellation
+/// may run arbitrary user code, including re-entering related user state or dropping a surviving
+/// endpoint. Before each callback, the event publishes the resulting state and completes any
+/// endpoint or storage cleanup that must survive unwinding.
 pub struct RawReceiver<T: Send + 'static> {
     inner: ReceiverCore<PtrRef<T>, T>,
 }
@@ -223,6 +235,7 @@ impl<T: Send + 'static> RawReceiver<T> {
     /// # Panics
     ///
     /// Panics if called after `poll()` has returned `Ready`.
+    #[inline]
     #[must_use]
     pub fn is_ready(&self) -> bool {
         self.inner.is_ready()
@@ -280,6 +293,7 @@ impl<T: Send + 'static> RawReceiver<T> {
 impl<T: Send + 'static> Future for RawReceiver<T> {
     type Output = Result<T, Disconnected>;
 
+    #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
 

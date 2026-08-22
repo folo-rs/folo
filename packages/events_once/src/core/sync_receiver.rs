@@ -106,17 +106,16 @@ where
                 Err(IntoValueError::Pending(self))
             }
             EVENT_SET | EVENT_DISCONNECTED => {
-                // The event has completed - consume self and
-                // let final_poll decide which endpoint performs the cleanup.
+                // The event has completed - consume self and extract its terminal result.
                 let mut this = ManuallyDrop::new(self);
                 let event_ref = this.event_ref.take().expect(
                     "event_ref was proven present above and neither the state inspection nor \
                      wrapping self in ManuallyDrop can clear it",
                 );
 
-                match Event::final_poll(&event_ref) {
-                    Ok(Some(value)) => {
-                        // SAFETY: `final_poll` returning a value means the state machine made
+                match Event::take_result(&event_ref) {
+                    Ok(value) => {
+                        // SAFETY: `take_result` returning a value means the state machine made
                         // the receiver the last endpoint and assigned it cleanup ownership. We
                         // do not access the event after this call - the receiver is consumed
                         // and its reference goes out of scope.
@@ -124,15 +123,11 @@ where
                             event_ref.release_event();
                         }
 
+                        drop(event_ref);
                         Ok(value)
                     }
-                    // Defensive: state machine guarantees final_poll
-                    // always returns Some or Err when the event has completed.
-                    Ok(None) => {
-                        unreachable!("final_poll returned None")
-                    }
                     Err(Disconnected) => {
-                        // SAFETY: `final_poll` reporting disconnection means the state machine
+                        // SAFETY: `take_result` reporting disconnection means the state machine
                         // made the receiver the last endpoint and assigned it cleanup ownership.
                         // We do not access the event after this call - the receiver is consumed
                         // and its reference goes out of scope.
@@ -140,6 +135,7 @@ where
                             event_ref.release_event();
                         }
 
+                        drop(event_ref);
                         Err(IntoValueError::Disconnected)
                     }
                 }
@@ -198,6 +194,41 @@ where
     }
 }
 
+/// Cancels a receiver that still owns an endpoint reference.
+///
+/// This path invokes user destructors and may release storage, while completed receivers only need
+/// to observe that their reference is absent. Keeping cancellation out of line preserves that
+/// common drop path through the public endpoint wrappers.
+// Callgrind and disassembly show that permitting inlining pulls this callback-heavy state machine
+// into generic receiver drop glue and regresses completed-event lifecycles.
+#[cold]
+#[inline(never)]
+fn cancel_receiver<E, T>(event_ref: E)
+where
+    E: EventRef<T>,
+    T: Send + 'static,
+{
+    let cancellation = Event::cancel(&event_ref);
+    let release_event = !matches!(&cancellation.result, Ok(None));
+
+    if release_event {
+        // Either a value was waiting for us or the sender has disconnected. Both outcomes leave
+        // the receiver as the last endpoint, so we release the event.
+        //
+        // SAFETY: `cancel` returned a terminal outcome, which is how the state machine assigns
+        // cleanup ownership to the receiver. The receiver is being dropped and its reference goes
+        // out of scope, so nothing accesses the event after this call.
+        unsafe {
+            event_ref.release_event();
+        }
+    }
+
+    // Endpoint bookkeeping and any owned storage release must complete before destructors for the
+    // discarded payload or extracted waker invoke user code.
+    drop(event_ref);
+    drop(cancellation);
+}
+
 impl<E, T> Drop for ReceiverCore<E, T>
 where
     E: EventRef<T>,
@@ -206,26 +237,7 @@ where
     #[inline]
     fn drop(&mut self) {
         if let Some(event_ref) = self.event_ref.take() {
-            match Event::final_poll(&event_ref) {
-                Ok(None) => {
-                    // Nothing for us to do - the sender was still connected and had not
-                    // sent any value, so it will perform the cleanup on its own.
-                }
-                _ => {
-                    // Either a value was waiting for us or the sender has disconnected. Both
-                    // outcomes leave the receiver as the last endpoint, so we release the event.
-                    // A value delivered here is intentionally discarded with the match
-                    // temporary - nobody is left to receive it.
-
-                    // SAFETY: `final_poll` returned a terminal outcome, which is how the state
-                    // machine assigns cleanup ownership to the receiver. The receiver is being
-                    // dropped and its reference goes out of scope, so nothing accesses the event
-                    // after this call.
-                    unsafe {
-                        event_ref.release_event();
-                    }
-                }
-            }
+            cancel_receiver(event_ref);
         }
     }
 }
