@@ -78,11 +78,11 @@ fn inspect_awaiters_propagates_panic_from_closure() {
         |message| assert!(message.contains("pass-through")),
     );
 
-    // The pool is still usable, which proves that the panic did not leave any lock behind.
     assert_eq!(pool.len(), 1);
 
     let mut inspected_count = 0;
 
+    // Relocking the diagnostic registry proves that the panic released its prior lock.
     pool.inspect_awaiters(|_bt| {
         inspected_count += 1;
     });

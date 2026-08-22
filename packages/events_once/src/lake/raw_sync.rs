@@ -1,18 +1,22 @@
-use std::any::{Any, TypeId, type_name};
+use std::any::type_name;
 #[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::pin::Pin;
 use std::ptr::NonNull;
 #[cfg(debug_assertions)]
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use hash_hasher::HashedMap;
+use plurality::MultiPool;
 
-use crate::{NEVER_POISONED, RawEventPool, RawPooledReceiver, RawPooledSender};
+#[cfg(debug_assertions)]
+use crate::EventRegistry;
+use crate::{
+    EVENT_COUNT_FITS_IN_USIZE, Event, NEVER_POISONED, RawPooledReceiver, RawPooledRef,
+    RawPooledSender, ReceiverCore, SenderCore, initialize_event,
+};
 
 /// Rents out events of different payloads.
 ///
@@ -50,26 +54,31 @@ use crate::{NEVER_POISONED, RawEventPool, RawPooledReceiver, RawPooledSender};
 /// ```
 #[derive(Debug)]
 pub struct RawEventLake {
-    // This is in an UnsafeCell to logically "detach" it from the parent object.
-    // We will create direct (shared) references to the contents of the cell not only from
-    // the pool but also from the event references themselves. This is safe as long as
-    // we never create conflicting references. We could not guarantee that for the parent
-    // object but we can guarantee it for the cell contents.
+    // The boxed core stays at a stable address so debug-only endpoint references can point to its
+    // registry. Methods form only shared core references; the multi pool and registry provide
+    // their own synchronization.
     core: NonNull<UnsafeCell<Core>>,
 }
 
+/// Owns heterogeneous event storage and diagnostics at a stable address.
 struct Core {
-    // This is a transparent HashMap, meaning it does not do any hashing.
-    // The reason is that the TypeId is already a hash, so hashing it again is redundant.
-    pools: Mutex<HashedMap<TypeId, Pin<Box<dyn ErasedPool>>>>,
+    events: Mutex<MultiPool>,
+
+    #[cfg(debug_assertions)]
+    registry: EventRegistry,
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl fmt::Debug for Core {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct(type_name::<Self>())
-            .field("pools", &self.pools)
-            .finish()
+        let mut f = f.debug_struct(type_name::<Self>());
+
+        f.field("events", &self.events);
+
+        #[cfg(debug_assertions)]
+        f.field("registry", &self.registry);
+
+        f.finish()
     }
 }
 
@@ -78,7 +87,9 @@ impl RawEventLake {
     #[must_use]
     pub fn new() -> Self {
         let core = Core {
-            pools: Mutex::new(HashedMap::default()),
+            events: Mutex::new(MultiPool::new()),
+            #[cfg(debug_assertions)]
+            registry: EventRegistry::new(),
         };
 
         // This exact pointer is reconstructed into an owning `Box` exactly once, in
@@ -116,39 +127,56 @@ impl RawEventLake {
     /// The caller must guarantee that the lake outlives the endpoints.
     #[must_use]
     pub unsafe fn rent<T: Send + 'static>(&self) -> (RawPooledSender<T>, RawPooledReceiver<T>) {
-        let type_id = TypeId::of::<T>();
+        let core = self.core();
+        let storage = core
+            .events
+            .lock()
+            .expect(NEVER_POISONED)
+            .alloc_uninit_box::<UnsafeCell<Event<T>>>();
+        let event = initialize_event(storage);
 
-        let mut pools = self.core().pools.lock().expect(NEVER_POISONED);
+        #[cfg(debug_assertions)]
+        {
+            // SAFETY: Plurality keeps this initialized slot at a stable address until release,
+            // which occurs only after unregistration. Endpoints and the registry create only shared
+            // references to the event throughout that interval.
+            unsafe {
+                core.registry.register(event);
+            }
+        }
 
-        let entry = pools
-            .entry(type_id)
-            .or_insert_with(|| Box::pin(PoolWrapper::<T>::new()));
+        // SAFETY: The event is initialized in an occupied plurality slot. Our caller promises the
+        // raw lake and its diagnostic registry outlive both endpoints. All access is shared until
+        // the state machine grants one endpoint sole cleanup ownership.
+        let event_ref = unsafe {
+            RawPooledRef::new(
+                #[cfg(debug_assertions)]
+                NonNull::from(&core.registry),
+                event,
+            )
+        };
 
-        let pool = entry
-            .as_any()
-            .downcast_ref::<PoolWrapper<T>>()
-            .expect("guarded by TypeId");
+        let inner_sender = SenderCore::new(event_ref.clone());
+        let inner_receiver = ReceiverCore::new(event_ref);
 
-        // SAFETY: All the pools are pinned, the wrapper just got lost in the downcast.
-        let pool = unsafe { Pin::new_unchecked(pool) };
-
-        pool.rent()
+        (
+            RawPooledSender::new(inner_sender),
+            RawPooledReceiver::new(inner_receiver),
+        )
     }
 
     /// Returns `true` if no events have currently been rented from the lake.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        let pools = self.core().pools.lock().expect(NEVER_POISONED);
-
-        pools.values().all(|x| x.is_empty())
+        self.core().events.lock().expect(NEVER_POISONED).is_empty()
     }
 
     /// Returns the number of events that have currently been rented from the lake.
     #[must_use]
     pub fn len(&self) -> usize {
-        let pools = self.core().pools.lock().expect(NEVER_POISONED);
+        let len = self.core().events.lock().expect(NEVER_POISONED).len();
 
-        pools.values().map(|x| x.len()).sum()
+        usize::try_from(len).expect(EVENT_COUNT_FITS_IN_USIZE)
     }
 
     /// Uses the provided closure to inspect the backtraces of the most recent awaiter of each
@@ -175,18 +203,12 @@ impl RawEventLake {
 
     /// Snapshots the backtrace of the most recent awaiter of each awaited event in the lake.
     ///
-    /// Both the lake lock and the locks of the pools it contains are released before this
-    /// returns, so the caller may pass the snapshots to user-supplied code without holding any
-    /// lock. Each snapshot is a shared owner of the backtrace, so it stays valid even if its
-    /// event is released in the meantime.
+    /// The diagnostic registry lock is released before this returns, so the caller may pass the
+    /// snapshots to user-supplied code without holding any lock. Each snapshot is a shared owner
+    /// of the backtrace, so it stays valid even if its event is released in the meantime.
     #[cfg(debug_assertions)]
     fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>> {
-        let pools = self.core().pools.lock().expect(NEVER_POISONED);
-
-        pools
-            .values()
-            .flat_map(|entry| entry.awaiter_backtraces())
-            .collect()
+        self.core().registry.awaiter_backtraces()
     }
 }
 
@@ -209,19 +231,13 @@ impl Drop for RawEventLake {
     }
 }
 
-// SAFETY: `new()` gives the lake unique ownership of a stable heap allocation (the boxed
-// `Core`); moving the lake to another thread moves only the `NonNull` pointer, never the
-// pointee, so ownership transfers cleanly. Everything reachable through `Core` is `Send`: the
-// map's values are `Pin<Box<dyn ErasedPool>>`, `ErasedPool` requires `Send` (see its trait bound
-// below), and the only `ErasedPool` implementation is on `PoolWrapper<T>` for `T: Send`. There is
-// therefore nothing non-`Send` reachable from an owned `RawEventLake`.
+// SAFETY: `new()` gives the lake unique ownership of a stable heap allocation. Moving the lake
+// moves only its pointer. `MultiPool` is `Send`, its mutex serializes allocation, and the
+// debug-only registry contains only synchronized backtrace cells from thread-safe events.
 unsafe impl Send for RawEventLake {}
-// SAFETY: Every access to `Core` goes through `core()`, which only ever produces a shared
-// `&Core`; `Core` itself has no other accessor. All shared access to the map inside `Core` (in
-// `rent()`, `is_empty()`, `len()`, and `awaiter_backtraces()`) is mediated by the `Mutex` around
-// it, and no code path ever forms a `&mut Core`. Sharing `&RawEventLake` across threads is
-// therefore safe: two threads can only ever contend on the same `Mutex`, never race on
-// unsynchronized memory.
+// SAFETY: Every access to the `!Sync` multi pool is mediated by its mutex. The registry
+// independently synchronizes diagnostic access, and no code path forms an exclusive core
+// reference while the lake is shared.
 unsafe impl Sync for RawEventLake {}
 
 // The NonNull<UnsafeCell<Core>> field disables auto-trait inference for
@@ -230,76 +246,6 @@ unsafe impl Sync for RawEventLake {}
 // state during unwind.
 impl UnwindSafe for RawEventLake {}
 impl RefUnwindSafe for RawEventLake {}
-
-struct PoolWrapper<T: 'static> {
-    inner: RawEventPool<T>,
-}
-
-impl<T: Send + 'static> PoolWrapper<T> {
-    fn new() -> Self {
-        Self {
-            inner: RawEventPool::new(),
-        }
-    }
-
-    fn rent(self: Pin<&Self>) -> (RawPooledSender<T>, RawPooledReceiver<T>) {
-        // SAFETY: The wrapper is reached only as `Pin<&PoolWrapper<T>>` (see `rent()` on
-        // `RawEventLake`, which pins the value once it is stored in the map and never moves it
-        // out again). `inner` is a private, directly-owned field that no method ever replaces,
-        // swaps or moves out of, so it cannot move independently of the wrapper while the wrapper
-        // remains pinned. Projecting to `&inner` is therefore a valid structural pin projection.
-        let inner = unsafe { self.map_unchecked(|s| &s.inner) };
-
-        // SAFETY: The top-level `RawEventLake::rent()` caller promises the lake outlives the
-        // returned endpoints. The lake owns the pools map and, transitively through this
-        // `PoolWrapper`, the `inner` pool for as long as the lake itself lives (the map entry is
-        // never removed except when the whole lake is dropped), so that same caller guarantee
-        // covers `inner` for the duration required by `RawEventPool::rent()`.
-        unsafe { inner.rent() }
-    }
-}
-
-#[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
-impl<T: Send + 'static> fmt::Debug for PoolWrapper<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct(type_name::<Self>())
-            .field("inner", &self.inner)
-            .finish()
-    }
-}
-
-/// A type-erased event pool for which we do not know the payload type any more.
-///
-/// We downcast from this to a specific pool wrapper when we need to rent events.
-trait ErasedPool: fmt::Debug + Send {
-    fn as_any(&self) -> &dyn Any;
-
-    fn is_empty(&self) -> bool;
-
-    fn len(&self) -> usize;
-
-    #[cfg(debug_assertions)]
-    fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>>;
-}
-
-impl<T: Send + 'static> ErasedPool for PoolWrapper<T> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
-    fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    #[cfg(debug_assertions)]
-    fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>> {
-        self.inner.awaiter_backtraces()
-    }
-}
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -321,6 +267,9 @@ mod tests {
     #[cfg(debug_assertions)]
     use crate::assert_inspect_awaiters_is_reentrant;
 
+    /// Compatible event representations must share the same internal layout pool.
+    const EXPECTED_COMPATIBLE_LAYOUT_COUNT: usize = 1;
+
     assert_impl_all!(RawEventLake: Send, Sync);
 
     assert_impl_all!(
@@ -329,7 +278,7 @@ mod tests {
 
     #[test]
     fn concurrent_same_type_rentals_are_usable_across_threads() {
-        // The smallest group that guarantees competing map and pool access.
+        // The smallest group that guarantees competing allocation access.
         const WORKER_COUNT: usize = 2;
 
         with_watchdog(|| {
@@ -361,8 +310,11 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_distinct_type_rentals_are_usable_across_threads() {
+    fn concurrent_same_layout_distinct_type_rentals_are_usable_across_threads() {
         with_watchdog(|| {
+            assert_eq!(size_of::<Event<i32>>(), size_of::<Event<u32>>());
+            assert_eq!(align_of::<Event<i32>>(), align_of::<Event<u32>>());
+
             let lake = Box::pin(RawEventLake::new());
             let barrier = Barrier::new(2);
 
@@ -394,15 +346,12 @@ mod tests {
 
                         // SAFETY: The enclosing scope joins this worker and its sender thread
                         // before the pinned lake is dropped.
-                        let (sender, receiver) = unsafe { lake.rent::<String>() };
+                        let (sender, receiver) = unsafe { lake.rent::<u32>() };
                         thread::scope(|scope| {
-                            scope
-                                .spawn(move || sender.send("payload".to_owned()))
-                                .join()
-                                .unwrap();
+                            scope.spawn(move || sender.send(24)).join().unwrap();
                         });
 
-                        assert_eq!(receiver.into_value().unwrap(), "payload");
+                        assert_eq!(receiver.into_value().unwrap(), 24);
                     }
                 });
             });
@@ -475,17 +424,41 @@ mod tests {
     }
 
     #[test]
+    fn reuses_compatible_storage_for_distinct_payload_types() {
+        assert_eq!(size_of::<Event<i32>>(), size_of::<Event<u32>>());
+        assert_eq!(align_of::<Event<i32>>(), align_of::<Event<u32>>());
+
+        let lake = RawEventLake::new();
+
+        // SAFETY: The lake remains alive until both returned endpoints are consumed.
+        let (sender, receiver) = unsafe { lake.rent::<i32>() };
+        sender.send(-42);
+        assert_eq!(receiver.into_value().unwrap(), -42);
+        assert!(lake.is_empty());
+
+        // SAFETY: The lake remains alive until both returned endpoints are consumed.
+        let (sender, receiver) = unsafe { lake.rent::<u32>() };
+        sender.send(42);
+        assert_eq!(receiver.into_value().unwrap(), 42);
+        assert!(lake.is_empty());
+        assert_eq!(
+            lake.core().events.lock().expect(NEVER_POISONED).layouts(),
+            EXPECTED_COMPATIBLE_LAYOUT_COUNT
+        );
+    }
+
+    #[test]
     #[cfg(debug_assertions)]
     fn inspect_awaiters_inspects_awaiters() {
         let lake = RawEventLake::new();
 
         // 2 events that are awaited and one that is not.
         // SAFETY: The lake remains alive until both returned endpoints are dropped.
-        let (sender1, receiver1) = unsafe { lake.rent::<String>() };
+        let (sender1, receiver1) = unsafe { lake.rent::<i32>() };
         // SAFETY: The lake remains alive until both returned endpoints are dropped.
-        let (_sender2, receiver2) = unsafe { lake.rent::<i32>() };
+        let (_sender2, receiver2) = unsafe { lake.rent::<u32>() };
         // SAFETY: The lake remains alive until both returned endpoints are dropped.
-        let (_sender3, _receiver3) = unsafe { lake.rent::<f64>() };
+        let (_sender3, _receiver3) = unsafe { lake.rent::<String>() };
 
         let mut receiver1 = Box::pin(receiver1);
         let mut receiver2 = Box::pin(receiver2);
@@ -537,7 +510,8 @@ mod tests {
             |message| assert!(message.contains("pass-through")),
         );
 
-        // The lake is still usable, which proves that the panic did not leave any lock behind.
+        // The lake is still usable, which proves that the panic did not leave the diagnostic
+        // registry locked.
         let mut call_count = 0;
 
         lake.inspect_awaiters(|_| {
@@ -551,10 +525,10 @@ mod tests {
     #[test]
     fn inspect_awaiters_closure_may_reenter_lake() {
         // The closure below reenters `inspect_awaiters()` and rents from the lake, both of
-        // which reacquire the lake's core `Mutex` (and the pool's own mutex) from the same
-        // thread. `inspect_awaiters()` must release every lock it holds before invoking the
-        // closure; a regression that invokes the closure under a held lock would deadlock this
-        // thread forever instead of failing an assertion, so we bound the test with a watchdog.
+        // which reacquire state from the same thread: inspection takes the diagnostic registry
+        // mutex, while renting takes the allocation mutex. `inspect_awaiters()` must release its
+        // registry lock before invoking the closure; otherwise this thread would deadlock instead
+        // of failing an assertion, so the watchdog bounds the test.
         with_watchdog(|| {
             let lake = RawEventLake::new();
 
@@ -566,7 +540,7 @@ mod tests {
             _ = receiver.as_mut().poll(&mut cx);
 
             assert_inspect_awaiters_is_reentrant(&|f| lake.inspect_awaiters(f), &|| {
-                // A payload type the lake has no pool for yet, to also exercise pool insertion.
+                // A new payload layout also exercises heterogeneous slot routing.
                 // SAFETY: The lake outlives both endpoints.
                 let (sender, receiver) = unsafe { lake.rent::<u8>() };
                 drop(sender);
@@ -578,11 +552,10 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn inspect_awaiters_tolerates_endpoint_drop_from_closure() {
-        // The closure below drops the endpoints it is being told about, which returns their
-        // event to its pool and reacquires the pool's mutex from the same thread that is
-        // currently iterating `inspect_awaiters()`. As above, a regression that holds the
-        // relevant lock across the closure call would deadlock rather than panic, so this test
-        // is bounded by a watchdog.
+        // The closure below drops the endpoints it is being told about, which unregisters their
+        // diagnostics from the same thread that is iterating `inspect_awaiters()`. A regression
+        // that holds the registry lock across the closure call would deadlock rather than panic,
+        // so this test is bounded by a watchdog.
         with_watchdog(|| {
             let lake = RawEventLake::new();
 

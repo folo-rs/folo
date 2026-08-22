@@ -388,9 +388,9 @@ mod linux {
         receiver
     }
 
-    // Steady-state rental from warmed managed pools. Returning the pool and endpoints keeps every
-    // destructor outside the measured region, so the count isolates slot acquisition, event
-    // initialization and endpoint construction.
+    // Steady-state rental from warmed managed pools and lakes. Returning the owner and endpoints
+    // keeps every destructor outside the measured region, so the count isolates slot acquisition,
+    // event initialization and endpoint construction.
 
     #[library_benchmark]
     #[bench::warm(warm_local_pool())]
@@ -404,6 +404,20 @@ mod linux {
     fn rent_sync_pooled(pool: EventPool<i32>) -> (EventPool<i32>, SyncPooledEndpoints) {
         let endpoints = black_box(pool.rent());
         black_box((pool, endpoints))
+    }
+
+    #[library_benchmark]
+    #[bench::warm(warm_local_lake())]
+    fn rent_local_lake(lake: LocalEventLake) -> (LocalEventLake, LocalPooledEndpoints) {
+        let endpoints = black_box(lake.rent::<i32>());
+        black_box((lake, endpoints))
+    }
+
+    #[library_benchmark]
+    #[bench::warm(warm_sync_lake())]
+    fn rent_sync_lake(lake: EventLake) -> (EventLake, SyncPooledEndpoints) {
+        let endpoints = black_box(lake.rent::<i32>());
+        black_box((lake, endpoints))
     }
 
     // Send-first lifecycle: acquire the endpoints, send, poll out the value and release
@@ -1231,7 +1245,12 @@ mod linux {
 
     library_benchmark_group!(
         name = rent,
-        benchmarks = [rent_local_pooled, rent_sync_pooled]
+        benchmarks = [
+            rent_local_pooled,
+            rent_sync_pooled,
+            rent_local_lake,
+            rent_sync_lake,
+        ]
     );
 
     library_benchmark_group!(

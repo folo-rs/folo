@@ -376,6 +376,8 @@ fn rent(c: &mut Criterion) {
     let mut g = c.benchmark_group("events_once_ops/rent");
     let local_pool = warm_local_pool();
     let sync_pool = warm_sync_pool();
+    let local_lake = warm_local_lake();
+    let sync_lake = warm_sync_lake();
 
     g.bench_function("local/pooled", |b| {
         b.iter_batched(
@@ -394,6 +396,28 @@ fn rent(c: &mut Criterion) {
             |pool| {
                 let endpoints = black_box(pool.rent());
                 black_box((pool, endpoints))
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    g.bench_function("local/lake", |b| {
+        b.iter_batched(
+            || local_lake.clone(),
+            |lake| {
+                let endpoints = black_box(lake.rent::<i32>());
+                black_box((lake, endpoints))
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    g.bench_function("sync/lake", |b| {
+        b.iter_batched(
+            || sync_lake.clone(),
+            |lake| {
+                let endpoints = black_box(lake.rent::<i32>());
+                black_box((lake, endpoints))
             },
             BatchSize::SmallInput,
         );
