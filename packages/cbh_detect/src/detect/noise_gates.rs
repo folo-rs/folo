@@ -31,11 +31,11 @@ pub const MIN_SERIES_POINTS: usize = 2 * MIN_REGIME;
 /// dropped before analysis, keeping only the most recent window.
 ///
 /// The tool is designed for series of dozens to a few hundred points; see
-/// `docs/DESIGN.md`, "Supported series length". The cap bounds how far the search for a
-/// step looks back and therefore bounds the work done by runtime permutation
-/// calibration. The value sits well above any realistic history, so the cap changes
-/// nothing in ordinary use; it prevents an unusually long series from consuming
-/// unbounded analysis time.
+/// `../../cargo-bench-history/docs/DESIGN.md`, "Supported series length". The cap bounds how
+/// far the search for a step looks back and therefore bounds exact-group calibration
+/// work. The value sits well above any realistic history, so the cap changes nothing
+/// in ordinary use; it prevents an unusually long series from consuming unbounded
+/// analysis time.
 pub const MAX_SERIES_POINTS: usize = 1000;
 
 /// The largest selection-adjusted chance level a change-point's Mann–Whitney rank test
@@ -57,44 +57,44 @@ pub const TARGET_FALSE_DISCOVERY_RATE: f64 = 0.10;
 /// The history detectors run as a pair and the better-fitting model is reported.
 ///
 /// Their individual p-values are multiplied by this count before gating to
-/// conservatively account for choosing between them. Ref: `docs/DESIGN.md`,
-/// "Choosing between a step and a drift".
+/// conservatively account for choosing between them. Ref:
+/// `../../cargo-bench-history/docs/DESIGN.md`, "Multiple-comparison discipline".
 pub const HISTORY_DETECTOR_COUNT: usize = 2;
 
-/// Conditional permutations added for each judged series in the false-discovery
-/// family, up to [`MAX_CHANGE_PERMUTATIONS`].
+/// Exact permutation-group order budget added for each judged series in the
+/// false-discovery family, up to [`MAX_CHANGE_PERMUTATION_ORDER`].
 ///
 /// At the hardest rank-1 Benjamini-Hochberg boundary, the pre-arbitration
 /// change-point p-value must be below `TARGET_FALSE_DISCOVERY_RATE /
-/// (HISTORY_DETECTOR_COUNT * family_size)`. This budget gives the null sample
-/// enough expected observations at that boundary to estimate it stably until the
-/// absolute cap takes over. Ref: `docs/DESIGN.md`, "Selection adjustment".
-pub const PERMUTATIONS_PER_JUDGED_SERIES: usize = 600;
+/// (HISTORY_DETECTOR_COUNT * family_size)`. Scaling the permitted exact group
+/// order with the family preserves useful resolution until the absolute cap takes
+/// over. Ref: `../../cargo-bench-history/docs/DESIGN.md`,
+/// "Multiple-comparison discipline".
+pub const PERMUTATION_ORDER_PER_JUDGED_SERIES: usize = 600;
 
-/// Absolute conditional-permutation budget for one selected change point.
+/// Minimum exact permutation-orbit order budget for any calibrated change point.
+///
+/// This admits the balanced all-position subgroup used by short histories,
+/// preserving useful conditional resolution even in a one-series family. It also
+/// covers every distinct ordering of the shortest tied steps.
+pub const MIN_CHANGE_PERMUTATION_ORDER: usize = 259_200;
+
+/// Absolute exact permutation-group order budget for one selected change point.
 ///
 /// The cap keeps work per series independent of an arbitrarily large analysis
-/// family. Its plus-one floor can still resolve the rank-1 Benjamini-Hochberg
-/// boundary at the stress harness's large-family scale after the analytic/
-/// permutation weighting and two-detector correction. With the current policy,
-/// zero-exceedance permutation resolves rank one through 22,500 judged series;
-/// above that, a candidate needs help from the analytic component. Clear changes
-/// normally use that component instead, while null candidates stop sequentially.
-pub const MAX_CHANGE_PERMUTATIONS: usize = 500_000;
-
-/// Extreme shuffled procedures needed before sequential calibration may stop.
-///
-/// This retains the former calibration target at the hardest uncapped family
-/// boundary: enough observations to estimate a near-threshold tail without making
-/// null candidates consume the entire maximum budget.
-pub const CHANGE_PERMUTATION_EXCEEDANCES: usize = 30;
+/// family. At the maximum supported series length, the largest realizable group
+/// can still resolve the rank-1 Benjamini-Hochberg boundary at the stress harness's
+/// large-family scale after analytic/permutation weighting and two-detector
+/// correction. With the current policy, its smallest nonzero result resolves rank
+/// one through 22,394 judged series. Shorter histories may realize a smaller group;
+/// clear changes normally use the analytic component instead.
+pub const MAX_CHANGE_PERMUTATION_ORDER: usize = 500_000;
 
 /// Bonferroni weight allocated to the analytic selection-adjustment component.
 ///
 /// The remaining weight goes to conditional permutation. Keeping most weight on
-/// permutation limits the ordinary power cost, while the analytic component needs
-/// only a small allocation to certify clear steps from an exponentially small
-/// finite-population tail bound.
+/// permutation limits the power cost of conservative finite-population bounds, while
+/// the analytic component can still certify clear steps.
 pub const CHANGE_ANALYTIC_WEIGHT: f64 = 0.10;
 
 /// Default `drift_min_points`: a series needs at least this many points before a

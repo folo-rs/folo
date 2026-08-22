@@ -587,7 +587,7 @@ fn exact_tail_p_values(counts: &[f64]) -> Vec<f64> {
 /// The Mann-Whitney tie-correction term from doubled average ranks.
 ///
 /// The value depends only on the rank multiset, so permutation calibration
-/// computes it once and reuses it for every shuffled ordering.
+/// computes it once and reuses it for every permuted ordering.
 pub(crate) fn mann_whitney_tie_term(scaled_ranks: &[usize]) -> f64 {
     let mut sorted = scaled_ranks.to_vec();
     sorted.sort_unstable();

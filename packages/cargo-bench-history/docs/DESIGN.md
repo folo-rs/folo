@@ -937,11 +937,12 @@ counts — because a large-sample approximation can be badly wrong in either dir
 
 Near-balanced splits of long histories exceed the exact counting range and retain the tie- and
 continuity-corrected normal score. History mode does not trust that approximate score as an honest
-p-value by itself: the selection adjustment (§8.3) applies the same exact-or-normal scorer to the
-observed ordering and to permutations of that series' actual values. The final chance level is
-therefore measured from the score's conditional null distribution, including the observed tie
-pattern. Exact scoring is retained where affordable for resolution and power; conditional
-calibration is what makes the complete history verdict honest in both scoring paths.
+p-value by itself: the selection adjustment in "Multiple-comparison discipline" applies the same
+exact-or-normal scorer to the observed ordering and to permutations of that series' actual values.
+The final chance level is therefore measured from the score's conditional null distribution,
+including the observed tie pattern. Exact scoring is retained where affordable for resolution and
+power; conditional calibration is what makes the complete history verdict honest in both scoring
+paths.
 
 The residual pool draws only from samples long enough to describe scatter. A sample of a single
 point is its own median, so it contributes a residual of exactly zero that says nothing about the
@@ -1052,7 +1053,8 @@ both can only *suppress* a candidate the other gates would report.
 The chance level a finding must clear is **selection-adjusted in history mode**. A history
 series is examined by both detectors and at every interior split, so the raw significance of
 the split the detectors *chose* overstates how surprising it is; history mode corrects for
-that search, and for running two detectors, before applying the gate (§8.3), so the
+that search, and for running two detectors, before applying the gate described in
+"Multiple-comparison discipline", so the
 significance level means what it says. Branch mode's final context-versus-base comparison is
 predetermined, but its optional base-window narrowing searches suffixes and split positions. Its
 chance level is not adjusted for that baseline selection. Neither mode reports a "confidence"
@@ -1155,31 +1157,46 @@ use the approximation only to identify the rank-sum tails that count as equally 
 bound those tails with finite-population concentration inequalities. Adding the per-split bounds
 is conservative regardless of which split Pettitt selected.
 
-The **conditional-permutation component** repeatedly shuffles the series' actual rank multiset,
-including every repeated value, and runs the complete production procedure on each ordering:
-Pettitt first-maximum split selection, minimum-regime rejection, and exact-or-normal Mann–Whitney
-scoring. A shuffled ordering whose selected split is too short remains in the denominator as no
-evidence; dropping it would condition on finding a reportable split and make the result optimistic.
+When the minimum regime leaves only one admissible split and its rank score is exact, no split-search
+penalty is needed: selecting that one split can only suppress fixed-split results, not create extra
+ones.
+
+Otherwise the **conditional-permutation component** runs the complete production procedure on an
+exact conditional orbit: Pettitt first-maximum split selection, minimum-regime rejection, and
+exact-or-normal Mann–Whitney scoring. When every distinct ordering of the observed rank multiset
+fits the work budget, all of them are evaluated. Otherwise every member of one fixed, finite
+permutation subgroup is evaluated, including the identity. A permuted ordering whose selected split
+is too short remains in the denominator as no evidence; dropping it would condition on finding a
+reportable split and make the result optimistic. Under the no-change hypothesis, the observed time
+order is exchangeable within either complete orbit. The fraction at least as striking as the
+observation is therefore an exact randomization p-value. In the subgroup path, repeated orderings
+caused by tied values are counted with their group multiplicity.
 The analytic and permutation components receive fixed portions of the available chance level and
 are combined by weighted Bonferroni, so either may provide the stronger answer without requiring
 them to be independent. The analytic component receives `0.10`, permutation receives `0.90`, and
 the combined split-search chance level is
 `min(analytic / 0.10, permutation / 0.90, 1)`.
 
-The permutation stream is reproducible and invariant to the observed ordering: its stable seed is
-derived from sorted canonical value bits, the sorted rank multiset, and the fixed regime rule.
-An analytic answer that already clears the strictest possible family threshold needs no shuffles.
-Otherwise sequential permutation stops after 30 shuffled winners are at least as striking and
-returns `30 / draws`, while a candidate that does not reach that count uses the plus-one estimate
-`(1 + exceedances) / (1 + maximum)` at its maximum budget. For a judged family of size `m`, that
-maximum is `min(600m, 500000)`. At the ceiling, a zero-exceedance permutation component still
-clears the rank-1 boundary of the 20,000-series stress family after its weight and the
-two-detector correction. With the current weights and false-discovery target, permutation alone has
-enough resolution through 22,500 judged series. The ceiling prevents a large family from
-multiplying its size into every series' work, making total permutation work linear in family size
-once it applies. It can make an isolated, ambiguous candidate in a larger family too coarse to
-survive the strictest family threshold; that candidate stays silent rather than borrowing certainty
-the bounded calculation did not establish.
+The fallback group is derived reproducibly from the series length and a declared order budget,
+independently of the observed values and their ordering. An analytic answer that already clears the
+strictest possible family threshold needs no permutation work. During exact enumeration, the
+extreme count so far divided by the final orbit order is a lower bound on the completed permutation
+p-value. Work may stop only when that bound proves that the analytic component must win or that
+neither component can clear the detector's rejection boundary; no partial count is reported as
+though it were a completed estimate.
+
+For a judged family of size `m`, the orbit-order budget is
+`min(max(600m, 259200), 500000)`. The minimum preserves useful short-history power; the maximum
+bounds every candidate independently of family size. The realizable fallback group also depends on
+series length and can be smaller than that budget. At the supported
+1,000-point series limit, the ceiling yields a group of order 497,664. Its smallest nonzero
+permutation result clears the rank-1 boundary of the 20,000-series stress family after weighting
+and the two-detector correction, and permutation alone has enough resolution through 22,394
+judged series. Shorter histories may have less permutation resolution. The ceiling prevents a
+large family from multiplying its size into unbounded per-series work, making total permutation
+work linear in family size once it applies. It can make an isolated, ambiguous candidate too
+coarse to survive the strictest family threshold; that candidate stays silent rather than
+borrowing certainty the bounded calculation did not establish.
 
 Permutation-independent gates run before this calibration, and a change point is calibrated only
 when its fitted step is at least as good as the drift model. These reorderings do not loosen the
@@ -1190,9 +1207,9 @@ After this split-search adjustment, history mode doubles both detectors' chance 
 for choosing between change-point and drift. The result is the honest per-series chance level that
 the significance gate and family correction both consume. Branch mode does not use these history adjustments. Its final comparison is predetermined, but
 optional base-window narrowing searches suffixes and split positions and is not selection-adjusted.
-The supported upper series length (§8) and the per-candidate permutation ceiling jointly bound the
-work of history calibration. This is a worst-case bound rather than a uniform speed promise: an
-ambiguous maximum-length series may use the full ceiling.
+The upper series length in "Supported series length" and the per-candidate permutation ceiling jointly
+bound the work of history calibration. This is a worst-case bound rather than a uniform speed
+promise: an ambiguous maximum-length series may use the full ceiling.
 
 That same predicate is what every report accounts for (§8.9): a series is judged, counted in
 the family, and reported as judged together, or it is none of the three.

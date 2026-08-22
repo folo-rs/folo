@@ -14,10 +14,11 @@ interpretation to the analysis engine.
 ## Selection adjustment
 
 The `selection` module owns change-point selection correction described in the
-[design](../../cargo-bench-history/docs/DESIGN.md) (§8.2, §8.3). Searching every interior split
-and retaining the strongest taints the Mann–Whitney p-value at that split. A correction based only
-on length is insufficient because benchmark series commonly contain repeated integer values, and
-different tie patterns have different null distributions.
+[design](../../cargo-bench-history/docs/DESIGN.md), in "Noise-aware gating" and
+"Multiple-comparison discipline". Searching every interior split and retaining the strongest
+taints the Mann–Whitney p-value at that split. A correction based only on length is insufficient
+because benchmark series commonly contain repeated integer values, and different tie patterns
+have different null distributions.
 
 `selection_adjusted_change_point` therefore combines an analytic certificate with conditional
 permutation over the exact observed rank multiset. Both are valid p-value components and receive
@@ -36,6 +37,8 @@ the sampling-without-replacement fraction, and keeps the smaller valid tail boun
 fixed-split tails is conservative regardless of Pettitt's selection rule: a selected score at least
 as striking as the observation must occur at one of the splits in the union.
 [Hoeffding's comparison theorem] and [Serfling's inequality] supply the finite-population bounds.
+When an exact scorer has only one admissible split, its fixed-split p-value needs no search
+adjustment: requiring Pettitt to select that split only narrows the rejection event.
 
 The scorer caches every property invariant under permutation. Doubled average ranks make Pettitt
 prefix sums and exact subset sums integral; the tie correction and total rank sum are computed
@@ -46,22 +49,34 @@ split needs one. Near-balanced long splits use the same normal scorer as the pro
 The final conditional p-value remains meaningful even when that internal score is approximate
 because calibration compares like with like over the observed tie pattern.
 
-Permutation order comes from a committed FNV-1a seed derivation, SplitMix64 stream, and
-Fisher–Yates shuffle. The seed hashes sorted canonical value bits, sorted doubled ranks, and the
-minimum-regime rule, so it is stable across platforms and invariant to the observed ordering.
-Signed zero is canonicalized before hashing while the rank multiset retains the actual tie pattern.
+Permutation calibration uses a complete conditional orbit rather than a sample from all possible
+time orderings. If the number of distinct rank orderings fits the order budget, lexicographic
+enumeration visits each exactly once. Otherwise a finite subgroup is enumerated completely,
+including the identity. Under the no-change null, the observation is exchangeable within either
+orbit, so the fraction at least as extreme is an exact randomization p-value by the
+[finite-group randomization principle]. Subgroup stabilizers caused by tied values correctly
+contribute repeated orderings with their group multiplicity.
 
-One shared `SplitScorer` evaluates the observed and every shuffled ordering: Pettitt first-maximum
+The general fallback group is a direct product of symmetric groups over mixed-radix coordinates.
+Its factorization maximizes the product of coordinate factorials within the series-length and order
+budgets. Short histories whose best Cartesian action touches too few positions instead use
+`A6 × S6` over disjoint position sets. Every action is conjugated by a fixed SplitMix64 bijection
+and spread across the history to avoid alignment with contiguous regimes. Conjugation changes which
+time positions the group connects without changing closure or order. The mixer is construction
+logic only: calibration still enumerates the entire resulting group and does not use pseudorandom
+samples.
+
+One shared `SplitScorer` evaluates the observed and every permuted ordering: Pettitt first-maximum
 location, minimum-regime rejection, and the same exact-or-normal Mann–Whitney score. Rejected
-shuffled splits contribute the no-evidence score while remaining in the denominator. Sequential
-Monte Carlo stops at a predeclared count `h` of shuffled scores at least as extreme and returns
-`h / draws`; when the maximum budget arrives first it returns the fixed-budget plus-one value.
-This [Besag-Clifford] stopping rule is valid under the conditional permutation null and avoids
-spending the maximum on ordinary null series. The caller may also skip permutation when the
-weighted analytic component already clears a predeclared acceptance boundary.
+permuted splits contribute the no-evidence score while remaining in the denominator. During
+enumeration, `extreme_so_far / final_orbit_order` is a monotone lower bound on the completed
+permutation p-value. Calibration may stop only when this proves that the weighted analytic
+component must be the combined minimum or that both components meet the caller's rejection
+boundary. It never reports a partial-orbit fraction as a p-value. The caller may skip all
+permutation work when the weighted analytic component already clears its acceptance boundary.
 
-[Besag-Clifford]: https://doi.org/10.1093/biomet/78.2.301
 [Hoeffding's comparison theorem]: https://doi.org/10.1080/01621459.1963.10500830
+[finite-group randomization principle]: https://doi.org/10.1214/aoms/1177729436
 [Serfling's inequality]: https://doi.org/10.1214/aos/1176342611
 
 ## Rank-test significance
@@ -86,7 +101,7 @@ enumeration runs over the smaller side so every intermediate subset count also s
 enumerating the larger side would overflow at its half-size subsets even when the reported answer
 is small. Because the count is done in `f64`, no big-integer dependency is pulled in and the kernel
 stays Miri-safe. History-mode selection adjustment calibrates whichever path this split-level
-scorer takes against the same path over conditional permutations.
+scorer takes against the same path over the complete conditional permutation group.
 
 The detector's early population-separation gate needs only Mann–Whitney superiority, not
 significance. `mann_whitney_superiority` therefore shares the joint-ranking calculation but omits

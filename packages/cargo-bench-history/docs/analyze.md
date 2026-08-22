@@ -120,7 +120,7 @@ flowchart TD
   SS --> CENSUS["classify testability + size family\n— serial metadata prepass —"]
   CENSUS --> DALL["cheap gates + model fit:\none chunk of series per worker\n(spawned)"]
   DALL --> CANDS["candidate findings"]
-  DALL --> CAL["bounded selection calibration\n(clear-step analytic certificate;\nsequential conditional permutation)"]
+  DALL --> CAL["bounded selection calibration\n(clear-step analytic certificate;\ncomplete conditional orbit)"]
   CAL --> CANDS
   CANDS --> BH["false-discovery filter — serial —"]
   CENSUS -->|series census: judged + reasons| BH
@@ -137,11 +137,11 @@ worker over the whole input. Per series the mode selects the detector: history r
 change-point and a drift detector and keeps the better fit; branch collapses each commit's
 runs to one level, narrows the recent base window to its current regime when that window
 contains an unambiguous level shift — held to a stricter separation floor than a reported
-move, since narrowing discards evidence (DESIGN.md §8.2) — and judges the tip against that
+move, since narrowing discards evidence (DESIGN.md, “Noise-aware gating”) — and judges the tip against that
 regime's prediction interval.
 
 The false-discovery filter's family is every series that was **testable**, including those that
-raised no candidate (DESIGN.md §8.3). A cheap serial prepass evaluates the mode-aware testability
+raised no candidate (DESIGN.md, “Multiple-comparison discipline”). A cheap serial prepass evaluates the mode-aware testability
 predicate, builds the **series census** — judged, and one reason per series it declined — and makes
 the final family size available before statistical work starts. This ordering is required because
 history change-point calibration uses that family size to choose its bounded permutation precision
@@ -149,16 +149,17 @@ and the analytic acceptance boundary that guarantees survival even at the strict
 Workers evaluate the same pure predicate to short-circuit unjudged series, so the count and
 execution decision cannot diverge. The census outlives detection: the pipeline records the
 ghost-filtered series into it too (their exclusion happens before detection ever sees them) and
-hands it to the renderers, which is how a report states what it judged (DESIGN.md §8.9).
+hands it to the renderers, which is how a report states what it judged
+(DESIGN.md, “Accounting for what was judged”).
 
 History change points pass permutation-independent magnitude, residual, population-separation, and
 interval gates before calibration. The step is calibrated only when it fits at least as well as the
 already-evaluated drift; a qualified drift remains the fallback if significance then rejects the
 step. Clear steps can finish through the analytic split-union certificate. Remaining candidates use
-conditional permutation, which stops after its predeclared exceedance count for ordinary nulls and
-has an absolute per-candidate ceiling for strong or ambiguous tails. Every series remains
-independent of the others, preserving the dependence assumptions of the final
-Benjamini–Hochberg pass.
+a complete conditional permutation orbit with an absolute per-candidate ceiling. Enumeration stops
+early only after a lower bound proves the final answer is already forced. Every series remains
+independent of the others, preserving the dependence assumptions of the final Benjamini–Hochberg
+pass.
 
 The statistical kernels are chosen to keep the tens-of-millions-of-points path affordable —
 an in-place unstable sort for the median (no scratch buffer, and ties are bit-identical so

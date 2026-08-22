@@ -27,16 +27,16 @@ const HIGH_SERIES_LEN: usize = 1000;
 const AMBIGUOUS_SERIES_LEN: usize = 50;
 /// The largest lopsided side that remains exactly enumerable at the production cap.
 const HIGH_LEFT_LEN: usize = 6;
-/// Production calibration budget for a family containing one judged series.
-const PERMUTATIONS: usize = 600;
-/// Production sequential exceedance limit.
-const EXCEEDANCES: usize = 30;
+/// Production minimum calibration budget for a small analysis family.
+const PERMUTATION_ORDER_BUDGET: usize = 259_200;
 /// Production weight of the analytic calibration component.
 const ANALYTIC_WEIGHT: f64 = 0.10;
 /// Rank-1 acceptance level for a family containing one judged series.
 const ACCEPTANCE_LEVEL: f64 = 0.025;
+/// Rank-1 pre-arbitration level for the seven-series crowded fixture.
+const CROWDED_ACCEPTANCE_LEVEL: f64 = 0.1 / 14.0;
 /// Production maximum reached by an unresolved large-family candidate.
-const MAX_PERMUTATIONS: usize = 500_000;
+const MAX_PERMUTATION_ORDER: usize = 500_000;
 /// Rank-1 pre-arbitration level at the stress harness's large-family scale.
 const LARGE_FAMILY_ACCEPTANCE_LEVEL: f64 = 0.000_002_5;
 /// Pre-arbitration rejection boundary used by the history detector.
@@ -66,10 +66,9 @@ fn exact_lopsided(c: &mut Criterion) {
 
 fn selection_adjustment(c: &mut Criterion) {
     let mut group = c.benchmark_group("cbh_stats_significance/selection_adjustment");
-    let budget = NonZero::new(PERMUTATIONS).expect("the production budget is nonzero");
+    let budget = NonZero::new(PERMUTATION_ORDER_BUDGET).expect("the production budget is nonzero");
     let calibration = SelectionCalibration {
-        permutations: budget,
-        exceedances: NonZero::new(EXCEEDANCES).expect("the production exceedance limit is nonzero"),
+        permutation_order_budget: budget,
         analytic_weight: ANALYTIC_WEIGHT,
         accept_analytic_below: ACCEPTANCE_LEVEL,
         reject_at_or_above: REJECTION_LEVEL,
@@ -82,6 +81,21 @@ fn selection_adjustment(c: &mut Criterion) {
                 black_box(&low),
                 LOW_LEFT_LEN,
                 calibration,
+            ))
+        });
+    });
+
+    let short = distinct_short_step();
+    let short_calibration = SelectionCalibration {
+        accept_analytic_below: CROWDED_ACCEPTANCE_LEVEL,
+        ..calibration
+    };
+    group.bench_function("12-points/exact-subgroup", |b| {
+        b.iter(|| {
+            black_box(selection_adjusted_change_point(
+                black_box(&short),
+                LOW_LEFT_LEN,
+                short_calibration,
             ))
         });
     });
@@ -99,8 +113,8 @@ fn selection_adjustment(c: &mut Criterion) {
 
     let ambiguous = ambiguous_step();
     let capped = SelectionCalibration {
-        permutations: NonZero::new(MAX_PERMUTATIONS).expect("the production maximum is nonzero"),
-        exceedances: NonZero::new(EXCEEDANCES).expect("the production exceedance limit is nonzero"),
+        permutation_order_budget: NonZero::new(MAX_PERMUTATION_ORDER)
+            .expect("the production maximum is nonzero"),
         analytic_weight: ANALYTIC_WEIGHT,
         accept_analytic_below: LARGE_FAMILY_ACCEPTANCE_LEVEL,
         reject_at_or_above: REJECTION_LEVEL,
@@ -131,6 +145,12 @@ fn clean_step(series_len: usize) -> Vec<f64> {
         vec![20.0; series_len.saturating_sub(split)],
     ]
     .concat()
+}
+
+fn distinct_short_step() -> Vec<f64> {
+    vec![
+        98.0, 100.0, 102.0, 99.0, 101.0, 100.0, 148.0, 150.0, 152.0, 149.0, 151.0, 150.0,
+    ]
 }
 
 fn ambiguous_step() -> Vec<f64> {

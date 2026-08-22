@@ -6,17 +6,18 @@
 //! one unusually convincing split.
 //!
 //! [`selection_adjusted_change_point`] combines a conservative analytic bound over
-//! every eligible split with shuffled orderings of the series' actual values. Every
-//! shuffle retains the same values and ties, runs the same Pettitt first-maximum split
-//! selection, applies the same minimum-regime rule, and scores the accepted split with
-//! the same exact-or-normal Mann-Whitney implementation. Both components therefore
-//! account for split selection without trusting the tainted winning score.
+//! every eligible split with a complete finite permutation-group orbit of the series'
+//! actual values. Every permuted ordering retains the same values and ties, runs the
+//! same Pettitt first-maximum split selection, applies the same minimum-regime rule,
+//! and scores the accepted split with the same exact-or-normal Mann-Whitney
+//! implementation. Both components therefore account for split selection without
+//! trusting the tainted winning score.
 
 mod permutation;
 
 use std::num::NonZero;
 
-use permutation::{SplitMix64, permutation_seed, shuffle};
+use permutation::{PermutationOrbit, group_order};
 
 use crate::{
     NO_EVIDENCE, exact_mw_feasible, exact_rank_sum_p_values, mann_whitney_tie_term,
@@ -26,20 +27,24 @@ use crate::{
 /// Largest integer through which binary64 represents every integer exactly.
 const MAX_EXACT_F64_INTEGER: u128 = 1 << f64::MANTISSA_DIGITS;
 
-/// Controls the bounded conditional-permutation calibration of one selected split.
+/// Relative slack for comparisons between independently evaluated normal p-values.
 ///
-/// The analytic component can certify an especially clear change without sampling.
-/// Otherwise the permutation component stops at either `exceedances` null results at
-/// least as extreme as the observation or `permutations`, whichever comes first.
+/// This allows one final-bit rounding difference per arithmetic step in the normal-score
+/// path. Expanding the rejection region by this amount can only make the analytic bound
+/// more conservative.
+const APPROXIMATE_P_COMPARISON_RELATIVE_TOLERANCE: f64 = 64.0 * f64::EPSILON;
+
+/// Controls bounded exact-group calibration of one selected split.
+///
+/// The analytic component can certify an especially clear change immediately.
+/// Otherwise `permutation_order_budget` bounds an exact conditional orbit.
 /// `analytic_weight` allocates part of the combined p-value to the analytic component;
 /// the remainder belongs to permutation. The acceptance and rejection boundaries let
 /// the scorer omit work that cannot affect its caller's decision.
 #[derive(Clone, Copy, Debug)]
 pub struct SelectionCalibration {
-    /// Maximum number of conditional permutations.
-    pub permutations: NonZero<usize>,
-    /// Extreme permutations needed before sequential calibration may stop.
-    pub exceedances: NonZero<usize>,
+    /// Maximum order of the exact conditional orbit.
+    pub permutation_order_budget: NonZero<usize>,
     /// Bonferroni weight allocated to the analytic component.
     pub analytic_weight: f64,
     /// Combined p-value below which the analytic component needs no permutation.
@@ -164,7 +169,7 @@ impl SplitScorer {
     }
 }
 
-/// Locates and selection-adjusts a change point by conditional permutation.
+/// Locates and selection-adjusts a change point by exact permutation.
 ///
 /// The analytic component applies a union bound over every admissible split. Exact
 /// Mann-Whitney splits contribute their valid fixed-split p-value; approximate splits
@@ -172,11 +177,11 @@ impl SplitScorer {
 /// region with a finite-population Chernoff inequality. It can certify a clear change
 /// without sampling.
 ///
-/// Otherwise permutation uses the Besag-Clifford sequential rule: stop at the
-/// predeclared exceedance count and return `exceedances / draws`, or exhaust the
-/// maximum budget and return the plus-one value `(1 + extreme) / (1 + permutations)`.
-/// A shuffled ordering whose selected split violates `min_regime` contributes the
-/// no-evidence score and remains in the denominator. Ties count as exceedances.
+/// Otherwise calibration enumerates every distinct ordering of the observed rank
+/// multiset when that fits `permutation_order_budget`, or every element of a
+/// deterministic subgroup within that budget. The observed ordering is included. A
+/// permuted ordering whose selected split violates `min_regime` contributes the
+/// no-evidence score and remains in the denominator. Ties count as equally extreme.
 ///
 /// The two valid components are combined by weighted Bonferroni and the result is
 /// clamped to be no smaller than the selected Mann-Whitney score.
@@ -187,8 +192,7 @@ impl SplitScorer {
 /// # Panics
 ///
 /// Panics if `min_regime` is zero, a calibration boundary or weight is invalid,
-/// the exceedance limit exceeds the permutation budget, or the permutation budget
-/// cannot be incremented and represented exactly as an `f64` denominator.
+/// or the exact permutation-orbit order cannot be represented as an `f64` denominator.
 #[must_use]
 pub fn selection_adjusted_change_point(
     values: &[f64],
@@ -208,28 +212,9 @@ pub fn selection_adjusted_change_point(
         calibration.reject_at_or_above > 0.0 && calibration.reject_at_or_above <= 1.0,
         "the rejection boundary must be in (0, 1]"
     );
-    assert!(
-        calibration.exceedances <= calibration.permutations,
-        "the exceedance limit must not exceed the permutation budget"
-    );
-    assert!(
-        calibration.permutations.get() < usize::MAX,
-        "the permutation budget must leave room for the plus-one correction"
-    );
-    let total = calibration
-        .permutations
-        .get()
-        .checked_add(1)
-        .expect("the validated permutation budget leaves room for plus one");
-    assert!(
-        total as u128 <= MAX_EXACT_F64_INTEGER,
-        "the plus-one permutation denominator must be exactly representable as f64"
-    );
-
     let observed_ranks = scaled_average_ranks(values);
     let mut sorted_ranks = observed_ranks.clone();
     sorted_ranks.sort_unstable();
-    let seed = permutation_seed(values, &sorted_ranks, min_regime);
     let mut scorer = SplitScorer::new(sorted_ranks.clone(), min_regime);
     let observed = scorer.score(&observed_ranks)?;
 
@@ -237,6 +222,9 @@ pub fn selection_adjusted_change_point(
     // score already outside the next gate needs no calibration.
     if observed.p >= calibration.reject_at_or_above {
         return Some(result(observed, NO_EVIDENCE));
+    }
+    if single_exact_split_needs_no_adjustment(observed_ranks.len(), min_regime) {
+        return Some(result(observed, observed.p));
     }
 
     let analytic = analytic_selection_p(&mut scorer, observed.p);
@@ -246,33 +234,84 @@ pub fn selection_adjusted_change_point(
     }
 
     let permutation_weight = 1.0 - calibration.analytic_weight;
-    let mut rng = SplitMix64::new(seed);
-    let mut shuffled = sorted_ranks;
+    let mut orbit = PermutationOrbit::new(
+        sorted_ranks,
+        observed_ranks.len(),
+        calibration.permutation_order_budget.get(),
+    );
+    let order = orbit.order();
+    assert!(
+        order as u128 <= MAX_EXACT_F64_INTEGER,
+        "the exact permutation-orbit denominator must be exactly representable as f64"
+    );
+    let mut permuted = observed_ranks.clone();
     let mut extreme = 0_usize;
-    for draw in 1..=calibration.permutations.get() {
-        shuffle(&mut shuffled, &mut rng);
-        let shuffled_p = scorer.score(&shuffled).map_or(NO_EVIDENCE, |score| score.p);
-        if shuffled_p <= observed.p {
+    for element in 0..order {
+        orbit.apply(&observed_ranks, &mut permuted);
+        let permuted_p = scorer.score(&permuted).map_or(NO_EVIDENCE, |score| score.p);
+        if permuted_p <= observed.p {
             extreme = extreme.saturating_add(1);
-            if extreme >= calibration.exceedances.get() {
-                let sequential = count_to_f64(extreme) / count_to_f64(draw);
-                return Some(result(
-                    observed,
-                    combined_p(weighted_analytic, sequential / permutation_weight).max(observed.p),
-                ));
-            }
+        }
+        let partial_permutation = weighted_permutation_p(extreme, order, permutation_weight);
+        if let Some(adjusted_p) = decisive_partial_orbit_p(
+            weighted_analytic,
+            partial_permutation,
+            calibration.reject_at_or_above,
+        ) {
+            return Some(result(observed, adjusted_p.max(observed.p)));
+        }
+        if element.saturating_add(1) < order {
+            assert!(
+                orbit.advance(),
+                "the exact permutation enumerator must produce its declared order"
+            );
         }
     }
 
-    let fixed = count_to_f64(extreme.saturating_add(1)) / count_to_f64(total);
     Some(result(
         observed,
-        combined_p(weighted_analytic, fixed / permutation_weight).max(observed.p),
+        combined_p(
+            weighted_analytic,
+            weighted_permutation_p(extreme, order, permutation_weight),
+        )
+        .max(observed.p),
     ))
+}
+
+/// Exact fallback-subgroup order used for a series and configured upper bound.
+#[must_use]
+pub fn selection_fallback_group_order(
+    series_len: usize,
+    order_budget: NonZero<usize>,
+) -> NonZero<usize> {
+    NonZero::new(group_order(series_len, order_budget.get()))
+        .expect("the identity gives every permutation group nonzero order")
 }
 
 fn analytic_is_decisive(weighted_p: f64, acceptance_boundary: f64) -> bool {
     weighted_p < acceptance_boundary
+}
+
+fn single_exact_split_needs_no_adjustment(series_len: usize, min_regime: usize) -> bool {
+    min_regime.checked_mul(2) == Some(series_len) && exact_mw_feasible(min_regime, min_regime)
+}
+
+fn decisive_partial_orbit_p(
+    weighted_analytic: f64,
+    partial_permutation: f64,
+    rejection_boundary: f64,
+) -> Option<f64> {
+    if partial_permutation >= weighted_analytic {
+        Some(weighted_analytic)
+    } else if partial_permutation >= rejection_boundary {
+        Some(NO_EVIDENCE)
+    } else {
+        None
+    }
+}
+
+fn weighted_permutation_p(extreme: usize, order: usize, permutation_weight: f64) -> f64 {
+    count_to_f64(extreme) / count_to_f64(order) / permutation_weight
 }
 
 /// Conservative conditional p-value for selecting the strongest admissible split.
@@ -362,14 +401,14 @@ fn closest_lower_rejection_sum(
     expected: usize,
     observed_p: f64,
 ) -> Option<usize> {
-    if scorer.p_for_subset(smaller_side, minimum) > observed_p {
+    if !reaches_approximate_rejection(scorer.p_for_subset(smaller_side, minimum), observed_p) {
         return None;
     }
     let mut low = minimum;
     let mut high = expected;
     while low != high {
         let middle = low.saturating_add(high.saturating_sub(low).div_ceil(2));
-        if scorer.p_for_subset(smaller_side, middle) <= observed_p {
+        if reaches_approximate_rejection(scorer.p_for_subset(smaller_side, middle), observed_p) {
             low = middle;
         } else {
             high = middle.saturating_sub(1);
@@ -386,20 +425,24 @@ fn closest_upper_rejection_sum(
     maximum: usize,
     observed_p: f64,
 ) -> Option<usize> {
-    if scorer.p_for_subset(smaller_side, maximum) > observed_p {
+    if !reaches_approximate_rejection(scorer.p_for_subset(smaller_side, maximum), observed_p) {
         return None;
     }
     let mut low = expected;
     let mut high = maximum;
     while low != high {
         let middle = low.midpoint(high);
-        if scorer.p_for_subset(smaller_side, middle) <= observed_p {
+        if reaches_approximate_rejection(scorer.p_for_subset(smaller_side, middle), observed_p) {
             high = middle;
         } else {
             low = middle.saturating_add(1);
         }
     }
     Some(low)
+}
+
+fn reaches_approximate_rejection(candidate_p: f64, observed_p: f64) -> bool {
+    candidate_p <= observed_p.mul_add(APPROXIMATE_P_COMPARISON_RELATIVE_TOLERANCE, observed_p)
 }
 
 /// Chernoff bound for one rank-sum tail under sampling without replacement.
@@ -499,12 +542,9 @@ mod tests {
     use crate::test_util::close;
     use crate::{MannWhitneyU, pettitt};
 
-    fn calibration(permutations: NonZero<usize>) -> SelectionCalibration {
+    fn calibration(permutation_order_budget: NonZero<usize>) -> SelectionCalibration {
         SelectionCalibration {
-            permutations,
-            exceedances: NonZero::new(30)
-                .expect("the test exceedance limit is nonzero")
-                .min(permutations),
+            permutation_order_budget,
             analytic_weight: 0.1,
             accept_analytic_below: f64::MIN_POSITIVE,
             reject_at_or_above: 0.025,
@@ -554,25 +594,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "must leave room for the plus-one correction")]
-    fn maximum_usize_permutation_budget_is_rejected() {
-        let budget = NonZero::new(usize::MAX).expect("usize::MAX is nonzero");
-        let _result = selection_adjusted_change_point(&[1.0, 2.0], 1, calibration(budget));
-    }
-
-    #[cfg(target_pointer_width = "64")]
-    #[test]
-    #[should_panic(expected = "denominator must be exactly representable as f64")]
-    fn inexact_permutation_denominator_is_rejected() {
-        let budget = NonZero::new(
-            usize::try_from(MAX_EXACT_F64_INTEGER)
-                .expect("the binary64 exact-integer limit fits 64-bit usize"),
-        )
-        .expect("the binary64 exact-integer limit is nonzero");
-        let _result = selection_adjusted_change_point(&[1.0, 2.0], 1, calibration(budget));
-    }
-
-    #[test]
     #[should_panic(expected = "analytic weight")]
     fn zero_analytic_weight_is_rejected() {
         let mut calibration = calibration(NonZero::new(10).expect("the test budget is nonzero"));
@@ -585,16 +606,6 @@ mod tests {
     fn zero_analytic_acceptance_boundary_is_rejected() {
         let mut calibration = calibration(NonZero::new(10).expect("the test budget is nonzero"));
         calibration.accept_analytic_below = 0.0;
-        _ = selection_adjusted_change_point(&[1.0, 2.0], 1, calibration);
-    }
-
-    #[test]
-    #[should_panic(expected = "exceedance limit")]
-    fn exceedance_limit_above_the_budget_is_rejected() {
-        let budget = NonZero::new(10).expect("the test budget is nonzero");
-        let mut calibration = calibration(budget);
-        calibration.exceedances =
-            NonZero::new(budget.get().saturating_add(1)).expect("the limit is nonzero");
         _ = selection_adjusted_change_point(&[1.0, 2.0], 1, calibration);
     }
 
@@ -615,10 +626,34 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "the production short-history orbit is too large for interpretation"
+    )]
+    fn distinct_noisy_step_has_family_scale_resolution() {
+        let values = [
+            98.0, 100.0, 102.0, 99.0, 101.0, 100.0, 148.0, 150.0, 152.0, 149.0, 151.0, 150.0,
+        ];
+        let adjusted = selection_adjusted_change_point(
+            &values,
+            5,
+            SelectionCalibration {
+                permutation_order_budget: NonZero::new(259_200)
+                    .expect("the production minimum is nonzero"),
+                analytic_weight: 0.1,
+                accept_analytic_below: 0.1 / 14.0,
+                reject_at_or_above: 0.025,
+            },
+        )
+        .expect("the selected split is reportable");
+        assert!(adjusted.adjusted_p < 0.1 / 14.0, "{adjusted:?}");
+    }
+
+    #[test]
     fn analytic_certificate_clears_stress_scale_boundary_without_permutations() {
         // These constants mirror the detector policy at the stress harness's default
-        // family size. Zero-exceedance permutation can just resolve rank one, while this
-        // fixture protects the analytic path that avoids paying that maximum budget.
+        // family size. The exact subgroup can resolve rank one, while this fixture
+        // protects the analytic path that avoids enumerating the complete group.
         const FAMILY_SIZE: usize = 20_000;
         const DETECTOR_COUNT: usize = 2;
         const TARGET_FALSE_DISCOVERY_RATE: f64 = 0.10;
@@ -642,8 +677,10 @@ mod tests {
         let weighted_analytic = analytic_selection_p(&mut scorer, observed.p) / ANALYTIC_WEIGHT;
         let rank_one_boundary =
             TARGET_FALSE_DISCOVERY_RATE / count_to_f64(DETECTOR_COUNT.saturating_mul(FAMILY_SIZE));
-        let weighted_permutation_floor = NO_EVIDENCE
-            / (count_to_f64(PERMUTATION_CAP.saturating_add(1)) * (1.0 - ANALYTIC_WEIGHT));
+        let budget = NonZero::new(PERMUTATION_CAP).expect("the production cap is nonzero");
+        let order = selection_fallback_group_order(values.len(), budget);
+        let weighted_permutation_floor =
+            NO_EVIDENCE / (count_to_f64(order.get()) * (1.0 - ANALYTIC_WEIGHT));
 
         assert!(weighted_permutation_floor < rank_one_boundary);
         assert!(weighted_analytic < rank_one_boundary, "{weighted_analytic}");
@@ -658,11 +695,10 @@ mod tests {
     }
 
     #[test]
-    fn fixed_budget_uses_the_plus_one_permutation_estimate() {
+    fn exact_group_counts_the_complete_orbit() {
         let budget = NonZero::new(10).expect("the test budget is nonzero");
         let calibration = SelectionCalibration {
-            permutations: budget,
-            exceedances: NonZero::new(2).expect("the test exceedance limit is nonzero"),
+            permutation_order_budget: budget,
             analytic_weight: 1e-10,
             accept_analytic_below: f64::MIN_POSITIVE,
             reject_at_or_above: NO_EVIDENCE,
@@ -670,31 +706,29 @@ mod tests {
         let adjusted =
             selection_adjusted_change_point(&[vec![1.0; 6], vec![2.0; 6]].concat(), 5, calibration)
                 .expect("the clean split is reportable");
-        close(adjusted.adjusted_p, 0.090_909_090_918_181_82, 1e-15);
+        close(adjusted.adjusted_p, 0.125_000_000_012_5, 1e-15);
     }
 
     #[test]
-    fn sequential_stopping_reports_exceedances_over_draws() {
-        let budget = NonZero::new(10).expect("the test budget is nonzero");
-        let calibration = SelectionCalibration {
-            permutations: budget,
-            exceedances: NonZero::new(2).expect("the test exceedance limit is nonzero"),
-            analytic_weight: 1e-10,
-            accept_analytic_below: f64::MIN_POSITIVE,
-            reject_at_or_above: NO_EVIDENCE,
-        };
-        let values = [2.0, 2.0, 1.0, 2.0, 1.0, 2.0, 2.0, 1.0, 2.0, 1.0, 1.0, 1.0];
-        let adjusted = selection_adjusted_change_point(&values, 5, calibration)
-            .expect("the selected split is reportable");
-        close(adjusted.adjusted_p, 0.285_714_285_742_857_1, 1e-15);
+    fn partial_orbit_stopping_returns_only_a_proven_component() {
+        assert_eq!(decisive_partial_orbit_p(0.02, 0.01, 0.025), None);
+        assert_eq!(decisive_partial_orbit_p(0.02, 0.02, 0.025), Some(0.02));
+        assert_eq!(
+            decisive_partial_orbit_p(0.5, 0.025, 0.025),
+            Some(NO_EVIDENCE)
+        );
+    }
+
+    #[test]
+    fn permutation_component_uses_orbit_order_and_weight() {
+        close(weighted_permutation_p(3, 10, 0.8), 0.375, 1e-15);
     }
 
     #[test]
     fn analytic_acceptance_returns_the_weighted_certificate() {
         let budget = NonZero::new(10).expect("the test budget is nonzero");
         let calibration = SelectionCalibration {
-            permutations: budget,
-            exceedances: NonZero::new(2).expect("the test exceedance limit is nonzero"),
+            permutation_order_budget: budget,
             analytic_weight: 0.1,
             accept_analytic_below: NO_EVIDENCE,
             reject_at_or_above: NO_EVIDENCE,
@@ -713,6 +747,20 @@ mod tests {
         assert!(analytic_is_decisive(0.01, 0.02));
         assert!(!analytic_is_decisive(0.02, 0.02));
         assert!(!analytic_is_decisive(0.03, 0.02));
+    }
+
+    #[test]
+    fn sole_exact_admissible_split_needs_no_search_penalty() {
+        let values = [
+            98.0, 100.0, 102.0, 99.0, 101.0, 128.0, 130.0, 132.0, 129.0, 131.0,
+        ];
+        let adjusted = selection_adjusted_change_point(
+            &values,
+            5,
+            calibration(NonZero::new(1).expect("the identity budget is nonzero")),
+        )
+        .expect("the sole admissible split is selected");
+        assert_eq!(adjusted.adjusted_p, adjusted.tainted_p);
     }
 
     #[test]
@@ -832,7 +880,7 @@ mod tests {
     fn reportable_tied_step_is_not_rejected_by_early_stopping() {
         // Of the C(12, 6) tied orderings, the two fully separated orders are at
         // least as extreme as this one. The adjusted chance level therefore stays
-        // below the detector boundary while still encountering extreme shuffles.
+        // below the detector boundary while still encountering extreme permutations.
         let values = [vec![10.0; 6], vec![20.0; 6]].concat();
         let adjusted = selection_adjusted_change_point(
             &values,
@@ -961,14 +1009,12 @@ mod tests {
     }
 
     #[test]
-    fn sequential_combination_is_conservative_with_ties() {
-        // Enumerating every ordering mechanically covers both Besag-Clifford exit
-        // paths and the weighted analytic/permutation combination under one tied
-        // conditional null.
+    fn exact_group_combination_is_conservative_with_ties() {
+        // Enumerating every observed ordering mechanically checks the weighted
+        // analytic/exact-group combination under one tied conditional null.
         let budget = NonZero::new(10).expect("the test budget is nonzero");
         let calibration = SelectionCalibration {
-            permutations: budget,
-            exceedances: NonZero::new(2).expect("the test exceedance limit is nonzero"),
+            permutation_order_budget: budget,
             analytic_weight: 0.1,
             accept_analytic_below: f64::MIN_POSITIVE,
             reject_at_or_above: NO_EVIDENCE,
@@ -995,7 +1041,7 @@ mod tests {
             let reported = adjusted.iter().filter(|&&value| value <= level).count();
             assert!(
                 count_to_f64(reported) <= level * total + f64::EPSILON,
-                "P(sequential <= {level}) exceeded {level} for a tied null"
+                "P(combined <= {level}) exceeded {level} for a tied null"
             );
         }
     }

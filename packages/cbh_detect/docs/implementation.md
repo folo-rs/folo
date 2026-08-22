@@ -45,13 +45,14 @@ Permutation-independent magnitude and noise gates run before selection adjustmen
 also fits the drift before calibration and calibrates a step only when that model fits at least as
 well; a qualified drift remains the fallback if the step then fails significance. Calibration
 combines a conservative analytic split-union bound with conditional permutation under fixed
-Bonferroni weights. An analytic result that clears the rank-1 family boundary needs no shuffles.
-Otherwise the permutation calculation uses Besag-Clifford stopping at a predeclared exceedance
-count, with a family-scaled maximum held under an absolute per-candidate ceiling. This bounds
-strong-candidate work without introducing cross-series allocation decisions that would change the
+Bonferroni weights. An analytic result that clears the rank-1 family boundary needs no permutation
+work. If only one exact split is admissible, its fixed-split score needs no search correction.
+Otherwise calibration enumerates either every distinct rank ordering that fits the budget or every
+member of a deterministic finite subgroup. Partial enumeration may stop only when its monotone
+lower bound proves the analytic component must win or the candidate must fail. This bounds
+candidate work without introducing cross-series allocation decisions that would change the
 dependence assumptions of Benjamini–Hochberg. The ceiling is a hard bound, not a claim that every
-candidate is cheap: an ambiguous maximum-length series may consume the full budget, while clear
-steps and ordinary nulls take the analytic and sequential exits respectively.
+candidate is cheap: an ambiguous maximum-length series may consume the full orbit.
 
 Parallel work is supplied through an executor abstraction, preserving the same deterministic
 analysis logic for production execution and synchronous component tests.

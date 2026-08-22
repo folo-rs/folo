@@ -138,7 +138,8 @@ impl AnalysisContext {
     /// Whether a finding of the given `direction` is reported in this mode.
     ///
     /// The two modes ask differently shaped questions, so they keep different
-    /// directions (DESIGN §8.3, §8.5). History mode is a drift watch over the base
+    /// directions (DESIGN, "Multiple-comparison discipline" and "Analysis modes").
+    /// History mode is a drift watch over the base
     /// branch, where improvement over time is the expected background and only a
     /// worsening warrants attention, so it is one-directional. Branch mode judges one
     /// change against its base, where any movement is what the reader came for.
@@ -989,7 +990,8 @@ fn arbitrate(
 /// chance level cancels that inflation. The factor is a conservative ceiling ("at most
 /// about twice as often"), so it holds however strongly the two detectors agree, and it is
 /// applied to both before each detector's significance gate so a candidate cannot clear the
-/// gate on an uncorrected value. Ref: docs/DESIGN.md, "Multiple-comparison discipline".
+/// gate on an uncorrected value. Ref: `../../cargo-bench-history/docs/DESIGN.md`,
+/// "Multiple-comparison discipline".
 ///
 /// The result is clamped to `1.0`, since a chance level cannot exceed certainty. Branch
 /// mode runs no arbitration, so the factor does not apply there.
@@ -997,12 +999,15 @@ fn across_both_detectors(chance_level: f64) -> f64 {
     (count_to_f64(noise_gates::HISTORY_DETECTOR_COUNT) * chance_level).min(1.0)
 }
 
-/// Bounded permutation budget for one change-point test in this analysis family.
-fn change_point_permutation_budget(family_size: usize) -> NonZero<usize> {
+/// Bounded permutation-group order for one change-point test in this analysis family.
+fn change_point_permutation_order_budget(family_size: usize) -> NonZero<usize> {
     NonZero::new(
         family_size
-            .saturating_mul(noise_gates::PERMUTATIONS_PER_JUDGED_SERIES)
-            .min(noise_gates::MAX_CHANGE_PERMUTATIONS),
+            .saturating_mul(noise_gates::PERMUTATION_ORDER_PER_JUDGED_SERIES)
+            .clamp(
+                noise_gates::MIN_CHANGE_PERMUTATION_ORDER,
+                noise_gates::MAX_CHANGE_PERMUTATION_ORDER,
+            ),
     )
     .expect("an evaluated series belongs to a nonempty judged family")
 }
@@ -1138,9 +1143,7 @@ fn calibrate_change_point(
         "the early-rejection boundary must invert detector arbitration"
     );
     let calibration = stats::SelectionCalibration {
-        permutations: change_point_permutation_budget(family_size),
-        exceedances: NonZero::new(noise_gates::CHANGE_PERMUTATION_EXCEEDANCES)
-            .expect("the configured exceedance limit is nonzero"),
+        permutation_order_budget: change_point_permutation_order_budget(family_size),
         analytic_weight: noise_gates::CHANGE_ANALYTIC_WEIGHT,
         accept_analytic_below: smallest_family_chance_level(family_size).min(reject_at_or_above),
         reject_at_or_above,
@@ -1797,7 +1800,8 @@ fn evaluate_branch(
 /// The cap drops the oldest points beyond the supported length so both detectors
 /// and runtime permutation calibration see the same bounded `n`. The tool is
 /// built for series of dozens to a few hundred points, so the cap changes
-/// nothing in ordinary use. Ref: docs/DESIGN.md, "Supported series length".
+/// nothing in ordinary use. Ref: `../../cargo-bench-history/docs/DESIGN.md`,
+/// "Supported series length".
 fn active_view(series: &Series) -> Series {
     let active = series.points.get(series.active_start..).unwrap_or_default();
     let keep_from = active.len().saturating_sub(noise_gates::MAX_SERIES_POINTS);
@@ -1981,7 +1985,7 @@ fn finalize_findings(
     // raising a candidate in a direction named in advance is at most half the chance of
     // raising one either way. The p-values the correction sees therefore overstate the
     // risk of what it admits, and the bound holds with room to spare.
-    // Ref: DESIGN.md §8.3.
+    // Ref: DESIGN.md, "Multiple-comparison discipline".
     let mut candidates = candidates;
     candidates.retain(|candidate| context.keeps(candidate.finding.direction));
 
@@ -2237,10 +2241,10 @@ mod tests {
     use crate::detect::noise_gates::{
         BRANCH_PRACTICAL_RELATIVE, CHANGE_ANALYTIC_WEIGHT, COMPARE_WINDOW, DRIFT_MIN_POINTS,
         DRIFT_NOISE_MULTIPLE, EXCURSION_MAX_REMOVALS, MAX_CHANGE_CHANCE_LEVEL,
-        MAX_CHANGE_PERMUTATIONS, MAX_DRIFT_CHANCE_LEVEL, MAX_SERIES_POINTS,
-        MIN_BASE_SPLIT_SEPARATION, MIN_REGIME, MIN_REGIME_SEPARATION, MIN_SERIES_POINTS,
-        PERMUTATIONS_PER_JUDGED_SERIES, PRACTICAL_ABSOLUTE_COUNT, PRACTICAL_RELATIVE,
-        RESIDUAL_NOISE_MULTIPLE, TARGET_FALSE_DISCOVERY_RATE,
+        MAX_CHANGE_PERMUTATION_ORDER, MAX_DRIFT_CHANCE_LEVEL, MAX_SERIES_POINTS,
+        MIN_BASE_SPLIT_SEPARATION, MIN_CHANGE_PERMUTATION_ORDER, MIN_REGIME, MIN_REGIME_SEPARATION,
+        MIN_SERIES_POINTS, PERMUTATION_ORDER_PER_JUDGED_SERIES, PRACTICAL_ABSOLUTE_COUNT,
+        PRACTICAL_RELATIVE, RESIDUAL_NOISE_MULTIPLE, TARGET_FALSE_DISCOVERY_RATE,
     };
     use crate::detect::recorded::{
         STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_HIGH, STATIONARY_BIMODAL_NOISE,
@@ -2493,28 +2497,34 @@ mod tests {
     }
 
     #[test]
-    fn change_point_permutation_budget_is_capped() {
+    fn change_point_permutation_order_budget_is_capped() {
         assert_eq!(
-            change_point_permutation_budget(1).get(),
-            PERMUTATIONS_PER_JUDGED_SERIES
+            change_point_permutation_order_budget(1).get(),
+            MIN_CHANGE_PERMUTATION_ORDER
         );
         assert_eq!(
-            change_point_permutation_budget(MAX_CHANGE_PERMUTATIONS).get(),
-            MAX_CHANGE_PERMUTATIONS
+            change_point_permutation_order_budget(500).get(),
+            500 * PERMUTATION_ORDER_PER_JUDGED_SERIES
+        );
+        assert_eq!(
+            change_point_permutation_order_budget(MAX_CHANGE_PERMUTATION_ORDER).get(),
+            MAX_CHANGE_PERMUTATION_ORDER
         );
     }
 
     #[test]
-    fn capped_zero_exceedance_permutation_resolves_the_default_stress_family() {
+    fn capped_exact_group_resolves_the_default_stress_family() {
         // The stress harness's default large family is the scale promised by the
-        // permutation-cap documentation. Pin that cross-package scenario here so a
-        // budget or weight change cannot silently make rank one unresolvable.
+        // exact-group documentation. Pin that cross-package scenario here so an
+        // order budget or weight change cannot silently make rank one unresolvable.
         const DEFAULT_STRESS_FAMILY_SIZE: usize = 20_000;
-        const DOCUMENTED_RESOLUTION_LIMIT: usize = 22_500;
+        const DOCUMENTED_RESOLUTION_LIMIT: usize = 22_394;
 
         let permutation_weight = 1.0 - CHANGE_ANALYTIC_WEIGHT;
-        let weighted_floor =
-            1.0 / (count_to_f64(MAX_CHANGE_PERMUTATIONS.saturating_add(1)) * permutation_weight);
+        let budget =
+            NonZero::new(MAX_CHANGE_PERMUTATION_ORDER).expect("the production cap is nonzero");
+        let group_order = stats::selection_fallback_group_order(MAX_SERIES_POINTS, budget);
+        let weighted_floor = 1.0 / (count_to_f64(group_order.get()) * permutation_weight);
         assert!(weighted_floor < smallest_family_chance_level(DEFAULT_STRESS_FAMILY_SIZE));
         assert!(weighted_floor < smallest_family_chance_level(DOCUMENTED_RESOLUTION_LIMIT));
         assert!(
@@ -5535,8 +5545,8 @@ mod tests {
         // BH denominator). The permutation component's 90% Bonferroni weight is
         // already reflected in that chance level. Flat companions are judged and
         // do count, while companions one point too short are not judged and do not.
-        const FAMILY_THAT_REPORTS: usize = 5;
-        const FAMILY_THAT_REJECTS: usize = 6;
+        const FAMILY_THAT_REPORTS: usize = 6;
+        const FAMILY_THAT_REJECTS: usize = 7;
 
         let stepped = named_series(
             "stepped",

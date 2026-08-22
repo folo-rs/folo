@@ -97,9 +97,10 @@ flowchart LR
 
 Detection corrects that advantage by asking how often chance could produce **a winner at least this
 strong**. It has two conservative ways to answer. A mathematical bound over every possible split
-can certify an especially clear step immediately. Otherwise the detector shuffles the same
-measurements into other time orders and runs the entire split search again. Frequent equally strong
-shuffled winners explain the apparent step; rare ones support it.
+can certify an especially clear step immediately. If only one exact split is possible, that
+fixed comparison is already fair. Otherwise the detector constructs a bounded conditional orbit,
+checks every member, and runs the entire split search again. Frequent equally strong rearranged
+winners explain the apparent step; rare ones support it.
 
 ```mermaid
 flowchart LR
@@ -108,10 +109,10 @@ flowchart LR
     FIT -->|no| D["Use qualified drift"]
     FIT -->|yes| A["Bound every possible<br/>split mathematically"]
     A -->|clear enough| AC["Search-adjusted<br/>step chance level"]
-    A -->|needs more resolution| S["Shuffle the same values;<br/>repeat the full search"]
-    S --> C{"Enough equally strong<br/>shuffled winners?"}
-    C -->|yes: ordinary null| AC
-    C -->|no: maximum reached| AC
+    A -->|needs more resolution| S["Try the next member of the<br/>complete conditional orbit"]
+    S --> C{"Is the answer forced,<br/>or is the group complete?"}
+    C -->|no| S
+    C -->|yes| AC
     AC --> TWO["Account for trying<br/>step and drift"]
     D --> TWO
     TWO --> CAN["Detection candidate"]
@@ -124,19 +125,20 @@ candidate or both do; it accounts for giving either detector an opportunity to r
 not change which model wins the fit comparison.
 
 Reusing the actual measurements preserves repeated values and quantization: an integer counter
-with many ties is judged against shuffled histories with those same ties. The shuffles are
-deterministic, so the same series produces the same verdict on every platform. Where direct rank
-counting is practical it is exact; where it is not, observed and shuffled histories use the same
-approximation, and their comparison supplies the trustworthy chance level.
+with many ties is judged against rearranged histories with those same ties. The rearrangement group
+is deterministic, includes the observed order, and is enumerated completely. When every distinct
+ordering fits the work budget, all of them are used instead. The same series therefore produces the
+same verdict on every platform without relying on a lucky random sample. Where direct rank counting
+is practical it is exact; where it is not, observed and rearranged histories use the same
+approximation, and their exact conditional comparison supplies the trustworthy chance level.
 
-The calculation is deliberately bounded. Ordinary unchanged series stop after enough shuffled
-winners show that chance explains them. Clear changes often need no shuffles because the
-mathematical bound already settles the question. Ambiguous cases have a fixed maximum rather than a
-budget that grows without limit with the number of benchmarks. If that maximum cannot distinguish
-an isolated candidate from chance at the strict group-wide threshold, the tool stays silent; it
-does not turn missing computation into confidence. The bound prevents runaway work; it does not
-promise that every difficult series is cheap. An ambiguous series at the supported history-length
-limit may use the full shuffle maximum.
+The calculation is deliberately bounded. Ordinary unchanged series can stop once the winners
+already seen prove that the final answer cannot pass. Clear changes often need no rearrangements
+because the mathematical bound settles the question. Ambiguous cases may require the complete
+orbit, whose size has a fixed maximum rather than growing without limit with the number of
+benchmarks. If that orbit cannot distinguish an isolated candidate from chance at the strict
+group-wide threshold, the tool stays silent; it does not turn missing resolution into confidence.
+The bound prevents runaway work; it does not promise that every difficult series is cheap.
 
 This correction belongs inside Detection because it repairs how the history step detector searched
 **within one series**. It is not the later [multiplicity control](coverage.md), which accounts for
