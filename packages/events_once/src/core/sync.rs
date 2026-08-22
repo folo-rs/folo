@@ -324,10 +324,10 @@ where
 
     /// Sets the value of the event and notifies the receiver's awaiter, if there is one.
     ///
-    /// Returns `Err` if the receiver has already disconnected and the caller must clean up the
-    /// event now.
+    /// Returns the payload to the caller if the receiver has already disconnected. The caller
+    /// owns cleanup in that case and must release the event before dropping the payload.
     #[inline]
-    pub(crate) fn set(event_cell: &UnsafeCell<Self>, value: T) -> Result<(), Disconnected> {
+    pub(crate) fn set(event_cell: &UnsafeCell<Self>, value: T) -> Result<(), T> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
         // still exist because something was able to call this method.
@@ -417,15 +417,14 @@ where
             }
             EVENT_DISCONNECTED => {
                 // The receiver has already been dropped, so we need to clean up the event.
-                // We have to first drop the value that we inserted into the event, though.
+                // Move the value back to the sender core so it can release the event before the
+                // payload destructor invokes user code.
 
                 // SAFETY: The receiver is gone - there is nobody else who might be touching
                 // the event anymore, we are essentially in a single-threaded mode now.
                 // We also just inserted the value, so it must still be there because we never
                 // entered a state where the receiver had the permission to extract the value.
-                unsafe {
-                    event.destroy_value();
-                }
+                let value = unsafe { event.take_value() };
 
                 // Before it is safe to destroy the event, we need to synchronize with whatever
                 // writes the receiver may have done into its state (e.g. it may have removed
@@ -433,7 +432,7 @@ where
                 atomic::fence(atomic::Ordering::Acquire);
 
                 // The sender (the caller) needs to clean up the event.
-                Err(Disconnected)
+                Err(value)
             }
             // Defensive: state machine guarantees this is unreachable.
             _ => {
@@ -983,22 +982,20 @@ where
         }
     }
 
-    /// Drops the payload stored in `value`, leaving that cell uninitialized.
+    /// Extracts the payload stored in `value`, leaving that cell uninitialized.
     ///
     /// # Safety
     ///
     /// The caller must have acquired the synchronization block for `value` and `value` must hold
     /// an initialized payload.
-    unsafe fn destroy_value(&self) {
+    unsafe fn take_value(&self) -> T {
         // SAFETY: Forwarding guarantees from the caller.
         let value_cell_maybe = unsafe { self.value.get().as_mut() };
         // SAFETY: UnsafeCell pointer is never null.
         let value_cell = unsafe { value_cell_maybe.unwrap_unchecked() };
 
         // SAFETY: Forwarding guarantees from the caller.
-        unsafe {
-            value_cell.assume_init_drop();
-        }
+        unsafe { value_cell.assume_init_read() }
     }
 }
 

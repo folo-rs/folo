@@ -202,6 +202,7 @@ mod tests {
     use super::*;
     #[cfg(debug_assertions)]
     use crate::assert_inspect_awaiters_is_reentrant;
+    use crate::{PanickingPayload, assert_disconnected_send_payload_panic_releases_event};
 
     /// Compatible event representations must share the same internal layout pool.
     const EXPECTED_COMPATIBLE_LAYOUT_COUNT: usize = 1;
@@ -211,6 +212,17 @@ mod tests {
     assert_impl_all!(
         EventLake: UnwindSafe, RefUnwindSafe
     );
+
+    #[test]
+    fn disconnected_send_payload_panic_releases_event() {
+        let lake = EventLake::new();
+
+        assert_disconnected_send_payload_panic_releases_event(
+            || lake.rent::<PanickingPayload>(),
+            |sender, value| sender.send(value),
+            || lake.is_empty(),
+        );
+    }
 
     #[test]
     fn concurrent_same_type_rentals_are_usable_across_threads() {

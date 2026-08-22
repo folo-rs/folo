@@ -303,9 +303,12 @@ impl<T: 'static> LocalEvent<T> {
     /// strongly protected by the aliasing model for the whole call, which makes such a release
     /// undefined behavior, whereas references derived from an `UnsafeCell` carry no protector and
     /// may dangle. The event is therefore not touched after the callback runs.
+    ///
+    /// Returns the payload to the caller if the receiver has already disconnected. The caller
+    /// owns cleanup in that case and must release the event before dropping the payload.
     /// Ref: docs/callback-safety.md.
     #[inline]
-    pub(crate) fn set(event_cell: &UnsafeCell<Self>, value: T) -> Result<(), Disconnected> {
+    pub(crate) fn set(event_cell: &UnsafeCell<Self>, value: T) -> Result<(), T> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
         // still exist because something was able to call this method.
@@ -374,7 +377,8 @@ impl<T: 'static> LocalEvent<T> {
             }
             EVENT_DISCONNECTED => {
                 // The receiver has already disconnected, so we can clean up the event now.
-                // We have to first drop the value that we inserted into the event, though.
+                // Move the value back to the sender core so it can release the event before the
+                // payload destructor invokes user code.
 
                 // SAFETY: The only other potential references to the field are other short-lived
                 // references in this type, which cannot exist at the moment because
@@ -383,14 +387,12 @@ impl<T: 'static> LocalEvent<T> {
                 // SAFETY: UnsafeCell pointer is never null.
                 let value_cell = unsafe { value_cell_maybe.unwrap_unchecked() };
 
-                // We drop the value and consider the cell uninitialized.
+                // We extract the value and consider the cell uninitialized.
                 //
                 // SAFETY: We were in EVENT_SET which guarantees there is a value in there.
-                unsafe {
-                    value_cell.assume_init_drop();
-                }
+                let value = unsafe { value_cell.assume_init_read() };
 
-                Err(Disconnected)
+                Err(value)
             }
             // Defensive: state machine guarantees this is unreachable.
             _ => {

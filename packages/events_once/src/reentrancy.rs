@@ -1,6 +1,9 @@
 use std::backtrace::Backtrace;
 use std::cell::Cell;
 
+#[cfg(test)]
+use testing::assert_panics;
+
 /// The closure that an `inspect_awaiters()` method calls once per awaited event.
 type AwaiterInspector<'a> = dyn FnMut(&Backtrace) + 'a;
 
@@ -50,4 +53,33 @@ pub(crate) fn assert_inspect_awaiters_is_reentrant(
     // The nested inspection observes the same awaited events as the outer one because the event
     // that `rent_and_drop` rents is never awaited and therefore never inspected.
     assert_eq!(nested_calls.get(), outer_calls.get());
+}
+
+/// A payload whose destructor unwinds after a disconnected send rejects it.
+#[cfg(test)]
+pub(crate) struct PanickingPayload;
+
+#[cfg(test)]
+impl Drop for PanickingPayload {
+    fn drop(&mut self) {
+        panic!("payload destructor");
+    }
+}
+
+/// Asserts that a disconnected send returns event storage before dropping its payload.
+#[cfg(test)]
+pub(crate) fn assert_disconnected_send_payload_panic_releases_event<S, R>(
+    rent: impl FnOnce() -> (S, R),
+    send: impl FnOnce(S, PanickingPayload),
+    is_empty: impl FnOnce() -> bool,
+) {
+    let (sender, receiver) = rent();
+    drop(receiver);
+
+    assert_panics(|| send(sender, PanickingPayload));
+
+    assert!(
+        is_empty(),
+        "the event must be returned before the payload destructor unwinds"
+    );
 }

@@ -245,6 +245,7 @@ mod tests {
     use super::*;
     #[cfg(debug_assertions)]
     use crate::assert_inspect_awaiters_is_reentrant;
+    use crate::{PanickingPayload, assert_disconnected_send_payload_panic_releases_event};
 
     /// Compatible event representations must share the same internal layout pool.
     const EXPECTED_COMPATIBLE_LAYOUT_COUNT: usize = 1;
@@ -254,6 +255,18 @@ mod tests {
     assert_impl_all!(
         RawLocalEventLake: UnwindSafe, RefUnwindSafe
     );
+
+    #[test]
+    fn disconnected_send_payload_panic_releases_event() {
+        let lake = RawLocalEventLake::new();
+
+        assert_disconnected_send_payload_panic_releases_event(
+            // SAFETY: The lake remains alive until the helper consumes both endpoints.
+            || unsafe { lake.rent::<PanickingPayload>() },
+            |sender, value| sender.send(value),
+            || lake.is_empty(),
+        );
+    }
 
     #[test]
     fn len() {
