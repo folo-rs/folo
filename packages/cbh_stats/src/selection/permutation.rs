@@ -524,6 +524,7 @@ fn is_even_permutation(values: &[usize]) -> bool {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::collections::{HashMap, HashSet};
 

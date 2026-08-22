@@ -377,10 +377,9 @@ impl MannWhitneyU {
     /// The two-sided p-value that the samples are drawn from the same distribution.
     ///
     /// Exact — the permutation tail over all `C(n1+n2, min(n1, n2))` rank splits,
-    /// doubled for two sidedness — whenever that count fits f64 exactly (see
-    /// [`exact_mw_feasible`]); the tie- and continuity-corrected normal
-    /// approximation otherwise. Returns `1.0` (no evidence of a difference) when
-    /// every observation ties.
+    /// doubled for two sidedness — whenever that count fits f64 exactly; the tie-
+    /// and continuity-corrected normal approximation otherwise. Returns `1.0` (no
+    /// evidence of a difference) when every observation ties.
     #[must_use]
     pub fn two_sided_p_value(&self) -> f64 {
         self.two_sided_p
