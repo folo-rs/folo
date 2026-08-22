@@ -32,7 +32,7 @@ flowchart TD
     subgraph analysis ["Analysis"]
         SEL["Selection<br/>which objects are eligible"]
         SEL --> REC["Reconstruction<br/>runs become series"]
-        REC --> DET["Detection<br/>did a level move?"]
+        REC --> DET["Detection<br/>locate, fairly test, and size a move"]
         DET --> GAT["Noise gates<br/>is the move real?"]
         GAT --> FDR["Multiplicity control<br/>is it real given everything else tested?"]
     end
@@ -48,10 +48,15 @@ shape of the whole:
 | [Collection](collection.md) | Every stored run is a permanent, complete record of one engine's output at one commit. |
 | [Selection](selection.md) | Only runs that are *comparable to each other* reach the analysis, decided without reading any of them. |
 | [Reconstruction](reconstruction.md) | A series is ordered by git topology, never by when it was measured. |
-| [Detection](detection.md) | A candidate names a level that moved. It never claims to know why. |
+| [Detection](detection.md) | A candidate names a moved level and carries a chance level that accounts for how the detector searched for it. |
 | [Noise gates](gates.md) | A reported move is larger than what the measurement itself manufactures. |
 | [Multiplicity control](coverage.md) | A reported move is unlikely to be an accident of how many things were tested. |
 | [Reporting](reporting.md) | What was *not* judged is disclosed as prominently as what was. |
+
+The correction for trying many possible change points is part of **Detection**, not a separate
+pipeline stage. It makes the step detector's chance level fair before the significance gate weighs
+it. Multiplicity control later answers a different question: whether that candidate still stands
+out after many *series* were tested.
 
 ## How to read this appendix
 

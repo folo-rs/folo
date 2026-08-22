@@ -56,11 +56,9 @@ See [Analysis](../concepts/analysis.md) for what each mode detects.
 
 ## Output
 
-Each finding names the benchmark and metric, quantifies the move, states a **confidence** —
-the strength of the evidence behind that particular finding, not a fixed threshold it
-cleared — attributes it to a commit, and draws a compact, topology-accurate chart — one column
-per first-parent commit, so a commit with no measurement is a gap rather than being collapsed
-away. History
+Each finding names the benchmark and metric, quantifies the move, attributes it to a commit,
+and draws a compact, topology-accurate chart — one column per first-parent commit, so a commit
+with no measurement is a gap rather than being collapsed away. History
 mode charts the full selected series, keeping a trailing gap up to the analyzed tip when a
 benchmark has not been measured on the most recent commits. Branch mode charts the comparison
 baseline followed by the recent per-commit tail ending at the tip, keeping the one commit

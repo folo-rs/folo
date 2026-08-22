@@ -78,9 +78,9 @@ Branch mode also holds its relative floor above history's — a pull-request com
 everyone who touches the branch, so a false alarm costs more there. Where the engine reports
 per-point dispersion, further suppression-only vetoes apply.
 
-Whichever test produced a finding also fixes its reported **confidence**, in both modes: the
-complement of that test's chance level. Confidence tells you how strong the evidence is, never
-which threshold the finding happened to clear.
+Neither mode attaches a confidence score to a finding. Every finding has already cleared its
+test, so such a number would read as near-certainty on all of them and rank almost nothing.
+Reports rank findings by the size of the move instead.
 
 > The [Detection](../appendix/detection.md) appendix chapter has the full comparison of the two
 > modes, including how the base window is narrowed when the base itself recently moved, and why

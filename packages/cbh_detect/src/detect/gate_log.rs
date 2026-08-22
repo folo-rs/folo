@@ -231,8 +231,16 @@ pub enum Gate {
     /// The comparison sample carries enough scatter for a prediction interval to be
     /// formed at all.
     BaseScatter,
+    /// The chance level after correcting the change-point's rank test for the split
+    /// search having chosen the most striking of many positions (history mode). Records
+    /// the tainted value and the selection-adjusted value it maps to; it reports the
+    /// correction and never declines a candidate.
+    SelectionAdjustment,
     /// The move is statistically significant: a Mann–Whitney, Mann–Kendall, or
-    /// prediction-interval p-value against its configured alpha.
+    /// prediction-interval p-value against its configured chance level. In history mode
+    /// the recorded value is the selection-adjusted chance level — after
+    /// [`SelectionAdjustment`](Self::SelectionAdjustment) and the two-detector factor —
+    /// not the raw test p-value.
     Significance,
     /// The two regimes separate as populations rather than interleaving — the
     /// Mann–Whitney probability of superiority against its floor.
@@ -263,6 +271,7 @@ impl Gate {
             Self::AbsoluteFloor => "absolute_floor",
             Self::ResidualNoise => "residual_noise",
             Self::BaseScatter => "base_scatter",
+            Self::SelectionAdjustment => "selection_adjustment",
             Self::Significance => "significance",
             Self::RegimeSeparation => "regime_separation",
             Self::IntervalDisjoint => "interval_disjoint",
@@ -276,7 +285,7 @@ impl Gate {
     /// because the appendix names the gates in prose and a list nothing checks would fall
     /// silently out of step the first time the set changed.
     #[cfg(any(test, feature = "private-test-util"))]
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::MinSeriesPoints,
         Self::MinBaseCommits,
         Self::SplitLocated,
@@ -286,9 +295,10 @@ impl Gate {
         Self::AbsoluteFloor,
         Self::ResidualNoise,
         Self::BaseScatter,
-        Self::Significance,
         Self::RegimeSeparation,
         Self::IntervalDisjoint,
+        Self::SelectionAdjustment,
+        Self::Significance,
         Self::IntervalNoiseBand,
     ];
 }
@@ -331,6 +341,23 @@ impl StageLog<'_> {
             passed,
         });
         passed
+    }
+
+    /// Records a gate that reports how it transformed a chance level rather than deciding
+    /// on it — `from` before the correction, `to` after — and always survives. The
+    /// selection adjustment corrects a value rather than testing it, so diagnostics can
+    /// explain the step rather than only its conclusion.
+    /// Returns `to`, so a call site both records and consumes the corrected value from one
+    /// expression and the two cannot drift apart.
+    pub(crate) fn adjustment(&mut self, gate: Gate, from: f64, to: f64) -> f64 {
+        self.log.record(GateOutcome {
+            stage: self.stage,
+            gate,
+            value: Some(from),
+            threshold: Some(to),
+            passed: true,
+        });
+        to
     }
 }
 

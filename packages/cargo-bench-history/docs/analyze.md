@@ -117,10 +117,14 @@ without re-measuring the parallel load.
 flowchart TD
   FIN["finalize"] --> FLAT["flatten to a series list"]
   FLAT --> SS["sort series, then sort each series' points by topology\n— serial —"]
-  SS --> DALL["detect: one chunk of series per worker\n(spawned)"]
+  SS --> CENSUS["classify testability + size family\n— serial metadata prepass —"]
+  CENSUS --> DALL["cheap gates + model fit:\none chunk of series per worker\n(spawned)"]
   DALL --> CANDS["candidate findings"]
+  DALL --> CAL["bounded selection calibration\n(clear-step analytic certificate;\ncomplete conditional orbit)"]
+  CAL --> CANDS
   CANDS --> BH["false-discovery filter — serial —"]
-  DALL -->|series census: judged + reasons| BH
+  CENSUS -->|series census: judged + reasons| BH
+  CENSUS -->|family size sets bounded\npermutation precision| CAL
   BH --> MAT["materialize surviving findings' chart points"]
   MAT --> SF["sort findings by magnitude, method, identity — serial —"]
   SF --> FINDINGS[("findings")]
@@ -133,18 +137,29 @@ worker over the whole input. Per series the mode selects the detector: history r
 change-point and a drift detector and keeps the better fit; branch collapses each commit's
 runs to one level, narrows the recent base window to its current regime when that window
 contains an unambiguous level shift — held to a stricter separation floor than a reported
-move, since narrowing discards evidence (DESIGN.md §8.2) — and judges the tip against that
+move, since narrowing discards evidence (DESIGN.md, “Noise-aware gating”) — and judges the tip against that
 regime's prediction interval.
 
 The false-discovery filter's family is every series that was **testable**, including those that
-raised no candidate (DESIGN.md §8.3). The detect workers already evaluate that predicate to
-decide whether to run at all, so each worker tallies its chunk into a **series census** —
-judged, and one reason per series it declined — which the driver merges alongside the
-candidates. The family size is read straight off that census, so the count and the
-short-circuit can never disagree, and no second pass over the series list is needed. The census
-outlives detection: the pipeline records the ghost-filtered series into it too (their exclusion
-happens before detection ever sees them) and hands it to the renderers, which is how a report
-states what it judged (DESIGN.md §8.9).
+raised no candidate (DESIGN.md, “Multiple-comparison discipline”). A cheap serial prepass evaluates the mode-aware testability
+predicate, builds the **series census** — judged, and one reason per series it declined — and makes
+the final family size available before statistical work starts. This ordering is required because
+history change-point calibration uses that family size to choose its bounded permutation precision
+and the analytic acceptance boundary that guarantees survival even at the strictest family rank.
+Workers evaluate the same pure predicate to short-circuit unjudged series, so the count and
+execution decision cannot diverge. The census outlives detection: the pipeline records the
+ghost-filtered series into it too (their exclusion happens before detection ever sees them) and
+hands it to the renderers, which is how a report states what it judged
+(DESIGN.md, “Accounting for what was judged”).
+
+History change points pass permutation-independent magnitude, residual, population-separation, and
+interval gates before calibration. The step is calibrated only when it fits at least as well as the
+already-evaluated drift; a qualified drift remains the fallback if significance then rejects the
+step. Clear steps can finish through the analytic split-union certificate. Remaining candidates use
+a complete conditional permutation orbit with an absolute per-candidate ceiling. Enumeration stops
+early only after a lower bound proves the final answer is already forced. Every series remains
+independent of the others, preserving the dependence assumptions of the final Benjamini–Hochberg
+pass.
 
 The statistical kernels are chosen to keep the tens-of-millions-of-points path affordable —
 an in-place unstable sort for the median (no scratch buffer, and ties are bit-identical so
@@ -184,7 +199,8 @@ second listing:
 | **Fetch + parse + fold (runs)** | **CPU-parallel (spawned)** | one chunk of survivors per worker |
 | Merge per-worker builders | serial | per worker partial |
 | Series sort + point sort | serial | the series list / per series |
-| **Detect** | **CPU-parallel (spawned)** | one chunk of series per worker |
+| Testability census | serial | per series metadata |
+| **Detect + bounded calibration** | **CPU-parallel (spawned)** | one chunk of series per worker |
 | Blessing-sidecar fetch | I/O-concurrent (one task) | per object, bounded in flight |
 | False-discovery filter + finding sort + render | serial | the candidate list + the merged census |
 

@@ -7,12 +7,11 @@
 //! that into a failing test rather than into prose that has quietly become wrong.
 
 use cbh_detect::{
-    AnalysisMode, CHANGE_ALPHA, COMPARE_WINDOW, DRIFT_MIN_POINTS, Finding, MIN_REGIME,
+    AnalysisMode, COMPARE_WINDOW, DRIFT_MIN_POINTS, Finding, MAX_CHANGE_CHANCE_LEVEL, MIN_REGIME,
     MIN_SERIES_POINTS, Series, evaluate_with_log, examples,
 };
 use cbh_model::MetricKind;
 use cbh_stats::{mean, sample_std_dev, student_t_two_sided_p};
-use plotters::style::RGBColor;
 
 use crate::assets::Asset;
 use crate::styles::plot::{Mark, Observation, Plot};
@@ -31,7 +30,6 @@ pub fn assets() -> Vec<Asset> {
     assets.extend(branch());
     assets.extend(branch_base_moved());
     assets.extend(branch_contended_runner());
-    assets.extend(confidence_examples());
     assets.extend(minimums());
     assets
 }
@@ -120,7 +118,7 @@ const BRANCH_CASES: [(&str, f64, &str); 2] = [
 /// This is the detector's prediction interval at its own significance level, not an
 /// illustrative width: from the same cleaned base sample the significance gate reads, it is
 /// the range a single further measurement stays inside unless its two-sided Student-t
-/// p-value falls below [`CHANGE_ALPHA`](cbh_detect::CHANGE_ALPHA). A context run drawn
+/// p-value falls below [`MAX_CHANGE_CHANCE_LEVEL`](cbh_detect::MAX_CHANGE_CHANCE_LEVEL). A context run drawn
 /// outside this band is therefore exactly one the significance gate rejects, so the band is
 /// the real cutoff the figure's verdict turns on.
 fn branch_prediction_band(values: &[f64]) -> (f64, f64) {
@@ -129,7 +127,7 @@ fn branch_prediction_band(values: &[f64]) -> (f64, f64) {
         .expect("the branch figure's base window has enough points to estimate scatter");
     let sample_count = crate::coord::of(values.len());
     let standard_error = scatter * (1.0 + 1.0 / sample_count).sqrt();
-    let half_width = standard_error * critical_t(CHANGE_ALPHA, sample_count - 1.0);
+    let half_width = standard_error * critical_t(MAX_CHANGE_CHANCE_LEVEL, sample_count - 1.0);
     (centre - half_width, centre + half_width)
 }
 
@@ -369,104 +367,6 @@ fn branch_contended_runner() -> Vec<Asset> {
             ),
         ),
     ]
-}
-
-/// The baseline for the lower-confidence step.
-///
-/// High enough that the absolute floor is irrelevant, leaving the example about the
-/// amount of evidence for an accepted relative move rather than about metric units.
-const LOWER_CONFIDENCE_BASELINE: f64 = 1_000.0;
-
-/// Relative size of the minimum-length confidence example's step.
-///
-/// Chosen large enough that practical floors and residual scatter are not what limits
-/// confidence; only the number of rank comparisons is.
-const LOWER_CONFIDENCE_STEP_RELATIVE: f64 = 0.30;
-
-/// Within-regime spacing for the minimum-length confidence example.
-///
-/// The regimes stay fully separated, but individual values do not tie, so the rank
-/// test demonstrates the confidence cap from having only the minimum number of points.
-const LOWER_CONFIDENCE_INTRA_REGIME_SPACING: f64 = 1.0;
-
-/// A fully separated step with the minimum allowed regime length on each side.
-fn lower_confidence_step_values() -> Vec<f64> {
-    let elevated = LOWER_CONFIDENCE_BASELINE * (1.0 + LOWER_CONFIDENCE_STEP_RELATIVE);
-    let midpoint = (crate::coord::of(MIN_REGIME) - 1.0) / 2.0;
-    (0..MIN_REGIME)
-        .map(|index| {
-            LOWER_CONFIDENCE_BASELINE
-                + (crate::coord::of(index) - midpoint) * LOWER_CONFIDENCE_INTRA_REGIME_SPACING
-        })
-        .chain((0..MIN_REGIME).map(|index| {
-            elevated + (crate::coord::of(index) - midpoint) * LOWER_CONFIDENCE_INTRA_REGIME_SPACING
-        }))
-        .collect()
-}
-
-/// History-mode examples whose accepted findings carry different confidence values.
-fn confidence_examples() -> Vec<Asset> {
-    let high_values = examples::clean_step();
-    let (_, high) = judge_history("confidence_high", &high_values, MetricKind::WallTime);
-    let high = high.expect("the clean-step confidence example must report");
-
-    let lower_values = lower_confidence_step_values();
-    let (_, lower) = judge_history("confidence_lower", &lower_values, MetricKind::WallTime);
-    let lower = lower.expect("the lower-confidence example must still report");
-
-    vec![
-        Asset::new(
-            "detection-confidence-high.svg",
-            confidence_plot(
-                "a cleanly separated step",
-                &high_values,
-                &high,
-                theme::REGRESSION,
-            )
-            .render(),
-        ),
-        Asset::new(
-            "detection-confidence-high.md",
-            verdict::reported(
-                &high,
-                "a clean split with extra evidence rounds to a very high confidence",
-                AnalysisMode::History,
-            ),
-        ),
-        Asset::new(
-            "detection-confidence-lower.svg",
-            confidence_plot(
-                "a minimum-length clean step",
-                &lower_values,
-                &lower,
-                theme::ALTERNATE,
-            )
-            .render(),
-        ),
-        Asset::new(
-            "detection-confidence-lower.md",
-            verdict::reported(
-                &lower,
-                "the split is clean, but the minimum-length regimes cap the confidence",
-                AnalysisMode::History,
-            ),
-        ),
-    ]
-}
-
-/// A confidence example with the detector's chosen split and fitted levels.
-fn confidence_plot(caption: &str, values: &[f64], finding: &Finding, color: RGBColor) -> Plot {
-    let split = attributed_index(finding);
-    let mut plot = Plot::new(caption, values.len())
-        .value_label("ns")
-        .base_color(color)
-        .values(values)
-        .rule(finding.baseline, "baseline", theme::HIGHLIGHT)
-        .rule(finding.latest, "latest", theme::REGRESSION);
-    if let Some(split) = split.filter(|index| *index > 0 && *index < values.len()) {
-        plot = plot.split(split, "change point");
-    }
-    plot
 }
 
 /// How many base-side commits the branch figures lay out.
@@ -839,38 +739,6 @@ mod tests {
     }
 
     #[test]
-    fn accepted_confidence_examples_are_not_all_the_same_value() {
-        let (_, high) = judge_history(
-            "confidence_high",
-            &examples::clean_step(),
-            MetricKind::WallTime,
-        );
-        let (_, lower) = judge_history(
-            "confidence_lower",
-            &lower_confidence_step_values(),
-            MetricKind::WallTime,
-        );
-        let high = high.expect("the clean-step confidence example must report");
-        let lower = lower.expect("the lower-confidence example must report");
-        let displayed_high = format!("{:.0}", high.confidence * 100.0);
-        let displayed_lower = format!("{:.0}", lower.confidence * 100.0);
-
-        assert!(high.confidence > lower.confidence);
-        assert!(
-            lower.confidence < 1.0,
-            "the lower-confidence example must not be exact internal certainty"
-        );
-        assert_eq!(
-            displayed_high, "100",
-            "the high-confidence example must display as rounded certainty"
-        );
-        assert_ne!(
-            displayed_lower, "100",
-            "the lower-confidence example must display below rounded certainty"
-        );
-    }
-
-    #[test]
     #[cfg_attr(
         miri,
         ignore = "plotters SVG generation is host graphics, not memory-safety-relevant, and exceeds the Miri CI budget"
@@ -899,10 +767,6 @@ mod tests {
             "detection-branch-base-moved.md",
             "detection-branch-contended.svg",
             "detection-branch-contended.md",
-            "detection-confidence-high.svg",
-            "detection-confidence-high.md",
-            "detection-confidence-lower.svg",
-            "detection-confidence-lower.md",
             "detection-minimums.md",
         ] {
             assert!(

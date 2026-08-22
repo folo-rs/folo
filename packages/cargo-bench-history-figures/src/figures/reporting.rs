@@ -360,9 +360,8 @@ fn finding_annotated() -> String {
     .expect("writing to a String never fails");
     writeln!(
         markdown,
-        "| `{headline}` | The headline: the move as a percentage of the baseline, the \
-         metric kind that moved, and the detector's confidence. Findings are ranked by \
-         the magnitude of that percentage — never by the confidence. |"
+        "| `{headline}` | The headline: the move as a percentage of the baseline, and the \
+         metric kind that moved. Findings are ranked by the magnitude of that percentage. |"
     )
     .expect("writing to a String never fails");
     writeln!(

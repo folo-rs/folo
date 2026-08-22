@@ -43,7 +43,6 @@
       "baseline": 100.36830218253652,
       "latest": 130.05171405014943,
       "relative_delta": 0.29574488381430086,
-      "confidence": 0.9998173282088905,
       "commit": "commit10"
     },
     {
@@ -60,7 +59,6 @@
       "baseline": 98.50313347697937,
       "latest": 108.7433855201543,
       "relative_delta": 0.10395864254986495,
-      "confidence": 0.9999958352376284,
       "commit": "commit29",
       "window_start": "commit0"
     }

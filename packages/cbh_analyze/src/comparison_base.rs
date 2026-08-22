@@ -341,7 +341,6 @@ mod tests {
             latest: 130.0,
             delta: 30.0,
             relative_delta: 0.3,
-            confidence: 0.99,
             commit: Some("f2".to_owned()),
             window_start_commit: None,
             blessed_at: None,

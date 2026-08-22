@@ -2,11 +2,21 @@
 
 What the pipeline deliberately does not do, why, and what to do instead.
 
-None of these is a bug, and most are consequences of choices made elsewhere in this appendix.
-Knowing them is what keeps you from waiting for a report that will never come.
+Some are deliberate trade-offs and others are limits of the current statistical model. Knowing
+them is what keeps you from reading more into a report than its evidence supports.
 
 The first few are stated in full in the chapter that owns them; they are listed here so that one
 page answers "what will this tool not tell me?".
+
+## Very long histories use the newest 1,000 points
+
+Detection is designed for histories from dozens to a few hundred measurements. When a series grows
+beyond 1,000 points, only its newest 1,000 influence the verdict. The older measurements remain
+stored and visible in charts; they simply stop pulling the detector toward performance levels that
+are no longer current.
+
+*What to do:* use [`examine`](../commands/examine.md) when you need the full recorded shape. To
+judge an older era rather than the current one, move the analysis context to a commit in that era.
 
 ## Distance between commits is invisible
 
@@ -64,14 +74,30 @@ attribution the tool refuses to guess at.
 look for the common cause before investigating any of them individually. That pattern is itself
 diagnostic — see [Insights](insights.md).
 
-## Confidence is not comparable, and not corrected
+## No certainty score is reported
 
-A finding's confidence comes from whichever test confirmed it. History and branch findings are
-confirmed by different tests answering different questions, so their confidences are not on a
-common scale. Neither is adjusted by the group-wide correction that runs afterwards.
+The report gives no confidence or certainty score. The chance levels used inside history and
+branch detection come from different tests answering different questions, so they are not on a
+common scale. The group-wide correction that runs afterwards does not turn them into a comparable
+finding score.
 
-*What to do:* use confidence as "how poorly does chance explain this", nothing more. The
-report ranks by size of move, which is the comparable quantity.
+*What to do:* rank findings by size of move, which is the comparable quantity the report provides.
+
+## Branch-mode base-window narrowing is not selection-adjusted
+
+To decide whether the recent base window should be narrowed, branch mode searches several suffixes
+and split positions, then predicts from the selected trailing regime when one qualifies. The
+prediction interval's chance level treats that regime as though it had been fixed in advance. It
+therefore does not account for the search that selected both the regime's centre and its scatter.
+
+The stricter boundary gates reduce false narrowing but do not calibrate the resulting chance
+level. The limitation is most important for benchmarks that naturally switch between levels and
+for counted metrics whose selected trailing regime can have no observed scatter. The later
+group-wide correction cannot repair a per-series chance level that is already too optimistic.
+
+*What to do:* treat a branch finding as a reason to inspect the chart and the base measurements,
+not as a calibrated probability that the branch caused a change. Use
+[`examine`](../commands/examine.md) when the base window appears to contain more than one level.
 
 ## Branch mode ignores blessings
 

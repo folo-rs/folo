@@ -1,7 +1,11 @@
 # Noise gates
 
-[Detection](detection.md) produces candidates. This chapter is the set of checks that decides
-which of them are worth your attention.
+[Detection](detection.md) produces candidates whose history-mode chance levels already account for
+the detector's within-series choices, including the step detector's search across possible change
+points. Branch mode has a
+[known exception](limits.md#branch-mode-base-window-narrowing-is-not-selection-adjusted) when it
+narrows the base window. This chapter is the set of checks that decides which candidates are worth
+your attention.
 
 Every gate answers the same underlying question in a different way: **is this move larger than
 what could be explained by measurement process noise?** A benchmark that reports 100 ns will
@@ -42,12 +46,17 @@ at a different point in their own sequence. The questions are the part worth lea
 | Does the engine's own precision explain the move? | `interval_disjoint`, `interval_noise_band` |
 | Can the base comparison even be formed? | `base_scatter` |
 
+The diagnostic ladder starts with Detection's own setup and test rows so it can explain the whole
+verdict in one place. `selection_adjustment` is one of those rows: it is the within-series
+correction described in [Detection](detection.md#making-the-winning-split-a-fair-test), surfaced
+here for visibility. It changes the chance level and never declines a candidate by itself.
+
 ## Each detector has its own sequence
 
 There is no single gate order. Each detector applies the gates its own question needs, in the
-order that makes sense for it — a change point tests significance before checking magnitude,
-while a branch comparison cannot test significance until it has formed its interval, so it
-checks magnitude first.
+order that makes sense for it. A change point checks inexpensive magnitude and noise evidence
+before running its bounded search correction; a branch comparison cannot test significance until
+it has formed its interval, so it checks magnitude first.
 
 A candidate **stops at the first gate that declines it**. Nothing after that runs, which is why
 a gate ladder is often short. That is an accurate picture, not a truncated one.
@@ -189,6 +198,10 @@ The demand is what the gate required, the computed value is what the candidate s
 verdict states the outcome. A numeric gate passes when the computed value clears the demand. A
 boolean gate must simply hold. Once a gate declines, the rows below it show `not run`.
 
+History compares the step and drift models after their cheap gates. If drift fits better, the step
+ladder can end with selection adjustment and significance marked `not run` even though no earlier
+step gate declined: the detector chose the better-fitting drift before paying for step calibration.
+
 A candidate that clears every gate:
 
 {{#include generated/gates-ladder-pass.md}}
@@ -202,6 +215,8 @@ and [Insights](insights.md) turns it into a checklist.
 
 ## What the gates hand on
 
-The candidates that survived, each still carrying the chance level of the test that confirmed
-it. One question remains, and it is not about any individual candidate:
+The candidates that survived, each still carrying its chance level from Detection. History values
+are adjusted for within-series selection; branch values carry the
+[base-window narrowing limitation](limits.md#branch-mode-base-window-narrowing-is-not-selection-adjusted).
+One question remains, and it is not about any individual candidate:
 [given how many things were tested, should we believe this one?](coverage.md)

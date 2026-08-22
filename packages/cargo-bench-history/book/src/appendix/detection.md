@@ -53,19 +53,17 @@ The step detector works in three moves.
 
 1. **Locate.** A split search scans every place the series could have changed level and picks
    the single most likely one.
-2. **Test.** A rank comparison asks, two-sided, whether the before and after regimes
-   differ. If they do not, there is no step. This is a significance test: it asks whether
-   the sides differ, not how completely they separate.
+2. **Test fairly.** A rank comparison asks, two-sided, whether the before and after regimes
+   differ. The result is corrected for having chosen the strongest of many possible splits.
 3. **Size.** Each side's median becomes its level, and the difference between them is the
    move. Medians rather than averages, so one outlier cannot invent a step or hide one.
 
 The change is attributed to **the first commit of the after-side** — the earliest commit that
 already shows the new level.
 
-> The split search reports a chance level of its own, and the tool deliberately ignores it.
-> On series this short it is far too conservative and would reject steps the rank comparison
-> establishes comfortably. The split search is used only to *locate* the boundary; the rank
-> comparison decides whether to believe it.
+> The split search's own chance level is not used as evidence. It only locates the boundary.
+> The rank comparison decides whether the regimes differ, and the correction below makes that
+> comparison fair despite the search that chose its boundary.
 
 Here is a series that steps, and the detector's own answer for it.
 
@@ -79,6 +77,75 @@ and later gates judge that single candidate.
 {{#include generated/detection-multi-step.svg}}
 
 {{#include generated/detection-multi-step.md}}
+
+### Making the winning split a fair test
+
+The step detector chooses a split **because it looked strongest**. Treating that winner as though
+someone had named it before seeing the data would give it an unfair advantage: even an unchanged
+noisy series offers many chances for one split to look persuasive by accident.
+
+```mermaid
+flowchart LR
+    S["One unchanged,<br/>noisy series"] --> A["Try split A"]
+    S --> B["Try split B"]
+    S --> C["Try split C …"]
+    A --> W{"Keep the<br/>strongest"}
+    B --> W
+    C --> W
+    W --> L["A lucky winner<br/>can look convincing"]
+```
+
+Detection corrects that advantage by asking how often chance could produce **a winner at least this
+strong**. It has two conservative ways to answer. A mathematical bound over every possible split
+can certify an especially clear step immediately. If only one exact split is possible, that
+fixed comparison is already fair. Otherwise the detector constructs a bounded conditional orbit,
+checks every member, and runs the entire split search again. Frequent equally strong rearranged
+winners explain the apparent step; rare ones support it.
+
+```mermaid
+flowchart LR
+    O["Observed order"] --> G["Magnitude + noise gates"]
+    G --> FIT{"Step fits at least<br/>as well as drift?"}
+    FIT -->|no| D["Use qualified drift"]
+    FIT -->|yes| A["Bound every possible<br/>split mathematically"]
+    A -->|clear enough| AC["Search-adjusted<br/>step chance level"]
+    A -->|needs more resolution| S["Try the next member of the<br/>complete conditional orbit"]
+    S --> C{"Is the answer forced,<br/>or is the group complete?"}
+    C -->|no| S
+    C -->|yes| AC
+    AC --> TWO["Account for trying<br/>step and drift"]
+    D --> TWO
+    TWO --> CAN["Detection candidate"]
+```
+
+History tries both the step and drift shapes, then keeps whichever model fits the series better.
+That gives chance another opportunity to offer a lucky answer, so each detector's chance level is
+doubled before its significance gate. The correction applies whether only one detector raises a
+candidate or both do; it accounts for giving either detector an opportunity to report, and does
+not change which model wins the fit comparison.
+
+Reusing the actual measurements preserves repeated values and quantization: an integer counter
+with many ties is judged against rearranged histories with those same ties. The rearrangement group
+is deterministic, includes the observed order, and is enumerated completely. When every distinct
+ordering fits the work budget, all of them are used instead. The same series therefore produces the
+same verdict on every platform without relying on a lucky random sample. Where direct rank counting
+is practical it is exact; where it is not, observed and rearranged histories use the same
+approximation, and their exact conditional comparison supplies the trustworthy chance level.
+
+The calculation is deliberately bounded. Ordinary unchanged series can stop once the winners
+already seen prove that the final answer cannot pass. Clear changes often need no rearrangements
+because the mathematical bound settles the question. Ambiguous cases may require the complete
+orbit, whose size has a fixed maximum rather than growing without limit with the number of
+benchmarks. If that orbit cannot distinguish an isolated candidate from chance at the strict
+group-wide threshold, the tool stays silent; it does not turn missing resolution into confidence.
+The bound prevents runaway work; it does not promise that every difficult series is cheap.
+
+This correction belongs inside Detection because it repairs how the history step detector searched
+**within one series**. It is not the later [multiplicity control](coverage.md), which accounts for
+testing many series. Branch mode does not use this correction. Its final context-versus-base
+comparison is named in advance, but its optional base-window narrowing searches suffixes and split
+positions; the chance level produced after that narrowing is not adjusted for the search. See
+[Limits](limits.md#branch-mode-base-window-narrowing-is-not-selection-adjusted).
 
 ### Finding a drift
 
@@ -234,6 +301,10 @@ scatter is re-estimated from what remains. A wrong boundary can collapse a noisy
 to almost nothing and make the next tip read as certain. A decision that discards data has to be
 more certain than one that merely reports something.
 
+The stricter gates reduce that risk, but they do not correct for trying several suffixes and split
+positions before choosing the trailing regime. The resulting chance level has the
+[branch-mode narrowing limitation](limits.md#branch-mode-base-window-narrowing-is-not-selection-adjusted).
+
 ### When one reading came from a disturbed runner
 
 A base window is a sample of what the base ref measures, and a shared machine occasionally
@@ -270,36 +341,27 @@ one and the removal judged rather than merely discovered.
 History mode does not do this. Its arithmetic is built on medians and ranks, which a lone
 reading barely moves, so it has nothing to gain and evidence to lose.
 
-## Confidence, and what it is not
+## Chance levels, not a confidence score
 
-Every finding carries a confidence, and it is **one minus the chance level of whichever test
-confirmed it**.
+A finding does **not** carry a confidence or certainty number. Every reported finding has
+already cleared its test, so any such number would read as near-certainty on all of them: a
+finding whose chance level is one in a million and one that barely cleared would round to the
+same reassuring figure. It would rank almost nothing, so the report omits it and ranks by *size
+of move* instead.
 
-That makes it a statement about evidence strength — how poorly chance explains the pattern —
-and it is easy to over-read.
-
-{{#include generated/detection-confidence-high.svg}}
-
-{{#include generated/detection-confidence-high.md}}
-
-{{#include generated/detection-confidence-lower.svg}}
-
-{{#include generated/detection-confidence-lower.md}}
-
-Both are accepted findings. The lower number is still high; it comes from the minimum
-regime length, where even a clean split has fewer ranks to compare.
-
-Four things it is not:
+The detector still uses chance levels as internal decision inputs; they are not retained as
+finding fields or printed by `--verbose`. This chapter explains them so the verdict logic can be
+understood, not to provide another number for ranking findings. A chance level is **how poorly
+chance explains the pattern** — and it is easy to over-read. Four things it is not:
 
 - **Not the probability that the finding is correct.** It says chance is a poor explanation.
   It says nothing about whether the cause is your code or the machine.
-- **Not a dial you tune.** Every reported finding has already cleared its test, so an emitted
-  confidence is always high — and is displayed rounded, so a finding whose chance level is
-  one in a million reads as 100%. It does not rank importance; the report ranks by *size of
-  move* for exactly that reason.
-- **Not adjusted for how much was tested.** The [group-wide correction](coverage.md) runs
-  afterwards and does not feed back into this number.
-- **Not comparable across modes.** History and branch confidences come from different tests
+- **Not a dial you tune.** Every reported finding has already cleared its gate, so the ranking
+  of importance is left to the *size of move*, not to how small a chance level came out.
+- **Not the family-wide result.** A history change point has already been corrected for its
+  internal split search. The [group-wide correction](coverage.md) runs afterwards to account for
+  how many series were tested and does not feed back into this chance level.
+- **Not comparable across modes.** History and branch chance levels come from different tests
   answering different questions.
 
 ## Minimum evidence
@@ -320,6 +382,8 @@ happening while still judging any series with a genuine history behind it.
 ## What detection hands on
 
 A candidate: the series it came from, the method that found it, the direction and size of the
-move, the commit it is attributed to, and the chance level of the confirming test.
+move, the commit it is attributed to, and the detector's chance level. History chance levels
+already account for the detector's within-series choices; branch chance levels carry the
+[base-window narrowing limitation](limits.md#branch-mode-base-window-narrowing-is-not-selection-adjusted).
 
 None of them is a finding yet. Next: [Noise gates](gates.md).
