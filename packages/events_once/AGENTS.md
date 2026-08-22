@@ -74,7 +74,7 @@ and its models, so the table below identifies every row that exists:
 | `poll` | `pending_first`, `pending_repeat`, `disconnected` | boxed | local, sync | every row (6) |
 | `into_value` | `pending`, `ready`, `disconnected` | boxed | local, sync | every row (6) |
 | `is_ready` | `pending`, `ready`, `disconnected` | boxed | local, sync | none |
-| `cancel` | `sender_first_bound`, `sender_first_awaiting`, `receiver_first_bound` | boxed, embedded, pooled, raw_pooled, lake, raw_lake | local, sync | every row (36) |
+| `cancel` | `sender_first_bound`, `sender_first_awaiting`, `receiver_first_bound`, `receiver_first_awaiting` | boxed, embedded, pooled, raw_pooled, lake, raw_lake | local, sync | every row (48) |
 
 The `oneshot` leaves are an external reference point for the same lifecycle; they
 live in the same group so Criterion reports them alongside our own numbers.
