@@ -135,4 +135,5 @@ single observation, judged against a base that is itself one clean point per com
 A set of series, each an ordered sequence of points, with ghosts removed and blessed series
 sliced to their active window.
 
-Next: [Detection](detection.md).
+Next: [Detection](detection.md), which locates possible moves and corrects for its own search before
+handing candidates onward.

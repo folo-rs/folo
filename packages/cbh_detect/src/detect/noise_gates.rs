@@ -27,13 +27,75 @@ pub const MIN_REGIME: usize = 5;
 /// only produce noise.
 pub const MIN_SERIES_POINTS: usize = 2 * MIN_REGIME;
 
-/// Default `change_alpha`: the significance level a change-point's Mann–Whitney
-/// rank test must clear.
-pub const CHANGE_ALPHA: f64 = 0.05;
+/// The most points any one series is analyzed over: older points beyond this count are
+/// dropped before analysis, keeping only the most recent window.
+///
+/// The tool is designed for series of dozens to a few hundred points; see
+/// `../../cargo-bench-history/docs/DESIGN.md`, "Supported series length". The cap bounds how
+/// far the search for a step looks back and therefore bounds exact-group calibration
+/// work. The value sits well above any realistic history, so the cap changes nothing
+/// in ordinary use; it prevents an unusually long series from consuming unbounded
+/// analysis time.
+pub const MAX_SERIES_POINTS: usize = 1000;
 
-/// Default `fdr_q`: the Benjamini–Hochberg target false-discovery rate over a batch
-/// of candidates.
-pub const FDR_Q: f64 = 0.10;
+/// The largest selection-adjusted chance level a change-point's Mann–Whitney rank test
+/// may report and still be treated as a finding.
+///
+/// The conventional 5% significance level: a finding this gate admits would arise by
+/// chance at most about one time in twenty on a series with no real step.
+pub const MAX_CHANGE_CHANCE_LEVEL: f64 = 0.05;
+
+/// The Benjamini–Hochberg target false-discovery rate over a batch of candidates: at most
+/// this fraction of the reported findings is expected to be a false alarm.
+///
+/// Set looser than [`MAX_CHANGE_CHANCE_LEVEL`] because it governs the expected *proportion*
+/// of false findings across a whole batch rather than the chance of any single false
+/// finding, and a 10% false-discovery rate keeps the reported set trustworthy without
+/// discarding genuine regressions that a stricter rate would cull.
+pub const TARGET_FALSE_DISCOVERY_RATE: f64 = 0.10;
+
+/// The history detectors run as a pair and the better-fitting model is reported.
+///
+/// Their individual p-values are multiplied by this count before gating to
+/// conservatively account for choosing between them. Ref:
+/// `../../cargo-bench-history/docs/DESIGN.md`, "Multiple-comparison discipline".
+pub const HISTORY_DETECTOR_COUNT: usize = 2;
+
+/// Exact permutation-group order budget added for each judged series in the
+/// false-discovery family, up to [`MAX_CHANGE_PERMUTATION_ORDER`].
+///
+/// At the hardest rank-1 Benjamini-Hochberg boundary, the pre-arbitration
+/// change-point p-value must be below `TARGET_FALSE_DISCOVERY_RATE /
+/// (HISTORY_DETECTOR_COUNT * family_size)`. Scaling the permitted exact group
+/// order with the family preserves useful resolution until the absolute cap takes
+/// over. Ref: `../../cargo-bench-history/docs/DESIGN.md`,
+/// "Multiple-comparison discipline".
+pub const PERMUTATION_ORDER_PER_JUDGED_SERIES: usize = 600;
+
+/// Minimum exact permutation-orbit order budget for any calibrated change point.
+///
+/// This admits the balanced all-position subgroup used by short histories,
+/// preserving useful conditional resolution even in a one-series family. It also
+/// covers every distinct ordering of the shortest tied steps.
+pub const MIN_CHANGE_PERMUTATION_ORDER: usize = 259_200;
+
+/// Absolute exact permutation-group order budget for one selected change point.
+///
+/// The cap keeps work per series independent of an arbitrarily large analysis
+/// family. At the maximum supported series length, the largest realizable group
+/// can still resolve the rank-1 Benjamini-Hochberg boundary at the stress harness's
+/// large-family scale after analytic/permutation weighting and two-detector
+/// correction. With the current policy, its smallest nonzero result resolves rank
+/// one through 22,394 judged series. Shorter histories may realize a smaller group;
+/// clear changes normally use the analytic component instead.
+pub const MAX_CHANGE_PERMUTATION_ORDER: usize = 500_000;
+
+/// Bonferroni weight allocated to the analytic selection-adjustment component.
+///
+/// The remaining weight goes to conditional permutation. Keeping most weight on
+/// permutation limits the power cost of conservative finite-population bounds, while
+/// the analytic component can still certify clear steps.
+pub const CHANGE_ANALYTIC_WEIGHT: f64 = 0.10;
 
 /// Default `drift_min_points`: a series needs at least this many points before a
 /// slow-drift finding is considered.
@@ -42,9 +104,12 @@ pub const FDR_Q: f64 = 0.10;
 /// minimum evidence and a series is either evaluable by both or by neither.
 pub const DRIFT_MIN_POINTS: usize = MIN_SERIES_POINTS;
 
-/// Default `drift_alpha`: the significance level a drift's Mann–Kendall trend must
-/// clear.
-pub const DRIFT_ALPHA: f64 = 0.05;
+/// The largest selection-adjusted chance level a drift's Mann–Kendall trend test may
+/// report and still be treated as a finding.
+///
+/// Held equal to [`MAX_CHANGE_CHANCE_LEVEL`] so both history detectors admit a finding at
+/// the same conventional 5% significance level.
+pub const MAX_DRIFT_CHANCE_LEVEL: f64 = 0.05;
 
 /// Default `practical_relative`: a history move must shift the level by at least
 /// this fraction to matter in practice, regardless of significance.

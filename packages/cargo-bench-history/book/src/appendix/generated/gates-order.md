@@ -7,12 +7,13 @@ Each detector applies its own gates in its own order, and a candidate stops at t
 | `split_located` | Whether a candidate split exists at all. | a split must be found |
 | `min_regime` | How many points the shorter side of the split holds. | 5 points |
 | `non_zero_delta` | Whether the two regime levels differ at all. | above zero |
-| `significance` | The chance level of the rank test comparing the two regimes. | p < 0.05 |
 | `relative_floor` | The move as a fraction of the baseline. | 3.0% |
 | `absolute_floor` | The move in the metric's own units. | the metric's own floor, below |
 | `residual_noise` | The move against the series' own typical residual. | 3× the typical residual |
 | `regime_separation` | The share of before-and-after pairs that agree the level moved. | 0.85 |
 | `interval_disjoint` | The two regimes' reported confidence intervals. | the two intervals must not overlap |
+| `selection_adjustment` | The change-point's rank-test chance level, before the split-search correction. | corrects the level; never declines |
+| `significance` | The chance level of the rank test comparing the two regimes. | p < 0.05 |
 
 **`drift`** — a level that is moving steadily
 

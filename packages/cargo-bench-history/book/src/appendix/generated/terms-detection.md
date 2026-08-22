@@ -2,7 +2,6 @@
 |---|---|
 | **chance level** | How often pure chance alone would produce a pattern at least this strong. |
 | **change point** | The commit where a series stops holding one level and starts holding another. |
-| **confidence** | How strong the evidence for a finding is, on a scale where higher means chance is a worse explanation. |
 | **detector** | The procedure that examines one series for one shape of change: a change point, a drift, or a branch comparison. |
 | **drift** | A series that moves steadily in one direction rather than stepping between levels. |
 | **level** | The value a series sits at over a stretch of commits, ignoring run-to-run scatter. |

@@ -849,6 +849,20 @@ residual scatter about its fitted model, which covers every engine uniformly.
 Every persisted metric is lower-is-better, so a rise is always a regression and a fall an
 improvement; there is no per-metric polarity for the analysis to key off.
 
+**Supported series length.** The analysis targets histories of **dozens to a few hundred**
+points — the range a benchmark accrues in practice. Two hard bounds frame that range, and
+neither is expected to bind in normal use; they exist so the tool degrades predictably at the
+extremes instead of behaving unpredictably. Below `MIN_SERIES_POINTS` a series carries too
+little evidence to judge and the analysis stays silent. Above `MAX_SERIES_POINTS` (1000) only
+the most recent 1000 points are analyzed and older measurements are discarded before analysis;
+1000 sits far above any realistic history yet below the length at which the analysis would
+lose accuracy, so it binds in neither direction in practice. A consequence of the upper bound
+is that a change more than `MAX_SERIES_POINTS` points in the past falls outside the analyzed
+window and is treated as settled history rather than a recent regression — which is the
+intended reading, since the tool reports *recent* movement. Outside the supported range the
+tool is deliberately either silent (too little data) or lossy at the far tail (too much data);
+it does not attempt to remain accurate for histories it is not designed to serve.
+
 ### 8.1 Findings: change-points and drift
 
 History mode emits two finding *methods* per series, ranked together by descending relative
@@ -912,6 +926,23 @@ Pettitt is trusted to identify a regime boundary: the history change-point detec
 for reported findings, and branch mode uses the same effect-size gate — at a stricter floor,
 for the reasons below — when deciding whether a base-side split is strong enough to define the
 current comparison regime.
+
+**Exact significance where feasible.** The Mann–Whitney score above is computed exactly whenever
+the number of possible before/after assignments fits in a double-precision integer. The exact
+value enumerates every way the combined points could have been divided into groups of the observed
+sizes and counts the fraction at least as lopsided as the split seen. Feasibility is decided split
+by split: the work grows with the *smaller* side, so a lopsided split can be counted exactly even
+in a long history. This matters especially when values repeat — routine for integer instruction
+counts — because a large-sample approximation can be badly wrong in either direction there.
+
+Near-balanced splits of long histories exceed the exact counting range and retain the tie- and
+continuity-corrected normal score. History mode does not trust that approximate score as an honest
+p-value by itself: the selection adjustment in "Multiple-comparison discipline" applies the same
+exact-or-normal scorer to the observed ordering and to permutations of that series' actual values.
+The final chance level is therefore measured from the score's conditional null distribution,
+including the observed tie pattern. Exact scoring is retained where affordable for resolution and
+power; conditional calibration is what makes the complete history verdict honest in both scoring
+paths.
 
 The residual pool draws only from samples long enough to describe scatter. A sample of a single
 point is its own median, so it contributes a residual of exactly zero that says nothing about the
@@ -1019,9 +1050,17 @@ per-point dispersion, two further vetoes apply: the base and context intervals m
 and the move must clear a multiple of the measurement noise band. Like every interval-derived check,
 both can only *suppress* a candidate the other gates would report.
 
-Whichever test produces a finding also fixes its reported **confidence**, in both modes: the
-complement of that test's p-value. Confidence therefore states the strength of the evidence,
-never the threshold the finding had to clear.
+The chance level a finding must clear is **selection-adjusted in history mode**. A history
+series is examined by both detectors and at every interior split, so the raw significance of
+the split the detectors *chose* overstates how surprising it is; history mode corrects for
+that search, and for running two detectors, before applying the gate described in
+"Multiple-comparison discipline", so the
+significance level means what it says. Branch mode's final context-versus-base comparison is
+predetermined, but its optional base-window narrowing searches suffixes and split positions. Its
+chance level is not adjusted for that baseline selection. Neither mode reports a "confidence"
+figure: every finding already cleared a small chance level, so such a number would read as
+near-certainty on all of them while discriminating between almost none. Chance levels remain
+internal decision inputs rather than finding fields; reports rank findings by the size of the move.
 
 The **practical-magnitude floor** is a hard threshold below which no finding surfaces,
 regardless of engine, direction, mode, or how confidently it was measured. A change too small
@@ -1097,9 +1136,80 @@ has at most half the chance of raising a candidate in a direction chosen in adva
 does of raising one either way; the target is an upper bound, and this order keeps the true
 rate under it.
 
-Because every mode's verdict rests on a real p-value and on that one family definition, the
-correction applies uniformly to history and branch analysis rather than being a history-mode
-concept.
+Every candidate supplies a p-value and uses the same family definition, so the correction applies
+mechanically to history and branch analysis rather than being a history-mode concept. Its
+false-discovery guarantee still depends on each input p-value being calibrated; branch mode's
+data-selected base-window narrowing does not currently satisfy that premise.
+
+**History mode carries a second, upstream correction.** The Benjamini–Hochberg family above
+controls false discoveries *across* benchmarks; it assumes each benchmark handed it an honest
+per-series chance level. In history mode that per-series number must itself be corrected first,
+because judging one series already involved two internal selections: the change-point detector
+tried every eligible split and kept the most striking, and the tool ran two detectors
+(change-point and drift) and reported whichever fit the data better. Both make a flat,
+unchanging series look more surprising than it is, so an uncorrected significance gate would
+admit far more false alarms than its nominal level suggests — most on the recent, short-regime
+regressions the tool most wants to get right. History mode therefore adjusts the change-point's tainted split score with two conservative
+components. The **analytic component** considers every eligible split and adds an upper bound for
+the chance that its fixed-split rank score would be at least as striking as the observed winner.
+Exactly scored splits contribute their valid fixed-split chance level. Approximately scored splits
+use the approximation only to identify the rank-sum tails that count as equally striking, then
+bound those tails with finite-population concentration inequalities. Adding the per-split bounds
+is conservative regardless of which split Pettitt selected.
+
+When the minimum regime leaves only one admissible split and its rank score is exact, no split-search
+penalty is needed: selecting that one split can only suppress fixed-split results, not create extra
+ones.
+
+Otherwise the **conditional-permutation component** runs the complete production procedure on an
+exact conditional orbit: Pettitt first-maximum split selection, minimum-regime rejection, and
+exact-or-normal Mann–Whitney scoring. When every distinct ordering of the observed rank multiset
+fits the work budget, all of them are evaluated. Otherwise every member of one fixed, finite
+permutation subgroup is evaluated, including the identity. A permuted ordering whose selected split
+is too short remains in the denominator as no evidence; dropping it would condition on finding a
+reportable split and make the result optimistic. Under the no-change hypothesis, the observed time
+order is exchangeable within either complete orbit. The fraction at least as striking as the
+observation is therefore an exact randomization p-value. In the subgroup path, repeated orderings
+caused by tied values are counted with their group multiplicity.
+The analytic and permutation components receive fixed portions of the available chance level and
+are combined by weighted Bonferroni, so either may provide the stronger answer without requiring
+them to be independent. The analytic component receives `0.10`, permutation receives `0.90`, and
+the combined split-search chance level is
+`min(analytic / 0.10, permutation / 0.90, 1)`.
+
+The fallback group is derived reproducibly from the series length and a declared order budget,
+independently of the observed values and their ordering. An analytic answer that already clears the
+strictest possible family threshold needs no permutation work. During exact enumeration, the
+extreme count so far divided by the final orbit order is a lower bound on the completed permutation
+p-value. Work may stop only when that bound proves that the analytic component must win or that
+neither component can clear the detector's rejection boundary; no partial count is reported as
+though it were a completed estimate.
+
+For a judged family of size `m`, the orbit-order budget is
+`min(max(600m, 259200), 500000)`. The minimum preserves useful short-history power; the maximum
+bounds every candidate independently of family size. The realizable fallback group also depends on
+series length and can be smaller than that budget. At the supported
+1,000-point series limit, the ceiling yields a group of order 497,664. Its smallest nonzero
+permutation result clears the rank-1 boundary of the 20,000-series stress family after weighting
+and the two-detector correction, and permutation alone has enough resolution through 22,394
+judged series. Shorter histories may have less permutation resolution. The ceiling prevents a
+large family from multiplying its size into unbounded per-series work, making total permutation
+work linear in family size once it applies. It can make an isolated, ambiguous candidate too
+coarse to survive the strictest family threshold; that candidate stays silent rather than
+borrowing certainty the bounded calculation did not establish.
+
+Permutation-independent gates run before this calibration, and a change point is calibrated only
+when its fitted step is at least as good as the drift model. These reorderings do not loosen the
+detector: every earlier gate is conjunctive, a better-fitting drift needs no step calibration, and a
+drift that already passed remains the fallback if the preferred step fails significance.
+
+After this split-search adjustment, history mode doubles both detectors' chance levels to account
+for choosing between change-point and drift. The result is the honest per-series chance level that
+the significance gate and family correction both consume. Branch mode does not use these history adjustments. Its final comparison is predetermined, but
+optional base-window narrowing searches suffixes and split positions and is not selection-adjusted.
+The upper series length in "Supported series length" and the per-candidate permutation ceiling jointly
+bound the work of history calibration. This is a worst-case bound rather than a uniform speed
+promise: an ambiguous maximum-length series may use the full ceiling.
 
 That same predicate is what every report accounts for (§8.9): a series is judged, counted in
 the family, and reported as judged together, or it is none of the three.
@@ -1217,7 +1327,7 @@ of history the findings describe — annotated `+ uncommitted changes` when the 
 was dirty, so a reader (or the auto-filed regression issue) can tie the report to an exact
 commit. Text goes to stdout as one paragraph per finding — the benchmark id on its own
 line as a chapter title, then a direction-colored headline pairing the relative-change
-percent with the metric and its confidence, a dimmed detail line, and a small line chart
+percent with the metric, a dimmed detail line, and a small line chart
 of the series — the whole series in history mode, only the bounded baseline-and-tail
 comparison in branch mode — the chart itself always uncolored, with headline color
 enabled only when stdout is a terminal and not disabled by environment. The text and Markdown reports

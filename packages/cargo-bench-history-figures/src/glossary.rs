@@ -174,13 +174,6 @@ pub const TERMS: &[Term] = &[
         chapter: "coverage.md",
     },
     Term {
-        phrase: "confidence",
-        definition: "How strong the evidence for a finding is, on a scale where higher \
-                     means chance is a worse explanation.",
-        formal_name: "",
-        chapter: "detection.md",
-    },
-    Term {
         phrase: "ghost",
         definition: "A benchmark that history remembers but the analyzed commit no longer \
                      measures.",

@@ -27,7 +27,12 @@ cbh_model = { workspace = true }
 cbh_render = { workspace = true }
 cbh_stats = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-plotters = { workspace = true }
+plotters = { workspace = true, features = [
+    "area_series",
+    "line_series",
+    "point_series",
+    "svg_backend",
+] }
 
 [dev-dependencies]
 cbh_probe = { path = "../cbh_probe", default-features = false }
@@ -35,5 +40,4 @@ tempfile = { workspace = true }
 
 [lints]
 workspace = true
-
 

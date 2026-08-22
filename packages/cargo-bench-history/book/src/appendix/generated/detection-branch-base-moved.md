@@ -1,4 +1,4 @@
-> **Reported.** A regression of +10.22% at the context commit against the base prediction interval, at 100% confidence.
+> **Reported.** A regression of +10.22% at the context commit against the base prediction interval.
 >
 > The context run is 145 against a base level of 131.6.
 >

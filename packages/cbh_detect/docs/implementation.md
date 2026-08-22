@@ -34,6 +34,26 @@ census untruthful, because the floor was met before anything was discarded. It f
 selection step may discard so much that the remainder falls under the minimum regime length; the
 removal allowance is set far below that margin.
 
+History-mode change-point calibration needs the size of the later false-discovery family before
+it can choose its analytic acceptance boundary and permutation precision. Detection therefore
+begins with a serial, metadata-only testability prepass that builds the census and obtains its
+judged count. Workers evaluate the same pure predicate to short-circuit unjudged series, then run
+each judged series independently. The expensive statistical work remains inside the existing
+per-series worker chunks; only the cheap classification pass is serial.
+
+Permutation-independent magnitude and noise gates run before selection adjustment. The detector
+also fits the drift before calibration and calibrates a step only when that model fits at least as
+well; a qualified drift remains the fallback if the step then fails significance. Calibration
+combines a conservative analytic split-union bound with conditional permutation under fixed
+Bonferroni weights. An analytic result that clears the rank-1 family boundary needs no permutation
+work. If only one exact split is admissible, its fixed-split score needs no search correction.
+Otherwise calibration enumerates either every distinct rank ordering that fits the budget or every
+member of a deterministic finite subgroup. Partial enumeration may stop only when its monotone
+lower bound proves the analytic component must win or the candidate must fail. This bounds
+candidate work without introducing cross-series allocation decisions that would change the
+dependence assumptions of Benjamini–Hochberg. The ceiling is a hard bound, not a claim that every
+candidate is cheap: an ambiguous maximum-length series may consume the full orbit.
+
 Parallel work is supplied through an executor abstraction, preserving the same deterministic
 analysis logic for production execution and synchronous component tests.
 

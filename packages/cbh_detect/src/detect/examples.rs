@@ -69,6 +69,16 @@ const RAMP_PER_POINT: f64 = 0.003;
 /// it.
 const RAMP_LENGTH: usize = 3 * REGIME;
 
+/// How many commits in each half of `overlapping_regimes` sit on the opposite level.
+///
+/// That series is two halves of `2 * REGIME`, the first mostly at `BASELINE` and the
+/// second mostly at `ELEVATED`. This many commits in each half cross to the other level.
+/// The count is chosen so the probability that a later commit beats an earlier one is
+/// exactly 0.80 — below `MIN_REGIME_SEPARATION` — so the majority shift is real and
+/// statistically significant, yet the two levels overlap too much for the separation gate
+/// to accept.
+const OVERLAP_CROSSOVER: usize = 4;
+
 /// A step from one settled level to another: the textbook change point.
 ///
 /// History mode reports it as a regression by the change-point method. Both regimes carry
@@ -121,6 +131,24 @@ pub fn blip() -> Vec<f64> {
 pub fn flat_noisy() -> Vec<f64> {
     let levels = vec![BASELINE; 3 * REGIME];
     scattered(&levels, TIMING_NOISE_CV, seed_of("flat_noisy"))
+}
+
+/// Two levels that both recur, with the majority level flipping at the midpoint.
+///
+/// History mode stays quiet, and the separation gate is the one that declines it. The
+/// majority shift is a genuine, statistically significant move, so it clears the
+/// significance gate — but the two levels overlap heavily, so the share of before-and-
+/// after pairs that agree the level rose (0.80) falls below `MIN_REGIME_SEPARATION`. This
+/// is the case that gate exists for: a *significant* difference is not yet a *separated*
+/// one. Each half is ordered high-then-low so no trend survives for the drift detector.
+#[must_use]
+pub fn overlapping_regimes() -> Vec<f64> {
+    let majority = 2 * REGIME - OVERLAP_CROSSOVER;
+    iter::repeat_n(ELEVATED, OVERLAP_CROSSOVER)
+        .chain(iter::repeat_n(BASELINE, majority))
+        .chain(iter::repeat_n(ELEVATED, majority))
+        .chain(iter::repeat_n(BASELINE, OVERLAP_CROSSOVER))
+        .collect()
 }
 
 /// Builds a series called `name` carrying `values` at consecutive topological indices
@@ -241,4 +269,23 @@ fn tip_index_of(series: &Series) -> usize {
         .map(|point| point.topo_index)
         .max()
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overlapping_regimes_has_the_declared_crossovers_and_majorities() {
+        let majority = 2 * REGIME - OVERLAP_CROSSOVER;
+        let expected = [
+            vec![ELEVATED; OVERLAP_CROSSOVER],
+            vec![BASELINE; majority],
+            vec![ELEVATED; majority],
+            vec![BASELINE; OVERLAP_CROSSOVER],
+        ]
+        .concat();
+
+        assert_eq!(overlapping_regimes(), expected);
+    }
 }

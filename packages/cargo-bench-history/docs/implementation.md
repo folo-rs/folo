@@ -43,7 +43,6 @@ private-use crates own the capabilities composed into the application:
   registry, fixtures derived from production projections, presentation styles, and preview
   rendering. It is book infrastructure, not part of the application binary; dependencies run from
   the generator to the production projections, never from the shipped application to the generator.
-
 These boundaries are directional: component crates do not depend on the shell, and behavioral
 policy remains with the application even when a component implements it. More detailed analysis
 data flow is documented in the [analysis implementation guide](analyze.md).

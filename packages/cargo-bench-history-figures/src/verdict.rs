@@ -46,12 +46,10 @@ fn history_reported(finding: &Finding, reading: &str) -> String {
     let latest = format_value(finding.latest);
 
     format!(
-        "> **Reported.** A {direction} of {:+.2}% via {method}, {attribution}, at {:.0}% \
-         confidence.\n>\n\
+        "> **Reported.** A {direction} of {:+.2}% via {method}, {attribution}.\n>\n\
          > The level moved from {baseline} to {latest}.\n>\n\
          > {reading}.\n",
         finding.relative_delta * 100.0,
-        finding.confidence * 100.0,
     )
 }
 
@@ -68,11 +66,10 @@ fn branch_reported(finding: &Finding, reading: &str) -> String {
 
     format!(
         "> **Reported.** A {direction} of {:+.2}% at the context commit against the base \
-         prediction interval, at {:.0}% confidence.\n>\n\
+         prediction interval.\n>\n\
          > The context run is {latest} against a base level of {baseline}.\n>\n\
          > {reading}.\n",
         finding.relative_delta * 100.0,
-        finding.confidence * 100.0,
     )
 }
 
@@ -102,10 +99,9 @@ pub fn quiet(finding: Option<&Finding>, reading: &str) -> String {
     match finding {
         None => format!("> **Nothing reported.** {}.\n", capitalized(reading)),
         Some(found) => format!(
-            "> **Reported**, unexpectedly: {:+.2}% at {:.0}% confidence. This example is \
+            "> **Reported**, unexpectedly: {:+.2}%. This example is \
              documented as staying quiet, so this fragment means the two have diverged.\n",
             found.relative_delta * 100.0,
-            found.confidence * 100.0,
         ),
     }
 }
@@ -138,7 +134,7 @@ mod tests {
     }
 
     #[test]
-    fn a_reported_fragment_carries_the_move_and_the_confidence() {
+    fn a_reported_fragment_carries_the_move() {
         let fragment = reported(
             &a_finding(),
             "because the level changed",
@@ -146,7 +142,7 @@ mod tests {
         );
 
         assert!(fragment.contains("Reported."));
-        assert!(fragment.contains("confidence"));
+        assert!(fragment.contains("% via"));
         assert!(fragment.contains("Because the level changed."));
     }
 

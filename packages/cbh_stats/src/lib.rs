@@ -25,6 +25,7 @@
 
 mod normal;
 mod p_value;
+mod selection;
 mod stats;
 mod student_t;
 
@@ -33,5 +34,6 @@ mod test_util;
 
 pub(crate) use normal::*;
 pub(crate) use p_value::*;
+pub use selection::*;
 pub use stats::*;
 pub use student_t::*;
