@@ -73,6 +73,7 @@ impl EventLake {
     /// Rents an event from the lake, returning its endpoints.
     ///
     /// The event will be returned to the lake when both endpoints are dropped.
+    /// See [`PooledReceiver`] for the receiver's callback and reentrancy contract.
     #[must_use]
     pub fn rent<T: Send + 'static>(&self) -> (PooledSender<T>, PooledReceiver<T>) {
         let type_id = TypeId::of::<T>();
@@ -215,11 +216,14 @@ mod tests {
     #[cfg(debug_assertions)]
     use std::cell::RefCell;
     use std::panic::{RefUnwindSafe, UnwindSafe};
+    use std::sync::Barrier;
     use std::task::Waker;
+    use std::thread;
 
     use static_assertions::assert_impl_all;
     #[cfg(debug_assertions)]
     use testing::assert_panics_with;
+    use testing::with_watchdog;
 
     use super::*;
     #[cfg(debug_assertions)]
@@ -230,6 +234,84 @@ mod tests {
     assert_impl_all!(
         EventLake: UnwindSafe, RefUnwindSafe
     );
+
+    #[test]
+    fn concurrent_same_type_rentals_are_usable_across_threads() {
+        // The smallest group that guarantees competing map and pool access.
+        const WORKER_COUNT: usize = 2;
+
+        with_watchdog(|| {
+            let lake = EventLake::new();
+            let barrier = Barrier::new(WORKER_COUNT);
+
+            thread::scope(|scope| {
+                for _ in 0..WORKER_COUNT {
+                    let lake = lake.clone();
+                    let barrier = &barrier;
+
+                    scope.spawn(move || {
+                        barrier.wait();
+
+                        let (sender, receiver) = lake.rent::<i32>();
+                        thread::scope(|scope| {
+                            scope.spawn(move || sender.send(42)).join().unwrap();
+                        });
+
+                        assert_eq!(receiver.into_value().unwrap(), 42);
+                    });
+                }
+            });
+
+            assert!(lake.is_empty());
+        });
+    }
+
+    #[test]
+    fn concurrent_distinct_type_rentals_are_usable_across_threads() {
+        with_watchdog(|| {
+            let lake = EventLake::new();
+            let barrier = Barrier::new(2);
+
+            thread::scope(|scope| {
+                scope.spawn({
+                    let lake = lake.clone();
+                    let barrier = &barrier;
+
+                    move || {
+                        barrier.wait();
+
+                        let (sender, receiver) = lake.rent::<i32>();
+                        thread::scope(|scope| {
+                            scope.spawn(move || sender.send(42)).join().unwrap();
+                        });
+
+                        assert_eq!(receiver.into_value().unwrap(), 42);
+                    }
+                });
+
+                scope.spawn({
+                    let lake = lake.clone();
+                    let barrier = &barrier;
+
+                    move || {
+                        barrier.wait();
+
+                        let (sender, receiver) = lake.rent::<String>();
+                        thread::scope(|scope| {
+                            scope
+                                .spawn(move || sender.send("payload".to_owned()))
+                                .join()
+                                .unwrap();
+                        });
+
+                        assert_eq!(receiver.into_value().unwrap(), "payload");
+                    }
+                });
+            });
+
+            assert!(lake.is_empty());
+        });
+    }
 
     #[test]
     fn len() {
@@ -384,49 +466,63 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn inspect_awaiters_closure_may_reenter_lake() {
-        let lake = EventLake::new();
+        // The closure below reenters `inspect_awaiters()` and rents from the lake, both of
+        // which reacquire the lake's core `Mutex` (and the pool's own mutex) from the same
+        // thread. `inspect_awaiters()` must release every lock it holds before invoking the
+        // closure; a regression that invokes the closure under a held lock would deadlock this
+        // thread forever instead of failing an assertion, so we bound the test with a watchdog.
+        with_watchdog(|| {
+            let lake = EventLake::new();
 
-        let (_sender, receiver) = lake.rent::<i32>();
-        let mut receiver = Box::pin(receiver);
+            let (_sender, receiver) = lake.rent::<i32>();
+            let mut receiver = Box::pin(receiver);
 
-        let mut cx = task::Context::from_waker(Waker::noop());
-        _ = receiver.as_mut().poll(&mut cx);
+            let mut cx = task::Context::from_waker(Waker::noop());
+            _ = receiver.as_mut().poll(&mut cx);
 
-        assert_inspect_awaiters_is_reentrant(&|f| lake.inspect_awaiters(f), &|| {
-            // A payload type the lake has no pool for yet, to also exercise pool insertion.
-            let (sender, receiver) = lake.rent::<u8>();
-            drop(sender);
-            drop(receiver);
+            assert_inspect_awaiters_is_reentrant(&|f| lake.inspect_awaiters(f), &|| {
+                // A payload type the lake has no pool for yet, to also exercise pool insertion.
+                let (sender, receiver) = lake.rent::<u8>();
+                drop(sender);
+                drop(receiver);
+            });
         });
     }
 
     #[cfg(debug_assertions)]
     #[test]
     fn inspect_awaiters_tolerates_endpoint_drop_from_closure() {
-        let lake = EventLake::new();
+        // The closure below drops the endpoints it is being told about, which returns their
+        // event to its pool and reacquires the pool's mutex from the same thread that is
+        // currently iterating `inspect_awaiters()`. As above, a regression that holds the
+        // relevant lock across the closure call would deadlock rather than panic, so this test
+        // is bounded by a watchdog.
+        with_watchdog(|| {
+            let lake = EventLake::new();
 
-        let mut cx = task::Context::from_waker(Waker::noop());
+            let mut cx = task::Context::from_waker(Waker::noop());
 
-        let (sender1, receiver1) = lake.rent::<i32>();
-        let (sender2, receiver2) = lake.rent::<i32>();
+            let (sender1, receiver1) = lake.rent::<i32>();
+            let (sender2, receiver2) = lake.rent::<i32>();
 
-        let mut receiver1 = Box::pin(receiver1);
-        let mut receiver2 = Box::pin(receiver2);
+            let mut receiver1 = Box::pin(receiver1);
+            let mut receiver2 = Box::pin(receiver2);
 
-        _ = receiver1.as_mut().poll(&mut cx);
-        _ = receiver2.as_mut().poll(&mut cx);
+            _ = receiver1.as_mut().poll(&mut cx);
+            _ = receiver2.as_mut().poll(&mut cx);
 
-        // The closure releases the events it is inspecting. The backtraces it receives are
-        // snapshots, so they remain valid and each event is still visited exactly once.
-        let endpoints = RefCell::new(vec![(sender1, receiver1), (sender2, receiver2)]);
-        let mut call_count = 0;
+            // The closure releases the events it is inspecting. The backtraces it receives are
+            // snapshots, so they remain valid and each event is still visited exactly once.
+            let endpoints = RefCell::new(vec![(sender1, receiver1), (sender2, receiver2)]);
+            let mut call_count = 0;
 
-        lake.inspect_awaiters(|_| {
-            call_count += 1;
-            drop(endpoints.borrow_mut().pop());
+            lake.inspect_awaiters(|_| {
+                call_count += 1;
+                drop(endpoints.borrow_mut().pop());
+            });
+
+            assert_eq!(call_count, 2);
+            assert!(lake.is_empty());
         });
-
-        assert_eq!(call_count, 2);
-        assert!(lake.is_empty());
     }
 }

@@ -1,14 +1,14 @@
 //! Task representation and the wrappers that adapt user-provided closures to it.
 
 use std::any::Any;
+use std::mem::MaybeUninit;
 use std::panic::{self, AssertUnwindSafe};
 use std::pin::Pin;
 
 use events_once::PooledSender;
 use fast_time::Instant;
-use multitude::dst::pointee;
-use multitude::{Arena, coerce};
 use pin_project::pin_project;
+use plurality::{Box as PoolBox, coerce};
 
 use crate::metrics::{CLOCK, EXECUTION_TIME_MS, SCHEDULING_DELAY_MS};
 
@@ -18,31 +18,36 @@ use crate::metrics::{CLOCK, EXECUTION_TIME_MS, SCHEDULING_DELAY_MS};
 /// loop knows about a task: it can run it exactly once, in place, without knowing the
 /// closure type or return type it was built from. The `Send` supertrait is what allows the
 /// erased form to travel from the spawning thread to the worker thread.
-///
-/// The `pointee` attribute supplies the pointer-metadata implementation that
-/// [`multitude::Box`] requires of its unsized targets. `pointee` is `ptr_meta`'s macro,
-/// re-exported by `multitude`, and it emits `::ptr_meta::*` paths unless told otherwise;
-/// the `crate` argument redirects those at `multitude`'s re-export so this package needs
-/// no direct dependency on `ptr_meta`. Depending on `ptr_meta` directly would be worse: the
-/// generated impls must target the exact `ptr_meta` instance `multitude` was built against,
-/// so a version skew would surface as an unrelated-looking trait mismatch.
-#[pointee(crate = ::multitude::dst)]
 pub(crate) trait VicinalTask: Send + 'static {
     fn call(self: Pin<&mut Self>);
 }
 
 /// Owning handle to a type-erased task, as stored in a processor's task queue.
 ///
-/// The handle owns its slice of the arena outright and keeps the backing storage alive on
-/// its own, so queueing, dequeuing and executing a task need no further contact with the
-/// arena or the lock that guards it.
-pub(crate) type ErasedTaskHandle = Pin<multitude::Box<dyn VicinalTask>>;
+/// The handle owns its pool slot, so queueing, dequeuing and executing a task need no further
+/// contact with the pool or the lock that guards allocation.
+pub(crate) type ErasedTaskHandle = PoolBox<dyn VicinalTask>;
 
-/// Moves `task` into the arena and erases its type.
-pub(crate) fn alloc_task(arena: &Arena, task: impl VicinalTask) -> ErasedTaskHandle {
-    let handle = arena.alloc_box(task);
+/// A reserved task slot that can be initialized after releasing the pool lock.
+pub(crate) type UninitTaskHandle<T> = PoolBox<MaybeUninit<T>>;
 
-    multitude::Box::into_pin(multitude::Box::unsize(handle, coerce!(dyn VicinalTask)))
+/// Initializes a reserved slot with `task` and erases its type.
+pub(crate) fn init_task<T: VicinalTask>(
+    mut handle: UninitTaskHandle<T>,
+    task: T,
+) -> ErasedTaskHandle {
+    {
+        let slot = handle.as_pin_mut();
+        // SAFETY: The uniquely owned slot is still uninitialized, so there is no pinned `T`
+        // that could be moved through this mutable reference. The task is written in place.
+        let slot = unsafe { Pin::get_unchecked_mut(slot) };
+        slot.write(task);
+    }
+
+    // SAFETY: The task was written into this slot immediately above.
+    let handle = unsafe { handle.assume_init() };
+
+    PoolBox::unsize(handle, coerce!(dyn VicinalTask))
 }
 
 /// Outcome of running a task to completion: either its return value or the payload of the
@@ -148,8 +153,64 @@ where
 mod tests {
     use events_once::EventLake;
     use futures::executor::block_on;
+    use plurality::MultiPool;
 
     use super::*;
+
+    /// Makes capacity growth observable after live tasks fill an initial chunk.
+    const TEST_CHUNK_SIZE: u32 = 2;
+
+    /// Uses a meaningfully different task layout without making the test expensive.
+    const LARGE_TASK_WORDS: usize = 8;
+
+    /// The reuse test deliberately exercises unrelated allocation layouts.
+    const EXPECTED_LAYOUT_COUNT: usize = 2;
+
+    /// A compact task used to exercise one internal layout pool.
+    struct SmallTask(u8);
+
+    impl VicinalTask for SmallTask {
+        fn call(self: Pin<&mut Self>) {
+            _ = std::hint::black_box(self.0);
+        }
+    }
+
+    /// A larger task used to exercise an independent internal layout pool.
+    struct LargeTask([u64; LARGE_TASK_WORDS]);
+
+    impl VicinalTask for LargeTask {
+        fn call(self: Pin<&mut Self>) {
+            _ = std::hint::black_box(self.0);
+        }
+    }
+
+    fn alloc_test_task<T: VicinalTask>(pool: &MultiPool, task: T) -> ErasedTaskHandle {
+        init_task(pool.alloc_uninit_box(), task)
+    }
+
+    #[test]
+    fn released_task_slots_are_reused_per_layout() {
+        let pool = MultiPool::builder().chunk_size(TEST_CHUNK_SIZE).build();
+        let small_held = alloc_test_task(&pool, SmallTask(u8::default()));
+        let small_released = alloc_test_task(&pool, SmallTask(u8::default()));
+        let large_held = alloc_test_task(&pool, LargeTask([u64::default(); LARGE_TASK_WORDS]));
+        let large_released = alloc_test_task(&pool, LargeTask([u64::default(); LARGE_TASK_WORDS]));
+
+        assert_eq!(pool.layouts(), EXPECTED_LAYOUT_COUNT);
+        assert_eq!(pool.capacity_of::<SmallTask>(), u64::from(TEST_CHUNK_SIZE));
+        assert_eq!(pool.capacity_of::<LargeTask>(), u64::from(TEST_CHUNK_SIZE));
+
+        drop((small_released, large_released));
+        let small_replacement = alloc_test_task(&pool, SmallTask(u8::default()));
+        let large_replacement =
+            alloc_test_task(&pool, LargeTask([u64::default(); LARGE_TASK_WORDS]));
+
+        assert_eq!(pool.capacity_of::<SmallTask>(), u64::from(TEST_CHUNK_SIZE));
+        assert_eq!(pool.capacity_of::<LargeTask>(), u64::from(TEST_CHUNK_SIZE));
+
+        drop((small_held, small_replacement, large_held, large_replacement));
+        assert!(pool.is_empty());
+    }
 
     #[test]
     fn wrap_task_sends_return_value() {

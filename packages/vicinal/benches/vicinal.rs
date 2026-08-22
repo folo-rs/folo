@@ -17,6 +17,25 @@ use vicinal::Pool;
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
+/// Keeps the low and high cases distinct without making each sample excessively long.
+const TASK_BATCH_SIZE: usize = 100;
+
+/// Matches the number of workers Vicinal assigns to each processor.
+const THREADPOOL_WORKER_COUNT: usize = 2;
+
+/// Makes it likely that every comparison-pool worker executes the pinning callback.
+const THREADPOOL_PIN_TASK_COUNT: usize = 30;
+
+/// Provides enough arithmetic to keep the task body observable without masking dispatch costs.
+const WORK_STEP_COUNT: usize = 32;
+
+/// A deterministic input prevents the optimizer from replacing the task body with a constant.
+const WORK_SEED: u32 = 42;
+
+/// Standard LCG parameters provide inexpensive deterministic arithmetic.
+const LCG_MULTIPLIER: u32 = 1_664_525;
+const LCG_INCREMENT: u32 = 1_013_904_223;
+
 /// A small, deterministic, CPU-only stand-in for a real task body.
 ///
 /// These benchmarks measure the overhead of *dispatching* work onto a worker,
@@ -25,9 +44,11 @@ static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 /// noise unrelated to the scheduling under test. A handful of LCG steps seeded
 /// with `black_box` gives a fixed cost the optimizer cannot fold away.
 fn simulate_work() -> u32 {
-    let mut value = black_box(42_u32);
-    for _ in 0..32 {
-        value = value.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+    let mut value = black_box(WORK_SEED);
+    for _ in 0..WORK_STEP_COUNT {
+        value = value
+            .wrapping_mul(LCG_MULTIPLIER)
+            .wrapping_add(LCG_INCREMENT);
     }
     value
 }
@@ -75,14 +96,14 @@ fn entrypoint(c: &mut Criterion) {
         let scheduler = pool.scheduler();
 
         b.iter_custom(|iterations| {
-            let mut handles = Vec::with_capacity(100);
+            let mut handles = Vec::with_capacity(TASK_BATCH_SIZE);
 
             let _alloc_span = spawn_100_alloc.measure_process().iterations(iterations);
             let _time_span = spawn_100_time.measure_process().iterations(iterations);
             let start = Instant::now();
 
             for _ in 0..iterations {
-                for _ in 0..100 {
+                for _ in 0..TASK_BATCH_SIZE {
                     handles.push(scheduler.spawn(move || black_box(simulate_work())));
                 }
 
@@ -132,7 +153,7 @@ fn entrypoint(c: &mut Criterion) {
         let scheduler = pool.scheduler();
 
         b.iter_custom(|iterations| {
-            let mut handles = Vec::with_capacity(100);
+            let mut handles = Vec::with_capacity(TASK_BATCH_SIZE);
 
             let _alloc_span = spawn_urgent_100_alloc
                 .measure_process()
@@ -143,7 +164,7 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             for _ in 0..iterations {
-                for _ in 0..100 {
+                for _ in 0..TASK_BATCH_SIZE {
                     handles.push(scheduler.spawn_urgent(move || black_box(simulate_work())));
                 }
 
@@ -183,14 +204,14 @@ fn entrypoint(c: &mut Criterion) {
 
     g.bench_function("thread_100", |b| {
         b.iter_custom(|iterations| {
-            let mut handles = Vec::with_capacity(100);
+            let mut handles = Vec::with_capacity(TASK_BATCH_SIZE);
 
             let _alloc_span = thread_100_alloc.measure_process().iterations(iterations);
             let _time_span = thread_100_time.measure_process().iterations(iterations);
             let start = Instant::now();
 
             for _ in 0..iterations {
-                for _ in 0..100 {
+                for _ in 0..TASK_BATCH_SIZE {
                     handles.push(thread::spawn(move || black_box(simulate_work())));
                 }
 
@@ -211,14 +232,13 @@ fn entrypoint(c: &mut Criterion) {
     let threadpool_single_time = times.operation("vicinal/spawn/threadpool_single");
 
     g.bench_function("threadpool_single", |b| {
-        // Vicinal pool defaults to 2 threads per processor, so we match.
-        let pool = ThreadPool::new(2);
+        // Match the number of workers Vicinal assigns to the selected processor.
+        let pool = ThreadPool::new(THREADPOOL_WORKER_COUNT);
         let event_pool = EventPool::<u32>::new();
 
-        // Ensure the thread pool threads are pinned to the same processor as main().
-        // There is no guarantee on what thread each task gets scheduled on, so we
-        // spam a whole bunch of these to make it more likely we hit both threads.
-        for _ in 0..30 {
+        // Submit more pinning callbacks than workers because the pool does not guarantee
+        // which worker runs each callback.
+        for _ in 0..THREADPOOL_PIN_TASK_COUNT {
             pool.execute({
                 let one_processor = one_processor.clone();
                 move || {
@@ -254,14 +274,13 @@ fn entrypoint(c: &mut Criterion) {
     let threadpool_100_time = times.operation("vicinal/spawn/threadpool_100");
 
     g.bench_function("threadpool_100", |b| {
-        // Vicinal pool defaults to 2 threads per processor, so we match.
-        let pool = ThreadPool::new(2);
+        // Match the number of workers Vicinal assigns to the selected processor.
+        let pool = ThreadPool::new(THREADPOOL_WORKER_COUNT);
         let event_pool = EventPool::<u32>::new();
 
-        // Ensure the thread pool threads are pinned to the same processor as main().
-        // There is no guarantee on what thread each task gets scheduled on, so we
-        // spam a whole bunch of these to make it more likely we hit both threads.
-        for _ in 0..30 {
+        // Submit more pinning callbacks than workers because the pool does not guarantee
+        // which worker runs each callback.
+        for _ in 0..THREADPOOL_PIN_TASK_COUNT {
             pool.execute({
                 let one_processor = one_processor.clone();
                 move || {
@@ -273,7 +292,7 @@ fn entrypoint(c: &mut Criterion) {
         pool.join();
 
         b.iter_custom(|iterations| {
-            let mut rxs = Vec::with_capacity(100);
+            let mut rxs = Vec::with_capacity(TASK_BATCH_SIZE);
 
             let _alloc_span = threadpool_100_alloc
                 .measure_process()
@@ -282,7 +301,7 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             for _ in 0..iterations {
-                for _ in 0..100 {
+                for _ in 0..TASK_BATCH_SIZE {
                     let (tx, rx) = event_pool.rent();
                     rxs.push(rx);
                     pool.execute(move || {
@@ -352,7 +371,7 @@ fn entrypoint(c: &mut Criterion) {
         let event_pool = EventPool::<()>::new();
 
         b.iter_custom(|iterations| {
-            let mut rxs = Vec::with_capacity(100);
+            let mut rxs = Vec::with_capacity(TASK_BATCH_SIZE);
 
             let _alloc_span = spawn_with_event_100_alloc
                 .measure_process()
@@ -363,7 +382,7 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             for _ in 0..iterations {
-                for _ in 0..100 {
+                for _ in 0..TASK_BATCH_SIZE {
                     let (tx, rx) = event_pool.rent();
                     rxs.push(rx);
                     let _handle = scheduler.spawn(move || {
@@ -428,7 +447,7 @@ fn entrypoint(c: &mut Criterion) {
         let event_pool = EventPool::<()>::new();
 
         b.iter_custom(|iterations| {
-            let mut rxs = Vec::with_capacity(100);
+            let mut rxs = Vec::with_capacity(TASK_BATCH_SIZE);
 
             let _alloc_span = spawn_and_forget_100_alloc
                 .measure_process()
@@ -439,7 +458,7 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             for _ in 0..iterations {
-                for _ in 0..100 {
+                for _ in 0..TASK_BATCH_SIZE {
                     let (tx, rx) = event_pool.rent();
                     rxs.push(rx);
                     scheduler.spawn_and_forget(move || {

@@ -111,12 +111,13 @@ impl<T: 'static> LocalPoolState<T> {
         let mut backtraces = Vec::with_capacity(self.registry.len());
 
         for event in self.registry.iter() {
-            // SAFETY: The registry only names events that have been rented and not yet released,
-            // so the slot is still occupied by a live event.
+            // SAFETY: An event is unregistered before it is destroyed, and unregistering
+            // requires the exclusive access to the registry that our caller's borrow excludes,
+            // so every event still named here is initialized, aligned and not yet destroyed.
             let event_cell = unsafe { event.as_ref() };
 
-            // SAFETY: We only ever create shared references to an event, so no exclusive
-            // reference can alias this one.
+            // SAFETY: An event is only ever reached through shared references, whether from an
+            // endpoint or from here, so no exclusive reference can alias this one.
             let event = unsafe { &*event_cell.get() };
 
             if let Some(backtrace) = event.awaiter_backtrace() {

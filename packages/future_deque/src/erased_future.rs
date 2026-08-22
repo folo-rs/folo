@@ -2,8 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use multitude::dst::pointee;
-use multitude::{Arena, coerce};
+use plurality::{Box as PoolBox, MultiPool, coerce};
 
 /// Type erasure trait for futures stored in a future deque.
 ///
@@ -11,15 +10,6 @@ use multitude::{Arena, coerce};
 /// which leaves nothing for the deque to name its element type by. This trait restates
 /// `Future::poll` behind a type parameter so that `dyn ErasedFuture<T>` identifies the
 /// output type it produces.
-///
-/// The `pointee` attribute supplies the pointer-metadata implementation that
-/// [`multitude::Box`] requires of its unsized targets. `pointee` is `ptr_meta`'s macro,
-/// re-exported by `multitude`, and it emits `::ptr_meta::*` paths unless told otherwise;
-/// the `crate` argument redirects those at `multitude`'s re-export so this package needs
-/// no direct dependency on `ptr_meta`. Depending on `ptr_meta` directly would be worse: the
-/// generated impls must target the exact `ptr_meta` instance `multitude` was built against,
-/// so a version skew would surface as an unrelated-looking trait mismatch.
-#[pointee(crate = ::multitude::dst)]
 pub(crate) trait ErasedFuture<T> {
     /// Polls the underlying future.
     fn poll_erased(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T>;
@@ -33,19 +23,45 @@ impl<T, F: Future<Output = T>> ErasedFuture<T> for F {
 
 /// Owning handle to a type-erased future, as stored in a deque slot.
 ///
-/// Both deque variants store this same type. The handle keeps its backing arena chunk alive
-/// on its own, so it stays valid after the thread-local arena that produced it is gone.
-pub(crate) type ErasedFutureHandle<T> = Pin<multitude::Box<dyn ErasedFuture<T>>>;
+/// Both deque variants store this same type. The handle owns its pool slot, so it stays valid
+/// after the thread-local pool that produced it is gone.
+pub(crate) type ErasedFutureHandle<T> = PoolBox<dyn ErasedFuture<T>>;
 
-/// Moves `future` into the arena and erases its type.
+/// Moves `future` into the pool and erases its type.
 pub(crate) fn alloc_future<T, F: Future<Output = T> + 'static>(
-    arena: &Arena,
+    pool: &MultiPool,
     future: F,
 ) -> ErasedFutureHandle<T> {
-    let handle = arena.alloc_box(future);
+    let handle = pool.alloc_box(future);
 
-    multitude::Box::into_pin(multitude::Box::unsize(
-        handle,
-        coerce!(<T> dyn ErasedFuture<T>),
-    ))
+    PoolBox::unsize(handle, coerce!(<T> dyn ErasedFuture<T>))
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::future::{Ready, ready};
+
+    use super::*;
+
+    /// Makes capacity growth observable after the initial allocations fill one chunk.
+    const TEST_CHUNK_SIZE: u32 = 2;
+
+    #[test]
+    fn released_slot_is_reused_with_live_neighbor() {
+        let pool = MultiPool::builder().chunk_size(TEST_CHUNK_SIZE).build();
+        let held = alloc_future(&pool, ready(1_u32));
+        let released = alloc_future(&pool, ready(2_u32));
+
+        assert_eq!(pool.capacity_of::<Ready<u32>>(), u64::from(TEST_CHUNK_SIZE));
+
+        drop(released);
+        let replacement = alloc_future(&pool, ready(3_u32));
+
+        assert_eq!(pool.capacity_of::<Ready<u32>>(), u64::from(TEST_CHUNK_SIZE));
+        assert_eq!(pool.len_of::<Ready<u32>>(), 2);
+
+        drop((held, replacement));
+        assert!(pool.is_empty());
+    }
 }

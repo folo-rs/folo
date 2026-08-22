@@ -28,10 +28,10 @@ event-listener = { workspace = true }
 events_once = { workspace = true }
 fast_time = { workspace = true }
 many_cpus = { workspace = true }
-multitude = { workspace = true, features = ["dst"] }
 new_zealand = { workspace = true }
 nm = { workspace = true }
 pin-project = { workspace = true }
+plurality = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
@@ -52,4 +52,3 @@ workspace = true
 [[bench]]
 name = "vicinal"
 harness = false
-

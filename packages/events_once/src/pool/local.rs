@@ -3,7 +3,6 @@ use std::any::type_name;
 use std::backtrace::Backtrace;
 use std::cell::RefCell;
 use std::fmt;
-use std::marker::PhantomData;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::rc::Rc;
 #[cfg(debug_assertions)]
@@ -37,14 +36,13 @@ use crate::{
 /// ```
 pub struct LocalEventPool<T: 'static> {
     core: Rc<LocalPoolCore<T>>,
-
-    _owns_some: PhantomData<T>,
 }
 
-// The RefCell inside LocalPoolCore causes !RefUnwindSafe via auto-trait
-// inference through Rc. The pool is only borrowed momentarily for
-// rent/return operations and cannot be observed in an inconsistent state
-// during unwind.
+// The RefCell inside LocalPoolCore causes !RefUnwindSafe via auto-trait inference through Rc.
+// The pool is borrowed only for the duration of a rent or release operation, neither of which
+// can unwind while the borrow is held, so a pool observed after a panic still has consistent
+// slot bookkeeping. This holds regardless of the payload, which the pool never exposes: a value
+// is reachable only through the endpoints of the event that carries it.
 impl<T: 'static> UnwindSafe for LocalEventPool<T> {}
 impl<T: 'static> RefUnwindSafe for LocalEventPool<T> {}
 
@@ -69,23 +67,31 @@ impl<T: 'static> LocalEventPool<T> {
             core: Rc::new(LocalPoolCore {
                 state: RefCell::new(LocalPoolState::new()),
             }),
-            _owns_some: PhantomData,
         }
     }
 
     /// Rents an event from the pool, returning its endpoints.
     ///
     /// The event will be returned to the pool when both endpoints are dropped.
+    /// See [`PooledLocalReceiver`] for the receiver's callback and reentrancy contract.
     #[inline]
     #[must_use]
     pub fn rent(&self) -> (PooledLocalSender<T>, PooledLocalReceiver<T>) {
         let event = self.core.state.borrow_mut().rent();
 
-        let event_ref = PooledLocalRef::new(
-            #[cfg(debug_assertions)]
-            Rc::clone(&self.core),
-            event,
-        );
+        #[cfg(debug_assertions)]
+        let core = Rc::clone(&self.core);
+
+        // SAFETY: The event was just rented from this pool's state and has not been released.
+        // The endpoints below and the pool's debug-only registry are the only reachers of the
+        // event, and none of them creates an exclusive reference to it.
+        let event_ref = unsafe {
+            PooledLocalRef::new(
+                #[cfg(debug_assertions)]
+                core,
+                event,
+            )
+        };
 
         let inner_sender = LocalSenderCore::new(event_ref.clone());
         let inner_receiver = LocalReceiverCore::new(event_ref);
@@ -151,7 +157,6 @@ impl<T: 'static> Clone for LocalEventPool<T> {
     fn clone(&self) -> Self {
         Self {
             core: Rc::clone(&self.core),
-            _owns_some: PhantomData,
         }
     }
 }
@@ -181,11 +186,12 @@ mod tests {
     #[cfg(debug_assertions)]
     use crate::assert_inspect_awaiters_is_reentrant;
 
+    // The payload is itself thread-safe, so the pool is what confines this to one thread.
     assert_not_impl_any!(LocalEventPool<u32>: Send, Sync);
 
-    assert_impl_all!(
-        LocalEventPool<u32>: UnwindSafe, RefUnwindSafe
-    );
+    // The payload satisfies only the bound that the pool's API requires (`'static`) and is
+    // neither `UnwindSafe` nor `RefUnwindSafe`, so both traits come from the pool itself.
+    assert_impl_all!(LocalEventPool<Rc<RefCell<u32>>>: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn len() {

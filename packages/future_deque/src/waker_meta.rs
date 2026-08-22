@@ -70,6 +70,9 @@ unsafe impl Sync for MetaPtr {}
 ///
 /// The returned pointer has a stable address and owns the pool slot. It stays valid until
 /// the refcount reaches zero, at which point [`release_ref`] returns the slot to the pool.
+// Inlining exposes the typed pool allocation to the deque insertion hot path measured by
+// the Callgrind push benchmarks.
+#[inline]
 pub(crate) fn create_waker_meta(shared_parent: &Arc<Mutex<Waker>>) -> MetaPtr {
     WAKER_META_POOL.with(|pool| {
         let handle = pool.alloc_box(WakerMeta {

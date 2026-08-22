@@ -9,7 +9,9 @@ async fn main() {
     let pool = Box::pin(RawEventPool::<String>::new());
 
     for customer_index in 0..CUSTOMER_COUNT {
-        // SAFETY: We promise the pool outlives both the returned endpoints.
+        // SAFETY: `pool` is pinned once before the loop and stays alive for every iteration.
+        // Each iteration consumes `tx` via `send` and drives `rx` via `await` to completion
+        // before the next `rent()` call, so no endpoint can outlive the pool.
         let (tx, rx) = unsafe { pool.as_ref().rent() };
 
         tx.send(format!(
