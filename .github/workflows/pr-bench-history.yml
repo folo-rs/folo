@@ -2,13 +2,13 @@ name: PR Benchmark history
 
 # Per-push benchmark feedback on pull requests: the PR counterpart of bench-history.yml. Where that
 # workflow collects on every push to `main` and files a rolling ISSUE about long-range trends, this
-# one runs on every push to a PR branch, benchmarks only the packages the PR impacts (the changed
-# packages plus their dependents, cargo-delta scoped), compares the PR head's benchmark level
-# against `main` in BRANCH mode, and posts/updates a rolling PR COMMENT with the findings. PR-head
-# points are written into the SAME prod Azure store as the `main` baseline (branch-mode comparison
-# reads a single backend); PR commits are
-# topologically branch-unique, so they never enter `main`'s history analysis. Findings are advisory:
-# they never gate the merge, only inform. See .github/workflows/design.md (Benchmark history).
+# one runs on every push to a PR branch, benchmarks all Cargo features of only the packages the PR
+# impacts (the changed packages plus their dependents, cargo-delta scoped), compares the PR head's
+# benchmark level against `main` in BRANCH mode, and posts/updates a rolling PR COMMENT with the
+# findings. PR-head points are written into the SAME prod Azure store as the `main` baseline
+# (branch-mode comparison reads a single backend); PR commits are topologically branch-unique, so
+# they never enter `main`'s history analysis. Findings are advisory: they never gate the merge, only
+# inform. See .github/workflows/design.md (Benchmark history).
 on:
   pull_request:
     types: [opened, synchronize, reopened]
