@@ -13,9 +13,9 @@ rust-version.workspace = true
 [package.metadata.docs.rs]
 all-features = true
 
-# These dev-dependencies are consumed only by `[[bench]]` entries that declare
-# `required-features = ["private-test-util"]`. When udeps runs without
-# `--all-features`, the benches are skipped, so the development dependencies appear unused.
+# These dev-dependencies are consumed only by test and benchmark targets that require
+# `private-test-util`. When udeps runs without `--all-features`, the targets are skipped, so the
+# development dependencies appear unused.
 # Ignore them here to silence false positives.
 [package.metadata.cargo-udeps.ignore]
 development = ["criterion", "gungraun", "many_cpus", "par_bench"]
@@ -31,7 +31,7 @@ doc = false
 # forwarded by the `nm_otel` shell crate, so end-user builds never see these
 # items. See docs/impl-crate-split.md for the `test-util` vs
 # `private-test-util` distinction.
-private-test-util = []
+private-test-util = ["dep:opentelemetry_sdk"]
 
 [dependencies]
 foldhash = { workspace = true }
@@ -39,6 +39,10 @@ futures = { workspace = true }
 hashbrown = { workspace = true, features = ["default-hasher", "inline-more"] }
 nm = { workspace = true }
 opentelemetry = { workspace = true, features = ["metrics"] }
+opentelemetry_sdk = { workspace = true, optional = true, features = [
+    "experimental_metrics_custom_reader",
+    "metrics",
+] }
 tick = { workspace = true }
 
 [dev-dependencies]
@@ -66,6 +70,18 @@ tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time
 # Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 gungraun = { workspace = true, features = ["default"] }
+
+[[test]]
+name = "nm_otel_publish_forever"
+required-features = ["private-test-util"]
+
+[[test]]
+name = "nm_otel_run_one_iteration"
+required-features = ["private-test-util"]
+
+[[test]]
+name = "nm_otel_run_one_iteration_deltas"
+required-features = ["private-test-util"]
 
 [[bench]]
 name = "nm_otel_export"

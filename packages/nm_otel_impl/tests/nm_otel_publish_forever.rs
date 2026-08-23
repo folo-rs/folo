@@ -3,15 +3,12 @@
 //! A separate binary prevents other tests from recording nm events, allowing exact assertions
 //! about the exported metrics.
 
-mod common;
-
 use std::task::{Context, Waker};
 use std::time::Duration;
 
-use common::{TestMetricReader, find_u64_sum};
 use nm::Event;
 use nm_otel::Publisher;
-use opentelemetry_sdk::metrics::SdkMeterProvider;
+use nm_otel_impl::{create_test_provider, find_u64_sum};
 use testing::with_watchdog;
 use tick::ClockControl;
 
@@ -28,14 +25,6 @@ thread_local! {
     static TEST_EVENT: Event = Event::builder()
         .name(EVENT_NAME)
         .build();
-}
-
-fn create_test_provider() -> (SdkMeterProvider, TestMetricReader) {
-    let reader = TestMetricReader::default();
-    let provider = SdkMeterProvider::builder()
-        .with_reader(reader.clone())
-        .build();
-    (provider, reader)
 }
 
 #[test]

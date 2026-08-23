@@ -20,11 +20,12 @@
 mod mapping;
 mod publisher;
 mod state;
-#[cfg(test)]
+#[cfg(any(test, feature = "private-test-util"))]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod test_metric_reader;
 
 pub use publisher::*;
 pub use state::*;
-#[cfg(test)]
-pub(crate) use test_metric_reader::*;
+#[cfg(any(test, feature = "private-test-util"))]
+#[doc(hidden)]
+pub use test_metric_reader::*;

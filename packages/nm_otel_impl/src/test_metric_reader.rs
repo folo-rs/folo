@@ -2,20 +2,24 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use opentelemetry_sdk::error::OTelSdkResult;
-use opentelemetry_sdk::metrics::data::ResourceMetrics;
+use opentelemetry_sdk::metrics::data::{
+    AggregatedMetrics, MetricData, ResourceMetrics, ScopeMetrics,
+};
 use opentelemetry_sdk::metrics::reader::MetricReader;
 use opentelemetry_sdk::metrics::{
     InstrumentKind, ManualReader, Pipeline, SdkMeterProvider, Temporality,
 };
 
-/// Gives unit tests shared access to an explicitly driven OpenTelemetry metric reader.
+/// Gives tests shared access to an explicitly driven OpenTelemetry metric reader.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct TestMetricReader {
+pub struct TestMetricReader {
     inner: Arc<ManualReader>,
 }
 
 impl TestMetricReader {
-    pub(crate) fn collect(&self) -> ResourceMetrics {
+    /// Collects the metrics recorded since the preceding collection.
+    #[must_use]
+    pub fn collect(&self) -> ResourceMetrics {
         let mut metrics = ResourceMetrics::default();
         MetricReader::collect(self, &mut metrics).unwrap();
         metrics
@@ -44,10 +48,29 @@ impl MetricReader for TestMetricReader {
     }
 }
 
-pub(crate) fn create_test_provider() -> (SdkMeterProvider, TestMetricReader) {
+/// Creates a meter provider and its explicitly driven test reader.
+#[must_use]
+pub fn create_test_provider() -> (SdkMeterProvider, TestMetricReader) {
     let reader = TestMetricReader::default();
     let provider = SdkMeterProvider::builder()
         .with_reader(reader.clone())
         .build();
     (provider, reader)
+}
+
+/// Finds the monotonic flag and value of a `u64` sum metric.
+pub fn find_u64_sum(metrics: &ResourceMetrics, name: &str) -> Option<(bool, u64)> {
+    metrics
+        .scope_metrics()
+        .flat_map(ScopeMetrics::metrics)
+        .find(|metric| metric.name() == name)
+        .map(|metric| {
+            let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+                panic!("expected Sum<u64> metric data");
+            };
+            let mut data_points = sum.data_points();
+            let value = data_points.next().unwrap().value();
+            assert!(data_points.next().is_none());
+            (sum.is_monotonic(), value)
+        })
 }
