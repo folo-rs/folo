@@ -176,6 +176,27 @@ Windows and macOS resolution entirely — without it, `cargo-machete` and
 do not support `cfg` attributes. Instead, the bench file gates its own
 contents (see next section).
 
+### Callgrind configuration contract
+
+Every `_cg.rs` target uses the same baseline Callgrind configuration:
+
+* Pass `--branch-sim=yes` to enable the branch predictor simulation.
+* Format both `CallgrindMetrics::Default` and `CallgrindMetrics::BranchSim`.
+  The default metrics provide instruction, cache, and estimated-cycle data;
+  the branch metrics make changes in control-flow behavior visible.
+
+Keep this baseline identical across packages so benchmark output remains
+comparable and repository tooling can treat every target uniformly. Additional
+Callgrind arguments are permitted only when a package has a documented
+measurement requirement that the baseline does not satisfy. Document each
+exception both here and beside the benchmark configuration.
+
+The current exception is `events_once_ops_cg`, which also passes
+`--collect-bus=yes`. Its local and thread-safe variants differ in atomic
+read-modify-write operations, and the resulting global bus event (`Ge`) makes
+that distinction visible. This remains an instruction count; it does not model
+contention or memory-ordering cost.
+
 ### Bench file template
 
 The Linux-only Gungraun code lives in a single `mod linux { ... }` block so
