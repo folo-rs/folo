@@ -462,6 +462,10 @@ or a genuine bug. The pattern is:
 We deliberately do **not** treat the trip wire as a CI gate today, because
 performance trade-offs require human evaluation, not automated rejection.
 
+Do not define some manual in-repo regression gates. Any regression detection
+and evaluation is custom judgement to be applied in a specific situation.
+There is no standard way to know if a regression is real.
+
 ## Baselines
 
 Baselines live in `target/gungraun/` and are local to each developer's
