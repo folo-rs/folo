@@ -2,7 +2,7 @@
 
 use std::hash::BuildHasher;
 
-use foldhash::fast::RandomState;
+use foldhash::fast::FixedState;
 use hashbrown::HashTable;
 use hashbrown::hash_table::Entry;
 use nm::{EventName, Magnitude};
@@ -13,16 +13,22 @@ use nm::{EventName, Magnitude};
 /// delta computation for OpenTelemetry. Gauge-type metrics (sum) are set directly.
 #[derive(Debug, Default)]
 pub(crate) struct CollectionState {
-    // We use `hashbrown::HashTable` (not `HashMap`) so the `entry(hash, eq, hasher)` API can
-    // avoid cloning `EventName` on cache hits. The natural `HashMap::entry(name.clone())` shape
-    // clones on every call, which is a heap allocation per export for `Cow::Owned` event names.
-    // Stable `HashMap` has no equivalent: `raw_entry_mut` is unstable, `entry_ref` needs
-    // `&Q: Into<K>` (no such impl exists for `Cow<'static, str>`), and `get_mut`-first
-    // early-return fails NLL borrow-check on rustc 1.93. Hashing is still done by
-    // `foldhash::fast::RandomState`; only the map shell changed. The hasher must be stored on
-    // the struct so the lookup-time hash and the growth-time rehash closure use the same
-    // instance and therefore produce the same hash for the same key.
-    hasher: RandomState,
+    // `hashbrown::HashTable` stands in for the obvious `std::collections::HashMap` because its
+    // `entry(hash, eq, hasher)` API clones the `EventName` key only when inserting a new entry,
+    // whereas `HashMap::entry(name.clone())` clones on every call — a heap allocation per export
+    // for every `Cow::Owned` event name. Stable `HashMap` offers no clone-free equivalent:
+    // `raw_entry_mut` is unstable, `entry_ref` requires `&Q: Into<K>` which `Cow<'static, str>`
+    // does not implement, and a `get_mut`-first early return fails the NLL borrow check. The
+    // price is spelling out the hash and equality closures by hand.
+    //
+    // The hasher is `foldhash::fast::FixedState` rather than the randomly seeded `RandomState`.
+    // This map is looked up on every measured export iteration, and a random per-process seed
+    // shifts probe counts and iteration order between builds, which surfaces as instruction-count
+    // jitter in the Callgrind export benchmark. A fixed seed makes the measurement depend only on
+    // the code. Event names are a bounded set of trusted, internally-chosen identifiers, so
+    // forfeiting HashDoS resistance is appropriate here.
+    // Ref: docs/benchmarks.md, "Hash containers and instruction-count determinism".
+    hasher: FixedState,
 
     /// Previous state per event name.
     events: HashTable<(EventName, EventState)>,
@@ -32,7 +38,7 @@ impl CollectionState {
     /// Creates a new empty collection state.
     pub(crate) fn new() -> Self {
         Self {
-            hasher: RandomState::default(),
+            hasher: FixedState::default(),
             events: HashTable::new(),
         }
     }
@@ -42,10 +48,11 @@ impl CollectionState {
         let hash = self.hasher.hash_one(name);
         let hasher = &self.hasher;
         // The three closures fed to `entry()`:
-        // 1. `hash`            - precomputed hash of the lookup key.
+        // 1. `hash`              - precomputed hash of the lookup key.
         // 2. `|...| ... == name` - tiebreaker on probed slots (collision check).
-        // 3. `|...| hash_one`  - rehash closure, called per existing entry on table growth.
-        // All three must agree on hashing; we route them through the same `RandomState`.
+        // 3. `|...| hash_one`    - rehash closure, called per existing entry on table growth.
+        // All three route through the same `FixedState`, so the lookup hash and the
+        // growth-time rehash agree on the hash for any given key.
         match self.events.entry(
             hash,
             |(existing, _)| existing == name,
@@ -53,8 +60,9 @@ impl CollectionState {
         ) {
             Entry::Occupied(occupied) => &mut occupied.into_mut().1,
             Entry::Vacant(vacant) => {
-                // The key clone is confined to this branch — we only pay for it on a true
-                // cache miss, not on the steady-state hit path.
+                // The key is cloned only on this vacant branch, i.e. the first time an event
+                // name is seen. Every later export for the same name takes the occupied branch
+                // above and performs no clone.
                 &mut vacant
                     .insert((name.clone(), EventState::default()))
                     .into_mut()
@@ -64,7 +72,13 @@ impl CollectionState {
     }
 }
 
-/// Previous state for a single event.
+/// Previous cumulative state for a single event, used to derive per-collection deltas.
+///
+/// nm reports counter-type metrics (the occurrence count and each histogram bucket) as
+/// running cumulative totals, but OpenTelemetry counters are fed deltas. This type retains
+/// the previously reported cumulative values for one event so the next collection can
+/// subtract them and publish only the increment. It holds no gauge-type state, because sum
+/// is exported as an absolute value and needs no history.
 #[derive(Debug, Default)]
 pub struct EventState {
     /// Previous cumulative count.
@@ -97,6 +111,13 @@ impl EventState {
     /// returned iterator must be fully driven for the next call to observe the deltas
     /// correctly.
     ///
+    /// The `magnitudes` and `non_cumulative_counts` inputs are consumed pairwise: bucket `i`
+    /// pairs the `i`th magnitude with the `i`th count. If one input is longer than the other,
+    /// the surplus tail of the longer input is ignored, and the number of buckets is the
+    /// length of the shorter input. Callers are expected to supply equal-length inputs (nm's
+    /// magnitude and count iterators always have matching lengths); the pairwise rule only
+    /// defines the outcome for malformed input rather than endorsing it.
+    ///
     /// # Panics
     ///
     /// Panics during iteration if the number of buckets yielded differs from the count
@@ -112,10 +133,10 @@ impl EventState {
         let first_call = self.histogram_buckets.is_empty();
         let source = magnitudes.into_iter().zip(non_cumulative_counts);
         if first_call {
-            // Reserve capacity upfront so the per-bucket `push(0)` on the first call only
-            // costs a write, not a reallocation. For sized inputs (arrays, slices, Vecs) the
-            // upper bound is exact and we get a single allocation; otherwise we fall back to
-            // the lower bound and `push` grows on demand.
+            // Reserve capacity upfront so the per-bucket push on the first call only costs a
+            // write, not a reallocation. For sized inputs (arrays, slices, Vecs) the upper
+            // bound is exact and we get a single allocation; otherwise we fall back to the
+            // lower bound and the push grows on demand.
             let (lower, upper) = source.size_hint();
             let reserve_hint = upper.unwrap_or(lower);
             self.histogram_buckets.reserve_exact(reserve_hint);
@@ -124,11 +145,17 @@ impl EventState {
             source,
             buckets: &mut self.histogram_buckets,
             first_call,
-            running_cumulative: 0,
-            index: 0,
+            running_cumulative: INITIAL_CUMULATIVE,
+            index: FIRST_BUCKET_INDEX,
         }
     }
 }
+
+/// Running cumulative bucket total before any observation has been folded in.
+const INITIAL_CUMULATIVE: u64 = 0;
+
+/// Index of the first histogram bucket.
+const FIRST_BUCKET_INDEX: usize = 0;
 
 /// Streaming iterator returned by [`EventState::histogram_deltas`].
 ///
@@ -153,13 +180,8 @@ where
         let Some((magnitude, non_cumulative)) = self.source.next() else {
             // Source exhausted: verify we visited every previously-established bucket.
             // On the first call there is no established length yet, so anything goes.
-            assert!(
-                self.first_call || self.index == self.buckets.len(),
-                "histogram bucket count changed unexpectedly: source yielded {} buckets, \
-                 but {} were established on the first call",
-                self.index,
-                self.buckets.len()
-            );
+            // This panic fulfils the documented bucket-count contract, so it carries no message.
+            assert!(self.first_call || self.index == self.buckets.len());
             return None;
         };
 
@@ -167,18 +189,13 @@ where
 
         let previous = if self.first_call {
             self.push_initial_bucket();
-            0
+            INITIAL_CUMULATIVE
         } else {
-            assert!(
-                self.index < self.buckets.len(),
-                "histogram bucket count changed unexpectedly: source yielded at least {} \
-                 buckets, but only {} were established on the first call",
-                self.index.saturating_add(1),
-                self.buckets.len()
-            );
+            // This panic fulfils the documented bucket-count contract, so it carries no message.
+            assert!(self.index < self.buckets.len());
             #[expect(
                 clippy::indexing_slicing,
-                reason = "index is bounds-checked by the assertion above"
+                reason = "The assertion above proves that the index is in bounds."
             )]
             let previous = self.buckets[self.index];
             previous
@@ -188,8 +205,8 @@ where
 
         #[expect(
             clippy::indexing_slicing,
-            reason = "on first call we just pushed; otherwise the assertion above \
-                      verified the index is in bounds"
+            reason = "The first-call path just pushed this index; otherwise the preceding \
+                      assertion proves that it is in bounds."
         )]
         {
             self.buckets[self.index] = self.running_cumulative;
@@ -201,7 +218,7 @@ where
 }
 
 impl<I> HistogramDeltas<'_, I> {
-    /// Appends a zero entry to grow `buckets` during the first collection.
+    /// Appends an initial-cumulative entry to grow `buckets` during the first collection.
     ///
     /// Marked `#[cold]` because the first-call path is only ever taken during the
     /// very first `histogram_deltas` invocation for an event; every subsequent call
@@ -210,7 +227,7 @@ impl<I> HistogramDeltas<'_, I> {
     #[cold]
     #[inline(never)]
     fn push_initial_bucket(&mut self) {
-        self.buckets.push(0);
+        self.buckets.push(INITIAL_CUMULATIVE);
     }
 }
 
@@ -233,17 +250,17 @@ mod tests {
     fn event_state_count_delta_subsequent_collections() {
         let mut state = EventState::default();
 
-        let delta1 = state.count_delta(100);
-        assert_eq!(delta1, 100);
+        let first_delta = state.count_delta(100);
+        assert_eq!(first_delta, 100);
 
-        let delta2 = state.count_delta(150);
-        assert_eq!(delta2, 50);
+        let increase_delta = state.count_delta(150);
+        assert_eq!(increase_delta, 50);
 
-        let delta3 = state.count_delta(150);
-        assert_eq!(delta3, 0);
+        let unchanged_delta = state.count_delta(150);
+        assert_eq!(unchanged_delta, 0);
 
-        let delta4 = state.count_delta(200);
-        assert_eq!(delta4, 50);
+        let later_increase_delta = state.count_delta(200);
+        assert_eq!(later_increase_delta, 50);
     }
 
     // `Iterator::eq` against a finite expected array is the bounded-consumption pattern
@@ -288,8 +305,8 @@ mod tests {
         let magnitudes = [10, 50, 100, Magnitude::MAX];
 
         // First collection.
-        let non_cumulative1 = [5, 12, 8, 2];
-        let expected1: [(Magnitude, u64, u64); 4] = [
+        let first_non_cumulative = [5, 12, 8, 2];
+        let first_expected: [(Magnitude, u64, u64); 4] = [
             (10, 5, 5),
             (50, 17, 17),
             (100, 25, 25),
@@ -297,16 +314,14 @@ mod tests {
         ];
         assert!(
             state
-                .histogram_deltas(magnitudes, non_cumulative1)
-                .eq(expected1)
+                .histogram_deltas(magnitudes, first_non_cumulative)
+                .eq(first_expected)
         );
 
-        // Second collection with more observations.
-        // Cumulative: [7, 22, 32, 35].
-        // Previous:   [5, 17, 25, 27].
-        // Deltas:     [2, 5, 7, 8].
-        let non_cumulative2 = [7, 15, 10, 3];
-        let expected2: [(Magnitude, u64, u64); 4] = [
+        // Second collection with more observations. Each delta is the new cumulative total
+        // minus the previous collection's cumulative total, saturating at zero.
+        let second_non_cumulative = [7, 15, 10, 3];
+        let second_expected: [(Magnitude, u64, u64); 4] = [
             (10, 7, 2),
             (50, 22, 5),
             (100, 32, 7),
@@ -314,8 +329,8 @@ mod tests {
         ];
         assert!(
             state
-                .histogram_deltas(magnitudes, non_cumulative2)
-                .eq(expected2)
+                .histogram_deltas(magnitudes, second_non_cumulative)
+                .eq(second_expected)
         );
     }
 
@@ -352,6 +367,10 @@ mod tests {
         // hashing — otherwise entries would land in the wrong buckets after a grow
         // and the reads would return fresh `EventState::default()` values instead of
         // the values we wrote.
+        //
+        // A freshly constructed `HashTable` starts with no heap capacity, so this count
+        // is chosen to be well beyond the first allocated capacity and therefore to
+        // trigger several successive grow-and-rehash cycles rather than just one.
         const NUM_EVENTS: u64 = 64;
 
         let mut state = CollectionState::new();
@@ -378,25 +397,23 @@ mod tests {
 
         let magnitudes = [10, 50, 100];
 
-        // First call - initializes to 3 buckets.
-        let non_cumulative1 = [5, 10, 3];
-        let expected1: [(Magnitude, u64, u64); 3] = [(10, 5, 5), (50, 15, 15), (100, 18, 18)];
+        // First call establishes the three buckets.
+        let first_non_cumulative = [5, 10, 3];
+        let first_expected: [(Magnitude, u64, u64); 3] = [(10, 5, 5), (50, 15, 15), (100, 18, 18)];
         assert!(
             state
-                .histogram_deltas(magnitudes, non_cumulative1)
-                .eq(expected1)
+                .histogram_deltas(magnitudes, first_non_cumulative)
+                .eq(first_expected)
         );
         assert_eq!(state.histogram_buckets.len(), 3);
 
-        // Second call with same bucket count - should work fine.
-        // Cumulative1: [5, 15, 18], Cumulative2: [7, 19, 24].
-        // Deltas: [2, 4, 6].
-        let non_cumulative2 = [7, 12, 5];
-        let expected2: [(Magnitude, u64, u64); 3] = [(10, 7, 2), (50, 19, 4), (100, 24, 6)];
+        // Second call with the same bucket count reports deltas against the first collection.
+        let second_non_cumulative = [7, 12, 5];
+        let second_expected: [(Magnitude, u64, u64); 3] = [(10, 7, 2), (50, 19, 4), (100, 24, 6)];
         assert!(
             state
-                .histogram_deltas(magnitudes, non_cumulative2)
-                .eq(expected2)
+                .histogram_deltas(magnitudes, second_non_cumulative)
+                .eq(second_expected)
         );
         assert_eq!(state.histogram_buckets.len(), 3);
     }
@@ -416,26 +433,26 @@ mod tests {
     fn event_state_histogram_deltas_bucket_count_mismatch_panics() {
         let mut state = EventState::default();
 
-        // First call with 3 buckets.
-        let magnitudes3 = [10, 50, 100];
-        let non_cumulative3 = [5, 10, 3];
-        let expected3: [(Magnitude, u64, u64); 3] = [(10, 5, 5), (50, 15, 15), (100, 18, 18)];
+        // First call establishes three buckets.
+        let first_magnitudes = [10, 50, 100];
+        let first_non_cumulative = [5, 10, 3];
+        let first_expected: [(Magnitude, u64, u64); 3] = [(10, 5, 5), (50, 15, 15), (100, 18, 18)];
         assert!(
             state
-                .histogram_deltas(magnitudes3, non_cumulative3)
-                .eq(expected3)
+                .histogram_deltas(first_magnitudes, first_non_cumulative)
+                .eq(first_expected)
         );
 
-        // Second call with 4 buckets - should panic when the iterator is consumed past
-        // the established bucket count. Yielded values on the first 3 items: cumulative
-        // equals the previously established values [5, 15, 18], so all deltas are 0.
+        // Second call yields a fourth bucket, so it must panic once the iterator is consumed
+        // past the established bucket count. The pre-panic yields repeat the first collection's
+        // cumulative totals, so every delta before the panic is zero.
         assert_panics(|| {
-            let magnitudes4 = [10, 50, 100, 500];
-            let non_cumulative4 = [5, 10, 3, 2];
+            let wider_magnitudes = [10, 50, 100, 500];
+            let wider_non_cumulative = [5, 10, 3, 2];
             let expected_pre_panic: [(Magnitude, u64, u64); 3] =
                 [(10, 5, 0), (50, 15, 0), (100, 18, 0)];
             _ = state
-                .histogram_deltas(magnitudes4, non_cumulative4)
+                .histogram_deltas(wider_magnitudes, wider_non_cumulative)
                 .eq(expected_pre_panic);
         });
     }
@@ -444,25 +461,25 @@ mod tests {
     fn event_state_histogram_deltas_fewer_buckets_panics() {
         let mut state = EventState::default();
 
-        // First call establishes 3 buckets.
-        let magnitudes3 = [10, 50, 100];
-        let non_cumulative3 = [5, 10, 3];
-        let expected3: [(Magnitude, u64, u64); 3] = [(10, 5, 5), (50, 15, 15), (100, 18, 18)];
+        // First call establishes three buckets.
+        let first_magnitudes = [10, 50, 100];
+        let first_non_cumulative = [5, 10, 3];
+        let first_expected: [(Magnitude, u64, u64); 3] = [(10, 5, 5), (50, 15, 15), (100, 18, 18)];
         assert!(
             state
-                .histogram_deltas(magnitudes3, non_cumulative3)
-                .eq(expected3)
+                .histogram_deltas(first_magnitudes, first_non_cumulative)
+                .eq(first_expected)
         );
 
-        // Second call yields only 2 buckets - should panic when the source iterator
-        // is exhausted before all established buckets have been visited. Cumulative
-        // [7, 19] against previous [5, 15] gives deltas [2, 4].
+        // Second call yields only two buckets, so it must panic once the source iterator is
+        // exhausted before every established bucket has been visited. The two pre-panic buckets
+        // still report their deltas against the first collection.
         assert_panics(|| {
-            let magnitudes2 = [10, 50];
-            let non_cumulative2 = [7, 12];
+            let narrower_magnitudes = [10, 50];
+            let narrower_non_cumulative = [7, 12];
             let expected_pre_panic: [(Magnitude, u64, u64); 2] = [(10, 7, 2), (50, 19, 4)];
             _ = state
-                .histogram_deltas(magnitudes2, non_cumulative2)
+                .histogram_deltas(narrower_magnitudes, narrower_non_cumulative)
                 .eq(expected_pre_panic);
         });
     }

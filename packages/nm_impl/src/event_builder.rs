@@ -9,10 +9,9 @@ use crate::{
     PublishModel, Pull, Push, PusherPreRegistration,
 };
 
-/// Creates instances of [`Event`].
+/// Configures and builds instances of [`Event`].
 ///
-/// Required parameters:
-/// * `name`
+/// The event name is required.
 ///
 /// Use `Event::builder()` to create a new instance of this builder.
 ///
@@ -36,7 +35,8 @@ where
     push_via: Option<PusherPreRegistration>,
 
     _p: PhantomData<P>,
-    _single_threaded: PhantomData<*const ()>,
+    // Builders carry thread-local registration state and must remain on their creating thread.
+    _single_threaded: PhantomData<Rc<()>>,
 }
 
 // EventBuilder is single-threaded (!Send, !Sync) and uses interior mutability only for
@@ -58,7 +58,9 @@ where
         }
     }
 
-    /// Sets the name of the event. This is a required property.
+    /// Configures the event name.
+    ///
+    /// The event name is a required setting.
     ///
     /// Recommended format: `big_medium_small_units`.
     /// For example: `net_http_connect_time_ns`.
@@ -82,7 +84,7 @@ where
         }
     }
 
-    /// Sets the upper bounds (inclusive) of histogram buckets to use
+    /// Configures the upper bounds (inclusive) of histogram buckets to use
     /// when creating a histogram of event magnitudes.
     ///
     /// The default is to not create a histogram.
@@ -107,27 +109,18 @@ where
     /// Panics if bucket magnitudes are not in ascending order.
     ///
     /// Panics if one of the values is `Magnitude::MAX`. You do not need to specify this
-    /// bucket yourself - it is automatically synthesized for all histograms to catch values
+    /// bucket yourself; it is automatically synthesized for all histograms to catch values
     /// that exceed the user-defined buckets.
     #[must_use]
     pub fn histogram(self, buckets: &'static [Magnitude]) -> Self {
-        if !buckets.is_empty() {
-            #[expect(
-                clippy::indexing_slicing,
-                reason = "windows() guarantees that we have exactly two elements"
-            )]
-            {
-                assert!(
-                    buckets.windows(2).all(|w| w[0] < w[1]),
-                    "histogram buckets must be in ascending order"
-                );
-            }
-
-            assert!(
-                !buckets.contains(&Magnitude::MAX),
-                "histogram buckets must not contain Magnitude::MAX"
-            );
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Each window guarantees both indexed elements are in bounds."
+        )]
+        {
+            assert!(buckets.windows(2).all(|w| w[0] < w[1]));
         }
+        assert!(!buckets.contains(&Magnitude::MAX));
 
         Self {
             histogram_buckets: buckets,
@@ -158,7 +151,8 @@ impl EventBuilder<Pull> {
     ///     .name("push_example")
     ///     .pusher(&pusher)
     ///     .build();
-    /// # // Example usage would require calling pusher.push()
+    /// push_event.observe_once();
+    /// pusher.push();
     /// ```
     ///
     /// [1]: crate::MetricsPusher::push
@@ -197,7 +191,8 @@ impl EventBuilder<Pull> {
     ///         .pusher_local(&PUSHER)
     ///         .build();
     /// }
-    /// # // Example usage would require calling PUSHER.with(MetricsPusher::push)
+    /// PUSH_EVENT.with(Event::observe_once);
+    /// PUSHER.with(MetricsPusher::push);
     /// ```
     ///
     /// [1]: crate::MetricsPusher::push
@@ -206,24 +201,23 @@ impl EventBuilder<Pull> {
         pusher.with(|p| self.pusher(p))
     }
 
-    /// Builds the event with the current configuration.
+    /// Builds an event from this configuration.
     ///
     /// # Panics
     ///
-    /// Panics if a required parameter is not set.
+    /// Panics if the event name is not set.
     ///
     /// Panics if an event with this name has already been registered on this thread.
     /// You can only create an event with each name once per thread.
     #[must_use]
-    #[cfg_attr(test, mutants::skip)] // Cargo-mutants does not understand this signature - every mutation is unviable waste of time.
+    // Generated mutations cannot produce a viable alternate implementation for this signature.
+    #[cfg_attr(test, mutants::skip)]
     pub fn build(self) -> Event<Pull> {
         assert!(!self.name.is_empty());
 
         let observation_bag = Arc::new(ObservationBagSync::new(self.histogram_buckets));
 
-        // This will panic if it is already registered. This is not strictly required and
-        // we may relax this constraint in the future but for now we keep it here to help
-        // uncover problematic patterns and learn when/where relaxed constraints may be useful.
+        // Duplicate names are rejected to expose invalid duplicate-registration patterns.
         LOCAL_REGISTRY.with_borrow(|r| r.register(self.name, Arc::clone(&observation_bag)));
 
         Event::new(Pull {
@@ -233,11 +227,11 @@ impl EventBuilder<Pull> {
 }
 
 impl EventBuilder<Push> {
-    /// Builds the event with the current configuration.
+    /// Builds an event from this configuration.
     ///
     /// # Panics
     ///
-    /// Panics if a required parameter is not set.
+    /// Panics if the event name is not set.
     ///
     /// Panics if an event with this name has already been registered on this thread.
     /// You can only create an event with each name once per thread.
@@ -247,10 +241,11 @@ impl EventBuilder<Push> {
 
         let observation_bag = Rc::new(ObservationBag::new(self.histogram_buckets));
 
-        let pre_registration = self.push_via.expect("push_via must be set for push model");
+        let pre_registration = self
+            .push_via
+            .expect("converting to EventBuilder<Push> always records a pusher registration");
 
-        // This completes the registration that was started with the pre-registration ticket.
-        // After this, the data set published by the pusher will include data from this event.
+        // Completing the registration retains the observation state for subsequent pushes.
         pre_registration.register(self.name, Rc::clone(&observation_bag));
 
         Event::new(Push {
@@ -337,8 +332,8 @@ mod tests {
     fn pull_build_registers_with_registry() {
         let previous_count = LOCAL_REGISTRY.with_borrow(LocalEventRegistry::event_count);
 
-        // It does not matter whether we drop it - events are eternal,
-        // dropping just means we can no longer observe occurrences of this event.
+        // Dropping the event handle does not unregister its observation state; it only
+        // prevents further observations through this handle.
         drop(
             Event::builder()
                 .name("pull_build_registers_with_registry")
@@ -354,8 +349,8 @@ mod tests {
     fn pusher_build_registers_with_pusher() {
         let pusher = MetricsPusher::new();
 
-        // It does not matter whether we drop it - events are eternal,
-        // dropping just means we can no longer observe occurrences of this event.
+        // Dropping the event handle does not unregister its observation state; it only
+        // prevents further observations through this handle.
         drop(
             Event::builder()
                 .name("push_build_registers_with_pusher")
@@ -370,8 +365,8 @@ mod tests {
 
     #[test]
     fn pusher_local_build_registers_with_pusher() {
-        // It does not matter whether we drop it - events are eternal,
-        // dropping just means we can no longer observe occurrences of this event.
+        // Dropping the event handle does not unregister its observation state; it only
+        // prevents further observations through this handle.
         drop(
             Event::builder()
                 .name("push_build_registers_with_pusher")
@@ -392,8 +387,8 @@ mod tests {
     fn register_pull_and_push_same_name_panics() {
         let pusher = MetricsPusher::new();
 
-        // It does not matter whether we drop it - events are eternal,
-        // dropping just means we can no longer observe occurrences of this event.
+        // Dropping the event handle does not unregister its observation state; it only
+        // prevents further observations through this handle.
         drop(
             Event::builder()
                 .name("conflicting_name_pull_and_push")

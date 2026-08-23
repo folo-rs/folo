@@ -1,8 +1,8 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
-# Pester suite for CallgrindBench.psm1. Get-CallgrindBenchTarget walks the filesystem, so each test
-# builds a small `packages/<pkg>/benches/` fixture under Pester's TestDrive and asserts which
-# (package, bench) pairs it discovers under the various filter combinations.
+# Pester suite for CallgrindBench.psm1. Its functions walk the filesystem, so each test builds a
+# small `packages/<pkg>/benches/` fixture under Pester's TestDrive and asserts which (package,
+# bench) pairs are discovered under the various filter combinations.
 
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot 'CallgrindBench.psm1') -Force
@@ -72,6 +72,53 @@ Describe 'Get-CallgrindBenchTarget' {
 
     It 'returns nothing when the target filter matches no bench' {
         $targets = @(Get-CallgrindBenchTarget -PackagesRoot $script:Root -TargetFilter 'does_not_exist_cg')
+        $targets | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Get-CriterionBenchTarget' {
+    BeforeEach {
+        $script:Root = Join-Path $TestDrive 'criterion-packages'
+
+        New-Item -ItemType Directory -Path (Join-Path $script:Root 'alpha' 'benches') -Force |
+            Out-Null
+        Set-Content -Path (Join-Path $script:Root 'alpha' 'benches' 'alpha_cg.rs') -Value '// cg'
+        Set-Content -Path (Join-Path $script:Root 'alpha' 'benches' 'alpha.rs') `
+            -Value '// criterion'
+
+        New-Item -ItemType Directory -Path (Join-Path $script:Root 'beta' 'benches') -Force |
+            Out-Null
+        Set-Content -Path (Join-Path $script:Root 'beta' 'benches' 'beta_one.rs') `
+            -Value '// criterion'
+        Set-Content -Path (Join-Path $script:Root 'beta' 'benches' 'beta_two.rs') `
+            -Value '// criterion'
+
+        New-Item -ItemType Directory -Path (Join-Path $script:Root 'gamma') -Force | Out-Null
+    }
+
+    It 'discovers non-Callgrind benches across packages in deterministic order' {
+        $targets = @(Get-CriterionBenchTarget -PackagesRoot $script:Root)
+        $pairs = $targets | ForEach-Object { "$($_.Package)::$($_.Bench)" }
+        ($pairs -join ',') | Should -Be 'alpha::alpha,beta::beta_one,beta::beta_two'
+    }
+
+    It 'excludes *_cg.rs targets' {
+        $targets = @(Get-CriterionBenchTarget -PackagesRoot $script:Root)
+        ($targets | Where-Object { $_.Bench -eq 'alpha_cg' }) | Should -BeNullOrEmpty
+    }
+
+    It 'restricts discovery to a space-separated package allow-list' {
+        $targets = @(
+            Get-CriterionBenchTarget -PackagesRoot $script:Root -PackageFilter 'alpha gamma'
+        )
+        $pairs = $targets | ForEach-Object { "$($_.Package)::$($_.Bench)" }
+        ($pairs -join ',') | Should -Be 'alpha::alpha'
+    }
+
+    It 'skips packages without a benches directory' {
+        { Get-CriterionBenchTarget -PackagesRoot $script:Root -PackageFilter 'gamma' } |
+            Should -Not -Throw
+        $targets = @(Get-CriterionBenchTarget -PackagesRoot $script:Root -PackageFilter 'gamma')
         $targets | Should -BeNullOrEmpty
     }
 }

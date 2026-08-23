@@ -1,54 +1,62 @@
 //! Publisher for exporting nm metrics to OpenTelemetry.
 
+use std::any::{type_name, type_name_of_val};
 use std::fmt;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::time::Duration;
 
 use futures::StreamExt;
 use nm::Report;
-use opentelemetry::metrics::{Meter, MeterProvider};
+use opentelemetry::metrics::MeterProvider;
 use tick::{Clock, PeriodicTimer};
 
 use crate::mapping::{InstrumentRegistry, export_report};
 use crate::state::CollectionState;
 
-/// Default collection interval.
+/// Balances publication freshness against recurring collection and processing overhead.
 const DEFAULT_INTERVAL: Duration = Duration::from_mins(1);
 
-/// Default meter name.
+/// Identifies measurements as originating from nm in OpenTelemetry instrumentation scopes.
 const DEFAULT_METER_NAME: &str = "nm";
 
 /// Builder for configuring an nm-to-OpenTelemetry publisher.
 ///
 /// # Examples
 ///
-/// ```
+/// ```no_run
 /// use std::time::Duration;
+///
 /// use nm_otel::Publisher;
 /// use tick::Clock;
-/// # use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
+/// # use opentelemetry_sdk::metrics::{
+/// #     InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
+/// # };
 ///
 /// # let exporter = InMemoryMetricExporter::default();
 /// # let reader = PeriodicReader::builder(exporter).build();
-/// # let my_meter_provider = SdkMeterProvider::builder().with_reader(reader).build();
+/// # let provider = SdkMeterProvider::builder().with_reader(reader).build();
 /// let publisher = Publisher::builder()
-///     .provider(my_meter_provider)
-///     .clock(Clock::new_frozen())
+///     .provider(provider)
+///     .clock(Clock::new_tokio())
 ///     .interval(Duration::from_secs(5))
 ///     .build();
 /// ```
 pub struct PublisherBuilder {
-    provider: Option<Box<dyn MeterProvider>>,
+    provider: Option<Box<dyn MeterProvider + Send>>,
     clock: Option<Clock>,
     interval: Duration,
     meter_name: &'static str,
 }
 
-// dyn MeterProvider does not implement Debug, so we provide a manual implementation
-// that omits the provider field.
+// `dyn MeterProvider` does not implement `Debug`, so the provider is represented by its
+// presence rather than its value.
+// Debug formatting has no contractual representation, so mutations cannot be tested
+// meaningfully.
+#[cfg_attr(test, mutants::skip)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl fmt::Debug for PublisherBuilder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PublisherBuilder")
+        f.debug_struct(type_name::<Self>())
             .field("provider", &self.provider.as_ref().map(|_| ".."))
             .field("clock", &self.clock)
             .field("interval", &self.interval)
@@ -57,7 +65,7 @@ impl fmt::Debug for PublisherBuilder {
     }
 }
 
-// PublisherBuilder stores an OpenTelemetry MeterProvider trait object.
+// `PublisherBuilder` stores an OpenTelemetry `MeterProvider` trait object.
 // The trait object is not auto-RefUnwindSafe but is used only for metrics export
 // configuration. Inconsistent state after a caught panic cannot affect safety.
 impl UnwindSafe for PublisherBuilder {}
@@ -75,17 +83,19 @@ impl PublisherBuilder {
 
     /// Sets the OpenTelemetry meter provider.
     ///
-    /// Accepts any [`MeterProvider`] implementation.
-    /// This is required - the builder will panic if not set.
+    /// Transfers ownership of the provider into the resulting publisher, which retains it to keep
+    /// the metric pipeline operational. The provider must implement [`Send`] so the publisher can
+    /// be moved between threads.
+    /// A provider must be configured before calling [`build()`][Self::build].
     #[must_use]
-    pub fn provider(mut self, provider: impl MeterProvider + 'static) -> Self {
+    pub fn provider(mut self, provider: impl MeterProvider + Send + 'static) -> Self {
         self.provider = Some(Box::new(provider));
         self
     }
 
     /// Sets the clock for timing.
     ///
-    /// This is required for async operation - the builder will panic if not set.
+    /// A clock must be configured before calling [`build()`][Self::build].
     #[must_use]
     pub fn clock(mut self, clock: Clock) -> Self {
         self.clock = Some(clock);
@@ -114,33 +124,30 @@ impl PublisherBuilder {
     ///
     /// # Panics
     ///
-    /// Panics if no provider has been set.
-    /// Panics if no clock has been set.
+    /// Panics unless both a meter provider and a clock have been configured.
     #[must_use]
     pub fn build(self) -> Publisher {
-        let provider = self
-            .provider
-            .expect("provider is required - call .provider() before .build()");
-
-        let clock = self
-            .clock
-            .expect("clock is required - call .clock() before .build()");
-
-        let meter = provider.meter(self.meter_name);
+        let Some(provider) = self.provider else {
+            panic!("a meter provider must be configured before building a publisher");
+        };
+        let Some(clock) = self.clock else {
+            panic!("a clock must be configured before building a publisher");
+        };
+        let instruments = InstrumentRegistry::new(provider.meter(self.meter_name));
 
         Publisher {
-            meter,
             clock,
             interval: self.interval,
             state: CollectionState::new(),
-            instruments: None,
+            instruments,
+            provider,
         }
     }
 }
 
 /// Publishes nm metrics to OpenTelemetry.
 ///
-/// This type collects metrics from nm periodically and exports them to OpenTelemetry
+/// This type periodically collects metrics from nm and publishes them through OpenTelemetry
 /// instruments. It tracks state between collections to compute deltas for counter-type
 /// metrics.
 ///
@@ -149,32 +156,55 @@ impl PublisherBuilder {
 /// ```no_run
 /// use nm_otel::Publisher;
 /// use tick::Clock;
-/// # use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
+/// # use opentelemetry_sdk::metrics::{
+/// #     InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
+/// # };
 ///
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() {
 /// # let exporter = InMemoryMetricExporter::default();
 /// # let reader = PeriodicReader::builder(exporter).build();
 /// # let provider = SdkMeterProvider::builder().with_reader(reader).build();
-/// # let mut publisher = Publisher::builder()
-/// #     .provider(provider)
-/// #     .clock(Clock::new_frozen())
-/// #     .build();
-/// # async fn example(mut publisher: nm_otel::Publisher) {
-/// // Spawn as a background task in your async runtime.
-/// publisher.publish_forever().await;
+/// let mut publisher = Publisher::builder()
+///     .provider(provider)
+///     .clock(Clock::new_tokio())
+///     .build();
+///
+/// let _publisher_task = tokio::spawn(async move {
+///     publisher.publish_forever().await;
+/// });
 /// # }
 /// ```
-#[derive(Debug)]
 pub struct Publisher {
-    meter: Meter,
     clock: Clock,
     interval: Duration,
     state: CollectionState,
-    instruments: Option<InstrumentRegistry>,
+    instruments: InstrumentRegistry,
+
+    /// Keeps the metric pipeline alive and drops after the instruments that depend on it.
+    provider: Box<dyn MeterProvider + Send>,
 }
 
-// Publisher wraps OpenTelemetry SDK types that use trait objects internally.
-// The trait objects are not auto-RefUnwindSafe but are used only for metrics export.
-// Inconsistent state after a caught panic cannot affect safety.
+// `dyn MeterProvider` does not implement `Debug`, so the provider is represented by its presence.
+#[cfg_attr(test, mutants::skip)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+impl fmt::Debug for Publisher {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct(type_name::<Self>())
+            .field("provider", &type_name_of_val(self.provider.as_ref()))
+            .field("clock", &self.clock)
+            .field("interval", &self.interval)
+            .field("state", &self.state)
+            .field("instruments", &self.instruments)
+            .finish()
+    }
+}
+
+// `Publisher` wraps OpenTelemetry SDK trait objects that are not auto-RefUnwindSafe.
+// Publication exposes no borrowed internal state across an unwind, so catching a provider panic
+// cannot violate memory safety. These marker traits do not make publication transactional: a
+// provider panic may leave some instruments and delta baselines advanced, and the publisher is
+// not intended to be retried after such a panic.
 impl UnwindSafe for Publisher {}
 impl RefUnwindSafe for Publisher {}
 
@@ -186,18 +216,21 @@ impl Publisher {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```no_run
     /// use std::time::Duration;
+    ///
     /// use nm_otel::Publisher;
     /// use tick::Clock;
-    /// # use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
+    /// # use opentelemetry_sdk::metrics::{
+    /// #     InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
+    /// # };
     ///
     /// # let exporter = InMemoryMetricExporter::default();
     /// # let reader = PeriodicReader::builder(exporter).build();
-    /// # let my_meter_provider = SdkMeterProvider::builder().with_reader(reader).build();
+    /// # let provider = SdkMeterProvider::builder().with_reader(reader).build();
     /// let publisher = Publisher::builder()
-    ///     .provider(my_meter_provider)
-    ///     .clock(Clock::new_frozen())
+    ///     .provider(provider)
+    ///     .clock(Clock::new_tokio())
     ///     .interval(Duration::from_secs(5))
     ///     .build();
     /// ```
@@ -206,10 +239,23 @@ impl Publisher {
         PublisherBuilder::new()
     }
 
-    /// Runs the publisher forever, collecting and exporting metrics at each interval.
+    /// Runs the publisher indefinitely, collecting and publishing metrics at each interval.
     ///
     /// This method never returns under normal operation. Drop the future to cancel
     /// the publishing.
+    ///
+    /// # Panics
+    ///
+    /// Panics if nm report collection finds incompatible configurations for the same event, or
+    /// if successive collections contain different histogram bucket counts for one event.
+    ///
+    /// # Reentrancy
+    ///
+    /// OpenTelemetry callbacks may record nm events, but must not attempt to poll this same
+    /// publisher future recursively.
+    // Mutations of this perpetual loop can busy-loop without yielding. Mutation testing
+    // disables watchdogs, so executing such a mutant hangs the test process.
+    #[cfg_attr(test, mutants::skip)]
     pub async fn publish_forever(&mut self) {
         let mut timer = PeriodicTimer::new(&self.clock, self.interval);
 
@@ -218,38 +264,37 @@ impl Publisher {
         }
     }
 
-    /// Runs a single collection iteration.
+    /// Collects and publishes metrics once.
     ///
-    /// This is an internal method for testing purposes.
+    /// # Panics
+    ///
+    /// Panics if nm report collection finds incompatible configurations for the same event, or
+    /// if the collection contains a different histogram bucket count from a previous collection.
     #[doc(hidden)]
     pub fn run_one_iteration(&mut self) {
         let report = Report::collect();
         self.export(&report);
     }
 
-    /// Runs a single export iteration using the supplied report.
+    /// Publishes the supplied report once.
     ///
     /// This bypasses [`Report::collect`] so callers can drive the export pipeline with
     /// a pre-built [`Report`] (typically constructed via `Report::fake` in tests and
     /// benchmarks).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the report contains a different histogram bucket count from a previous
+    /// report for the same event.
     #[cfg(any(test, feature = "private-test-util"))]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     #[doc(hidden)]
     pub fn run_one_iteration_with_report(&mut self, report: &Report) {
         self.export(report);
     }
 
     fn export(&mut self, report: &Report) {
-        // Lazily initialize instruments on first use.
-        if self.instruments.is_none() {
-            self.instruments = Some(InstrumentRegistry::new(self.meter.clone()));
-        }
-
-        let instruments = self
-            .instruments
-            .as_mut()
-            .expect("we just initialized it above");
-
-        export_report(report, &mut self.state, instruments);
+        export_report(report, &mut self.state, &mut self.instruments);
     }
 }
 
@@ -261,32 +306,26 @@ mod tests {
     use nm::{EventMetrics, Histogram, Magnitude};
     use opentelemetry::KeyValue;
     use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData, ResourceMetrics};
-    use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
     use static_assertions::assert_impl_all;
+    use testing::assert_panics;
 
     use super::*;
+    use crate::create_test_provider;
 
     assert_impl_all!(Publisher: UnwindSafe, RefUnwindSafe);
     assert_impl_all!(PublisherBuilder: UnwindSafe, RefUnwindSafe);
-
-    fn create_test_provider() -> (SdkMeterProvider, InMemoryMetricExporter) {
-        let exporter = InMemoryMetricExporter::default();
-        let reader = PeriodicReader::builder(exporter.clone()).build();
-        let provider = SdkMeterProvider::builder().with_reader(reader).build();
-        (provider, exporter)
-    }
 
     fn create_test_clock() -> Clock {
         Clock::new_frozen()
     }
 
-    // The OpenTelemetry SDK calls `env::current_exe()` during default resource detection,
-    // which Miri aborts on. Tracked upstream as
-    // https://github.com/open-telemetry/opentelemetry-rust/issues/3523 (regression in 0.32).
-    #[cfg_attr(miri, ignore)]
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
+    )]
     fn builder_with_defaults() {
-        let (provider, _exporter) = create_test_provider();
+        let (provider, _) = create_test_provider();
 
         let publisher = Publisher::builder()
             .provider(provider)
@@ -296,10 +335,13 @@ mod tests {
         assert_eq!(publisher.interval, DEFAULT_INTERVAL);
     }
 
-    #[cfg_attr(miri, ignore)]
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
+    )]
     fn builder_with_custom_interval() {
-        let (provider, _exporter) = create_test_provider();
+        let (provider, _) = create_test_provider();
 
         let publisher = Publisher::builder()
             .provider(provider)
@@ -310,81 +352,25 @@ mod tests {
         assert_eq!(publisher.interval, Duration::from_secs(5));
     }
 
-    #[cfg_attr(miri, ignore)]
     #[test]
-    fn builder_with_custom_meter_name() {
-        let (provider, _exporter) = create_test_provider();
-
-        let _publisher = Publisher::builder()
-            .provider(provider)
-            .clock(create_test_clock())
-            .meter_name("custom_meter")
-            .build();
-    }
-
-    #[test]
-    #[should_panic]
     fn builder_without_provider_panics() {
-        let _publisher = Publisher::builder().clock(create_test_clock()).build();
+        assert_panics(|| {
+            _ = Publisher::builder().clock(create_test_clock()).build();
+        });
     }
 
-    #[cfg_attr(miri, ignore)]
     #[test]
-    #[should_panic]
+    #[cfg_attr(
+        miri,
+        ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
+    )]
     fn builder_without_clock_panics() {
-        let (provider, _exporter) = create_test_provider();
-        let _publisher = Publisher::builder().provider(provider).build();
-    }
-
-    #[cfg_attr(miri, ignore)]
-    #[test]
-    fn run_one_iteration_collects_metrics() {
-        let (provider, exporter) = create_test_provider();
-
-        let mut publisher = Publisher::builder()
-            .provider(provider.clone())
-            .clock(create_test_clock())
-            .build();
-
-        publisher.run_one_iteration();
-        provider.force_flush().unwrap();
-
-        // The report may be empty if no nm events have been recorded,
-        // but the operation should complete successfully.
-        let metrics = exporter.get_finished_metrics().unwrap();
-
-        // We do not assert on content since nm may have no events.
-        // The test validates that the iteration completes without error.
-        drop(metrics);
-    }
-
-    #[cfg_attr(miri, ignore)]
-    #[test]
-    fn multiple_iterations_track_state() {
-        let (provider, _exporter) = create_test_provider();
-
-        let mut publisher = Publisher::builder()
-            .provider(provider)
-            .clock(create_test_clock())
-            .build();
-
-        // Run multiple iterations to verify state tracking works.
-        publisher.run_one_iteration();
-        publisher.run_one_iteration();
-        publisher.run_one_iteration();
-
-        // If this completes without panic, state tracking is working.
-    }
-
-    #[cfg_attr(miri, ignore)]
-    #[test]
-    fn builder_debug_formatting() {
-        let (provider, _exporter) = create_test_provider();
-
+        let (provider, _) = create_test_provider();
         let builder = Publisher::builder().provider(provider);
-        let debug = format!("{builder:?}");
 
-        assert!(debug.contains("PublisherBuilder"));
+        assert_panics(|| {
+            _ = builder.build();
+        });
     }
 
     const FAKE_EVENT_NAME: &str = "fake_event";
@@ -394,38 +380,39 @@ mod tests {
         count: u64,
         sum: Magnitude,
         bucket_counts: Vec<u64>,
-        plus_inf: u64,
+        plus_infinity_bucket_count: u64,
     ) -> Report {
-        let histogram = Histogram::fake(FAKE_HISTOGRAM_MAGNITUDES, bucket_counts, plus_inf);
+        let histogram = Histogram::fake(
+            FAKE_HISTOGRAM_MAGNITUDES,
+            bucket_counts,
+            plus_infinity_bucket_count,
+        );
         let event = EventMetrics::fake(FAKE_EVENT_NAME, count, sum, Some(histogram));
         Report::fake(vec![event])
     }
 
     fn find_metric_value(
-        exporter: &InMemoryMetricExporter,
+        metrics: &ResourceMetrics,
         name: &str,
         bucket: Option<&str>,
     ) -> Option<u64> {
-        let metrics = exporter.get_finished_metrics().ok()?;
-        for resource_metrics in &metrics {
-            for scope_metrics in resource_metrics.scope_metrics() {
-                for metric in scope_metrics.metrics() {
-                    if metric.name() != name {
-                        continue;
-                    }
-                    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
-                        continue;
+        for scope_metrics in metrics.scope_metrics() {
+            for metric in scope_metrics.metrics() {
+                if metric.name() != name {
+                    continue;
+                }
+                let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+                    continue;
+                };
+                for point in sum.data_points() {
+                    let matches = match bucket {
+                        None => point.attributes().next().is_none(),
+                        Some(expected) => point.attributes().any(|kv: &KeyValue| {
+                            kv.key.as_str() == "le" && kv.value.as_str() == expected
+                        }),
                     };
-                    for point in sum.data_points() {
-                        let matches = match bucket {
-                            None => point.attributes().next().is_none(),
-                            Some(expected) => point.attributes().any(|kv: &KeyValue| {
-                                kv.key.as_str() == "le" && kv.value.as_str() == expected
-                            }),
-                        };
-                        if matches {
-                            return Some(point.value());
-                        }
+                    if matches {
+                        return Some(point.value());
                     }
                 }
             }
@@ -433,81 +420,84 @@ mod tests {
         None
     }
 
-    // Same Miri limitation as the other tests above
-    // (https://github.com/open-telemetry/opentelemetry-rust/issues/3523).
-    #[cfg_attr(miri, ignore)]
     #[test]
-    fn run_one_iteration_with_report_exports_fake_report() {
+    #[cfg_attr(
+        miri,
+        ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
+    )]
+    fn run_one_iteration_with_report_publishes_fake_report() {
         const METER_NAME: &str = "custom_meter_name_for_test";
 
-        let (provider, exporter) = create_test_provider();
+        let (provider, reader) = create_test_provider();
 
         let mut publisher = Publisher::builder()
-            .provider(provider.clone())
+            .provider(provider)
             .clock(create_test_clock())
             .meter_name(METER_NAME)
             .build();
 
-        // First iteration: cumulative buckets are [4, 7, 9] from non-cumulative [4, 3, 2],
-        // plus 1 in the `+Inf` overflow bucket.
-        let report1 = make_fake_report(10, 4567, vec![4, 3, 2], 1);
-        publisher.run_one_iteration_with_report(&report1);
-        provider.force_flush().unwrap();
+        let initial_report = make_fake_report(10, 4567, vec![4, 3, 2], 1);
+        publisher.run_one_iteration_with_report(&initial_report);
 
-        // Verify the custom meter name propagates into the OTel instrumentation scope.
-        let metrics = exporter.get_finished_metrics().unwrap();
-        let observed_scope_names: Vec<&str> = metrics
-            .iter()
-            .flat_map(ResourceMetrics::scope_metrics)
-            .map(|sm| sm.scope().name())
-            .collect();
-        assert!(
-            observed_scope_names.contains(&METER_NAME),
-            "expected scope name {METER_NAME:?} in {observed_scope_names:?}"
-        );
+        let metrics = reader.collect();
+        let has_expected_scope = metrics
+            .scope_metrics()
+            .map(|scope_metrics| scope_metrics.scope().name())
+            .any(|scope_name| scope_name == METER_NAME);
+        assert!(has_expected_scope);
 
-        assert_eq!(
-            find_metric_value(&exporter, FAKE_EVENT_NAME, None),
-            Some(10)
-        );
-        exporter.reset();
+        assert_eq!(find_metric_value(&metrics, FAKE_EVENT_NAME, None), Some(10));
 
-        // Second iteration: non-cumulative becomes [6, 5, 3], cumulative [6, 11, 14],
-        // so per-bucket deltas vs the first iteration are [2, 4, 5]. Counter delta:
-        // 25 - 10 = 15.
-        let report2 = make_fake_report(25, 8901, vec![6, 5, 3], 2);
-        publisher.run_one_iteration_with_report(&report2);
-        provider.force_flush().unwrap();
+        let next_report = make_fake_report(25, 8901, vec![6, 5, 3], 2);
+        publisher.run_one_iteration_with_report(&next_report);
+        let metrics = reader.collect();
 
-        // OTel counters accumulate across flushes. After iter 2 the exported cumulative is
-        // 10 + 15 = 25. This confirms the publisher shipped a *delta* of 15 (not the raw
-        // cumulative of 25, which would yield 10 + 25 = 35).
-        assert_eq!(
-            find_metric_value(&exporter, FAKE_EVENT_NAME, None),
-            Some(25)
-        );
+        // OpenTelemetry counters accumulate across flushes, so the observed total
+        // distinguishes publishing deltas from replaying raw cumulative report values.
+        assert_eq!(find_metric_value(&metrics, FAKE_EVENT_NAME, None), Some(25));
 
-        // Histogram bucket counters likewise accumulate. After iter 1 their cumulative
-        // values are [4, 7, 9, 10]; iter 2 deltas are [2, 4, 5, 6]; so post-iter-2
-        // cumulatives are [6, 11, 14, 16]. Any of these matching the expected
-        // sum-of-deltas confirms that histogram_deltas is computing correctly across
-        // iterations.
+        // Bucket counters have the same cumulative OpenTelemetry semantics and therefore
+        // verify delta publication independently for every bound and the overflow bucket.
         let bucket_metric = format!("{FAKE_EVENT_NAME}_bucket");
         assert_eq!(
-            find_metric_value(&exporter, &bucket_metric, Some("10")),
+            find_metric_value(&metrics, &bucket_metric, Some("10")),
             Some(6)
         );
         assert_eq!(
-            find_metric_value(&exporter, &bucket_metric, Some("50")),
+            find_metric_value(&metrics, &bucket_metric, Some("50")),
             Some(11)
         );
         assert_eq!(
-            find_metric_value(&exporter, &bucket_metric, Some("100")),
+            find_metric_value(&metrics, &bucket_metric, Some("100")),
             Some(14)
         );
         assert_eq!(
-            find_metric_value(&exporter, &bucket_metric, Some("+Inf")),
+            find_metric_value(&metrics, &bucket_metric, Some("+Inf")),
             Some(16)
         );
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
+    )]
+    fn run_one_iteration_with_report_panics_on_incompatible_histograms() {
+        let (provider, _) = create_test_provider();
+        let mut publisher = Publisher::builder()
+            .provider(provider)
+            .clock(create_test_clock())
+            .build();
+
+        let initial_report = make_fake_report(10, 4567, vec![4, 3, 2], 1);
+        publisher.run_one_iteration_with_report(&initial_report);
+
+        let histogram = Histogram::fake(&[10, 50], vec![6, 5], 2);
+        let event = EventMetrics::fake(FAKE_EVENT_NAME, 25, 8901, Some(histogram));
+        let incompatible_report = Report::fake(vec![event]);
+
+        assert_panics(|| {
+            publisher.run_one_iteration_with_report(&incompatible_report);
+        });
     }
 }

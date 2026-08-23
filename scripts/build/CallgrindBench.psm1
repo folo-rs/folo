@@ -1,12 +1,12 @@
 #requires -Version 7
 
-# Discovers Callgrind instruction-count benchmark targets for the `bench-cg` recipe.
+# Discovers benchmark targets for the `bench-cg` and `test-benches-criterion` recipes.
 #
 # Callgrind benches live in `packages/<pkg>/benches/*_cg.rs` (the `_cg` suffix is the naming
-# convention that pairs a Callgrind file with its Criterion counterpart). Turning a package filter
-# and an optional target filter into the concrete list of (package, bench) pairs to run involves
-# directory walking and filtering that is easy to get wrong and worth covering with tests, so it
-# lives here. The recipe keeps only the platform/tool guards and the actual `cargo bench` calls.
+# convention that pairs a Callgrind file with its Criterion counterpart); other `.rs` files in
+# those directories are Criterion benches. Turning a package filter and an optional target filter
+# into concrete (package, bench) pairs involves directory walking and filtering that is easy to get
+# wrong and worth covering with tests, so it lives here. Recipes retain only orchestration.
 
 Set-StrictMode -Version Latest
 
@@ -25,7 +25,9 @@ function Get-CallgrindBenchTarget {
     )
 
     $packages = if ([string]::IsNullOrWhiteSpace($PackageFilter)) {
-        Get-ChildItem -LiteralPath $PackagesRoot -Directory | ForEach-Object { $_.Name } | Sort-Object
+        Get-ChildItem -LiteralPath $PackagesRoot -Directory |
+            ForEach-Object { $_.Name } |
+            Sort-Object
     } else {
         # Support space-separated package lists (e.g. from cargo-delta output).
         $PackageFilter -split ' ' | Where-Object { $_ -ne '' }
@@ -46,4 +48,37 @@ function Get-CallgrindBenchTarget {
     return $targets.ToArray()
 }
 
-Export-ModuleMember -Function Get-CallgrindBenchTarget
+function Get-CriterionBenchTarget {
+    # Returns Criterion benchmark targets, excluding `_cg` Callgrind targets. An empty package
+    # filter scans the workspace; otherwise the filter is a space-separated package allow-list.
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)][string] $PackagesRoot,
+        [string] $PackageFilter = ''
+    )
+
+    $packages = if ([string]::IsNullOrWhiteSpace($PackageFilter)) {
+        Get-ChildItem -LiteralPath $PackagesRoot -Directory |
+            ForEach-Object { $_.Name } |
+            Sort-Object
+    } else {
+        $PackageFilter -split ' ' | Where-Object { $_ -ne '' }
+    }
+
+    $targets = [System.Collections.Generic.List[pscustomobject]]::new()
+    foreach ($package in $packages) {
+        $benchesDir = Join-Path $PackagesRoot $package 'benches'
+        if (-not (Test-Path -LiteralPath $benchesDir)) { continue }
+
+        $benchFiles = Get-ChildItem -LiteralPath $benchesDir -Filter '*.rs' |
+            Where-Object { $_.BaseName -notlike '*_cg' } |
+            Sort-Object Name
+        foreach ($benchFile in $benchFiles) {
+            $targets.Add([pscustomobject]@{ Package = $package; Bench = $benchFile.BaseName })
+        }
+    }
+    return $targets.ToArray()
+}
+
+Export-ModuleMember -Function Get-CallgrindBenchTarget, Get-CriterionBenchTarget

@@ -516,6 +516,40 @@ jobs:
       - name: Run miri-harder for awaiter_set on ubuntu-latest (shard ${{ matrix.shard }})
         run: just package=awaiter_set miri-harder ${{ matrix.shard }}
 
+  miri-harder-nm-impl:
+    needs: [delta, miri-x64]
+    if: >-
+      needs.delta.outputs.skip_all != 'true'
+      && (
+        needs.delta.outputs.packages == ''
+        || contains(fromJson(needs.delta.outputs.packages_json), 'nm_impl')
+      )
+    strategy:
+      fail-fast: false
+      matrix:
+        # The smallest existing many-seeds matrix shape is sufficient: a half-budget local
+        # Windows run takes only minutes, and Linux has lower interpreter overhead.
+        shard: [1/2, 2/2]
+    # Many-seeds Miri work budget (~90 min) plus up to 90 min for a cold-cache setup-environment.
+    timeout-minutes: 180
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run miri-harder for nm_impl on ubuntu-latest (shard ${{ matrix.shard }})
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          just package=nm_impl miri-harder ${{ matrix.shard }}
+
   machete:
     needs: [delta]
     if: needs.delta.outputs.skip_all != 'true'
@@ -983,6 +1017,7 @@ jobs:
       - miri-harder-infinity-pool
       - miri-harder-events
       - miri-harder-awaiter-set
+      - miri-harder-nm-impl
       - machete
       - clippy-release
       - build-release

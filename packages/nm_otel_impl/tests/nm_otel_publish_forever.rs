@@ -1,99 +1,77 @@
 //! Integration test for `Publisher::publish_forever()`.
 //!
-//! This test is in a separate binary to establish controlled circumstances - no other tests
-//! will have recorded nm events, so we can verify the exact metrics exported.
+//! A separate binary prevents other tests from recording nm events, allowing exact assertions
+//! about the exported metrics.
 
-use std::pin::pin;
+mod common;
+
 use std::task::{Context, Waker};
 use std::time::Duration;
 
+use common::{TestMetricReader, find_u64_sum};
 use nm::Event;
 use nm_otel::Publisher;
-use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
-use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
+use opentelemetry_sdk::metrics::SdkMeterProvider;
+use testing::with_watchdog;
 use tick::ClockControl;
+
+// A test-specific name lets the assertion distinguish this event from registry noise.
+const EVENT_NAME: &str = "publish_forever_test_event";
+// The interval is arbitrary because the fake clock advances directly to each deadline.
+const INTERVAL: Duration = Duration::from_secs(5);
+// A batch ensures that the timer-triggered collection exports a nontrivial counter value.
+const OBSERVED_EVENT_COUNT: usize = 10;
+// A nonzero magnitude exercises the histogram path while the count metric is asserted.
+const OBSERVED_MAGNITUDE: i64 = 100;
 
 thread_local! {
     static TEST_EVENT: Event = Event::builder()
-        .name("publish_forever_test_event")
+        .name(EVENT_NAME)
         .build();
 }
 
-fn create_test_provider() -> (SdkMeterProvider, InMemoryMetricExporter) {
-    let exporter = InMemoryMetricExporter::default();
-    let reader = PeriodicReader::builder(exporter.clone()).build();
-    let provider = SdkMeterProvider::builder().with_reader(reader).build();
-    (provider, exporter)
+fn create_test_provider() -> (SdkMeterProvider, TestMetricReader) {
+    let reader = TestMetricReader::default();
+    let provider = SdkMeterProvider::builder()
+        .with_reader(reader.clone())
+        .build();
+    (provider, reader)
 }
 
-// OpenTelemetry SDK uses system time calls not available under Miri isolation.
-#[cfg_attr(miri, ignore)]
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
+)]
 fn publish_forever_collects_metrics_on_timer_tick() {
-    const INTERVAL: Duration = Duration::from_secs(5);
+    with_watchdog(|| {
+        TEST_EVENT.with(|event| {
+            event
+                .batch(OBSERVED_EVENT_COUNT)
+                .observe(OBSERVED_MAGNITUDE);
+        });
 
-    // Record some events before creating the publisher.
-    TEST_EVENT.with(|event| {
-        event.batch(10).observe(100);
+        let (provider, reader) = create_test_provider();
+        let control = ClockControl::new();
+
+        let mut publisher = Publisher::builder()
+            .provider(provider.clone())
+            .clock(control.to_clock())
+            .interval(INTERVAL)
+            .build();
+        let mut future = Box::pin(publisher.publish_forever());
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+
+        assert!(future.as_mut().poll(&mut context).is_pending());
+        control.advance(INTERVAL);
+        assert!(future.as_mut().poll(&mut context).is_pending());
+
+        let metrics = reader.collect();
+        assert_eq!(
+            find_u64_sum(&metrics, EVENT_NAME),
+            Some((true, u64::try_from(OBSERVED_EVENT_COUNT).unwrap()))
+        );
+        drop(provider);
     });
-
-    let (provider, exporter) = create_test_provider();
-
-    // Create a clock with manual time control.
-    let control = ClockControl::new();
-    let clock = control.to_clock();
-
-    let mut pub_instance = Publisher::builder()
-        .provider(provider.clone())
-        .clock(clock)
-        .interval(INTERVAL)
-        .build();
-
-    // Create the future but do not await it - we will poll manually.
-    let mut future = pin!(pub_instance.publish_forever());
-
-    // Create a no-op waker for polling.
-    let waker = Waker::noop();
-    let mut cx = Context::from_waker(waker);
-
-    // First poll - the future should be pending (waiting for timer).
-    let poll_result = future.as_mut().poll(&mut cx);
-    assert!(poll_result.is_pending());
-
-    // Advance time past the interval to trigger the timer.
-    control.advance(INTERVAL);
-
-    // Poll again - this should execute one iteration and then suspend again.
-    let poll_result = future.as_mut().poll(&mut cx);
-    assert!(poll_result.is_pending());
-
-    // Flush and check that metrics were exported.
-    provider.force_flush().unwrap();
-
-    let metrics = exporter.get_finished_metrics().unwrap();
-    assert!(!metrics.is_empty(), "should have exported some metrics");
-
-    // Find our test event's count metric.
-    let mut found_count = false;
-    for resource_metrics in &metrics {
-        for scope_metrics in resource_metrics.scope_metrics() {
-            for metric in scope_metrics.metrics() {
-                if metric.name() == "publish_forever_test_event" {
-                    found_count = true;
-
-                    // Verify it is a counter with the expected value.
-                    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
-                        panic!("expected Sum<u64> metric data");
-                    };
-                    assert!(sum.is_monotonic());
-                    let mut data_points = sum.data_points();
-                    let first = data_points.next().unwrap();
-                    assert!(data_points.next().is_none());
-                    assert_eq!(first.value(), 10);
-                }
-            }
-        }
-    }
-
-    assert!(found_count, "should have found our test event count metric");
 }

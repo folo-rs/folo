@@ -1,3 +1,5 @@
+use std::collections::HashMap as StdHashMap;
+
 use foldhash::fast::FixedState;
 
 /// A `HashMap` seeded with a fixed hash key for deterministic iteration.
@@ -14,4 +16,4 @@ use foldhash::fast::FixedState;
 /// Event names are expected to be a bounded set of trusted, internally-chosen
 /// identifiers rather than attacker-controlled input, so trading the default
 /// `HashDoS` resistance for determinism is appropriate here.
-pub(crate) type HashMap<K, V> = std::collections::HashMap<K, V, FixedState>;
+pub(crate) type HashMap<K, V> = StdHashMap<K, V, FixedState>;

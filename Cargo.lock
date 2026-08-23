@@ -2280,6 +2280,7 @@ dependencies = [
  "num-traits",
  "par_bench",
  "static_assertions",
+ "testing",
 ]
 
 [[package]]
@@ -2288,7 +2289,6 @@ version = "0.4.16"
 dependencies = [
  "nm",
  "nm_otel_impl",
- "opentelemetry",
  "opentelemetry-stdout",
  "opentelemetry_sdk",
  "static_assertions",

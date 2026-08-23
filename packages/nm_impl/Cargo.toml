@@ -1,6 +1,6 @@
 [package]
 name = "nm_impl"
-description = "Implementation crate for nm - do not reference directly"
+description = "Implementation crate for nm; do not depend on it directly"
 publish = true
 version = "0.1.44"
 
@@ -15,7 +15,7 @@ all-features = true
 
 [lib]
 # nm_impl exists only to host the implementation of `nm` and to expose internal
-# items to in-workspace tests/benches; user-facing documentation lives in `nm`.
+# items to in-workspace tests and benchmarks; user-facing documentation lives in `nm`.
 doc = false
 
 [features]
@@ -35,11 +35,12 @@ num-traits = { workspace = true }
 criterion = { workspace = true }
 many_cpus = { path = "../many_cpus" }
 mutants = { workspace = true }
-# `nm` is a dev-dep so doctests, examples, and benches can write `use nm::Event;`
-# exactly as user code would, matching the documentation rendered for `nm`.
+# `nm` is a development dependency so doctests, examples, and benchmarks can write
+# `use nm::Event;` exactly as user code would, matching the documentation rendered for `nm`.
 nm = { path = "../nm" }
 par_bench = { path = "../par_bench", features = ["criterion"] }
 static_assertions = { workspace = true }
+testing = { path = "../testing" }
 
 # Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
