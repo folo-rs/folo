@@ -1926,9 +1926,9 @@ mod tests {
         let mut first = series("first", "m1", &[100.0; 20], 100.0);
         let mut second = series("second", "m1", &[100.0; 20], 100.0);
         let mut third = series("third", "m1", &[100.0; 20], 100.0);
-        replace_reference_commits(&mut first, &[10, 20, 30, 40, 50, 90, 110], 200);
-        replace_reference_commits(&mut second, &[10, 20, 30, 40, 50, 90, 100], 200);
-        replace_reference_commits(&mut third, &[10, 20, 30, 40, 50, 100, 110], 200);
+        replace_reference_commits(&mut first, &[10, 15, 20, 30, 35, 40, 50], 200);
+        replace_reference_commits(&mut second, &[10, 15, 20, 30, 40, 45, 50], 200);
+        replace_reference_commits(&mut third, &[10, 20, 30, 35, 40, 45, 50], 200);
 
         let detection = find_changes(&[first, second, third], &context(200));
         let comparison = &detection.branch_comparisons[0];
