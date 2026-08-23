@@ -83,10 +83,13 @@ impl PublisherBuilder {
 
     /// Sets the OpenTelemetry meter provider.
     ///
-    /// Transfers ownership of the provider into the resulting publisher, which retains it to keep
-    /// the metric pipeline operational. The provider must implement [`Send`] so the publisher can
-    /// be moved between threads.
+    /// Takes ownership of the provider, which the resulting publisher retains for its lifetime.
+    /// The provider must implement [`MeterProvider`][otel-meter-provider] and [`Send`] and have a
+    /// `'static` lifetime.
     /// A provider must be configured before calling [`build()`][Self::build].
+    ///
+    /// [otel-meter-provider]:
+    ///     https://docs.rs/opentelemetry/latest/opentelemetry/metrics/trait.MeterProvider.html
     #[must_use]
     pub fn provider(mut self, provider: impl MeterProvider + Send + 'static) -> Self {
         self.provider = Some(Box::new(provider));

@@ -459,9 +459,9 @@ mod tests {
                 global_registry.inspect(|observation_bags| {
                     live_events += observation_bags.len();
                 });
-                assert_eq!(live_events, THREADS);
 
                 checkpoint.wait();
+                assert_eq!(live_events, THREADS);
             });
 
             let mut archived_events: usize = 0;

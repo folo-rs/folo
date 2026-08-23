@@ -16,7 +16,7 @@ use many_cpus::SystemHardware;
 use new_zealand::nz;
 use nm::{EventMetrics, Histogram, Magnitude, Report};
 use nm_otel::Publisher;
-use opentelemetry_sdk::metrics::SdkMeterProvider;
+use nm_otel_impl::create_test_provider;
 use par_bench::{ResourceUsageExt, Run, ThreadPool};
 use tick::Clock;
 
@@ -156,9 +156,8 @@ fn benchmark_multi_event_allocations(c: &mut Criterion) {
 }
 
 fn build_publisher() -> Publisher {
-    // Benchmarks only need reachable instruments; installing a reader would add unrelated
-    // collection work and, for a periodic reader, autonomous real-time activity.
-    let provider = SdkMeterProvider::builder().build();
+    // Attaching the manual reader activates instruments without autonomous collection activity.
+    let (provider, _) = create_test_provider();
 
     Publisher::builder()
         .provider(provider)

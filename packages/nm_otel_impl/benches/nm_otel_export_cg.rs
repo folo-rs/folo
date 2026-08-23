@@ -47,7 +47,7 @@ mod linux {
     use gungraun::prelude::*;
     use nm::{EventMetrics, Histogram, Magnitude, Report};
     use nm_otel::Publisher;
-    use opentelemetry_sdk::metrics::SdkMeterProvider;
+    use nm_otel_impl::create_test_provider;
     use tick::Clock;
 
     // A stable synthetic name avoids introducing registry-dependent setup.
@@ -99,9 +99,9 @@ mod linux {
     type ExportInputs = (Publisher, Report);
 
     fn build_publisher() -> Publisher {
-        // Callgrind needs reachable instruments but no reader. A reader would add collection
-        // behavior unrelated to the export operation under measurement.
-        let provider = SdkMeterProvider::builder().build();
+        // Attaching the manual reader activates instruments without collection in the measured
+        // region.
+        let (provider, _) = create_test_provider();
 
         Publisher::builder()
             .provider(provider)

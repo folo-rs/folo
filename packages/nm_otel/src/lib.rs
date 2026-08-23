@@ -68,7 +68,8 @@
 //! - `interval()` - how often to collect nm data and record OpenTelemetry instruments
 //!   (default: 60 seconds)
 //! - `meter_name()` - OpenTelemetry meter name (default: "nm")
-//! - `provider()` - any [`MeterProvider`][otel-meter-provider] implementation
+//! - `provider()` - a [`MeterProvider`][otel-meter-provider] that implements [`Send`] and has a
+//!   `'static` lifetime
 //!
 //! ## Requirements
 //!
@@ -81,6 +82,7 @@
 //! [nm-event]: https://docs.rs/nm/latest/nm/struct.Event.html
 //! [otel-meter-provider]:
 //!     https://docs.rs/opentelemetry/latest/opentelemetry/metrics/trait.MeterProvider.html
+//! [`Send`]: std::marker::Send
 //! [tick-clock]: https://docs.rs/tick/latest/tick/struct.Clock.html
 
 // This explicit list advertises only the public subset and excludes implementation-only items.

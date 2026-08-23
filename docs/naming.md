@@ -34,8 +34,8 @@ Every file in `packages/<pkg>/benches/` must be prefixed with either:
 
 For packages that follow the `_impl` crate split pattern (see
 [`docs/impl-crate-split.md`](impl-crate-split.md)), the `_impl` suffix is
-omitted from the benchmark file prefix (e.g. `nm_impl/benches/nm_observe.rs`,
-not `nm_impl_observe.rs`).
+omitted from the benchmark file prefix (e.g. `nm_impl/benches/nm_performance.rs`,
+not `nm_impl_performance.rs`).
 
 The crate-name prefix prevents collisions when the resulting bench binaries
 land in the shared `target/.../deps/` directory.

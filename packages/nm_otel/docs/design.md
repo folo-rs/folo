@@ -15,14 +15,21 @@ schedule according to how frequently they need updated values and exported telem
 
 ## Metric mapping
 
-Each event's observation count is recorded as a counter under the event name. Its accumulated
-magnitude is recorded as a gauge with the `_sum` suffix.
+Each event's observation count is recorded as a counter under the event's instrument name. Its
+accumulated magnitude is recorded as a gauge with the `_sum` suffix.
 
 An event with a histogram also produces cumulative counters named with the `_bucket` suffix.
 Each finite bucket carries an `le` attribute containing its inclusive upper boundary, and the
 final `+Inf` bucket contains all observations. This representation preserves the cumulative
 counts and sum exposed by `nm`, allowing a backend to display the distribution without requiring
 the original observations.
+
+The instrument name is the event name. Because the `_sum` and `_bucket` companions are derived
+from it, an event name that already has the shape of a companion name — ending in `_sum` or
+`_bucket`, optionally followed by further underscores — receives one additional trailing
+underscore before its instruments are named. Every event name is accepted, and each event maps
+to its own distinct set of instrument names, so no event's values are ever merged into another
+event's instruments.
 
 The configured meter name groups the instruments created by one publisher. Applications may
 replace the default name when they need to distinguish this source from other OpenTelemetry

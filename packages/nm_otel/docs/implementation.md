@@ -26,8 +26,17 @@ the information available in an `nm` report and keeps publication work proportio
 of events and buckets instead of the number of original observations.
 
 Event instruments, bucket attributes, and previous cumulative values are cached when first seen.
-Once the event and histogram configuration is established, the steady-state histogram path looks
-up this state, computes deltas, and records them without allocating.
+The instrument names, including the underscore shift that keeps companion-shaped event names
+apart, are derived at that point rather than per export. Once the event and histogram
+configuration is established, the steady-state histogram path looks up this state, computes
+deltas, and records them without allocating.
+
+Both the delta state and the instrument cache are keyed by event name and hashed with the
+standard library's `HashDoS`-resistant default rather than a faster non-cryptographic hasher.
+Event names originate outside this library, so the hash has to hold up against a caller-chosen
+name set rather than merely against accidental clustering; the resulting cost and per-process
+variation in probe counts are accepted in the instruction-count benchmarks that cover the export
+path.
 
 The configured meter provider creates the instruments and is retained by the publisher so its
 metric pipeline remains active for the publisher's lifetime. Its readers operate independently of

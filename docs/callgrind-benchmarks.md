@@ -151,8 +151,8 @@ packages/<pkg>/benches/<crate>_<name>_cg.rs
 ```
 
 The `_cg.rs` filename suffix is required for `just bench-cg` discovery. Use
-a crate-name prefix on the file name (e.g. `nm_observe_cg.rs`,
-`fast_time_clock_cg.rs`) so the resulting bench binary does not collide
+a crate-name prefix on the file name (e.g. `nm_performance_cg.rs`,
+`fast_time_timestamp_performance_cg.rs`) so the resulting bench binary does not collide
 with binaries from other crates in the shared `target/.../deps/` directory.
 
 ### Cargo.toml
@@ -351,10 +351,10 @@ Then:
 just bench-cg
 
 # Scope to a single package.
-just package=nm bench-cg
+just package=nm_impl bench-cg
 
 # Run a specific bench file by name.
-just bench-cg nm_observe_cg
+just bench-cg nm_performance_cg
 ```
 
 On Windows, run the recipe via WSL from the repo root (WSL inherits the

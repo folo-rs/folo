@@ -2271,7 +2271,6 @@ version = "0.1.44"
 dependencies = [
  "criterion",
  "fast_time",
- "foldhash",
  "gungraun",
  "many_cpus",
  "mutants",
@@ -2302,7 +2301,6 @@ version = "0.4.16"
 dependencies = [
  "alloc_tracker",
  "criterion",
- "foldhash",
  "futures",
  "gungraun",
  "hashbrown 0.17.1",

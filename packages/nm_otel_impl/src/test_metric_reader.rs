@@ -43,6 +43,9 @@ impl MetricReader for TestMetricReader {
         self.inner.shutdown_with_timeout(timeout)
     }
 
+    // The wrapped default reader and `Temporality::default()` both select cumulative
+    // temporality, so the generated default-return mutation is behaviorally equivalent.
+    #[cfg_attr(test, mutants::skip)]
     fn temporality(&self, kind: InstrumentKind) -> Temporality {
         self.inner.temporality(kind)
     }

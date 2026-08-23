@@ -1,8 +1,7 @@
 //! State tracking for delta computation between collections.
 
-use std::hash::BuildHasher;
+use std::hash::{BuildHasher, RandomState};
 
-use foldhash::fast::FixedState;
 use hashbrown::HashTable;
 use hashbrown::hash_table::Entry;
 use nm::{EventName, Magnitude};
@@ -21,14 +20,14 @@ pub(crate) struct CollectionState {
     // does not implement, and a `get_mut`-first early return fails the NLL borrow check. The
     // price is spelling out the hash and equality closures by hand.
     //
-    // The hasher is `foldhash::fast::FixedState` rather than the randomly seeded `RandomState`.
-    // This map is looked up on every measured export iteration, and a random per-process seed
-    // shifts probe counts and iteration order between builds, which surfaces as instruction-count
-    // jitter in the Callgrind export benchmark. A fixed seed makes the measurement depend only on
-    // the code. Event names are a bounded set of trusted, internally-chosen identifiers, so
-    // forfeiting HashDoS resistance is appropriate here.
-    // Ref: docs/benchmarks.md, "Hash containers and instruction-count determinism".
-    hasher: FixedState,
+    // The hasher is the standard library's `HashDoS`-resistant default rather than the faster
+    // `foldhash`. This map is looked up once per event on every export and is keyed by names
+    // that reach nm through an API accepting owned strings, so the key set is outside this
+    // crate's control, and `foldhash` documents itself as only minimally DoS-resistant. The
+    // stronger hash raises the instruction count of the Callgrind export benchmark, and the
+    // random seed makes that count vary between processes.
+    // Ref: workspace docs/benchmarks.md, "Hash containers and instruction-count determinism".
+    hasher: RandomState,
 
     /// Previous state per event name.
     events: HashTable<(EventName, EventState)>,
@@ -38,7 +37,7 @@ impl CollectionState {
     /// Creates a new empty collection state.
     pub(crate) fn new() -> Self {
         Self {
-            hasher: FixedState::default(),
+            hasher: RandomState::default(),
             events: HashTable::new(),
         }
     }
@@ -51,7 +50,7 @@ impl CollectionState {
         // 1. `hash`              - precomputed hash of the lookup key.
         // 2. `|...| ... == name` - tiebreaker on probed slots (collision check).
         // 3. `|...| hash_one`    - rehash closure, called per existing entry on table growth.
-        // All three route through the same `FixedState`, so the lookup hash and the
+        // All three route through the same `RandomState`, so the lookup hash and the
         // growth-time rehash agree on the hash for any given key.
         match self.events.entry(
             hash,

@@ -1,10 +1,10 @@
 //! Mapping from nm metrics to OpenTelemetry instruments.
 
-use std::hash::BuildHasher;
+use std::borrow::Cow;
+use std::hash::{BuildHasher, RandomState};
 use std::slice;
 use std::sync::Arc;
 
-use foldhash::fast::FixedState;
 use hashbrown::HashTable;
 use hashbrown::hash_table::Entry;
 use nm::{EventName, Histogram, Magnitude, Report};
@@ -18,6 +18,10 @@ const SUM_SUFFIX: &str = "_sum";
 
 /// Implements the Prometheus-compatible name for an event's per-bound histogram series.
 const BUCKET_SUFFIX: &str = "_bucket";
+
+/// Separates an event's instrument name from a companion suffix, and doubles as the escape
+/// character that keeps companion-shaped event names out of the companion name space.
+const NAME_SEPARATOR: char = '_';
 
 /// Attribute key for histogram bucket upper bound (Prometheus convention).
 const LE_ATTRIBUTE: &str = "le";
@@ -34,10 +38,9 @@ pub(crate) struct InstrumentRegistry {
     // See the matching comment on `CollectionState::hasher` in `state.rs` for the full
     // rationale. In short: `hashbrown::HashTable` in place of `std::collections::HashMap`
     // clones the `EventName` key only on insertion (not on every lookup), and the hasher is
-    // `foldhash::fast::FixedState` rather than a randomly seeded one so that this
-    // export-path map produces stable Callgrind instruction counts across builds. Event
-    // names are trusted internal identifiers, so forfeiting HashDoS resistance is safe.
-    hasher: FixedState,
+    // the standard library's `HashDoS`-resistant default because event names reach nm through
+    // an API accepting owned strings, which puts the key set outside this crate's control.
+    hasher: RandomState,
 
     /// Cached instruments per event name.
     events: HashTable<(EventName, EventInstruments)>,
@@ -48,7 +51,7 @@ impl InstrumentRegistry {
     pub(crate) fn new(meter: Meter) -> Self {
         Self {
             meter,
-            hasher: FixedState::default(),
+            hasher: RandomState::default(),
             events: HashTable::new(),
         }
     }
@@ -75,12 +78,13 @@ impl InstrumentRegistry {
         ) {
             Entry::Occupied(occupied) => &mut occupied.into_mut().1,
             Entry::Vacant(vacant) => {
-                let sum_name = format!("{event_name}{SUM_SUFFIX}");
+                let base_name = instrument_base_name(event_name);
+                let sum_name = format!("{base_name}{SUM_SUFFIX}");
                 let new_instruments = EventInstruments {
-                    // OpenTelemetry accepts the name as `Cow<'static, str>`, and `EventName`
-                    // already is one, so cloning it avoids the allocation that `to_string()`
-                    // would force for a borrowed (`Cow::Borrowed`) name.
-                    count_counter: meter.u64_counter(event_name.clone()).build(),
+                    // OpenTelemetry accepts the name as `Cow<'static, str>`, and the base name
+                    // already is one, so handing it over avoids the allocation that
+                    // `to_string()` would force for a borrowed (`Cow::Borrowed`) name.
+                    count_counter: meter.u64_counter(base_name).build(),
                     sum_gauge: meter.i64_gauge(sum_name).build(),
                     bucket_counter: None,
                     bucket_attrs: Vec::new(),
@@ -97,11 +101,13 @@ impl InstrumentRegistry {
 
         // Lazily create the bucket counter and cache bucket attributes if histogram data is
         // provided. Building the `KeyValue` once per bucket here eliminates per-export
-        // `Arc<str>` clone and `KeyValue::new` work in the export loop.
+        // `Arc<str>` clone and `KeyValue::new` work in the export loop. The guard is false on
+        // every later export for this event, so the name derivation stays off the steady-state
+        // path.
         if let Some(magnitudes) = magnitudes
             && instruments.bucket_counter.is_none()
         {
-            let bucket_name = format!("{event_name}{BUCKET_SUFFIX}");
+            let bucket_name = format!("{}{BUCKET_SUFFIX}", instrument_base_name(event_name));
             instruments.bucket_counter = Some(meter.u64_counter(bucket_name).build());
             instruments.bucket_attrs = magnitudes
                 .map(|magnitude| KeyValue::new(LE_ATTRIBUTE, format_bucket_bound(magnitude)))
@@ -120,13 +126,13 @@ impl InstrumentRegistry {
 /// bucket counter with its precomputed attributes forms a coherent trailing block.
 #[derive(Debug)]
 struct EventInstruments {
-    /// Counter for event count (named after the event itself, e.g. `http_requests`).
+    /// Counter for event count, named with the event's base name (e.g. `http_requests`).
     count_counter: Counter<u64>,
 
-    /// Gauge for event sum (named `{event}_sum`).
+    /// Gauge for event sum (named `{base}_sum`).
     sum_gauge: Gauge<i64>,
 
-    /// Counter for histogram buckets (named `{event}_bucket`), if the event has a histogram.
+    /// Counter for histogram buckets (named `{base}_bucket`), if the event has a histogram.
     /// Different bucket bounds are distinguished by the `le` attribute, not by instrument name.
     bucket_counter: Option<Counter<u64>>,
 
@@ -215,6 +221,36 @@ fn add_bucket_delta(counter: &Counter<u64>, delta: u64, attr: &KeyValue) {
     }
 }
 
+/// Derives the instrument name that carries an event's own count, and from which the `_sum`
+/// and `_bucket` companion names are built.
+///
+/// The mapping is injective and its result never ends in a companion suffix, so no two events
+/// share an instrument name and no event's own instrument can be confused with another event's
+/// companion. Ref: `nm_otel` docs/design.md, "Metric mapping".
+///
+/// Ordinary names pass through unchanged. Only names that already look like a companion name —
+/// ending in `_sum` or `_bucket`, optionally followed by further underscores — are shifted out
+/// of the companion name space by one appended underscore. That shift maps such a name onto
+/// another name of the same shape, so it never lands on a name used by any other event.
+fn instrument_base_name(event_name: &EventName) -> EventName {
+    if has_companion_shape(event_name) {
+        Cow::Owned(format!("{event_name}{NAME_SEPARATOR}"))
+    } else {
+        // Cloning a borrowed event name costs nothing, so ordinary names reach OpenTelemetry
+        // without an allocation.
+        event_name.clone()
+    }
+}
+
+/// Reports whether a name belongs to the family that [`instrument_base_name`] shifts.
+///
+/// Trailing underscores are removed first because appending the escape to an already-shifted
+/// name has to be recognized as the same family, which is what keeps repeated shifts injective.
+fn has_companion_shape(name: &str) -> bool {
+    let stem = name.trim_end_matches(NAME_SEPARATOR);
+    stem.ends_with(SUM_SUFFIX) || stem.ends_with(BUCKET_SUFFIX)
+}
+
 /// Formats a bucket bound for the `le` attribute.
 ///
 /// The terminal `Magnitude::MAX` bucket is the plus-infinity bucket (the overflow bucket for
@@ -231,6 +267,8 @@ fn format_bucket_bound(magnitude: Magnitude) -> Arc<str> {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::collections::HashSet;
+
     use nm::{EventMetrics, Histogram};
     use opentelemetry::metrics::MeterProvider;
     use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData, ResourceMetrics};
@@ -296,6 +334,24 @@ mod tests {
             }
         }
         None
+    }
+
+    /// Counts how many exported metrics carry `name`.
+    ///
+    /// The mapping publishes at most one instrument per name, so a higher count means two
+    /// events, or an event and another event's companion, were given the same metric identity.
+    fn metric_count(metrics: &[ResourceMetrics], name: &str) -> usize {
+        let mut count = 0_usize;
+        for resource_metrics in metrics {
+            for scope_metrics in resource_metrics.scope_metrics() {
+                for metric in scope_metrics.metrics() {
+                    if metric.name() == name {
+                        count = count.saturating_add(1);
+                    }
+                }
+            }
+        }
+        count
     }
 
     #[test]
@@ -600,5 +656,187 @@ mod tests {
         // Verify the histogram state is unchanged (same cumulative values).
         let event_state = state.event_state(&"test_event".into());
         assert_eq!(event_state.histogram_buckets, vec![5, 15, 17]);
+    }
+
+    #[test]
+    fn instrument_base_name_preserves_ordinary_names() {
+        // Ordinary names, plus every near-miss of the shift rule: a bare suffix word, a
+        // suffix word glued on without the separator, a suffix word that is not final, and
+        // a trailing underscore with no suffix word before it.
+        for name in [
+            "http_requests",
+            "checksum",
+            "bucket",
+            "sum",
+            "latency_sum_count",
+            "latency_",
+        ] {
+            assert_eq!(instrument_base_name(&name.into()), name);
+        }
+    }
+
+    #[test]
+    fn instrument_base_name_shifts_companion_shaped_names() {
+        for (event_name, expected) in [
+            ("latency_sum", "latency_sum_"),
+            ("latency_bucket", "latency_bucket_"),
+            ("latency_sum_", "latency_sum__"),
+            ("latency_bucket___", "latency_bucket____"),
+            ("_sum", "_sum_"),
+        ] {
+            assert_eq!(instrument_base_name(&event_name.into()), expected);
+        }
+    }
+
+    #[test]
+    fn instrument_names_never_collide_between_events() {
+        // Every event name that can interact with the suffix rule: an ordinary event, its own
+        // companion names used as event names, the shifted forms of those, a companion word
+        // that is not final, a name whose companion is itself companion-shaped, and a name
+        // that merely ends in one of the suffix words.
+        const EVENT_NAMES: [&str; 9] = [
+            "latency",
+            "latency_sum",
+            "latency_bucket",
+            "latency_sum_",
+            "latency_bucket_",
+            "latency_sum_sum",
+            "latency_",
+            "latency__sum",
+            "checksum",
+        ];
+
+        let mut instrument_names = Vec::new();
+        for event_name in EVENT_NAMES {
+            let base = instrument_base_name(&event_name.into());
+            instrument_names.push(format!("{base}{SUM_SUFFIX}"));
+            instrument_names.push(format!("{base}{BUCKET_SUFFIX}"));
+            instrument_names.push(base.into_owned());
+        }
+
+        let distinct: HashSet<&String> = instrument_names.iter().collect();
+        assert_eq!(distinct.len(), instrument_names.len());
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
+    )]
+    fn export_report_separates_event_named_like_sum_companion() {
+        const BASE_EVENT: &str = "latency";
+        const BASE_COUNT: u64 = 7;
+        const BASE_SUM: Magnitude = 700;
+        const COLLIDING_EVENT: &str = "latency_sum";
+        const COLLIDING_COUNT: u64 = 3;
+        const COLLIDING_SUM: Magnitude = 300;
+
+        let (provider, reader) = create_test_provider();
+        let meter = provider.meter("test");
+
+        let mut state = CollectionState::new();
+        let mut instruments = InstrumentRegistry::new(meter);
+
+        let report = Report::fake(vec![
+            EventMetrics::fake(BASE_EVENT, BASE_COUNT, BASE_SUM, None),
+            EventMetrics::fake(COLLIDING_EVENT, COLLIDING_COUNT, COLLIDING_SUM, None),
+        ]);
+
+        export_report(&report, &mut state, &mut instruments);
+
+        let metrics = collect_metrics(&reader);
+
+        // The base event keeps its unshifted names, so its sum gauge owns `latency_sum`.
+        assert_eq!(counter_value(&metrics, BASE_EVENT, None), Some(BASE_COUNT));
+        assert_eq!(gauge_value(&metrics, "latency_sum"), Some(BASE_SUM));
+
+        // The colliding event is shifted out of that name space and keeps its own values,
+        // reported under the counter and gauge aggregations its metrics call for.
+        assert_eq!(
+            counter_value(&metrics, "latency_sum_", None),
+            Some(COLLIDING_COUNT)
+        );
+        assert_eq!(
+            gauge_value(&metrics, "latency_sum__sum"),
+            Some(COLLIDING_SUM)
+        );
+
+        // One instrument per name means the gauge and the counter were never merged.
+        for name in ["latency", "latency_sum", "latency_sum_", "latency_sum__sum"] {
+            assert_eq!(metric_count(&metrics, name), 1);
+        }
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
+    )]
+    fn export_report_separates_event_named_like_bucket_companion() {
+        const BASE_EVENT: &str = "latency";
+        const BASE_COUNT: u64 = 9;
+        const BASE_SUM: Magnitude = 900;
+        static BASE_BUCKETS: &[Magnitude] = &[10, 50];
+        const BASE_PLUS_INFINITY_BUCKET_COUNT: u64 = 2;
+        const COLLIDING_EVENT: &str = "latency_bucket";
+        const COLLIDING_COUNT: u64 = 4;
+        const COLLIDING_SUM: Magnitude = 400;
+
+        let (provider, reader) = create_test_provider();
+        let meter = provider.meter("test");
+
+        let mut state = CollectionState::new();
+        let mut instruments = InstrumentRegistry::new(meter);
+
+        let histogram = Histogram::fake(BASE_BUCKETS, vec![5, 2], BASE_PLUS_INFINITY_BUCKET_COUNT);
+        let report = Report::fake(vec![
+            EventMetrics::fake(BASE_EVENT, BASE_COUNT, BASE_SUM, Some(histogram)),
+            EventMetrics::fake(COLLIDING_EVENT, COLLIDING_COUNT, COLLIDING_SUM, None),
+        ]);
+
+        export_report(&report, &mut state, &mut instruments);
+
+        let metrics = collect_metrics(&reader);
+
+        // The base event keeps its unshifted names, so its bucket counter owns
+        // `latency_bucket` and reports one cumulative series per bound.
+        assert_eq!(counter_value(&metrics, BASE_EVENT, None), Some(BASE_COUNT));
+        assert_eq!(gauge_value(&metrics, "latency_sum"), Some(BASE_SUM));
+        assert_eq!(
+            counter_value(&metrics, "latency_bucket", Some("10")),
+            Some(5)
+        );
+        assert_eq!(
+            counter_value(&metrics, "latency_bucket", Some("50")),
+            Some(7)
+        );
+        assert_eq!(
+            counter_value(&metrics, "latency_bucket", Some("+Inf")),
+            Some(BASE_COUNT)
+        );
+
+        // The bucket counter carries an `le` attribute on every series, so the colliding
+        // event's attribute-free count cannot hide inside it.
+        assert_eq!(counter_value(&metrics, "latency_bucket", None), None);
+
+        // The colliding event is shifted out of that name space and keeps its own values.
+        assert_eq!(
+            counter_value(&metrics, "latency_bucket_", None),
+            Some(COLLIDING_COUNT)
+        );
+        assert_eq!(
+            gauge_value(&metrics, "latency_bucket__sum"),
+            Some(COLLIDING_SUM)
+        );
+
+        for name in [
+            "latency",
+            "latency_sum",
+            "latency_bucket",
+            "latency_bucket_",
+            "latency_bucket__sum",
+        ] {
+            assert_eq!(metric_count(&metrics, name), 1);
+        }
     }
 }
