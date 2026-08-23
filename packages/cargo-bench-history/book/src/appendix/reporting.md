@@ -17,10 +17,11 @@ matters more than a 40% regression in a rarely-used one is a judgment about your
 the tool does not have the information to make it. It sorts by the one quantity it can
 measure, and leaves the ranking of importance to you.
 
-Note in particular that findings carry **no** confidence score to sort by. Every reported
-finding already cleared its test, so any such number would be uniformly high and would rank
-almost nothing — see
-[Detection](detection.md#history-chance-levels-not-a-confidence-score).
+Note in particular that history findings carry **no** confidence score to sort by. Every
+reported history finding already cleared its test, so any such number would be uniformly high
+and would rank almost nothing — see
+[Detection](detection.md#history-chance-levels-not-a-confidence-score). Branch findings report
+an observed range plus report-wide historical context instead of a probability score.
 
 ## Reading a finding
 

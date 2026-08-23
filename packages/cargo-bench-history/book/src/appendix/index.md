@@ -50,7 +50,7 @@ shape of the whole:
 | [Reconstruction](reconstruction.md) | A series is ordered by git topology, never by when it was measured. |
 | [Detection](detection.md) | History candidates carry selection-adjusted chance levels; branch candidates name an excursion beyond the observed current-base range. |
 | [Noise gates](gates.md) | A reported move is larger than what the measurement itself manufactures. |
-| [Multiplicity control](coverage.md) | A reported move is unlikely to be an accident of how many things were tested. |
+| [Multiplicity control](coverage.md) | History: a reported move is unlikely to be an accident of how many things were tested. Branch: the complete report is compared with historical base turns. |
 | [Reporting](reporting.md) | What was *not* judged is disclosed as prominently as what was. |
 
 The correction for trying many possible history change points is part of **Detection**, not a
