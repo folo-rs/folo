@@ -58,7 +58,7 @@ pub use linux::*;
 main!(
     config = LibraryBenchmarkConfig::default().tool(
         Callgrind::default()
-            .args(["--branch-sim=yes"])
+            .args(["--branch-sim=yes", "--collect-bus=yes"])
             .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
     ),
     library_benchmark_groups = timestamp_capture

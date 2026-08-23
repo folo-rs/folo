@@ -180,10 +180,14 @@ contents (see next section).
 
 Every `_cg.rs` target uses the same baseline Callgrind configuration:
 
-* Pass `--branch-sim=yes` to enable the branch predictor simulation.
+* Pass `--branch-sim=yes` to enable the branch predictor simulation. Callgrind
+  disables this simulation by default.
+* Pass `--collect-bus=yes` to count global bus events (`Ge`), which represent
+  atomic instructions. Callgrind disables this counter by default.
 * Format both `CallgrindMetrics::Default` and `CallgrindMetrics::BranchSim`.
   The default metrics provide instruction, cache, and estimated-cycle data;
-  the branch metrics make changes in control-flow behavior visible.
+  the branch metrics make changes in control-flow behavior visible. The default
+  metrics include `Ge` when bus-event collection is enabled.
 
 Keep this baseline identical across packages so benchmark output remains
 comparable and repository tooling can treat every target uniformly. Additional
@@ -191,11 +195,8 @@ Callgrind arguments are permitted only when a package has a documented
 measurement requirement that the baseline does not satisfy. Document each
 exception both here and beside the benchmark configuration.
 
-The current exception is `events_once_ops_cg`, which also passes
-`--collect-bus=yes`. Its local and thread-safe variants differ in atomic
-read-modify-write operations, and the resulting global bus event (`Ge`) makes
-that distinction visible. This remains an instruction count; it does not model
-contention or memory-ordering cost.
+Global bus events are instruction counts, not measurements of contention or
+memory-ordering cost.
 
 ### Bench file template
 
@@ -242,7 +243,7 @@ use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig, main};
 main!(
     config = LibraryBenchmarkConfig::default().tool(
         Callgrind::default()
-            .args(["--branch-sim=yes"])
+            .args(["--branch-sim=yes", "--collect-bus=yes"])
             .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
     ),
     library_benchmark_groups = my_group
