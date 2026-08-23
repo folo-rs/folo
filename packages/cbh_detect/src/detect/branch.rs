@@ -307,10 +307,13 @@ fn select_regime(series: &Series) -> RegimeSelection {
         else {
             break;
         };
-        if change.adjusted_p >= search_alpha
-            || !supported_boundary(series.kind, &values, change.index, change.superiority)
-        {
+        if change.adjusted_p >= search_alpha {
             break;
+        }
+        if !supported_boundary(series.kind, &values, change.index, change.superiority) {
+            // Skip the unsupported boundary and keep searching later suffixes.
+            selector_start = selector_start.saturating_add(change.index);
+            continue;
         }
         let split_after = suffix
             .get(change.index)
@@ -1423,6 +1426,19 @@ mod tests {
 
         assert_eq!(selection.current_start, 0);
         assert_eq!(selection.boundary_commit, None);
+    }
+
+    #[test]
+    fn an_unsupported_split_does_not_prevent_searching_for_a_later_supported_one() {
+        let mut base = vec![100.0; 20];
+        base.extend(std::iter::repeat_n(104.0, 20));
+        base.extend(std::iter::repeat_n(130.0, 10));
+        let one = series("later-supported-split", "m1", &base, 130.0);
+        let selection = select_regime(&one);
+
+        assert_eq!(selection.current_start, 40);
+        assert_eq!(selection.boundary_commit.as_deref(), Some("c40"));
+        assert!(!selection.unresolved);
     }
 
     #[test]

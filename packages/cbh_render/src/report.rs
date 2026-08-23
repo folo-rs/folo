@@ -811,8 +811,8 @@ fn historical_comparison_text(comparison: Option<&BranchComparison>, has_finding
     };
     if !has_findings {
         return format!(
-            "The branch stayed within every observed base range in this comparison ({} series \
-             and {} comparable base commits).",
+            "The branch produced no reportable out-of-range movement in this comparison ({} \
+             series and {} comparable base commits).",
             comparison.series, comparison.evaluated_base_commits,
         );
     }
@@ -2590,7 +2590,7 @@ mod tests {
         let text = render(&input, ReportFormat::Text, false);
         assert!(
             text.contains(
-                "The branch stayed within every observed base range in this comparison \
+                "The branch produced no reportable out-of-range movement in this comparison \
                  (1 series and 10 comparable base commits)."
             ),
             "{text}"
@@ -2609,7 +2609,7 @@ mod tests {
         assert!(markdown.contains("Not judged: 1 series"), "{markdown}");
         assert!(
             markdown.contains(
-                "The branch stayed within every observed base range in this comparison \
+                "The branch produced no reportable out-of-range movement in this comparison \
                  (1 series and 10 comparable base commits)."
             ),
             "{markdown}"
@@ -2618,7 +2618,7 @@ mod tests {
         let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
         assert!(
             summary.contains(
-                "The branch stayed within every observed base range in this comparison \
+                "The branch produced no reportable out-of-range movement in this comparison \
                  (1 series and 10 comparable base commits)."
             ),
             "{summary}"

@@ -22,7 +22,8 @@ a threshold to make the decision observable.
 Branch analysis is a dedicated all-series path rather than another independent per-series
 detector. Per-series preparation remains parallel: it applies the base blessing boundary,
 alternates chronologically ordered observed levels between selector and reference lanes, locates
-the latest supported regime using only selectors, and evaluates the context value against the
+the latest supported regime using only selectors, skipping unsupported candidate boundaries and
+evaluating the context value against the
 resulting observed range. The branch tip itself is first collapsed to one observation per commit,
 preferring the dirty snapshot lane when present, so a commit with repeated measurements does not
 depend on storage order. Alternating observations rather than raw topology coordinates preserves
