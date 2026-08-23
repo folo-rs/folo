@@ -122,7 +122,7 @@ test touching the real filesystem/process/runtime/wall-clock or the network emul
 
 **Faker (test-support engine).** End-to-end tests launch the standalone
 **`cargo-bench-history-faker` lib+bin package** — a stand-in benchmark engine. It is a
-published-but-unsupported crate (`#![doc(hidden)]`, no stable API/CLI); the workspace consumes
+published-but-unsupported crate (`#![cfg_attr(docsrs, doc(hidden))]`, no stable API/CLI); the workspace consumes
 its `binary_path()` locator behind the `private-test-util` feature, so `cargo install
 cargo-bench-history` still places only the one real binary on PATH. Tests resolve the binary via
 `cargo_bench_history_faker::binary_path()`; every `just` recipe that runs the suite under nextest

@@ -13,9 +13,9 @@
 //! published only so sibling repositories can run the binary (and, via
 //! `cargo binstall`, fetch a prebuilt one) without vendoring it.
 //!
-//! The whole crate root is `#[doc(hidden)]` to keep this unsupported surface out of
-//! the rendered documentation.
-#![doc(hidden)]
+//! The whole crate root is `#[cfg_attr(docsrs, doc(hidden))]` to keep this unsupported
+//! surface out of the rendered docs.rs documentation.
+#![cfg_attr(docsrs, doc(hidden))]
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 // This crate is test-support scaffolding — a synthetic benchmark-output generator
 // driven by in-workspace tests and by the published binary. Its code carries no

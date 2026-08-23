@@ -13,6 +13,16 @@ rust-version.workspace = true
 [package.metadata.docs.rs]
 all-features = true
 
+# Baseline of external types intentionally exposed in the public API. Any new
+# external type must be reviewed and added explicitly.
+# Ref: docs/external-types.md.
+[package.metadata.cargo_check_external_types]
+allowed_external_types = [
+    "nm_impl::data_types::Magnitude",
+    "opentelemetry::metrics::meter::MeterProvider",
+    "tick::clock::Clock",
+]
+
 # These dev-dependencies are consumed only by `[[bench]]` entries that declare
 # `required-features = ["private-test-util"]`. When udeps runs without
 # `--all-features`, the benches are skipped, so the dev-deps appear unused.
