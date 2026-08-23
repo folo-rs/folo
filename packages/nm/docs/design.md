@@ -1,8 +1,8 @@
 # nm design
 
 `nm` collects event metrics with low observation overhead in highly concurrent
-applications. The API favors integer measurements and thread-local event handles so
-instrumentation can remain practical on frequently executed paths.
+applications. The API accepts event magnitudes only as integers and uses thread-local event
+handles to minimize observation-path overhead.
 
 ## Events and observations
 
