@@ -57,5 +57,15 @@ name = "nm_push_bulk"
 harness = false
 
 [[bench]]
+name = "nm_rendering"
+harness = false
+required-features = ["private-test-util"]
+
+[[bench]]
+name = "nm_rendering_cg"
+harness = false
+required-features = ["private-test-util"]
+
+[[bench]]
 name = "nm_performance_cg"
 harness = false

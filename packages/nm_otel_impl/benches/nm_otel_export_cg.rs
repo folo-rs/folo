@@ -37,17 +37,18 @@ main!(
             .args(["--branch-sim=yes", "--collect-bus=yes"])
             .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
     ),
-    library_benchmark_groups = export
+    library_benchmark_groups = [export, delta]
 );
 
 #[cfg(target_os = "linux")]
 mod linux {
     use std::hint::black_box;
+    use std::iter;
 
     use gungraun::prelude::*;
     use nm::{EventMetrics, Histogram, Magnitude, Report};
     use nm_otel::Publisher;
-    use nm_otel_impl::create_test_provider;
+    use nm_otel_impl::{EventState, create_test_provider};
     use tick::Clock;
 
     // A stable synthetic name avoids introducing registry-dependent setup.
@@ -196,6 +197,18 @@ mod linux {
         run_export(inputs)
     }
 
+    #[library_benchmark]
+    #[bench::default(setup_delta(LOW_CARDINALITY_BUCKET_BOUNDS))]
+    fn delta_low_bucket_cardinality_positive_delta(inputs: DeltaInputs) -> DeltaInputs {
+        run_delta(inputs)
+    }
+
+    #[library_benchmark]
+    #[bench::default(setup_delta(HIGH_CARDINALITY_BUCKET_BOUNDS))]
+    fn delta_high_bucket_cardinality_positive_delta(inputs: DeltaInputs) -> DeltaInputs {
+        run_delta(inputs)
+    }
+
     library_benchmark_group!(
         name = export,
         benchmarks = [
@@ -204,4 +217,58 @@ mod linux {
             export_high_bucket_cardinality_positive_delta
         ]
     );
+
+    library_benchmark_group!(
+        name = delta,
+        benchmarks = [
+            delta_low_bucket_cardinality_positive_delta,
+            delta_high_bucket_cardinality_positive_delta
+        ]
+    );
+
+    /// Carries warm delta state and the next collection's non-cumulative bucket counts.
+    #[derive(Debug)]
+    struct DeltaInputs {
+        state: EventState,
+        bucket_bounds: &'static [Magnitude],
+        counts: Vec<u64>,
+    }
+
+    fn setup_delta(bucket_bounds: &'static [Magnitude]) -> DeltaInputs {
+        let mut state = EventState::default();
+        let bucket_count = bucket_bounds
+            .len()
+            .checked_add(1)
+            .expect("the benchmark bucket count fits in usize");
+        let initial_counts = vec![WARM_PER_BUCKET_COUNT; bucket_count];
+        _ = state
+            .histogram_deltas(
+                bucket_bounds
+                    .iter()
+                    .copied()
+                    .chain(iter::once(Magnitude::MAX)),
+                initial_counts,
+            )
+            .count();
+
+        DeltaInputs {
+            state,
+            bucket_bounds,
+            counts: vec![POSITIVE_DELTA_PER_BUCKET_COUNT; bucket_count],
+        }
+    }
+
+    fn run_delta(mut inputs: DeltaInputs) -> DeltaInputs {
+        for delta in inputs.state.histogram_deltas(
+            inputs
+                .bucket_bounds
+                .iter()
+                .copied()
+                .chain(iter::once(Magnitude::MAX)),
+            black_box(&inputs.counts).iter().copied(),
+        ) {
+            black_box(delta);
+        }
+        inputs
+    }
 }
