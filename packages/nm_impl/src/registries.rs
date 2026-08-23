@@ -4,7 +4,14 @@ use std::rc::Rc;
 use std::sync::{Arc, LazyLock, PoisonError, RwLock};
 use std::thread::{self, ThreadId};
 
-use crate::{ERR_POISONED_LOCK, EventName, HashMap, ObservationBagSync};
+use crate::{EventName, HashMap, ObservationBagSync};
+
+// Registry code validates every expected failure before mutation and never invokes caller code
+// while holding a write guard, so a poisoned registry lock indicates an internal invariant failure.
+const ERR_POISONED_REGISTRY_LOCK: &str = concat!(
+    "registry write paths release their locks before propagating expected panics, so the lock ",
+    "cannot be poisoned during supported operation"
+);
 
 /// Maps each event name to the shared observation storage that records that event within one
 /// scope. A scope is either a single thread's live registrations or one compatible slice of the
@@ -108,7 +115,7 @@ impl GlobalEventRegistry {
         let outcome = 'register: {
             // Most likely the thread is already registered, so we try being optimistic.
             {
-                let state = self.state.read().expect(ERR_POISONED_LOCK);
+                let state = self.state.read().expect(ERR_POISONED_REGISTRY_LOCK);
 
                 if let Some(thread_bags) = state.thread_observation_bags.get(&thread_id) {
                     break 'register register_core(name, observation_bag, thread_bags);
@@ -116,7 +123,7 @@ impl GlobalEventRegistry {
             }
 
             // The thread was not registered. Let us register it now.
-            let mut state = self.state.write().expect(ERR_POISONED_LOCK);
+            let mut state = self.state.write().expect(ERR_POISONED_REGISTRY_LOCK);
 
             let thread_bags = state
                 .thread_observation_bags
@@ -177,10 +184,10 @@ impl GlobalEventRegistry {
     /// This takes read locks, so the callback must not attempt to perform any operations
     /// that may want to register new events, under threat of deadlock.
     pub(crate) fn inspect(&self, mut f: impl FnMut(&ObservationBagMap)) {
-        let state = self.state.read().expect(ERR_POISONED_LOCK);
+        let state = self.state.read().expect(ERR_POISONED_REGISTRY_LOCK);
 
         for thread_bags in state.thread_observation_bags.values() {
-            let bags = thread_bags.read().expect(ERR_POISONED_LOCK);
+            let bags = thread_bags.read().expect(ERR_POISONED_REGISTRY_LOCK);
 
             // We do not want to make a useless callback for an empty map but we know that these
             // maps are lazy-registered, so we know that if it exists, it is non-empty.
@@ -239,7 +246,7 @@ fn register_core(
     observation_bag: Arc<ObservationBagSync>,
     thread_bags: &RwLock<ObservationBagMap>,
 ) -> Result<(), EventName> {
-    let mut bags = thread_bags.write().expect(ERR_POISONED_LOCK);
+    let mut bags = thread_bags.write().expect(ERR_POISONED_REGISTRY_LOCK);
 
     if bags.contains_key(&name) {
         return Err(name);
