@@ -1409,7 +1409,8 @@ pub async fn find_changes_spawned(
 /// This is the single definition of what "judged" means: detection consults it to
 /// decide whether to evaluate a series at all, the census counts its answers, and the
 /// false-discovery family is exactly the series it calls
-/// [`Judged`](Testability::Judged).
+/// [`Judged`](Testability::Judged). Branch mode reuses the branch detector's final
+/// verdict, so unresolved current-base regimes stay unjudged everywhere that matters.
 #[must_use]
 pub fn testability(series: &Series, context: &AnalysisContext) -> Testability {
     match context.mode {
@@ -1426,29 +1427,7 @@ pub fn testability(series: &Series, context: &AnalysisContext) -> Testability {
             }
         }
 
-        AnalysisMode::Branch => {
-            if series
-                .points
-                .last()
-                .is_none_or(|point| point.topo_index != context.tip_index)
-            {
-                return Testability::Unjudged(UnjudgedReason::NotMeasuredOnBranch);
-            }
-            // Testability asks whether the post-blessing recent base window contains
-            // enough evidence to run a branch comparison at all.
-            let base_points = series
-                .base_window
-                .len()
-                .min(noise_gates::MAX_BRANCH_BASE_COMMITS);
-            if base_points < noise_gates::MIN_SERIES_POINTS {
-                return Testability::Unjudged(if series.blessing.is_some() {
-                    UnjudgedReason::TooFewBaseCommitsSinceBlessing
-                } else {
-                    UnjudgedReason::TooFewBaseCommits
-                });
-            }
-            Testability::Judged
-        }
+        AnalysisMode::Branch => branch::testability(series, context),
     }
 }
 
@@ -3349,6 +3328,23 @@ mod tests {
         assert_eq!(
             testability(&branch, &context),
             Testability::Unjudged(UnjudgedReason::TooFewBaseCommitsSinceBlessing)
+        );
+
+        let mut unresolved_values = vec![100.0; 36];
+        unresolved_values.extend(std::iter::repeat_n(200.0, 4));
+        unresolved_values.push(220.0);
+        let unresolved_branch = examples::with_base_window(series_of(&unresolved_values), 39);
+        let unresolved_context = examples::branch_context(&unresolved_branch, 39);
+        assert_eq!(
+            testability(&unresolved_branch, &unresolved_context),
+            Testability::Unjudged(UnjudgedReason::CurrentBaseRegimeUnresolved)
+        );
+        let detection = find_changes(slice::from_ref(&unresolved_branch), &unresolved_context);
+        assert_eq!(detection.census.judged(), 0);
+        assert_eq!(detection.census.unjudged(), 1);
+        assert_eq!(
+            detection.branch_trace.series[0].unresolved,
+            Some(UnjudgedReason::CurrentBaseRegimeUnresolved)
         );
     }
 

@@ -56,10 +56,11 @@ Benjamini–Hochberg filter.
 
 History-mode change-point calibration needs the size of the later false-discovery family before
 it can choose its analytic acceptance boundary and permutation precision. Detection therefore
-begins with a serial, metadata-only testability prepass that builds the census and obtains its
-judged count. Workers evaluate the same pure predicate to short-circuit unjudged series, then run
-each judged series independently. The expensive statistical work remains inside the existing
-per-series worker chunks; only the cheap classification pass is serial.
+begins with a serial testability prepass that builds the census and obtains its judged count.
+The same verdict also governs branch mode, including unresolved current-base regimes, so the
+census, the detector, and the verbose diagnostics stay aligned. Workers then run each judged
+series independently. The expensive statistical work remains inside the existing per-series
+worker chunks; only the cheap classification pass is serial.
 
 Permutation-independent magnitude and noise gates run before selection adjustment. The detector
 also fits the drift before calibration and calibrates a step only when that model fits at least as

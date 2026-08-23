@@ -118,7 +118,7 @@ flowchart TD
   FIN["finalize"] --> FLAT["flatten to a series list"]
   FLAT --> SS["sort series, then sort each series' points by topology\n— serial —"]
   SS --> MODE{"analysis mode"}
-  MODE -->|history| CENSUS["classify testability + size family\n— serial metadata prepass —"]
+  MODE -->|history| CENSUS["classify testability + size family\n— serial shared verdict prepass —"]
   CENSUS --> HD["detect + bounded calibration\n— one series chunk per worker —"]
   HD --> BH["Benjamini-Hochberg filter\n— serial —"]
   MODE -->|branch| BP["select regimes + evaluate tip ranges\n— one series chunk per worker —"]
@@ -138,9 +138,11 @@ strictly outside that regime's observed range.
 
 History's false-discovery family is every series that was **testable**, including those that raised
 no candidate (DESIGN.md, “Multiple-comparison discipline”). A cheap serial prepass evaluates the
-testability predicate, builds the **series census**, and makes the family size available before
-statistical work starts. This ordering is required because history change-point calibration uses
-that size to choose bounded permutation precision and its analytic acceptance boundary.
+shared testability verdict, builds the **series census**, and makes the family size available before
+statistical work starts. In branch mode, that same verdict also decides whether the current base
+regime is resolved enough to compare the tip at all. This ordering is required because history
+change-point calibration uses that size to choose bounded permutation precision and its analytic
+acceptance boundary.
 
 Branch mode does not produce per-series p-values and does not enter the history-mode
 Benjamini–Hochberg pass. Its workers return prepared range evaluations and regime provenance. A

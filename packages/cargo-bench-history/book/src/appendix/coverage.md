@@ -108,8 +108,9 @@ silently changing what was observed.
 ## What a report judged
 
 The same testability decision that builds history's correction family and branch mode's eligible
-series drives the report's coverage line. The analysis and the report therefore cannot disagree
-about whether a series was judged.
+series drives the report's coverage line. In branch mode, that verdict includes unresolved
+current-base regimes, so the analysis and the report cannot disagree about whether a series was
+judged.
 
 Every report states it — the coverage line in the text and Markdown output, and the full census
 in the JSON, on every `analyze` run. How each format presents it is the

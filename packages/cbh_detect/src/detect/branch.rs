@@ -75,6 +75,12 @@ struct RegimeSelection {
     unresolved: bool,
 }
 
+/// The branch-mode verdict that both detection and testability consume.
+struct BranchJudgment<'a> {
+    tip_points: &'a [SeriesPoint],
+    selection: RegimeSelection,
+}
+
 /// Runs branch analysis sequentially.
 #[cfg(any(test, feature = "private-test-util"))]
 pub(crate) fn find_changes(series: &[Series], context: &AnalysisContext) -> Detection {
@@ -110,6 +116,15 @@ pub(crate) async fn find_changes_spawned(
         entries.extend(handle.await);
     }
     finish(&series, entries, &context)
+}
+
+/// Shares the branch-mode verdict between the public testability check and the
+/// detector's preparation path.
+pub(crate) fn testability(series: &Series, context: &AnalysisContext) -> Testability {
+    match branch_judgment(series, context) {
+        Ok(_) => Testability::Judged,
+        Err(reason) => Testability::Unjudged(reason),
+    }
 }
 
 /// Evaluates one series with the same branch evaluator production uses.
@@ -179,10 +194,6 @@ fn prepare_series(
         noise_band_passed: None,
         included_in_historical_comparison: false,
     };
-
-    let Some(tip_points) = latest_context_points(&series.points, context.tip_index) else {
-        return unjudged(trace, UnjudgedReason::NotMeasuredOnBranch);
-    };
     let enough_base = series.base_window.len() >= noise_gates::MIN_SERIES_POINTS;
     log.stage(GateStage::Branch).numeric(
         Gate::MinBaseCommits,
@@ -190,28 +201,19 @@ fn prepare_series(
         count_to_f64(noise_gates::MIN_SERIES_POINTS),
         enough_base,
     );
-    if !enough_base {
-        let reason = if series.blessing.is_some() {
-            UnjudgedReason::TooFewBaseCommitsSinceBlessing
-        } else {
-            UnjudgedReason::TooFewBaseCommits
-        };
-        return unjudged(trace, reason);
-    }
-
-    let selection = select_regime(series);
-    if selection.unresolved {
-        return unjudged(trace, UnjudgedReason::CurrentBaseRegimeUnresolved);
-    }
+    let judgment = match branch_judgment(series, context) {
+        Ok(judgment) => judgment,
+        Err(reason) => return unjudged(trace, reason),
+    };
     let current = series
         .base_window
-        .get(selection.current_start..)
+        .get(judgment.selection.current_start..)
         .unwrap_or_default();
     let references: Vec<Observation> = current.iter().map(observation_of_level).collect();
-    let tip = observation_of_points(tip_points);
+    let tip = observation_of_points(judgment.tip_points);
     let actual = evaluate_excursion(series.kind, tip, &references, log);
     let current_range = range_of(current.iter().map(|level| level.value));
-    let current_regime_start = selection.boundary_commit.or_else(|| {
+    let current_regime_start = judgment.selection.boundary_commit.or_else(|| {
         series
             .blessing
             .as_ref()
@@ -220,7 +222,7 @@ fn prepare_series(
 
     trace.current_regime_start = current.first().map(|level| level.topo_index);
     trace.current_range = current_range;
-    trace.previous_range = selection.previous_range;
+    trace.previous_range = judgment.selection.previous_range;
     trace.reference_count = actual.reference_count;
     trace.branch_relation = actual.relation;
     trace.relative_floor_passed = actual.relative_floor_passed;
@@ -231,11 +233,12 @@ fn prepare_series(
     PreparedEntry {
         prepared: Some(PreparedSeries {
             source_index,
-            current_start: selection.current_start,
-            previous_range: selection.previous_range,
+            current_start: judgment.selection.current_start,
+            previous_range: judgment.selection.previous_range,
             current_regime_start,
             tip,
-            tip_commit: tip_points
+            tip_commit: judgment
+                .tip_points
                 .first()
                 .and_then(|point| point.commit.as_deref().map(str::to_owned)),
             stable_for_comparison: regime_is_stable(current),
@@ -253,6 +256,30 @@ fn unjudged(mut trace: BranchSeriesTrace, reason: UnjudgedReason) -> PreparedEnt
         unjudged: Some(reason),
         trace,
     }
+}
+
+fn branch_judgment<'a>(
+    series: &'a Series,
+    context: &AnalysisContext,
+) -> Result<BranchJudgment<'a>, UnjudgedReason> {
+    let Some(tip_points) = latest_context_points(&series.points, context.tip_index) else {
+        return Err(UnjudgedReason::NotMeasuredOnBranch);
+    };
+    if series.base_window.len() < noise_gates::MIN_SERIES_POINTS {
+        return Err(if series.blessing.is_some() {
+            UnjudgedReason::TooFewBaseCommitsSinceBlessing
+        } else {
+            UnjudgedReason::TooFewBaseCommits
+        });
+    }
+    let selection = select_regime(series);
+    if selection.unresolved {
+        return Err(UnjudgedReason::CurrentBaseRegimeUnresolved);
+    }
+    Ok(BranchJudgment {
+        tip_points,
+        selection,
+    })
 }
 
 fn select_regime(series: &Series) -> RegimeSelection {

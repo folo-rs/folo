@@ -315,7 +315,7 @@ where
     };
     reporter.timing(detection_stage, detect_started.elapsed());
     note_branch_evaluation(reporter, &branch_trace);
-    note_series_census(reporter, &series, &context, &census, &branch_trace);
+    note_series_census(reporter, &series, &context, &census);
     let regressions = findings
         .iter()
         .filter(|finding| finding.is_regression())
@@ -446,18 +446,10 @@ fn note_series_census<R: Reporter + ?Sized>(
     series: &[Series],
     context: &AnalysisContext,
     census: &SeriesCensus,
-    branch_trace: &BranchEvaluationTrace,
 ) {
     reporter.if_enabled(|notes| {
         for one in series {
-            let traced_reason = branch_trace
-                .series
-                .iter()
-                .find(|trace| trace.set == one.set && trace.id == one.id && trace.kind == one.kind)
-                .and_then(|trace| trace.unresolved);
-            let verdict =
-                traced_reason.map_or_else(|| testability(one, context), Testability::Unjudged);
-            let Testability::Unjudged(reason) = verdict else {
+            let Testability::Unjudged(reason) = testability(one, context) else {
                 continue;
             };
             // A blessed series is judged only on what came after the blessing, so name
@@ -1550,7 +1542,13 @@ mod tests {
             39,
         );
         let context = cbh_detect::examples::branch_context(&exact, 39);
+        assert_eq!(
+            testability(&exact, &context),
+            Testability::Unjudged(UnjudgedReason::CurrentBaseRegimeUnresolved)
+        );
         let detection = cbh_detect::find_changes(std::slice::from_ref(&exact), &context);
+        assert_eq!(detection.census.judged(), 0);
+        assert_eq!(detection.census.unjudged(), 1);
         assert_eq!(
             detection.branch_trace.series[0].unresolved,
             Some(UnjudgedReason::CurrentBaseRegimeUnresolved)
@@ -1565,13 +1563,7 @@ mod tests {
         let series = [exact, different_set, different_id, different_kind];
         let reporter = RecordingReporter::new();
 
-        note_series_census(
-            &reporter,
-            &series,
-            &context,
-            &detection.census,
-            &detection.branch_trace,
-        );
+        note_series_census(&reporter, &series, &context, &detection.census);
 
         let recorded_notes = reporter.notes();
         let notes: Vec<&str> = recorded_notes
@@ -1579,12 +1571,22 @@ mod tests {
             .map(String::as_str)
             .filter(|note| note.starts_with("not judging"))
             .collect();
-        assert_eq!(notes.len(), 1, "{notes:?}");
-        assert!(notes[0].contains("exact"), "{notes:?}");
-        assert!(notes[0].contains("m1"), "{notes:?}");
+        assert_eq!(notes.len(), 4, "{notes:?}");
+        for expected in [
+            "exact/case instruction_count in callgrind/t/m1",
+            "exact/case instruction_count in callgrind/t/other",
+            "different instruction_count in callgrind/t/m1",
+            "exact/case conditional_branches in callgrind/t/m1",
+        ] {
+            assert!(
+                notes.iter().any(|note| note.contains(expected)),
+                "{notes:?}"
+            );
+        }
         assert!(
-            notes[0].contains(MetricKind::InstructionCount.as_str()),
-            "{notes:?}"
+            notes
+                .iter()
+                .all(|note| note.contains("current base regime is unresolved"))
         );
     }
 
