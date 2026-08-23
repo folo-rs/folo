@@ -267,16 +267,22 @@ impl Publisher {
         }
     }
 
-    /// Collects and publishes metrics once.
+    fn run_one_iteration(&mut self) {
+        let report = Report::collect();
+        self.export(&report);
+    }
+
+    /// Collects and publishes metrics once for an in-workspace test.
     ///
     /// # Panics
     ///
     /// Panics if nm report collection finds incompatible configurations for the same event, or
     /// if the collection contains a different histogram bucket count from a previous collection.
+    #[cfg(any(test, feature = "private-test-util"))]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     #[doc(hidden)]
-    pub fn run_one_iteration(&mut self) {
-        let report = Report::collect();
-        self.export(&report);
+    pub fn run_one_iteration_for_test(&mut self) {
+        self.run_one_iteration();
     }
 
     /// Publishes the supplied report once.

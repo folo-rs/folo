@@ -2,8 +2,6 @@ use std::fmt::{self, Display, Write};
 use std::num::NonZero;
 use std::{cmp, iter};
 
-use new_zealand::nz;
-
 use crate::{
     EventName, GLOBAL_REGISTRY, GlobalEventRegistry, HashMap, Magnitude, ObservationBagSnapshot,
 };
@@ -510,71 +508,63 @@ const TARGET_HISTOGRAM_BAR_WIDTH_CHARS: u64 = 50;
 /// Ensures that a nonempty histogram remains renderable when its largest bucket is small.
 const MIN_OBSERVATIONS_PER_BAR_CHAR: u64 = 1;
 
-/// Pre-allocated string of histogram bar characters to avoid allocation during rendering.
-/// We make this longer than the typical bar width to handle cases where quantization causes
-/// the bar to exceed the target width.
-const HISTOGRAM_BAR_CHARS: &str =
-    "∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎";
+/// Uses the conventional textual representation for an unbounded upper range.
+const PLUS_INFINITY_BOUND_LABEL: &str = "+inf";
 
-const HISTOGRAM_BAR_CHARS_LEN_BYTES: NonZero<usize> = nz!(HISTOGRAM_BAR_CHARS.len());
+/// Makes relative bucket counts easy to compare in a Unicode-capable terminal.
+const HISTOGRAM_BAR_CHAR: char = '∎';
 
-/// UTF-8 width of each histogram bar character.
-const BYTES_PER_HISTOGRAM_BAR_CHAR: NonZero<usize> = nz!('∎'.len_utf8());
+fn decimal_width(value: u64) -> usize {
+    let width = value
+        .checked_ilog10()
+        .unwrap_or(0)
+        .checked_add(1)
+        .expect("a u64 decimal width fits in u32");
+    usize::try_from(width).expect("a u64 decimal width fits in usize")
+}
+
+fn magnitude_width(value: Magnitude) -> usize {
+    decimal_width(value.unsigned_abs())
+        .checked_add(usize::from(value.is_negative()))
+        .expect("an i64 decimal width fits in usize")
+}
 
 impl Display for Histogram {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let buckets = self.buckets().collect::<Vec<_>>();
+        let (widest_upper_bound, widest_count) = self.buckets().fold(
+            (0, 0),
+            |(upper_bound_width, count_width), (magnitude, count)| {
+                let magnitude_width = if magnitude == Magnitude::MAX {
+                    PLUS_INFINITY_BOUND_LABEL.len()
+                } else {
+                    magnitude_width(magnitude)
+                };
 
-        let mut count_str = String::new();
-
-        let widest_count = buckets.iter().fold(0, |current, &(_, count)| {
-            count_str.clear();
-            write!(&mut count_str, "{count}").expect("writing to a String is infallible");
-            cmp::max(current, count_str.len())
-        });
-
-        let mut upper_bound_str = String::new();
-
-        let widest_upper_bound = buckets.iter().fold(0, |current, &(magnitude, _)| {
-            upper_bound_str.clear();
-
-            if magnitude == Magnitude::MAX {
-                upper_bound_str.push_str("+inf");
-            } else {
-                write!(&mut upper_bound_str, "{magnitude}")
-                    .expect("writing to a String is infallible");
-            }
-
-            cmp::max(current, upper_bound_str.len())
-        });
+                (
+                    cmp::max(upper_bound_width, magnitude_width),
+                    cmp::max(count_width, decimal_width(count)),
+                )
+            },
+        );
 
         let histogram_scale = HistogramScale::new(self);
 
-        for (magnitude, count) in buckets {
-            upper_bound_str.clear();
-
+        for (magnitude, count) in self.buckets() {
             if magnitude == Magnitude::MAX {
-                upper_bound_str.push_str("+inf");
+                write!(
+                    f,
+                    "value <= {PLUS_INFINITY_BOUND_LABEL:>widest_upper_bound$} \
+                     [ {count:>widest_count$} ]: "
+                )?;
             } else {
-                write!(&mut upper_bound_str, "{magnitude}")?;
+                write!(
+                    f,
+                    "value <= {magnitude:>widest_upper_bound$} \
+                     [ {count:>widest_count$} ]: "
+                )?;
             }
 
-            let padding_needed = widest_upper_bound.saturating_sub(upper_bound_str.len());
-            for _ in 0..padding_needed {
-                upper_bound_str.insert(0, ' ');
-            }
-
-            count_str.clear();
-            write!(&mut count_str, "{count}")?;
-
-            let padding_needed = widest_count.saturating_sub(count_str.len());
-            for _ in 0..padding_needed {
-                count_str.insert(0, ' ');
-            }
-
-            write!(f, "value <= {upper_bound_str} [ {count_str} ]: ")?;
             histogram_scale.write_bar(count, f)?;
-
             writeln!(f)?;
         }
 
@@ -616,34 +606,8 @@ impl HistogramScale {
             .checked_div(self.observations_per_char.get())
             .expect("the observations-per-character divisor is nonzero");
 
-        let chars_in_constant = HISTOGRAM_BAR_CHARS_LEN_BYTES
-            .get()
-            .checked_div(BYTES_PER_HISTOGRAM_BAR_CHAR.get())
-            .expect("the histogram bar character width is nonzero");
-        let chars_in_constant = u64::try_from(chars_in_constant)
-            .expect("Rust does not support pointer widths greater than 64 bits");
-
-        let mut remaining = histogram_bar_width;
-
-        while remaining > 0 {
-            let chunk_char_count = NonZero::new(remaining.min(chars_in_constant))
-                .expect("the loop condition and nonempty bar constant guarantee a nonzero chunk");
-            let chunk_char_count_usize = usize::try_from(chunk_char_count.get())
-                .expect("the chunk is bounded by the bar constant's usize character count");
-
-            let byte_end = chunk_char_count_usize
-                .checked_mul(BYTES_PER_HISTOGRAM_BAR_CHAR.get())
-                .expect("the chunk is bounded by the bar constant's byte length");
-
-            #[expect(
-                clippy::string_slice,
-                reason = "The end is a multiple of the known UTF-8 character width."
-            )]
-            f.write_str(&HISTOGRAM_BAR_CHARS[..byte_end])?;
-
-            remaining = remaining
-                .checked_sub(chunk_char_count.get())
-                .expect("the chunk is no larger than the remaining width");
+        for _ in 0..histogram_bar_width {
+            f.write_char(HISTOGRAM_BAR_CHAR)?;
         }
 
         Ok(())
@@ -739,6 +703,13 @@ mod tests {
         for line in output.lines() {
             assert!(line.len() < max_line_bytes);
         }
+    }
+
+    #[test]
+    fn histogram_magnitude_width_accounts_for_digits_and_sign() {
+        // Multiple digits and opposite signs make both parts of the width observable.
+        assert_eq!(magnitude_width(12_345), 5);
+        assert_eq!(magnitude_width(-12_345), 6);
     }
 
     #[test]
@@ -1137,15 +1108,6 @@ mod tests {
             output,
             "∎".repeat(usize::try_from(TARGET_HISTOGRAM_BAR_WIDTH_CHARS).unwrap() - 1)
         );
-    }
-
-    #[test]
-    fn histogram_char_byte_count_is_correct() {
-        assert_eq!("∎".len(), BYTES_PER_HISTOGRAM_BAR_CHAR.get());
-
-        let expected_chars = HISTOGRAM_BAR_CHARS.chars().count();
-        let expected_bytes = expected_chars * BYTES_PER_HISTOGRAM_BAR_CHAR.get();
-        assert_eq!(HISTOGRAM_BAR_CHARS.len(), expected_bytes);
     }
 
     #[test]

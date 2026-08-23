@@ -27,13 +27,13 @@ private-test-util = []
 
 [dependencies]
 fast_time = { workspace = true }
-new_zealand = { workspace = true }
 num-traits = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
 many_cpus = { path = "../many_cpus" }
 mutants = { workspace = true }
+new_zealand = { path = "../new_zealand" }
 # `nm` is a development dependency so doctests, examples, and benchmarks can write
 # `use nm::Event;` exactly as user code would, matching the documentation rendered for `nm`.
 nm = { path = "../nm" }

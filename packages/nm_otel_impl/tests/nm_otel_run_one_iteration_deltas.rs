@@ -41,7 +41,7 @@ fn run_one_iteration_computes_deltas_across_collections() {
         .clock(Clock::new_frozen())
         .build();
 
-    publisher.run_one_iteration();
+    publisher.run_one_iteration_for_test();
     let metrics = reader.collect();
     assert_eq!(
         find_u64_sum(&metrics, EVENT_NAME),
@@ -54,7 +54,7 @@ fn run_one_iteration_computes_deltas_across_collections() {
             .observe(ADDITIONAL_MAGNITUDE);
     });
 
-    publisher.run_one_iteration();
+    publisher.run_one_iteration_for_test();
     let metrics = reader.collect();
     assert_eq!(
         find_u64_sum(&metrics, EVENT_NAME),
