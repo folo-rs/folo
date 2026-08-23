@@ -856,7 +856,7 @@ mod linux {
     // handle, or the caller's embedded place - is returned from the measured region so
     // that its own teardown stays untimed.
     //
-    // Three start states are measured per storage and model:
+    // Four start states are measured per storage and model:
     //
     // - `sender_first_bound`: the receiver never polled, so there is no waker to consume.
     // - `sender_first_awaiting`: the receiver parked a waker, which the sender consumes
@@ -868,6 +868,9 @@ mod linux {
     //   in `docs/implementation.md` ("The state machine is the single source of truth").
     // - `receiver_first_bound`: the receiver is dropped before polling, which makes the
     //   sender the endpoint that releases the storage.
+    // - `receiver_first_awaiting`: the receiver is dropped after parking a waker, so
+    //   receiver cancellation includes the waker cleanup and state handoff before the
+    //   sender releases the storage.
 
     #[library_benchmark]
     #[bench::bound(local_boxed_bound())]
@@ -912,6 +915,22 @@ mod linux {
     #[library_benchmark]
     #[bench::bound(sync_boxed_bound())]
     fn cancel_sync_boxed_receiver_first_bound(input: SyncBoxedEndpoints) {
+        let (sender, receiver) = input;
+        drop(receiver);
+        drop(sender);
+    }
+
+    #[library_benchmark]
+    #[bench::awaiting(local_boxed_awaiting())]
+    fn cancel_local_boxed_receiver_first_awaiting(input: LocalBoxedEndpoints) {
+        let (sender, receiver) = input;
+        drop(receiver);
+        drop(sender);
+    }
+
+    #[library_benchmark]
+    #[bench::awaiting(sync_boxed_awaiting())]
+    fn cancel_sync_boxed_receiver_first_awaiting(input: SyncBoxedEndpoints) {
         let (sender, receiver) = input;
         drop(receiver);
         drop(sender);
@@ -975,6 +994,28 @@ mod linux {
     #[library_benchmark]
     #[bench::bound(sync_embedded_bound())]
     fn cancel_sync_embedded_receiver_first_bound(
+        input: (SyncEmbeddedStorage, SyncEmbeddedEndpoints),
+    ) -> SyncEmbeddedStorage {
+        let (place, (sender, receiver)) = input;
+        drop(receiver);
+        drop(sender);
+        place
+    }
+
+    #[library_benchmark]
+    #[bench::awaiting(local_embedded_awaiting())]
+    fn cancel_local_embedded_receiver_first_awaiting(
+        input: (LocalEmbeddedStorage, LocalEmbeddedEndpoints),
+    ) -> LocalEmbeddedStorage {
+        let (place, (sender, receiver)) = input;
+        drop(receiver);
+        drop(sender);
+        place
+    }
+
+    #[library_benchmark]
+    #[bench::awaiting(sync_embedded_awaiting())]
+    fn cancel_sync_embedded_receiver_first_awaiting(
         input: (SyncEmbeddedStorage, SyncEmbeddedEndpoints),
     ) -> SyncEmbeddedStorage {
         let (place, (sender, receiver)) = input;
@@ -1050,6 +1091,28 @@ mod linux {
     }
 
     #[library_benchmark]
+    #[bench::awaiting(local_pooled_awaiting())]
+    fn cancel_local_pooled_receiver_first_awaiting(
+        input: (LocalEventPool<i32>, LocalPooledEndpoints),
+    ) -> LocalEventPool<i32> {
+        let (pool, (sender, receiver)) = input;
+        drop(receiver);
+        drop(sender);
+        pool
+    }
+
+    #[library_benchmark]
+    #[bench::awaiting(sync_pooled_awaiting())]
+    fn cancel_sync_pooled_receiver_first_awaiting(
+        input: (EventPool<i32>, SyncPooledEndpoints),
+    ) -> EventPool<i32> {
+        let (pool, (sender, receiver)) = input;
+        drop(receiver);
+        drop(sender);
+        pool
+    }
+
+    #[library_benchmark]
     #[bench::bound(local_raw_pooled_bound())]
     fn cancel_local_raw_pooled_sender_first_bound(
         input: (LocalRawPool, LocalRawPooledEndpoints),
@@ -1107,6 +1170,28 @@ mod linux {
     #[library_benchmark]
     #[bench::bound(sync_raw_pooled_bound())]
     fn cancel_sync_raw_pooled_receiver_first_bound(
+        input: (SyncRawPool, SyncRawPooledEndpoints),
+    ) -> SyncRawPool {
+        let (pool, (sender, receiver)) = input;
+        drop(receiver);
+        drop(sender);
+        pool
+    }
+
+    #[library_benchmark]
+    #[bench::awaiting(local_raw_pooled_awaiting())]
+    fn cancel_local_raw_pooled_receiver_first_awaiting(
+        input: (LocalRawPool, LocalRawPooledEndpoints),
+    ) -> LocalRawPool {
+        let (pool, (sender, receiver)) = input;
+        drop(receiver);
+        drop(sender);
+        pool
+    }
+
+    #[library_benchmark]
+    #[bench::awaiting(sync_raw_pooled_awaiting())]
+    fn cancel_sync_raw_pooled_receiver_first_awaiting(
         input: (SyncRawPool, SyncRawPooledEndpoints),
     ) -> SyncRawPool {
         let (pool, (sender, receiver)) = input;
@@ -1178,6 +1263,28 @@ mod linux {
     }
 
     #[library_benchmark]
+    #[bench::awaiting(local_lake_awaiting())]
+    fn cancel_local_lake_receiver_first_awaiting(
+        input: (LocalEventLake, LocalPooledEndpoints),
+    ) -> LocalEventLake {
+        let (lake, (sender, receiver)) = input;
+        drop(receiver);
+        drop(sender);
+        lake
+    }
+
+    #[library_benchmark]
+    #[bench::awaiting(sync_lake_awaiting())]
+    fn cancel_sync_lake_receiver_first_awaiting(
+        input: (EventLake, SyncPooledEndpoints),
+    ) -> EventLake {
+        let (lake, (sender, receiver)) = input;
+        drop(receiver);
+        drop(sender);
+        lake
+    }
+
+    #[library_benchmark]
     #[bench::bound(local_raw_lake_bound())]
     fn cancel_local_raw_lake_sender_first_bound(
         input: (RawLocalEventLake, LocalRawPooledEndpoints),
@@ -1235,6 +1342,28 @@ mod linux {
     #[library_benchmark]
     #[bench::bound(sync_raw_lake_bound())]
     fn cancel_sync_raw_lake_receiver_first_bound(
+        input: (RawEventLake, SyncRawPooledEndpoints),
+    ) -> RawEventLake {
+        let (lake, (sender, receiver)) = input;
+        drop(receiver);
+        drop(sender);
+        lake
+    }
+
+    #[library_benchmark]
+    #[bench::awaiting(local_raw_lake_awaiting())]
+    fn cancel_local_raw_lake_receiver_first_awaiting(
+        input: (RawLocalEventLake, LocalRawPooledEndpoints),
+    ) -> RawLocalEventLake {
+        let (lake, (sender, receiver)) = input;
+        drop(receiver);
+        drop(sender);
+        lake
+    }
+
+    #[library_benchmark]
+    #[bench::awaiting(sync_raw_lake_awaiting())]
+    fn cancel_sync_raw_lake_receiver_first_awaiting(
         input: (RawEventLake, SyncRawPooledEndpoints),
     ) -> RawEventLake {
         let (lake, (sender, receiver)) = input;
@@ -1324,36 +1453,48 @@ mod linux {
             cancel_sync_boxed_sender_first_awaiting,
             cancel_local_boxed_receiver_first_bound,
             cancel_sync_boxed_receiver_first_bound,
+            cancel_local_boxed_receiver_first_awaiting,
+            cancel_sync_boxed_receiver_first_awaiting,
             cancel_local_embedded_sender_first_bound,
             cancel_sync_embedded_sender_first_bound,
             cancel_local_embedded_sender_first_awaiting,
             cancel_sync_embedded_sender_first_awaiting,
             cancel_local_embedded_receiver_first_bound,
             cancel_sync_embedded_receiver_first_bound,
+            cancel_local_embedded_receiver_first_awaiting,
+            cancel_sync_embedded_receiver_first_awaiting,
             cancel_local_pooled_sender_first_bound,
             cancel_sync_pooled_sender_first_bound,
             cancel_local_pooled_sender_first_awaiting,
             cancel_sync_pooled_sender_first_awaiting,
             cancel_local_pooled_receiver_first_bound,
             cancel_sync_pooled_receiver_first_bound,
+            cancel_local_pooled_receiver_first_awaiting,
+            cancel_sync_pooled_receiver_first_awaiting,
             cancel_local_raw_pooled_sender_first_bound,
             cancel_sync_raw_pooled_sender_first_bound,
             cancel_local_raw_pooled_sender_first_awaiting,
             cancel_sync_raw_pooled_sender_first_awaiting,
             cancel_local_raw_pooled_receiver_first_bound,
             cancel_sync_raw_pooled_receiver_first_bound,
+            cancel_local_raw_pooled_receiver_first_awaiting,
+            cancel_sync_raw_pooled_receiver_first_awaiting,
             cancel_local_lake_sender_first_bound,
             cancel_sync_lake_sender_first_bound,
             cancel_local_lake_sender_first_awaiting,
             cancel_sync_lake_sender_first_awaiting,
             cancel_local_lake_receiver_first_bound,
             cancel_sync_lake_receiver_first_bound,
+            cancel_local_lake_receiver_first_awaiting,
+            cancel_sync_lake_receiver_first_awaiting,
             cancel_local_raw_lake_sender_first_bound,
             cancel_sync_raw_lake_sender_first_bound,
             cancel_local_raw_lake_sender_first_awaiting,
             cancel_sync_raw_lake_sender_first_awaiting,
             cancel_local_raw_lake_receiver_first_bound,
             cancel_sync_raw_lake_receiver_first_bound,
+            cancel_local_raw_lake_receiver_first_awaiting,
+            cancel_sync_raw_lake_receiver_first_awaiting,
         ]
     );
 }

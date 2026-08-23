@@ -200,9 +200,13 @@ mod tests {
     use testing::assert_panics_with;
 
     use super::*;
-    use crate::Disconnected;
     #[cfg(debug_assertions)]
     use crate::assert_inspect_awaiters_is_reentrant;
+    use crate::{
+        Disconnected, PanickingPayload, assert_disconnected_send_payload_panic_releases_event,
+        assert_receiver_waker_panic_handoff_releases_event,
+        assert_unread_payload_panic_releases_event,
+    };
 
     // The payload is itself thread-safe, so the pool is what confines this to one thread.
     assert_not_impl_any!(LocalEventPool<u32>: Send, Sync);
@@ -210,6 +214,39 @@ mod tests {
     // The payload satisfies only the bound that the pool's API requires (`'static`) and is
     // neither `UnwindSafe` nor `RefUnwindSafe`, so both traits come from the pool itself.
     assert_impl_all!(LocalEventPool<Rc<RefCell<u32>>>: UnwindSafe, RefUnwindSafe);
+
+    #[test]
+    fn disconnected_send_payload_panic_releases_event() {
+        let pool = LocalEventPool::<PanickingPayload>::new();
+
+        assert_disconnected_send_payload_panic_releases_event(
+            || pool.rent(),
+            PooledLocalSender::send,
+            || pool.is_empty(),
+        );
+    }
+
+    #[test]
+    fn receiver_waker_panic_handoff_releases_event() {
+        let pool = LocalEventPool::<i32>::new();
+
+        assert_receiver_waker_panic_handoff_releases_event(
+            || pool.rent(),
+            PooledLocalSender::send,
+            || pool.is_empty(),
+        );
+    }
+
+    #[test]
+    fn unread_payload_panic_releases_event() {
+        let pool = LocalEventPool::<PanickingPayload>::new();
+
+        assert_unread_payload_panic_releases_event(
+            || pool.rent(),
+            PooledLocalSender::send,
+            || pool.is_empty(),
+        );
+    }
 
     #[test]
     fn len() {

@@ -56,12 +56,14 @@
 //! party permitted to release the event, and no endpoint may access the event after the
 //! transition that transferred cleanup ownership to the other endpoint.
 //!
-//! # Callback publication order
+//! # Callback boundary order
 //!
-//! Completing or cancelling an event runs user-supplied waker callbacks that may reenter the
-//! event, including polling the receiver and dropping the last endpoint. The terminal state is
-//! therefore always published before such a callback runs, so a reentrant caller observes a
-//! terminal state rather than the transient `signaling` state. See `docs/callback-safety.md`.
+//! Cloning, waking or dropping a waker and dropping a payload can execute user code that reenters
+//! the event or its storage owner and can unwind. Before invoking one of these callbacks, an
+//! operation completes the observable state transition, releases every borrow or lock the callback
+//! can reenter, and completes any endpoint or storage handoff that unwinding would otherwise skip.
+//! User-owned values are moved into temporary ownership when their destruction must be deferred
+//! past that handoff. See `docs/callback-safety.md`.
 //!
 //! # The signaling state
 //!
@@ -80,6 +82,21 @@
 //! This compresses a read-and-write into one atomic instruction. The single-threaded variant
 //! cannot benefit from the encoding (a non-atomic `Cell` `+= 1` lowers to a separate load + add
 //! + store), so it transitions directly to the target state instead.
+
+use std::task::Waker;
+
+use crate::Disconnected;
+
+/// Carries a receiver's cancellation outcome and any waker deferred past state handoff.
+///
+/// Receiver cancellation extracts the registered waker without destroying it, publishes the
+/// disconnection, and then lets the receiver core release any storage it owns before this value is
+/// dropped. The payload and waker may both invoke user code from their destructors, so keeping them
+/// together makes their deferred ownership explicit.
+pub(crate) struct Cancellation<T> {
+    pub(crate) result: Result<Option<T>, Disconnected>,
+    pub(crate) _awaiter: Option<Waker>,
+}
 
 pub(crate) const EVENT_BOUND: u8 = 0;
 pub(crate) const EVENT_SET: u8 = 1;

@@ -301,7 +301,7 @@ mod core;
 mod disconnected;
 mod lake;
 mod pool;
-#[cfg(all(test, debug_assertions))]
+#[cfg(test)]
 mod reentrancy;
 
 pub use core::*;
@@ -312,5 +312,5 @@ pub(crate) use constants::{EVENT_COUNT_FITS_IN_USIZE, NEVER_POISONED};
 pub use disconnected::*;
 pub use lake::*;
 pub use pool::*;
-#[cfg(all(test, debug_assertions))]
+#[cfg(test)]
 pub(crate) use reentrancy::*;

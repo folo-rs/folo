@@ -35,23 +35,30 @@ where
     /// there is a receiver waiting.
     #[inline]
     pub(crate) fn send(self, value: T) {
-        // The drop logic is different before/after set(), so we switch to manual drop here.
-        let mut this = ManuallyDrop::new(self);
+        // The drop logic is different before/after set(), so we prevent the sender destructor
+        // from running and move its reference into an ordinary local. The local is still dropped
+        // if a waker callback unwinds out of `set()`.
+        let this = ManuallyDrop::new(self);
 
-        if LocalEvent::set(&this.event_ref, value) == Err(Disconnected) {
+        // SAFETY: `this` will never be dropped, so reading its event reference transfers that
+        // field into `event_ref` exactly once. The marker field needs no destruction.
+        let event_ref = unsafe { ptr::read(&raw const this.event_ref) };
+
+        if let Err(value) = LocalEvent::set(&event_ref, value) {
             // SAFETY: `set()` reported that the receiver had already disconnected, which is the
             // transition that grants this sender sole cleanup responsibility, and we do not
             // access the event afterwards.
             unsafe {
-                this.event_ref.release_event();
+                event_ref.release_event();
             }
+
+            // Release all event-owned resources before payload destruction invokes user code.
+            drop(event_ref);
+            drop(value);
+            return;
         }
 
-        // SAFETY: The field contains a valid object of the right type. We avoid a double-drop
-        // via ManuallyDrop above. We consume `self` so nothing further can happen.
-        unsafe {
-            ptr::drop_in_place(&raw mut this.event_ref);
-        }
+        drop(event_ref);
     }
 }
 

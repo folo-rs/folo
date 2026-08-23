@@ -40,6 +40,19 @@ Two properties of the state machine matter beyond the event implementations them
   as the result of the transition it performed. No endpoint may derive that right from an
   observation it made earlier, because the other endpoint may act in between.
 
+## User destructors are callback boundaries
+
+Waker vtable operations and payload destruction may reenter the event or storage owner and may
+unwind. The state machine therefore finishes the observable transition and releases any borrow or
+lock before invoking them. When an endpoint is ending its lifecycle, it first transfers or
+completes storage cleanup, while temporarily owning any waker or payload whose destructor must be
+deferred. A panic from that destructor can then propagate without stranding a rented slot.
+
+Terminal value extraction is separate from receiver cancellation. The extraction path handles only
+stable terminal states and remains inline with the normal receiver flow. Synchronized cancellation
+contains the callback-bearing state handoff and storage release in a cold, out-of-line helper, so
+completed-receiver destruction does not inherit the cancellation state machine.
+
 ## Unsafe reference ownership and the release boundary
 
 The endpoint reference is the package's central unsafe abstraction, so its obligations are
