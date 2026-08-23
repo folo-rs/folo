@@ -2607,6 +2607,13 @@ mod tests {
             "{markdown}"
         );
         assert!(markdown.contains("Not judged: 1 series"), "{markdown}");
+        assert!(
+            markdown.contains(
+                "The branch stayed within every observed base range in this comparison \
+                 (1 series and 10 comparable base commits)."
+            ),
+            "{markdown}"
+        );
 
         let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
         assert!(
