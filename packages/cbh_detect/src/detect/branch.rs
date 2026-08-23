@@ -266,11 +266,15 @@ fn branch_judgment<'a>(
         return Err(UnjudgedReason::NotMeasuredOnBranch);
     };
     if series.base_window.len() < noise_gates::MIN_SERIES_POINTS {
-        return Err(if series.blessing.is_some() {
-            UnjudgedReason::TooFewBaseCommitsSinceBlessing
-        } else {
-            UnjudgedReason::TooFewBaseCommits
-        });
+        return Err(
+            if series.blessing.is_some()
+                && series.base_history_count >= noise_gates::MIN_SERIES_POINTS
+            {
+                UnjudgedReason::TooFewBaseCommitsSinceBlessing
+            } else {
+                UnjudgedReason::TooFewBaseCommits
+            },
+        );
     }
     let selection = select_regime(series);
     if selection.unresolved {
@@ -558,22 +562,26 @@ fn intervals_allow(
     log: &mut StageLog<'_>,
 ) -> Option<bool> {
     let candidate_interval = candidate.interval?;
-    let reference_intervals: Option<Vec<(f64, f64)>> =
-        references.iter().map(|one| one.interval).collect();
-    let reference_intervals = reference_intervals?;
+    let reference_intervals: Vec<(f64, f64)> =
+        references.iter().filter_map(|one| one.interval).collect();
+    if reference_intervals.is_empty() {
+        return None;
+    }
     let passed = match relation {
         BranchRangeRelation::Above => {
             let highest = reference_intervals
                 .iter()
                 .map(|(_, high)| *high)
-                .max_by(f64::total_cmp)?;
+                .max_by(f64::total_cmp)
+                .expect("non-empty reference intervals");
             candidate_interval.0 > highest
         }
         BranchRangeRelation::Below => {
             let lowest = reference_intervals
                 .iter()
                 .map(|(low, _)| *low)
-                .min_by(f64::total_cmp)?;
+                .min_by(f64::total_cmp)
+                .expect("non-empty reference intervals");
             candidate_interval.1 < lowest
         }
         BranchRangeRelation::Inside | BranchRangeRelation::Unavailable => return None,
@@ -812,33 +820,51 @@ fn select_family(
     let minimum = noise_gates::MIN_BRANCH_COMPARISON_COMMITS;
     let mut seen_members = HashSet::new();
     let mut best: Option<HistoricalFamily> = None;
+    let mut seeds: std::collections::VecDeque<Vec<usize>> = std::collections::VecDeque::new();
+    let mut seen_seeds = HashSet::new();
+    let mut seed_order = Vec::new();
     for (candidates, _) in &groups {
         let ordered: Vec<usize> = candidates.iter().copied().collect();
         for seed in ordered.windows(minimum) {
-            consider_family_seed(
-                seed,
-                &commit_members,
-                &groups,
-                bits_per_word,
-                &mut seen_members,
-                &mut best,
-            );
+            let seed = seed.to_vec();
+            if seen_seeds.insert(seed.clone()) {
+                seeds.push_back(seed.clone());
+                seed_order.push(seed);
+            }
         }
     }
     for (left_index, (left, _)) in groups.iter().enumerate() {
         for (right, _) in groups.iter().skip(left_index.saturating_add(1)) {
             let intersection: Vec<usize> = left.intersection(right).copied().collect();
-            if intersection.len() >= minimum {
-                consider_family_seed(
-                    &intersection,
-                    &commit_members,
-                    &groups,
-                    bits_per_word,
-                    &mut seen_members,
-                    &mut best,
-                );
+            if intersection.len() >= minimum && seen_seeds.insert(intersection.clone()) {
+                seeds.push_back(intersection.clone());
+                seed_order.push(intersection);
             }
         }
+    }
+    let mut queue = seeds;
+    while let Some(seed) = queue.pop_front() {
+        for (candidates, _) in &groups {
+            let intersection: Vec<usize> = seed
+                .iter()
+                .copied()
+                .filter(|commit| candidates.contains(commit))
+                .collect();
+            if intersection.len() >= minimum && seen_seeds.insert(intersection.clone()) {
+                queue.push_back(intersection.clone());
+                seed_order.push(intersection);
+            }
+        }
+    }
+    for seed in seed_order {
+        consider_family_seed(
+            &seed,
+            &commit_members,
+            &groups,
+            bits_per_word,
+            &mut seen_members,
+            &mut best,
+        );
     }
     best.filter(|family| family.candidate_commits.len() >= minimum)
 }
@@ -1573,6 +1599,24 @@ mod tests {
     }
 
     #[test]
+    fn a_blessing_does_not_relabel_insufficient_total_history() {
+        let base = vec![100.0; 9];
+        let mut one = series("too-short", "m1", &base, 130.0);
+        one.base_history_count = 9;
+        one.blessing = Some(crate::detect::Blessing {
+            commit: "blessed-commit".to_owned(),
+            commit_time: None,
+        });
+        let detection = find_changes(std::slice::from_ref(&one), &context(base.len()));
+
+        assert_eq!(detection.census.judged(), 0);
+        assert_eq!(
+            detection.branch_trace.series[0].unresolved,
+            Some(UnjudgedReason::TooFewBaseCommits)
+        );
+    }
+
+    #[test]
     fn an_observed_bimodal_value_is_not_an_excursion() {
         let base: Vec<f64> = (0_usize..20)
             .map(|index| {
@@ -1693,6 +1737,45 @@ mod tests {
                 &mut log.stage(GateStage::Branch),
             ),
             None
+        );
+    }
+
+    #[test]
+    fn interval_vetoes_ignore_missing_reference_intervals() {
+        let references = [
+            Observation {
+                value: 100.0,
+                interval: None,
+            },
+            Observation {
+                value: 100.0,
+                interval: Some((91.0, 109.0)),
+            },
+        ];
+        let mut log = GateLog::disabled();
+        assert_eq!(
+            intervals_allow(
+                BranchRangeRelation::Above,
+                Observation {
+                    value: 130.0,
+                    interval: Some((110.0, 140.0)),
+                },
+                &references,
+                &mut log.stage(GateStage::Branch),
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            intervals_allow(
+                BranchRangeRelation::Below,
+                Observation {
+                    value: 70.0,
+                    interval: Some((60.0, 90.0)),
+                },
+                &references,
+                &mut log.stage(GateStage::Branch),
+            ),
+            Some(true)
         );
     }
 
@@ -1836,6 +1919,22 @@ mod tests {
 
         assert_eq!(family.member_indices, vec![1]);
         assert_eq!(family.candidate_commits, vec![1, 3, 5, 7, 11]);
+    }
+
+    #[test]
+    fn three_way_shared_candidates_form_a_larger_family() {
+        let mut first = series("first", "m1", &[100.0; 20], 100.0);
+        let mut second = series("second", "m1", &[100.0; 20], 100.0);
+        let mut third = series("third", "m1", &[100.0; 20], 100.0);
+        replace_reference_commits(&mut first, &[10, 20, 30, 40, 50, 90, 110], 200);
+        replace_reference_commits(&mut second, &[10, 20, 30, 40, 50, 90, 100], 200);
+        replace_reference_commits(&mut third, &[10, 20, 30, 40, 50, 100, 110], 200);
+
+        let detection = find_changes(&[first, second, third], &context(200));
+        let comparison = &detection.branch_comparisons[0];
+
+        assert_eq!(comparison.series, 3);
+        assert_eq!(comparison.evaluated_base_commits, 5);
     }
 
     #[test]

@@ -592,10 +592,9 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
         format!("  {}", header.join("  ")),
     ];
 
-    let has_branch_comparisons = input
-        .sets
-        .iter()
-        .any(|summary| summary.branch_comparison.is_some());
+    let has_branch_context = input.sets.iter().any(|summary| {
+        summary.branch_comparison.is_some() || !summary.comparison_base_lags.is_empty()
+    });
     if input.findings.is_empty() {
         lines.push(coverage.verdict().to_owned());
         // Silence is a claim about the judged series only, so state how far it
@@ -607,7 +606,7 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
             lines.push(String::new());
             lines.push(hint.to_owned());
         }
-        if !has_branch_comparisons {
+        if !has_branch_context {
             push_warning(&mut lines, input.warning);
             return finish(&lines);
         }
@@ -618,7 +617,10 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
     // it judges stays legible (see `ChartScope`).
     let scope = chart_scope(input.mode);
     for summary in input.sets {
-        if summary.findings.is_empty() && summary.branch_comparison.is_none() {
+        if summary.findings.is_empty()
+            && summary.branch_comparison.is_none()
+            && summary.comparison_base_lags.is_empty()
+        {
             continue;
         }
         lines.push(String::new());
@@ -1118,10 +1120,9 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
         ));
     }
 
-    let has_branch_comparisons = input
-        .sets
-        .iter()
-        .any(|summary| summary.branch_comparison.is_some());
+    let has_branch_context = input.sets.iter().any(|summary| {
+        summary.branch_comparison.is_some() || !summary.comparison_base_lags.is_empty()
+    });
     if input.findings.is_empty() {
         lines.push(String::new());
         lines.push(coverage.verdict().to_owned());
@@ -1133,7 +1134,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
             lines.push(String::new());
             lines.push(hint.to_owned());
         }
-        if !has_branch_comparisons {
+        if !has_branch_context {
             push_warning(&mut lines, input.warning);
             return finish(&lines);
         }
@@ -1143,7 +1144,10 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
     // (history walks the whole series, branch charts the baseline and recent tail).
     let scope = chart_scope(input.mode);
     for summary in input.sets {
-        if summary.findings.is_empty() && summary.branch_comparison.is_none() {
+        if summary.findings.is_empty()
+            && summary.branch_comparison.is_none()
+            && summary.comparison_base_lags.is_empty()
+        {
             continue;
         }
         lines.push(String::new());
@@ -1244,10 +1248,9 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
         ));
     }
 
-    let has_branch_comparisons = input
-        .sets
-        .iter()
-        .any(|summary| summary.branch_comparison.is_some());
+    let has_branch_context = input.sets.iter().any(|summary| {
+        summary.branch_comparison.is_some() || !summary.comparison_base_lags.is_empty()
+    });
     if input.findings.is_empty() {
         lines.push(String::new());
         lines.push(coverage.verdict().to_owned());
@@ -1259,23 +1262,29 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
             lines.push(String::new());
             lines.push(hint.to_owned());
         }
-        if !has_branch_comparisons {
+        if !has_branch_context {
             push_warning(&mut lines, input.warning);
             return finish(&lines);
         }
     }
     if input.findings.is_empty() {
         for summary in input.sets {
-            let Some(comparison) = summary.branch_comparison else {
+            if summary.branch_comparison.is_none() && summary.comparison_base_lags.is_empty() {
                 continue;
-            };
+            }
             lines.push(String::new());
             lines.push(format!("## {}", set_label(summary.set)));
             lines.push(String::new());
-            lines.push(format!(
-                "**Historical comparison:** {}",
-                historical_comparison_text(Some(comparison), false)
-            ));
+            for lag in &summary.comparison_base_lags {
+                lines.push(format!("> {}", comparison_base_lag_warning(lag)));
+            }
+            if let Some(comparison) = summary.branch_comparison {
+                lines.push(String::new());
+                lines.push(format!(
+                    "**Historical comparison:** {}",
+                    historical_comparison_text(Some(comparison), false)
+                ));
+            }
             push_set_filter_footer(&mut lines, summary.set);
         }
         push_warning(&mut lines, input.warning);
@@ -2628,6 +2637,51 @@ mod tests {
             "{summary}"
         );
         assert!(summary.contains("Not judged: 1 series"), "{summary}");
+    }
+
+    #[test]
+    fn branch_reports_with_only_lag_metadata_still_surface_the_context_limit() {
+        let set = discriminant_set();
+        let lag = ComparisonBaseLag {
+            commits_behind: NonZero::new(2).expect("non-zero"),
+            reason: ComparisonBaseLagReason::NoRecentBaseData,
+        };
+        let summaries = vec![SetSummary {
+            set: &set,
+            runs: 21,
+            series: 1,
+            findings: Vec::new(),
+            comparison_base_lags: vec![lag],
+            branch_comparison: None,
+        }];
+        let input = ReportInput {
+            project: "folo",
+            tip_commit: "1234567890abcdef1234",
+            tip_dirty: false,
+            mode: AnalysisMode::Branch,
+            notable: false,
+            runs: 21,
+            series: 1,
+            commit_span: None,
+            report_improvements: true,
+            findings: &[],
+            sets: &summaries,
+            hint: None,
+            warning: None,
+            ghosts_excluded: 0,
+            census: census_of(1, &[(UnjudgedReason::TooFewBaseCommits, 1)]),
+        };
+
+        let expected_lag = comparison_base_lag_warning(&lag);
+
+        let text = render(&input, ReportFormat::Text, false);
+        assert!(text.contains(&expected_lag), "{text}");
+
+        let markdown = render(&input, ReportFormat::Markdown, false);
+        assert!(markdown.contains(&expected_lag), "{markdown}");
+
+        let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+        assert!(summary.contains(&expected_lag), "{summary}");
     }
 
     #[test]
