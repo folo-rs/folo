@@ -455,16 +455,25 @@ fn note_series_census<R: Reporter + ?Sized>(
             let Testability::Unjudged(reason) = testability(one, context) else {
                 continue;
             };
-            // A blessed series is judged only on what came after the blessing, so name
-            // that window rather than the misleading full length.
-            let evidence = if one.active_start > 0 {
-                format!(
+            let evidence = match context.mode {
+                // A blessed history series is judged only on what came after the blessing,
+                // so name that window rather than the misleading full length.
+                AnalysisMode::History if one.active_start > 0 => format!(
                     "{}, of which {} since its blessing",
                     count_noun(one.points.len(), "point"),
                     one.points.len().saturating_sub(one.active_start),
-                )
-            } else {
-                count_noun(one.points.len(), "point")
+                ),
+                AnalysisMode::History => count_noun(one.points.len(), "point"),
+                AnalysisMode::Branch => {
+                    let retained = count_noun(one.base_window.len(), "base-branch commit");
+                    let available = count_noun(
+                        one.base_history_count.max(one.base_window.len()),
+                        "base-branch commit",
+                    );
+                    format!(
+                        "{retained} retained from {available} available before the cap and blessings"
+                    )
+                }
             };
             notes.note(&format!(
                 "not judging {} {} in {}: {} — it carries {evidence}",
@@ -1591,6 +1600,12 @@ mod tests {
                 .iter()
                 .all(|note| note.contains("current base regime is unresolved"))
         );
+        assert!(notes.iter().all(|note| {
+            note.contains(
+                "40 base-branch commits retained from 40 base-branch commits available before \
+                 the cap and blessings",
+            )
+        }));
     }
 
     #[test]
@@ -1666,6 +1681,14 @@ mod tests {
             reporter.contains(
                 "with too few base-ref commits remaining since being blessed; 10 base commits \
                  were available, 2 remained after the cap and blessings"
+            ),
+            "{:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains(
+                "it carries 2 base-branch commits retained from 10 base-branch commits available \
+                 before the cap and blessings"
             ),
             "{:?}",
             reporter.notes()

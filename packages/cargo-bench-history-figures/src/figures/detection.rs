@@ -159,8 +159,9 @@ const MOVED_BASE_TIP_LEVEL: f64 = MOVED_BASE_OLD_LEVEL;
 
 /// How many commits each base regime occupies in the branch-base-moved figure.
 ///
-/// Equal halves fill the default comparison window while satisfying the stricter evidence
-/// floor for accepting a base-side regime boundary.
+/// Two equal halves supply enough total evidence for regime selection. Alternating them into
+/// selector and reference lanes leaves [`MIN_REGIME`] selector observations on each side of
+/// the boundary.
 const MOVED_BASE_REGIME: usize = MIN_SERIES_POINTS;
 
 /// Builds the branch-base-moved example and returns its values and detector verdict.

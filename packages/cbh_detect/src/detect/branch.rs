@@ -2202,6 +2202,11 @@ mod tests {
     }
 
     #[test]
+    fn no_eligible_series_yields_no_historical_family() {
+        assert!(select_family(&[], &[], &[]).is_none());
+    }
+
+    #[test]
     fn three_way_shared_candidates_form_a_larger_family() {
         let mut first = series("first", "m1", &[100.0; 20], 100.0);
         let mut second = series("second", "m1", &[100.0; 20], 100.0);

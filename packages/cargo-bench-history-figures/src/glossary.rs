@@ -154,8 +154,8 @@ pub const TERMS: &[Term] = &[
     },
     Term {
         phrase: "false-discovery family",
-        definition: "Every series that carried enough data to be tested, which is the \
-                     group a finding has to stand out from.",
+        definition: "In history mode, every series that carried enough data to be tested: \
+                     the group a statistical finding has to stand out from.",
         formal_name: "",
         chapter: "coverage.md",
     },
@@ -221,8 +221,9 @@ pub const TERMS: &[Term] = &[
     },
     Term {
         phrase: "finding",
-        definition: "A move that survived detection, every gate, and the group-wide \
-                     correction.",
+        definition: "A reported move. A history finding survived the group-wide correction; \
+                     a branch finding exceeded the current base range and survived every \
+                     applicable gate.",
         formal_name: "",
         chapter: "reporting.md",
     },

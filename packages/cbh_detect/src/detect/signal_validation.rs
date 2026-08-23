@@ -59,16 +59,17 @@
 //! question. Detector internals and magnitude are covered by the
 //! finer-grained unit tests in [`findings`](super::findings).
 //!
-//! Curated series carry the measurement scatter their metric kind actually shows.
-//! Timing metrics run at [`TIMING_NOISE_CV`], the middle of the band the wall-time
-//! benchmarks in this project's own stored history occupy; Callgrind counters and
-//! allocation counters carry none at all, because those engines re-measure identical
-//! code to the same value. Detection has to be judged against data with as much spread as
-//! the real thing, because on near-perfect series every "stays quiet" case is trivial:
-//! the observed range is narrow and the rank tests see an unambiguous ordering. The
-//! scatter is drawn from a fixed-seed generator keyed by
-//! each series' own name, so every run sees identical data while a batch of companions
-//! stays independent of one another rather than carrying copies of one sequence.
+//! Curated series carry deterministic measurement scatter for every metric family.
+//! Timing uses [`TIMING_NOISE_CV`], the middle of the band the wall-time benchmarks in
+//! this project's stored history occupy. Callgrind counters drift by a few percent and
+//! allocation measurements jitter as warmup work is amortized, so their modelled cases
+//! use the same bounded few-percent premise rather than a fictitious exact value.
+//! Detection has to be judged against spread representative of real measurements because
+//! on near-perfect series every "stays quiet" case is trivial: the observed range is
+//! narrow and rank tests see an unambiguous ordering. The scatter is drawn from a
+//! fixed-seed generator keyed by each series' own name, so every run sees identical data
+//! while a batch of companions stays independent rather than carrying copies of one
+//! sequence.
 //!
 //! What the generator supplies is realistic *spread*, not realistic *shape*: its deviates
 //! are bounded, symmetric, and light-tailed (see [`scattered`]), while real timing noise
@@ -315,25 +316,29 @@ impl SignalCase {
     }
 }
 
-/// The coefficient of variation of a metric that re-measures identical code to
-/// identical values.
-const EXACT: f64 = 0.0;
+/// The representative coefficient of variation for low-noise Callgrind counters.
+///
+/// The design records a few percent of between-run drift; the timing fixture's measured
+/// mid-band value lies within that range.
+const CALLGRIND_NOISE_CV: f64 = TIMING_NOISE_CV;
+
+/// The representative coefficient of variation for allocation measurements.
+///
+/// Allocation jitter has no separate quantitative contract, so the shared bounded
+/// few-percent premise keeps these fixtures non-exact without claiming false precision.
+const ALLOCATION_NOISE_CV: f64 = TIMING_NOISE_CV;
 
 /// The coefficient of variation a curated series of `kind` carries.
 ///
-/// Callgrind simulates the processor rather than timing it, and the allocation tracker
-/// counts whole events, so both reproduce a value exactly across runs of unchanged
-/// code — zero scatter *is* the realistic model for them. Timing metrics retain their
-/// realistic scatter so the observed base range represents the variation users actually
-/// encounter.
+/// Every family is deliberately nonzero: timing is hardware-noisy, Callgrind counters
+/// drift between builds and runs, and allocation slopes jitter as setup work is amortized.
 fn noise_cv(kind: MetricKind) -> f64 {
     match kind {
         MetricKind::WallTime | MetricKind::ProcessorTime => TIMING_NOISE_CV,
         MetricKind::InstructionCount
         | MetricKind::ConditionalBranches
-        | MetricKind::IndirectBranches
-        | MetricKind::AllocatedBytes
-        | MetricKind::AllocationCount => EXACT,
+        | MetricKind::IndirectBranches => CALLGRIND_NOISE_CV,
+        MetricKind::AllocatedBytes | MetricKind::AllocationCount => ALLOCATION_NOISE_CV,
     }
 }
 
@@ -643,9 +648,8 @@ fn cases() -> Vec<SignalCase> {
         .branch(run_of(100.0, 1))
         .expects(Outcome::Fall, Outcome::Quiet),
         // A counter metric stepping by 200 instructions, forty times the five-count
-        // absolute floor and far above the relative floors. Callgrind
-        // reproduces identical code exactly, so the series carries no scatter; the branch
-        // tip is strictly outside that exact observed range.
+        // absolute floor and far above both its modelled few-percent scatter and the
+        // relative floors.
         SignalCase::new(
             "a_counter_step_far_above_the_count_floors_is_reported",
             MetricKind::InstructionCount,
@@ -654,8 +658,7 @@ fn cases() -> Vec<SignalCase> {
         .branch(run_of(1200.0, MIN_SERIES_POINTS))
         .expects(Outcome::Rise, Outcome::Rise),
         // An allocation metric stepping by a kilobyte, three orders of magnitude above
-        // the one-byte absolute floor. An allocator hands out whole bytes and repeats
-        // the same requests run after run, so this series is exact too.
+        // the one-byte absolute floor and far above the modelled amortization jitter.
         SignalCase::new(
             "an_allocation_step_far_above_the_allocation_floors_is_reported",
             MetricKind::AllocatedBytes,

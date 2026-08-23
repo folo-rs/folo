@@ -11,8 +11,8 @@
 | dirty run | A measurement taken with uncommitted changes in the working tree. |  | [Collection](collection.md) |
 | discriminant set | The engine, target triple, and machine key a run was measured with, which together decide what it may be compared against. |  | [Shape of the data](shape.md) |
 | drift | A series that moves steadily in one direction rather than stepping between levels. | monotonic trend | [Detection](detection.md) |
-| false-discovery family | Every series that carried enough data to be tested, which is the group a finding has to stand out from. |  | [Multiplicity and coverage](coverage.md) |
-| finding | A move that survived detection, every gate, and the group-wide correction. |  | [Reporting](reporting.md) |
+| false-discovery family | In history mode, every series that carried enough data to be tested: the group a statistical finding has to stand out from. |  | [Multiplicity and coverage](coverage.md) |
+| finding | A reported move. A history finding survived the group-wide correction; a branch finding exceeded the current base range and survived every applicable gate. |  | [Reporting](reporting.md) |
 | ghost | A benchmark that history remembers but the analyzed commit no longer measures. |  | [Reconstruction](reconstruction.md) |
 | group-wide correction | A stricter bar applied when many things are tested at once, so that only a small share of what is reported is expected to be wrong. | Benjamini-Hochberg false discovery rate control | [Multiplicity and coverage](coverage.md) |
 | harvest | Reading whatever output the benchmark engines left behind after a run. |  | [Collection](collection.md) |
