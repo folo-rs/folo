@@ -1,8 +1,7 @@
 //! Allocation assertion test for the histogram delta computation path.
 //!
 //! Verifies that [`EventState::histogram_deltas`] performs no heap allocations on the
-//! steady-state path (after the first call has sized the bucket storage). This locks in
-//! the streaming refactor that replaced two intermediate `Vec` allocations per event.
+//! warm path after the first call has sized the bucket storage.
 
 use alloc_tracker::{Allocator, Session};
 use nm_otel_impl::EventState;
@@ -10,56 +9,58 @@ use nm_otel_impl::EventState;
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
-const BUCKETS: [i64; 4] = [10, 50, 100, 500];
+// Multiple bounds exercise cumulative conversion and retained per-bucket state.
+const HISTOGRAM_BUCKET_BOUNDS: [i64; 4] = [10, 50, 100, 500];
+// A stable name allows the allocation report to identify the measured operation.
+const OPERATION_NAME: &str = "histogram_deltas_steady_state";
+// Repetition makes incidental fixed-cost allocations visible in the aggregate report.
+const MEASURED_EXPORT_COUNT: u64 = 16;
+// The first measured export compares against initializing state rather than warm state.
+const FIRST_MEASURED_EXPORT_INDEX: u64 = 0;
+// The warm-path allocation contract permits no allocator activity.
+const NO_ALLOCATED_BYTES: u64 = 0;
 
 #[test]
 #[cfg_attr(
     miri,
-    ignore = "uses a custom #[global_allocator]; miri's runtime allocator instrumentation \
-              conflicts with the alloc_tracker probe"
+    ignore = "The custom global allocator conflicts with Miri's runtime allocator \
+              instrumentation."
 )]
 fn histogram_deltas_does_not_allocate_on_steady_state() {
     let session = Session::new().no_stdout().no_file();
-    let op = session.operation("histogram_deltas_steady_state");
+    let op = session.operation(OPERATION_NAME);
 
     let mut state = EventState::default();
 
-    // First call initializes the bucket storage (this allocates the bucket Vec).
-    // Cumulative: [5, 17, 25, 28]. First-call deltas equal cumulative values.
+    // Drive the initializing path outside the allocation measurement.
     let expected_first: [(i64, u64, u64); 4] =
         [(10, 5, 5), (50, 17, 17), (100, 25, 25), (500, 28, 28)];
     assert!(
         state
-            .histogram_deltas(BUCKETS, [5_u64, 12, 8, 3])
+            .histogram_deltas(HISTOGRAM_BUCKET_BOUNDS, [5_u64, 12, 8, 3])
             .eq(expected_first)
     );
 
-    // Steady-state input is the same on every iteration, so:
-    //  * iteration 1 sees cumulative [7, 16, 27, 31] against previous [5, 17, 25, 28]
-    //    (note the saturating subtraction at bucket 1: 16 - 17 saturates to 0);
-    //  * iterations 2+ see cumulative [7, 16, 27, 31] against previous [7, 16, 27, 31],
-    //    so all deltas are zero.
+    // The first measured export mixes positive and saturating deltas. Reusing the same
+    // cumulative input then exercises the zero-delta warm path.
     let expected_steady_first: [(i64, u64, u64); 4] =
         [(10, 7, 2), (50, 16, 0), (100, 27, 2), (500, 31, 3)];
     let expected_steady_subsequent: [(i64, u64, u64); 4] =
         [(10, 7, 0), (50, 16, 0), (100, 27, 0), (500, 31, 0)];
 
-    // `Iterator::eq` against a finite expected array bounds consumption to
-    // `expected.len() + 1` calls to `self.next()` and is itself allocation-free.
-    // A hypothetical mutation that broke iteration termination would surface here
-    // as an assertion failure rather than a test hang.
-    let iterations = 16_u64;
+    // A finite expected sequence makes incorrect termination fail without a timeout and
+    // keeps the assertion itself allocation-free.
     {
-        let _span = op.measure_thread().iterations(iterations);
-        for i in 0..iterations {
-            let expected = if i == 0 {
+        let _span = op.measure_thread().iterations(MEASURED_EXPORT_COUNT);
+        for export_index in 0..MEASURED_EXPORT_COUNT {
+            let expected = if export_index == FIRST_MEASURED_EXPORT_INDEX {
                 expected_steady_first
             } else {
                 expected_steady_subsequent
             };
             assert!(
                 state
-                    .histogram_deltas(BUCKETS, [7_u64, 9, 11, 4])
+                    .histogram_deltas(HISTOGRAM_BUCKET_BOUNDS, [7_u64, 9, 11, 4])
                     .eq(expected)
             );
         }
@@ -67,17 +68,10 @@ fn histogram_deltas_does_not_allocate_on_steady_state() {
 
     let report = session.to_report();
     let operations: Vec<_> = report.operations().collect();
-    let (_name, stats) = operations
+    let (_, stats) = operations
         .iter()
-        .find(|(name, _)| *name == "histogram_deltas_steady_state")
-        .expect("operation should have been recorded");
+        .find(|(name, _)| *name == OPERATION_NAME)
+        .unwrap();
 
-    assert_eq!(
-        stats.total_bytes_allocated(),
-        0,
-        "steady-state histogram_deltas must not allocate; allocated \
-         {} bytes across {} iterations",
-        stats.total_bytes_allocated(),
-        stats.total_iterations()
-    );
+    assert_eq!(stats.total_bytes_allocated(), NO_ALLOCATED_BYTES);
 }

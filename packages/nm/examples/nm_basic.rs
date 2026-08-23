@@ -3,20 +3,22 @@
 use nm::{Event, Report};
 
 fn main() {
-    // We just process a fixed amount of data here.
+    /// Different counts make the fixture categories distinguishable in the report.
     const LARGE_BAGEL_COUNT: usize = 1000;
     const SMALL_BAGEL_COUNT: usize = 1300;
+
+    /// Distinct weights make the aggregate magnitude meaningful.
     const LARGE_BAGEL_WEIGHT_GRAMS: i64 = 510;
     const SMALL_BAGEL_WEIGHT_GRAMS: i64 = 180;
 
     for _ in 0..LARGE_BAGEL_COUNT {
         LARGE_BAGELS_COOKED.with(Event::observe_once);
-        BAGELS_COOKED_WEIGHT_GRAMS.with(|x| x.observe(LARGE_BAGEL_WEIGHT_GRAMS));
+        BAGELS_COOKED_WEIGHT_GRAMS.with(|event| event.observe(LARGE_BAGEL_WEIGHT_GRAMS));
     }
 
     for _ in 0..SMALL_BAGEL_COUNT {
         SMALL_BAGELS_COOKED.with(Event::observe_once);
-        BAGELS_COOKED_WEIGHT_GRAMS.with(|x| x.observe(SMALL_BAGEL_WEIGHT_GRAMS));
+        BAGELS_COOKED_WEIGHT_GRAMS.with(|event| event.observe(SMALL_BAGEL_WEIGHT_GRAMS));
     }
 
     let report = Report::collect();

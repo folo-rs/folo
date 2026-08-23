@@ -2271,7 +2271,6 @@ version = "0.1.44"
 dependencies = [
  "criterion",
  "fast_time",
- "foldhash",
  "gungraun",
  "many_cpus",
  "mutants",
@@ -2280,6 +2279,7 @@ dependencies = [
  "num-traits",
  "par_bench",
  "static_assertions",
+ "testing",
 ]
 
 [[package]]
@@ -2288,7 +2288,6 @@ version = "0.4.16"
 dependencies = [
  "nm",
  "nm_otel_impl",
- "opentelemetry",
  "opentelemetry-stdout",
  "opentelemetry_sdk",
  "static_assertions",
@@ -2302,7 +2301,6 @@ version = "0.4.16"
 dependencies = [
  "alloc_tracker",
  "criterion",
- "foldhash",
  "futures",
  "gungraun",
  "hashbrown 0.17.1",

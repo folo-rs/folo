@@ -4,12 +4,14 @@ use std::{cmp, iter};
 
 use new_zealand::nz;
 
-use crate::{EventName, GLOBAL_REGISTRY, HashMap, Magnitude, ObservationBagSnapshot, Observations};
+use crate::{
+    EventName, GLOBAL_REGISTRY, GlobalEventRegistry, HashMap, Magnitude, ObservationBagSnapshot,
+};
 
 /// A human- and machine-readable report about observed occurrences of events.
 ///
-/// For human-readable output, use the `Display` trait implementation. This is intended
-/// for writing to a terminal and uses only the basic ASCII character set.
+/// For human-readable output, use the `Display` trait implementation. Its histogram
+/// rendering uses Unicode symbols and is intended for Unicode-capable terminals.
 ///
 /// For machine-readable output, inspect report contents via the provided methods.
 #[derive(Debug)]
@@ -32,11 +34,10 @@ impl Report {
     ///         .build();
     /// }
     ///
-    /// // Observe some events first
-    /// TEST_EVENT.with(|e| e.observe_once());
+    /// TEST_EVENT.with(Event::observe_once);
     ///
     /// let report = Report::collect();
-    /// println!("{}", report);
+    /// println!("{report}");
     /// ```
     ///
     /// # Panics
@@ -44,35 +45,32 @@ impl Report {
     /// Panics if the same event is registered on different threads with a different configuration.
     #[must_use]
     pub fn collect() -> Self {
-        // We must first collect all observations from all threads and merge them per-event.
-        let mut event_name_to_merged_snapshot = HashMap::default();
+        Self::collect_from(&GLOBAL_REGISTRY)
+    }
 
-        GLOBAL_REGISTRY.inspect(|observation_bags| {
+    fn collect_from(registry: &GlobalEventRegistry) -> Self {
+        let mut event_name_to_merged_snapshot: HashMap<EventName, ObservationBagSnapshot> =
+            HashMap::default();
+
+        registry.inspect(|observation_bags| {
             for (event_name, observation_bag) in observation_bags {
-                let snapshot = observation_bag.snapshot();
-
-                // Merge the snapshot into the existing one for this event name.
-                event_name_to_merged_snapshot
-                    .entry(event_name.clone())
-                    .and_modify(|existing_snapshot: &mut ObservationBagSnapshot| {
-                        existing_snapshot.merge_from(&snapshot);
-                    })
-                    .or_insert(snapshot);
+                if let Some(existing_snapshot) =
+                    event_name_to_merged_snapshot.get_mut(event_name.as_ref())
+                {
+                    existing_snapshot.merge_from_observations(observation_bag);
+                } else {
+                    event_name_to_merged_snapshot
+                        .insert(event_name.clone(), observation_bag.snapshot());
+                }
             }
         });
 
-        // Now that we have the data set, we can form the report.
-        let mut events = event_name_to_merged_snapshot
+        let events = event_name_to_merged_snapshot
             .into_iter()
             .map(|(event_name, snapshot)| EventMetrics::new(event_name, snapshot))
             .collect::<Vec<_>>();
 
-        // Sort the events by name.
-        events.sort_by_key(|event_metrics| event_metrics.name().clone());
-
-        Self {
-            events: events.into_boxed_slice(),
-        }
+        Self::from_unsorted_events(events)
     }
 
     /// Iterates through all the events in the report, allowing access to their metrics.
@@ -88,8 +86,7 @@ impl Report {
     ///         .build();
     /// }
     ///
-    /// // Observe some events first
-    /// TEST_EVENT.with(|e| e.observe_once());
+    /// TEST_EVENT.with(Event::observe_once);
     ///
     /// let report = Report::collect();
     ///
@@ -102,15 +99,21 @@ impl Report {
         self.events.iter()
     }
 
-    /// Constructs a `Report` from a pre-assembled list of [`EventMetrics`] without
-    /// touching the global event registry.
+    /// Constructs a report from preassembled metrics.
     ///
-    /// Intended for in-workspace tests and benchmarks that need to drive code paths
-    /// expecting a [`Report`] without observing real events.
+    /// This does not touch the global event registry. It is intended for in-workspace
+    /// tests and benchmarks that need to drive code paths expecting a [`Report`].
     #[cfg(any(test, feature = "private-test-util"))]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     #[doc(hidden)]
     #[must_use]
     pub fn fake(events: Vec<EventMetrics>) -> Self {
+        Self::from_unsorted_events(events)
+    }
+
+    fn from_unsorted_events(mut events: Vec<EventMetrics>) -> Self {
+        events.sort_by(|left, right| left.name().as_ref().cmp(right.name().as_ref()));
+
         Self {
             events: events.into_boxed_slice(),
         }
@@ -137,9 +140,6 @@ pub struct EventMetrics {
     count: u64,
     sum: Magnitude,
 
-    // 0 if there are no observations.
-    mean: Magnitude,
-
     // None if the event was not configured to generate a histogram.
     histogram: Option<Histogram>,
 }
@@ -149,32 +149,24 @@ impl EventMetrics {
         let count = snapshot.count;
         let sum = snapshot.sum;
 
-        #[expect(
-            clippy::arithmetic_side_effects,
-            reason = "NonZero protects against division by zero"
-        )]
-        #[expect(
-            clippy::integer_division,
-            reason = "we accept that we lose the remainder - 100% precision not required"
-        )]
-        let mean = Magnitude::try_from(count)
-            .ok()
-            .and_then(NonZero::new)
-            .map_or(0, |count| sum / count.get());
-
         let histogram = if snapshot.bucket_magnitudes.is_empty() {
             None
         } else {
-            // We now need to synthesize the `Magnitude::MAX` bucket for the histogram.
-            // This is just "whatever is left after the configured buckets".
-            let plus_infinity_bucket_count = snapshot
-                .count
-                .saturating_sub(snapshot.bucket_counts.iter().sum::<u64>());
+            let explicit_bucket_count = snapshot
+                .bucket_counts
+                .iter()
+                .copied()
+                .fold(0_u64, u64::wrapping_add);
+
+            // Snapshot fields are loaded independently, so a concurrent observation can make
+            // the explicit bucket total appear newer than the overall count. Clamp that
+            // logically torn state instead of reporting an impossible negative overflow count.
+            let overflow_bucket_count = snapshot.count.saturating_sub(explicit_bucket_count);
 
             Some(Histogram {
                 magnitudes: snapshot.bucket_magnitudes,
                 counts: snapshot.bucket_counts,
-                plus_infinity_bucket_count,
+                overflow_bucket_count,
             })
         };
 
@@ -182,7 +174,6 @@ impl EventMetrics {
             name,
             count,
             sum,
-            mean,
             histogram,
         }
     }
@@ -200,7 +191,7 @@ impl EventMetrics {
     ///         .build();
     /// }
     ///
-    /// HTTP_REQUESTS.with(|e| e.observe_once());
+    /// HTTP_REQUESTS.with(Event::observe_once);
     /// let report = Report::collect();
     ///
     /// for event in report.events() {
@@ -226,8 +217,8 @@ impl EventMetrics {
     ///         .build();
     /// }
     ///
-    /// HTTP_REQUESTS.with(|e| e.observe_once());
-    /// HTTP_REQUESTS.with(|e| e.observe_once());
+    /// HTTP_REQUESTS.with(Event::observe_once);
+    /// HTTP_REQUESTS.with(Event::observe_once);
     /// let report = Report::collect();
     ///
     /// for event in report.events() {
@@ -292,8 +283,19 @@ impl EventMetrics {
     /// ```
     #[inline]
     #[must_use]
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "NonZero protects against division by zero"
+    )]
+    #[expect(
+        clippy::integer_division,
+        reason = "The reported integral mean is truncated toward zero."
+    )]
     pub fn mean(&self) -> Magnitude {
-        self.mean
+        Magnitude::try_from(self.count)
+            .ok()
+            .and_then(NonZero::new)
+            .map_or(0, |count| self.sum / count.get())
     }
 
     /// The histogram of observed magnitudes (if configured).
@@ -321,7 +323,7 @@ impl EventMetrics {
     ///     if let Some(histogram) = event.histogram() {
     ///         println!("Histogram for {}", event.name());
     ///         for (bucket_upper_bound, count) in histogram.buckets() {
-    ///             println!("  ≤{}: {}", bucket_upper_bound, count);
+    ///             println!("  ≤{bucket_upper_bound}: {count}");
     ///         }
     ///     }
     /// }
@@ -334,13 +336,13 @@ impl EventMetrics {
         self.histogram.as_ref()
     }
 
-    /// Constructs an `EventMetrics` from pre-computed values without touching the
-    /// global event registry. The mean is calculated as `sum / count` (rounded
-    /// down); when `count` is zero, the mean is zero.
+    /// Constructs event metrics from precomputed values.
     ///
-    /// Intended for in-workspace tests and benchmarks that need to build metric
-    /// snapshots without observing real events.
+    /// This does not touch the global event registry. The mean is calculated as
+    /// `sum / count`, truncated toward zero; when `count` is zero, the mean is zero.
+    /// This function is intended for in-workspace tests and benchmarks.
     #[cfg(any(test, feature = "private-test-util"))]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     #[doc(hidden)]
     #[must_use]
     pub fn fake(
@@ -349,24 +351,10 @@ impl EventMetrics {
         sum: Magnitude,
         histogram: Option<Histogram>,
     ) -> Self {
-        #[expect(
-            clippy::arithmetic_side_effects,
-            reason = "NonZero protects against division by zero"
-        )]
-        #[expect(
-            clippy::integer_division,
-            reason = "we accept that we lose the remainder - 100% precision not required"
-        )]
-        let mean = Magnitude::try_from(count)
-            .ok()
-            .and_then(NonZero::new)
-            .map_or(0, |count| sum / count.get());
-
         Self {
             name: name.into(),
             count,
             sum,
-            mean,
             histogram,
         }
     }
@@ -377,14 +365,13 @@ impl Display for EventMetrics {
         write!(f, "{}: ", self.name)?;
 
         if self.count == 0 {
-            // If there is no recorded data, we just report a flat zero no questions asked.
             writeln!(f, "0")?;
             return Ok(());
         }
 
         #[expect(
             clippy::cast_possible_wrap,
-            reason = "intentional wrap - crate policy is that values out of safe range may be mangled"
+            reason = "The display contract permits wrapping out-of-range counts."
         )]
         let count_as_magnitude = self.count as Magnitude;
 
@@ -397,10 +384,10 @@ impl Display for EventMetrics {
             // makes the typical case more readable.
             writeln!(f, "{} (counter)", self.count)?;
         } else {
-            writeln!(f, "{}; sum {}; mean {}", self.count, self.sum, self.mean)?;
+            let mean = self.mean();
+            writeln!(f, "{}; sum {}; mean {mean}", self.count, self.sum)?;
         }
 
-        // If there is no histogram to report (because there are no buckets defined), we are done.
         if let Some(histogram) = &self.histogram {
             writeln!(f, "{histogram}")?;
         }
@@ -423,17 +410,16 @@ pub struct Histogram {
 
     counts: Box<[u64]>,
 
-    /// Occurrences that did not fit into any of the buckets.
+    /// Occurrences that did not fit into any explicit bucket.
     /// We map these to a synthetic bucket with `Magnitude::MAX`.
-    plus_infinity_bucket_count: u64,
+    overflow_bucket_count: u64,
 }
 
 impl Histogram {
     /// Iterates over the magnitudes of the histogram buckets, in ascending order.
     ///
-    /// Each bucket counts the number of events that are less than or equal to the corresponding
-    /// magnitude. Each occurrence of an event is counted only once, in the first bucket that can
-    /// accept it.
+    /// Each bucket counts observations whose magnitude is less than or equal to its upper bound.
+    /// Each observation is counted only once, in the first bucket that accepts it.
     ///
     /// The last bucket always has the magnitude `Magnitude::MAX`, counting
     /// occurrences that do not fit into any of the previous buckets.
@@ -445,26 +431,23 @@ impl Histogram {
             .chain(iter::once(Magnitude::MAX))
     }
 
-    /// Iterates over the count of occurrences in each bucket,
-    /// including the last `Magnitude::MAX` bucket.
+    /// Iterates over occurrence counts, including the last `Magnitude::MAX` bucket.
     ///
-    /// Each bucket counts the number of events that are less than or equal to the corresponding
-    /// magnitude. Each occurrence of an event is counted only once, in the first bucket that can
-    /// accept it.
+    /// Each bucket counts observations whose magnitude is less than or equal to its upper bound.
+    /// Each observation is counted only once, in the first bucket that accepts it.
     #[inline]
     pub fn counts(&self) -> impl Iterator<Item = u64> {
         self.counts
             .iter()
             .copied()
-            .chain(iter::once(self.plus_infinity_bucket_count))
+            .chain(iter::once(self.overflow_bucket_count))
     }
 
     /// Iterates over the histogram buckets as `(magnitude, count)` pairs,
     /// in ascending order of magnitudes.
     ///
-    /// Each bucket counts the number of events that are less than or equal to the corresponding
-    /// magnitude. Each occurrence of an event is counted only once, in the first bucket that can
-    /// accept it.
+    /// Each bucket counts observations whose magnitude is less than or equal to its upper bound.
+    /// Each observation is counted only once, in the first bucket that accepts it.
     ///
     /// The last bucket always has the magnitude `Magnitude::MAX`, counting
     /// occurrences that do not fit into any of the previous buckets.
@@ -473,113 +456,93 @@ impl Histogram {
         self.magnitudes().zip(self.counts())
     }
 
-    /// Constructs a `Histogram` from raw parts without touching the global event
-    /// registry.
+    /// Constructs a histogram from raw parts.
     ///
-    /// `magnitudes` must be sorted in strictly ascending order and must not contain
-    /// `Magnitude::MAX` (which is automatically synthesized as the terminal bucket).
-    /// `counts` must have the same length as `magnitudes`. `plus_infinity_count` is
-    /// the count for the synthetic `Magnitude::MAX` bucket.
+    /// `bucket_upper_bounds` must be sorted in strictly ascending order and must not
+    /// contain `Magnitude::MAX`, which is synthesized as the terminal bucket.
+    /// `bucket_counts` must have the same length as `bucket_upper_bounds`.
+    /// `overflow_bucket_count` is the count for the synthetic terminal bucket.
     ///
-    /// Intended for in-workspace tests and benchmarks.
+    /// This does not touch the global event registry. It is intended for in-workspace
+    /// tests and benchmarks.
     ///
     /// # Panics
     ///
     /// Panics if any of the above preconditions are violated.
     #[cfg(any(test, feature = "private-test-util"))]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     #[doc(hidden)]
     #[must_use]
     pub fn fake(
-        magnitudes: &'static [Magnitude],
-        counts: Vec<u64>,
-        plus_infinity_count: u64,
+        bucket_upper_bounds: &'static [Magnitude],
+        bucket_counts: Vec<u64>,
+        overflow_bucket_count: u64,
     ) -> Self {
-        assert!(
-            counts.len() == magnitudes.len(),
-            "counts and magnitudes must have the same length"
-        );
+        assert_eq!(bucket_counts.len(), bucket_upper_bounds.len());
 
-        if !magnitudes.is_empty() {
-            #[expect(
-                clippy::indexing_slicing,
-                reason = "windows() guarantees that we have exactly two elements"
-            )]
-            {
-                assert!(
-                    magnitudes.windows(2).all(|w| w[0] < w[1]),
-                    "magnitudes must be in strictly ascending order"
-                );
-            }
-
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "Windows guarantee that both indexed elements are in bounds."
+        )]
+        {
             assert!(
-                !magnitudes.contains(&Magnitude::MAX),
-                "magnitudes must not contain Magnitude::MAX"
+                bucket_upper_bounds
+                    .windows(2)
+                    .all(|window| window[0] < window[1])
             );
         }
 
+        assert!(!bucket_upper_bounds.contains(&Magnitude::MAX));
+
         Self {
-            magnitudes,
-            counts: counts.into_boxed_slice(),
-            plus_infinity_bucket_count: plus_infinity_count,
+            magnitudes: bucket_upper_bounds,
+            counts: bucket_counts.into_boxed_slice(),
+            overflow_bucket_count,
         }
     }
 }
 
-/// We auto-scale histogram bars when rendering the report. This is the number of characters
-/// that we use to represent the maximum bucket value in the histogram.
+/// Target width balances visible relative differences against terminal readability.
 ///
-/// Histograms may be smaller than this, as well, because one character will never represent
-/// less than one event (so if the max value is 3, the histogram render will be 3 characters wide).
-///
-/// Due to aliasing effects (have to assign at least 1 item per character), the width may even
-/// be greater than this for histograms with very small bucket values. We are not after perfect
-/// rendering here, just a close enough approximation that is easy to read.
-const HISTOGRAM_BAR_WIDTH_CHARS: u64 = 50;
+/// Integer quantization can produce shorter or longer bars.
+const TARGET_HISTOGRAM_BAR_WIDTH_CHARS: u64 = 50;
+
+/// Ensures that a nonempty histogram remains renderable when its largest bucket is small.
+const MIN_OBSERVATIONS_PER_BAR_CHAR: u64 = 1;
 
 /// Pre-allocated string of histogram bar characters to avoid allocation during rendering.
-/// We make this longer than the typical bar width to handle cases where aliasing causes
+/// We make this longer than the typical bar width to handle cases where quantization causes
 /// the bar to exceed the target width.
 const HISTOGRAM_BAR_CHARS: &str =
     "∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎";
 
-const HISTOGRAM_BAR_CHARS_LEN_BYTES: NonZero<usize> =
-    NonZero::new(HISTOGRAM_BAR_CHARS.len()).unwrap();
+const HISTOGRAM_BAR_CHARS_LEN_BYTES: NonZero<usize> = nz!(HISTOGRAM_BAR_CHARS.len());
 
-/// Number of bytes per histogram bar character.
-/// The '∎' character is U+25A0 which encodes to 3 bytes in UTF-8.
-const BYTES_PER_HISTOGRAM_BAR_CHAR: NonZero<usize> = nz!(3);
+/// UTF-8 width of each histogram bar character.
+const BYTES_PER_HISTOGRAM_BAR_CHAR: NonZero<usize> = nz!('∎'.len_utf8());
 
 impl Display for Histogram {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let buckets = self.buckets().collect::<Vec<_>>();
 
-        // We measure the dynamic parts of the string to know how much padding to add.
-
-        // We write the observation counts here (both in measurement phase and when rendering).
         let mut count_str = String::new();
 
-        // What is the widest event count string for any bucket? Affects padding.
-        let widest_count = buckets.iter().fold(0, |current, bucket| {
+        let widest_count = buckets.iter().fold(0, |current, &(_, count)| {
             count_str.clear();
-            write!(&mut count_str, "{}", bucket.1)
-                .expect("we expect writing integer to String to be infallible");
+            write!(&mut count_str, "{count}").expect("writing to a String is infallible");
             cmp::max(current, count_str.len())
         });
 
-        // We write the bucket upper bounds here (both in measurement phase and when rendering).
         let mut upper_bound_str = String::new();
 
-        // What is the widest upper bound string for any bucket? Affects padding.
-        let widest_upper_bound = buckets.iter().fold(0, |current, bucket| {
+        let widest_upper_bound = buckets.iter().fold(0, |current, &(magnitude, _)| {
             upper_bound_str.clear();
 
-            if bucket.0 == Magnitude::MAX {
-                // We use "+inf" for the upper bound of the last bucket.
-                write!(&mut upper_bound_str, "+inf")
-                    .expect("we expect writing integer to String to be infallible");
+            if magnitude == Magnitude::MAX {
+                upper_bound_str.push_str("+inf");
             } else {
-                write!(&mut upper_bound_str, "{}", bucket.0)
-                    .expect("we expect writing integer to String to be infallible");
+                write!(&mut upper_bound_str, "{magnitude}")
+                    .expect("writing to a String is infallible");
             }
 
             cmp::max(current, upper_bound_str.len())
@@ -591,10 +554,8 @@ impl Display for Histogram {
             upper_bound_str.clear();
 
             if magnitude == Magnitude::MAX {
-                // We use "+inf" for the upper bound of the last bucket.
-                write!(&mut upper_bound_str, "+inf")?;
+                upper_bound_str.push_str("+inf");
             } else {
-                // Otherwise, we write the magnitude as is.
                 write!(&mut upper_bound_str, "{magnitude}")?;
             }
 
@@ -621,70 +582,68 @@ impl Display for Histogram {
     }
 }
 
-/// Represent the auto-scaling logic of the histogram bars, identifying the step size for rendering.
+/// Scales histogram counts into readable Unicode bars.
 #[derive(Debug)]
 struct HistogramScale {
-    /// The number of events that each character in the histogram bar represents.
-    /// One character is rendered for each `count_per_char` events (rounded down).
-    count_per_char: NonZero<u64>,
+    /// Number of observations represented by one bar character.
+    observations_per_char: NonZero<u64>,
 }
 
 impl HistogramScale {
-    fn new(snapshot: &Histogram) -> Self {
-        let max_count = snapshot
+    fn new(histogram: &Histogram) -> Self {
+        let max_count = histogram
             .counts()
             .max()
-            .expect("a histogram always has at least one bucket by definition (+inf)");
+            .expect("the synthesized overflow bucket guarantees a nonempty histogram");
 
-        // Each character in the histogram bar represents this many events for auto-scaling
-        // purposes. We use integers, so this can suffer from aliasing effects if there are
-        // not many events. That is fine - the relative sizes will still be fine and the numbers
-        // will give the ground truth even if the rendering is not perfect.
         #[expect(
             clippy::integer_division,
-            reason = "we accept the loss of precision here - the bar might not always reach 100% of desired width or even overshoot it"
+            reason = "Quantization may make bars shorter or longer than the target width."
         )]
-        let count_per_char = NonZero::new(cmp::max(max_count / HISTOGRAM_BAR_WIDTH_CHARS, 1))
-            .expect("guarded by max()");
+        let observations_per_char = NonZero::new(cmp::max(
+            max_count / TARGET_HISTOGRAM_BAR_WIDTH_CHARS,
+            MIN_OBSERVATIONS_PER_BAR_CHAR,
+        ))
+        .expect("the minimum observations per character is nonzero");
 
-        Self { count_per_char }
+        Self {
+            observations_per_char,
+        }
     }
 
     fn write_bar(&self, count: u64, f: &mut impl Write) -> fmt::Result {
         let histogram_bar_width = count
-            .checked_div(self.count_per_char.get())
-            .expect("division by zero impossible - divisor is NonZero");
-
-        // Note: due to aliasing we can occasionally exceed HISTOGRAM_BAR_WIDTH_CHARS.
-        // This is fine - we are not looking for perfect rendering, just close enough.
-
-        let bar_width = usize::try_from(histogram_bar_width).expect("safe range");
+            .checked_div(self.observations_per_char.get())
+            .expect("the observations-per-character divisor is nonzero");
 
         let chars_in_constant = HISTOGRAM_BAR_CHARS_LEN_BYTES
             .get()
             .checked_div(BYTES_PER_HISTOGRAM_BAR_CHAR.get())
-            .expect("NonZero - cannot be zero");
+            .expect("the histogram bar character width is nonzero");
+        let chars_in_constant = u64::try_from(chars_in_constant)
+            .expect("Rust does not support pointer widths greater than 64 bits");
 
-        let mut remaining = bar_width;
+        let mut remaining = histogram_bar_width;
 
         while remaining > 0 {
-            let chunk_size =
-                NonZero::new(remaining.min(chars_in_constant)).expect("guarded by loop condition");
+            let chunk_char_count = NonZero::new(remaining.min(chars_in_constant))
+                .expect("the loop condition and nonempty bar constant guarantee a nonzero chunk");
+            let chunk_char_count_usize = usize::try_from(chunk_char_count.get())
+                .expect("the chunk is bounded by the bar constant's usize character count");
 
-            // Calculate byte length directly: each ∎ character is BYTES_PER_HISTOGRAM_BAR_CHAR bytes in UTF-8.
-            let byte_end = chunk_size
-                .checked_mul(BYTES_PER_HISTOGRAM_BAR_CHAR)
-                .expect("we are seeking into a small constant value, overflow impossible");
+            let byte_end = chunk_char_count_usize
+                .checked_mul(BYTES_PER_HISTOGRAM_BAR_CHAR.get())
+                .expect("the chunk is bounded by the bar constant's byte length");
 
             #[expect(
                 clippy::string_slice,
-                reason = "safe slicing - ∎ characters have known UTF-8 encoding"
+                reason = "The end is a multiple of the known UTF-8 character width."
             )]
-            f.write_str(&HISTOGRAM_BAR_CHARS[..byte_end.get()])?;
+            f.write_str(&HISTOGRAM_BAR_CHARS[..byte_end])?;
 
             remaining = remaining
-                .checked_sub(chunk_size.get())
-                .expect("guarded by min() above");
+                .checked_sub(chunk_char_count.get())
+                .expect("the chunk is no larger than the remaining width");
         }
 
         Ok(())
@@ -694,13 +653,17 @@ impl HistogramScale {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
+    #![allow(clippy::indexing_slicing, reason = "Panicking is acceptable in tests.")]
 
     use std::panic::{RefUnwindSafe, UnwindSafe};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
 
     use static_assertions::assert_impl_all;
+    use testing::{assert_panics, with_watchdog};
 
     use super::*;
+    use crate::{LocalEventRegistry, ObservationBagSync, Observations};
 
     assert_impl_all!(Report: UnwindSafe, RefUnwindSafe);
     assert_impl_all!(EventMetrics: UnwindSafe, RefUnwindSafe);
@@ -714,7 +677,7 @@ mod tests {
         let histogram = Histogram {
             magnitudes,
             counts: Vec::from(counts).into_boxed_slice(),
-            plus_infinity_bucket_count: 1,
+            overflow_bucket_count: 1,
         };
 
         assert_eq!(
@@ -745,13 +708,17 @@ mod tests {
 
     #[test]
     fn histogram_display_contains_expected_information() {
+        // This allows for UTF-8 bar bytes, labels, and integer quantization overshoot without
+        // duplicating the rendering algorithm in the test.
+        const MAX_LINE_BYTES_PER_TARGET_BAR_CHAR: u64 = 5;
+
         let magnitudes = &[-5, 1, 10, 100];
         let counts = &[666666, 5, 3, 2];
 
         let histogram = Histogram {
             magnitudes,
             counts: Vec::from(counts).into_boxed_slice(),
-            plus_infinity_bucket_count: 1,
+            overflow_bucket_count: 1,
         };
 
         let mut output = String::new();
@@ -759,28 +726,18 @@ mod tests {
 
         println!("{output}");
 
-        // We expect each bucket to be displayed, except the MAX one should say "+inf"
-        // instead of the actual value (because the numeric value is too big for good UX).
-        // We check for the specific format we expect to see here (change test if we change format).
         assert!(output.contains("value <=   -5 [ 666666 ]: "));
         assert!(output.contains("value <=    1 [      5 ]: "));
         assert!(output.contains("value <=   10 [      3 ]: "));
         assert!(output.contains("value <=  100 [      2 ]: "));
         assert!(output.contains("value <= +inf [      1 ]: "));
 
-        // We do not want to reproduce the auto-scaling logic here, so let us just ensure that
-        // the lines are not hilariously long (e.g. 66666 chars), as a basic sanity check.
-        // NB! Recall that String::len() counts BYTES and that the "boxes" we draw are non-ASCII
-        // characters that take up more than one byte each! So we leave some extra room with a
-        // x5 multiplier to give it some leeway - we just want to detect insane line lengths.
-        #[expect(clippy::cast_possible_truncation, reason = "safe range, tiny values")]
-        let max_acceptable_line_length = (HISTOGRAM_BAR_WIDTH_CHARS * 5) as usize;
+        let max_line_bytes =
+            usize::try_from(TARGET_HISTOGRAM_BAR_WIDTH_CHARS * MAX_LINE_BYTES_PER_TARGET_BAR_CHAR)
+                .unwrap();
 
         for line in output.lines() {
-            assert!(
-                line.len() < max_acceptable_line_length,
-                "line is too long: {line}"
-            );
+            assert!(line.len() < max_line_bytes);
         }
     }
 
@@ -794,14 +751,13 @@ mod tests {
         let histogram = Histogram {
             magnitudes: &[1, 10, 100],
             counts: vec![5, 3, 2].into_boxed_slice(),
-            plus_infinity_bucket_count: 1,
+            overflow_bucket_count: 1,
         };
 
         let event_metrics = EventMetrics {
             name: event_name.clone().into(),
             count,
             sum,
-            mean,
             histogram: Some(histogram),
         };
 
@@ -822,14 +778,13 @@ mod tests {
         let histogram = Histogram {
             magnitudes: &[1, 10, 100],
             counts: vec![5, 3, 2].into_boxed_slice(),
-            plus_infinity_bucket_count: 1,
+            overflow_bucket_count: 1,
         };
 
         let event_metrics = EventMetrics {
             name: event_name.clone().into(),
             count,
             sum,
-            mean,
             histogram: Some(histogram),
         };
 
@@ -838,8 +793,6 @@ mod tests {
 
         println!("{output}");
 
-        // We expect the output to contain the event name and the metrics.
-        // We do not prescribe the exact format here, as it is not so critical.
         assert!(output.contains(&event_name));
         assert!(output.contains(&count.to_string()));
         assert!(output.contains(&sum.to_string()));
@@ -848,33 +801,112 @@ mod tests {
     }
 
     #[test]
-    fn report_properties_reflect_reality() {
-        let event1 = EventMetrics {
-            name: "event1".to_string().into(),
+    fn report_fake_sorts_unsorted_events_by_name() {
+        let later_event = EventMetrics {
+            name: "later_event".to_string().into(),
             count: 10,
             sum: Magnitude::from(100),
-            mean: Magnitude::from(10),
             histogram: None,
         };
 
-        let event2 = EventMetrics {
-            name: "event2".to_string().into(),
+        let earlier_event = EventMetrics {
+            name: "earlier_event".to_string().into(),
             count: 5,
             sum: Magnitude::from(50),
-            mean: Magnitude::from(10),
             histogram: None,
         };
 
-        let report = Report {
-            events: vec![event1, event2].into_boxed_slice(),
-        };
+        let report = Report::fake(vec![later_event, earlier_event]);
+        let event_names = report
+            .events()
+            .map(|event| event.name().as_ref())
+            .collect::<Vec<_>>();
 
-        // This is very boring because the Report type is very boring.
-        let events = report.events().collect::<Vec<_>>();
+        assert_eq!(event_names, ["earlier_event", "later_event"]);
+    }
 
-        assert_eq!(events.len(), 2);
-        assert_eq!(events[0].name(), "event1");
-        assert_eq!(events[1].name(), "event2");
+    #[test]
+    fn collection_remains_valid_during_concurrent_observation() {
+        with_watchdog(|| {
+            const EVENT_NAME: &str = "concurrent_report_collection";
+            const OBSERVATION_COUNT: usize = 16;
+            const OBSERVATION_MAGNITUDE: Magnitude = 3;
+
+            let registry = GlobalEventRegistry::new();
+            let checkpoint = Barrier::new(2);
+
+            thread::scope(|scope| {
+                let worker = scope.spawn(|| {
+                    let observations = Arc::new(ObservationBagSync::new(&[]));
+                    let local_registry = LocalEventRegistry::new(&registry);
+                    local_registry.register(EVENT_NAME.into(), Arc::clone(&observations));
+
+                    checkpoint.wait();
+                    for _ in 0..OBSERVATION_COUNT {
+                        observations.insert(OBSERVATION_MAGNITUDE, 1);
+                    }
+                    checkpoint.wait();
+
+                    drop(local_registry);
+                });
+
+                checkpoint.wait();
+                let concurrent_report = Report::collect_from(&registry);
+                checkpoint.wait();
+                worker.join().unwrap();
+
+                let metrics = concurrent_report
+                    .events()
+                    .find(|event| event.name() == EVENT_NAME)
+                    .unwrap();
+                assert!(metrics.count() <= OBSERVATION_COUNT as u64);
+            });
+
+            let report_after_teardown = Report::collect_from(&registry);
+            let metrics = report_after_teardown
+                .events()
+                .find(|event| event.name() == EVENT_NAME)
+                .unwrap();
+            assert_eq!(metrics.count(), OBSERVATION_COUNT as u64);
+            assert_eq!(
+                metrics.sum(),
+                Magnitude::try_from(OBSERVATION_COUNT).unwrap() * OBSERVATION_MAGNITUDE
+            );
+        });
+    }
+
+    #[test]
+    fn collection_rejects_incompatible_archived_configurations() {
+        with_watchdog(|| {
+            const EVENT_NAME: &str = "incompatible_archived_report";
+            const FIRST_BUCKETS: &[Magnitude] = &[10];
+            const SECOND_BUCKETS: &[Magnitude] = &[10, 20];
+
+            let registry = GlobalEventRegistry::new();
+            thread::scope(|scope| {
+                for buckets in [FIRST_BUCKETS, SECOND_BUCKETS] {
+                    let registry = &registry;
+                    scope
+                        .spawn(move || {
+                            let observations = Arc::new(ObservationBagSync::new(buckets));
+                            let local_registry = LocalEventRegistry::new(registry);
+                            local_registry.register(EVENT_NAME.into(), observations);
+                        })
+                        .join()
+                        .unwrap();
+                }
+            });
+
+            assert_panics(|| {
+                _ = Report::collect_from(&registry);
+            });
+
+            let mut retained_configurations = 0;
+            registry.inspect(|observation_bags| {
+                retained_configurations += usize::from(observation_bags.contains_key(EVENT_NAME));
+            });
+            assert_eq!(retained_configurations, 2);
+        });
     }
 
     #[test]
@@ -883,7 +915,6 @@ mod tests {
             name: "event1".to_string().into(),
             count: 10,
             sum: Magnitude::from(100),
-            mean: Magnitude::from(10),
             histogram: None,
         };
 
@@ -891,7 +922,6 @@ mod tests {
             name: "event2".to_string().into(),
             count: 5,
             sum: Magnitude::from(50),
-            mean: Magnitude::from(10),
             histogram: None,
         };
 
@@ -904,57 +934,45 @@ mod tests {
 
         println!("{output}");
 
-        // We expect the output to contain both events.
         assert!(output.contains("event1"));
         assert!(output.contains("event2"));
     }
 
     #[test]
     fn event_displayed_as_counter_if_unit_values_and_no_histogram() {
-        // The Display output should be heuristically detected as a "counter"
-        // and undergo simplified printing if the sum equals the count and if
-        // there is no histogram to report.
-
         let counter = EventMetrics {
             name: "test_event".to_string().into(),
             count: 100,
             sum: Magnitude::from(100),
-            mean: Magnitude::from(1),
             histogram: None,
         };
 
-        // sum != count - cannot be a counter.
         let not_counter = EventMetrics {
             name: "test_event".to_string().into(),
             count: 100,
             sum: Magnitude::from(200),
-            mean: Magnitude::from(2),
             histogram: None,
         };
 
-        // Has a histogram - cannot be a counter.
         let also_not_counter = EventMetrics {
             name: "test_event".to_string().into(),
             count: 100,
             sum: Magnitude::from(100),
-            mean: Magnitude::from(1),
             histogram: Some(Histogram {
                 magnitudes: &[],
                 counts: Box::new([]),
-                plus_infinity_bucket_count: 100,
+                overflow_bucket_count: 100,
             }),
         };
 
-        // Neither condition is a match.
         let still_not_counter = EventMetrics {
             name: "test_event".to_string().into(),
             count: 100,
             sum: Magnitude::from(200),
-            mean: Magnitude::from(2),
             histogram: Some(Histogram {
                 magnitudes: &[],
                 counts: Box::new([]),
-                plus_infinity_bucket_count: 200,
+                overflow_bucket_count: 200,
             }),
         };
 
@@ -978,11 +996,10 @@ mod tests {
 
     #[test]
     fn histogram_scale_zero() {
-        // Everything is zero, so we render zero bar segments.
         let histogram = Histogram {
             magnitudes: &[1, 2, 3],
             counts: Box::new([0, 0, 0]),
-            plus_infinity_bucket_count: 0,
+            overflow_bucket_count: 0,
         };
 
         let histogram_scale = HistogramScale::new(&histogram);
@@ -995,11 +1012,10 @@ mod tests {
 
     #[test]
     fn histogram_scale_small() {
-        // All the buckets have small values, so we do not reach 100% bar width.
         let histogram = Histogram {
             magnitudes: &[1, 2, 3],
             counts: Box::new([1, 2, 3]),
-            plus_infinity_bucket_count: 0,
+            overflow_bucket_count: 0,
         };
 
         let histogram_scale = HistogramScale::new(&histogram);
@@ -1024,15 +1040,14 @@ mod tests {
 
     #[test]
     fn histogram_scale_just_over() {
-        // All the buckets values just a tiny bit over the desired width.
         let histogram = Histogram {
             magnitudes: &[1, 2, 3],
             counts: Box::new([
-                HISTOGRAM_BAR_WIDTH_CHARS + 1,
-                HISTOGRAM_BAR_WIDTH_CHARS + 1,
-                HISTOGRAM_BAR_WIDTH_CHARS + 1,
+                TARGET_HISTOGRAM_BAR_WIDTH_CHARS + 1,
+                TARGET_HISTOGRAM_BAR_WIDTH_CHARS + 1,
+                TARGET_HISTOGRAM_BAR_WIDTH_CHARS + 1,
             ]),
-            plus_infinity_bucket_count: 0,
+            overflow_bucket_count: 0,
         };
 
         let histogram_scale = HistogramScale::new(&histogram);
@@ -1040,29 +1055,24 @@ mod tests {
         let mut output = String::new();
 
         histogram_scale
-            .write_bar(HISTOGRAM_BAR_WIDTH_CHARS + 1, &mut output)
+            .write_bar(TARGET_HISTOGRAM_BAR_WIDTH_CHARS + 1, &mut output)
             .unwrap();
-        // We expect ∎ repeated HISTOGRAM_BAR_WIDTH_CHARS + 1 times.
         assert_eq!(
             output,
-            "∎".repeat(
-                usize::try_from(HISTOGRAM_BAR_WIDTH_CHARS + 1).expect("safe range, tiny value")
-            )
+            "∎".repeat(usize::try_from(TARGET_HISTOGRAM_BAR_WIDTH_CHARS + 1).unwrap())
         );
     }
 
     #[test]
     fn histogram_scale_large_exact() {
-        // The scale is large enough that we render long segments.
-        // The numbers divide just right so the bar reaches the desired width.
         let histogram = Histogram {
             magnitudes: &[1, 2, 3],
             counts: Box::new([
                 79,
-                HISTOGRAM_BAR_WIDTH_CHARS * 100,
-                HISTOGRAM_BAR_WIDTH_CHARS * 1000,
+                TARGET_HISTOGRAM_BAR_WIDTH_CHARS * 100,
+                TARGET_HISTOGRAM_BAR_WIDTH_CHARS * 1000,
             ]),
-            plus_infinity_bucket_count: 0,
+            overflow_bucket_count: 0,
         };
 
         let histogram_scale = HistogramScale::new(&histogram);
@@ -1074,38 +1084,33 @@ mod tests {
         output.clear();
 
         histogram_scale
-            .write_bar(histogram_scale.count_per_char.get(), &mut output)
+            .write_bar(histogram_scale.observations_per_char.get(), &mut output)
             .unwrap();
         assert_eq!(output, "∎");
         output.clear();
 
         histogram_scale
-            .write_bar(HISTOGRAM_BAR_WIDTH_CHARS * 1000, &mut output)
+            .write_bar(TARGET_HISTOGRAM_BAR_WIDTH_CHARS * 1000, &mut output)
             .unwrap();
         assert_eq!(
             output,
-            "∎".repeat(usize::try_from(HISTOGRAM_BAR_WIDTH_CHARS).expect("safe range, tiny value"))
+            "∎".repeat(usize::try_from(TARGET_HISTOGRAM_BAR_WIDTH_CHARS).unwrap())
         );
     }
 
     #[test]
     fn histogram_scale_large_inexact() {
-        // The scale is large enough that we render long segments.
-        // The numbers divide with a remainder, so we do not reach 100% width.
         let histogram = Histogram {
             magnitudes: &[1, 2, 3],
             counts: Box::new([
                 79,
-                HISTOGRAM_BAR_WIDTH_CHARS * 100,
-                HISTOGRAM_BAR_WIDTH_CHARS * 1000,
+                TARGET_HISTOGRAM_BAR_WIDTH_CHARS * 100,
+                TARGET_HISTOGRAM_BAR_WIDTH_CHARS * 1000,
             ]),
-            plus_infinity_bucket_count: 0,
+            overflow_bucket_count: 0,
         };
 
         let histogram_scale = HistogramScale::new(&histogram);
-
-        let mut output = String::new();
-        histogram_scale.write_bar(3, &mut output).unwrap();
 
         let mut output = String::new();
 
@@ -1114,34 +1119,30 @@ mod tests {
         output.clear();
 
         histogram_scale
-            .write_bar(histogram_scale.count_per_char.get() - 1, &mut output)
+            .write_bar(histogram_scale.observations_per_char.get() - 1, &mut output)
             .unwrap();
         assert_eq!(output, "");
         output.clear();
 
         histogram_scale
-            .write_bar(histogram_scale.count_per_char.get(), &mut output)
+            .write_bar(histogram_scale.observations_per_char.get(), &mut output)
             .unwrap();
         assert_eq!(output, "∎");
         output.clear();
 
         histogram_scale
-            .write_bar(HISTOGRAM_BAR_WIDTH_CHARS * 1000 - 1, &mut output)
+            .write_bar(TARGET_HISTOGRAM_BAR_WIDTH_CHARS * 1000 - 1, &mut output)
             .unwrap();
         assert_eq!(
             output,
-            "∎".repeat(
-                usize::try_from(HISTOGRAM_BAR_WIDTH_CHARS).expect("safe range, tiny value") - 1
-            )
+            "∎".repeat(usize::try_from(TARGET_HISTOGRAM_BAR_WIDTH_CHARS).unwrap() - 1)
         );
     }
 
     #[test]
     fn histogram_char_byte_count_is_correct() {
-        // Verify our assumption that ∎ is BYTES_PER_HISTOGRAM_BAR_CHAR bytes in UTF-8.
         assert_eq!("∎".len(), BYTES_PER_HISTOGRAM_BAR_CHAR.get());
 
-        // Verify that our constant string has the expected byte length.
         let expected_chars = HISTOGRAM_BAR_CHARS.chars().count();
         let expected_bytes = expected_chars * BYTES_PER_HISTOGRAM_BAR_CHAR.get();
         assert_eq!(HISTOGRAM_BAR_CHARS.len(), expected_bytes);
@@ -1149,8 +1150,6 @@ mod tests {
 
     #[test]
     fn event_metrics_display_zero_count_reports_flat_zero() {
-        // This tests the "If there is no recorded data, we just report a flat zero
-        // no questions asked." branch in the Display impl.
         let snapshot = ObservationBagSnapshot {
             count: 0,
             sum: 0,
@@ -1162,10 +1161,7 @@ mod tests {
 
         let output = format!("{metrics}");
 
-        // The output should contain the event name followed by ": 0".
         assert!(output.contains("zero_event: 0"));
-
-        // It should be a short output (just the name and zero, plus newline).
         assert_eq!(output.trim(), "zero_event: 0");
     }
 
@@ -1201,42 +1197,58 @@ mod tests {
         assert_eq!(metrics.name(), "sum_event");
         assert_eq!(metrics.count(), 10);
         assert_eq!(metrics.sum(), 100);
-        assert_eq!(metrics.mean(), 10); // 100 / 10 = 10
+        assert_eq!(metrics.mean(), 10);
         assert!(metrics.histogram().is_none());
     }
 
     #[test]
     fn event_metrics_new_non_zero_count_with_buckets() {
-        // Create a snapshot with bucket data.
-        // Buckets: [-10, 0, 10, 100]
-        // Counts in buckets: [2, 3, 4, 5] = 14 total in buckets
-        // Total count: 20 (so 6 are in +inf bucket)
+        const BUCKET_UPPER_BOUNDS: &[Magnitude] = &[-10, 0, 10, 100];
+        const EXPLICIT_BUCKET_COUNTS: [u64; 4] = [2, 3, 4, 5];
+        const TOTAL_COUNT: u64 = 20;
+        const TOTAL_SUM: Magnitude = 500;
+        const EXPECTED_OVERFLOW_COUNT: u64 = TOTAL_COUNT
+            - (EXPLICIT_BUCKET_COUNTS[0]
+                + EXPLICIT_BUCKET_COUNTS[1]
+                + EXPLICIT_BUCKET_COUNTS[2]
+                + EXPLICIT_BUCKET_COUNTS[3]);
+
         let snapshot = ObservationBagSnapshot {
-            count: 20,
-            sum: 500,
-            bucket_magnitudes: &[-10, 0, 10, 100],
-            bucket_counts: vec![2, 3, 4, 5].into_boxed_slice(),
+            count: TOTAL_COUNT,
+            sum: TOTAL_SUM,
+            bucket_magnitudes: BUCKET_UPPER_BOUNDS,
+            bucket_counts: Box::new(EXPLICIT_BUCKET_COUNTS),
         };
 
         let metrics = EventMetrics::new("histogram_event".into(), snapshot);
 
         assert_eq!(metrics.name(), "histogram_event");
-        assert_eq!(metrics.count(), 20);
-        assert_eq!(metrics.sum(), 500);
-        assert_eq!(metrics.mean(), 25); // 500 / 20 = 25
+        assert_eq!(metrics.count(), TOTAL_COUNT);
+        assert_eq!(metrics.sum(), TOTAL_SUM);
+        #[expect(
+            clippy::integer_division,
+            reason = "The public mean contract truncates an integral quotient toward zero."
+        )]
+        let expected_mean = TOTAL_SUM / Magnitude::try_from(TOTAL_COUNT).unwrap();
+        assert_eq!(metrics.mean(), expected_mean);
 
-        let histogram = metrics.histogram().expect("histogram should be present");
+        let histogram = metrics.histogram().unwrap();
 
-        // Verify bucket magnitudes include the synthetic +inf bucket.
         let magnitudes: Vec<_> = histogram.magnitudes().collect();
         assert_eq!(magnitudes, vec![-10, 0, 10, 100, Magnitude::MAX]);
 
-        // Verify bucket counts include the plus_infinity_bucket_count.
-        // plus_infinity = 20 - (2+3+4+5) = 20 - 14 = 6
         let counts: Vec<_> = histogram.counts().collect();
-        assert_eq!(counts, vec![2, 3, 4, 5, 6]);
+        assert_eq!(
+            counts,
+            vec![
+                EXPLICIT_BUCKET_COUNTS[0],
+                EXPLICIT_BUCKET_COUNTS[1],
+                EXPLICIT_BUCKET_COUNTS[2],
+                EXPLICIT_BUCKET_COUNTS[3],
+                EXPECTED_OVERFLOW_COUNT,
+            ]
+        );
 
-        // Verify buckets() returns correct pairs.
         let buckets: Vec<_> = histogram.buckets().collect();
         assert_eq!(buckets.len(), 5);
         assert_eq!(buckets[0], (-10, 2));
@@ -1247,14 +1259,43 @@ mod tests {
     }
 
     #[test]
+    fn event_metrics_new_wraps_explicit_bucket_total() {
+        let snapshot = ObservationBagSnapshot {
+            count: 4,
+            sum: 0,
+            bucket_magnitudes: &[10, 20],
+            bucket_counts: Box::new([u64::MAX, 2]),
+        };
+
+        let metrics = EventMetrics::new("wrapped_buckets".into(), snapshot);
+        let counts = metrics.histogram().unwrap().counts().collect::<Vec<_>>();
+
+        assert_eq!(counts, [u64::MAX, 2, 3]);
+    }
+
+    #[test]
+    fn event_metrics_new_clamps_logically_torn_overflow_count() {
+        let snapshot = ObservationBagSnapshot {
+            count: 1,
+            sum: 0,
+            bucket_magnitudes: &[10],
+            bucket_counts: Box::new([2]),
+        };
+
+        let metrics = EventMetrics::new("torn_snapshot".into(), snapshot);
+        let counts = metrics.histogram().unwrap().counts().collect::<Vec<_>>();
+
+        assert_eq!(counts, [2, 0]);
+    }
+
+    #[test]
     fn event_metrics_fake_calculates_mean_correctly() {
-        // EventMetrics::fake correctly calculates mean as sum / count.
         let metrics = EventMetrics::fake("test_event", 10, 100, None);
 
         assert_eq!(metrics.name(), "test_event");
         assert_eq!(metrics.count(), 10);
         assert_eq!(metrics.sum(), 100);
-        assert_eq!(metrics.mean(), 10); // 100 / 10 = 10
+        assert_eq!(metrics.mean(), 10);
         assert!(metrics.histogram().is_none());
     }
 
@@ -1262,12 +1303,11 @@ mod tests {
     fn event_metrics_fake_calculates_mean_with_different_values() {
         let metrics = EventMetrics::fake("test_event", 25, 500, None);
 
-        assert_eq!(metrics.mean(), 20); // 500 / 25 = 20
+        assert_eq!(metrics.mean(), 20);
     }
 
     #[test]
     fn event_metrics_fake_mean_zero_when_count_zero() {
-        // When count is 0, mean is 0 (not NaN or panic).
         let metrics = EventMetrics::fake("test_event", 0, 100, None);
 
         assert_eq!(metrics.count(), 0);
@@ -1276,14 +1316,10 @@ mod tests {
     }
 
     #[test]
-    fn event_metrics_fake_mean_handles_integer_division() {
-        // Integer division correctly truncates the remainder.
-        // This test specifically catches mutations that replace / with % or *.
-        // - If / were replaced with %, result would be 1 (10 % 3 = 1)
-        // - If / were replaced with *, result would be 30 (10 * 3 = 30)
-        let metrics = EventMetrics::fake("test_event", 3, 10, None);
+    fn event_metrics_fake_mean_truncates_toward_zero() {
+        let metrics = EventMetrics::fake("test_event", 3, -10, None);
 
-        assert_eq!(metrics.mean(), 3); // 10 / 3 = 3 (remainder discarded)
+        assert_eq!(metrics.mean(), -3);
     }
 
     #[test]

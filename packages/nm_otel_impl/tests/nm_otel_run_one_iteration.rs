@@ -1,71 +1,51 @@
-//! Integration test for `Publisher::run_one_iteration()`.
+//! Integration test for one explicitly requested `Publisher` collection.
 //!
-//! This test is in a separate binary to establish controlled circumstances - no other tests
-//! will have recorded nm events, so we can verify the exact metrics exported.
+//! A separate binary prevents other tests from recording nm events, allowing exact assertions
+//! about the exported metrics.
 
 use nm::Event;
 use nm_otel::Publisher;
-use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
-use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
+use nm_otel_impl::{create_test_provider, find_u64_sum};
 use tick::Clock;
+
+// A test-specific name lets the assertion distinguish this event from registry noise.
+const EVENT_NAME: &str = "integration_test_event";
+// The batch distinguishes batched observation from a single-event observation.
+const OBSERVED_EVENT_COUNT: usize = 10;
+// A nonzero magnitude exercises the histogram path while the count metric is asserted.
+const OBSERVED_MAGNITUDE: i64 = 100;
 
 thread_local! {
     static TEST_EVENT: Event = Event::builder()
-        .name("integration_test_event")
+        .name(EVENT_NAME)
         .build();
 }
 
-fn create_test_provider() -> (SdkMeterProvider, InMemoryMetricExporter) {
-    let exporter = InMemoryMetricExporter::default();
-    let reader = PeriodicReader::builder(exporter.clone()).build();
-    let provider = SdkMeterProvider::builder().with_reader(reader).build();
-    (provider, exporter)
-}
-
-// OpenTelemetry SDK uses system time calls not available under Miri isolation.
-#[cfg_attr(miri, ignore)]
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
+)]
 fn run_one_iteration_exports_recorded_events() {
-    // Record some events before creating the publisher.
     TEST_EVENT.with(|event| {
-        event.batch(10).observe(100);
+        event
+            .batch(OBSERVED_EVENT_COUNT)
+            .observe(OBSERVED_MAGNITUDE);
     });
 
-    let (provider, exporter) = create_test_provider();
+    let (provider, reader) = create_test_provider();
 
-    let mut pub_instance = Publisher::builder()
+    let mut publisher = Publisher::builder()
         .provider(provider.clone())
         .clock(Clock::new_frozen())
         .build();
 
-    // Run one iteration - this should collect and export our recorded events.
-    pub_instance.run_one_iteration();
-    provider.force_flush().unwrap();
+    publisher.run_one_iteration();
+    let metrics = reader.collect();
 
-    let metrics = exporter.get_finished_metrics().unwrap();
-    assert!(!metrics.is_empty(), "should have exported some metrics");
-
-    // Find our test event's count metric.
-    let mut found_count = false;
-    for resource_metrics in &metrics {
-        for scope_metrics in resource_metrics.scope_metrics() {
-            for metric in scope_metrics.metrics() {
-                if metric.name() == "integration_test_event" {
-                    found_count = true;
-
-                    // Verify it is a counter with the expected value.
-                    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
-                        panic!("expected Sum<u64> metric data");
-                    };
-                    assert!(sum.is_monotonic());
-                    let mut data_points = sum.data_points();
-                    let first = data_points.next().unwrap();
-                    assert!(data_points.next().is_none());
-                    assert_eq!(first.value(), 10);
-                }
-            }
-        }
-    }
-
-    assert!(found_count, "should have found our test event count metric");
+    assert_eq!(
+        find_u64_sum(&metrics, EVENT_NAME),
+        Some((true, u64::try_from(OBSERVED_EVENT_COUNT).unwrap()))
+    );
+    drop(provider);
 }

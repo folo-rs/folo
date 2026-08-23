@@ -20,7 +20,7 @@
 
 #![allow(
     missing_docs,
-    reason = "no need for API documentation on benchmark code"
+    reason = "No need for API documentation in benchmark code"
 )]
 #![cfg_attr(
     target_os = "linux",
@@ -28,8 +28,8 @@
         clippy::exit,
         clippy::missing_docs_in_private_items,
         unused_qualifications,
-        reason = "Triggered by Gungraun macro expansion. Tracking issue drafts live at \
-          c:/Source/gungraun-lint-issues/ pending upstream filing."
+        reason = "These lints originate in Gungraun macro expansion and cannot be addressed in \
+          this benchmark."
     )
 )]
 
@@ -37,6 +37,34 @@
 fn main() {
     // Valgrind is Linux-only.
 }
+
+#[cfg(target_os = "linux")]
+use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig, main};
+#[cfg(target_os = "linux")]
+pub use linux::*;
+
+// `--collect-bus=yes` makes Callgrind emit the global bus event (`Ge`), which counts
+// lock-prefixed instructions and therefore the atomic read-modify-write operations
+// that separate the thread-safe paths from the single-threaded ones. It is an
+// instruction count, not a contention or memory-ordering cost. `CallgrindMetrics::
+// Default` already reports `Ge` once collection is enabled.
+#[cfg(target_os = "linux")]
+main!(
+    config = LibraryBenchmarkConfig::default().tool(
+        Callgrind::default()
+            .args(["--branch-sim=yes", "--collect-bus=yes"])
+            .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
+    ),
+    library_benchmark_groups = [
+        rent,
+        lifecycle,
+        lifecycle_await_first,
+        send,
+        poll,
+        into_value,
+        cancel
+    ]
+);
 
 #[cfg(target_os = "linux")]
 mod linux {
@@ -1498,23 +1526,3 @@ mod linux {
         ]
     );
 }
-
-#[cfg(target_os = "linux")]
-use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
-#[cfg(target_os = "linux")]
-pub use linux::{cancel, into_value, lifecycle, lifecycle_await_first, poll, rent, send};
-
-// `--collect-bus=yes` makes Callgrind emit the global bus event (`Ge`), which counts
-// lock-prefixed instructions and therefore the atomic read-modify-write operations
-// that separate the thread-safe paths from the single-threaded ones. It is an
-// instruction count, not a contention or memory-ordering cost. `CallgrindMetrics::
-// Default` already reports `Ge` once collection is enabled.
-#[cfg(target_os = "linux")]
-gungraun::main!(
-    config = LibraryBenchmarkConfig::default().tool(
-        Callgrind::default()
-            .args(["--branch-sim=yes", "--collect-bus=yes"])
-            .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
-    );
-    library_benchmark_groups = rent, lifecycle, lifecycle_await_first, send, poll, into_value, cancel
-);

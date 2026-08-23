@@ -79,7 +79,7 @@ bench-cg TARGET="":
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
-    Import-Module "{{ justfile_directory() }}/scripts/build/CallgrindBench.psm1" -Force
+    Import-Module "{{ justfile_directory() }}/scripts/build/BenchmarkTarget.psm1" -Force
 
     if (-not $IsLinux) {
         Write-Error "bench-cg requires Linux (Valgrind). On Windows, invoke through WSL from the repo root: wsl -e bash -l -c 'just bench-cg'"
@@ -420,6 +420,31 @@ test-benches FILTER="":
     $PSNativeCommandUseErrorActionPreference = $true
 
     cargo +$env:RUST_MSRV test {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast --benches
+
+# Smoke-run only Criterion benchmark targets. Local validation uses this narrower recipe so it
+# verifies the practical wall-clock harnesses without running every Linux Callgrind scenario under
+# Valgrind; CI uses `test-benches` above to cover both kinds.
+[group('testing')]
+[script]
+test-benches-criterion FILTER="":
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    Import-Module "{{ justfile_directory() }}/scripts/build/BenchmarkTarget.psm1" -Force
+
+    $targets = @(Get-CriterionBenchTarget -PackagesRoot "packages" -PackageFilter "{{ package }}")
+    foreach ($benchTarget in $targets) {
+        $targetName = "$($benchTarget.Package)::$($benchTarget.Bench)"
+        Write-Host "Smoke-running $targetName" -ForegroundColor Cyan
+        cargo +$env:RUST_MSRV test -p $benchTarget.Package --bench $benchTarget.Bench `
+            --all-features {{ FILTER }} --locked --no-fail-fast
+    }
+
+    if ($targets.Count -eq 0) {
+        Write-Host "No Criterion benchmarks found in the selected package scope." `
+            -ForegroundColor Yellow
+    }
 
 [group('testing')]
 [script]
