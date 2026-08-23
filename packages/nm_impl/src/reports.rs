@@ -511,6 +511,21 @@ const MIN_OBSERVATIONS_PER_BAR_CHAR: u64 = 1;
 /// Uses the conventional textual representation for an unbounded upper range.
 const PLUS_INFINITY_BOUND_LABEL: &str = "+inf";
 
+/// A chunk exceeds the target bar width so ordinary bars require one writer call.
+///
+/// Low- and high-cardinality rendering benchmarks show that per-glyph writer calls materially
+/// increase instruction counts, so the formatter retains this allocation-free specialization.
+const HISTOGRAM_BAR_CHUNK: &str = concat!(
+    "∎∎∎∎∎∎∎∎",
+    "∎∎∎∎∎∎∎∎",
+    "∎∎∎∎∎∎∎∎",
+    "∎∎∎∎∎∎∎∎",
+    "∎∎∎∎∎∎∎∎",
+    "∎∎∎∎∎∎∎∎",
+    "∎∎∎∎∎∎∎∎",
+    "∎∎∎∎∎∎∎∎",
+);
+
 /// Makes relative bucket counts easy to compare in a Unicode-capable terminal.
 const HISTOGRAM_BAR_CHAR: char = '∎';
 
@@ -605,10 +620,28 @@ impl HistogramScale {
         let histogram_bar_width = count
             .checked_div(self.observations_per_char.get())
             .expect("the observations-per-character divisor is nonzero");
+        let mut remaining_width = usize::try_from(histogram_bar_width)
+            .expect("histogram scaling keeps bar widths within the usize range");
+        let bytes_per_char = HISTOGRAM_BAR_CHAR.len_utf8();
+        let chars_per_chunk = HISTOGRAM_BAR_CHUNK
+            .len()
+            .checked_div(bytes_per_char)
+            .expect("the histogram bar character width is nonzero");
 
-        for _ in 0..histogram_bar_width {
-            f.write_char(HISTOGRAM_BAR_CHAR)?;
+        while remaining_width >= chars_per_chunk {
+            f.write_str(HISTOGRAM_BAR_CHUNK)?;
+            remaining_width = remaining_width
+                .checked_sub(chars_per_chunk)
+                .expect("the written chunk is no wider than the remaining bar");
         }
+
+        let remaining_bytes = remaining_width
+            .checked_mul(bytes_per_char)
+            .expect("the remainder is bounded by the histogram chunk");
+        let remainder = HISTOGRAM_BAR_CHUNK
+            .get(..remaining_bytes)
+            .expect("the remainder ends at a histogram character boundary");
+        f.write_str(remainder)?;
 
         Ok(())
     }
@@ -1032,6 +1065,20 @@ mod tests {
             output,
             "∎".repeat(usize::try_from(TARGET_HISTOGRAM_BAR_WIDTH_CHARS + 1).unwrap())
         );
+    }
+
+    #[test]
+    fn histogram_scale_bar_spans_chunks() {
+        let histogram_scale = HistogramScale {
+            observations_per_char: NonZero::new(1).unwrap(),
+        };
+        // One extra character exercises both the full-chunk and remainder writes.
+        let count = u64::try_from(HISTOGRAM_BAR_CHUNK.chars().count()).unwrap() + 1;
+        let mut output = String::new();
+
+        histogram_scale.write_bar(count, &mut output).unwrap();
+
+        assert_eq!(output, "∎".repeat(usize::try_from(count).unwrap()));
     }
 
     #[test]

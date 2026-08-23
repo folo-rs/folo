@@ -84,10 +84,10 @@ mod linux {
     }
 
     impl Write for ByteCounter {
-        fn write_str(&mut self, value: &str) -> fmt::Result {
+        fn write_str(&mut self, s: &str) -> fmt::Result {
             self.bytes = self
                 .bytes
-                .checked_add(value.len())
+                .checked_add(s.len())
                 .expect("formatted histogram output fits in usize");
             Ok(())
         }
