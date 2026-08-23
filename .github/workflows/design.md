@@ -224,6 +224,12 @@ ARM and macOS are only nominally supported — they must pass tests (see the Pla
 section) but their performance is not tracked — so benchmarking them would spend runner
 minutes producing series no one reads.
 
+Every selected package is benchmarked with all Cargo features enabled. This makes Cargo include
+benchmark targets guarded by `required-features` and builds each selected package in its
+all-features configuration. The push, PR, re-collection and nightly-backfill paths all obtain this
+feature selection from the same command builder, so a stored point is never made incomparable by
+one path using narrower feature coverage.
+
 Even with those defences, a single day of a badly degraded runner can still leave one commit's
 data point corrupted. Collection is therefore also manually re-runnable against a specific
 historical commit: a `workflow_dispatch` with a `recollect_commit_id` re-measures just that
