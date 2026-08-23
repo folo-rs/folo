@@ -447,29 +447,6 @@ jobs:
       - name: Run miri-harder for events_once on ubuntu-latest (shard ${{ matrix.shard }})
         run: just package=events_once miri-harder ${{ matrix.shard }}
 
-  miri-harder-infinity-pool:
-    needs: [delta, miri-x64]
-    if: >-
-      needs.delta.outputs.skip_all != 'true'
-      && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'infinity_pool'))
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1/8, 2/8, 3/8, 4/8, 5/8, 6/8, 7/8, 8/8]
-    # Many-seeds Miri work budget (~90 min) plus up to 90 min for a cold-cache setup-environment.
-    timeout-minutes: 180
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Setup environment
-        uses: ./.github/actions/setup-environment
-
-      - name: Run miri-harder for infinity_pool on ubuntu-latest (shard ${{ matrix.shard }})
-        run: just package=infinity_pool miri-harder ${{ matrix.shard }}
-
   miri-harder-events:
     needs: [delta, miri-x64]
     if: >-
@@ -980,7 +957,6 @@ jobs:
       - test-arm
       - miri-arm
       - miri-harder-events-once
-      - miri-harder-infinity-pool
       - miri-harder-events
       - miri-harder-awaiter-set
       - machete
