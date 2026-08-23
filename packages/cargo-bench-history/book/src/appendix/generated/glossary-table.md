@@ -1,7 +1,7 @@
 | Term | What it means | Also called | Introduced in |
 |---|---|---|---|
 | agreement share | The fraction of before-and-after pairs that agree the level moved in the same direction. | probability of superiority | [Noise gates](gates.md) |
-| blessing | A recorded decision to treat a change as accepted, so history stops reporting it. |  | [Reconstruction](reconstruction.md) |
+| blessing | A recorded decision to treat a change as accepted, so earlier measurements no longer influence analysis. |  | [Reconstruction](reconstruction.md) |
 | census | The report's account of how many series it judged, and why it did not judge the rest. |  | [Reporting](reporting.md) |
 | chance level | How often pure chance alone would produce a pattern at least this strong. | p-value | [Detection](detection.md) |
 | change point | The commit where a series stops holding one level and starts holding another. |  | [Detection](detection.md) |
@@ -20,14 +20,13 @@
 | machine key | A fingerprint of the host hardware, used to keep incomparable results apart. |  | [Collection](collection.md) |
 | median | The middle value of a sample, which a few extreme measurements cannot drag around. |  | [Detection](detection.md) |
 | merge base | The newest commit a branch and its base still share. |  | [Selection](selection.md) |
+| observed range | The lowest through highest values actually recorded in the current base regime. |  | [Detection](detection.md) |
 | one-way-trend check | A test for whether a series mostly moves in one direction, which counts rises against falls rather than fitting a line. | Mann-Kendall test | [Detection](detection.md) |
 | outlier-resistant slope | A trend line fitted from the middle of all the pairwise slopes, so a few odd measurements cannot tilt it. | Theil-Sen estimator | [Detection](detection.md) |
 | partition | One discriminant set's slice of the store. |  | [Collection](collection.md) |
-| prediction interval | The range a single further measurement is expected to land in, given what the previous ones did. | Student's t prediction interval | [Detection](detection.md) |
-| quantum | The smallest step a metric can actually take, such as one whole instruction. |  | [Noise gates](gates.md) |
 | rank comparison | A test for whether two regimes differ that weighs each measurement by its rank among all of them rather than by its size, so a few extreme values cannot dominate. Tested two-sided. | Mann-Whitney U test | [Detection](detection.md) |
 | regime | A stretch of commits over which a series holds one level. |  | [Detection](detection.md) |
 | scatter | Between-commit variation in a series when nothing has changed. |  | [Detection](detection.md) |
 | series | One metric of one benchmark, tracked across commits. |  | [Reconstruction](reconstruction.md) |
 | split search | A scan for the single most likely place a series changed level. | Pettitt test | [Detection](detection.md) |
-| typical residual | How far a representative point sits from the model fitted to the series: a level for a change point or branch comparison, a line for a drift. | median absolute residual | [Noise gates](gates.md) |
+| typical residual | How far a representative point sits from the history model fitted to the series: a level for a change point, a line for a drift. | median absolute residual | [Noise gates](gates.md) |

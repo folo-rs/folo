@@ -28,8 +28,8 @@ flowchart TD
   EXEC["analyze"] --> SD["select data set (the load)"]
   SD --> DS[("series + run tallies + blessings")]
   DS --> GF["drop ghost benchmarks\n(absent at context commit)"]
-  GF --> AB["apply blessings (history re-baseline)"]
-  AB --> FC["detect changes (per series)"]
+  GF --> AB["apply blessings\n(history active segment / branch base floor)"]
+  AB --> FC["run mode-specific analysis"]
   FC --> SUM["per-set summaries"]
   SUM --> RENDER["render reports"]
 ```
@@ -117,40 +117,44 @@ without re-measuring the parallel load.
 flowchart TD
   FIN["finalize"] --> FLAT["flatten to a series list"]
   FLAT --> SS["sort series, then sort each series' points by topology\n— serial —"]
-  SS --> CENSUS["classify testability + size family\n— serial metadata prepass —"]
-  CENSUS --> DALL["cheap gates + model fit:\none chunk of series per worker\n(spawned)"]
-  DALL --> CANDS["candidate findings"]
-  DALL --> CAL["bounded selection calibration\n(clear-step analytic certificate;\ncomplete conditional orbit)"]
-  CAL --> CANDS
-  CANDS --> BH["false-discovery filter — serial —"]
-  CENSUS -->|series census: judged + reasons| BH
-  CENSUS -->|family size sets bounded\npermutation precision| CAL
-  BH --> MAT["materialize surviving findings' chart points"]
+  SS --> MODE{"analysis mode"}
+  MODE -->|history| CENSUS["classify testability + size family\n— serial metadata prepass —"]
+  CENSUS --> HD["detect + bounded calibration\n— one series chunk per worker —"]
+  HD --> BH["Benjamini-Hochberg filter\n— serial —"]
+  MODE -->|branch| BP["select regimes + evaluate tip ranges\n— one series chunk per worker —"]
+  BP --> BC["build rectangular families + score\nhistorical report turns — serial —"]
+  BH --> MAT["materialize findings' chart points"]
+  BC --> MAT
   MAT --> SF["sort findings by magnitude, method, identity — serial —"]
-  SF --> FINDINGS[("findings")]
+  SF --> FINDINGS[("findings + census + branch comparisons")]
 ```
 
-Detection has no cross-series state, so the series split into one balanced chunk per worker
-— the same split-once, spawn, await-and-recombine pattern as the load — and the output is
-identical to a sequential pass. A single available CPU (as Miri reports) yields a single
-worker over the whole input. Per series the mode selects the detector: history runs both a
-change-point and a drift detector and keeps the better fit; branch collapses each commit's
-runs to one level, narrows the recent base window to its current regime when that window
-contains an unambiguous level shift — held to a stricter separation floor than a reported
-move, since narrowing discards evidence (DESIGN.md, “Noise-aware gating”) — and judges the tip against that
-regime's prediction interval.
+The per-series preparation work splits into one balanced chunk per worker — the same split-once,
+spawn, await-and-recombine pattern as the load — and is identical to a sequential pass. A single
+available CPU (as Miri reports) yields one worker over the whole input. History runs both a
+change-point and a drift detector and keeps the better fit. Branch collapses each base commit to
+one level, selects the latest supported regime on a selector lane, and tests whether the tip lies
+strictly outside that regime's observed range.
 
-The false-discovery filter's family is every series that was **testable**, including those that
-raised no candidate (DESIGN.md, “Multiple-comparison discipline”). A cheap serial prepass evaluates the mode-aware testability
-predicate, builds the **series census** — judged, and one reason per series it declined — and makes
-the final family size available before statistical work starts. This ordering is required because
-history change-point calibration uses that family size to choose its bounded permutation precision
-and the analytic acceptance boundary that guarantees survival even at the strictest family rank.
-Workers evaluate the same pure predicate to short-circuit unjudged series, so the count and
-execution decision cannot diverge. The census outlives detection: the pipeline records the
-ghost-filtered series into it too (their exclusion happens before detection ever sees them) and
-hands it to the renderers, which is how a report states what it judged
-(DESIGN.md, “Accounting for what was judged”).
+History's false-discovery family is every series that was **testable**, including those that raised
+no candidate (DESIGN.md, “Multiple-comparison discipline”). A cheap serial prepass evaluates the
+testability predicate, builds the **series census**, and makes the family size available before
+statistical work starts. This ordering is required because history change-point calibration uses
+that size to choose bounded permutation precision and its analytic acceptance boundary.
+
+Branch mode does not produce per-series p-values and does not enter the history-mode
+Benjamini–Hochberg pass. Its workers return prepared range evaluations and regime provenance. A
+serial finalization pass then chooses, per discriminant set, a deterministic rectangular family
+whose stable series share enough reference-lane base commits, preferring more series and then more
+shared commits among the bounded candidates it examines. It scores the real branch report and each
+leave-one-base-commit-out historical turn with identical range and practical gates. This is
+cross-series state by design: the output tells the reader how often an existing base commit
+produced at least as much report-wide movement, without filtering away factual per-series
+excursions.
+
+Both modes build a census from the same execution decision their workers use. The census outlives
+detection: the pipeline records ghost-filtered series into it too and hands it to the renderers,
+which is how a report states what it judged (DESIGN.md, “Accounting for what was judged”).
 
 History change points pass permutation-independent magnitude, residual, population-separation, and
 interval gates before calibration. The step is calibrated only when it fits at least as well as the
@@ -164,7 +168,9 @@ pass.
 The statistical kernels are chosen to keep the tens-of-millions-of-points path affordable —
 an in-place unstable sort for the median (no scratch buffer, and ties are bit-identical so
 reordering cannot change the result), pre-sized buffers for the pairwise Theil–Sen slope,
-and a single sort for the false-discovery filter across all noisy candidates.
+and a single sort for the history false-discovery filter across all noisy candidates. Branch
+report work is bounded independently by the 128-commit base window and keeps range preparation
+parallel; only the bounded family intersection and candidate scoring are serial.
 
 ## Comparison-base lag (branch mode)
 
@@ -200,9 +206,10 @@ second listing:
 | Merge per-worker builders | serial | per worker partial |
 | Series sort + point sort | serial | the series list / per series |
 | Testability census | serial | per series metadata |
-| **Detect + bounded calibration** | **CPU-parallel (spawned)** | one chunk of series per worker |
+| **Per-series detect / branch preparation** | **CPU-parallel (spawned)** | one chunk of series per worker |
+| Branch historical report comparison | serial | each discriminant set's bounded rectangular family |
 | Blessing-sidecar fetch | I/O-concurrent (one task) | per object, bounded in flight |
-| False-discovery filter + finding sort + render | serial | the candidate list + the merged census |
+| History false-discovery filter + finding sort + render | serial | the candidate list + the merged census |
 
 ## Where the bottlenecks live
 

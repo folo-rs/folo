@@ -1,11 +1,8 @@
 # Noise gates
 
-[Detection](detection.md) produces candidates whose history-mode chance levels already account for
-the detector's within-series choices, including the step detector's search across possible change
-points. Branch mode has a
-[known exception](limits.md#branch-mode-base-window-narrowing-is-not-selection-adjusted) when it
-narrows the base window. This chapter is the set of checks that decides which candidates are worth
-your attention.
+[Detection](detection.md) produces history candidates whose chance levels already account for the
+detector's within-series choices, and branch candidates that lie outside an observed current-base
+range. This chapter is the set of checks that decides which candidates are worth your attention.
 
 Every gate answers the same underlying question in a different way: **is this move larger than
 what could be explained by measurement process noise?** A benchmark that reports 100 ns will
@@ -39,12 +36,11 @@ at a different point in their own sequence. The questions are the part worth lea
 |---|---|
 | Is there enough data to judge a candidate at all? | `min_series_points`, `min_regime`, `min_base_commits` |
 | Did anything actually change? | `split_located`, `non_zero_delta` |
-| Could chance alone have produced the candidate? | `significance` |
+| Could chance alone have produced the history candidate? | `significance` |
 | Is the move big enough to matter? | `relative_floor`, `absolute_floor` |
-| Is it bigger than what this series does anyway? | `residual_noise` |
+| Is a history move bigger than what this series does anyway? | `residual_noise` |
 | Do the two before-and-after sides genuinely separate? | `regime_separation` |
 | Does the engine's own precision explain the move? | `interval_disjoint`, `interval_noise_band` |
-| Can the base comparison even be formed? | `base_scatter` |
 
 The diagnostic ladder starts with Detection's own setup and test rows so it can explain the whole
 verdict in one place. `selection_adjustment` is one of those rows: it is the within-series
@@ -55,8 +51,8 @@ here for visibility. It changes the chance level and never declines a candidate 
 
 There is no single gate order. Each detector applies the gates its own question needs, in the
 order that makes sense for it. A change point checks inexpensive magnitude and noise evidence
-before running its bounded search correction; a branch comparison cannot test significance until
-it has formed its interval, so it checks magnitude first.
+before running its bounded search correction; a branch comparison first establishes that the
+context value is outside the observed range, then checks the excess beyond the nearest edge.
 
 A candidate **stops at the first gate that declines it**. Nothing after that runs, which is why
 a gate ladder is often short. That is an accurate picture, not a truncated one.
@@ -97,9 +93,9 @@ on a benchmark a thousand times larger clears the absolute floor easily, and is 
 This is the primary noise check, and the one that does the most work. It needs nothing from the
 engine — no confidence interval, no repeat runs — because it measures the series against itself.
 
-The tool fits the candidate's own model to the series (a step for a change point or branch
-comparison, a line for a drift), then measures how far a typical point sits from that model. The
-move must be several times that distance.
+For history, the tool fits the candidate's own model to the series (a step for a change point, a
+line for a drift), then measures how far a typical point sits from that model. The move must be
+several times that distance. Branch mode uses its stricter observed-range rule instead.
 
 {{#include generated/gates-residual.svg}}
 
@@ -153,28 +149,8 @@ distinguish these levels.
 independently of how the two levels compare.
 
 Engines that report no interval — Callgrind always, and `alloc_tracker` or `all_the_time` for a
-single-span measurement — simply skip these. They are not held to a weaker standard: the residual
-check already judged them against their own between-commit scatter, which is the more relevant
-quantity anyway.
-
-## The quantum is not a floor
-
-One distinction that catches people, because the two look alike.
-
-The **absolute floor** decides whether a move is worth reporting. The **quantum** is something
-else: the smallest scatter a metric can meaningfully express. An instruction count cannot
-resolve finer than one instruction, so when a base window happens to repeat the same integer,
-its scatter is treated as one unit rather than zero.
-
-Without that, a window of identical counts would have zero scatter, and *any* difference from it
-would read as infinitely certain.
-
-Timing metrics get no quantum at all. A stored time is a slope fitted across many iterations and
-resolves far below a clock tick, so imposing a floor would cost short benchmarks real
-sensitivity. The price is a corner: a timing base window with *exactly* zero scatter yields no
-verdict at all — which is what the `base_scatter` gate reports. Silence rather than false
-certainty is the right trade, but it is silence, and the census does not distinguish it from a
-series that was judged and found quiet.
+single-span measurement — simply skip these. History still has its residual gate; branch mode
+still requires an excursion beyond every value actually observed in the current regime.
 
 ## Two gates that fail open
 
@@ -215,8 +191,7 @@ and [Insights](insights.md) turns it into a checklist.
 
 ## What the gates hand on
 
-The candidates that survived, each still carrying its chance level from Detection. History values
-are adjusted for within-series selection; branch values carry the
-[base-window narrowing limitation](limits.md#branch-mode-base-window-narrowing-is-not-selection-adjusted).
-One question remains, and it is not about any individual candidate:
+The candidates that survived. History values carry selection-adjusted chance levels; branch values
+carry the observed range and excess beyond its nearest edge. One question remains, and it is not
+about any individual candidate:
 [given how many things were tested, should we believe this one?](coverage.md)

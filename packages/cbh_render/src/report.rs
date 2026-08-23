@@ -13,8 +13,11 @@ use std::collections::HashSet;
 use std::num::NonZero;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use cbh_detect::{AnalysisMode, Direction, Finding, FindingMethod, SeriesCensus, short_commit};
-use cbh_model::{BenchmarkId, DiscriminantSet};
+use cbh_detect::{
+    AnalysisMode, BranchComparison, BranchExcursion, Direction, Finding, FindingMethod,
+    SeriesCensus, short_commit,
+};
+use cbh_model::{BenchmarkId, DiscriminantSet, MetricKind};
 use colored::Colorize;
 use rasciigraph::{Config, plot};
 use serde::Serialize;
@@ -86,6 +89,9 @@ pub struct SetSummary<'a> {
     /// different points, so this is a deduplicated, deterministically ordered list
     /// rather than a single value.
     pub comparison_base_lags: Vec<ComparisonBaseLag>,
+    /// Branch-mode historical comparison for this set, when enough comparable
+    /// current-regime history exists.
+    pub branch_comparison: Option<&'a BranchComparison>,
 }
 
 /// How far a discriminant set's comparison base sits behind the base ref, and why.
@@ -261,6 +267,30 @@ struct JsonSet<'a> {
     /// the base ref — the usual case — and in history mode.
     #[serde(skip_serializing_if = "<[ComparisonBaseLag]>::is_empty")]
     comparison_base_lags: &'a [ComparisonBaseLag],
+    /// Report-wide branch comparison for this set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    branch_comparison: Option<JsonBranchComparison>,
+}
+
+/// Machine-readable historical comparison for one branch-mode set.
+#[derive(Serialize)]
+struct JsonBranchComparison {
+    /// Existing base commits evaluated as the candidate.
+    evaluated_base_commits: usize,
+    /// Existing-base reports tied with or exceeding the branch report.
+    at_least_as_much: usize,
+    /// Series shared by every candidate turn.
+    series: usize,
+}
+
+impl From<&BranchComparison> for JsonBranchComparison {
+    fn from(comparison: &BranchComparison) -> Self {
+        Self {
+            evaluated_base_commits: comparison.evaluated_base_commits,
+            at_least_as_much: comparison.at_least_as_much,
+            series: comparison.series,
+        }
+    }
 }
 
 /// The JSON shape of one finding: the machine-readable form of a text-report
@@ -305,6 +335,46 @@ struct JsonFinding<'a> {
     /// Effective (committer) time of the blessed commit, RFC 3339, if blessed.
     #[serde(skip_serializing_if = "Option::is_none")]
     blessed_commit_time: Option<&'a str>,
+    /// Branch-specific observed range and excess.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    branch: Option<JsonBranchExcursion<'a>>,
+}
+
+/// Machine-readable range evidence for a branch excursion.
+#[derive(Serialize)]
+struct JsonBranchExcursion<'a> {
+    /// Base observations in the selected range.
+    reference_count: usize,
+    /// Smallest selected base observation.
+    reference_min: f64,
+    /// Largest selected base observation.
+    reference_max: f64,
+    /// Signed distance beyond the nearest range edge.
+    excess: f64,
+    /// Signed excess relative to that edge.
+    relative_excess: f64,
+    /// Commit opening the current regime, when established.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_regime_start: Option<&'a str>,
+    /// Whether the branch falls inside the immediately preceding regime.
+    matches_previous_regime: bool,
+    /// Whether this series contributed to the report-wide historical comparison.
+    included_in_historical_comparison: bool,
+}
+
+impl<'a> From<&'a BranchExcursion> for JsonBranchExcursion<'a> {
+    fn from(excursion: &'a BranchExcursion) -> Self {
+        Self {
+            reference_count: excursion.reference_count,
+            reference_min: excursion.reference_min,
+            reference_max: excursion.reference_max,
+            excess: excursion.excess,
+            relative_excess: excursion.relative_excess,
+            current_regime_start: excursion.current_regime_start.as_deref(),
+            matches_previous_regime: excursion.matches_previous_regime,
+            included_in_historical_comparison: excursion.included_in_historical_comparison,
+        }
+    }
 }
 
 impl<'a> JsonFinding<'a> {
@@ -323,6 +393,7 @@ impl<'a> JsonFinding<'a> {
             window_start: finding.window_start_commit.as_deref(),
             blessed_at: finding.blessed_at.as_deref(),
             blessed_commit_time: finding.blessed_commit_time.as_deref(),
+            branch: finding.branch.as_ref().map(JsonBranchExcursion::from),
         }
     }
 }
@@ -521,6 +592,10 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
         format!("  {}", header.join("  ")),
     ];
 
+    let has_branch_comparisons = input
+        .sets
+        .iter()
+        .any(|summary| summary.branch_comparison.is_some());
     if input.findings.is_empty() {
         lines.push(coverage.verdict().to_owned());
         // Silence is a claim about the judged series only, so state how far it
@@ -532,8 +607,10 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
             lines.push(String::new());
             lines.push(hint.to_owned());
         }
-        push_warning(&mut lines, input.warning);
-        return finish(&lines);
+        if !has_branch_comparisons {
+            push_warning(&mut lines, input.warning);
+            return finish(&lines);
+        }
     }
 
     // Both modes draw a per-finding chart; the scope differs. History walks the whole
@@ -541,7 +618,7 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
     // it judges stays legible (see `ChartScope`).
     let scope = chart_scope(input.mode);
     for summary in input.sets {
-        if summary.findings.is_empty() {
+        if summary.findings.is_empty() && summary.branch_comparison.is_none() {
             continue;
         }
         lines.push(String::new());
@@ -551,7 +628,42 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
         for lag in &summary.comparison_base_lags {
             lines.push(format!("  {}", comparison_base_lag_warning(lag)));
         }
-        for finding in &summary.findings {
+        if input.mode == AnalysisMode::Branch {
+            lines.push(format!(
+                "  {}",
+                historical_comparison_text(summary.branch_comparison, !summary.findings.is_empty(),)
+            ));
+        }
+        let included: Vec<&Finding> = summary
+            .findings
+            .iter()
+            .copied()
+            .filter(|finding| {
+                finding
+                    .branch
+                    .as_ref()
+                    .is_none_or(|branch| branch.included_in_historical_comparison)
+            })
+            .collect();
+        for finding in included {
+            push_finding_block(&mut lines, finding, scope);
+        }
+        let additional: Vec<&Finding> = summary
+            .findings
+            .iter()
+            .copied()
+            .filter(|finding| {
+                finding
+                    .branch
+                    .as_ref()
+                    .is_some_and(|branch| !branch.included_in_historical_comparison)
+            })
+            .collect();
+        if summary.branch_comparison.is_some() && !additional.is_empty() {
+            lines.push(String::new());
+            lines.push("  Additional excursions outside this comparison:".to_owned());
+        }
+        for finding in additional {
             push_finding_block(&mut lines, finding, scope);
         }
     }
@@ -560,9 +672,9 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
 }
 
 /// Appends one finding as a paragraph: the benchmark id on its own line as a
-/// chapter title, then a direction-colored `percentage metric` headline, a
-/// dimmed detail line, an optional blessing note, and a chart
-/// of the metric over commits, scoped per [`ChartScope`].
+/// chapter title, then a direction-colored headline, a dimmed detail line, an
+/// optional blessing note, and a chart of the metric over commits, scoped per
+/// [`ChartScope`].
 fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, scope: ChartScope) {
     lines.push(String::new());
 
@@ -570,12 +682,26 @@ fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, scope: ChartSc
     // long, so a dedicated line keeps the change headline that follows readable.
     lines.push(describe_id(&finding.id).bold().to_string());
 
-    let percent = format_percent(finding.relative_delta);
-    let headline = match finding.direction {
-        Direction::Regression => percent.red().bold(),
-        Direction::Improvement => percent.green().bold(),
+    let headline_text = if let Some(branch) = &finding.branch {
+        let relation = branch_relation(finding.kind, finding.direction);
+        format!(
+            "{} {} - {relation} {} current-base observations",
+            format_value(finding.latest),
+            finding.kind.as_str(),
+            branch.reference_count,
+        )
+    } else {
+        format!(
+            "{} {}",
+            format_percent(finding.relative_delta),
+            finding.kind.as_str()
+        )
     };
-    lines.push(format!("  {headline} {}", finding.kind.as_str()));
+    let headline = match finding.direction {
+        Direction::Regression => headline_text.red().bold(),
+        Direction::Improvement => headline_text.green().bold(),
+    };
+    lines.push(format!("  {headline}"));
 
     lines.push(format!("    {}", detail_text(finding)).dimmed().to_string());
 
@@ -583,6 +709,9 @@ fn push_finding_block(lines: &mut Vec<String>, finding: &Finding, scope: ChartSc
     // history before it is intentionally excluded from detection.
     if let Some(blessing) = blessing_text(finding) {
         lines.push(format!("    {blessing}").dimmed().to_string());
+    }
+    if let Some(context) = previous_regime_text(finding) {
+        lines.push(format!("    {context}").dimmed().to_string());
     }
 
     if let Some(chart) = scoped_chart(finding, scope) {
@@ -654,6 +783,16 @@ fn runs_with_span(runs: usize, span: Option<(&str, &str)>) -> String {
 /// range it accumulated over (`from … to …`) instead of a single commit. Carries no
 /// styling and no leading indent; each format applies its own.
 fn detail_text(finding: &Finding) -> String {
+    if let Some(branch) = &finding.branch {
+        return format!(
+            "current base range: {}-{} · branch excess: {} / {} · {}",
+            format_value(branch.reference_min),
+            format_value(branch.reference_max),
+            format_signed_value(branch.excess),
+            format_percent(branch.relative_excess),
+            attribution_text(finding),
+        );
+    }
     format!(
         "{} via {} · {} → {} · {}",
         direction_label(finding.direction),
@@ -662,6 +801,49 @@ fn detail_text(finding: &Finding) -> String {
         format_value(finding.latest),
         attribution_text(finding),
     )
+}
+
+/// Reader-facing historical comparison without internal statistical terminology.
+fn historical_comparison_text(comparison: Option<&BranchComparison>, has_findings: bool) -> String {
+    let Some(comparison) = comparison else {
+        return "There was not enough comparable base history for a report-wide comparison."
+            .to_owned();
+    };
+    if !has_findings {
+        return format!(
+            "The branch stayed within every observed base range in this comparison ({} series \
+             and {} comparable base commits).",
+            comparison.series, comparison.evaluated_base_commits,
+        );
+    }
+    if comparison.at_least_as_much == 0 {
+        return format!(
+            "None of {} comparable base commits showed as much out-of-range movement as this \
+             branch ({} series compared).",
+            comparison.evaluated_base_commits, comparison.series,
+        );
+    }
+    format!(
+        "{} of {} comparable base commits showed at least as much out-of-range movement as this \
+         branch ({} series compared).",
+        comparison.at_least_as_much, comparison.evaluated_base_commits, comparison.series,
+    )
+}
+
+/// Context note when the branch returns to the regime immediately before the current one.
+fn previous_regime_text(finding: &Finding) -> Option<String> {
+    let branch = finding.branch.as_ref()?;
+    if !branch.matches_previous_regime {
+        return None;
+    }
+    let boundary = branch
+        .current_regime_start
+        .as_deref()
+        .unwrap_or("the current boundary");
+    Some(format!(
+        "The branch value matches the regime preceding base commit {}.",
+        short_commit(boundary)
+    ))
 }
 
 /// The commit(s) a finding is attributed to, for the detail body. A change point or
@@ -936,6 +1118,10 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
         ));
     }
 
+    let has_branch_comparisons = input
+        .sets
+        .iter()
+        .any(|summary| summary.branch_comparison.is_some());
     if input.findings.is_empty() {
         lines.push(String::new());
         lines.push(coverage.verdict().to_owned());
@@ -947,15 +1133,17 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
             lines.push(String::new());
             lines.push(hint.to_owned());
         }
-        push_warning(&mut lines, input.warning);
-        return finish(&lines);
+        if !has_branch_comparisons {
+            push_warning(&mut lines, input.warning);
+            return finish(&lines);
+        }
     }
 
     // Both modes draw a per-finding chart, matching the text report; the scope differs
     // (history walks the whole series, branch charts the baseline and recent tail).
     let scope = chart_scope(input.mode);
     for summary in input.sets {
-        if summary.findings.is_empty() {
+        if summary.findings.is_empty() && summary.branch_comparison.is_none() {
             continue;
         }
         lines.push(String::new());
@@ -977,8 +1165,44 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
             lines.push(String::new());
             lines.push(format!("> {}", comparison_base_lag_warning(lag)));
         }
-        for finding in &summary.findings {
+        if input.mode == AnalysisMode::Branch {
+            lines.push(String::new());
+            lines.push(format!(
+                "**Historical comparison:** {}",
+                historical_comparison_text(summary.branch_comparison, !summary.findings.is_empty(),)
+            ));
+        }
+        let included: Vec<&Finding> = summary
+            .findings
+            .iter()
+            .copied()
+            .filter(|finding| {
+                finding
+                    .branch
+                    .as_ref()
+                    .is_none_or(|branch| branch.included_in_historical_comparison)
+            })
+            .collect();
+        for finding in included {
             push_finding_markdown(&mut lines, finding, "###", scope);
+        }
+        let additional: Vec<&Finding> = summary
+            .findings
+            .iter()
+            .copied()
+            .filter(|finding| {
+                finding
+                    .branch
+                    .as_ref()
+                    .is_some_and(|branch| !branch.included_in_historical_comparison)
+            })
+            .collect();
+        if summary.branch_comparison.is_some() && !additional.is_empty() {
+            lines.push(String::new());
+            lines.push("### Additional excursions outside this comparison".to_owned());
+        }
+        for finding in additional {
+            push_finding_markdown(&mut lines, finding, "####", scope);
         }
     }
     push_warning(&mut lines, input.warning);
@@ -1020,6 +1244,10 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
         ));
     }
 
+    let has_branch_comparisons = input
+        .sets
+        .iter()
+        .any(|summary| summary.branch_comparison.is_some());
     if input.findings.is_empty() {
         lines.push(String::new());
         lines.push(coverage.verdict().to_owned());
@@ -1030,6 +1258,25 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
         if let Some(hint) = input.hint {
             lines.push(String::new());
             lines.push(hint.to_owned());
+        }
+        if !has_branch_comparisons {
+            push_warning(&mut lines, input.warning);
+            return finish(&lines);
+        }
+    }
+    if input.findings.is_empty() {
+        for summary in input.sets {
+            let Some(comparison) = summary.branch_comparison else {
+                continue;
+            };
+            lines.push(String::new());
+            lines.push(format!("## {}", set_label(summary.set)));
+            lines.push(String::new());
+            lines.push(format!(
+                "**Historical comparison:** {}",
+                historical_comparison_text(Some(comparison), false)
+            ));
+            push_set_filter_footer(&mut lines, summary.set);
         }
         push_warning(&mut lines, input.warning);
         return finish(&lines);
@@ -1054,18 +1301,43 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
     // grouping, so surface each affected set's warnings once — immediately before that
     // set's first retained finding.
     let scope = chart_scope(input.mode);
-    let mut warned_sets: HashSet<&DiscriminantSet> = HashSet::new();
+    let mut contextualized_sets: HashSet<&DiscriminantSet> = HashSet::new();
     for finding in input.findings.iter().take(limit.get()) {
-        if warned_sets.insert(&finding.set)
-            && let Some(summary) = input
-                .sets
-                .iter()
-                .find(|summary| *summary.set == finding.set)
+        let summary = input
+            .sets
+            .iter()
+            .find(|summary| *summary.set == finding.set);
+        if contextualized_sets.insert(&finding.set)
+            && let Some(summary) = summary
         {
             for lag in &summary.comparison_base_lags {
                 lines.push(String::new());
                 lines.push(format!("> {}", comparison_base_lag_warning(lag)));
             }
+            if input.mode == AnalysisMode::Branch {
+                lines.push(String::new());
+                lines.push(format!(
+                    "> **Historical comparison for {}:** {}",
+                    set_label(summary.set),
+                    historical_comparison_text(
+                        summary.branch_comparison,
+                        !summary.findings.is_empty(),
+                    )
+                ));
+            }
+        }
+        if summary.is_some_and(|summary| summary.branch_comparison.is_some())
+            && finding
+                .branch
+                .as_ref()
+                .is_some_and(|branch| !branch.included_in_historical_comparison)
+        {
+            lines.push(String::new());
+            lines.push(
+                "> **Outside the historical comparison:** This excursion did not meet the \
+                 shared-history requirements of the compared family."
+                    .to_owned(),
+            );
         }
         push_finding_markdown(&mut lines, finding, "##", scope);
         push_set_filter_footer(&mut lines, &finding.set);
@@ -1086,9 +1358,9 @@ fn push_set_filter_footer(lines: &mut Vec<String>, set: &DiscriminantSet) {
 }
 
 /// Appends one finding as a Markdown block mirroring the text report: the benchmark
-/// id as a `heading` (a chapter title), then a bold `percentage metric` line, the
-/// shared detail line, an optional blessing note, and the metric chart in a
-/// fenced `text` block so it survives Markdown rendering, scoped per [`ChartScope`].
+/// id as a `heading` (a chapter title), then a bold headline, the shared detail line,
+/// an optional blessing note, and the metric chart in a fenced `text` block so it
+/// survives Markdown rendering, scoped per [`ChartScope`].
 /// `heading` carries the ATX prefix (`##`/`###`) so the block nests correctly —
 /// top-level in the summary, one level under the set heading in the full report.
 fn push_finding_markdown(
@@ -1103,11 +1375,21 @@ fn push_finding_markdown(
     // rather than crowding the change headline that follows.
     lines.push(format!("{heading} `{}`", describe_id(&finding.id)));
 
-    lines.push(format!(
-        "**{}** `{}`",
-        format_percent(finding.relative_delta),
-        finding.kind.as_str(),
-    ));
+    if let Some(branch) = &finding.branch {
+        let relation = branch_relation(finding.kind, finding.direction);
+        lines.push(format!(
+            "**{}** `{}` - {relation} {} current-base observations",
+            format_value(finding.latest),
+            finding.kind.as_str(),
+            branch.reference_count,
+        ));
+    } else {
+        lines.push(format!(
+            "**{}** `{}`",
+            format_percent(finding.relative_delta),
+            finding.kind.as_str(),
+        ));
+    }
 
     lines.push(String::new());
     lines.push(detail_text(finding));
@@ -1116,12 +1398,29 @@ fn push_finding_markdown(
         lines.push(String::new());
         lines.push(blessing);
     }
+    if let Some(context) = previous_regime_text(finding) {
+        lines.push(String::new());
+        lines.push(context);
+    }
 
     if let Some(chart) = scoped_chart(finding, scope) {
         lines.push(String::new());
         lines.push("```text".to_owned());
         lines.push(chart);
         lines.push("```".to_owned());
+    }
+}
+
+fn branch_relation(kind: MetricKind, direction: Direction) -> &'static str {
+    match (kind, direction) {
+        (MetricKind::WallTime | MetricKind::ProcessorTime, Direction::Regression) => {
+            "slower than all"
+        }
+        (MetricKind::WallTime | MetricKind::ProcessorTime, Direction::Improvement) => {
+            "faster than all"
+        }
+        (_, Direction::Regression) => "higher than all",
+        (_, Direction::Improvement) => "lower than all",
     }
 }
 
@@ -1145,6 +1444,7 @@ fn render_json(input: &ReportInput<'_>) -> String {
                 .report_improvements
                 .then(|| count_direction(&summary.findings, Direction::Improvement)),
             comparison_base_lags: &summary.comparison_base_lags,
+            branch_comparison: summary.branch_comparison.map(JsonBranchComparison::from),
         })
         .collect();
 
@@ -1189,6 +1489,7 @@ fn method_label(method: FindingMethod) -> &'static str {
     match method {
         FindingMethod::ChangePoint => "change point",
         FindingMethod::Drift => "drift",
+        FindingMethod::BranchExcursion => "branch excursion",
     }
 }
 
@@ -1215,6 +1516,12 @@ pub fn format_value(value: f64) -> String {
     let decimals = significant_decimals(value.abs());
     let formatted = format!("{value:.decimals$}");
     trim_trailing_zeros(&formatted)
+}
+
+/// Formats a measured value with an explicit sign for human-readable display.
+fn format_signed_value(value: f64) -> String {
+    let sign = if value.is_sign_negative() { "-" } else { "+" };
+    format!("{sign}{}", format_value(value.abs()))
 }
 
 /// The number of decimal places that yields four significant figures for
@@ -1298,7 +1605,28 @@ mod tests {
             series: Vec::new(),
             comparison_base_index: None,
             chart_base_ref: None,
+            branch: None,
         }
+    }
+
+    fn branch_regression(included_in_historical_comparison: bool) -> Finding {
+        let mut finding = regression();
+        finding.method = FindingMethod::BranchExcursion;
+        finding.baseline = 110.0;
+        finding.latest = 130.0;
+        finding.delta = 20.0;
+        finding.relative_delta = 20.0 / 110.0;
+        finding.branch = Some(BranchExcursion {
+            reference_count: 20,
+            reference_min: 99.0,
+            reference_max: 110.0,
+            excess: 20.0,
+            relative_excess: 20.0 / 110.0,
+            current_regime_start: Some("abcdef0123456789".to_owned()),
+            matches_previous_regime: false,
+            included_in_historical_comparison,
+        });
+        finding
     }
 
     /// A census in which every one of `series` series was judged — the healthy shape
@@ -1324,6 +1652,7 @@ mod tests {
             series: findings.len().max(1),
             findings: findings.iter().collect(),
             comparison_base_lags: Vec::new(),
+            branch_comparison: None,
         });
         ReportInput {
             project,
@@ -1825,6 +2154,18 @@ mod tests {
                 "No notable changes detected.",
             ),
             (
+                "partial: too few base commits since blessing",
+                census_of(2, &[(UnjudgedReason::TooFewBaseCommitsSinceBlessing, 1)]),
+                "with too few base-ref commits remaining since being blessed",
+                "No notable changes detected.",
+            ),
+            (
+                "partial: unresolved current base regime",
+                census_of(2, &[(UnjudgedReason::CurrentBaseRegimeUnresolved, 1)]),
+                "whose current base regime is unresolved",
+                "No notable changes detected.",
+            ),
+            (
                 "mixed reasons",
                 census_of(
                     2,
@@ -2099,6 +2440,7 @@ mod tests {
             series: 5,
             findings: findings.iter().collect(),
             comparison_base_lags: Vec::new(),
+            branch_comparison: None,
         }];
         let input = ReportInput {
             project: "folo",
@@ -2125,6 +2467,280 @@ mod tests {
             "{report}"
         );
         assert!(!report.contains("series:"), "{report}");
+    }
+
+    #[test]
+    fn branch_reports_use_range_and_historical_comparison_language() {
+        let set = discriminant_set();
+        let findings = [branch_regression(true)];
+        let comparison = BranchComparison {
+            set: set.clone(),
+            evaluated_base_commits: 10,
+            at_least_as_much: 0,
+            series: 1,
+        };
+        let summaries = vec![SetSummary {
+            set: &set,
+            runs: 21,
+            series: 1,
+            findings: vec![&findings[0]],
+            comparison_base_lags: Vec::new(),
+            branch_comparison: Some(&comparison),
+        }];
+        let input = ReportInput {
+            project: "folo",
+            tip_commit: "1234567890abcdef1234",
+            tip_dirty: false,
+            mode: AnalysisMode::Branch,
+            notable: true,
+            runs: 21,
+            series: 1,
+            commit_span: None,
+            report_improvements: true,
+            findings: &findings,
+            sets: &summaries,
+            hint: None,
+            warning: None,
+            ghosts_excluded: 0,
+            census: judged_census(1),
+        };
+
+        let text = render(&input, ReportFormat::Text, false);
+        assert!(
+            text.contains(
+                "None of 10 comparable base commits showed as much out-of-range movement as this \
+                 branch (1 series compared)."
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("130 instruction_count - higher than all 20 current-base observations"),
+            "{text}"
+        );
+        assert!(
+            text.contains("current base range: 99-110 · branch excess: +20"),
+            "{text}"
+        );
+        assert!(!text.contains("change point"), "{text}");
+
+        let json: serde_json::Value =
+            serde_json::from_str(&render(&input, ReportFormat::Json, false)).unwrap();
+        assert_eq!(json["findings"][0]["method"], "branch_excursion");
+        assert_eq!(json["findings"][0]["branch"]["reference_min"], 99.0);
+        assert_eq!(json["sets"][0]["branch_comparison"]["at_least_as_much"], 0);
+
+        let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+        assert!(
+            summary.contains(
+                "None of 10 comparable base commits showed as much out-of-range movement"
+            ),
+            "{summary}"
+        );
+        assert!(
+            !summary.contains("Outside the historical comparison"),
+            "{summary}"
+        );
+
+        let markdown = render(&input, ReportFormat::Markdown, false);
+        assert!(
+            markdown.contains("**Historical comparison:** None of 10 comparable base commits"),
+            "{markdown}"
+        );
+        assert!(
+            !markdown.contains("Additional excursions outside this comparison"),
+            "{markdown}"
+        );
+    }
+
+    #[test]
+    fn branch_comparison_is_rendered_even_without_findings() {
+        let set = discriminant_set();
+        let comparison = BranchComparison {
+            set: set.clone(),
+            evaluated_base_commits: 10,
+            at_least_as_much: 10,
+            series: 1,
+        };
+        let summaries = vec![SetSummary {
+            set: &set,
+            runs: 21,
+            series: 2,
+            findings: Vec::new(),
+            comparison_base_lags: Vec::new(),
+            branch_comparison: Some(&comparison),
+        }];
+        let input = ReportInput {
+            project: "folo",
+            tip_commit: "1234567890abcdef1234",
+            tip_dirty: false,
+            mode: AnalysisMode::Branch,
+            notable: false,
+            runs: 21,
+            series: 2,
+            commit_span: None,
+            report_improvements: true,
+            findings: &[],
+            sets: &summaries,
+            hint: None,
+            warning: None,
+            ghosts_excluded: 0,
+            census: census_of(1, &[(UnjudgedReason::TooFewBaseCommits, 1)]),
+        };
+
+        let text = render(&input, ReportFormat::Text, false);
+        assert!(
+            text.contains(
+                "The branch stayed within every observed base range in this comparison \
+                 (1 series and 10 comparable base commits)."
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("No notable changes detected among the series that were judged."),
+            "{text}"
+        );
+        assert!(text.contains("Not judged: 1 series"), "{text}");
+
+        let markdown = render(&input, ReportFormat::Markdown, false);
+        assert!(
+            markdown.contains("No notable changes detected among the series that were judged."),
+            "{markdown}"
+        );
+        assert!(markdown.contains("Not judged: 1 series"), "{markdown}");
+
+        let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+        assert!(
+            summary.contains(
+                "The branch stayed within every observed base range in this comparison \
+                 (1 series and 10 comparable base commits)."
+            ),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("No notable changes detected among the series that were judged."),
+            "{summary}"
+        );
+        assert!(summary.contains("Not judged: 1 series"), "{summary}");
+    }
+
+    #[test]
+    fn branch_summary_marks_excursions_outside_the_historical_family() {
+        let set = discriminant_set();
+        let findings = [branch_regression(false)];
+        let comparison = BranchComparison {
+            set: set.clone(),
+            evaluated_base_commits: 10,
+            at_least_as_much: 0,
+            series: 3,
+        };
+        let summaries = vec![SetSummary {
+            set: &set,
+            runs: 21,
+            series: 4,
+            findings: vec![&findings[0]],
+            comparison_base_lags: Vec::new(),
+            branch_comparison: Some(&comparison),
+        }];
+        let input = ReportInput {
+            project: "folo",
+            tip_commit: "1234567890abcdef1234",
+            tip_dirty: false,
+            mode: AnalysisMode::Branch,
+            notable: true,
+            runs: 21,
+            series: 4,
+            commit_span: None,
+            report_improvements: true,
+            findings: &findings,
+            sets: &summaries,
+            hint: None,
+            warning: None,
+            ghosts_excluded: 0,
+            census: judged_census(4),
+        };
+
+        let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+        assert!(
+            summary.contains("**Outside the historical comparison:**"),
+            "{summary}"
+        );
+
+        let text = render(&input, ReportFormat::Text, false);
+        assert!(
+            text.contains("Additional excursions outside this comparison:"),
+            "{text}"
+        );
+        let markdown = render(&input, ReportFormat::Markdown, false);
+        assert!(
+            markdown.contains("### Additional excursions outside this comparison"),
+            "{markdown}"
+        );
+    }
+
+    #[test]
+    fn an_excursion_is_not_marked_outside_when_no_comparison_exists() {
+        let set = discriminant_set();
+        let findings = [branch_regression(false)];
+        let summaries = vec![SetSummary {
+            set: &set,
+            runs: 21,
+            series: 1,
+            findings: vec![&findings[0]],
+            comparison_base_lags: Vec::new(),
+            branch_comparison: None,
+        }];
+        let input = ReportInput {
+            project: "folo",
+            tip_commit: "1234567890abcdef1234",
+            tip_dirty: false,
+            mode: AnalysisMode::Branch,
+            notable: true,
+            runs: 21,
+            series: 1,
+            commit_span: None,
+            report_improvements: true,
+            findings: &findings,
+            sets: &summaries,
+            hint: None,
+            warning: None,
+            ghosts_excluded: 0,
+            census: judged_census(1),
+        };
+
+        let text = render(&input, ReportFormat::Text, false);
+        assert!(
+            !text.contains("Additional excursions outside this comparison"),
+            "{text}"
+        );
+        let markdown = render(&input, ReportFormat::Markdown, false);
+        assert!(
+            !markdown.contains("Additional excursions outside this comparison"),
+            "{markdown}"
+        );
+        let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+        assert!(
+            !summary.contains("Outside the historical comparison"),
+            "{summary}"
+        );
+    }
+
+    #[test]
+    fn previous_regime_context_is_present_only_for_a_return_to_that_regime() {
+        let mut finding = branch_regression(true);
+        assert_eq!(previous_regime_text(&finding), None);
+
+        let branch = finding
+            .branch
+            .as_mut()
+            .expect("the fixture is a branch excursion");
+        branch.matches_previous_regime = true;
+        assert_eq!(
+            previous_regime_text(&finding).as_deref(),
+            Some("The branch value matches the regime preceding base commit abcdef012345.")
+        );
+
+        finding.branch = None;
+        assert_eq!(previous_regime_text(&finding), None);
     }
 
     #[test]
@@ -2507,6 +3123,43 @@ mod tests {
         assert_eq!(format_value(1_234_567.89), "1234568");
         // Trailing zeros are trimmed.
         assert_eq!(format_value(0.25), "0.25");
+    }
+
+    #[test]
+    fn signed_values_keep_the_human_readable_precision() {
+        assert_eq!(format_signed_value(0.300_000_000_000_04), "+0.3");
+        assert_eq!(format_signed_value(-0.300_000_000_000_04), "-0.3");
+    }
+
+    #[test]
+    fn branch_relations_match_the_metric_kind() {
+        for kind in [MetricKind::WallTime, MetricKind::ProcessorTime] {
+            assert_eq!(
+                branch_relation(kind, Direction::Regression),
+                "slower than all"
+            );
+            assert_eq!(
+                branch_relation(kind, Direction::Improvement),
+                "faster than all"
+            );
+        }
+
+        for kind in [
+            MetricKind::InstructionCount,
+            MetricKind::ConditionalBranches,
+            MetricKind::IndirectBranches,
+            MetricKind::AllocatedBytes,
+            MetricKind::AllocationCount,
+        ] {
+            assert_eq!(
+                branch_relation(kind, Direction::Regression),
+                "higher than all"
+            );
+            assert_eq!(
+                branch_relation(kind, Direction::Improvement),
+                "lower than all"
+            );
+        }
     }
 
     /// Builds a regression finding whose series steps up over four commits, so a
@@ -3115,6 +3768,7 @@ mod tests {
                 series: 1,
                 findings: vec![&findings[0]],
                 comparison_base_lags: Vec::new(),
+                branch_comparison: None,
             },
             SetSummary {
                 set: &set_b,
@@ -3122,6 +3776,7 @@ mod tests {
                 series: 1,
                 findings: Vec::new(),
                 comparison_base_lags: Vec::new(),
+                branch_comparison: None,
             },
         ];
         let input = ReportInput {
@@ -3162,6 +3817,7 @@ mod tests {
                 series: 1,
                 findings: vec![&findings[0]],
                 comparison_base_lags: Vec::new(),
+                branch_comparison: None,
             },
             SetSummary {
                 set: &set_b,
@@ -3169,6 +3825,7 @@ mod tests {
                 series: 1,
                 findings: Vec::new(),
                 comparison_base_lags: Vec::new(),
+                branch_comparison: None,
             },
         ];
         let input = ReportInput {
@@ -3219,6 +3876,7 @@ mod tests {
             series: findings.len().max(1),
             findings: findings.iter().collect(),
             comparison_base_lags: lags,
+            branch_comparison: None,
         });
         ReportInput {
             project: "folo",

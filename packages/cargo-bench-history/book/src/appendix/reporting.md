@@ -19,7 +19,8 @@ measure, and leaves the ranking of importance to you.
 
 Note in particular that findings carry **no** confidence score to sort by. Every reported
 finding already cleared its test, so any such number would be uniformly high and would rank
-almost nothing — see [Detection](detection.md#chance-levels-not-a-confidence-score).
+almost nothing — see
+[Detection](detection.md#history-chance-levels-not-a-confidence-score).
 
 ## Reading a finding
 
@@ -107,6 +108,24 @@ The report says so, naming how far behind and which of two reasons applies:
 It is advisory. It never changes which findings are reported, and never affects the exit code.
 What it changes is how much weight you should give a marginal branch finding: a comparison
 against a base state ten commits old is a comparison against a base state ten commits old.
+
+## Branch range and historical context
+
+A branch finding does not borrow history-mode change-point wording. It states the measured context
+value, the lowest and highest values observed in the selected current-base regime, and the excess
+beyond the nearest edge. "Slower than all 20 current-base observations" is a claim about those
+recorded observations, not a probability estimate.
+
+The discriminant-set section then gives the report-wide historical comparison, for example:
+
+```text
+None of 10 comparable base commits showed as much out-of-range movement as this branch
+(12 series compared).
+```
+
+When too little shared history exists, the report says the comparison could not be formed and
+still prints every factual range excursion. JSON exposes the same distinction: finding-level
+`branch` range metadata and set-level `branch_comparison` counts.
 
 ## Where output goes
 

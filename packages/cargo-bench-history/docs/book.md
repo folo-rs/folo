@@ -104,7 +104,7 @@ the commands that exercise them and down into the appendix for mechanism.
 | `examine` | Drill-down from a finding to the raw per-commit points of one `(benchmark, metric)` series; no detection, no judgment. |
 | `list` | Preview the runs `analyze` would consume, catalog discriminant sets, or audit blessings without analyzing. |
 | `prune` | Delete a chosen scope of stored data; `--dry-run` previews the exact deletion plan, and base-branch history needs an explicit confirm. |
-| `bless` / `unbless` | Manually accept an intentional change so history stops re-flagging it; per-benchmark; honored only in history mode. |
+| `bless` / `unbless` | Manually accept an intentional change; per-benchmark; starts history's active segment and branch mode's admissible base evidence. |
 
 ### Part 3 — Concepts
 
@@ -129,10 +129,10 @@ the commands that exercise them and down into the appendix for mechanism.
 - **Goal**: how findings are produced with high signal-to-noise.
 - **Teach**: the two finding methods (change-point step vs. monotonic drift) and how one wins per
   series; the noise-aware gates and the practical-magnitude floor (relative *and* absolute, on
-  every metric) and what they are *not* for (tenet 2); how branch mode judges the *tip commit* as
-  one new observation against the base's commit-to-commit scatter; that a finding carries no
-  confidence score because it has already cleared every gate; the false-discovery family being
-  every judged series in either mode; the two
+  every metric) and what they are *not* for (tenet 2); how branch mode judges the *tip commit*
+  against the observed current-base range and compares the whole report with historical base
+  turns; that a finding carries no confidence score; the history false-discovery family being
+  every judged history series; the two
   auto-selected modes (tenet 7); full-history vs. bounded baseline-and-tip charts; re-baselining
   via blessings; the three report formats sharing one pass and the
   advisory-finding / JSON-is-the-signal split (tenet 6); no severity classification.

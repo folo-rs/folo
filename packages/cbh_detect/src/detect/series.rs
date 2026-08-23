@@ -97,6 +97,8 @@ pub type BlessingPlacement = (usize, Option<Timestamp>, BlessingRecord);
 pub struct BaseLevel {
     /// First-parent topological index of the base-ref commit.
     pub topo_index: usize,
+    /// Commit the base level was measured against, when known.
+    pub commit: Option<Arc<str>>,
     /// Median value of this series' clean runs at the commit.
     pub value: f64,
     /// Representative confidence interval for the commit's runs, when available.
@@ -120,9 +122,14 @@ pub struct Series {
     /// not from the context ref's ancestry. Each entry is one clean base commit's
     /// median level for this series. It retains each commit's coordinate and
     /// representative interval so branch-mode lag reporting and interval vetoes use
-    /// the same base state the prediction interval judged. Detection truncates this
-    /// window further only when the base ref itself recently moved to a new regime.
+    /// the same base state as the observed current-regime range. Regime selection may
+    /// limit analysis to a supported recent suffix without deleting observations inside it.
     pub base_window: Vec<BaseLevel>,
+    /// Base-ref levels available before the branch window cap and blessings.
+    ///
+    /// Branch diagnostics disclose both the available history and the bounded history
+    /// the detector actually used.
+    pub base_history_count: usize,
     /// Index into `points` where the active (post-blessing) window begins; `0`
     /// when the series is unblessed (every point is active). History-mode
     /// detection considers only `points[active_start..]`; the full `points` are
@@ -463,6 +470,7 @@ impl SeriesBuilder {
                         kind,
                         points,
                         base_window: Vec::new(),
+                        base_history_count: 0,
                         active_start: 0,
                         blessing: None,
                     });
@@ -519,7 +527,10 @@ pub fn attach_base_windows(series: &mut [Series], base_series: &[Series], compar
             break;
         };
         if series_cmp(candidate, one).is_eq() {
-            one.base_window = base_window_levels(candidate, compare_window);
+            let levels = commit_levels(&candidate.points);
+            one.base_history_count = levels.len();
+            let start = levels.len().saturating_sub(compare_window);
+            one.base_window = levels.get(start..).unwrap_or_default().to_vec();
         }
     }
 }
@@ -531,28 +542,32 @@ fn series_cmp(left: &Series, right: &Series) -> Ordering {
         .then_with(|| left.kind.cmp(&right.kind))
 }
 
-fn base_window_levels(series: &Series, compare_window: usize) -> Vec<BaseLevel> {
-    let levels = commit_levels(&series.points);
-    let start = levels.len().saturating_sub(compare_window);
-    levels.get(start..).unwrap_or_default().to_vec()
-}
-
 fn commit_levels(points: &[SeriesPoint]) -> Vec<BaseLevel> {
     let mut levels = Vec::new();
     let mut values: Vec<f64> = Vec::new();
     let mut lows: Vec<f64> = Vec::new();
     let mut highs: Vec<f64> = Vec::new();
-    let mut current: Option<(usize, bool)> = None;
+    let mut current: Option<(usize, bool, Option<Arc<str>>)> = None;
     for point in points {
         let key = (point.topo_index, point.dirty);
-        if current != Some(key) {
-            if let Some((topo_index, _)) = current {
-                push_base_level(&mut levels, topo_index, &mut values, &mut lows, &mut highs);
+        if current
+            .as_ref()
+            .is_none_or(|(topo_index, dirty, _)| (*topo_index, *dirty) != key)
+        {
+            if let Some((topo_index, _, commit)) = current {
+                push_base_level(
+                    &mut levels,
+                    topo_index,
+                    commit,
+                    &mut values,
+                    &mut lows,
+                    &mut highs,
+                );
             }
             values.clear();
             lows.clear();
             highs.clear();
-            current = Some(key);
+            current = Some((point.topo_index, point.dirty, point.commit.clone()));
         }
         values.push(point.value);
         if let Some(low) = point.interval_low {
@@ -562,8 +577,15 @@ fn commit_levels(points: &[SeriesPoint]) -> Vec<BaseLevel> {
             highs.push(high);
         }
     }
-    if let Some((topo_index, _)) = current {
-        push_base_level(&mut levels, topo_index, &mut values, &mut lows, &mut highs);
+    if let Some((topo_index, _, commit)) = current {
+        push_base_level(
+            &mut levels,
+            topo_index,
+            commit,
+            &mut values,
+            &mut lows,
+            &mut highs,
+        );
     }
     levels
 }
@@ -571,6 +593,7 @@ fn commit_levels(points: &[SeriesPoint]) -> Vec<BaseLevel> {
 fn push_base_level(
     levels: &mut Vec<BaseLevel>,
     topo_index: usize,
+    commit: Option<Arc<str>>,
     values: &mut [f64],
     lows: &mut [f64],
     highs: &mut [f64],
@@ -581,9 +604,42 @@ fn push_base_level(
     let interval = stats::median_in_place(lows).zip(stats::median_in_place(highs));
     levels.push(BaseLevel {
         topo_index,
+        commit,
         value,
         interval,
     });
+}
+
+/// Applies each series' latest matching blessing to its branch base window.
+///
+/// Branch mode positions blessings on the base ref's first-parent history. A matching
+/// blessing is a hard evidence boundary: base levels before its commit are removed,
+/// while the blessed commit itself opens the retained baseline. The branch context
+/// points are not re-indexed because they live on a different first-parent line.
+pub fn apply_base_blessings<S: BuildHasher>(
+    series: &mut [Series],
+    blessings: &HashMap<DiscriminantSet, Vec<BlessingPlacement>, S>,
+) {
+    for one in series.iter_mut() {
+        let Some(set_blessings) = blessings.get(&one.set) else {
+            continue;
+        };
+        let latest = set_blessings
+            .iter()
+            .filter(|(_, _, record)| record.matches(&one.id))
+            .max_by_key(|(topo_index, _, _)| *topo_index);
+        let Some((topo_index, commit_time, record)) = latest else {
+            continue;
+        };
+        let keep_from = one
+            .base_window
+            .partition_point(|level| level.topo_index < *topo_index);
+        one.base_window.drain(..keep_from);
+        one.blessing = Some(Blessing {
+            commit: record.commit.clone(),
+            commit_time: *commit_time,
+        });
+    }
 }
 
 /// Re-baselines each series to its latest matching blessing (history mode).
@@ -1054,6 +1110,47 @@ mod tests {
         let recorded = series[0].blessing.as_ref().unwrap();
         assert_eq!(recorded.commit, "c2full");
         assert_eq!(recorded.commit_time, Some(ts(300)));
+    }
+
+    #[test]
+    fn apply_base_blessings_removes_only_pre_blessing_levels() {
+        let mut series = four_commit_series();
+        series[0].base_window = series[0]
+            .points
+            .iter()
+            .map(|point| BaseLevel {
+                topo_index: point.topo_index,
+                commit: point.commit.clone(),
+                value: point.value,
+                interval: point.interval_low.zip(point.interval_high),
+            })
+            .collect();
+        series[0].base_history_count = series[0].base_window.len();
+        let set = series[0].set.clone();
+        let mut map = HashMap::new();
+        map.insert(
+            set,
+            vec![(2_usize, Some(ts(300)), blessing(&["group"], "c2full", 301))],
+        );
+
+        apply_base_blessings(&mut series, &map);
+
+        assert_eq!(
+            series[0]
+                .base_window
+                .iter()
+                .map(|level| level.topo_index)
+                .collect::<Vec<_>>(),
+            vec![2, 3],
+            "the blessed commit remains and all earlier evidence is excluded"
+        );
+        assert_eq!(series[0].base_history_count, 4);
+        assert_eq!(
+            series[0].points.len(),
+            4,
+            "branch-side topology is unchanged"
+        );
+        assert_eq!(series[0].blessing.as_ref().unwrap().commit, "c2full");
     }
 
     #[test]

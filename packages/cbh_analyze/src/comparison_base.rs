@@ -348,6 +348,7 @@ mod tests {
             series: Vec::new(),
             comparison_base_index,
             chart_base_ref: None,
+            branch: None,
         }
     }
 
@@ -389,10 +390,12 @@ mod tests {
             } else {
                 vec![BaseLevel {
                     topo_index,
+                    commit: None,
                     value: 100.0,
                     interval: None,
                 }]
             },
+            base_history_count: usize::from(!dirty),
             active_start: 0,
             blessing: None,
         }

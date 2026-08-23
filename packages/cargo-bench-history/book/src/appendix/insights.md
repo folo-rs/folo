@@ -68,7 +68,8 @@ tool looks for it.
 
 ### A branch finding
 
-Branch mode judges **only the analyzed context commit**, against the base ref's current level.
+Branch mode judges **only the analyzed context commit**, against the base ref's observed
+current-regime range.
 Your branch's intermediate commits are ignored — only the context state is evaluated.
 
 1. **Re-run the benchmark on the context commit.** Branch findings rest on a small sample, often
@@ -79,6 +80,9 @@ Your branch's intermediate commits are ignored — only the context state is eva
 3. **Check whether the base itself recently moved.** If the base stepped a few commits ago and
    your branch merely matches the new level, that is worth knowing before you go looking
    through your own diff.
+4. **Read the comparable-base count literally.** It tells you how many eligible base commits
+   produced at least as much report-wide out-of-range movement. It is historical context, not a
+   confidence percentage.
 
 ## Unreliable or inconsistent hardware
 
@@ -104,11 +108,10 @@ Your branch's intermediate commits are ignored — only the context state is eva
 
 ## Unreliable benchmarks
 
-A noisy benchmark is not merely unpleasant — it is **actively harmful to detection**. The
-[residual gate](gates.md) measures a candidate move against a multiple of the series' own typical
-residual, so on a benchmark that scatters widely the move has to be several times that scatter
-before anything is reported. Noise does not just add false alarms; it hides real regressions, and
-it hides them at a threshold well above the scatter itself.
+A noisy benchmark is not merely unpleasant — it is **actively harmful to detection**. In history
+mode the [residual gate](gates.md) requires a move to exceed a multiple of the series' typical
+residual. In branch mode every current-regime extreme expands the observed range the context must
+clear. Noise does not just add false alarms; it hides real regressions.
 
 **How to recognize one:**
 
@@ -170,11 +173,12 @@ Work down this list. Each step names the chapter that explains it.
    recently cannot produce a change point yet. → [Detection](detection.md)
 4. **Does the move clear both floors?** Relative *and* absolute. A large percentage of a tiny
    number does not qualify. → [Noise gates](gates.md)
-5. **Is the series too noisy?** Compare the move against the series' own scatter on the chart.
-   If it sits inside the band, that is your answer — and the benchmark, not the tool, is what
-   needs work. → [Noise gates](gates.md)
-6. **Is the judged family large?** Read the report's judged count. A marginal finding must clear
-   a stricter bar for an analysis that judged many series than for one that judged few.
+5. **Is the series too noisy?** In history mode, compare the move with the series' residual
+   scatter. In branch mode, check whether historical extremes expanded the observed current-base
+   range. → [Noise gates](gates.md)
+6. **What does the report-wide context say?** For history, a larger judged family sets a stricter
+   false-discovery bar. For branch mode, read how many comparable base commits tied or exceeded the
+   branch score.
    → [Multiplicity and coverage](coverage.md)
 7. **Was it an improvement in history mode?** History mode watches for regressions only, so a
    move that made things faster never becomes a finding there. → [Reporting](reporting.md)

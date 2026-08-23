@@ -8,8 +8,8 @@ use std::time::Instant;
 use anyspawn::Spawner;
 use cbh_config::Config;
 use cbh_detect::{
-    AnalysisMode, BlessingPlacement, COMPARE_WINDOW, DiscriminantSetQuery, Series, SeriesFilter,
-    attach_base_windows,
+    AnalysisMode, BlessingPlacement, DiscriminantSetQuery, MAX_BRANCH_BASE_COMMITS, Series,
+    SeriesFilter, attach_base_windows,
 };
 use cbh_diag::{Reporter, ReporterExt, count_noun};
 use cbh_git::GitHistory;
@@ -38,7 +38,7 @@ use crate::{
 pub(crate) struct SelectedDataSet {
     /// The reconstructed series for the in-window runs, built with the caller's
     /// series filter and ordered by git topology. Pre-blessing: the caller applies
-    /// blessings (history mode) or leaves them unapplied (branch, listings).
+    /// blessings to the mode-appropriate evidence line; listings leave them unapplied.
     pub(crate) series: Vec<Series>,
     /// Compact per-set, per-commit run tallies, standing in for a retained copy of
     /// every loaded object (which a large history cannot afford to keep resident).
@@ -88,9 +88,9 @@ pub(crate) struct SelectedDataSet {
     pub(crate) base_ref_index: Option<usize>,
     /// Blessings recorded on in-window commits, grouped by discriminant set. Each
     /// entry pairs the blessed commit's first-parent topological index and its
-    /// committer date (from topology, for the report anchor) with the record;
-    /// history-mode re-baselining picks, per series, the latest matching blessing.
-    /// Empty in branch mode (it ignores blessings).
+    /// committer date (from topology, for the report anchor) with the record. History
+    /// positions these on the context line; branch mode positions them on the base-ref
+    /// line so pre-blessing base evidence cannot enter a comparison.
     pub(crate) blessings: HashMap<DiscriminantSet, Vec<BlessingPlacement>>,
     /// Base-ref clean-run observations retained (branch mode only) so the analysis can
     /// classify why a finding's comparison base lags the base ref. Entries may come
@@ -428,7 +428,7 @@ where
     let finish_started = Instant::now();
     let mut series = builder.finish();
     if !base_series.is_empty() {
-        attach_base_windows(&mut series, &base_series, COMPARE_WINDOW);
+        attach_base_windows(&mut series, &base_series, MAX_BRANCH_BASE_COMMITS);
     }
     reporter.timing(
         "series build finalization (builder.finish: assemble + serial point sort)",
@@ -442,18 +442,24 @@ where
         )
     });
 
-    // Load the blessing sidecars on in-window commits into a per-set map. A
-    // blessing on a commit outside the analyzed history is irrelevant and skipped,
-    // while one that fails to parse fails the run. Branch mode ignores blessings
-    // entirely, so only history mode pays the load.
+    // Load blessing sidecars into the topology the active analysis uses. History
+    // positions them on the context line; branch detection positions them on the base
+    // ref's own first-parent line so pre-blessing base evidence is excluded even after
+    // the feature branch diverged.
     let mut blessings: HashMap<DiscriminantSet, Vec<BlessingPlacement>> = HashMap::new();
-    if mode == AnalysisMode::History {
+    if mode == AnalysisMode::History || load_branch_base_windows {
         let blessing_started = Instant::now();
         // Phase 1 — key-only filtering: drop blessings whose commit is not on the
         // analyzed history before fetching, in candidate order.
         let mut to_fetch: Vec<(String, StorageKey)> = Vec::new();
         for (key, parsed) in bless_candidates {
-            if order.contains_key(&parsed.commit) {
+            let on_analysis_history = match mode {
+                AnalysisMode::History => order.contains_key(&parsed.commit),
+                AnalysisMode::Branch => base_ref_history
+                    .as_ref()
+                    .is_some_and(|history| history.order.contains_key(&parsed.commit)),
+            };
+            if on_analysis_history {
                 to_fetch.push((key, parsed));
             } else {
                 reporter.note_with(|| {
@@ -481,11 +487,20 @@ where
         // Phase 3 — record each blessing against its commit's topological index
         // and committer date (resolved from topology, for the report anchor).
         for (key, parsed, record) in fetched {
-            let topo_index = order
-                .get(&parsed.commit)
-                .copied()
-                .expect("phase 1 admitted only blessings whose commit is on the analyzed history");
-            let commit_time = commit_times.get(&parsed.commit).copied();
+            let (topo_index, commit_time) = match mode {
+                AnalysisMode::History => (
+                    order.get(&parsed.commit).copied(),
+                    commit_times.get(&parsed.commit).copied(),
+                ),
+                AnalysisMode::Branch => base_ref_history.as_ref().map_or((None, None), |history| {
+                    (
+                        history.order.get(&parsed.commit).copied(),
+                        history.commit_times.get(&parsed.commit).copied(),
+                    )
+                }),
+            };
+            let topo_index =
+                topo_index.expect("phase 1 admitted only blessings on the analysis topology");
             reporter.note_with(|| {
                 format!(
                     "loaded blessing {key} ({} accepted at {})",
@@ -500,7 +515,7 @@ where
             ));
         }
         reporter.timing(
-            "blessing sidecar load (history mode: filter + fetch + parse)",
+            "blessing sidecar load (filter + fetch + parse)",
             blessing_started.elapsed(),
         );
     }

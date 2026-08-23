@@ -228,17 +228,14 @@ pub enum Gate {
     AbsoluteFloor,
     /// The move stands above the series' own between-commit residual scatter.
     ResidualNoise,
-    /// The comparison sample carries enough scatter for a prediction interval to be
-    /// formed at all.
-    BaseScatter,
     /// The chance level after correcting the change-point's rank test for the split
     /// search having chosen the most striking of many positions (history mode). Records
     /// the tainted value and the selection-adjusted value it maps to; it reports the
     /// correction and never declines a candidate.
     SelectionAdjustment,
-    /// The move is statistically significant: a Mann–Whitney, Mann–Kendall, or
-    /// prediction-interval p-value against its configured chance level. In history mode
-    /// the recorded value is the selection-adjusted chance level — after
+    /// The move is statistically significant: a Mann–Whitney or Mann–Kendall p-value
+    /// against its configured chance level. The recorded value is the selection-adjusted
+    /// chance level — after
     /// [`SelectionAdjustment`](Self::SelectionAdjustment) and the two-detector factor —
     /// not the raw test p-value.
     Significance,
@@ -270,7 +267,6 @@ impl Gate {
             Self::RelativeFloor => "relative_floor",
             Self::AbsoluteFloor => "absolute_floor",
             Self::ResidualNoise => "residual_noise",
-            Self::BaseScatter => "base_scatter",
             Self::SelectionAdjustment => "selection_adjustment",
             Self::Significance => "significance",
             Self::RegimeSeparation => "regime_separation",
@@ -285,7 +281,7 @@ impl Gate {
     /// because the appendix names the gates in prose and a list nothing checks would fall
     /// silently out of step the first time the set changed.
     #[cfg(any(test, feature = "private-test-util"))]
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 13] = [
         Self::MinSeriesPoints,
         Self::MinBaseCommits,
         Self::SplitLocated,
@@ -294,7 +290,6 @@ impl Gate {
         Self::RelativeFloor,
         Self::AbsoluteFloor,
         Self::ResidualNoise,
-        Self::BaseScatter,
         Self::RegimeSeparation,
         Self::IntervalDisjoint,
         Self::SelectionAdjustment,
@@ -428,7 +423,7 @@ mod tests {
         );
         assert!(
             !log.stage(GateStage::Branch)
-                .boolean(Gate::BaseScatter, false)
+                .boolean(Gate::IntervalDisjoint, false)
         );
     }
 

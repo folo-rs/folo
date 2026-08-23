@@ -23,7 +23,7 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
 
-use cbh_detect::{COMPARE_WINDOW, DRIFT_MIN_POINTS, MIN_REGIME, MIN_SERIES_POINTS};
+use cbh_detect::{DRIFT_MIN_POINTS, MAX_BRANCH_BASE_COMMITS, MIN_REGIME, MIN_SERIES_POINTS};
 
 /// Benchmark cases the scenario seeds per discriminant set: one per timeline-shape
 /// family, so every seeded shape — including the stable one, which must raise
@@ -63,7 +63,7 @@ const _: () = assert!(
     "the fixture keeps twice the run-carrying commits the seeded drift needs to be seen"
 );
 const _: () = assert!(
-    COMPARE_WINDOW >= MIN_SERIES_POINTS,
+    MAX_BRANCH_BASE_COMMITS >= MIN_SERIES_POINTS,
     "branch mode's base window must be able to hold the levels its test demands"
 );
 
@@ -86,9 +86,15 @@ const SERIES: usize = BENCHMARKS * DISCRIMINANT_SETS;
 /// set no blessing re-baselined.
 const HISTORY_REGRESSIONS: usize = 2 * DISCRIMINANT_SETS + (DISCRIMINANT_SETS - BLESSED_SETS);
 
-/// Branch-mode regressions the seeded shapes produce: the two seeded benchmarks the
-/// feature branch elevates, in every set.
-const BRANCH_REGRESSIONS: usize = 2 * DISCRIMINANT_SETS;
+/// Branch-mode regressions explicitly seeded by elevating two benchmarks in every set.
+const SEEDED_BRANCH_REGRESSIONS: usize = 2 * DISCRIMINANT_SETS;
+
+/// Branch-mode regressions the default scenario can judge.
+///
+/// The recent-step family has too few selector-lane observations in its new regime,
+/// so the detector honestly leaves it unjudged. The smooth-drift family remains
+/// judgeable because the branch exceeds the complete observed base range.
+const DEFAULT_BRANCH_REGRESSIONS: usize = DISCRIMINANT_SETS;
 
 /// Branch-mode improvements: the feature branch only ever raises values, so there
 /// are none.
@@ -125,18 +131,17 @@ fn run_stress(extra: &[&str]) -> Output {
     let dirty_runs = DIRTY_RUNS.to_string();
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-bench-history-stress"));
-    command.args([
-        "--storage",
-        "local",
-        "--benchmarks",
-        benchmarks.as_str(),
-        "--commits",
-        commits.as_str(),
-        "--branch-commits",
-        branch_commits.as_str(),
-        "--dirty-runs",
-        dirty_runs.as_str(),
-    ]);
+    command.args(["--storage", "local"]);
+    for (flag, value) in [
+        ("--benchmarks", benchmarks.as_str()),
+        ("--commits", commits.as_str()),
+        ("--branch-commits", branch_commits.as_str()),
+        ("--dirty-runs", dirty_runs.as_str()),
+    ] {
+        if !extra.contains(&flag) {
+            command.args([flag, value]);
+        }
+    }
     command.args(extra);
     command
         .output()
@@ -245,7 +250,7 @@ fn expected_row(mode: &str, with_runs: usize) -> ModeRow {
         "branch" => ModeRow {
             objects: (with_runs + BRANCH_COMMITS + DIRTY_RUNS) * DISCRIMINANT_SETS,
             series: SERIES,
-            regressions: BRANCH_REGRESSIONS,
+            regressions: DEFAULT_BRANCH_REGRESSIONS,
             improvements: Some(BRANCH_IMPROVEMENTS),
             notable: true,
         },
@@ -321,6 +326,32 @@ fn finds_the_seeded_branch_regressions() {
     // and no improvements at all.
     let stdout = successful_stress(&["--modes", "branch"]);
     assert_seeded_ground_truth(&stdout, &["branch"]);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn branch_mode_handles_more_base_evidence_than_its_window_cap() {
+    let commits = MAX_BRANCH_BASE_COMMITS.saturating_mul(2).to_string();
+    let stdout = successful_stress(&["--commits", &commits, "--modes", "branch"]);
+    let with_runs = summary_count(&stdout, "with a run:");
+
+    assert!(
+        with_runs >= MAX_BRANCH_BASE_COMMITS,
+        "the scenario must reach the production branch window cap: {stdout}"
+    );
+    let rows = mode_rows(&stdout);
+    let branch = rows
+        .get("branch")
+        .expect("the requested branch analysis must be reported");
+    assert_eq!(
+        branch.objects,
+        (with_runs + BRANCH_COMMITS + DIRTY_RUNS) * DISCRIMINANT_SETS,
+        "{stdout}"
+    );
+    assert_eq!(branch.series, SERIES, "{stdout}");
+    assert_eq!(branch.regressions, SEEDED_BRANCH_REGRESSIONS, "{stdout}");
+    assert_eq!(branch.improvements, Some(BRANCH_IMPROVEMENTS), "{stdout}");
+    assert!(branch.notable, "{stdout}");
 }
 
 #[test]

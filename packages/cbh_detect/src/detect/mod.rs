@@ -8,10 +8,10 @@
 //! Every public type is re-exported flat from this module, so consumers write
 //! `crate::detect::Finding` rather than reaching into a submodule.
 
+mod branch;
 pub(crate) mod discriminant;
 #[cfg(any(test, feature = "private-test-util"))]
 pub mod examples;
-mod excursions;
 pub(crate) mod findings;
 pub(crate) mod gate_log;
 mod noise_gates;
@@ -27,9 +27,9 @@ pub(crate) mod series;
 mod signal_validation;
 
 pub use discriminant::{DiscriminantFilter, DiscriminantSetQuery};
-pub use excursions::DiscardedReading;
 pub use findings::{
-    AnalysisContext, AnalysisMode, Detection, Direction, DiscardedBaseReading, Finding,
+    AnalysisContext, AnalysisMode, BranchComparison, BranchComparisonTrace, BranchEvaluationTrace,
+    BranchExcursion, BranchRangeRelation, BranchSeriesTrace, Detection, Direction, Finding,
     FindingMethod, SeriesCensus, SeriesValue, Testability, UnjudgedReason, find_changes_spawned,
     short_commit, testability,
 };
@@ -51,5 +51,6 @@ pub use run_points::{MetricPoint, ResultPoints, RunPoints};
 pub use selection::{DirtyAdmission, SelectedCommit, select_commits};
 pub use series::{
     BaseLevel, Blessing, BlessingPlacement, LoadedObject, Series, SeriesBuilder, SeriesFilter,
-    SeriesPoint, apply_blessings, attach_base_windows, build_series, retain_present_at_context,
+    SeriesPoint, apply_base_blessings, apply_blessings, attach_base_windows, build_series,
+    retain_present_at_context,
 };

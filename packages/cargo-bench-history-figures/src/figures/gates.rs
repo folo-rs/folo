@@ -77,15 +77,11 @@ const DRIFT_GATES: [Gate; 7] = [
 ];
 
 /// The branch comparison's gates, in the order it applies them.
-const BRANCH_GATES: [Gate; 10] = [
+const BRANCH_GATES: [Gate; 6] = [
     Gate::MinBaseCommits,
     Gate::NonZeroDelta,
-    Gate::MinRegime,
     Gate::RelativeFloor,
     Gate::AbsoluteFloor,
-    Gate::ResidualNoise,
-    Gate::BaseScatter,
-    Gate::Significance,
     Gate::IntervalDisjoint,
     Gate::IntervalNoiseBand,
 ];
@@ -159,11 +155,6 @@ fn demanded(gate: Gate, stage: GateStage) -> String {
         },
         Gate::AbsoluteFloor => "the metric's own floor, below".to_owned(),
         Gate::ResidualNoise => format!("{}× the typical residual", number(RESIDUAL_NOISE_MULTIPLE)),
-        Gate::BaseScatter => concat!(
-            "observed scatter, or one count, byte, or allocation of scale; ",
-            "flat timings have no quantum"
-        )
-        .to_owned(),
         Gate::Significance => match stage {
             GateStage::Drift => format!("p < {}", chance(MAX_DRIFT_CHANCE_LEVEL)),
             _ => format!("p < {}", chance(MAX_CHANGE_CHANCE_LEVEL)),
@@ -197,7 +188,9 @@ fn compares(gate: Gate, stage: GateStage) -> &'static str {
         Gate::NonZeroDelta => match stage {
             GateStage::ChangePoint => "Whether the two regime levels differ at all.",
             GateStage::Drift => "Whether the fitted line moved across the window.",
-            GateStage::Branch => "Whether the context run differs from the base level at all.",
+            GateStage::Branch => {
+                "Whether the context run lies strictly outside the observed current-base range."
+            }
         },
         Gate::SelectionAdjustment => {
             "The change-point's rank-test chance level, before the split-search correction."
@@ -205,24 +198,17 @@ fn compares(gate: Gate, stage: GateStage) -> &'static str {
         Gate::RelativeFloor => "The move as a fraction of the baseline.",
         Gate::AbsoluteFloor => "The move in the metric's own units.",
         Gate::ResidualNoise => "The move against the series' own typical residual.",
-        Gate::BaseScatter => {
-            "Whether the base window has any dispersion — measured scatter, or an integer \
-             metric's quantum — to build a prediction interval from; with none, the context run \
-             cannot be judged and the candidate is dropped."
-        }
         Gate::Significance => match stage {
             GateStage::ChangePoint => {
                 "The chance level of the rank test comparing the two regimes."
             }
             GateStage::Drift => "The chance level of the trend test across the window.",
-            GateStage::Branch => {
-                "The chance level of the context run against the base window's interval."
-            }
+            GateStage::Branch => "Branch mode does not apply a per-series significance test.",
         },
         Gate::RegimeSeparation => "The share of before-and-after pairs that agree the level moved.",
         Gate::IntervalDisjoint => match stage {
             GateStage::Branch => {
-                "The base sample's and the context run's reported confidence intervals."
+                "The current-base observations' and context run's reported confidence intervals."
             }
             GateStage::ChangePoint | GateStage::Drift => {
                 "The two regimes' reported confidence intervals."
@@ -341,7 +327,7 @@ struct Rung {
 fn reading(gate: Gate) -> Reading {
     match gate {
         Gate::MinSeriesPoints | Gate::MinBaseCommits | Gate::MinRegime => Reading::Points,
-        Gate::SplitLocated | Gate::BaseScatter | Gate::IntervalDisjoint => Reading::Boolean,
+        Gate::SplitLocated | Gate::IntervalDisjoint => Reading::Boolean,
         Gate::RelativeFloor => Reading::Fraction,
         Gate::NonZeroDelta => Reading::NonZero,
         Gate::AbsoluteFloor | Gate::ResidualNoise | Gate::IntervalNoiseBand => Reading::Magnitude,
@@ -948,7 +934,8 @@ fn commits(count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use cbh_detect::{
-        COMPARE_WINDOW, PRACTICAL_ABSOLUTE_ALLOC, PRACTICAL_ABSOLUTE_COUNT, PRACTICAL_ABSOLUTE_TIME,
+        MIN_SERIES_POINTS, PRACTICAL_ABSOLUTE_ALLOC, PRACTICAL_ABSOLUTE_COUNT,
+        PRACTICAL_ABSOLUTE_TIME,
     };
 
     use super::*;
@@ -1144,7 +1131,7 @@ mod tests {
 
     /// A branch candidate, which reaches every gate the comparison applies.
     fn judge_branch() -> (Option<Finding>, GateLog) {
-        let base = COMPARE_WINDOW;
+        let base = MIN_SERIES_POINTS;
         let levels: Vec<f64> = iter::repeat_n(DECLINED_BASELINE, base)
             .chain(iter::repeat_n(
                 examples::clean_step().last().copied().unwrap_or_default(),

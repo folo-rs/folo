@@ -142,10 +142,11 @@ The bound prevents runaway work; it does not promise that every difficult series
 
 This correction belongs inside Detection because it repairs how the history step detector searched
 **within one series**. It is not the later [multiplicity control](coverage.md), which accounts for
-testing many series. Branch mode does not use this correction. Its final context-versus-base
-comparison is named in advance, but its optional base-window narrowing searches suffixes and split
-positions; the chance level produced after that narrowing is not adjusted for the search. See
-[Limits](limits.md#branch-mode-base-window-narrowing-is-not-selection-adjusted).
+testing many series. Branch mode does not use this chance-level machinery. It selects the latest
+supported base regime under one shared false-boundary budget, then makes a factual observed-range
+comparison. Its report-wide historical comparison supplies finite context rather than a
+probability — see
+[Limits](limits.md#branch-historical-comparison-is-finite-context-not-probability).
 
 ### Finding a drift
 
@@ -246,25 +247,23 @@ That difference in question drives every difference in method.
 | Evidence | Every point in the series | The base ref's recent commits, plus the context run |
 | Dirty snapshots | Never admitted | Only the context commit's newest snapshot is judged |
 | Window | The whole analyzed history | A fixed number of recent base-ref commits |
-| Test | Rank comparison, or trend check | Did the context run land inside the range a further measurement was expected in? |
+| Test | Rank comparison, or trend check | Is the context run outside every observed value in the current base regime? |
 | Reports | Regressions only | Regressions and improvements |
-| Blessings | Honored | Ignored |
+| Blessings | Start the active history segment | Set the earliest admissible base evidence |
 
 The branch's own intermediate commits are discarded. Only the analyzed context commit is the
 state being evaluated, so only that commit is judged.
 
-The comparison is a **prediction interval**: from the base window's commits, the tool works
-out the range a single further measurement was expected to land in, and asks whether the context run
-landed outside it. That is a different question from "are these two groups different" —
-there is only one context observation, not a group.
+The comparison uses the **observed range** of the base ref's selected current regime. The context
+run is an excursion only when it lies strictly below the lowest observed value or strictly above
+the highest. Equality with either edge is inside. That is a deliberately modest statement: there is
+only one context observation, so the tool does not pretend it has a second sample or a probability
+model for unseen values.
 
-In the figures below, the shaded value band is that predicted range: the interval a single
-further measurement stays inside unless the tool judges it a change. Its edges are the real
-cutoff, computed from the same base window the tool uses — a context run drawn outside the band
-is one the tool reports, and one drawn inside is one it passes over. Every verdict shown beneath
-a figure is the real one. The base window itself is the recent base-ref first-parent commit
-sample for the same discriminant set, capped by the branch comparison window. It is anchored at
-the base ref, not at the merge base.
+In the figures below, the shaded value band is that observed range. Its edges are the real cutoff,
+and the reported magnitude is the excess beyond the nearest edge. Every verdict shown beneath a
+figure is the real one. The base window is the recent base-ref first-parent commit sample for the
+same discriminant set, capped at 128 commits and anchored at the base ref, not at the merge base.
 
 {{#include generated/detection-branch-reported.svg}}
 
@@ -278,72 +277,72 @@ The same base window, with a tip that agrees with it:
 
 ### When the base itself recently moved
 
-A base window spanning a genuine level shift describes two levels, not one. Predicting from
-both would produce a range so wide that nothing could fall outside it.
+A base window spanning a genuine level shift describes two regimes. Using both would allow older
+operating conditions to hide a branch excursion from the current one.
 
-So branch mode first checks its own window for a shift, and on finding an unambiguous one,
-discards everything before it and predicts from the newer regime alone.
+With at least 20 base commits, branch mode alternates the observed base levels in chronological
+order between a **selector lane** and a **reference lane**. Observation order keeps both lanes
+useful even when the benchmark ran on only a sparse subset of first-parent commits. Only selectors
+may locate boundaries. The reference lane is reserved for the report-wide historical comparison,
+so a base commit cannot help choose the boundary it is later judged against.
+
+The selector lane searches recursively for supported changes under one shared, selection-adjusted
+error budget. Each accepted split must leave full regimes, clear the practical floors, and separate
+the two populations almost completely. The current regime begins at the first selector observation
+known to follow the boundary; an interleaved reference observation whose side is ambiguous is not
+used. If a strongly separated recent group is still too short to establish a regime, the series is
+reported as unjudged rather than compared with stale history.
 
 {{#include generated/detection-branch-base-moved.svg}}
 
 {{#include generated/detection-branch-base-moved.md}}
 
-Accepting such a boundary is deliberately harder than reporting a finding. It is not a single
-higher number — the split has to qualify as a **full change point in its own right**: located by
-the split search, with each side long enough to meet the minimum regime length, significant under
-the rank comparison, well separated, and clearing the same relative and absolute floors a
-reported move must. Merely *reporting* a branch move asks for none of that extra structure, only
-that the tip fall outside the interval.
+Histories with 10–19 base commits skip this selection and use the full observed range. They can
+support the factual range comparison, but not a defensible decision to discard an older regime.
 
-The asymmetry looks backwards until you see why. Reporting a move makes a claim that a human then
-checks. Accepting a boundary *throws evidence away*: the comparison sample shrinks, and its
-scatter is re-estimated from what remains. A wrong boundary can collapse a noisy window's scatter
-to almost nothing and make the next tip read as certain. A decision that discards data has to be
-more certain than one that merely reports something.
-
-The stricter gates reduce that risk, but they do not correct for trying several suffixes and split
-positions before choosing the trailing regime. The resulting chance level has the
-[branch-mode narrowing limitation](limits.md#branch-mode-base-window-narrowing-is-not-selection-adjusted).
-
-### When one reading came from a disturbed runner
+### Historical extremes remain evidence
 
 A base window is a sample of what the base ref measures, and a shared machine occasionally
 contributes a reading that measures something else — another job on the same host, a thermal
 event, a noisy neighbour. Such a reading is not a level and not a trend: it stands well clear of
 its neighbours in one direction and is gone at the very next commit.
 
-Averaging one in would be quietly expensive. It drags the window's center toward the tip and
-inflates the window's apparent scatter several times over, and a wider predicted range is a range
-almost nothing falls outside of. The window would still look like a window, and the comparison
-would still run, but it would have lost most of its ability to see an ordinary move.
-
-So branch mode leaves such a reading out of the comparison. A reading qualifies only when the
-commits on either side of it agree with each other, it stands far clear of them, and it is the only
-one in the window — a window offering a second is a benchmark that visits more than one level, and
-how often it does so is exactly what the context run is being measured against.
-
-One more thing can disqualify it: the run being judged standing at that same level. That run is
-evidence consistent with the window's odd reading being a level the series returns to, and a level
-it may return to cannot safely be dropped from the description of what the series does. Dropping it
-would leave the window describing a steadiness the benchmark does not actually hold, and the very
-run that contradicted it would then be read as a large, confident regression against what remained.
+Branch mode keeps it. Removing a historical extreme would make the range narrower and permit a
+stronger claim by hiding contrary evidence. A context value inside the full observed current-regime
+range cannot honestly be described as faster or slower than everything the base recently did.
 
 {{#include generated/detection-branch-contended.svg}}
 
 {{#include generated/detection-branch-contended.md}}
 
-The reading is left out of the comparison only. It is still stored, still charted, and still
-counted as one of the commits whose existence lets the window be judged at all — a window is
-never made eligible by discarding. `--verbose` names each reading left out, what it measured,
-and the level its neighbours agreed on, so a narrowed comparison can be told from an ordinary
-one and the removal judged rather than merely discovered.
+The quiet verdict under the figure is therefore intentional. The observed extreme costs
+sensitivity, but the alternative would be an unsupported finding.
 
-History mode does not do this. Its arithmetic is built on medians and ranks, which a lone
-reading barely moves, so it has nothing to gain and evidence to lose.
+## Comparing the whole branch report with history
 
-## Chance levels, not a confidence score
+An excursion says what the recorded range proves about one series. It does not say how remarkable
+the complete report is when many series are inspected. Branch mode answers that separately by
+turning eligible base commits into historical branch-like turns:
 
-A finding does **not** carry a confidence or certainty number. Every reported finding has
+```mermaid
+flowchart LR
+  B["real branch turn"] --> BR["candidate: branch tip\nreferences: all current-base values"]
+  H["historical turn"] --> HR["candidate: one reference-lane base commit\nreferences: remaining base values + real branch tip"]
+  BR --> S["apply the same range and practical gates\nsum normalized excess across a shared series family"]
+  HR --> S
+  S --> C["count historical turns tied with or above the branch score"]
+```
+
+Only stable series that share the same candidate base commits enter one rectangular family. Adding
+the real branch value to each historical turn makes the two directions symmetric. The report can
+then say, for example, "None of 10 comparable base commits showed as much out-of-range movement as
+this branch." It does not call that count confidence or use it to erase factual excursions. If too
+few comparable commits exist, the excursions remain and the report says the wider comparison could
+not be formed.
+
+## History chance levels, not a confidence score
+
+A history finding does **not** carry a confidence or certainty number. Every reported finding has
 already cleared its test, so any such number would read as near-certainty on all of them: a
 finding whose chance level is one in a million and one that barely cleared would round to the
 same reassuring figure. It would rank almost nothing, so the report omits it and ranks by *size
@@ -361,8 +360,8 @@ chance explains the pattern** — and it is easy to over-read. Four things it is
 - **Not the family-wide result.** A history change point has already been corrected for its
   internal split search. The [group-wide correction](coverage.md) runs afterwards to account for
   how many series were tested and does not feed back into this chance level.
-- **Not comparable across modes.** History and branch chance levels come from different tests
-  answering different questions.
+- **Not a branch score.** Branch mode uses observed ranges and historical report turns rather than
+  a per-series chance level.
 
 ## Minimum evidence
 
@@ -381,9 +380,8 @@ happening while still judging any series with a genuine history behind it.
 
 ## What detection hands on
 
-A candidate: the series it came from, the method that found it, the direction and size of the
-move, the commit it is attributed to, and the detector's chance level. History chance levels
-already account for the detector's within-series choices; branch chance levels carry the
-[base-window narrowing limitation](limits.md#branch-mode-base-window-narrowing-is-not-selection-adjusted).
+A history candidate carries the series, method, direction and size of the move, attribution, and
+selection-adjusted chance level. A branch candidate carries the selected observed range and excess
+beyond its nearest edge, with no manufactured chance level.
 
 None of them is a finding yet. Next: [Noise gates](gates.md).

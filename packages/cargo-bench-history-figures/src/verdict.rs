@@ -27,6 +27,7 @@ fn history_reported(finding: &Finding, reading: &str) -> String {
     let method = match finding.method {
         FindingMethod::ChangePoint => "change point",
         FindingMethod::Drift => "drift",
+        FindingMethod::BranchExcursion => "branch excursion",
     };
 
     // A change point names the commit the new level starts at, which is a claim about
@@ -41,6 +42,9 @@ fn history_reported(finding: &Finding, reading: &str) -> String {
             Some(start) => format!("accumulated from `{start}` to `{commit}`"),
             None => format!("accumulated across the window ending at `{commit}`"),
         },
+        (FindingMethod::BranchExcursion, Some(commit)) => {
+            format!("observed at context commit `{commit}`")
+        }
     };
     let baseline = format_value(finding.baseline);
     let latest = format_value(finding.latest);
@@ -53,23 +57,35 @@ fn history_reported(finding: &Finding, reading: &str) -> String {
     )
 }
 
-/// Branch mode: the context commit against the base prediction interval.
+/// Branch mode: the context commit against the observed current-base range.
 ///
 /// The detector still records a [`FindingMethod`] because both modes share one finding
 /// type; the branch comparison is not a change point, so the fragment must not borrow
 /// history-mode wording.
 fn branch_reported(finding: &Finding, reading: &str) -> String {
     let reading = capitalized(reading);
-    let direction = direction_of(finding);
-    let baseline = format_value(finding.baseline);
+    let movement = match finding.direction {
+        Direction::Regression => "A regression",
+        Direction::Improvement => "An improvement",
+    };
     let latest = format_value(finding.latest);
+    let Some(branch) = finding.branch.as_ref() else {
+        return format!(
+            "> **Reported.** {movement} at the context commit.\n>\n\
+             > The context run is {latest}.\n>\n\
+             > {reading}.\n"
+        );
+    };
+    let minimum = format_value(branch.reference_min);
+    let maximum = format_value(branch.reference_max);
+    let excess = format_value(branch.excess.abs());
 
     format!(
-        "> **Reported.** A {direction} of {:+.2}% at the context commit against the base \
-         prediction interval.\n>\n\
-         > The context run is {latest} against a base level of {baseline}.\n>\n\
+        "> **Reported.** {movement} at the context commit, outside every observed \
+         current-base value.\n>\n\
+         > The context run is {latest}; the observed range is {minimum}-{maximum}, and the \
+         excess beyond its nearest edge is {excess}.\n>\n\
          > {reading}.\n",
-        finding.relative_delta * 100.0,
     )
 }
 
@@ -146,18 +162,21 @@ mod tests {
         assert!(fragment.contains("Because the level changed."));
     }
 
-    /// Branch mode compares the context run to the base interval. History-mode phrasing would
-    /// describe a split that the branch detector never locates.
+    /// Branch mode compares the context run to the observed current-base range. History-mode
+    /// phrasing would describe a split that the branch detector never locates.
     #[test]
-    fn a_branch_fragment_describes_a_context_run_against_the_base_interval() {
+    fn a_branch_fragment_describes_a_context_run_against_the_observed_range() {
         let fragment = reported(
             &a_branch_finding(),
-            "the context run sits outside the predicted range",
+            "the context run sits outside the observed range",
             AnalysisMode::Branch,
         );
 
         assert!(fragment.contains("context commit"));
-        assert!(fragment.contains("base prediction interval"));
+        assert!(fragment.contains("outside every observed current-base value"));
+        assert!(fragment.contains("observed range"));
+        assert!(fragment.contains("excess beyond its nearest edge"));
+        assert!(!fragment.contains('%'));
         assert!(!fragment.contains("via change point"));
         assert!(!fragment.contains("first seen"));
         assert!(!fragment.contains("the level moved"));

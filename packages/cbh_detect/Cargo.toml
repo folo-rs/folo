@@ -40,8 +40,14 @@ smallvec = { workspace = true, features = ["serde"] }
 thread_aware = { workspace = true, optional = true, features = ["derive"] }
 
 [dev-dependencies]
+criterion = { workspace = true }
 futures = { workspace = true, features = ["executor"] }
 mutants = { workspace = true }
+
+[[bench]]
+name = "cbh_detect_branch"
+harness = false
+required-features = ["private-test-util"]
 
 [lints]
 workspace = true

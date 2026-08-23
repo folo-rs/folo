@@ -1171,8 +1171,8 @@ async fn analyze_hints_when_every_run_is_a_dirty_snapshot_on_the_base() {
 async fn analyze_dirty_tree_on_the_base_admits_the_tip_with_a_warning() {
     let workspace = Workspace::clean_repo(&storage_only_config());
     // A flat clean baseline of `MIN_SERIES_POINTS` commits on the base branch. A
-    // dirty tip promotes this to branch mode, whose prediction interval needs at
-    // least `MIN_SERIES_POINTS` base-side commit levels before it will judge the tip.
+    // dirty tip promotes this to branch mode, which needs at least
+    // `MIN_SERIES_POINTS` base-side commit levels before it will judge the tip.
     let baseline_dates = sequential_dates("2024-01-01", MIN_SERIES_POINTS);
     for (index, date) in baseline_dates.iter().enumerate() {
         let label = format!("c{}", index + 1);
@@ -1180,7 +1180,7 @@ async fn analyze_dirty_tree_on_the_base_admits_the_tip_with_a_warning() {
         workspace.seed_callgrind(&label, 100.0);
     }
     // `MIN_REGIME` dirty regression snapshots on the tip commit form the "after"
-    // cohort: a raised level the prediction interval rejects against the clean base.
+    // cohort: a raised level beyond the observed clean-base range.
     let tip = format!("c{MIN_SERIES_POINTS}");
     for date in sequential_dates("2024-02-01", MIN_REGIME) {
         workspace.seed_dirty_callgrind(&date, &tip, 130.0);
@@ -1265,7 +1265,7 @@ async fn analyze_dirty_tree_without_recorded_dirty_runs_stays_history_mode() {
 async fn analyze_feature_branch_admits_dirty_snapshots() {
     let workspace = Workspace::repo(&storage_only_config());
     // A flat clean baseline on master, long enough to give branch mode the
-    // `MIN_SERIES_POINTS` base-side commit levels its prediction interval needs.
+    // `MIN_SERIES_POINTS` base-side commit levels its observed-range comparison needs.
     for (index, date) in sequential_dates("2024-01-01", MIN_SERIES_POINTS)
         .into_iter()
         .enumerate()
@@ -1348,7 +1348,7 @@ async fn analyze_orders_by_topology_not_commit_time() {
 async fn analyze_branch_mode_reports_the_tip_commit_state() {
     let workspace = Workspace::repo(&storage_only_config());
     // A flat clean baseline on master, long enough to give branch mode the
-    // `MIN_SERIES_POINTS` base-side commit levels its prediction interval needs.
+    // `MIN_SERIES_POINTS` base-side commit levels its observed-range comparison needs.
     for (index, date) in sequential_dates("2024-01-01", MIN_SERIES_POINTS)
         .into_iter()
         .enumerate()
@@ -1395,7 +1395,7 @@ async fn analyze_branch_mode_reports_the_tip_commit_state() {
 /// branch mode: with no change in the latest state there is nothing to report,
 /// and `notable` stays false so downstream automation knows to stay quiet. The
 /// base carries [`MIN_SERIES_POINTS`] commit levels, so branch mode actually
-/// judges the tip against a real prediction interval rather than staying silent
+/// judges the tip against a real observed base range rather than staying silent
 /// only because the base was too short to evaluate.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
@@ -1827,7 +1827,7 @@ async fn analyze_machine_key_discriminant_selects_one_set() {
 async fn analyze_criterion_feature_branch_admits_dirty_snapshots() {
     let workspace = Workspace::repo(&storage_only_config());
     // A clean Criterion baseline on master, long enough to give branch mode the
-    // `MIN_SERIES_POINTS` base-side commit levels its prediction interval needs. The
+    // `MIN_SERIES_POINTS` base-side commit levels its observed-range comparison needs. The
     // levels alternate 19.9/20.1 ns: a wall time is a slope fitted over a run's
     // iterations and never repeats a value, and a base window that did repeat one
     // would carry no scatter for the tip to be judged against.
@@ -1969,7 +1969,7 @@ async fn analyze_branch_comparison_base_lag_warns_and_charts_the_gap() {
     // Base data reaches only the last seeded base commit; the merge-base carries
     // none, so the branch's comparison base ends one commit behind the branch point.
     // The base has `MIN_SERIES_POINTS` seeded commit levels, which branch mode's
-    // prediction interval requires.
+    // observed-range comparison requires.
     for (index, date) in sequential_dates("2024-01-01", MIN_SERIES_POINTS)
         .into_iter()
         .enumerate()
