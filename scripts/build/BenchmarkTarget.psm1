@@ -1,6 +1,6 @@
 #requires -Version 7
 
-# Discovers benchmark targets for the `bench-cg` and `test-benches-criterion` recipes.
+# Discovers benchmark targets for the benchmark smoke and measurement recipes.
 #
 # Callgrind benches live in `packages/<pkg>/benches/*_cg.rs` (the `_cg` suffix is the naming
 # convention that pairs a Callgrind file with its Criterion counterpart); other `.rs` files in

@@ -1,11 +1,11 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
-# Pester suite for CallgrindBench.psm1. Its functions walk the filesystem, so each test builds a
+# Pester suite for BenchmarkTarget.psm1. Its functions walk the filesystem, so each test builds a
 # small `packages/<pkg>/benches/` fixture under Pester's TestDrive and asserts which (package,
 # bench) pairs are discovered under the various filter combinations.
 
 BeforeAll {
-    Import-Module (Join-Path $PSScriptRoot 'CallgrindBench.psm1') -Force
+    Import-Module (Join-Path $PSScriptRoot 'BenchmarkTarget.psm1') -Force
 }
 
 Describe 'Get-CallgrindBenchTarget' {

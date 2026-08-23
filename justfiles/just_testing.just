@@ -79,7 +79,7 @@ bench-cg TARGET="":
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
-    Import-Module "{{ justfile_directory() }}/scripts/build/CallgrindBench.psm1" -Force
+    Import-Module "{{ justfile_directory() }}/scripts/build/BenchmarkTarget.psm1" -Force
 
     if (-not $IsLinux) {
         Write-Error "bench-cg requires Linux (Valgrind). On Windows, invoke through WSL from the repo root: wsl -e bash -l -c 'just bench-cg'"
@@ -431,7 +431,7 @@ test-benches-criterion FILTER="":
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
-    Import-Module "{{ justfile_directory() }}/scripts/build/CallgrindBench.psm1" -Force
+    Import-Module "{{ justfile_directory() }}/scripts/build/BenchmarkTarget.psm1" -Force
 
     $targets = @(Get-CriterionBenchTarget -PackagesRoot "packages" -PackageFilter "{{ package }}")
     foreach ($benchTarget in $targets) {
