@@ -23,7 +23,9 @@ Branch analysis is a dedicated all-series path rather than another independent p
 detector. Per-series preparation remains parallel: it applies the base blessing boundary,
 alternates chronologically ordered observed levels between selector and reference lanes, locates
 the latest supported regime using only selectors, and evaluates the context value against the
-resulting observed range. Alternating observations rather than raw topology coordinates preserves
+resulting observed range. The branch tip itself is first collapsed to one observation per commit,
+preferring the dirty snapshot lane when present, so a commit with repeated measurements does not
+depend on storage order. Alternating observations rather than raw topology coordinates preserves
 both lanes for sparse histories. Finalization is serial because the report-wide historical
 comparison needs a rectangular family of stable series sharing the same reference-lane candidate
 commits.

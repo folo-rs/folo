@@ -180,7 +180,7 @@ fn prepare_series(
         included_in_historical_comparison: false,
     };
 
-    let Some(tip_point) = latest_context_point(&series.points, context.tip_index) else {
+    let Some(tip_points) = latest_context_points(&series.points, context.tip_index) else {
         return unjudged(trace, UnjudgedReason::NotMeasuredOnBranch);
     };
     let enough_base = series.base_window.len() >= noise_gates::MIN_SERIES_POINTS;
@@ -208,7 +208,7 @@ fn prepare_series(
         .get(selection.current_start..)
         .unwrap_or_default();
     let references: Vec<Observation> = current.iter().map(observation_of_level).collect();
-    let tip = observation_of_point(tip_point);
+    let tip = observation_of_points(tip_points);
     let actual = evaluate_excursion(series.kind, tip, &references, log);
     let current_range = range_of(current.iter().map(|level| level.value));
     let current_regime_start = selection.boundary_commit.or_else(|| {
@@ -235,7 +235,9 @@ fn prepare_series(
             previous_range: selection.previous_range,
             current_regime_start,
             tip,
-            tip_commit: tip_point.commit.as_deref().map(str::to_owned),
+            tip_commit: tip_points
+                .first()
+                .and_then(|point| point.commit.as_deref().map(str::to_owned)),
             stable_for_comparison: regime_is_stable(current),
             actual,
         }),
@@ -957,10 +959,13 @@ fn score_candidate(
     })
 }
 
-fn latest_context_point(points: &[SeriesPoint], context_index: usize) -> Option<&SeriesPoint> {
-    points
-        .last()
-        .filter(|point| point.topo_index == context_index)
+/// The points that share the branch tip's commit and lane preference.
+fn latest_context_points(points: &[SeriesPoint], context_index: usize) -> Option<&[SeriesPoint]> {
+    let start = points.partition_point(|point| point.topo_index < context_index);
+    let end = points.partition_point(|point| point.topo_index <= context_index);
+    let points = points.get(start..end)?;
+    let dirty_start = points.partition_point(|point| !point.dirty);
+    Some(points.get(dirty_start..).unwrap_or(points))
 }
 
 fn observation_of_level(level: &BaseLevel) -> Observation {
@@ -970,10 +975,24 @@ fn observation_of_level(level: &BaseLevel) -> Observation {
     }
 }
 
-fn observation_of_point(point: &SeriesPoint) -> Observation {
+/// Collapses one commit's selected context points to a single observation.
+fn observation_of_points(points: &[SeriesPoint]) -> Observation {
+    let mut values = Vec::with_capacity(points.len());
+    let mut lows = Vec::new();
+    let mut highs = Vec::new();
+    for point in points {
+        values.push(point.value);
+        if let Some(low) = point.interval_low {
+            lows.push(low);
+        }
+        if let Some(high) = point.interval_high {
+            highs.push(high);
+        }
+    }
     Observation {
-        value: point.value,
-        interval: point.interval_low.zip(point.interval_high),
+        value: stats::median_in_place(&mut values)
+            .expect("the selected context slice is non-empty"),
+        interval: stats::median_in_place(&mut lows).zip(stats::median_in_place(&mut highs)),
     }
 }
 
@@ -1097,6 +1116,47 @@ mod tests {
         }
     }
 
+    /// Builds a branch-tip series with repeated measurements on the context commit.
+    fn series_with_tip_points(
+        name: &str,
+        machine_key: &str,
+        base: &[f64],
+        tip_points: &[(bool, f64)],
+    ) -> Series {
+        let tip_index = base.len();
+        Series {
+            set: set(machine_key),
+            id: BenchmarkId::new(nonempty!["bench".to_owned(), name.to_owned()]),
+            kind: MetricKind::InstructionCount,
+            points: tip_points
+                .iter()
+                .enumerate()
+                .map(|(object_ordinal, &(dirty, value))| SeriesPoint {
+                    topo_index: tip_index,
+                    dirty,
+                    object_ordinal: object_ordinal as u32,
+                    commit: Some(Arc::from("branch-tip")),
+                    value,
+                    interval_low: None,
+                    interval_high: None,
+                })
+                .collect(),
+            base_window: base
+                .iter()
+                .enumerate()
+                .map(|(topo_index, &value)| BaseLevel {
+                    topo_index,
+                    commit: Some(Arc::from(format!("c{topo_index}"))),
+                    value,
+                    interval: None,
+                })
+                .collect(),
+            base_history_count: base.len(),
+            active_start: 0,
+            blessing: None,
+        }
+    }
+
     /// Branch context for fixtures whose tip follows `base_commits`.
     fn context(base_commits: usize) -> AnalysisContext {
         AnalysisContext {
@@ -1177,6 +1237,22 @@ mod tests {
 
         assert_eq!(finding.method, FindingMethod::BranchExcursion);
         assert_eq!(finding.direction, Direction::Regression);
+    }
+
+    #[test]
+    fn repeated_context_commit_points_are_collapsed_before_evaluation() {
+        let one = series_with_tip_points(
+            "collapsed",
+            "m1",
+            &[100.0; 20],
+            &[(true, 100.0), (true, 100.0), (true, 130.0)],
+        );
+        let (finding, _) = evaluate_with_log(&one, &context(20));
+
+        assert!(
+            finding.is_none(),
+            "the tip commit should be judged from its per-commit median rather than the last point",
+        );
     }
 
     #[test]
