@@ -4,7 +4,7 @@
 name = "cbh_render"
 description = "Implementation crate for cargo-bench-history - do not reference directly"
 publish = true
-version = "0.0.4"
+version = "0.2.1"
 
 authors.workspace = true
 edition.workspace = true
@@ -20,7 +20,7 @@ doc = false
 cbh_detect = { workspace = true }
 cbh_model = { workspace = true }
 colored = { workspace = true }
-rasciigraph = { workspace = true, features = ["color"] }
+rasciigraph = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 

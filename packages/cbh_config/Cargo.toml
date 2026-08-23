@@ -4,7 +4,7 @@
 name = "cbh_config"
 description = "Implementation crate for cargo-bench-history - do not reference directly"
 publish = true
-version = "0.0.4"
+version = "0.2.1"
 
 authors.workspace = true
 edition.workspace = true
@@ -18,12 +18,14 @@ doc = false
 
 [dependencies]
 cbh_command = { workspace = true }
+ohno = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["fs"] }
 toml = { workspace = true, features = ["parse", "serde"] }
 
 [dev-dependencies]
 mutants = { workspace = true }
+static_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
 

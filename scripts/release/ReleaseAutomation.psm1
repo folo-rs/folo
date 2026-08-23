@@ -14,6 +14,10 @@
 
 Set-StrictMode -Version Latest
 
+# The transient-fault retry (used by Invoke-ReleasePublish) is the shared workspace helper rather
+# than a private copy, so every network-facing script retries the same way.
+Import-Module (Join-Path $PSScriptRoot '..' 'utility' 'Retry.psm1') -Force
+
 function Get-ReleaseTarget {
     # The single source of truth for the triple -> runner mapping. The workflow's build matrix
     # is derived from this (via Get-MissingBinaryMatrix), so a target is added in exactly one
@@ -238,30 +242,6 @@ function ConvertTo-MatrixJson {
     if ($json.TrimStart().StartsWith('[')) { $json } else { "[$json]" }
 }
 
-function Invoke-WithRetry {
-    # Runs $Action, retrying up to $Attempt times with $DelaySeconds between tries; rethrows the
-    # last failure if every attempt fails. crates.io rate-limits and the Trusted-Publishing OIDC
-    # token is short-lived, so the publish is retried rather than failing the whole release on a
-    # transient rejection.
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][scriptblock] $Action,
-        [int] $Attempt = 3,
-        [int] $DelaySeconds = 900
-    )
-
-    for ($n = 1; $n -le $Attempt; $n++) {
-        try {
-            & $Action
-            return
-        } catch {
-            if ($n -eq $Attempt) { throw }
-            Write-Warning "Attempt $n of $Attempt failed: $($_.Exception.Message). Retrying in $DelaySeconds seconds..."
-            Start-Sleep -Seconds $DelaySeconds
-        }
-    }
-}
-
 function Invoke-ReleasePublish {
     # Publishes changed crates to crates.io via `release-plz release` using the composed CI
     # config, with bounded retries. release-plz is idempotent (it skips already-published
@@ -402,6 +382,5 @@ Export-ModuleMember -Function `
     Get-BinaryReleaseAsset, `
     Get-MissingBinaryMatrix, `
     ConvertTo-MatrixJson, `
-    Invoke-WithRetry, `
     Invoke-ReleasePublish, `
     Set-GitHubOutput

@@ -7,12 +7,13 @@
 //! groups are factored into [`clap::Args`] structs and `#[command(flatten)]`ed
 //! into each subcommand so the same option means the same thing everywhere.
 
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use cbh_command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
-    ExamineOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection, PruneOptions,
-    UnblessOptions,
+    ExamineOptions, ImportOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection,
+    MachineKeyOptions, PruneOptions, UnblessOptions,
 };
 use cbh_model::BenchmarkIdPrefix;
 use clap::{ArgGroup, Args, Parser, Subcommand as ClapSubcommand, ValueEnum};
@@ -24,7 +25,6 @@ const HEADING_COMMIT: &str = "Commit selection";
 const HEADING_FILTER: &str = "Data filtering";
 const HEADING_SCOPE: &str = "Benchmark scope";
 const HEADING_FEATURES: &str = "Feature selection";
-const HEADING_ANALYSIS: &str = "Analysis";
 
 /// Maintain a history of benchmark results over time and analyze it for trends.
 #[derive(Debug, Parser)]
@@ -92,8 +92,10 @@ impl Cli {
             Subcommand::Bless(command) => Command::Bless(command.into_options()),
             Subcommand::Collect(command) => Command::Collect(command.into_options()),
             Subcommand::Examine(command) => Command::Examine(command.into_options()),
+            Subcommand::Import(command) => Command::Import(command.into_options()),
             Subcommand::Install(command) => Command::Install(command.into_options()),
             Subcommand::List(command) => Command::List(command.into_options()),
+            Subcommand::MachineKey(command) => Command::MachineKey(command.into_options()),
             Subcommand::Prune(command) => Command::Prune(command.into_options()),
             Subcommand::Unbless(command) => Command::Unbless(command.into_options()),
         }
@@ -124,10 +126,19 @@ enum Subcommand {
     Bless(BlessCommand),
     /// Run the workspace benchmarks (`cargo bench`) and store the results.
     Collect(CollectCommand),
+    /// Import pre-existing engine output into storage without running a benchmark
+    /// engine (the collect pipeline minus `cargo bench`). Internal and hidden: it
+    /// exists to validate the storage/analysis pipeline against curated engine
+    /// output (for example, output produced by `cargo-bench-history-faker`), so it
+    /// is kept out of the public help.
+    #[command(hide = true)]
+    Import(ImportCommand),
     /// Generate a starter configuration file.
     Install(InstallCommand),
     /// List the data set a matching `analyze` would include, without analyzing it.
     List(ListCommand),
+    /// Print this machine's hardware fingerprint (the machine key).
+    MachineKey(MachineKeyCommand),
     /// Show the raw per-commit data points of one `(benchmark, metric)` series.
     Examine(ExamineCommand),
     /// Delete stored runs (and their blessing sidecars) from the resolved data set.
@@ -240,14 +251,14 @@ struct CacheArg {
     cache: Option<Option<PathBuf>>,
 }
 
-/// The repeatable, `all`-aware discriminant facets used by every query command.
+/// The repeatable, `all`-aware discriminant filters used by every query command.
 ///
-/// Each facet auto-detects the current machine when omitted (`--engine` has no
-/// machine-derived value, so it auto-detects to every engine); repeating a facet
+/// Each filter auto-detects the current machine when omitted (`--engine` has no
+/// machine-derived value, so it auto-detects to every engine); repeating a filter
 /// unions its values; the literal `all` removes the filter for that dimension.
 #[derive(Args, Debug)]
 #[command(next_help_heading = HEADING_DISCRIMINANT)]
-struct QueryFacetArgs {
+struct QueryDiscriminantArgs {
     /// Restrict to these engines, e.g. `criterion`/`callgrind` (repeatable; `all`
     /// matches every engine; default: every engine).
     #[arg(long, value_name = "NAME")]
@@ -280,11 +291,6 @@ struct TimelineArgs {
     /// a `YYYY-MM-DD` date, or a relative duration such as `6 months ago`.
     #[arg(long, value_name = "WHEN")]
     since: Option<String>,
-
-    /// Only consider commits made on or before this cutoff (same formats as
-    /// `--since`).
-    #[arg(long, value_name = "WHEN")]
-    until: Option<String>,
 }
 
 /// Per-format report output shared by `analyze`/`list`/`prune`.
@@ -317,11 +323,6 @@ struct OutputArgs {
 struct CollectCommand {
     #[command(flatten)]
     env: EnvArgs,
-
-    /// Override the machine fingerprint used to partition hardware-dependent
-    /// results (for example, a CI machine-pool name).
-    #[arg(long, value_name = "KEY", help_heading = HEADING_DISCRIMINANT)]
-    machine_key: Option<String>,
 
     /// Benchmark the entire workspace (the default when no `--package` is given);
     /// conflicts with `--package`.
@@ -370,6 +371,13 @@ struct CollectCommand {
     #[arg(long, help_heading = HEADING_ENV, conflicts_with = "overwrite")]
     skip_existing: bool,
 
+    /// Run the whole suite this many times and keep, per metric, the best
+    /// (minimum) observed value — a noise-reduction pass for jittery runners.
+    /// Every run must produce the same benchmark cases and the same metrics
+    /// per case or collection fails.
+    #[arg(long = "best-of", value_name = "N", default_value_t = NonZeroUsize::MIN, help_heading = HEADING_ENV)]
+    best_of: NonZeroUsize,
+
     /// Arguments after `--` forwarded verbatim to `cargo bench` after the scope
     /// flags.
     #[arg(last = true, value_name = "ARGS")]
@@ -388,11 +396,75 @@ impl CollectCommand {
             features: self.features,
             all_features: self.all_features,
             no_default_features: self.no_default_features,
-            machine_key: self.machine_key,
             no_store: self.no_store,
             overwrite: self.overwrite,
             skip_existing: self.skip_existing,
             passthrough: self.passthrough,
+            verbose: self.env.verbose,
+            best_of: self.best_of,
+        }
+    }
+}
+
+/// Import pre-existing engine output into storage (the collect pipeline minus the
+/// `cargo bench` run). Internal and hidden.
+///
+/// It keeps collect's environment/storage flags and adds the required scan
+/// directory plus the metadata overrides that let one host synthesize data for
+/// another target triple or commit. It has no benchmark-scope or feature flags
+/// because it never runs a build.
+#[derive(Args, Debug)]
+struct ImportCommand {
+    #[command(flatten)]
+    env: EnvArgs,
+
+    /// The directory tree to scan for pre-existing engine output. Required, with
+    /// no default: an ungated harvest of the shared `target/` directory would
+    /// sweep stale leftovers from unrelated runs into one import, so the caller
+    /// must name the tree it curated.
+    #[arg(long, value_name = "PATH", help_heading = HEADING_ENV)]
+    target_dir: PathBuf,
+
+    /// Override the target triple the results are partitioned under (and recorded
+    /// against), so a single host can synthesize data for another target.
+    #[arg(long, value_name = "TRIPLE", help_heading = HEADING_DISCRIMINANT)]
+    target_triple: Option<String>,
+
+    /// Override the commit the run is keyed under (default: the current commit).
+    /// Resolved through git, so it must name a real commit; it avoids checking the
+    /// commit out, not the requirement that it exist.
+    #[arg(long, value_name = "COMMIT", help_heading = HEADING_COMMIT)]
+    commit: Option<String>,
+
+    /// Store a dirty snapshot keyed by the import-time second instead of a clean
+    /// object, as if the working tree had uncommitted changes.
+    #[arg(long, help_heading = HEADING_DISCRIMINANT)]
+    dirty: bool,
+
+    /// Replace an already-stored result for this run instead of refusing it as a
+    /// duplicate.
+    #[arg(long, help_heading = HEADING_ENV)]
+    overwrite: bool,
+
+    /// Treat an already-stored result for this run as a success that writes
+    /// nothing, instead of refusing it as a duplicate. Mutually exclusive with
+    /// `--overwrite`.
+    #[arg(long, help_heading = HEADING_ENV, conflicts_with = "overwrite")]
+    skip_existing: bool,
+}
+
+impl ImportCommand {
+    fn into_options(self) -> ImportOptions {
+        ImportOptions {
+            config_path: self.env.config,
+            repo: self.env.repo,
+            local: local_selection(self.env.local),
+            target_dir: self.target_dir,
+            target_triple: self.target_triple,
+            commit: self.commit,
+            dirty: self.dirty,
+            overwrite: self.overwrite,
+            skip_existing: self.skip_existing,
             verbose: self.env.verbose,
         }
     }
@@ -420,6 +492,27 @@ impl InstallCommand {
     }
 }
 
+/// Print this machine's hardware fingerprint (the machine key).
+#[derive(Args, Debug)]
+struct MachineKeyCommand {
+    /// Also emit the individual hardware factors that make up the fingerprint to
+    /// standard error (the fingerprint version, processor count, memory-region
+    /// count and processor models), so a change in the key can be traced to which
+    /// factor changed. Per-processor speeds are recorded with collected runs as
+    /// hardware provenance, but they are not factors and so are not reported here.
+    /// The key itself always goes to standard output.
+    #[arg(long, help_heading = HEADING_ENV)]
+    verbose: bool,
+}
+
+impl MachineKeyCommand {
+    fn into_options(self) -> MachineKeyOptions {
+        MachineKeyOptions {
+            verbose: self.verbose,
+        }
+    }
+}
+
 /// Analyze stored history for notable patterns.
 #[derive(Args, Debug)]
 struct AnalyzeCommand {
@@ -439,7 +532,7 @@ struct AnalyzeCommand {
     output: OutputArgs,
 
     #[command(flatten)]
-    facets: QueryFacetArgs,
+    discriminants: QueryDiscriminantArgs,
 
     #[command(flatten)]
     timeline: TimelineArgs,
@@ -447,19 +540,6 @@ struct AnalyzeCommand {
     /// Exclude dirty (uncommitted-tree) snapshots from the analysis.
     #[arg(long, help_heading = HEADING_FILTER)]
     no_dirty: bool,
-
-    /// In history mode, also report sustained improvements (by default only
-    /// regressions are reported, since improvement over time is expected). Branch
-    /// mode always reports all findings, so this flag has no effect there.
-    #[arg(long, help_heading = HEADING_ANALYSIS)]
-    include_improvements: bool,
-
-    /// In history mode, also report inactive findings: a change the current state
-    /// no longer reflects (a regression that has since recovered). Hidden by
-    /// default since they need no action. Branch mode always reports all
-    /// findings, so this flag has no effect there.
-    #[arg(long, help_heading = HEADING_ANALYSIS)]
-    include_inactive: bool,
 
     /// Also write a condensed Markdown summary — only the most significant findings
     /// — to this path (a relative path resolves against the working directory). The
@@ -480,17 +560,14 @@ impl AnalyzeCommand {
             base: self.timeline.base,
             no_dirty: self.no_dirty,
             since: self.timeline.since,
-            until: self.timeline.until,
-            engine: self.facets.engine,
-            target_triple: self.facets.target_triple,
-            machine_key: self.facets.machine_key,
+            engine: self.discriminants.engine,
+            target_triple: self.discriminants.target_triple,
+            machine_key: self.discriminants.machine_key,
             prefixes: self.prefixes,
             no_text: self.output.no_text,
             markdown: self.output.markdown,
             json: self.output.json,
             markdown_summary: self.markdown_summary,
-            include_improvements: self.include_improvements,
-            include_inactive: self.include_inactive,
             verbose: self.env.verbose,
             timing: false,
         }
@@ -504,7 +581,7 @@ enum ListSubjectArg {
     Runs,
     /// Every discriminant set present in storage (no repository required); a
     /// discovery catalog that lists all partitions regardless of the current
-    /// machine. Pass a facet to narrow it.
+    /// machine. Pass a discriminant filter to narrow it.
     Discriminants,
     /// The blessings recorded at the current commit (or, with `--all`, across the
     /// whole analysis window).
@@ -538,7 +615,7 @@ struct ListCommand {
     output: OutputArgs,
 
     #[command(flatten)]
-    facets: QueryFacetArgs,
+    discriminants: QueryDiscriminantArgs,
 
     #[command(flatten)]
     timeline: TimelineArgs,
@@ -566,10 +643,9 @@ impl ListCommand {
             base: self.timeline.base,
             no_dirty: self.no_dirty,
             since: self.timeline.since,
-            until: self.timeline.until,
-            engine: self.facets.engine,
-            target_triple: self.facets.target_triple,
-            machine_key: self.facets.machine_key,
+            engine: self.discriminants.engine,
+            target_triple: self.discriminants.target_triple,
+            machine_key: self.discriminants.machine_key,
             no_text: self.output.no_text,
             markdown: self.output.markdown,
             json: self.output.json,
@@ -582,10 +658,12 @@ impl ListCommand {
 /// Show the raw per-commit data points of one `(benchmark, metric)` series.
 ///
 /// A drill-down sibling of `list runs`: it resolves exactly the data set a matching
-/// `analyze`/`list` would, then pivots one named series into its data points — one
-/// row per recorded observation, in git first-parent order, pairing the value with
-/// the short commit id and the start of the commit's title. Both `--benchmark` and
-/// `--metric` are required.
+/// `analyze`/`list` would, then pivots one named series into a per-commit listing —
+/// every commit from the earliest one carrying the series in any matching set up to
+/// the analyzed tip, in git first-parent order, pairing the value with the short
+/// commit id and the start of the commit's title. A commit with several observations
+/// contributes one row per observation, clean before dirty; a commit with no data
+/// point reads `n/a`. Both `--benchmark` and `--metric` are required.
 #[derive(Args, Debug)]
 struct ExamineCommand {
     #[command(flatten)]
@@ -598,7 +676,7 @@ struct ExamineCommand {
     output: OutputArgs,
 
     #[command(flatten)]
-    facets: QueryFacetArgs,
+    discriminants: QueryDiscriminantArgs,
 
     #[command(flatten)]
     timeline: TimelineArgs,
@@ -629,10 +707,9 @@ impl ExamineCommand {
             base: self.timeline.base,
             no_dirty: self.no_dirty,
             since: self.timeline.since,
-            until: self.timeline.until,
-            engine: self.facets.engine,
-            target_triple: self.facets.target_triple,
-            machine_key: self.facets.machine_key,
+            engine: self.discriminants.engine,
+            target_triple: self.discriminants.target_triple,
+            machine_key: self.discriminants.machine_key,
             benchmark: self.benchmark,
             metric: self.metric,
             no_text: self.output.no_text,
@@ -643,18 +720,27 @@ impl ExamineCommand {
     }
 }
 
-/// Delete stored runs (and their blessing sidecars) from the data set a matching
-/// `analyze`/`list` would resolve.
+/// Delete stored runs from the data set a matching `analyze`/`list` would resolve.
 ///
-/// You must say which kinds of run to delete with `--clean`, `--dirty`, or
-/// `--all`. Pruning walks the selected commits from `--context` back to `--base`;
-/// deleting the base branch's own data set requires the `--prune-base` guard.
+/// You must say what to delete with `--clean`, `--dirty`, `--all`, or
+/// `--include-blessings`. Pruning runs never removes a blessing on its own;
+/// `--include-blessings` additionally deletes blessing sidecars in the selected
+/// range (including on commits with no recorded run) and may be given alone.
+/// Pruning walks the selected commits from `--context` back to `--base`; deleting
+/// the base branch's own data set requires the `--prune-base` guard.
 #[derive(Args, Debug)]
-#[command(group(
-    ArgGroup::new("prune-kind")
-        .args(["clean", "dirty", "all"])
-        .required(true)
-))]
+#[command(
+    group(
+        ArgGroup::new("prune-action")
+            .args(["clean", "dirty", "all", "include_blessings"])
+            .required(true)
+            .multiple(true)
+    ),
+    group(
+        ArgGroup::new("prune-run-kind")
+            .args(["clean", "dirty", "all"])
+    )
+)]
 struct PruneCommand {
     /// Restrict removal to these commits (a full or short commit ID, prefix-matched);
     /// repeatable (default: every one of the selected commits).
@@ -680,12 +766,12 @@ struct PruneCommand {
     output: OutputArgs,
 
     #[command(flatten)]
-    facets: QueryFacetArgs,
+    discriminants: QueryDiscriminantArgs,
 
     #[command(flatten)]
     commit_selection: PruneCommitArgs,
 
-    /// Remove only clean runs and their blessing sidecars.
+    /// Remove only clean runs.
     #[arg(long, help_heading = HEADING_FILTER)]
     clean: bool,
 
@@ -693,10 +779,14 @@ struct PruneCommand {
     #[arg(long, help_heading = HEADING_FILTER)]
     dirty: bool,
 
-    /// Remove both clean runs (with their blessing sidecars) and dirty snapshots
-    /// (the same as `--clean --dirty`).
+    /// Remove both clean and dirty runs (the same as `--clean --dirty`).
     #[arg(long, help_heading = HEADING_FILTER)]
     all: bool,
+
+    /// Also remove blessing sidecars in the selected range, including on commits
+    /// with no recorded run. May be given alone to remove only blessings.
+    #[arg(long, help_heading = HEADING_FILTER)]
+    include_blessings: bool,
 }
 
 /// Commit selection for `prune`: the range of commits whose data is removed.
@@ -717,11 +807,6 @@ struct PruneCommitArgs {
     /// `YYYY-MM-DD` date, or a relative duration such as `6 months ago`.
     #[arg(long, value_name = "WHEN")]
     since: Option<String>,
-
-    /// Only prune commits made on or before this cutoff (same formats as
-    /// `--since`).
-    #[arg(long, value_name = "WHEN")]
-    until: Option<String>,
 }
 
 impl PruneCommand {
@@ -738,12 +823,12 @@ impl PruneCommand {
             base: self.commit_selection.base,
             commit: self.commit,
             since: self.commit_selection.since,
-            until: self.commit_selection.until,
-            engine: self.facets.engine,
-            target_triple: self.facets.target_triple,
-            machine_key: self.facets.machine_key,
+            engine: self.discriminants.engine,
+            target_triple: self.discriminants.target_triple,
+            machine_key: self.discriminants.machine_key,
             clean,
             dirty,
+            include_blessings: self.include_blessings,
             prune_base: self.prune_base,
             dry_run: self.dry_run,
             no_text: self.output.no_text,
@@ -755,6 +840,9 @@ impl PruneCommand {
 }
 
 /// Replay `collect` across a range of historical commits.
+///
+/// The range is walked newest commit first, so a run that is cut short has filled
+/// the most recent — and most comparison-relevant — gaps.
 #[derive(Args, Debug)]
 struct BackfillCommand {
     /// Oldest commit of the range to backfill, inclusive; a commit ID, tag, or ref such
@@ -769,11 +857,6 @@ struct BackfillCommand {
 
     #[command(flatten)]
     env: EnvArgs,
-
-    /// Override the machine fingerprint used to partition hardware-dependent
-    /// results (for example, a CI machine-pool name).
-    #[arg(long, value_name = "KEY", help_heading = HEADING_DISCRIMINANT)]
-    machine_key: Option<String>,
 
     /// Benchmark the entire workspace (the default when no `--package` is given);
     /// conflicts with `--package`.
@@ -812,9 +895,17 @@ struct BackfillCommand {
     #[arg(long, help_heading = HEADING_ENV)]
     overwrite: bool,
 
-    /// Continue past commits whose build or benchmark fails instead of stopping.
+    /// Continue past commits whose build or benchmark fails instead of stopping at
+    /// the newest failing one.
     #[arg(long, help_heading = HEADING_ENV)]
     ignore_errors: bool,
+
+    /// Run the whole suite this many times per commit and keep, per metric, the
+    /// best (minimum) observed value — a noise-reduction pass for jittery runners.
+    /// Every run must produce the same benchmark cases and the same metrics
+    /// per case or collection fails.
+    #[arg(long = "best-of", value_name = "N", default_value_t = NonZeroUsize::MIN, help_heading = HEADING_ENV)]
+    best_of: NonZeroUsize,
 
     /// Arguments after `--` forwarded verbatim to `cargo bench` after the scope
     /// flags.
@@ -836,11 +927,11 @@ impl BackfillCommand {
             features: self.features,
             all_features: self.all_features,
             no_default_features: self.no_default_features,
-            machine_key: self.machine_key,
             overwrite: self.overwrite,
             ignore_errors: self.ignore_errors,
             passthrough: self.passthrough,
             verbose: self.env.verbose,
+            best_of: self.best_of,
         }
     }
 }
@@ -871,7 +962,7 @@ struct BlessCommand {
     base: Option<String>,
 
     #[command(flatten)]
-    facets: QueryFacetArgs,
+    discriminants: QueryDiscriminantArgs,
 }
 
 impl BlessCommand {
@@ -882,9 +973,9 @@ impl BlessCommand {
             local: local_selection(self.env.local),
             context: self.context,
             base: self.base,
-            engine: self.facets.engine,
-            target_triple: self.facets.target_triple,
-            machine_key: self.facets.machine_key,
+            engine: self.discriminants.engine,
+            target_triple: self.discriminants.target_triple,
+            machine_key: self.discriminants.machine_key,
             prefixes: self.prefixes,
             all: self.all,
             verbose: self.env.verbose,
@@ -912,7 +1003,7 @@ struct UnblessCommand {
     base: Option<String>,
 
     #[command(flatten)]
-    facets: QueryFacetArgs,
+    discriminants: QueryDiscriminantArgs,
 }
 
 impl UnblessCommand {
@@ -923,9 +1014,9 @@ impl UnblessCommand {
             local: local_selection(self.env.local),
             context: self.context,
             base: self.base,
-            engine: self.facets.engine,
-            target_triple: self.facets.target_triple,
-            machine_key: self.facets.machine_key,
+            engine: self.discriminants.engine,
+            target_triple: self.discriminants.target_triple,
+            machine_key: self.discriminants.machine_key,
             verbose: self.env.verbose,
         }
     }
@@ -965,6 +1056,77 @@ mod tests {
         ] {
             assert!(help.contains(command), "help lists {command}: {help}");
         }
+    }
+
+    #[test]
+    fn import_is_hidden_from_help() {
+        // `import` parses (it is registered below) but is deliberately kept out of
+        // the public help, so it must not appear as an entry in the command list.
+        // Match the subcommand name as the first token of a help line rather than a
+        // bare substring, so an unrelated word like "important" in a description
+        // cannot mask a regression that re-exposes the command.
+        let help = Cli::help("cargo-bench-history");
+        let listed = help
+            .lines()
+            .any(|line| line.split_whitespace().next() == Some("import"));
+        assert!(!listed, "import is hidden from help: {help}");
+    }
+
+    #[test]
+    fn import_parses_target_dir_and_metadata_overrides() {
+        let command = parse(&[
+            "import",
+            "--target-dir",
+            "curated/target",
+            "--target-triple",
+            "aarch64-apple-darwin",
+            "--commit",
+            "release-1.0",
+            "--dirty",
+            "--overwrite",
+        ]);
+        let Command::Import(options) = command else {
+            panic!("expected import command");
+        };
+        assert_eq!(options.target_dir, PathBuf::from("curated/target"));
+        assert_eq!(
+            options.target_triple.as_deref(),
+            Some("aarch64-apple-darwin")
+        );
+        assert_eq!(options.commit.as_deref(), Some("release-1.0"));
+        assert!(options.dirty);
+        assert!(options.overwrite);
+        assert!(!options.skip_existing);
+    }
+
+    #[test]
+    fn import_requires_target_dir() {
+        // The harvest is ungated, so the tree to scan must be named explicitly
+        // rather than defaulting to the shared `target/` directory.
+        let error = Cli::from_args(&["cargo-bench-history"], &["import"]).unwrap_err();
+        assert_eq!(error.status, Err(()));
+        assert!(error.output.contains("--target-dir"), "{}", error.output);
+    }
+
+    #[test]
+    fn import_overwrite_and_skip_existing_conflict() {
+        let error = Cli::from_args(
+            &["cargo-bench-history"],
+            &[
+                "import",
+                "--target-dir",
+                "t",
+                "--overwrite",
+                "--skip-existing",
+            ],
+        )
+        .unwrap_err();
+        assert_eq!(error.status, Err(()));
+        assert!(
+            error.output.contains("cannot be used with"),
+            "{}",
+            error.output
+        );
     }
 
     #[test]
@@ -1052,6 +1214,30 @@ mod tests {
         };
         assert!(options.all_features);
         assert!(options.features.is_empty());
+    }
+
+    #[test]
+    fn collect_best_of_defaults_to_one_and_parses_a_value() {
+        let Command::Collect(options) = parse(&["collect"]) else {
+            panic!("expected collect command");
+        };
+        assert_eq!(
+            options.best_of.get(),
+            1,
+            "--best-of defaults to a single run"
+        );
+
+        let Command::Collect(options) = parse(&["collect", "--best-of", "5", "--no-store"]) else {
+            panic!("expected collect command");
+        };
+        assert_eq!(options.best_of.get(), 5);
+        assert!(options.no_store, "--best-of coexists with --no-store");
+    }
+
+    #[test]
+    fn collect_best_of_rejects_zero() {
+        let parsed = Cli::from_args(&["cargo-bench-history"], &["collect", "--best-of", "0"]);
+        assert!(parsed.is_err(), "--best-of 0 must be rejected");
     }
 
     #[test]
@@ -1308,15 +1494,6 @@ mod tests {
     }
 
     #[test]
-    fn collect_parses_machine_key_override() {
-        let command = parse(&["collect", "--machine-key", "ci-pool-a"]);
-        let Command::Collect(options) = command else {
-            panic!("expected collect command");
-        };
-        assert_eq!(options.machine_key.as_deref(), Some("ci-pool-a"));
-    }
-
-    #[test]
     fn collect_parses_verbose_switch() {
         let Command::Collect(options) = parse(&["collect", "--verbose"]) else {
             panic!("expected collect command");
@@ -1361,6 +1538,25 @@ mod tests {
     }
 
     #[test]
+    fn machine_key_maps_to_machine_key_command() {
+        let command = parse(&["machine-key"]);
+        assert_eq!(command, Command::MachineKey(MachineKeyOptions::default()));
+    }
+
+    #[test]
+    fn machine_key_parses_verbose_switch() {
+        let Command::MachineKey(options) = parse(&["machine-key", "--verbose"]) else {
+            panic!("expected machine-key command");
+        };
+        assert!(options.verbose);
+
+        let Command::MachineKey(options) = parse(&["machine-key"]) else {
+            panic!("expected machine-key command");
+        };
+        assert!(!options.verbose);
+    }
+
+    #[test]
     fn analyze_parses_verbose_switch() {
         let Command::Analyze(options) = parse(&["analyze", "--verbose"]) else {
             panic!("expected analyze command");
@@ -1374,16 +1570,7 @@ mod tests {
     }
 
     #[test]
-    fn analyze_collects_switches() {
-        let command = parse(&["analyze", "--include-improvements"]);
-        let Command::Analyze(options) = command else {
-            panic!("expected analyze command");
-        };
-        assert!(options.include_improvements);
-    }
-
-    #[test]
-    fn analyze_collects_topology_and_repeatable_facets() {
+    fn analyze_collects_topology_and_repeatable_discriminants() {
         let command = parse(&[
             "analyze",
             "--repo",
@@ -1392,7 +1579,7 @@ mod tests {
             "feature",
             "--base",
             "master",
-            "--until",
+            "--since",
             "2024-06-01T00:00:00Z",
             "--no-dirty",
             "--engine",
@@ -1410,7 +1597,7 @@ mod tests {
         assert_eq!(options.repo, Some(PathBuf::from("/work/folo")));
         assert_eq!(options.context.as_deref(), Some("feature"));
         assert_eq!(options.base.as_deref(), Some("master"));
-        assert_eq!(options.until.as_deref(), Some("2024-06-01T00:00:00Z"));
+        assert_eq!(options.since.as_deref(), Some("2024-06-01T00:00:00Z"));
         assert!(options.no_dirty);
         assert_eq!(
             options.engine,
@@ -1421,14 +1608,47 @@ mod tests {
     }
 
     #[test]
-    fn analyze_facets_default_to_empty() {
+    fn analyze_discriminants_default_to_empty() {
         let Command::Analyze(options) = parse(&["analyze"]) else {
             panic!("expected analyze command");
         };
         assert!(options.engine.is_empty());
         assert!(options.target_triple.is_empty());
         assert!(options.machine_key.is_empty());
-        assert!(options.until.is_none());
+        assert!(options.since.is_none());
+    }
+
+    #[test]
+    fn until_flag_is_rejected_after_removal() {
+        // `--until` was removed in favour of `--context` as the timeline's end, so
+        // every command that previously accepted it now rejects it as unknown.
+        for args in [
+            vec!["analyze", "--until", "2024-06-01"],
+            vec!["list", "runs", "--until", "2024-06-01"],
+            vec![
+                "examine",
+                "--benchmark",
+                "b",
+                "--metric",
+                "m",
+                "--until",
+                "2024-06-01",
+            ],
+            vec!["prune", "--dirty", "--until", "2024-06-01"],
+        ] {
+            let error = Cli::from_args(&["cargo-bench-history"], &args).unwrap_err();
+            assert!(error.status.is_err(), "{args:?} should reject --until");
+            assert!(
+                error.output.contains("--until"),
+                "{args:?} error should name the rejected flag: {}",
+                error.output
+            );
+            assert!(
+                error.output.contains("unexpected argument"),
+                "{args:?} error should reject --until as an unexpected argument: {}",
+                error.output
+            );
+        }
     }
 
     #[test]
@@ -1456,19 +1676,6 @@ mod tests {
         assert!(options.no_text);
         assert_eq!(options.markdown, Some(PathBuf::from("out/report.md")));
         assert_eq!(options.json, Some(PathBuf::from("out/report.json")));
-    }
-
-    #[test]
-    fn analyze_parses_include_inactive_switch() {
-        let Command::Analyze(options) = parse(&["analyze", "--include-inactive"]) else {
-            panic!("expected analyze command");
-        };
-        assert!(options.include_inactive);
-
-        let Command::Analyze(options) = parse(&["analyze"]) else {
-            panic!("expected analyze command");
-        };
-        assert!(!options.include_inactive);
     }
 
     #[test]
@@ -1575,8 +1782,6 @@ mod tests {
             "ci-pool",
             "--since",
             "2024-01-01",
-            "--until",
-            "2024-02-01",
             "--no-text",
             "--markdown",
             "examine.md",
@@ -1600,7 +1805,6 @@ mod tests {
         );
         assert_eq!(options.machine_key, vec!["ci-pool".to_owned()]);
         assert_eq!(options.since.as_deref(), Some("2024-01-01"));
-        assert_eq!(options.until.as_deref(), Some("2024-02-01"));
         assert!(options.no_text);
         assert_eq!(options.markdown, Some(PathBuf::from("examine.md")));
         assert_eq!(options.json, Some(PathBuf::from("examine.json")));
@@ -1633,7 +1837,7 @@ mod tests {
     }
 
     #[test]
-    fn bless_collects_prefixes_facets_and_context() {
+    fn bless_collects_prefixes_discriminants_and_context() {
         let command = parse(&[
             "bless",
             "--engine",
@@ -1691,7 +1895,7 @@ mod tests {
     }
 
     #[test]
-    fn unbless_parses_facets() {
+    fn unbless_parses_discriminants() {
         let command = parse(&[
             "unbless",
             "--context",
@@ -1726,8 +1930,6 @@ mod tests {
             "master",
             "--since",
             "2024-01-01T00:00:00Z",
-            "--until",
-            "2024-06-01T00:00:00Z",
             "--engine",
             "callgrind",
             "--target-triple",
@@ -1752,7 +1954,6 @@ mod tests {
             vec!["abc123".to_owned(), "def456".to_owned()]
         );
         assert_eq!(options.since.as_deref(), Some("2024-01-01T00:00:00Z"));
-        assert_eq!(options.until.as_deref(), Some("2024-06-01T00:00:00Z"));
         assert_eq!(options.engine, vec!["callgrind".to_owned()]);
         assert_eq!(
             options.target_triple,
@@ -1789,6 +1990,43 @@ mod tests {
     }
 
     #[test]
+    fn prune_include_blessings_combines_with_a_run_scope() {
+        // `--include-blessings` is additive: it must be usable alongside a run scope
+        // to prune runs and their blessings in one pass.
+        let Command::Prune(options) = parse(&["prune", "--all", "--include-blessings"]) else {
+            panic!("expected prune command");
+        };
+        assert!(options.clean, "--all enables clean removal");
+        assert!(options.dirty, "--all enables dirty removal");
+        assert!(options.include_blessings, "--include-blessings is set");
+    }
+
+    #[test]
+    fn prune_include_blessings_alone_is_accepted() {
+        let Command::Prune(options) = parse(&["prune", "--include-blessings"]) else {
+            panic!("expected prune command");
+        };
+        assert!(!options.clean);
+        assert!(!options.dirty);
+        assert!(options.include_blessings);
+    }
+
+    #[test]
+    fn prune_rejects_combining_clean_and_dirty() {
+        // `--clean`, `--dirty`, and `--all` remain mutually exclusive alternatives;
+        // `--all` is the way to remove both run kinds.
+        let error =
+            Cli::from_args(&["cargo-bench-history"], &["prune", "--clean", "--dirty"]).unwrap_err();
+        assert!(
+            error.output.contains("cannot be used with")
+                || error.output.contains("conflict")
+                || error.output.contains("cannot be used"),
+            "combining --clean and --dirty should be rejected: {}",
+            error.output
+        );
+    }
+
+    #[test]
     fn backfill_collects_range_and_passthrough() {
         let command = parse(&[
             "backfill",
@@ -1798,8 +2036,6 @@ mod tests {
             "nm",
             "--bench",
             "nm_observe",
-            "--machine-key",
-            "ci-pool",
             "--overwrite",
             "--ignore-errors",
             "--",
@@ -1812,7 +2048,6 @@ mod tests {
         assert_eq!(options.to, "def456");
         assert_eq!(options.packages, vec!["nm".to_owned()]);
         assert_eq!(options.benches, vec!["nm_observe".to_owned()]);
-        assert_eq!(options.machine_key.as_deref(), Some("ci-pool"));
         assert!(options.overwrite);
         assert!(options.ignore_errors);
         assert_eq!(options.passthrough, vec!["--noplot".to_owned()]);
@@ -1836,6 +2071,33 @@ mod tests {
             panic!("expected backfill command");
         };
         assert!(!options.verbose);
+    }
+
+    #[test]
+    fn backfill_best_of_defaults_to_one_and_parses_a_value() {
+        let Command::Backfill(options) = parse(&["backfill", "abc123", "def456"]) else {
+            panic!("expected backfill command");
+        };
+        assert_eq!(
+            options.best_of.get(),
+            1,
+            "--best-of defaults to a single run"
+        );
+
+        let Command::Backfill(options) = parse(&["backfill", "abc123", "def456", "--best-of", "3"])
+        else {
+            panic!("expected backfill command");
+        };
+        assert_eq!(options.best_of.get(), 3);
+    }
+
+    #[test]
+    fn backfill_best_of_rejects_zero() {
+        let parsed = Cli::from_args(
+            &["cargo-bench-history"],
+            &["backfill", "abc123", "def456", "--best-of", "0"],
+        );
+        assert!(parsed.is_err(), "--best-of 0 must be rejected");
     }
 
     #[test]

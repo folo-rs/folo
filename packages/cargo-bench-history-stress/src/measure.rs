@@ -2,9 +2,9 @@
 //!
 //! Each mode is run through the real public [`run_with_overrides`] entry point, so
 //! the measured path is exactly production data-loading and detection — only the
-//! data underneath is synthetic. The facet filters are forced to `all` because the
-//! seeded triples and the `synthetic` machine key never match the host the harness
-//! runs on; without that every object would be filtered out.
+//! data underneath is synthetic. The discriminant filters are forced to `all` because the
+//! seeded triples and the seeded machine key never match the host the harness runs
+//! on; without that every object would be filtered out.
 
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
@@ -67,8 +67,8 @@ pub(crate) struct MeasureResult {
     pub(crate) series: usize,
     /// Flagged regressions.
     pub(crate) regressions: usize,
-    /// Flagged improvements.
-    pub(crate) improvements: usize,
+    /// Flagged improvements, or `None` in a mode that does not report them.
+    pub(crate) improvements: Option<usize>,
     /// Whether any finding survived (the downstream signal).
     pub(crate) notable: bool,
 }
@@ -82,8 +82,9 @@ struct ReportCounts {
     series: usize,
     /// Flagged regressions.
     regressions: usize,
-    /// Flagged improvements.
-    improvements: usize,
+    /// Flagged improvements. Absent from the report in a mode that does not report
+    /// improvements.
+    improvements: Option<usize>,
     /// Whether any finding survived.
     notable: bool,
 }
@@ -105,12 +106,14 @@ pub(crate) async fn measure(
 ) -> Result<MeasureResult, Error> {
     let options = build_options(workspace, repo, mode, storage, logger.verbose());
     logger.step(&format!("analyzing in {} mode", mode.keyword()));
-    logger.detail_with(|| format!(
-        "context={}, base={}, facets forced to all (seeded triples and the synthetic machine key \
-         never match the host), repeats={repeat}",
-        options.context.as_deref().unwrap_or(""),
-        options.base.as_deref().unwrap_or(""),
-    ));
+    logger.detail_with(|| {
+        format!(
+            "context={}, base={}, discriminant filters forced to all \
+             (seeded triples and the seeded machine key never match the host), repeats={repeat}",
+            options.context.as_deref().unwrap_or(""),
+            options.base.as_deref().unwrap_or(""),
+        )
+    });
 
     let command = Command::Analyze(options);
 
@@ -262,7 +265,6 @@ fn build_options(
         base: Some(base.to_owned()),
         no_dirty: false,
         since,
-        until: None,
         engine: vec!["all".to_owned()],
         target_triple: vec!["all".to_owned()],
         machine_key: vec!["all".to_owned()],
@@ -271,8 +273,6 @@ fn build_options(
         markdown: None,
         json: Some(PathBuf::from(ANALYZE_REPORT_FILE)),
         markdown_summary: None,
-        include_improvements: true,
-        include_inactive: false,
         verbose: false,
         timing,
     }
@@ -286,6 +286,7 @@ fn overrides(workspace: &Path, anchor: Timestamp) -> Overrides {
         bench_command: None,
         clock: Some(Clock::new_frozen_at(anchor)),
         storage_override: None,
+        auto_discriminants: None,
     }
 }
 

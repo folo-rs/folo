@@ -4,10 +4,13 @@
 // round-trip), walks every standard dependency table, and rewrites each entry's `version`
 // string to its frozen form.
 
+use std::path::Path;
+
+use ohno::AppError;
 use toml_edit::{DocumentMut, Formatted, Item, TableLike, Value};
 
 use crate::version::freeze_requirement;
-use crate::{RunError, RunOutcome};
+use crate::{InvalidVersionError, ParseError, RunOutcome, UnexpectedVersionTypeError};
 
 /// Standard dependency tables that can appear at the root of a package-level Cargo.toml.
 const PACKAGE_DEP_TABLES: &[&str] = &["dependencies", "dev-dependencies", "build-dependencies"];
@@ -17,10 +20,13 @@ const PACKAGE_DEP_TABLES: &[&str] = &["dependencies", "dev-dependencies", "build
 ///
 /// The returned string has the same comments and overall layout as the input — only the
 /// rewritten version literals differ.
-pub(crate) fn freeze_document(content: &str) -> Result<(String, RunOutcome), RunError> {
+pub(crate) fn freeze_document(
+    content: &str,
+    input_path: &Path,
+) -> Result<(String, RunOutcome), AppError> {
     let mut doc: DocumentMut = content
         .parse()
-        .map_err(|e: toml_edit::TomlError| RunError::Parse(e.to_string()))?;
+        .map_err(|error| ParseError::caused_by(input_path, error))?;
 
     let mut outcome = RunOutcome {
         frozen_count: 0,
@@ -39,7 +45,7 @@ pub(crate) fn freeze_document(content: &str) -> Result<(String, RunOutcome), Run
 fn process_package_level(
     root: &mut dyn TableLike,
     outcome: &mut RunOutcome,
-) -> Result<(), RunError> {
+) -> Result<(), AppError> {
     for table_name in PACKAGE_DEP_TABLES {
         if let Some(table) = root.get_mut(table_name).and_then(Item::as_table_like_mut) {
             freeze_dependency_table(table, outcome)?;
@@ -52,7 +58,7 @@ fn process_package_level(
 fn process_workspace_level(
     root: &mut dyn TableLike,
     outcome: &mut RunOutcome,
-) -> Result<(), RunError> {
+) -> Result<(), AppError> {
     let Some(workspace) = root.get_mut("workspace").and_then(Item::as_table_like_mut) else {
         return Ok(());
     };
@@ -72,7 +78,7 @@ fn process_workspace_level(
 fn process_target_level(
     root: &mut dyn TableLike,
     outcome: &mut RunOutcome,
-) -> Result<(), RunError> {
+) -> Result<(), AppError> {
     let Some(target) = root.get_mut("target").and_then(Item::as_table_like_mut) else {
         return Ok(());
     };
@@ -99,7 +105,7 @@ fn process_target_level(
 fn freeze_dependency_table(
     table: &mut dyn TableLike,
     outcome: &mut RunOutcome,
-) -> Result<(), RunError> {
+) -> Result<(), AppError> {
     for (key, entry) in table.iter_mut() {
         let dep_name = key.get().to_string();
         freeze_dependency_entry(&dep_name, entry, outcome)?;
@@ -116,7 +122,7 @@ fn freeze_dependency_entry(
     dep_name: &str,
     entry: &mut Item,
     outcome: &mut RunOutcome,
-) -> Result<(), RunError> {
+) -> Result<(), AppError> {
     match entry {
         Item::Value(Value::String(s)) => {
             // Form 1: bare string.
@@ -147,13 +153,10 @@ fn freeze_version_in_value(
     dep_name: &str,
     version_value: &mut Value,
     outcome: &mut RunOutcome,
-) -> Result<(), RunError> {
+) -> Result<(), AppError> {
     match version_value {
         Value::String(s) => freeze_version_string(dep_name, s, outcome),
-        other => Err(RunError::UnexpectedVersionType {
-            dep: dep_name.to_string(),
-            actual_type: other.type_name().to_string(),
-        }),
+        other => Err(UnexpectedVersionTypeError::new(dep_name, other.type_name()).into()),
     }
 }
 
@@ -162,18 +165,15 @@ fn freeze_version_in_item(
     dep_name: &str,
     version_item: &mut Item,
     outcome: &mut RunOutcome,
-) -> Result<(), RunError> {
+) -> Result<(), AppError> {
     match version_item {
         Item::Value(Value::String(s)) => freeze_version_string(dep_name, s, outcome),
-        Item::Value(other) => Err(RunError::UnexpectedVersionType {
-            dep: dep_name.to_string(),
-            actual_type: other.type_name().to_string(),
-        }),
+        // A `version` key parsed as `Item::None` carries no value to freeze.
         Item::None => Ok(()),
-        Item::Table(_) | Item::ArrayOfTables(_) => Err(RunError::UnexpectedVersionType {
-            dep: dep_name.to_string(),
-            actual_type: "table".to_string(),
-        }),
+        // `Item::type_name()` names every remaining shape, including the ones that are not
+        // `Value`s, so the diagnostic points at the construct the author actually wrote —
+        // an array of tables is reported as such rather than as a plain table.
+        other => Err(UnexpectedVersionTypeError::new(dep_name, other.type_name()).into()),
     }
 }
 
@@ -183,14 +183,11 @@ fn freeze_version_string(
     dep_name: &str,
     formatted: &mut Formatted<String>,
     outcome: &mut RunOutcome,
-) -> Result<(), RunError> {
+) -> Result<(), AppError> {
     let original = formatted.value().as_str();
 
-    let frozen = freeze_requirement(original).map_err(|source| RunError::InvalidVersion {
-        dep: dep_name.to_string(),
-        version: original.to_string(),
-        source,
-    })?;
+    let frozen = freeze_requirement(original)
+        .map_err(|source| InvalidVersionError::caused_by(dep_name, original, source))?;
 
     let Some(frozen) = frozen else {
         outcome.skipped_count = outcome
@@ -227,7 +224,8 @@ mod tests {
     use super::*;
 
     fn freeze(content: &str) -> (String, RunOutcome) {
-        freeze_document(content).expect("test inputs are expected to be well-formed")
+        freeze_document(content, Path::new("Cargo.toml"))
+            .expect("test inputs are expected to be well-formed")
     }
 
     // -- Dependency entry forms -----------------------------------------------------------
@@ -603,10 +601,12 @@ serde = "=1.2.3"
     #[test]
     fn invalid_toml_returns_parse_error() {
         let input = "this is = not [valid toml";
-        match freeze_document(input).unwrap_err() {
-            RunError::Parse(_) => {}
-            other => panic!("expected Parse error, got {other:?}"),
-        }
+        let input_path = Path::new("some/Cargo.toml");
+        let error = freeze_document(input, input_path).unwrap_err();
+        let parse_error = error.find_source::<ParseError>().unwrap();
+
+        assert_eq!(parse_error.path, input_path);
+        assert!(error.find_source::<toml_edit::TomlError>().is_some());
     }
 
     #[test]
@@ -615,13 +615,12 @@ serde = "=1.2.3"
 [dependencies]
 serde = "garbage"
 "#;
-        match freeze_document(input).unwrap_err() {
-            RunError::InvalidVersion { dep, version, .. } => {
-                assert_eq!(dep, "serde");
-                assert_eq!(version, "garbage");
-            }
-            other => panic!("expected InvalidVersion error, got {other:?}"),
-        }
+        let error = freeze_document(input, Path::new("Cargo.toml")).unwrap_err();
+        let invalid = error.find_source::<InvalidVersionError>().unwrap();
+
+        assert_eq!(invalid.dep(), "serde");
+        assert_eq!(invalid.version(), "garbage");
+        assert!(error.find_source::<semver::Error>().is_some());
     }
 
     #[test]
@@ -630,12 +629,11 @@ serde = "garbage"
 [dependencies]
 serde = { version = 123 }
 ";
-        match freeze_document(input).unwrap_err() {
-            RunError::UnexpectedVersionType { dep, .. } => {
-                assert_eq!(dep, "serde");
-            }
-            other => panic!("expected UnexpectedVersionType error, got {other:?}"),
-        }
+        let error = freeze_document(input, Path::new("Cargo.toml")).unwrap_err();
+        let unexpected = error.find_source::<UnexpectedVersionTypeError>().unwrap();
+
+        assert_eq!(unexpected.dep(), "serde");
+        assert_eq!(unexpected.actual_type(), "integer");
     }
 
     #[test]
@@ -644,12 +642,11 @@ serde = { version = 123 }
 [dependencies.serde]
 version = 123
 ";
-        match freeze_document(input).unwrap_err() {
-            RunError::UnexpectedVersionType { dep, .. } => {
-                assert_eq!(dep, "serde");
-            }
-            other => panic!("expected UnexpectedVersionType error, got {other:?}"),
-        }
+        let error = freeze_document(input, Path::new("Cargo.toml")).unwrap_err();
+        let unexpected = error.find_source::<UnexpectedVersionTypeError>().unwrap();
+
+        assert_eq!(unexpected.dep(), "serde");
+        assert_eq!(unexpected.actual_type(), "integer");
     }
 
     // -- Aggregated counts and idempotency ------------------------------------------------
@@ -815,18 +812,33 @@ serde = "=1.2.3"
 
     #[test]
     fn freeze_version_in_item_rejects_table_version() {
-        // Exercises the `Item::Table | Item::ArrayOfTables` arm of `freeze_version_in_item`
-        // — a `version` key that resolves to a nested table rather than a string. Real
+        // A `version` key that resolves to a nested table rather than a string. Real
         // user-authored TOML can produce this with `[dependencies.serde.version]`.
         let mut item = Item::Table(toml_edit::Table::new());
         let mut outcome = RunOutcome {
             frozen_count: 0,
             skipped_count: 0,
         };
-        let err = freeze_version_in_item("dep", &mut item, &mut outcome).unwrap_err();
-        match err {
-            RunError::UnexpectedVersionType { dep, .. } => assert_eq!(dep, "dep"),
-            other => panic!("expected UnexpectedVersionType, got {other:?}"),
-        }
+        let error = freeze_version_in_item("dep", &mut item, &mut outcome).unwrap_err();
+        let unexpected = error.find_source::<UnexpectedVersionTypeError>().unwrap();
+
+        assert_eq!(unexpected.dep(), "dep");
+        assert_eq!(unexpected.actual_type(), "table");
+    }
+
+    #[test]
+    fn freeze_version_in_item_rejects_array_of_tables_version() {
+        // An array of tables is a distinct TOML construct from a table, written as repeated
+        // `[[dependencies.serde.version]]` headers. Reporting it as a table would send the
+        // author looking for the wrong syntax.
+        let mut item = Item::ArrayOfTables(toml_edit::ArrayOfTables::new());
+        let mut outcome = RunOutcome {
+            frozen_count: 0,
+            skipped_count: 0,
+        };
+        let error = freeze_version_in_item("dep", &mut item, &mut outcome).unwrap_err();
+        let unexpected = error.find_source::<UnexpectedVersionTypeError>().unwrap();
+
+        assert_eq!(unexpected.actual_type(), "array of tables");
     }
 }

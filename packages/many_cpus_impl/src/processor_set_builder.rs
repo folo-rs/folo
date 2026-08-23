@@ -888,10 +888,11 @@ impl ProcessorSetBuilder {
     fn all_processors(&self) -> NonEmpty<Processor> {
         // Cheap conversion, reasonable to do it inline since we do not expect
         // processor set logic to be on the hot path anyway.
+        let hardware_id = self.hardware.hardware_id();
         self.hardware
             .platform()
             .get_all_processors()
-            .map(Processor::new)
+            .map(|inner| Processor::new(hardware_id, inner))
     }
 
     fn resource_quota_processor_count_limit(&self) -> Option<usize> {

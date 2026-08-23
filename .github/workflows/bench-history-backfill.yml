@@ -1,0 +1,126 @@
+name: Benchmark history backfill
+
+# Nightly gap-filling for the benchmark history the push-triggered workflow (bench-history.yml)
+# collects. GitHub's hosted runner pool is heterogeneous, so consecutive pushes to `main` are
+# measured by different hardware and every per-machine-key series is sparse: a commit measured under
+# one machine key is simply missing from every other machine key's series. Each night this job
+# measures the recent commits that whichever machine key it draws is missing, appending them to that
+# key's series; analysis is left to the next push run, which surveys whatever landed here.
+#
+# Best-effort by design. Each leg fills roughly one gap per platform per night (the benchmark suite
+# at `--best-of 3` takes most of a job), and which series gets densified depends on the hardware the
+# runner happens to have, so this is opportunistic densification of recent history rather than a
+# guarantee for any particular series. See the gh-backfill-bench-history recipe for the range
+# selection and the flags.
+on:
+  schedule:
+    # 02:00 UTC, deliberately off the cache-warmup workflow's midnight slot so the two multi-hour
+    # nightly jobs do not compete for the same runner-concurrency budget.
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      # Optional escape hatch: the SHA to use as the range END instead of the computed one (the
+      # newest commit at least 24 hours old). A commit that fails slowly is re-selected every night
+      # and can eat a whole run before anything is stored, so this lets an operator step over it by
+      # aiming the window at an older commit. Leave empty for a normal run.
+      to_commit:
+        description: "Commit SHA to backfill up to (leave empty for the newest commit at least 24 hours old)"
+        required: false
+        type: string
+        default: ""
+
+# One backfill at a time, repository-wide: a fixed group name is what serializes every run of this
+# workflow against every other, since a leg spends hours rebuilding a historical checkout per commit
+# and a second concurrent run would race the first for the same gaps rather than add to them.
+# Queueing rather than cancelling is what makes a manual dispatch wait for the scheduled run instead
+# of racing it. The SHA-keyed shape bench-history.yml uses would be wrong on both counts here: it
+# serializes nothing across runs, and a scheduled run's github.sha is the current tip, so this job
+# would land in the same group as that tip's own collect run and whichever started later would kill
+# the other.
+concurrency:
+  group: bench-history-backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    # Skip everywhere the OIDC sign-in cannot work: forks (only this repository's identity can
+    # federate into Azure) and any ref other than main (the federated credential is scoped to
+    # refs/heads/main). A scheduled run is always on refs/heads/main, so this only ever gates a
+    # manual dispatch from a feature branch, which skips cleanly instead of failing red.
+    if: github.repository == 'folo-rs/folo' && github.ref == 'refs/heads/main'
+
+    strategy:
+      # One platform's benchmarks failing must not abandon the other's gap-filling; each platform
+      # stores into its own partition independently.
+      fail-fast: false
+      matrix:
+        # x86_64 Linux and Windows only, matching the platforms the push workflow collects on -
+        # backfilling a platform whose series does not exist would measure nothing comparable.
+        platform: [ubuntu-latest, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+    # 360 minutes is GitHub's hard per-job ceiling, and this job is designed to simply work until it
+    # hits it: there is no per-run commit budget, the tool just keeps filling gaps until the axe
+    # falls. Results are stored per commit as that commit completes, so a kill keeps everything
+    # already stored and affects only the commit in flight.
+    timeout-minutes: 360
+    # A timeout is therefore the EXPECTED end of a healthy run, not a failure, so the job must not
+    # mark the workflow red - hence continue-on-error. The accepted cost is that a genuine failure
+    # (auth, storage, a tool defect) is also invisible here; such breakage surfaces within hours in
+    # the push workflow, which does alert.
+    continue-on-error: true
+
+    # `id-token: write` lets cargo-bench-history mint short-lived GitHub OIDC tokens (each a signed
+    # JWT proving "this run is repo folo-rs/folo on ref refs/heads/main"), which it exchanges
+    # directly with Entra against the prod managed identity's `main`-branch federated credential - so
+    # CI authenticates with no stored secret, and a multi-hour run stays authenticated past the ~1h
+    # access-token lifetime. `contents: read` is the minimum the checkout needs.
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        # Full history: the tool benchmarks each historical commit in a throwaway `git worktree`,
+        # and the range selection walks `main`'s first-parent history by date. Neither works on the
+        # default shallow clone.
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup environment
+        # Backfill runs the Callgrind measurement engine, which drives Valgrind.
+        uses: ./.github/actions/setup-environment
+        with:
+          install-valgrind: "true"
+
+      # cargo-bench-history self-federates with GitHub OIDC: given the managed identity's client id
+      # and tenant - plus the ACTIONS_ID_TOKEN_* values GitHub injects because of id-token: write -
+      # it mints a fresh OIDC assertion each time Entra needs a new access token, so a long run never
+      # re-submits an expired assertion. Export those two identifiers from constants.env under the
+      # standard names the tool reads (AZURE_PROD_CLIENT_ID is the prod identity's client id). The
+      # data store account name is NOT needed here: it is baked into the committed
+      # .cargo/bench_history.toml.
+      - name: Configure Azure federation identity from constants.env
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          # constants.env holds the two non-secret identifiers the benchmark-history jobs federate
+          # with; the module re-exports them under the standard AZURE_* names the tool reads, failing
+          # loudly if either is missing. Shared with bench-history.yml so the two cannot drift. See
+          # scripts/bench-history/AzureFederation.psm1.
+          Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
+          Set-AzureFederationEnv -ConstantsPath constants.env -EnvFilePath $env:GITHUB_ENV | Out-Null
+
+      # The recipe resolves the commit range, measures only the commits this runner's own machine
+      # partition is missing, and appends them under the runner's real hardware fingerprint (no fixed
+      # machine key). BACKFILL_TO_COMMIT is empty on a scheduled run; it is passed through the
+      # environment so an untrusted dispatch input is never spliced into a shell command line here.
+      - name: Backfill benchmark history
+        shell: pwsh
+        env:
+          BACKFILL_TO_COMMIT: ${{ inputs.to_commit }}
+        run: just gh-backfill-bench-history

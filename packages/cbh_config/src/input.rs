@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use cbh_command::{CacheSelection, LocalStorageSelection};
 
-use crate::{Config, ConfigError};
+use crate::{Config, ConfigError, SelectionEnvironmentRequiredError};
 
 /// The environment variable that supplies the local-storage path for a bare
 /// `--local` (given with no value): `CARGO_BENCH_HISTORY_STORAGE`.
@@ -103,9 +103,7 @@ pub fn resolve_local_path(
         Some(LocalStorageSelection::Path(path)) => Ok(Some(path.clone())),
         Some(LocalStorageSelection::FromEnv) => match env {
             Some(value) if !value.is_empty() => Ok(Some(PathBuf::from(value))),
-            _ => Err(ConfigError::new(format!(
-                "--local was given without a path and {STORAGE_ENV_VAR} is unset or empty"
-            ))),
+            _ => Err(SelectionEnvironmentRequiredError::new("--local", STORAGE_ENV_VAR).into()),
         },
     }
 }
@@ -147,9 +145,7 @@ pub fn resolve_cache_path(
         Some(CacheSelection::Path(path)) => Ok(Some(path.clone())),
         Some(CacheSelection::FromEnv) => match env {
             Some(value) if !value.is_empty() => Ok(Some(PathBuf::from(value))),
-            _ => Err(ConfigError::new(format!(
-                "--cache was given without a path and {CACHE_ENV_VAR} is unset or empty"
-            ))),
+            _ => Err(SelectionEnvironmentRequiredError::new("--cache", CACHE_ENV_VAR).into()),
         },
     }
 }
@@ -170,6 +166,8 @@ pub fn resolve_project_id(config: &Config, workspace_dir: &Path) -> String {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use ohno::ErrorExt;
+
     use super::*;
     use crate::parse_config;
 
@@ -218,15 +216,22 @@ mod tests {
     #[test]
     fn resolve_local_path_errors_when_env_unset() {
         let error = resolve_local_path(Some(&LocalStorageSelection::FromEnv), None).unwrap_err();
-        let message = error.to_string();
-        assert!(message.contains(STORAGE_ENV_VAR), "{message}");
+        let selection = error
+            .find_source::<SelectionEnvironmentRequiredError>()
+            .unwrap();
+        assert_eq!(selection.option, "--local");
+        assert_eq!(selection.environment, STORAGE_ENV_VAR);
     }
 
     #[test]
     fn resolve_local_path_treats_empty_env_as_unset() {
         let error =
             resolve_local_path(Some(&LocalStorageSelection::FromEnv), Some("")).unwrap_err();
-        assert!(error.to_string().contains(STORAGE_ENV_VAR), "{error}");
+        assert!(
+            error
+                .find_source::<SelectionEnvironmentRequiredError>()
+                .is_some()
+        );
     }
 
     #[test]
@@ -254,14 +259,21 @@ mod tests {
     #[test]
     fn resolve_cache_path_errors_when_env_unset() {
         let error = resolve_cache_path(Some(&CacheSelection::FromEnv), None).unwrap_err();
-        let message = error.to_string();
-        assert!(message.contains(CACHE_ENV_VAR), "{message}");
+        let selection = error
+            .find_source::<SelectionEnvironmentRequiredError>()
+            .unwrap();
+        assert_eq!(selection.option, "--cache");
+        assert_eq!(selection.environment, CACHE_ENV_VAR);
     }
 
     #[test]
     fn resolve_cache_path_treats_empty_env_as_unset() {
         let error = resolve_cache_path(Some(&CacheSelection::FromEnv), Some("")).unwrap_err();
-        assert!(error.to_string().contains(CACHE_ENV_VAR), "{error}");
+        assert!(
+            error
+                .find_source::<SelectionEnvironmentRequiredError>()
+                .is_some()
+        );
     }
 
     #[test]

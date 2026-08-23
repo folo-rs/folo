@@ -21,9 +21,10 @@ pub struct Metric {
     /// few percent from run to run, so this is always a point estimate rather than
     /// an exact truth.
     pub value: f64,
-    /// Estimated standard deviation of the measurement, when the engine reports
-    /// one (Criterion, `all_the_time`, `alloc_tracker`). Absent for engines that
-    /// report no dispersion (Callgrind).
+    /// Estimated standard deviation of the measurement, when the engine reports one.
+    ///
+    /// Stored runs keep this value for schema fidelity, but analysis uses
+    /// confidence intervals and between-run scatter instead of this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub std_dev: Option<f64>,
     /// Lower bound of the value's confidence interval, when reported.
@@ -92,12 +93,10 @@ pub enum MetricKind {
     ConditionalBranches,
     /// Executed indirect branches (Callgrind); low-noise but not exact.
     IndirectBranches,
-    /// Bytes allocated per iteration (`alloc_tracker`); hardware-independent but
-    /// not deterministic (warmup and buffer-resize allocations jitter the
-    /// per-iteration figure).
+    /// Bytes allocated per iteration (`alloc_tracker`); not deterministic (warmup
+    /// and buffer-resize allocations jitter the per-iteration figure).
     AllocatedBytes,
-    /// Allocation count per iteration (`alloc_tracker`); hardware-independent but
-    /// not deterministic.
+    /// Allocation count per iteration (`alloc_tracker`); not deterministic.
     AllocationCount,
 }
 
@@ -196,6 +195,8 @@ mod tests {
         assert_eq!(MetricKind::AllocatedBytes.as_unit(), "bytes");
         assert_eq!(MetricKind::InstructionCount.as_unit(), "count");
         assert_eq!(MetricKind::ConditionalBranches.as_unit(), "count");
+        assert_eq!(MetricKind::IndirectBranches.as_unit(), "count");
+        assert_eq!(MetricKind::AllocationCount.as_unit(), "count");
     }
 
     #[test]

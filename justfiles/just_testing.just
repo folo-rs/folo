@@ -12,13 +12,66 @@ bench TARGET="":
         $target_selector += "{{ TARGET }}"
     }
 
+    # Force 64-byte function alignment so hot loops keep a fixed position relative to the L1
+    # instruction-cache lines across relinks; without it an unrelated dependency bump can reorder
+    # functions and shift a byte-identical loop across a cache-line boundary, showing up as a
+    # phantom wall-clock regression (see constants.env and the cargo-bench-history "Measurement
+    # stability" guide). $env:BENCH_STABILITY_RUSTFLAGS comes from constants.env via dotenv. Treat
+    # any RUSTFLAGS the caller set as an opaque string: remove only a pre-existing
+    # -align-all-functions token (in any -C/--codegen spelling), then append the stability value so
+    # the 64-byte setting always wins - never duplicated, never silently skipped in favour of a
+    # stray caller value.
+    $kept_rustflags = ("$env:RUSTFLAGS" -replace '(^|\s)(-C\s*|--codegen(?:\s+|=))llvm-args=-align-all-functions=\d+', '').Trim()
+    $env:RUSTFLAGS = (@($kept_rustflags, $env:BENCH_STABILITY_RUSTFLAGS) | Where-Object { $_ }) -join " "
+
     cargo bench {{ target_package }} --all-features $target_selector --locked
+
+# Run the wall-clock benchmarks tuned for the best achievable numbers rather than for stability
+# across history: whole-program optimization (fat LTO, a single codegen unit) and NO alignment
+# padding. Use this to see how fast the standard pipeline gets this code on the current machine -
+# it drops the stability pessimizations `just bench` accepts, though it is not a guaranteed
+# optimum (the compiler can still be suboptimal; PGO would be needed to go further). The results
+# are deliberately NOT comparable with the `just bench` timeline that cargo-bench-history collects
+# - the build profile differs - so never feed a `bench-best` run into the history store.
+[group('testing')]
+[script]
+bench-best TARGET="":
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    $target_selector = @()
+
+    if ("{{ TARGET }}" -ne "") {
+        $target_selector += "--bench"
+        $target_selector += "{{ TARGET }}"
+    }
+
+    # Best-case means NO forced alignment, so remove any -align-all-functions token that may have
+    # been inherited from the environment (e.g. an exported BENCH_STABILITY_RUSTFLAGS); otherwise
+    # this would silently run aligned and stop being a true best case. Treat RUSTFLAGS as opaque
+    # and strip only that token (in any -C/--codegen spelling).
+    $env:RUSTFLAGS = ("$env:RUSTFLAGS" -replace '(^|\s)(-C\s*|--codegen(?:\s+|=))llvm-args=-align-all-functions=\d+', '').Trim()
+
+    # Build under the `bench-best` profile (root Cargo.toml): the `release` base plus fat LTO and a
+    # single codegen unit - the most aggressively optimized build the standard pipeline produces.
+    # No alignment flag is set, so this path is free to reach layouts `just bench` pins away from -
+    # that is the point: best case, not stable case. Note this is not a guaranteed optimum: the
+    # compiler can still emit suboptimal code (closing that gap would need PGO), but it does remove
+    # the explicit pessimizations we accept elsewhere in the name of measurement stability.
+
+    cargo bench {{ target_package }} --profile bench-best --all-features $target_selector --locked
 
 # Run Callgrind-based instruction-count benchmarks. Requires Linux (Valgrind)
 # and the `gungraun-runner` binary on PATH; both are installed by
 # `just install-tools`. Discovers any bench file whose name ends with `_cg`
 # (short for Callgrind) under `packages/<pkg>/benches/`. Callers on Windows
 # must invoke this through WSL themselves.
+#
+# Unlike `just bench`, this recipe deliberately does NOT force function alignment
+# ($env:BENCH_STABILITY_RUSTFLAGS): Callgrind counts executed instructions, which are already
+# independent of where functions land in memory, so alignment buys no stability here and only
+# perturbs the build. The alignment flag exists purely to stabilize wall-clock timings.
 [group('testing')]
 [script]
 bench-cg TARGET="":
@@ -102,7 +155,7 @@ test FILTER="":
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
-    $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
+    $env:CBH_FAKER = just _faker-path | Select-Object -Last 1
     cargo +$env:RUST_MSRV nextest run {{ target_package }} --all-features {{ FILTER }} --locked --no-fail-fast
 
 # Run the PowerShell test suites for the standalone scripts under scripts/ (currently the
@@ -124,34 +177,34 @@ test-scripts:
     $config.Output.Verbosity = 'Detailed'
     Invoke-Pester -Configuration $config
 
-# Build the test-support `mock_bench_engine` binary and print its path. The mock is a
-# fake benchmark engine the cargo-bench-history integration tests drive; it lives in
-# its own never-published package (see packages/mock_bench_engine and issue #289), so
-# Cargo does not expose it via CARGO_BIN_EXE_* to the tests. The tests build and locate
-# it on demand, but a test runner can call this once up front and pass the path via
-# MOCK_BENCH_ENGINE so each per-test process skips a redundant Cargo freshness check.
+# Build the test-support `cargo-bench-history-faker` binary and print its path. The faker
+# is a stand-in benchmark engine the cargo-bench-history integration tests drive; it lives
+# in its own lib+bin package (see packages/cargo-bench-history-faker), so Cargo does not
+# expose it via CARGO_BIN_EXE_* to the tests. The tests build and locate it on demand, but
+# a test runner can call this once up front and pass the path via CBH_FAKER so each per-test
+# process skips a redundant Cargo freshness check.
 #
-# The build targets a dedicated `<target>/mock-engine` directory rather than the shared
+# The build targets a dedicated `<target>/faker` directory rather than the shared
 # workspace `target/` tree (matching the Rust-side `engine_target_dir`). Cargo relinks a
 # binary by unlinking it and hard-linking the replacement, so on the shared tree a
-# concurrent build could momentarily leave the engine absent under a test that is spawning
+# concurrent build could momentarily leave the binary absent under a test that is spawning
 # it; its own tree means only builds aimed here touch the file, closing that race (#332).
 [group('testing')]
 [script]
-_mock-engine-path:
+_faker-path:
     Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
-    Import-Module "{{ justfile_directory() }}/scripts/build/MockBenchEngine.psm1" -Force
+    Import-Module "{{ justfile_directory() }}/scripts/build/Faker.psm1" -Force
 
     # Nest under the ambient CARGO_TARGET_DIR (e.g. a coverage run's tree) when set, else the
     # workspace `target/`, so the isolated tree stays git-ignored and cached like everything
-    # else. The Rust resolver derives the same path, so a pre-built MOCK_BENCH_ENGINE and an
+    # else. The Rust resolver derives the same path, so a pre-built CBH_FAKER and an
     # on-demand build resolve to the very same isolated binary.
-    $engineTargetDir = Join-Path ($env:CARGO_TARGET_DIR ?? "target") "mock-engine"
-    $messages = cargo +$env:RUST_MSRV build -p mock_bench_engine --target-dir $engineTargetDir --message-format=json-render-diagnostics --locked
-    Write-Output (Resolve-MockBenchEngineExecutable -CargoMessage $messages)
+    $fakerTargetDir = Join-Path ($env:CARGO_TARGET_DIR ?? "target") "faker"
+    $messages = cargo +$env:RUST_MSRV build -p cargo-bench-history-faker --target-dir $fakerTargetDir --message-format=json-render-diagnostics --locked
+    Write-Output (Resolve-FakerExecutable -CargoMessage $messages)
 
 # Run the cargo-bench-history "stress analyze" harness against LOCAL filesystem
 # storage: it seeds a giant synthetic benchmark history (default 1000 benchmarks ×
@@ -304,7 +357,7 @@ test-azurite:
         # AZURITE_BLOB_ENDPOINT cannot redirect the tests to a different target (the recipe would
         # then start/reuse one emulator while the tests hit another - non-hermetic).
         $env:AZURITE_BLOB_ENDPOINT = "https://${blobHost}:${blobPort}/devstoreaccount1"
-        $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
+        $env:CBH_FAKER = just _faker-path | Select-Object -Last 1
         Write-Host "Running Azurite-backed tests against ${blobHost}:${blobPort}."
         cargo +$env:RUST_MSRV nextest run -p cargo-bench-history --locked --no-fail-fast azure azurite
     } finally {
@@ -347,7 +400,7 @@ test-azure ACCOUNT=env_var_or_default('BENCH_HISTORY_TEST_AZURE_ACCOUNT', ''):
 
     $env:BENCH_HISTORY_TEST_AZURE_ACCOUNT = $account
     $env:ENABLE_AZURE = "1"
-    $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
+    $env:CBH_FAKER = just _faker-path | Select-Object -Last 1
 
     Write-Host "Running real-Azure tests against account '$account' (Microsoft Entra ID; requires az login)."
     cargo +$env:RUST_MSRV nextest run -p cargo-bench-history real_azure --locked --no-fail-fast

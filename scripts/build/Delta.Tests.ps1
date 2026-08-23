@@ -42,6 +42,58 @@ Describe 'Read-DeltaAffectedPackage' {
     }
 }
 
+Describe 'Invoke-CargoDelta empty-result composition (regression)' {
+    # Invoke-CargoDelta itself drives real cargo/git and is CI-covered, but its internal hand-off
+    # from Read-DeltaAffectedPackage to Select-ExistingPackage is pure and reproduced here: a
+    # "nothing affected" report must survive that hand-off instead of failing the delta job on a
+    # PR that touches no crate (docs, workflows or scripts only).
+    It 'wraps an empty affected list so Select-ExistingPackage never binds null' {
+        # Read-DeltaAffectedPackage returns @() here, which PowerShell collapses to $null on a bare
+        # assignment; the @() wrap Invoke-CargoDelta applies keeps it an array so the Mandatory
+        # -Affected parameter binds instead of throwing "argument is null".
+        $affected = @(Read-DeltaAffectedPackage -DeltaJson '{"Affected":[]}')
+        { Select-ExistingPackage -Affected $affected -WorkspacePackage @('here') } |
+            Should -Not -Throw
+    }
+
+    It 'produces a skip_all output for a report that affects nothing' {
+        $affected = @(Read-DeltaAffectedPackage -DeltaJson '{"Affected":[]}')
+        $existing = Select-ExistingPackage -Affected $affected -WorkspacePackage @('here')
+        (Get-DeltaOutput -Affected @($existing)).SkipAll | Should -Be 'true'
+    }
+}
+
+
+Describe 'Select-ExistingPackage' {
+    It 'drops packages that no longer exist in the workspace' {
+        $result = Select-ExistingPackage `
+            -Affected @('mock_bench_engine', 'cargo-bench-history-faker', 'cbh_engines') `
+            -WorkspacePackage @('cargo-bench-history-faker', 'cbh_engines', 'cbh_cli')
+        $result | Should -Be @('cargo-bench-history-faker', 'cbh_engines')
+    }
+
+    It 'preserves the affected order' {
+        $result = Select-ExistingPackage `
+            -Affected @('c', 'a', 'b') `
+            -WorkspacePackage @('a', 'b', 'c')
+        $result | Should -Be @('c', 'a', 'b')
+    }
+
+    It 'returns an empty array when every affected package was removed' {
+        Select-ExistingPackage -Affected @('gone') -WorkspacePackage @('here') |
+            Should -BeNullOrEmpty
+    }
+
+    It 'returns an empty array for an empty affected list' {
+        Select-ExistingPackage -Affected @() -WorkspacePackage @('a') | Should -BeNullOrEmpty
+    }
+
+    It 'is case-sensitive (a differently cased name is treated as absent)' {
+        Select-ExistingPackage -Affected @('Events') -WorkspacePackage @('events') |
+            Should -BeNullOrEmpty
+    }
+}
+
 Describe 'Get-DeltaOutput' {
     Context 'when packages are affected' {
         BeforeAll {

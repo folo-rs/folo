@@ -4,7 +4,7 @@
 name = "cbh_storage"
 description = "Implementation crate for cargo-bench-history - do not reference directly"
 publish = true
-version = "0.0.4"
+version = "0.2.1"
 
 authors.workspace = true
 edition.workspace = true
@@ -27,23 +27,25 @@ async-trait = { workspace = true }
 azure_core = { workspace = true }
 azure_identity = { workspace = true, features = ["default"] }
 azure_storage_blob = { workspace = true, features = ["default"] }
-base64 = { workspace = true }
 cbh_codec = { workspace = true }
 cbh_config = { workspace = true }
 cbh_diag = { workspace = true }
 cbh_model = { workspace = true }
 futures = { workspace = true }
 jiff = { workspace = true }
+ohno = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util"] }
 
 [dev-dependencies]
+base64 = { workspace = true }
 cbh_diag = { path = "../cbh_diag", features = ["private-test-util"] }
 futures = { workspace = true, features = ["executor"] }
 mutants = { workspace = true }
 reqwest = { workspace = true, features = ["gzip", "rustls"] }
 serial_test = { workspace = true }
+static_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 

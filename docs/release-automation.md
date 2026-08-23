@@ -62,16 +62,17 @@ fail *before* any version or changelog is touched:
 The set of published binary crates is **derived**, so new tools are covered
 automatically and hardcoding can never let one slip through. A package is a
 publishable binary crate iff it is publishable **and** has a `bin` target. Today
-that set is three Cargo subcommands:
+that set is four Cargo subcommands:
 
-| Crate                  | Binary                 | Notes                                              |
-| ---------------------- | ---------------------- | -------------------------------------------------- |
-| `cargo-bench-history`  | `cargo-bench-history`  | Slow to build from source (Azure SDK), so the one that benefits most from a prebuilt binary. |
-| `cargo-detect-package` | `cargo-detect-package` | Small, fast to build.                              |
-| `cargo-freeze-deps`    | `cargo-freeze-deps`    | Small, fast to build.                              |
+| Crate                       | Binary                      | Notes                                              |
+| --------------------------- | --------------------------- | -------------------------------------------------- |
+| `cargo-bench-history`       | `cargo-bench-history`       | Slow to build from source (Azure SDK), so the one that benefits most from a prebuilt binary. |
+| `cargo-bench-history-faker` | `cargo-bench-history-faker` | Unsupported test-support engine; published only so sibling repos can validate `cargo-bench-history` end to end (and fetch it via `cargo binstall`). No stable API or CLI. |
+| `cargo-detect-package`      | `cargo-detect-package`      | Small, fast to build.                              |
+| `cargo-freeze-deps`         | `cargo-freeze-deps`         | Small, fast to build.                              |
 
-`cargo-bench-history-stress` and `mock_bench_engine` have binaries but are
-`publish = false`, so the derivation correctly excludes them.
+`cargo-bench-history-stress` has a binary but is `publish = false`, so the
+derivation correctly excludes it.
 
 The `mimalloc` global allocator is orthogonal to distribution and is applied to
 every binary regardless of whether it is published (tracked separately in
@@ -117,7 +118,7 @@ jobs:
 crates.io **Trusted Publishing (OIDC)** is the credential model: the job carries
 `id-token: write` and no `CARGO_REGISTRY_TOKEN` exists anywhere. `release-plz`
 performs the crates.io OIDC token exchange itself, so no long-lived crates.io
-token is stored. This matches the repo's OIDC-first posture (the nightly
+token is stored. This matches the repo's OIDC-first posture (the
 `bench-history` workflow already federates into Azure the same way). The GitHub
 side (tags + releases) uses the ambient `secrets.GITHUB_TOKEN` with
 `contents: write`.
@@ -132,12 +133,15 @@ publish:
     id-token: write   # crates.io Trusted Publishing (OIDC)
   timeout-minutes: 180   # generous: covers up to 3 retry attempts (see below)
   steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
         # persist-credentials stays at its default (true): release-plz pushes the
         # release tags via git, which uses the checkout-persisted token.
     - uses: ./.github/actions/setup-environment
+    - name: Verify the checked-in lockfile is consistent
+      shell: pwsh
+      run: just verify-lockfile   # aborts before publish/tag if Cargo.lock is stale
     - name: Compose the CI release-plz config
       shell: pwsh
       run: just gh-compose-release-config "$env:RUNNER_TEMP/release-plz.ci.toml"
@@ -146,6 +150,20 @@ publish:
       env:
         GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # forge API (tags + GitHub releases)
 ```
+
+Before it publishes or tags anything, `publish` runs a **lockfile-consistency gate**
+(`just verify-lockfile`). The whole workspace shares a single `Cargo.lock`, so one entry
+that disagrees with its manifest — the classic case being a version bumped in a
+`Cargo.toml` without the matching lock entry updated — makes *every* `--locked` build fail.
+Nothing else stops such a commit from being tagged: `release-plz` publishes and tags on push
+to `main` before the ordinary `--locked` validation on that push can block it, so the broken
+lock would only surface downstream as a total `build-binaries` wipeout. The gate runs
+`cargo metadata --locked`, which resolves the graph against the committed lockfile and exits
+non-zero if the lock would need to change, turning that latent failure into an early, actionable
+abort — no crate is published and no tag is created. It is **verify-only**: it reads the
+checked-in lockfile and never regenerates it (workflows build the committed lockfile verbatim).
+The same recipe is runnable locally (`just verify-lockfile`) to catch a stale lock after a manual
+version edit, before pushing.
 
 Each step is a thin `pwsh` call into a `just` recipe; the publishing logic — deriving
 the binary crates, injecting `git_release_enable`, and the retry loop — lives in
@@ -232,7 +250,7 @@ build-binaries:
   permissions:
     contents: write   # upload assets to the release
   steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         ref: refs/tags/${{ matrix.tag }}   # build the exact released code
     - uses: ./.github/actions/setup-environment
@@ -252,8 +270,9 @@ build-binaries:
 
 #### Target matrix
 
-Native runners, one per target, no cross-compilation — the same runner set as the
-nightly `bench-history` matrix plus macOS. This table is the single `triple → runner`
+Native runners, one per target, no cross-compilation — the `bench-history` matrix's two
+x86_64 runners plus the ARM and macOS targets binaries are published for. This table is the
+single `triple → runner`
 source that `plan-binaries` joins each missing `(crate, target)` pair against to set
 its `os`:
 
@@ -432,9 +451,6 @@ not yet exist, prints a warning like:
 > Warning: `<crate>` has never been published. Its first release must be done
 > manually (`cargo publish`); afterwards configure Trusted Publishing for it on
 > crates.io and re-publish via the GitHub workflow.
-
-The three crates published today already exist on crates.io, so this affects only
-future new crates.
 
 ## Prerequisites (one-time)
 

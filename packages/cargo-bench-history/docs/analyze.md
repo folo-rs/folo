@@ -27,16 +27,21 @@ reactor-free and unchanged under Miri while still scaling on real hardware.
 flowchart TD
   EXEC["analyze"] --> SD["select data set (the load)"]
   SD --> DS[("series + run tallies + blessings")]
-  DS --> AB["apply blessings (history re-baseline)"]
+  DS --> GF["drop ghost benchmarks\n(absent at context commit)"]
+  GF --> AB["apply blessings (history re-baseline)"]
   AB --> FC["detect changes (per series)"]
   FC --> SUM["per-set summaries"]
   SUM --> RENDER["render reports"]
 ```
 
 The cost is overwhelmingly in the **load** and secondarily in the **detect**; everything
-else is bookkeeping. Each analysis mode (`history`, `branch`) is a separate
-invocation with its own load — there is no dataset cache across modes — and the mode is
-auto-detected once per run from git topology.
+else is bookkeeping. The **ghost filter** between the load and detect is a cheap
+per-series pass: it drops every reconstructed series whose benchmark has no run at the
+context commit (the analyzed tip), so a benchmark that no longer exists is not re-flagged.
+It runs before blessings and detection so ghosts never enter the false-discovery
+correction. Each analysis mode (`history`, `branch`) is a separate invocation with its own
+load — there is no dataset cache across modes — and the mode is auto-detected once per run
+from git topology.
 
 The read-only `examine` command is a **lighter consumer of the same load**: it runs Phase 1
 and Phase 2/3 through the identical `select_dataset` pipeline, then narrows to a single
@@ -49,8 +54,8 @@ in [`DESIGN.md`](DESIGN.md).
 ```mermaid
 flowchart TD
   subgraph P1["Phase 1 — key-only filtering (no payload fetched)"]
-    L["list keys (one round-trip)"] --> KF["parse key + facet match"]
-    KF --> WF["history / dirty / since-until filters\n(commit time + topology)"]
+    L["list keys (one round-trip)"] --> KF["parse key + discriminant match"]
+    KF --> WF["history / dirty / since filter\n(commit time + topology)"]
     WF --> SK["sort survivors by storage key\n→ assign each a global ordinal"]
   end
   SK --> P23
@@ -65,7 +70,7 @@ flowchart TD
 Design properties that make this both fast and deterministic:
 
 * **Phase 1 never fetches a payload.** History membership, base-side dirty admission, and
-  the `--since`/`--until` window are all decided from the *key* and git topology, so an
+  the `--since` cutoff are all decided from the *key* and git topology, so an
   excluded object costs zero round-trips.
 * **Ordering is fixed before parallelism.** Survivors are sorted by storage key and each is
   assigned a global ordinal *before* chunking, so the result never depends on which worker
@@ -112,9 +117,14 @@ without re-measuring the parallel load.
 flowchart TD
   FIN["finalize"] --> FLAT["flatten to a series list"]
   FLAT --> SS["sort series, then sort each series' points by topology\n— serial —"]
-  SS --> DALL["detect: one chunk of series per worker\n(spawned)"]
+  SS --> CENSUS["classify testability + size family\n— serial metadata prepass —"]
+  CENSUS --> DALL["cheap gates + model fit:\none chunk of series per worker\n(spawned)"]
   DALL --> CANDS["candidate findings"]
+  DALL --> CAL["bounded selection calibration\n(clear-step analytic certificate;\ncomplete conditional orbit)"]
+  CAL --> CANDS
   CANDS --> BH["false-discovery filter — serial —"]
+  CENSUS -->|series census: judged + reasons| BH
+  CENSUS -->|family size sets bounded\npermutation precision| CAL
   BH --> MAT["materialize surviving findings' chart points"]
   MAT --> SF["sort findings by magnitude, method, identity — serial —"]
   SF --> FINDINGS[("findings")]
@@ -124,13 +134,61 @@ Detection has no cross-series state, so the series split into one balanced chunk
 — the same split-once, spawn, await-and-recombine pattern as the load — and the output is
 identical to a sequential pass. A single available CPU (as Miri reports) yields a single
 worker over the whole input. Per series the mode selects the detector: history runs both a
-change-point and a drift detector and keeps the better fit (plus an optional recovered-spike
-pass); branch compares the branch tip's level against its base.
+change-point and a drift detector and keeps the better fit; branch collapses each commit's
+runs to one level, narrows the recent base window to its current regime when that window
+contains an unambiguous level shift — held to a stricter separation floor than a reported
+move, since narrowing discards evidence (DESIGN.md, “Noise-aware gating”) — and judges the tip against that
+regime's prediction interval.
+
+The false-discovery filter's family is every series that was **testable**, including those that
+raised no candidate (DESIGN.md, “Multiple-comparison discipline”). A cheap serial prepass evaluates the mode-aware testability
+predicate, builds the **series census** — judged, and one reason per series it declined — and makes
+the final family size available before statistical work starts. This ordering is required because
+history change-point calibration uses that family size to choose its bounded permutation precision
+and the analytic acceptance boundary that guarantees survival even at the strictest family rank.
+Workers evaluate the same pure predicate to short-circuit unjudged series, so the count and
+execution decision cannot diverge. The census outlives detection: the pipeline records the
+ghost-filtered series into it too (their exclusion happens before detection ever sees them) and
+hands it to the renderers, which is how a report states what it judged
+(DESIGN.md, “Accounting for what was judged”).
+
+History change points pass permutation-independent magnitude, residual, population-separation, and
+interval gates before calibration. The step is calibrated only when it fits at least as well as the
+already-evaluated drift; a qualified drift remains the fallback if significance then rejects the
+step. Clear steps can finish through the analytic split-union certificate. Remaining candidates use
+a complete conditional permutation orbit with an absolute per-candidate ceiling. Enumeration stops
+early only after a lower bound proves the final answer is already forced. Every series remains
+independent of the others, preserving the dependence assumptions of the final Benjamini–Hochberg
+pass.
 
 The statistical kernels are chosen to keep the tens-of-millions-of-points path affordable —
 an in-place unstable sort for the median (no scratch buffer, and ties are bit-identical so
 reordering cannot change the result), pre-sized buffers for the pairwise Theil–Sen slope,
 and a single sort for the false-discovery filter across all noisy candidates.
+
+## Comparison-base lag (branch mode)
+
+After detection, branch mode discloses when a finding's comparison base lags the merge-base
+(DESIGN.md §8.8). The classification reuses the pipeline's existing seams rather than adding a
+second listing:
+
+* **Phase 1 already retained the candidates.** The single project listing splits its keys into
+  the candidates selected by discriminant filters *and* the machine-relaxed clean-run siblings —
+  exact `clean.json` objects sharing the engine and triple under a machine key the selection does
+  not cover. The sibling keys pass the same on-history, base-side, and `--since` admission as the
+  selection, so classification starts from a compact, already-vetted key list without a second
+  `list` round-trip.
+* **Evidence comes from loaded data first.** A lagging finding is a machine-key mismatch if a
+  newer base-side clean point for its benchmark and metric exists under a sibling key. Under
+  `--machine-key all` every key is already resident, so this is answered from the loaded series
+  with no fetch at all.
+* **Foreign payloads are fetched lazily and once.** Only when the loaded series leave a lag
+  unresolved are the sibling objects that could fall in its gap fetched — deduplicated, through
+  the same bounded-concurrency loader the main load uses — then parsed with the same lean
+  projection to confirm the benchmark and metric are actually present rather than trusting raw key
+  occupancy. A run with no surviving lag, an all-ghost set, or history mode fetches nothing. The
+  warning is advisory, so a failure to fetch or parse that optional evidence is noted and degrades
+  the affected findings to the generic reason instead of failing the run.
 
 ## The full parallelism / serial map
 
@@ -141,9 +199,10 @@ and a single sort for the false-discovery filter across all noisy candidates.
 | **Fetch + parse + fold (runs)** | **CPU-parallel (spawned)** | one chunk of survivors per worker |
 | Merge per-worker builders | serial | per worker partial |
 | Series sort + point sort | serial | the series list / per series |
-| **Detect** | **CPU-parallel (spawned)** | one chunk of series per worker |
+| Testability census | serial | per series metadata |
+| **Detect + bounded calibration** | **CPU-parallel (spawned)** | one chunk of series per worker |
 | Blessing-sidecar fetch | I/O-concurrent (one task) | per object, bounded in flight |
-| False-discovery filter + finding sort + render | serial | the candidate / finding list |
+| False-discovery filter + finding sort + render | serial | the candidate list + the merged census |
 
 ## Where the bottlenecks live
 
@@ -196,3 +255,25 @@ thousands of them would both bury the timings and distort the very wall clock be
 measured. A programmatic caller can therefore request the stage timings alone, without the
 note flood — which is exactly how the stress harness surfaces the load breakdown while
 keeping its own measurement clean.
+
+## Seeing what was searched, always
+
+A third reporter channel runs **regardless of `--verbose`**: a single **effective-selection**
+line to standard error naming the discriminant filters actually applied — engine, target
+triple, and machine key, each tagged when it was auto-detected rather than typed — plus the
+resolved base branch and the `--since` cutoff. Auto-detection is convenient but invisible, and
+this line makes it legible so a surprising result can be traced to *what* was searched before
+suspecting the data. It is one line by construction, so it neither buries the verbose notes
+nor perturbs the timing channel, and like both of them it stays on stderr to keep stdout a
+clean stream of reports.
+
+The line is most valuable when a query comes back empty. When the effective — possibly
+auto-detected — partition holds no stored runs at all, the stdout report's hint names that
+partition and suggests widening it (for instance `--target-triple all`), so an
+auto-detected filter that quietly missed is distinguished from a genuinely empty project. The
+other selection-driven commands emit the same line through one shared announcement builder:
+`list`, `prune`, and `examine` name the same discriminant filters, base branch, and `--since`
+cutoff, while the `bless` / `unbless` mutation commands name the discriminant filters and the
+context commit they act at
+(`bless` also names its base branch), so the wording is identical wherever auto-detection can
+surprise you.

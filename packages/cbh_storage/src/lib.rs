@@ -41,6 +41,16 @@ mod port;
 pub use azure::AzureBlobStorage;
 pub use caching::CachingStorage;
 pub use error::StorageError;
+#[cfg(any(test, feature = "private-test-util"))]
+#[doc(hidden)]
+pub use error::TestStorageError;
+pub(crate) use error::{
+    AdvanceLocalListingDirectoryError, AzureBlobOperationError, CreateLocalParentDirectoriesError,
+    DecompressAzureBlobError, DecompressLocalObjectError, InspectLocalListingEntryError,
+    InspectLocalObjectExistenceError, InvalidStorageKeyError, ObjectAlreadyExistsError,
+    ObjectNotFoundError, OpenLocalListingDirectoryError, ReadLocalObjectError,
+    RemoveLocalObjectError, StorageConfigurationError, WriteLocalObjectError,
+};
 pub use facade::{
     StorageFacade, StorageOverride, azure_backend_from_parts, build_storage, resolve_storage,
 };

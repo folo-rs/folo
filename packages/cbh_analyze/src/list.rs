@@ -30,11 +30,15 @@ use serde::Serialize;
 use tick::Clock;
 
 use super::{
-    AutoFacets, ReportFormat, RunIndex, Selection, Series, SeriesFilter, apply_blessings,
-    detect_auto_facets, dirty_base_exception_warning, empty_history_hint,
-    facet_filtered_candidates, resolve_facets, resolve_now, select_dataset,
+    AutoDiscriminants, ReportFormat, RunIndex, Selection, Series, SeriesFilter, apply_blessings,
+    dirty_base_exception_warning, discriminant_filtered_candidates, empty_history_hint,
+    resolve_auto_discriminants, resolve_discriminants, resolve_now, select_dataset,
 };
-use crate::{AnalyzeError, RenderedReports, ReportRequest};
+use crate::{
+    AnalyzeError, CommitterTimeFailedError, InvalidBlessingError, InvalidStoredUtf8Error,
+    ListAllUnsupportedError, RenderedReports, ReportRequest, ResolveRefFailedError,
+    UnresolvedRefError,
+};
 
 /// The real `list`: load configuration, wire the configured storage and git
 /// history, and orchestrate.
@@ -43,7 +47,7 @@ use crate::{AnalyzeError, RenderedReports, ReportRequest};
 /// "now" to (see [`analyze`](super::analyze)); production passes `None` for the
 /// runtime wall clock.
 // Thin real-adapter wiring: loads config from disk, builds the configured storage,
-// and shells out via `SystemGitHistory`/`detect_auto_facets` before delegating every
+// and shells out via `SystemGitHistory`/`detect_auto_discriminants` before delegating every
 // decision to the mutation-tested `list_with`. In-crate tests cannot drive these real
 // adapters deterministically; the binary's integration tests cover this edge.
 #[cfg_attr(test, mutants::skip)]
@@ -52,6 +56,7 @@ pub async fn execute(
     workspace_dir: &Path,
     clock_override: Option<Clock>,
     storage_override: Option<StorageFacade>,
+    auto_override: Option<AutoDiscriminants>,
 ) -> Result<RenderedReports, AnalyzeError> {
     let reporter = StderrReporter::new(options.verbose);
 
@@ -73,7 +78,7 @@ pub async fn execute(
     storage.synchronize_cache(&project_id, &reporter).await?;
 
     let git = SystemGitHistory::new(resolve_repo(workspace_dir, options.repo.as_deref()));
-    let auto = detect_auto_facets().await?;
+    let auto = resolve_auto_discriminants(auto_override).await?;
 
     let now = resolve_now(clock_override);
     // The object-load and detection work shares the ambient Tokio worker threads
@@ -108,7 +113,7 @@ pub(crate) async fn list_with<G, S>(
     project_id: &str,
     config: &Config,
     options: &ListOptions,
-    auto: &AutoFacets,
+    auto: &AutoDiscriminants,
     now: Timestamp,
     reporter: &dyn Reporter,
     spawner: &Spawner,
@@ -123,25 +128,21 @@ where
         options.json.as_deref(),
     )?;
     if options.all && options.subject != ListSubject::Blessings {
-        return Err(AnalyzeError::Analyze {
-            message: "--all applies only to `list blessings`, where it widens the view from \
-                      the current commit to the most recent blessing of every benchmark in \
-                      the window; it has no meaning for `list runs` or `list discriminants`"
-                .to_owned(),
-        });
+        return Err(ListAllUnsupportedError::new().into());
     }
     let selection = Selection::from_list(options);
 
     match options.subject {
         ListSubject::Discriminants => {
-            // The discriminant listing is a facet-only view of storage; it never
+            // The discriminant listing is a discriminant-only view of storage; it never
             // resolves git topology, so it works without a repository. It is a
-            // discovery catalog, so omitted facets default to no filter (every
+            // discovery catalog, so omitted discriminant filters default to no filter (every
             // stored partition) rather than the current machine — pass `None` so a
             // user can see machine keys and triples they do not already know.
-            let facets = resolve_facets(&selection, None)?;
+            let discriminants = resolve_discriminants(&selection, None)?;
             let candidates =
-                facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
+                discriminant_filtered_candidates(storage, project_id, &discriminants, reporter)
+                    .await?;
             let mut sets: Vec<DiscriminantSet> = candidates
                 .into_iter()
                 .map(|(_, parsed)| parsed.set)
@@ -162,14 +163,15 @@ where
         ListSubject::Runs => {
             let filter = SeriesFilter::default();
             let dataset = select_dataset(
-                git, storage, project_id, config, &selection, filter, auto, now, reporter, spawner,
+                git, storage, project_id, config, &selection, filter, false, auto, now, reporter,
+                spawner,
             )
             .await?;
             let series = dataset.series;
             let listing = build_listing(project_id, &dataset.run_index, &series);
 
             // The same self-explaining diagnostics `analyze` shows: a hint when
-            // stored runs matched the facets but none entered the selection, and a
+            // stored runs matched the discriminant filters but none entered the selection, and a
             // warning when a dirty base-branch-tip run was admitted because the
             // working tree is dirty.
             let hint = empty_history_hint(
@@ -177,6 +179,7 @@ where
                 dataset.candidate_count,
                 &dataset.target_ref,
                 dataset.tally,
+                &dataset.discriminants,
             );
             let warning = dataset
                 .included_dirty_base_exception
@@ -272,6 +275,27 @@ fn series_noun(count: usize) -> String {
     format!("{count} series")
 }
 
+/// Renders one commit's line for the text listing, annotating only the runs that
+/// deviate from the norm.
+///
+/// Almost every commit carries exactly one clean run and no dirty snapshot, so that
+/// case renders as the bare commit with no counts. A clean count other than one, or
+/// any dirty snapshots, is spelled out so the exception stands out instead of being
+/// buried in noise repeated on every line.
+fn commit_line(commit: &CommitEntry) -> String {
+    let clean = if commit.clean == 1 {
+        String::new()
+    } else {
+        format!("  {}", count_noun(commit.clean, "clean run"))
+    };
+    let dirty = if commit.dirty == 0 {
+        String::new()
+    } else {
+        format!(" + {}", count_noun(commit.dirty, "dirty run"))
+    };
+    format!("    {}{clean}{dirty}", commit.commit)
+}
+
 /// Renders the data-set preview in the requested format, appending the diagnostic
 /// hint and ephemeral-data warning (if any).
 fn render_listing(
@@ -303,13 +327,7 @@ fn render_listing_text(listing: &Listing, hint: Option<&str>, warning: Option<&s
                 count_noun(set.commits.len(), "commit")
             ));
             for commit in &set.commits {
-                lines.push(format!(
-                    "    {}  {} ({} clean, {} dirty)",
-                    commit.commit,
-                    count_noun(commit.runs, "run"),
-                    commit.clean,
-                    commit.dirty
-                ));
+                lines.push(commit_line(commit));
             }
         }
         lines.push(String::new());
@@ -400,9 +418,9 @@ fn render_listing_json(listing: &Listing, hint: Option<&str>, warning: Option<&s
         .sets
         .iter()
         .map(|set| JsonSet {
-            engine: &set.set.engine,
-            target_triple: &set.set.target_triple,
-            machine_key: &set.set.machine_key,
+            engine: set.set.engine.as_str(),
+            target_triple: set.set.target_triple.as_str(),
+            machine_key: set.set.machine_key.as_str(),
             runs: set.runs,
             series: set.series,
             commits: set
@@ -459,9 +477,9 @@ fn render_discriminants(sets: &[DiscriminantSet], format: ReportFormat) -> Strin
             let list: Vec<JsonDiscriminant<'_>> = sets
                 .iter()
                 .map(|set| JsonDiscriminant {
-                    engine: &set.engine,
-                    target_triple: &set.target_triple,
-                    machine_key: &set.machine_key,
+                    engine: set.engine.as_str(),
+                    target_triple: set.target_triple.as_str(),
+                    machine_key: set.machine_key.as_str(),
                 })
                 .collect();
             serde_json::to_string_pretty(&list).expect("discriminant list serializes to JSON")
@@ -518,9 +536,10 @@ struct BlessingEntry {
 /// Lists blessings for `list blessings`.
 ///
 /// Default: every blessing recorded at the current commit (HEAD) in the
-/// facet-selected sets — the sidecars a fresh `unbless` would remove. `--all`: the
-/// most recent blessing of every benchmark across the analysis window `analyze`
-/// would resolve, so a user can audit which benchmarks are currently re-baselined.
+/// sets selected by discriminant filters — the sidecars a fresh `unbless` would remove.
+/// `--all`: the most recent blessing of every benchmark across the analysis window
+/// `analyze` would resolve, so a user can audit which benchmarks are currently
+/// re-baselined.
 #[expect(
     clippy::too_many_arguments,
     reason = "mirrors the analyze selection pipeline, which threads the same injected ports"
@@ -531,7 +550,7 @@ async fn list_blessings<G, S>(
     project_id: &str,
     config: &Config,
     options: &ListOptions,
-    auto: &AutoFacets,
+    auto: &AutoDiscriminants,
     now: Timestamp,
     reporter: &dyn Reporter,
     spawner: &Spawner,
@@ -561,13 +580,13 @@ where
 }
 
 /// Collects the blessings recorded at the current commit (HEAD) in the
-/// facet-selected sets, returning the abbreviated HEAD label and the rows.
+/// sets selected by discriminant filters, returning the abbreviated HEAD label and the rows.
 async fn blessings_at_head<G, S>(
     git: &G,
     storage: &S,
     project_id: &str,
     selection: &Selection<'_>,
-    auto: &AutoFacets,
+    auto: &AutoDiscriminants,
     reporter: &dyn Reporter,
 ) -> Result<(String, Vec<BlessingEntry>), AnalyzeError>
 where
@@ -577,31 +596,37 @@ where
     let head = git
         .resolve("HEAD")
         .await
-        .map_err(AnalyzeError::Io)?
-        .ok_or_else(|| AnalyzeError::Analyze {
-            message: "this command requires a git repository: could not resolve HEAD. \
-                      Run inside a repository (or pass --repo)."
-                .to_owned(),
+        .map_err(|error| ResolveRefFailedError::caused_by("HEAD", error))?
+        .ok_or_else(|| {
+            UnresolvedRefError::new(
+                "listing blessings",
+                "HEAD",
+                "Check that the ref exists or is fetched, and select a repository with --repo if \
+                 needed.",
+            )
         })?;
-    let facets = resolve_facets(selection, Some(auto))?;
-    let candidates = facet_filtered_candidates(storage, project_id, &facets, reporter).await?;
+    let discriminants = resolve_discriminants(selection, Some(auto))?;
+    let candidates =
+        discriminant_filtered_candidates(storage, project_id, &discriminants, reporter).await?;
 
     // The blessed commit is HEAD; its committer date comes from git topology, so
     // the sidecar itself need not carry a denormalized copy. A single-commit read
     // dates HEAD without walking its first-parent ancestry.
-    let head_commit_time = git.committer_time("HEAD").await.map_err(AnalyzeError::Io)?;
+    let head_commit_time = git
+        .committer_time("HEAD")
+        .await
+        .map_err(|error| CommitterTimeFailedError::caused_by("HEAD", error))?;
 
     let mut entries = Vec::new();
     for (key, parsed) in candidates {
         if !(parsed.is_bless() && parsed.commit == head) {
             continue;
         }
-        let bytes = storage.get(&key).await.map_err(AnalyzeError::Storage)?;
-        let text = String::from_utf8(bytes).map_err(|error| AnalyzeError::Analyze {
-            message: format!("stored object {key} is not valid UTF-8: {error}"),
-        })?;
-        let record = BlessingRecord::from_json(&text).map_err(|error| AnalyzeError::Analyze {
-            message: format!("stored object {key} is not a valid blessing: {error}"),
+        let bytes = storage.get(&key).await?;
+        let text = String::from_utf8(bytes)
+            .map_err(|error| InvalidStoredUtf8Error::caused_by("stored object", &key, error))?;
+        let record = BlessingRecord::from_json(&text).map_err(|error| {
+            InvalidBlessingError::caused_by("stored object", &key, "blessing", error)
         })?;
         reporter.note_with(|| format!("blessing {key}"));
         entries.push(BlessingEntry {
@@ -628,7 +653,7 @@ async fn blessings_across_window<G, S>(
     project_id: &str,
     config: &Config,
     selection: &Selection<'_>,
-    auto: &AutoFacets,
+    auto: &AutoDiscriminants,
     now: Timestamp,
     reporter: &dyn Reporter,
     spawner: &Spawner,
@@ -639,7 +664,7 @@ where
 {
     let filter = SeriesFilter::default();
     let dataset = select_dataset(
-        git, storage, project_id, config, selection, filter, auto, now, reporter, spawner,
+        git, storage, project_id, config, selection, filter, false, auto, now, reporter, spawner,
     )
     .await?;
     let mut series = dataset.series;
@@ -838,9 +863,9 @@ fn render_blessings_json(
     let blessings: Vec<JsonBlessing<'_>> = entries
         .iter()
         .map(|entry| JsonBlessing {
-            engine: &entry.set.engine,
-            target_triple: &entry.set.target_triple,
-            machine_key: &entry.set.machine_key,
+            engine: entry.set.engine.as_str(),
+            target_triple: entry.set.target_triple.as_str(),
+            machine_key: entry.set.machine_key.as_str(),
             benchmark: entry.benchmark.as_deref(),
             commit: &entry.commit,
             commit_time: entry.commit_time,
@@ -868,25 +893,30 @@ mod tests {
     use cbh_diag::RecordingReporter;
     use cbh_git::FakeGitHistory;
     use cbh_model::{
-        BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, EnvironmentInfo, GitInfo, Metric,
+        BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, Engine, EnvironmentInfo, GitInfo, Metric,
         MetricKind, Run, RunContext, ToolchainInfo,
     };
     use cbh_storage::{MemoryStorage, Storage};
     use futures::executor::block_on;
     use jiff::Timestamp;
     use nonempty::nonempty;
+    use ohno::ErrorExt as _;
 
     use super::*;
+    use crate::{
+        InvalidBlessingError, InvalidStoredUtf8Error, ListAllUnsupportedError,
+        NoOutputSelectedError, UnresolvedRefError,
+    };
 
     fn config() -> Config {
         Config::default()
     }
 
-    /// The auto-detected facets for the default synthetic partition the tests seed.
-    fn auto() -> AutoFacets {
-        AutoFacets {
+    /// The auto-detected discriminant values the tests seed their default partition under.
+    fn auto() -> AutoDiscriminants {
+        AutoDiscriminants {
             triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "synthetic".to_owned(),
+            machine_key: "m1".into(),
         }
     }
 
@@ -984,7 +1014,7 @@ mod tests {
     }
 
     fn clean_key(commit: &str) -> String {
-        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json")
+        format!("v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/clean.json")
     }
 
     fn store(storage: &MemoryStorage, key: &str, set: &Run) {
@@ -994,9 +1024,9 @@ mod tests {
 
     fn linux_set() -> DiscriminantSet {
         DiscriminantSet {
-            engine: "callgrind".to_owned(),
-            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            machine_key: "synthetic".to_owned(),
+            engine: Engine::Callgrind,
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            machine_key: "m1".into(),
         }
     }
 
@@ -1007,9 +1037,9 @@ mod tests {
     /// A discriminant set distinct from [`linux_set`], for grouping tests.
     fn mac_set() -> DiscriminantSet {
         DiscriminantSet {
-            engine: "criterion".to_owned(),
-            target_triple: "aarch64-apple-darwin".to_owned(),
-            machine_key: "synthetic".to_owned(),
+            engine: Engine::Criterion,
+            target_triple: "aarch64-apple-darwin".into(),
+            machine_key: "m1".into(),
         }
     }
 
@@ -1074,7 +1104,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("callgrind/x86_64-unknown-linux-gnu/synthetic"),
+            text.contains("callgrind/x86_64-unknown-linux-gnu/m1"),
             "{text}"
         );
         assert!(
@@ -1270,13 +1300,69 @@ mod tests {
         let report = list(&storage, &git, &options());
         assert!(report.contains("Data set for project folo"), "{report}");
         assert!(
-            report.contains("callgrind/x86_64-unknown-linux-gnu/synthetic"),
+            report.contains("callgrind/x86_64-unknown-linux-gnu/m1"),
             "{report}"
         );
         // "series" must not be pluralized into "seriess".
         assert!(report.contains("2 series"), "{report}");
         assert!(!report.contains("seriess"), "{report}");
         assert!(report.contains("1 discriminant set"), "{report}");
+    }
+
+    #[test]
+    fn commit_line_omits_counts_for_a_single_clean_run() {
+        let line = commit_line(&CommitEntry {
+            commit: "abc123".to_owned(),
+            runs: 1,
+            clean: 1,
+            dirty: 0,
+        });
+        // The overwhelming common case: no counts, just the commit.
+        assert_eq!(line, "    abc123");
+    }
+
+    #[test]
+    fn commit_line_appends_only_dirty_runs_when_clean_is_the_norm() {
+        let line = commit_line(&CommitEntry {
+            commit: "abc123".to_owned(),
+            runs: 4,
+            clean: 1,
+            dirty: 3,
+        });
+        assert_eq!(line, "    abc123 + 3 dirty runs");
+    }
+
+    #[test]
+    fn commit_line_singularizes_a_lone_dirty_run() {
+        let line = commit_line(&CommitEntry {
+            commit: "abc123".to_owned(),
+            runs: 2,
+            clean: 1,
+            dirty: 1,
+        });
+        assert_eq!(line, "    abc123 + 1 dirty run");
+    }
+
+    #[test]
+    fn commit_line_spells_out_a_non_unit_clean_count() {
+        let line = commit_line(&CommitEntry {
+            commit: "abc123".to_owned(),
+            runs: 2,
+            clean: 2,
+            dirty: 0,
+        });
+        assert_eq!(line, "    abc123  2 clean runs");
+    }
+
+    #[test]
+    fn commit_line_reports_both_clean_and_dirty_deviations() {
+        let line = commit_line(&CommitEntry {
+            commit: "abc123".to_owned(),
+            runs: 3,
+            clean: 0,
+            dirty: 1,
+        });
+        assert_eq!(line, "    abc123  0 clean runs + 1 dirty run");
     }
 
     #[test]
@@ -1295,7 +1381,7 @@ mod tests {
     }
 
     #[test]
-    fn list_requires_a_repository() {
+    fn list_rejects_an_unresolved_head() {
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c0"), &two_metric_set(0, "c0"));
         let git = FakeGitHistory::new(); // No commits: HEAD does not resolve.
@@ -1311,17 +1397,18 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
+        let found = error.find_source::<UnresolvedRefError>().unwrap();
+        assert_eq!(found.reference, "HEAD");
     }
 
     #[test]
-    fn list_engine_facet_restricts_the_data_set() {
+    fn list_engine_discriminant_restricts_the_data_set() {
         // Two sets in the same triple/machine-key partition differing only by engine.
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c0"), &two_metric_set(0, "c0"));
         store(
             &storage,
-            "v1/folo/objects/criterion/x86_64-unknown-linux-gnu/synthetic/c0/clean.json",
+            "v1/folo/objects/criterion/x86_64-unknown-linux-gnu/m1/c0/clean.json",
             &two_metric_set(0, "c0"),
         );
         let git = linear_git();
@@ -1370,16 +1457,11 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        match error {
-            AnalyzeError::Analyze { message } => {
-                assert!(message.contains("no output selected"), "{message}");
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        assert!(error.find_source::<NoOutputSelectedError>().is_some());
     }
 
     #[test]
-    fn list_discriminants_shows_all_sets_by_default_and_facets_narrow() {
+    fn list_discriminants_shows_all_sets_by_default_and_discriminants_narrow() {
         // The discriminants index never requires a repository.
         let storage = MemoryStorage::new();
         store(&storage, &clean_key("c0"), &two_metric_set(0, "c0"));
@@ -1390,7 +1472,7 @@ mod tests {
         );
         let git = FakeGitHistory::new(); // No repo, but listing does not need one.
 
-        // With no facets the catalog is unfiltered: it shows every stored partition
+        // With no discriminant filters the catalog is unfiltered: it shows every stored partition
         // — including the windows/m1 set that does not match the current machine —
         // so a user can discover triples and machine keys they do not already know.
         let opts = ListOptions {
@@ -1412,9 +1494,9 @@ mod tests {
         assert!(engines.contains(&"callgrind"), "{report}");
         assert!(engines.contains(&"criterion"), "{report}");
 
-        // An explicit facet still narrows the catalog. (`--engine` is the facet
-        // that always discriminates: synthetic partitions are exempt from the
-        // triple and machine-key filters, but never from the engine filter.)
+        // An explicit discriminant filter still narrows the catalog. The discriminants catalog
+        // lists every stored partition regardless of the auto-detected triple or
+        // machine key, but an explicit `--engine` still filters it.
         let opts = ListOptions {
             subject: ListSubject::Discriminants,
             engine: vec!["criterion".to_owned()],
@@ -1452,13 +1534,7 @@ mod tests {
             &spawner(),
         ))
         .unwrap_err();
-        match error {
-            AnalyzeError::Analyze { message } => {
-                assert!(message.contains("--all"), "{message}");
-                assert!(message.contains("list blessings"), "{message}");
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        assert!(error.find_source::<ListAllUnsupportedError>().is_some());
     }
 
     #[test]
@@ -1473,7 +1549,7 @@ mod tests {
         let report = list(&storage, &git, &opts);
         assert!(report.contains("Discriminant sets:"), "{report}");
         assert!(
-            report.contains("callgrind/x86_64-unknown-linux-gnu/synthetic"),
+            report.contains("callgrind/x86_64-unknown-linux-gnu/m1"),
             "{report}"
         );
     }
@@ -1494,7 +1570,7 @@ mod tests {
             "{report}"
         );
         assert!(
-            report.contains("| callgrind | x86_64-unknown-linux-gnu | synthetic |"),
+            report.contains("| callgrind | x86_64-unknown-linux-gnu | m1 |"),
             "{report}"
         );
     }
@@ -1541,7 +1617,7 @@ mod tests {
     /// The blessing-sidecar key in the same partition as [`clean_key`].
     fn bless_key(commit: &str, issued_unix: i64) -> String {
         format!(
-            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/bless-{issued_unix}.json"
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/bless-{issued_unix}.json"
         )
     }
 
@@ -1660,16 +1736,34 @@ mod tests {
     }
 
     #[test]
-    fn list_blessings_requires_a_repository() {
+    fn list_blessings_rejects_an_unresolved_head() {
         let storage = MemoryStorage::new();
         // No commits: HEAD does not resolve.
         let error = list_blessings_error(&storage, &FakeGitHistory::new());
-        match error {
-            AnalyzeError::Analyze { message } => {
-                assert!(message.contains("could not resolve HEAD"), "{message}");
-            }
-            other => panic!("expected an analyze error, got {other:?}"),
-        }
+        let found = error.find_source::<UnresolvedRefError>().unwrap();
+        assert_eq!(found.reference, "HEAD");
+    }
+
+    #[test]
+    fn list_blessings_names_a_failed_head_resolution() {
+        // Resolving HEAD and dating it are adjacent queries on this path, so each
+        // must name itself rather than the other.
+        let storage = MemoryStorage::new();
+        let mut git = linear_git();
+        git.fail_resolve();
+
+        let error = list_blessings_error(&storage, &git);
+        assert!(error.find_source::<ResolveRefFailedError>().is_some());
+    }
+
+    #[test]
+    fn list_blessings_names_a_failed_head_dating() {
+        let storage = MemoryStorage::new();
+        let mut git = linear_git();
+        git.fail_committer_time();
+
+        let error = list_blessings_error(&storage, &git);
+        assert!(error.find_source::<CommitterTimeFailedError>().is_some());
     }
 
     #[test]
@@ -1678,12 +1772,10 @@ mod tests {
         // HEAD is c3 in `linear_git`; a sidecar there with corrupt bytes.
         block_on(storage.put(&bless_key("c3", 100), &[0xff, 0xfe, 0x00])).unwrap();
         let error = list_blessings_error(&storage, &linear_git());
-        match error {
-            AnalyzeError::Analyze { message } => {
-                assert!(message.contains("is not valid UTF-8"), "{message}");
-            }
-            other => panic!("expected an analyze error, got {other:?}"),
-        }
+        let found = error.find_source::<InvalidStoredUtf8Error>().unwrap();
+        assert_eq!(found.object_kind, "stored object");
+        assert!(found.key.ends_with("/c3/bless-100.json"));
+        assert!(error.find_source::<std::string::FromUtf8Error>().is_some());
     }
 
     #[test]
@@ -1691,12 +1783,10 @@ mod tests {
         let storage = MemoryStorage::new();
         block_on(storage.put(&bless_key("c3", 100), b"{ not a blessing record")).unwrap();
         let error = list_blessings_error(&storage, &linear_git());
-        match error {
-            AnalyzeError::Analyze { message } => {
-                assert!(message.contains("is not a valid blessing"), "{message}");
-            }
-            other => panic!("expected an analyze error, got {other:?}"),
-        }
+        let found = error.find_source::<InvalidBlessingError>().unwrap();
+        assert_eq!(found.expected, "blessing");
+        assert!(found.key.ends_with("/c3/bless-100.json"));
+        assert!(error.find_source::<serde_json::Error>().is_some());
     }
 
     #[test]

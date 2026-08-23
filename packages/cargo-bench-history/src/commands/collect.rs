@@ -5,6 +5,7 @@
 //! [`tick::Clock`], so the whole flow is exercised in-process with fakes. The
 //! public [`execute`] wires the real adapters and is what the binary runs.
 
+use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -19,16 +20,27 @@ use cbh_engines::{
     parse_criterion_case,
 };
 use cbh_git::{BenchRunner, TokioBenchRunner};
-use cbh_probe::{EnvironmentProbe, HardwareProfile, RustcInfo, SystemProbe, resolve_machine_key};
-use cbh_storage::{Storage, StorageError, StorageFacade, build_storage};
+use cbh_probe::{
+    EnvironmentProbe, HardwareProfile, RustcInfo, SystemProbe, describe_fingerprint_components,
+    resolve_machine_key,
+};
+use cbh_storage::{Storage, StorageFacade, build_storage};
 use jiff::Timestamp;
+use ohno::AppError;
 use tick::Clock;
 
-use crate::model::{
-    BenchmarkResult, DiscriminantSet, Engine, EnvironmentInfo, GitInfo, Run, RunContext,
-    ToolchainInfo, detect_environment,
+use crate::errors::{
+    BenchCommandFailedError, EngineFailedError, EngineTerminatedError, GitProbeFailedError,
+    HarvestFailedError, InconsistentRunsError, InvalidCommandError, ParseOutputError,
+    ToolchainProbeFailedError,
 };
-use crate::{CollectOptions, LocalStorageSelection, RunError, RunOutcome, finish_with_flush};
+use crate::model::{
+    BenchmarkResult, DiscriminantSet, Engine, EnvironmentInfo, GitInfo, MachineInfo, MachineKey,
+    Run, RunContext, TargetTriple, ToolchainInfo, detect_environment, min_per_metric,
+};
+use crate::{
+    CollectOptions, DuplicateResultError, LocalStorageSelection, RunOutcome, finish_with_flush,
+};
 
 /// The program and base arguments the production tool runs to benchmark the
 /// workspace. The first-class scope flags (`--workspace`/`--package`/`--bench`)
@@ -83,7 +95,7 @@ pub(crate) async fn execute(
     target_root: Option<PathBuf>,
     bench_command: Option<Vec<String>>,
     storage_override: Option<StorageFacade>,
-) -> Result<RunOutcome, RunError> {
+) -> Result<RunOutcome, AppError> {
     let reporter = StderrReporter::new(options.verbose);
 
     // `--repo` selects the repository the run operates on (where benches run, git
@@ -175,7 +187,7 @@ pub(crate) async fn execute(
 /// resolved to (if any), so the note can state both the chosen backend and why —
 /// an explicit `--local` path, the environment-variable path behind a bare
 /// `--local`, or the cloud backend configured when no `--local` was given.
-fn describe_storage(
+pub(crate) fn describe_storage(
     selection: Option<&LocalStorageSelection>,
     resolved_local: Option<&Path>,
     config: &Config,
@@ -209,18 +221,159 @@ pub(crate) fn default_bench_command() -> Vec<String> {
 }
 
 /// Probe facts shared across every engine in a single run.
-struct SharedContext {
+///
+/// `collect` builds this straight from the host probe; `import` builds it the same
+/// way and then applies its metadata overrides (target triple, commit, dirty)
+/// before handing it to [`finalize_and_store`], which treats it as ground truth.
+pub(crate) struct SharedContext {
     /// Git facts of the working directory.
-    git: GitInfo,
+    pub(crate) git: GitInfo,
     /// Active toolchain facts.
-    rustc: RustcInfo,
+    pub(crate) rustc: RustcInfo,
     /// Detected execution environment.
-    env: EnvironmentInfo,
-    /// Target triple the benchmarks ran on (the host triple `rustc` reports; the
-    /// tool always runs on the same OS it benchmarks).
-    target_triple: String,
-    /// Host hardware profile, fingerprinted for hardware-dependent engines.
-    hardware: HardwareProfile,
+    pub(crate) env: EnvironmentInfo,
+    /// Effective target triple the run is keyed under and recorded against — the
+    /// host triple `rustc` reports for `collect`, or an `import --target-triple`
+    /// override. It feeds both the partition key and `ToolchainInfo.target_triple`.
+    pub(crate) target_triple: TargetTriple,
+    /// Host hardware profile: the factors fingerprinted into the machine key, plus
+    /// the provenance recorded beside them.
+    pub(crate) hardware: HardwareProfile,
+}
+
+/// Probes the host once for the facts every engine shares.
+///
+/// Both commands start here: `collect` stores the result as-is, `import` mutates
+/// the key-affecting discriminants afterwards. It is the single place the raw host
+/// context is assembled.
+pub(crate) async fn probe_context<P>(
+    probe: &P,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<SharedContext, AppError>
+where
+    P: EnvironmentProbe,
+{
+    let rustc = probe
+        .toolchain()
+        .await
+        .map_err(ToolchainProbeFailedError::caused_by)?;
+    Ok(SharedContext {
+        git: probe.git().await.map_err(GitProbeFailedError::caused_by)?,
+        target_triple: TargetTriple::from(rustc.host.clone().unwrap_or_default()),
+        rustc,
+        env: detect_environment(env),
+        hardware: probe.hardware().await,
+    })
+}
+
+/// The storage partition a run's results are keyed under, less the engine.
+///
+/// A stored object's discriminant set is `engine / target_triple / machine_key`.
+/// The engine varies across the engines of a single run, while the other two are
+/// fixed by the host — so they are derived once, here. This is the one place
+/// that derivation lives, so `backfill`'s pre-check
+/// and the store path share it rather than reimplementing it.
+///
+/// The target triple is whatever `rustc -vV` reports in the checkout being
+/// probed, and a worktree governs its own toolchain — so `backfill`, which
+/// derives the partition once from the newest checkout in its range, holds that
+/// partition for the whole range only as long as every toolchain in the range
+/// resolves to the same host triple. Pinning a bare channel does; a
+/// fully-qualified pin carrying its own host triple (`1.75.0-x86_64-unknown-linux-musl`)
+/// does not, and a range that crosses such a change scans one partition while
+/// writing another.
+///
+/// The components are held exactly as probed;
+/// [`discriminant_set`](Self::discriminant_set) is what sanitizes them into path
+/// segments, so the effective-partition announcement still reports what the host
+/// reported.
+pub(crate) struct Partition {
+    /// Effective target triple: the toolchain host, or an `import` override.
+    pub(crate) target_triple: TargetTriple,
+    /// Effective machine key: the auto-detected hardware fingerprint.
+    pub(crate) machine_key: MachineKey,
+}
+
+impl Partition {
+    /// The discriminant set this partition forms together with `engine`.
+    pub(crate) fn discriminant_set(&self, engine: Engine) -> DiscriminantSet {
+        DiscriminantSet::new(engine, &self.target_triple, &self.machine_key)
+    }
+}
+
+/// Derives the storage partition from an already-probed host context.
+pub(crate) fn partition_of(shared: &SharedContext) -> Partition {
+    Partition {
+        target_triple: shared.target_triple.clone(),
+        machine_key: MachineKey::from(resolve_machine_key(&shared.hardware)),
+    }
+}
+
+/// Probes the host and derives the storage partition a run there would write to.
+///
+/// The read-side counterpart of the store path: `backfill` calls this against the
+/// worktree probe before any commit is benchmarked, so the commits it treats as
+/// already recorded are exactly the ones present in the partition it would write.
+pub(crate) async fn probe_partition<P>(
+    probe: &P,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<Partition, AppError>
+where
+    P: EnvironmentProbe,
+{
+    let shared = probe_context(probe, env).await?;
+    Ok(partition_of(&shared))
+}
+
+/// The injected collaborators the store back half operates against, shared by
+/// `collect` and `import`.
+///
+/// A lean subset of [`CollectDeps`] with only what persisting a finalized run
+/// needs — no runner, output source, or bench command — so `import` (which has no
+/// benchmark command to run) can call [`finalize_and_store`] without inventing
+/// stand-ins for collect-only ports.
+pub(crate) struct FinalizeDeps<'a, S> {
+    /// Persists result sets. `None` under `--no-store`, where the store path is
+    /// never reached.
+    pub(crate) storage: Option<&'a S>,
+    /// Resolved project identity for the storage partition.
+    pub(crate) project_id: &'a str,
+    /// Version of this tool, recorded with each run.
+    pub(crate) tool_version: &'a str,
+    /// Sink for `--verbose` diagnostic notes.
+    pub(crate) reporter: &'a dyn Reporter,
+}
+
+/// How a finalized run is placed in storage, independent of which command
+/// produced it.
+///
+/// Decouples the store logic from `CollectOptions` so `collect` and `import` feed
+/// it from their own option structs. The dirty/clean choice is *not* here: it
+/// rides on [`SharedContext::git`]'s `dirty` flag (probed by `collect`, set from
+/// `--dirty` by `import`), keeping the stored body and its key coherent by
+/// construction.
+pub(crate) struct StoreParams {
+    /// Replace an existing object in place instead of failing on a collision.
+    pub(crate) overwrite: bool,
+    /// Treat an existing object as a success that writes nothing (append-only).
+    pub(crate) skip_existing: bool,
+    /// Skip storage entirely (`collect --no-store`). `import` never sets this.
+    pub(crate) no_store: bool,
+}
+
+/// One engine's best-of reduction: the records to store and how many repetitions
+/// of the benchmark suite their per-metric minima were taken over.
+///
+/// The two travel together because the count is only meaningful as a description
+/// of how those records were produced, and it is recorded on the stored run as
+/// measurement-protocol provenance.
+struct Reduction {
+    /// The records to store, each metric the minimum across the repetitions.
+    records: Vec<BenchmarkResult>,
+    /// How many repetitions the reduction actually consumed. Derived from the
+    /// harvested runs rather than the requested `--best-of`, so the recorded value
+    /// can never claim a repetition that did not happen.
+    runs: usize,
 }
 
 /// The result of harvesting one engine's output.
@@ -248,7 +401,7 @@ pub(crate) struct CollectSummary {
 pub(crate) async fn execute_collect<R, P, O, S>(
     options: &CollectOptions,
     deps: &CollectDeps<'_, R, P, O, S>,
-) -> Result<RunOutcome, RunError>
+) -> Result<RunOutcome, AppError>
 where
     R: BenchRunner,
     P: EnvironmentProbe,
@@ -265,19 +418,28 @@ where
     Ok(RunOutcome::Completed { message })
 }
 
-/// Runs the benchmark command once and harvests every engine's output.
+/// Runs the benchmark command `--best-of` times and harvests every engine's output.
 ///
 /// This is the storage-aware core shared by the `collect` command and `backfill`:
 /// the former wraps the summary in a human-readable message, the latter maps it
-/// to a per-commit outcome. The benchmark command (`cargo bench` in production)
-/// is run a single time with the union of every engine's injected environment;
-/// each engine is then identified by which output tree it populated. An engine
-/// that produced no output (for example Callgrind off Linux, where its benches
-/// compile to no-ops) simply contributes nothing.
+/// to a per-commit outcome. The benchmark command (`cargo bench` in production) is
+/// run `options.best_of` times, each time with the union of every engine's
+/// injected environment; each engine is identified by which output tree it
+/// populated. An engine that produced no output (for example Callgrind off Linux,
+/// where its benches compile to no-ops) simply contributes nothing.
+///
+/// With `--best-of N` the whole suite runs `N` times and each metric is reduced to
+/// its minimum across the runs (see [`min_per_metric`]), so a transient slowdown
+/// on one run is discarded rather than stored. Every run must measure the same set
+/// of cases and metrics; a mismatch fails the collection ([`InconsistentRunsError`]).
+/// The stored run takes its timeline position and dirty-snapshot key from the
+/// first run's start, and the git/toolchain/hardware context is probed once after
+/// the runs finish (it does not change between them). `N == 1` reproduces a plain
+/// single run.
 pub(crate) async fn run_engines<R, P, O, S>(
     options: &CollectOptions,
     deps: &CollectDeps<'_, R, P, O, S>,
-) -> Result<CollectSummary, RunError>
+) -> Result<CollectSummary, AppError>
 where
     R: BenchRunner,
     P: EnvironmentProbe,
@@ -286,7 +448,7 @@ where
 {
     let argv = build_bench_argv(deps.bench_command, options)?;
 
-    // The benchmark command runs once with the union of every engine's injected
+    // The benchmark command runs with the union of every engine's injected
     // environment plus `CARGO_TARGET_DIR` pinned to the directory the harvest
     // scans, so engine output always lands where it is collected from — notably
     // when an ambient `CARGO_TARGET_DIR` (such as the one `cargo llvm-cov` sets)
@@ -308,37 +470,161 @@ where
         format!("injected environment: {rendered_env}")
     });
 
-    let run_start = deps.clock.system_time();
-    let status = deps.runner.run_benches(&argv, &env).await?;
-    if !status.success {
-        return Err(RunError::Engine {
-            engine: BENCH_COMMAND_LABEL.to_owned(),
-            code: status.code,
+    let runs = options.best_of.get();
+    if runs > 1 {
+        deps.reporter.note_with(|| {
+            format!(
+                "best-of collection: running the suite {runs} times and keeping the minimum \
+                 value per metric, so a transient slowdown on any single run is discarded"
+            )
         });
     }
-    deps.reporter.note_with(|| {
+
+    // One bucket per engine (parallel to `Engine::ALL`), each collecting that
+    // engine's harvested records from every run so they can be reduced together.
+    let mut per_engine: Vec<Vec<Vec<BenchmarkResult>>> = Engine::ALL
+        .iter()
+        .map(|_| Vec::with_capacity(runs))
+        .collect();
+    let mut first_run_start: Option<SystemTime> = None;
+
+    for run_number in 1..=runs {
+        let run_start = deps.clock.system_time();
+        if first_run_start.is_none() {
+            first_run_start = Some(run_start);
+        }
+        if runs > 1 {
+            deps.reporter.note_with(|| {
+                format!(
+                    "best-of run {run_number}/{runs}: invoking {}",
+                    argv.join(" ")
+                )
+            });
+        }
+
+        let status = deps
+            .runner
+            .run_benches(&argv, &env)
+            .await
+            .map_err(|error| BenchCommandFailedError::caused_by(argv.join(" "), error))?;
+        if !status.success {
+            return Err(match status.code {
+                Some(code) => EngineFailedError::new(BENCH_COMMAND_LABEL, code).into(),
+                None => EngineTerminatedError::new(BENCH_COMMAND_LABEL).into(),
+            });
+        }
+        deps.reporter.note_with(|| {
+            format!(
+                "benchmark command finished; harvesting output modified at or after {} \
+             (older files are treated as stale leftovers)",
+                timestamp_from(run_start)
+            )
+        });
+
+        for (bucket, engine) in per_engine.iter_mut().zip(Engine::ALL) {
+            let records =
+                harvest_records(deps.output, deps.reporter, engine, Some(run_start)).await?;
+            bucket.push(records);
+        }
+    }
+
+    // At least one run always executes (`best_of` is non-zero), so a first start
+    // was recorded. It stamps the stored run's observation time and dirty-snapshot
+    // second; later runs share the same commit, so their starts do not matter.
+    let run_start = first_run_start.expect("best-of runs the suite at least once");
+
+    let shared = probe_context(deps.probe, deps.env).await?;
+
+    let store = FinalizeDeps {
+        storage: deps.storage,
+        project_id: deps.project_id,
+        tool_version: deps.tool_version,
+        reporter: deps.reporter,
+    };
+    let params = StoreParams {
+        overwrite: options.overwrite,
+        skip_existing: options.skip_existing,
+        no_store: options.no_store,
+    };
+    finalize_and_store(
+        &store,
+        &shared,
+        &params,
+        "collecting",
+        "toolchain host",
+        &per_engine,
+        run_start,
+    )
+    .await
+}
+
+/// Reduces and stores every engine's harvested records against a resolved context.
+///
+/// The shared back half of the import pipeline (announce partition → per-metric
+/// reduce → per-engine store). Given `per_engine` (one inner vector per run), the
+/// resolved [`SharedContext`], and the [`StoreParams`] governing placement, it is
+/// used verbatim by both `collect` and `import`; they differ only in how they
+/// produce `per_engine` and `shared` (and in the `operation` verb naming the
+/// partition announcement). `run_start` stamps each stored run's observation time
+/// and any dirty-snapshot second.
+pub(crate) async fn finalize_and_store<S>(
+    store: &FinalizeDeps<'_, S>,
+    shared: &SharedContext,
+    params: &StoreParams,
+    operation: &str,
+    triple_note: &str,
+    per_engine: &[Vec<Vec<BenchmarkResult>>],
+    run_start: SystemTime,
+) -> Result<CollectSummary, AppError>
+where
+    S: Storage,
+{
+    // The always-on effective-partition announcement: one line, printed regardless
+    // of `--verbose`, naming the storage partition this run's results land in (the
+    // target triple, always the toolchain host, and the auto-detected machine key
+    // every engine uses). It mirrors the query commands' effective-selection
+    // summary so the partition a run writes and an `analyze` reads is stated the
+    // same way.
+    let partition = partition_of(shared);
+    store.reporter.announce(&partition_selection_summary(
+        operation,
+        shared.target_triple.as_str(),
+        triple_note,
+        partition.machine_key.as_str(),
+    ));
+    // Under --verbose, spell out the individual hardware factors behind the
+    // auto-detected fingerprint so that if the machine key changes between runs
+    // the responsible factor can be identified from the log.
+    store.reporter.note_with(|| {
         format!(
-            "benchmark command finished; harvesting output modified at or after {} \
-         (older files are treated as stale leftovers)",
-            timestamp_from(run_start)
+            "hardware fingerprint components: {}",
+            describe_fingerprint_components(&shared.hardware)
         )
     });
-
-    let rustc = deps.probe.toolchain().await?;
-    let shared = SharedContext {
-        git: deps.probe.git().await?,
-        target_triple: rustc.host.clone().unwrap_or_default(),
-        rustc,
-        env: detect_environment(deps.env),
-        hardware: deps.probe.hardware().await,
-    };
 
     let mut stored = 0_usize;
     let mut harvested = 0_usize;
     let mut labels = Vec::new();
 
-    for engine in Engine::ALL {
-        let summary = harvest_engine(options, deps, &shared, engine, run_start).await?;
+    for (bucket, engine) in per_engine.iter().zip(Engine::ALL) {
+        let runs = bucket.len();
+        let combined = min_per_metric(bucket)
+            .map_err(|error| InconsistentRunsError::caused_by(engine.to_string(), error))?;
+        note_best_of_selections(store.reporter, engine, runs, &combined.selections);
+
+        let summary = store_engine(
+            store,
+            shared,
+            params,
+            &partition,
+            engine,
+            Reduction {
+                records: combined.results,
+                runs,
+            },
+            run_start,
+        )
+        .await?;
         if summary.stored {
             stored = stored.saturating_add(1);
         }
@@ -353,6 +639,96 @@ where
         harvested,
         labels,
     })
+}
+
+/// Builds the always-on, one-line summary of a run's effective storage partition:
+/// the target triple its results are keyed under and the auto-detected machine key
+/// every engine uses.
+///
+/// `operation` is the gerund naming the action ("collecting"/"importing").
+/// `triple_note` qualifies the triple in parentheses ("toolchain host" for a
+/// probed run, "from --target-triple" for an import override); an empty note omits
+/// the parenthetical.
+///
+/// A pure formatter so the wording is unit-tested without a probe; the effective
+/// values are resolved by the caller.
+pub(crate) fn partition_selection_summary(
+    operation: &str,
+    target_triple: &str,
+    triple_note: &str,
+    machine_key: &str,
+) -> String {
+    let triple = if target_triple.is_empty() {
+        "unknown"
+    } else {
+        target_triple
+    };
+    let triple_suffix = if triple_note.is_empty() {
+        String::new()
+    } else {
+        format!(" ({triple_note})")
+    };
+    format!(
+        "{operation}: target-triple={triple}{triple_suffix}; \
+         machine-key={machine_key} (auto-detected)"
+    )
+}
+
+/// Builds the write-only host-hardware provenance recorded on the runs this
+/// command stores: the hardware facts the probe observed and the key the
+/// fingerprint factors among them hash to.
+///
+/// It records the auto-detected fingerprint so that a later change in a partition
+/// key can be traced back to the specific hardware factor that moved.
+/// The per-processor speed histogram is recorded alongside as provenance even
+/// though it does not take part in the key.
+fn machine_info(hardware: &HardwareProfile) -> MachineInfo {
+    MachineInfo {
+        processors: hardware.processors,
+        memory_regions: hardware.memory_regions,
+        processor_models: hardware.processor_models.clone(),
+        processor_speeds: hardware.processor_speeds.clone(),
+        fingerprint: resolve_machine_key(hardware),
+    }
+}
+
+/// Emits the per-metric best-of provenance: the samples seen and which run won.
+///
+/// Only meaningful when more than one run was taken, so it is a no-op for a plain
+/// single run. The chosen sample is bracketed so the reasoning behind each stored
+/// value can be reconstructed from the verbose log.
+fn note_best_of_selections(
+    reporter: &dyn Reporter,
+    engine: Engine,
+    runs: usize,
+    selections: &[crate::model::Selection],
+) {
+    if runs <= 1 {
+        return;
+    }
+    reporter.if_enabled(|notes| {
+        for selection in selections {
+            let samples = selection
+                .samples
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    if index == selection.chosen_run {
+                        format!("[{value}]")
+                    } else {
+                        value.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            notes.note(&format!(
+                "{engine} {}/{}: best-of samples {samples} (kept run {})",
+                selection.id,
+                selection.kind.as_str(),
+                selection.chosen_run.saturating_add(1),
+            ));
+        }
+    });
 }
 
 /// Builds the benchmark command line: the base command followed by the cargo
@@ -371,12 +747,13 @@ where
 fn build_bench_argv(
     bench_command: &[String],
     options: &CollectOptions,
-) -> Result<Vec<String>, RunError> {
+) -> Result<Vec<String>, AppError> {
     let Some((program, _)) = bench_command.split_first() else {
-        return Err(RunError::Command {
-            engine: BENCH_COMMAND_LABEL.to_owned(),
-            message: "the benchmark command is empty".to_owned(),
-        });
+        return Err(InvalidCommandError::new(
+            BENCH_COMMAND_LABEL,
+            "the benchmark command is empty",
+        )
+        .into());
     };
     debug_assert!(!program.is_empty());
 
@@ -419,25 +796,50 @@ fn build_bench_argv(
     Ok(argv)
 }
 
-/// Harvests one engine's output and (unless suppressed) stores the result set.
-async fn harvest_engine<R, P, O, S>(
-    options: &CollectOptions,
-    deps: &CollectDeps<'_, R, P, O, S>,
-    shared: &SharedContext,
+/// Harvests and parses one engine's output for a single run.
+///
+/// The front half of storing an engine's results, split out so the `--best-of`
+/// loop can gather each run's records before they are reduced together, and so
+/// `import` can harvest a curated tree the same way. Producing no fresh output
+/// yields an empty vector (the steady state for an engine that does not apply
+/// here). `since` gates by modification time (`Some`) or admits everything
+/// (`None`, which `import` passes to take a curated tree wholesale).
+pub(crate) async fn harvest_records<O>(
+    output: &O,
+    reporter: &dyn Reporter,
     engine: Engine,
-    run_start: SystemTime,
-) -> Result<EngineSummary, RunError>
+    since: Option<SystemTime>,
+) -> Result<Vec<BenchmarkResult>, AppError>
 where
-    R: BenchRunner,
-    P: EnvironmentProbe,
     O: BenchOutputSource,
+{
+    let harvest = output
+        .collect(engine, since, reporter)
+        .await
+        .map_err(|error| HarvestFailedError::caused_by(engine.to_string(), error))?;
+    parse_harvest(&harvest, reporter)
+}
+
+/// Stores one engine's reduced result set (unless suppressed).
+///
+/// The back half of collecting an engine: given the [`Reduction`] to persist
+/// (already reduced across the `--best-of` runs) and the [`Partition`] the run
+/// writes to, it builds the run context and storage key and writes the object.
+/// `run_start` is the first run's start, which stamps the observation time and any
+/// dirty-snapshot second.
+async fn store_engine<S>(
+    store: &FinalizeDeps<'_, S>,
+    shared: &SharedContext,
+    params: &StoreParams,
+    partition: &Partition,
+    engine: Engine,
+    reduction: Reduction,
+    run_start: SystemTime,
+) -> Result<EngineSummary, AppError>
+where
     S: Storage,
 {
-    let harvest = deps
-        .output
-        .collect(engine, run_start, deps.reporter)
-        .await?;
-    let records = parse_harvest(&harvest, deps.reporter)?;
+    let Reduction { records, runs } = reduction;
     let count = records.len();
 
     // An engine that produced no fresh output contributes nothing. Off Linux the
@@ -447,7 +849,7 @@ where
     // is no misconfiguration to report, since absence is the expected steady state
     // for an engine that does not apply here.
     if count == 0 {
-        deps.reporter.note_with(|| {
+        store.reporter.note_with(|| {
             format!("{engine}: no fresh benchmark cases harvested; nothing to store")
         });
         return Ok(EngineSummary {
@@ -457,8 +859,8 @@ where
         });
     }
 
-    if options.no_store {
-        deps.reporter.note_with(|| {
+    if params.no_store {
+        store.reporter.note_with(|| {
             format!(
                 "{engine}: harvested {}; not storing (--no-store)",
                 count_noun(count, "case")
@@ -483,37 +885,50 @@ where
             target_triple: target_triple.clone(),
             rustc_version: shared.rustc.version.clone(),
         },
-        deps.tool_version.to_owned(),
+        store.tool_version.to_owned(),
     );
+    // Record the host hardware provenance on the runs this command stores
+    // (write-only): the hardware facts and the key their fingerprint factors hash
+    // to, so a later change in a machine key can be traced to the specific factor
+    // that moved.
+    let mut context = context;
+    context.machine = Some(machine_info(&shared.hardware));
+    // Record the measurement protocol alongside it: how many repetitions of the
+    // suite the stored minima were taken over. `NonZero::new` yields `None` only for
+    // an empty reduction, which cannot reach here — no repetitions means no records,
+    // and the zero-case early return above already took that path.
+    context.best_of = NonZero::new(runs);
+    store.reporter.note_with(|| {
+        format!(
+            "{engine}: recording best-of={runs} on the stored run; each value is the minimum \
+             of {}, and because that minimum falls as the count rises, a later reader needs \
+             the count to tell a protocol change from a code change",
+            count_noun(runs, "sample")
+        )
+    });
     let run = Run::new(context, records);
 
-    // Hardware-dependent engines (such as Criterion) partition their history by a
-    // machine fingerprint so only equivalent machines share a series. An explicit
-    // `--machine-key` overrides the computed fingerprint. Hardware-independent
-    // engines (such as Callgrind) use no machine key.
-    let machine_key = engine
-        .is_hardware_dependent()
-        .then(|| resolve_machine_key(options.machine_key.as_deref(), &shared.hardware));
-    let key = DiscriminantSet::new(engine, target_triple, machine_key.as_deref());
+    // Every engine partitions its history by a machine key so only equivalent
+    // machines share a series; the run's partition supplies the computed hardware
+    // fingerprint for every engine.
+    let machine_key = &partition.machine_key;
+    let key = partition.discriminant_set(engine);
     // History is organized by commit, so the full commit ID names the directory
     // (`analyze` resolves which commits to read from git topology). A clean run is
     // keyed solely by its commit and so is deterministic; a dirty snapshot adds its
     // observation time so concurrent snapshots of the same commit coexist.
     let commit = shared.git.commit.as_deref().unwrap_or("unknown");
     let object_key = if dirty {
-        key.dirty_key(deps.project_id, commit, observation.as_second())
+        key.dirty_key(store.project_id, commit, observation.as_second())
     } else {
-        key.clean_key(deps.project_id, commit)
+        key.clean_key(store.project_id, commit)
     };
 
-    deps.reporter.note_with(|| {
+    store.reporter.note_with(|| {
         format!(
-            "{engine}: {} at commit {commit} ({}){} -> {object_key}",
+            "{engine}: {} at commit {commit} ({}), machine {machine_key} -> {object_key}",
             count_noun(count, "case"),
             if dirty { "dirty" } else { "clean" },
-            machine_key
-                .as_deref()
-                .map_or_else(String::new, |key| format!(", machine {key}")),
         )
     });
 
@@ -524,21 +939,21 @@ where
         .expect("a freshly built run always serializes to JSON");
     // The early `--no-store` return above is the only path that leaves storage
     // unset, so reaching here guarantees a backend was built.
-    let storage = deps
+    let storage = store
         .storage
         .expect("storage is built whenever a run may store results");
     let outcome = store_result(
         storage,
         &object_key,
         json.as_bytes(),
-        options.overwrite,
-        options.skip_existing,
+        params.overwrite,
+        params.skip_existing,
     )
     .await?;
 
     match outcome {
         StoreOutcome::Skipped => {
-            deps.reporter.note_with(|| {
+            store.reporter.note_with(|| {
                 format!(
                     "{engine}: {object_key} already exists; left unchanged (--skip-existing), \
                  so nothing was written and the cache-invalidation marker was not armed"
@@ -553,16 +968,9 @@ where
             })
         }
         StoreOutcome::Stored => {
-            deps.reporter
+            store
+                .reporter
                 .note_with(|| format!("{engine}: stored {object_key}"));
-
-            // Replacing a clean run discards the data point its blessings accepted, so
-            // any blessing sidecars on this commit no longer describe a stored level.
-            // Remove them on overwrite so a stale blessing cannot silently re-baseline
-            // the new run.
-            if options.overwrite && !dirty {
-                invalidate_blessings(storage, &key, deps.project_id, commit, deps.reporter).await?;
-            }
 
             Ok(EngineSummary {
                 stored: true,
@@ -589,7 +997,7 @@ enum StoreOutcome {
 ///
 /// A normal run is write-once: if an object already exists at the key (a clean
 /// re-run of the same commit, or a dirty snapshot sharing an effective second),
-/// the collision surfaces as [`RunError::Duplicate`] so the caller can refuse it.
+/// the collision surfaces as [`DuplicateResultError`] so the caller can refuse it.
 /// `--overwrite` replaces any existing object in place instead; `--skip-existing`
 /// instead treats the existing object as a success that writes nothing — the
 /// append-only mode the CI collection uses so it never overwrites an object
@@ -600,49 +1008,24 @@ async fn store_result<S: Storage>(
     bytes: &[u8],
     overwrite: bool,
     skip_existing: bool,
-) -> Result<StoreOutcome, RunError> {
+) -> Result<StoreOutcome, AppError> {
     if overwrite {
         storage.put_overwrite(object_key, bytes).await?;
         return Ok(StoreOutcome::Stored);
     }
     match storage.put(object_key, bytes).await {
         Ok(()) => Ok(StoreOutcome::Stored),
-        Err(StorageError::AlreadyExists { key }) => {
+        Err(error) => {
+            let Some(key) = error.already_existing_key().map(ToOwned::to_owned) else {
+                return Err(error.into());
+            };
             if skip_existing {
                 Ok(StoreOutcome::Skipped)
             } else {
-                Err(RunError::Duplicate { key })
+                Err(DuplicateResultError::caused_by(key, error).into())
             }
         }
-        Err(error) => Err(error.into()),
     }
-}
-
-/// Deletes every blessing sidecar recorded at `commit` in the partition `key`.
-///
-/// Called when an overwrite replaces a clean run: the blessings accepted the level
-/// of the run being replaced, so they are removed rather than left to re-baseline
-/// the new (possibly different) level.
-async fn invalidate_blessings<S: Storage>(
-    storage: &S,
-    key: &DiscriminantSet,
-    project: &str,
-    commit: &str,
-    reporter: &dyn Reporter,
-) -> Result<(), RunError> {
-    let prefix = key.commit_prefix(project, commit);
-    let keys = storage.list(&prefix).await?;
-    for object_key in keys {
-        let is_bless = object_key
-            .rsplit('/')
-            .next()
-            .is_some_and(|name| name.starts_with("bless-"));
-        if is_bless {
-            storage.delete(&object_key).await?;
-            reporter.note_with(|| format!("removed stale blessing {object_key}"));
-        }
-    }
-    Ok(())
 }
 
 /// Parses harvested engine output into result records, naming the offending
@@ -655,15 +1038,13 @@ async fn invalidate_blessings<S: Storage>(
 fn parse_harvest(
     harvest: &Harvest,
     reporter: &dyn Reporter,
-) -> Result<Vec<BenchmarkResult>, RunError> {
+) -> Result<Vec<BenchmarkResult>, AppError> {
     match harvest {
         Harvest::Callgrind(summaries) => {
             let mut records = Vec::with_capacity(summaries.len());
             for summary in summaries {
-                let record =
-                    parse_callgrind_summary(&summary.content).map_err(|error| RunError::Parse {
-                        message: format!("{}: {error}", summary.path.display()),
-                    })?;
+                let record = parse_callgrind_summary(&summary.content)
+                    .map_err(|error| ParseOutputError::caused_by(&summary.path, error))?;
                 records.push(record);
             }
             Ok(records)
@@ -671,12 +1052,8 @@ fn parse_harvest(
         Harvest::Criterion(cases) => {
             let mut records = Vec::with_capacity(cases.len());
             for case in cases {
-                let record =
-                    parse_criterion_case(&case.benchmark, &case.estimates).map_err(|error| {
-                        RunError::Parse {
-                            message: format!("{}: {error}", case.dir.display()),
-                        }
-                    })?;
+                let record = parse_criterion_case(&case.benchmark, &case.estimates)
+                    .map_err(|error| ParseOutputError::caused_by(&case.dir, error))?;
                 records.push(record);
             }
             Ok(records)
@@ -684,11 +1061,8 @@ fn parse_harvest(
         Harvest::AllocTracker(files) => {
             let mut records = Vec::with_capacity(files.len());
             for file in files {
-                let record = parse_alloc_tracker_operation(&file.content).map_err(|error| {
-                    RunError::Parse {
-                        message: format!("{}: {error}", file.path.display()),
-                    }
-                })?;
+                let record = parse_alloc_tracker_operation(&file.content)
+                    .map_err(|error| ParseOutputError::caused_by(&file.path, error))?;
                 push_or_skip(&mut records, record, file, reporter);
             }
             Ok(records)
@@ -696,11 +1070,8 @@ fn parse_harvest(
         Harvest::AllTheTime(files) => {
             let mut records = Vec::with_capacity(files.len());
             for file in files {
-                let record = parse_all_the_time_operation(&file.content).map_err(|error| {
-                    RunError::Parse {
-                        message: format!("{}: {error}", file.path.display()),
-                    }
-                })?;
+                let record = parse_all_the_time_operation(&file.content)
+                    .map_err(|error| ParseOutputError::caused_by(&file.path, error))?;
                 push_or_skip(&mut records, record, file, reporter);
             }
             Ok(records)
@@ -727,8 +1098,13 @@ fn push_or_skip(
     }
 }
 
-/// Builds the human-readable run summary.
-fn build_message(no_store: bool, stored: usize, harvested: usize, labels: &[String]) -> String {
+/// Builds the human-readable outcome message summarizing what a run stored.
+pub(crate) fn build_message(
+    no_store: bool,
+    stored: usize,
+    harvested: usize,
+    labels: &[String],
+) -> String {
     let mut message = if no_store {
         format!(
             "Harvested {}; nothing stored (--no-store).",
@@ -784,8 +1160,14 @@ fn target_root_from(configured: Option<std::ffi::OsString>, base: &Path) -> Path
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "panic is fine in tests")]
+    #![allow(
+        clippy::float_cmp,
+        reason = "best-of stores exact input values, so comparisons are exact"
+    )]
 
+    use std::collections::HashMap;
     use std::io;
+    use std::num::NonZeroUsize;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -793,11 +1175,11 @@ mod tests {
     use cbh_diag::RecordingReporter;
     use cbh_engines::{Harvest, RawCriterionCase, RawOperationFile, RawSummary};
     use cbh_git::{EngineStatus, parse_git_info};
-    use cbh_storage::MemoryStorage;
+    use cbh_storage::{MemoryStorage, StorageError, TestStorageError};
     use futures::executor::block_on;
 
     use super::*;
-    use crate::model::{BenchmarkIdPrefix, BlessingRecord};
+    use crate::model::{AggregateError, BenchmarkIdPrefix, BlessingRecord};
 
     const SINGLE_FIXTURE: &str =
         include_str!("../../tests/fixtures/callgrind/single_unparametrized.summary.json");
@@ -876,27 +1258,23 @@ mod tests {
 
     impl Storage for FailingStorage {
         async fn put(&self, _key: &str, _bytes: &[u8]) -> Result<(), StorageError> {
-            Err(StorageError::Io(io::Error::other("disk full")))
+            Err(TestStorageError::new().into())
         }
 
         async fn put_overwrite(&self, _key: &str, _bytes: &[u8]) -> Result<(), StorageError> {
-            Err(StorageError::Io(io::Error::other("disk full")))
+            Err(TestStorageError::new().into())
         }
 
-        async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
-            Err(StorageError::NotFound {
-                key: key.to_owned(),
-            })
+        async fn get(&self, _key: &str) -> Result<Vec<u8>, StorageError> {
+            Err(TestStorageError::new().into())
         }
 
         async fn list(&self, _prefix: &str) -> Result<Vec<String>, StorageError> {
             Ok(Vec::new())
         }
 
-        async fn delete(&self, key: &str) -> Result<(), StorageError> {
-            Err(StorageError::NotFound {
-                key: key.to_owned(),
-            })
+        async fn delete(&self, _key: &str) -> Result<(), StorageError> {
+            Err(TestStorageError::new().into())
         }
     }
 
@@ -912,10 +1290,9 @@ mod tests {
             false,
         ))
         .unwrap_err();
-        assert!(
-            matches!(error, RunError::Storage(_)),
-            "expected a storage error, got {error:?}"
-        );
+        assert!(error.find_source::<StorageError>().is_some());
+        assert!(error.find_source::<TestStorageError>().is_some());
+        assert!(error.find_source::<DuplicateResultError>().is_none());
     }
 
     fn frozen_time() -> SystemTime {
@@ -985,6 +1362,50 @@ mod tests {
     }
 
     #[test]
+    fn partition_selection_summary_names_the_effective_partition() {
+        // Auto-detected fingerprint: the machine key is marked auto-detected and the
+        // triple is named as the toolchain host.
+        let auto = partition_selection_summary(
+            "collecting",
+            "x86_64-pc-windows-msvc",
+            "toolchain host",
+            "abcd1234",
+        );
+        assert!(auto.starts_with("collecting: "), "{auto}");
+        assert!(
+            auto.contains("target-triple=x86_64-pc-windows-msvc (toolchain host)"),
+            "{auto}"
+        );
+        assert!(
+            auto.contains("machine-key=abcd1234 (auto-detected)"),
+            "{auto}"
+        );
+
+        // A missing host triple degrades to a readable placeholder rather than blank.
+        let unknown = partition_selection_summary("collecting", "", "toolchain host", "abcd1234");
+        assert!(unknown.contains("target-triple=unknown"), "{unknown}");
+
+        // `import` reuses the formatter with its own verb and triple note, and an
+        // empty note drops the parenthetical entirely.
+        let imported = partition_selection_summary(
+            "importing",
+            "wasm32-unknown-unknown",
+            "from --target-triple",
+            "abcd1234",
+        );
+        assert!(imported.starts_with("importing: "), "{imported}");
+        assert!(
+            imported.contains("target-triple=wasm32-unknown-unknown (from --target-triple)"),
+            "{imported}"
+        );
+        let no_note = partition_selection_summary("importing", "wasm32-unknown-unknown", "", "k");
+        assert!(
+            no_note.contains("target-triple=wasm32-unknown-unknown;"),
+            "{no_note}"
+        );
+    }
+
+    #[test]
     fn build_message_brackets_labels_only_when_present() {
         let labels = vec!["callgrind: 1 stored".to_owned()];
         let with_labels = build_message(false, 1, 1, &labels);
@@ -1027,6 +1448,7 @@ mod tests {
     #[derive(Clone)]
     struct FakeRunner {
         status: EngineStatus,
+        failure: Option<io::ErrorKind>,
         calls: Arc<Mutex<Vec<Vec<String>>>>,
         envs: Arc<Mutex<Vec<RecordedEnv>>>,
     }
@@ -1038,6 +1460,7 @@ mod tests {
                     success: true,
                     code: Some(0),
                 },
+                failure: None,
                 calls: Arc::default(),
                 envs: Arc::default(),
             }
@@ -1049,6 +1472,33 @@ mod tests {
                     success: false,
                     code: Some(code),
                 },
+                failure: None,
+                calls: Arc::default(),
+                envs: Arc::default(),
+            }
+        }
+
+        /// A run that died without reporting an exit code, as a process killed by a
+        /// signal does.
+        fn terminated() -> Self {
+            Self {
+                status: EngineStatus {
+                    success: false,
+                    code: None,
+                },
+                failure: None,
+                calls: Arc::default(),
+                envs: Arc::default(),
+            }
+        }
+
+        fn io_failing() -> Self {
+            Self {
+                status: EngineStatus {
+                    success: false,
+                    code: None,
+                },
+                failure: Some(io::ErrorKind::Other),
                 calls: Arc::default(),
                 envs: Arc::default(),
             }
@@ -1071,6 +1521,9 @@ mod tests {
         ) -> io::Result<EngineStatus> {
             self.calls.lock().unwrap().push(argv.to_vec());
             self.envs.lock().unwrap().push(env.to_vec());
+            if let Some(kind) = self.failure {
+                return Err(io::Error::from(kind));
+            }
             Ok(self.status)
         }
     }
@@ -1080,6 +1533,8 @@ mod tests {
         git: GitInfo,
         rustc: RustcInfo,
         hardware: HardwareProfile,
+        git_failure: Option<io::ErrorKind>,
+        toolchain_failure: Option<io::ErrorKind>,
     }
 
     impl FakeProbe {
@@ -1102,18 +1557,37 @@ mod tests {
                 hardware: HardwareProfile {
                     processors: 8,
                     memory_regions: 1,
-                    cpu_brand: Some("Test CPU 3000".to_owned()),
+                    processor_models: vec!["Test CPU 3000".to_owned()],
+                    processor_speeds: vec![(3141, 8)],
                 },
+                git_failure: None,
+                toolchain_failure: None,
             }
+        }
+
+        fn with_git_failure(mut self) -> Self {
+            self.git_failure = Some(io::ErrorKind::Other);
+            self
+        }
+
+        fn with_toolchain_failure(mut self) -> Self {
+            self.toolchain_failure = Some(io::ErrorKind::Other);
+            self
         }
     }
 
     impl EnvironmentProbe for FakeProbe {
         async fn git(&self) -> io::Result<GitInfo> {
+            if let Some(kind) = self.git_failure {
+                return Err(io::Error::from(kind));
+            }
             Ok(self.git.clone())
         }
 
         async fn toolchain(&self) -> io::Result<RustcInfo> {
+            if let Some(kind) = self.toolchain_failure {
+                return Err(io::Error::from(kind));
+            }
             Ok(self.rustc.clone())
         }
 
@@ -1122,12 +1596,20 @@ mod tests {
         }
     }
 
+    /// The auto-detected machine key every engine partitions under for the
+    /// [`FakeProbe`] hardware profile. Every engine is machine-keyed, so a probed
+    /// run lands under this fingerprint.
+    fn probe_machine_key() -> String {
+        resolve_machine_key(&FakeProbe::new().hardware)
+    }
+
     #[derive(Clone, Default)]
     struct FakeOutput {
         callgrind: Vec<RawSummary>,
         criterion: Vec<RawCriterionCase>,
         alloc: Vec<RawOperationFile>,
         time: Vec<RawOperationFile>,
+        failure: Option<Engine>,
     }
 
     impl FakeOutput {
@@ -1242,15 +1724,25 @@ mod tests {
                 ..Self::default()
             }
         }
+
+        fn failing(engine: Engine) -> Self {
+            Self {
+                failure: Some(engine),
+                ..Self::default()
+            }
+        }
     }
 
     impl BenchOutputSource for FakeOutput {
         async fn collect(
             &self,
             engine: Engine,
-            _since: SystemTime,
+            _since: Option<SystemTime>,
             _reporter: &dyn Reporter,
         ) -> io::Result<Harvest> {
+            if self.failure == Some(engine) {
+                return Err(io::Error::other("injected harvest failure"));
+            }
             Ok(match engine {
                 Engine::Callgrind => Harvest::Callgrind(self.callgrind.clone()),
                 Engine::Criterion => Harvest::Criterion(self.criterion.clone()),
@@ -1272,7 +1764,7 @@ mod tests {
         probe: &FakeProbe,
         output: &FakeOutput,
         storage: &MemoryStorage,
-    ) -> Result<RunOutcome, RunError> {
+    ) -> Result<RunOutcome, AppError> {
         drive_at(FROZEN_UNIX, options, runner, probe, output, storage)
     }
 
@@ -1283,7 +1775,7 @@ mod tests {
         probe: &FakeProbe,
         output: &FakeOutput,
         storage: &MemoryStorage,
-    ) -> Result<RunOutcome, RunError> {
+    ) -> Result<RunOutcome, AppError> {
         let reporter = StderrReporter::new(true);
         drive_at_with(now_unix, options, runner, probe, output, storage, &reporter)
     }
@@ -1296,7 +1788,7 @@ mod tests {
         output: &FakeOutput,
         storage: &MemoryStorage,
         reporter: &dyn Reporter,
-    ) -> Result<RunOutcome, RunError> {
+    ) -> Result<RunOutcome, AppError> {
         let now = SystemTime::UNIX_EPOCH
             .checked_add(Duration::from_secs(now_unix))
             .unwrap();
@@ -1356,6 +1848,40 @@ mod tests {
     }
 
     #[test]
+    fn collect_announces_the_effective_storage_partition() {
+        let runner = FakeRunner::succeeding();
+        let probe = FakeProbe::new();
+        let output = FakeOutput::with_two_callgrind_summaries();
+        let storage = MemoryStorage::new();
+        let reporter = RecordingReporter::new();
+
+        drive_at_with(
+            FROZEN_UNIX,
+            &CollectOptions::default(),
+            &runner,
+            &probe,
+            &output,
+            &storage,
+            &reporter,
+        )
+        .unwrap();
+
+        // The always-on announcement names the probed host triple and the
+        // auto-detected machine key, so a collect run reports where its results
+        // land even without `--verbose`.
+        assert!(
+            reporter.announced("target-triple=x86_64-pc-windows-msvc (toolchain host)"),
+            "expected the effective-partition announcement, got {:?}",
+            reporter.announcements()
+        );
+        assert!(
+            reporter.announced("(auto-detected)"),
+            "machine key should read as auto-detected, got {:?}",
+            reporter.announcements()
+        );
+    }
+
+    #[test]
     fn verbose_collect_notes_an_empty_harvest() {
         let runner = FakeRunner::succeeding();
         let probe = FakeProbe::new();
@@ -1404,13 +1930,13 @@ mod tests {
         assert!(message.contains("Stored 1"), "{message}");
 
         let keys = storage.keys();
+        let machine = probe_machine_key();
         assert_eq!(
             keys,
-            vec![
-                "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/\
+            vec![format!(
+                "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/{machine}/\
                  deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/clean.json"
-                    .to_owned()
-            ]
+            )]
         );
 
         let bytes = block_on(storage.get(&keys[0])).unwrap();
@@ -1421,6 +1947,37 @@ mod tests {
             set.context.toolchain.target_triple,
             "x86_64-pc-windows-msvc"
         );
+    }
+
+    #[test]
+    fn probed_partition_is_the_partition_that_is_written_to() {
+        // The backfill pre-check asks `probe_partition` which partition a run here
+        // would occupy and then scans exactly that. If the two ever diverged, a
+        // backfill would scan one partition and write to another, so every commit
+        // would look unrecorded and be benchmarked again.
+        let storage = MemoryStorage::new();
+
+        drive(
+            &CollectOptions::default(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            &FakeOutput::with_two_callgrind_summaries(),
+            &storage,
+        )
+        .unwrap();
+
+        let env = |_name: &str| None::<String>;
+        let partition = block_on(probe_partition(&FakeProbe::new(), &env)).unwrap();
+        let prefix = partition
+            .discriminant_set(Engine::Callgrind)
+            .partition_prefix("folo");
+
+        let keys = storage.keys();
+        assert!(
+            keys.iter().all(|key| key.starts_with(&prefix)),
+            "scanned {prefix} but wrote {keys:?}"
+        );
+        assert!(!keys.is_empty(), "stored nothing");
     }
 
     #[test]
@@ -1444,10 +2001,9 @@ mod tests {
         )
         .unwrap_err();
 
-        let RunError::Duplicate { key } = error else {
-            panic!("expected a duplicate error, got {error:?}");
-        };
-        assert!(key.ends_with("/clean.json"), "{key}");
+        let duplicate = error.find_source::<DuplicateResultError>().unwrap();
+        assert!(duplicate.key().ends_with("/clean.json"));
+        assert!(error.find_source::<StorageError>().is_some());
         // The second run left the single stored object untouched.
         assert_eq!(storage.keys().len(), 1);
     }
@@ -1464,10 +2020,11 @@ mod tests {
             &storage,
         )
         .unwrap();
-        let original = block_on(storage.get(
-            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/\
+        let machine = probe_machine_key();
+        let original = block_on(storage.get(&format!(
+            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/{machine}/\
              deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/clean.json",
-        ))
+        )))
         .unwrap();
 
         // A re-run of the same commit under --skip-existing succeeds without a
@@ -1545,7 +2102,7 @@ mod tests {
     }
 
     #[test]
-    fn overwriting_a_clean_run_removes_stale_blessing_sidecars() {
+    fn overwriting_a_clean_run_keeps_blessing_sidecars() {
         let storage = MemoryStorage::new();
         // A first clean run establishes the commit directory.
         drive(
@@ -1556,8 +2113,11 @@ mod tests {
             &storage,
         )
         .unwrap();
-        let commit_dir = "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/\
-                          deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+        let machine = probe_machine_key();
+        let commit_dir = format!(
+            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/{machine}/\
+             deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        );
         let bless_key = format!("{commit_dir}/bless-100.json");
         let record = BlessingRecord::new(
             "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_owned(),
@@ -1568,8 +2128,10 @@ mod tests {
         block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
         assert!(storage.keys().iter().any(|key| key == &bless_key));
 
-        // Overwriting the clean run discards the accepted data point, so its
-        // blessing sidecar is removed.
+        // Capturing a run never removes a blessing — even an overwrite that replaces
+        // the clean run leaves the sidecar in place. A blessing is removed only by the
+        // `unbless` command, so a pre-emptive blessing (applied before the data lands)
+        // survives the capture that gives it something to baseline.
         let overwrite = CollectOptions {
             overwrite: true,
             ..CollectOptions::default()
@@ -1585,8 +2147,8 @@ mod tests {
 
         let keys = storage.keys();
         assert!(
-            !keys.iter().any(|key| key == &bless_key),
-            "the stale blessing should be gone: {keys:?}"
+            keys.iter().any(|key| key == &bless_key),
+            "the blessing survives the capture: {keys:?}"
         );
         assert!(
             keys.iter().any(|key| key.ends_with("/clean.json")),
@@ -1619,11 +2181,14 @@ mod tests {
     #[test]
     fn overwriting_a_dirty_snapshot_keeps_blessing_sidecars() {
         let storage = MemoryStorage::new();
-        // Blessings accept the clean run's data point, so a blessing sidecar on the
-        // commit must survive when only a dirty snapshot of that commit is rewritten;
-        // invalidation is reserved for a clean overwrite that discards the point.
-        let commit_dir = "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/synthetic/\
-                          deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+        // Capturing never removes a blessing, so a blessing sidecar on the commit
+        // survives when a dirty snapshot of that commit is rewritten, just as it does
+        // for a clean run. Blessings are removed only by the `unbless` command.
+        let machine = probe_machine_key();
+        let commit_dir = format!(
+            "v1/folo/objects/callgrind/x86_64-pc-windows-msvc/{machine}/\
+             deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        );
         let bless_key = format!("{commit_dir}/bless-100.json");
         let record = BlessingRecord::new(
             "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_owned(),
@@ -1709,7 +2274,7 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(matches!(error, RunError::Duplicate { .. }), "{error:?}");
+        assert!(error.find_source::<DuplicateResultError>().is_some());
         assert_eq!(storage.keys().len(), 1);
 
         // With --overwrite the clash is resolved by replacing the object in place.
@@ -1818,13 +2383,111 @@ mod tests {
         )
         .unwrap_err();
 
-        match error {
-            RunError::Engine { engine, code } => {
-                assert_eq!(engine, "cargo bench");
-                assert_eq!(code, Some(101));
-            }
-            other => panic!("expected engine error, got {other:?}"),
-        }
+        let failure = error.find_source::<EngineFailedError>().unwrap();
+        assert_eq!(failure.engine(), "cargo bench");
+        assert_eq!(failure.code(), 101);
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn engine_termination_without_an_exit_code_is_an_error() {
+        // A process killed by a signal reports failure with no exit code to name, so
+        // it is a distinct failure from a non-zero exit rather than a missing code.
+        let storage = MemoryStorage::new();
+        let error = drive(
+            &CollectOptions::default(),
+            &FakeRunner::terminated(),
+            &FakeProbe::new(),
+            &FakeOutput::with_two_callgrind_summaries(),
+            &storage,
+        )
+        .unwrap_err();
+
+        let terminated = error.find_source::<EngineTerminatedError>().unwrap();
+        assert_eq!(terminated.engine(), "cargo bench");
+        assert!(error.find_source::<EngineFailedError>().is_none());
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn benchmark_command_io_failure_is_mapped_at_the_call_site() {
+        let storage = MemoryStorage::new();
+        let error = drive(
+            &CollectOptions::default(),
+            &FakeRunner::io_failing(),
+            &FakeProbe::new(),
+            &FakeOutput::default(),
+            &storage,
+        )
+        .unwrap_err();
+
+        assert!(error.find_source::<BenchCommandFailedError>().is_some());
+        assert_eq!(
+            error.find_source::<io::Error>().unwrap().kind(),
+            io::ErrorKind::Other
+        );
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn toolchain_probe_failure_is_mapped_at_the_call_site() {
+        let storage = MemoryStorage::new();
+        let error = drive(
+            &CollectOptions::default(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new().with_toolchain_failure(),
+            &FakeOutput::default(),
+            &storage,
+        )
+        .unwrap_err();
+
+        assert!(error.find_source::<ToolchainProbeFailedError>().is_some());
+        assert!(error.find_source::<GitProbeFailedError>().is_none());
+        assert_eq!(
+            error.find_source::<io::Error>().unwrap().kind(),
+            io::ErrorKind::Other
+        );
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn git_probe_failure_is_mapped_at_the_call_site() {
+        let storage = MemoryStorage::new();
+        let error = drive(
+            &CollectOptions::default(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new().with_git_failure(),
+            &FakeOutput::default(),
+            &storage,
+        )
+        .unwrap_err();
+
+        assert!(error.find_source::<GitProbeFailedError>().is_some());
+        assert!(error.find_source::<ToolchainProbeFailedError>().is_none());
+        assert_eq!(
+            error.find_source::<io::Error>().unwrap().kind(),
+            io::ErrorKind::Other
+        );
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn harvest_failure_is_mapped_at_the_call_site() {
+        let storage = MemoryStorage::new();
+        let error = drive(
+            &CollectOptions::default(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            &FakeOutput::failing(Engine::Criterion),
+            &storage,
+        )
+        .unwrap_err();
+
+        assert!(error.find_source::<HarvestFailedError>().is_some());
+        assert_eq!(
+            error.find_source::<io::Error>().unwrap().kind(),
+            io::ErrorKind::Other
+        );
         assert!(storage.keys().is_empty());
     }
 
@@ -1845,18 +2508,19 @@ mod tests {
         };
         assert!(message.contains("Stored 2"), "{message}");
 
-        // Callgrind partitions under `synthetic`; Criterion partitions under the
-        // machine fingerprint of the probed hardware. Both sets are stored.
+        // Every engine partitions under the machine fingerprint of the probed
+        // hardware. Both sets are stored under the same machine key.
+        let machine = probe_machine_key();
         let keys = storage.keys();
         assert_eq!(keys.len(), 2, "{keys:?}");
         assert!(
             keys.iter()
-                .any(|key| key.contains("/callgrind/") && key.contains("/synthetic/")),
+                .any(|key| key.contains("/callgrind/") && key.contains(&format!("/{machine}/"))),
             "{keys:?}"
         );
         assert!(
             keys.iter()
-                .any(|key| key.contains("/criterion/") && !key.contains("/synthetic/")),
+                .any(|key| key.contains("/criterion/") && key.contains(&format!("/{machine}/"))),
             "{keys:?}"
         );
     }
@@ -1890,30 +2554,6 @@ mod tests {
     }
 
     #[test]
-    fn criterion_partition_uses_the_machine_key_override() {
-        let storage = MemoryStorage::new();
-        let options = CollectOptions {
-            machine_key: Some("ci-pool-a".to_owned()),
-            ..CollectOptions::default()
-        };
-        drive(
-            &options,
-            &FakeRunner::succeeding(),
-            &FakeProbe::new(),
-            &FakeOutput::with_criterion_case(),
-            &storage,
-        )
-        .unwrap();
-
-        let keys = storage.keys();
-        assert_eq!(keys.len(), 1, "{keys:?}");
-        assert!(
-            keys[0].contains("/criterion/x86_64-pc-windows-msvc/ci-pool-a/"),
-            "{keys:?}"
-        );
-    }
-
-    #[test]
     fn malformed_criterion_case_is_a_parse_error() {
         let storage = MemoryStorage::new();
         let error = drive(
@@ -1925,14 +2565,8 @@ mod tests {
         )
         .unwrap_err();
 
-        match error {
-            RunError::Parse { message } => {
-                assert!(message.contains("Criterion"), "{message}");
-                // The offending case directory is named so failures are actionable.
-                assert!(message.contains("new"), "{message}");
-            }
-            other => panic!("expected parse error, got {other:?}"),
-        }
+        let parse = error.find_source::<ParseOutputError>().unwrap();
+        assert_eq!(parse.path(), Path::new("criterion/grp/std/now/new"));
         assert!(storage.keys().is_empty());
     }
 
@@ -1948,13 +2582,8 @@ mod tests {
         )
         .unwrap_err();
 
-        match error {
-            RunError::Parse { message } => {
-                // The offending operation file is named so failures are actionable.
-                assert!(message.contains("allocate_vec.json"), "{message}");
-            }
-            other => panic!("expected parse error, got {other:?}"),
-        }
+        let parse = error.find_source::<ParseOutputError>().unwrap();
+        assert_eq!(parse.path(), Path::new("alloc_tracker/allocate_vec.json"));
         assert!(storage.keys().is_empty());
     }
 
@@ -1970,17 +2599,13 @@ mod tests {
         )
         .unwrap_err();
 
-        match error {
-            RunError::Parse { message } => {
-                assert!(message.contains("read_cell.json"), "{message}");
-            }
-            other => panic!("expected parse error, got {other:?}"),
-        }
+        let parse = error.find_source::<ParseOutputError>().unwrap();
+        assert_eq!(parse.path(), Path::new("all_the_time/read_cell.json"));
         assert!(storage.keys().is_empty());
     }
 
     #[test]
-    fn alloc_tracker_output_is_stored_in_a_synthetic_partition() {
+    fn alloc_tracker_output_is_stored_under_the_machine_key() {
         let storage = MemoryStorage::new();
         let outcome = drive(
             &CollectOptions::default(),
@@ -1996,12 +2621,13 @@ mod tests {
         };
         assert!(message.contains("Stored 1"), "{message}");
 
-        // Allocation counts are hardware-independent, so the partition is
-        // `synthetic` rather than a machine key.
+        // Allocation counts are machine-dependent (allocator behaviour varies by
+        // build and platform), so the partition is the machine fingerprint.
+        let machine = probe_machine_key();
         let keys = storage.keys();
         assert_eq!(keys.len(), 1, "{keys:?}");
         assert!(keys[0].contains("/alloc_tracker/"), "{keys:?}");
-        assert!(keys[0].contains("/synthetic/"), "{keys:?}");
+        assert!(keys[0].contains(&format!("/{machine}/")), "{keys:?}");
 
         let bytes = block_on(storage.get(&keys[0])).unwrap();
         let set = Run::from_json(&String::from_utf8(bytes).unwrap()).unwrap();
@@ -2064,12 +2690,8 @@ mod tests {
     #[test]
     fn all_the_time_output_is_partitioned_by_machine_key() {
         let storage = MemoryStorage::new();
-        let options = CollectOptions {
-            machine_key: Some("ci-pool-a".to_owned()),
-            ..CollectOptions::default()
-        };
         let outcome = drive(
-            &options,
+            &CollectOptions::default(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_all_the_time_operation(),
@@ -2083,10 +2705,11 @@ mod tests {
         assert!(message.contains("Stored 1"), "{message}");
 
         // Processor time depends on the host, so it is partitioned by machine key.
+        let machine = probe_machine_key();
         let keys = storage.keys();
         assert_eq!(keys.len(), 1, "{keys:?}");
         assert!(
-            keys[0].contains("/all_the_time/x86_64-pc-windows-msvc/ci-pool-a/"),
+            keys[0].contains(&format!("/all_the_time/x86_64-pc-windows-msvc/{machine}/")),
             "{keys:?}"
         );
 
@@ -2224,15 +2847,8 @@ mod tests {
         )
         .unwrap_err();
 
-        match error {
-            RunError::Parse { message } => {
-                assert!(message.contains("Callgrind"), "{message}");
-                // The offending file is named so multi-summary failures are
-                // actionable.
-                assert!(message.contains("summary.json"), "{message}");
-            }
-            other => panic!("expected parse error, got {other:?}"),
-        }
+        let parse = error.find_source::<ParseOutputError>().unwrap();
+        assert_eq!(parse.path(), Path::new("a/summary.json"));
         assert!(storage.keys().is_empty());
     }
 
@@ -2352,12 +2968,491 @@ mod tests {
     #[test]
     fn build_bench_argv_rejects_an_empty_command() {
         let error = build_bench_argv(&[], &CollectOptions::default()).unwrap_err();
-        match error {
-            RunError::Command { engine, message } => {
-                assert_eq!(engine, "cargo bench");
-                assert!(message.contains("empty"), "{message}");
-            }
-            other => panic!("expected command error, got {other:?}"),
+        let invalid = error.find_source::<InvalidCommandError>().unwrap();
+        assert_eq!(invalid.engine(), "cargo bench");
+        assert_eq!(invalid.problem(), "the benchmark command is empty");
+    }
+
+    // --- best-of-N orchestration ---------------------------------------------
+
+    /// Builds a `NonZeroUsize` for a test `--best-of` count.
+    fn best_of(n: usize) -> NonZeroUsize {
+        NonZeroUsize::new(n).expect("test best-of counts are non-zero")
+    }
+
+    /// A single-operation `all_the_time` harvest whose stored value is `slope`.
+    ///
+    /// The adapter maps `slope_processor_time_nanos` straight to the metric value,
+    /// so authoring a slope lets a test pin exactly what value a run contributes.
+    fn all_the_time_output(slope: f64) -> FakeOutput {
+        FakeOutput {
+            time: vec![RawOperationFile {
+                path: PathBuf::from("all_the_time/read_cell.json"),
+                content: format!(
+                    "{{\"operation\":\"read_cell\",\"total_iterations\":4,\
+                     \"total_processor_time_nanos\":80000000,\"span_count\":1,\
+                     \"slope_processor_time_nanos\":{slope}}}"
+                ),
+            }],
+            ..FakeOutput::default()
         }
+    }
+
+    /// An output source that hands out a different [`FakeOutput`] per invocation,
+    /// so `--best-of` runs can be given distinct per-run measurements.
+    ///
+    /// Each engine advances its own cursor through `runs`, mirroring how the real
+    /// harvest scans the freshly produced tree once per engine per run. Requesting
+    /// more runs than were supplied is a test-author error and panics.
+    struct SequencedOutput {
+        runs: Vec<FakeOutput>,
+        cursors: Arc<Mutex<HashMap<Engine, usize>>>,
+    }
+
+    impl SequencedOutput {
+        fn new(runs: Vec<FakeOutput>) -> Self {
+            Self {
+                runs,
+                cursors: Arc::default(),
+            }
+        }
+    }
+
+    impl BenchOutputSource for SequencedOutput {
+        async fn collect(
+            &self,
+            engine: Engine,
+            since: Option<SystemTime>,
+            reporter: &dyn Reporter,
+        ) -> io::Result<Harvest> {
+            let index = {
+                let mut cursors = self.cursors.lock().unwrap();
+                let cursor = cursors.entry(engine).or_insert(0);
+                let index = *cursor;
+                *cursor = cursor.saturating_add(1);
+                index
+            };
+            let output = self
+                .runs
+                .get(index)
+                .expect("a sequenced test must supply one output per requested run");
+            output.collect(engine, since, reporter).await
+        }
+    }
+
+    /// A runner that succeeds until a chosen 1-based invocation, then reports a
+    /// non-zero exit, to prove `--best-of` aborts fail-fast on any failing run.
+    struct FailOnNthRunner {
+        fail_on: usize,
+        calls: Arc<Mutex<usize>>,
+    }
+
+    impl FailOnNthRunner {
+        fn new(fail_on: usize) -> Self {
+            Self {
+                fail_on,
+                calls: Arc::default(),
+            }
+        }
+
+        fn call_count(&self) -> usize {
+            *self.calls.lock().unwrap()
+        }
+    }
+
+    impl BenchRunner for FailOnNthRunner {
+        async fn run_benches(
+            &self,
+            _argv: &[String],
+            _env: &[(String, String)],
+        ) -> io::Result<EngineStatus> {
+            let mut calls = self.calls.lock().unwrap();
+            *calls = calls.saturating_add(1);
+            let this_call = *calls;
+            Ok(EngineStatus {
+                success: this_call != self.fail_on,
+                code: (this_call == self.fail_on).then_some(101),
+            })
+        }
+    }
+
+    /// Drives `execute_collect` over arbitrary runner and output doubles.
+    ///
+    /// The other `drive*` helpers pin the concrete [`FakeRunner`]/[`FakeOutput`];
+    /// the best-of tests need a per-run runner or output, so this variant is
+    /// generic over both ports while keeping the rest of the wiring fixed. The
+    /// frozen clock hands every run the same start, which is fine because the fake
+    /// output ignores the harvest cutoff.
+    fn drive_best_of<R, O>(
+        options: &CollectOptions,
+        runner: &R,
+        probe: &FakeProbe,
+        output: &O,
+        storage: &MemoryStorage,
+        reporter: &dyn Reporter,
+    ) -> Result<RunOutcome, AppError>
+    where
+        R: BenchRunner,
+        O: BenchOutputSource,
+    {
+        let now = SystemTime::UNIX_EPOCH
+            .checked_add(Duration::from_secs(FROZEN_UNIX))
+            .unwrap();
+        let clock = Clock::new_frozen_at(now);
+        let env = |_name: &str| None::<String>;
+        let bench_command = mock_bench_command();
+        let deps = CollectDeps {
+            runner,
+            probe,
+            output,
+            storage: Some(storage),
+            clock: &clock,
+            env: &env,
+            project_id: "folo",
+            tool_version: "0.0.1",
+            target_root: Path::new("target"),
+            bench_command: &bench_command,
+            reporter,
+        };
+        block_on(execute_collect(options, &deps))
+    }
+
+    /// Reads the single stored object back as a [`Run`], failing if there is not
+    /// exactly one.
+    fn only_stored_run(storage: &MemoryStorage) -> Run {
+        let keys = storage.keys();
+        assert_eq!(
+            keys.len(),
+            1,
+            "expected exactly one stored object: {keys:?}"
+        );
+        let bytes = block_on(storage.get(&keys[0])).unwrap();
+        Run::from_json(&String::from_utf8(bytes).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn best_of_runs_the_suite_n_times_and_stores_the_minimum_value() {
+        // Three runs measure the same case at 30, 10 and 20 ns; the stored value is
+        // the minimum (10), discarding the two slower, interference-perturbed runs.
+        let runner = FakeRunner::succeeding();
+        let probe = FakeProbe::new();
+        let output = SequencedOutput::new(vec![
+            all_the_time_output(30.0),
+            all_the_time_output(10.0),
+            all_the_time_output(20.0),
+        ]);
+        let storage = MemoryStorage::new();
+        let reporter = StderrReporter::new(false);
+        let options = CollectOptions {
+            best_of: best_of(3),
+            ..CollectOptions::default()
+        };
+
+        drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap();
+
+        assert_eq!(
+            runner.calls.lock().unwrap().len(),
+            3,
+            "the suite must run once per best-of count"
+        );
+
+        let run = only_stored_run(&storage);
+        assert_eq!(run.results.len(), 1);
+        assert_eq!(run.results[0].metrics.len(), 1);
+        assert_eq!(run.results[0].metrics[0].value, 10.0);
+    }
+
+    #[test]
+    fn best_of_selects_each_metric_independently() {
+        // Two cases, each minimized on its own: read_cell wins on run 2 (5 < 30),
+        // write_cell wins on run 1 (7 < 40), so a stored result blends metrics from
+        // different physical runs.
+        fn two_ops(read: f64, write: f64) -> FakeOutput {
+            FakeOutput {
+                time: vec![
+                    RawOperationFile {
+                        path: PathBuf::from("all_the_time/read_cell.json"),
+                        content: format!(
+                            "{{\"operation\":\"read_cell\",\
+                             \"slope_processor_time_nanos\":{read}}}"
+                        ),
+                    },
+                    RawOperationFile {
+                        path: PathBuf::from("all_the_time/write_cell.json"),
+                        content: format!(
+                            "{{\"operation\":\"write_cell\",\
+                             \"slope_processor_time_nanos\":{write}}}"
+                        ),
+                    },
+                ],
+                ..FakeOutput::default()
+            }
+        }
+
+        let runner = FakeRunner::succeeding();
+        let probe = FakeProbe::new();
+        let output = SequencedOutput::new(vec![two_ops(30.0, 7.0), two_ops(5.0, 40.0)]);
+        let storage = MemoryStorage::new();
+        let reporter = StderrReporter::new(false);
+        let options = CollectOptions {
+            best_of: best_of(2),
+            ..CollectOptions::default()
+        };
+
+        drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap();
+
+        let run = only_stored_run(&storage);
+        let mut values: Vec<(String, f64)> = run
+            .results
+            .iter()
+            .map(|result| (result.id.to_string(), result.metrics[0].value))
+            .collect();
+        values.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            values,
+            vec![
+                ("read_cell".to_owned(), 5.0),
+                ("write_cell".to_owned(), 7.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn best_of_reports_provenance_of_the_kept_sample() {
+        // The verbose log must explain each choice: that a best-of pass is running,
+        // each invocation, and — per metric — the samples seen and which run
+        // supplied the kept minimum, with the winner bracketed.
+        let runner = FakeRunner::succeeding();
+        let probe = FakeProbe::new();
+        let output =
+            SequencedOutput::new(vec![all_the_time_output(30.0), all_the_time_output(10.0)]);
+        let storage = MemoryStorage::new();
+        let reporter = RecordingReporter::new();
+        let options = CollectOptions {
+            best_of: best_of(2),
+            ..CollectOptions::default()
+        };
+
+        drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap();
+
+        assert!(
+            reporter.contains("best-of collection: running the suite 2 times"),
+            "expected an announcement of the best-of pass, got {:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains("best-of run 1/2"),
+            "expected a per-run note, got {:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains("best-of samples 30, [10] (kept run 2)"),
+            "expected a provenance note naming the kept sample, got {:?}",
+            reporter.notes()
+        );
+    }
+
+    #[test]
+    fn a_single_run_emits_no_best_of_notes() {
+        // With the default single run there is nothing to choose, so none of the
+        // best-of verbose notes appear — the guards that suppress them at `N == 1`
+        // must hold.
+        let runner = FakeRunner::succeeding();
+        let probe = FakeProbe::new();
+        let output = all_the_time_output(20.0);
+        let storage = MemoryStorage::new();
+        let reporter = RecordingReporter::new();
+
+        drive_best_of(
+            &CollectOptions::default(),
+            &runner,
+            &probe,
+            &output,
+            &storage,
+            &reporter,
+        )
+        .unwrap();
+
+        assert!(
+            !reporter.contains("best-of collection"),
+            "a single run must not announce a best-of pass, got {:?}",
+            reporter.notes()
+        );
+        assert!(
+            !reporter.contains("best-of run"),
+            "a single run must not emit per-run best-of notes, got {:?}",
+            reporter.notes()
+        );
+        assert!(
+            !reporter.contains("best-of samples"),
+            "a single run has no samples to choose between, got {:?}",
+            reporter.notes()
+        );
+    }
+
+    #[test]
+    fn best_of_fails_fast_when_any_run_fails() {
+        // The second of three runs exits non-zero, so collection aborts there
+        // (never reaching a third run) and stores nothing.
+        let runner = FailOnNthRunner::new(2);
+        let probe = FakeProbe::new();
+        let output = SequencedOutput::new(vec![
+            all_the_time_output(30.0),
+            all_the_time_output(10.0),
+            all_the_time_output(20.0),
+        ]);
+        let storage = MemoryStorage::new();
+        let reporter = StderrReporter::new(false);
+        let options = CollectOptions {
+            best_of: best_of(3),
+            ..CollectOptions::default()
+        };
+
+        let error =
+            drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap_err();
+
+        let failure = error.find_source::<EngineFailedError>().unwrap();
+        assert_eq!(failure.engine(), "cargo bench");
+        assert_eq!(failure.code(), 101);
+        assert_eq!(
+            runner.call_count(),
+            2,
+            "the run after the failure must not start"
+        );
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn best_of_rejects_a_case_missing_from_a_later_run() {
+        // Run 1 measures read_cell but run 2 does not, so the runs did not exercise
+        // the same work: a hard error that stores nothing.
+        let runner = FakeRunner::succeeding();
+        let probe = FakeProbe::new();
+        let output = SequencedOutput::new(vec![all_the_time_output(10.0), FakeOutput::default()]);
+        let storage = MemoryStorage::new();
+        let reporter = StderrReporter::new(false);
+        let options = CollectOptions {
+            best_of: best_of(2),
+            ..CollectOptions::default()
+        };
+
+        let error =
+            drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap_err();
+
+        let inconsistent = error.find_source::<InconsistentRunsError>().unwrap();
+        assert_eq!(inconsistent.engine(), Engine::AllTheTime.to_string());
+        assert!(error.find_source::<AggregateError>().is_some());
+        assert!(storage.keys().is_empty());
+    }
+
+    #[test]
+    fn best_of_with_no_store_runs_every_time_but_stores_nothing() {
+        let runner = FakeRunner::succeeding();
+        let probe = FakeProbe::new();
+        let output =
+            SequencedOutput::new(vec![all_the_time_output(30.0), all_the_time_output(10.0)]);
+        let storage = MemoryStorage::new();
+        let reporter = StderrReporter::new(false);
+        let options = CollectOptions {
+            best_of: best_of(2),
+            no_store: true,
+            ..CollectOptions::default()
+        };
+
+        let outcome =
+            drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap();
+
+        assert_eq!(runner.calls.lock().unwrap().len(), 2);
+        assert!(storage.keys().is_empty());
+        let RunOutcome::Completed { message } = outcome else {
+            panic!("expected completion");
+        };
+        assert!(message.contains("nothing stored"), "{message}");
+    }
+
+    #[test]
+    fn best_of_one_stores_the_single_run_unchanged() {
+        // `--best-of 1` is the default single run: the lone sample is stored as-is,
+        // with no minimization to perform.
+        let runner = FakeRunner::succeeding();
+        let probe = FakeProbe::new();
+        let output = all_the_time_output(20.0);
+        let storage = MemoryStorage::new();
+        let reporter = StderrReporter::new(false);
+        let options = CollectOptions {
+            best_of: best_of(1),
+            ..CollectOptions::default()
+        };
+
+        drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap();
+
+        assert_eq!(runner.calls.lock().unwrap().len(), 1);
+        let run = only_stored_run(&storage);
+        assert_eq!(run.results[0].metrics[0].value, 20.0);
+    }
+
+    #[test]
+    fn the_stored_run_records_the_repetition_count_it_was_reduced_from() {
+        // The stored value is the minimum of the repetitions, and that minimum falls
+        // as the count rises, so the count is part of the measurement protocol and
+        // must travel with the run. Recorded from the repetitions that actually
+        // produced the harvests, so it can never claim a run that did not happen.
+        for count in [1_usize, 3] {
+            let runner = FakeRunner::succeeding();
+            let probe = FakeProbe::new();
+            let output = SequencedOutput::new(
+                [30.0, 10.0, 20.0]
+                    .into_iter()
+                    .take(count)
+                    .map(all_the_time_output)
+                    .collect(),
+            );
+            let storage = MemoryStorage::new();
+            let reporter = StderrReporter::new(false);
+            let options = CollectOptions {
+                best_of: best_of(count),
+                ..CollectOptions::default()
+            };
+
+            drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap();
+
+            let run = only_stored_run(&storage);
+            assert_eq!(run.context.best_of, NonZero::new(count));
+
+            // The count survives the stored representation, which is what a later
+            // reader actually parses.
+            let restored = Run::from_json(&run.to_json().unwrap()).unwrap();
+            assert_eq!(restored.context.best_of, NonZero::new(count));
+        }
+    }
+
+    #[test]
+    fn the_recorded_repetition_count_is_explained_in_the_verbose_log() {
+        // The verbose trail must state the count recorded with the run and why it is
+        // recorded, so the stored measurement protocol is reconstructable from the
+        // log rather than only from the object.
+        let runner = FakeRunner::succeeding();
+        let probe = FakeProbe::new();
+        let output =
+            SequencedOutput::new(vec![all_the_time_output(30.0), all_the_time_output(10.0)]);
+        let storage = MemoryStorage::new();
+        let reporter = RecordingReporter::new();
+        let options = CollectOptions {
+            best_of: best_of(2),
+            ..CollectOptions::default()
+        };
+
+        drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap();
+
+        assert!(
+            reporter.contains("recording best-of=2 on the stored run"),
+            "expected a note naming the recorded count, got {:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains("minimum of 2 samples"),
+            "expected the note to explain what the count means, got {:?}",
+            reporter.notes()
+        );
     }
 }

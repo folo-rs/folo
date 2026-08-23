@@ -2,7 +2,7 @@
 name = "nm"
 description = "Minimalistic high-performance metrics collection in highly concurrent environments"
 publish = true
-version = "0.1.42"
+version = "0.1.44"
 
 authors.workspace = true
 edition.workspace = true
@@ -12,6 +12,13 @@ rust-version.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true
+
+# Baseline of external types intentionally exposed in the public API.
+# `nm` is the public shell over its own `nm_impl` partition, so re-exporting any
+# impl type is by-design layering, not accidental exposure.
+# Ref: docs/external-types.md; docs/impl-crate-split.md.
+[package.metadata.cargo_check_external_types]
+allowed_external_types = ["nm_impl::*"]
 
 [dependencies]
 nm_impl = { workspace = true }

@@ -3,9 +3,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, LazyLock, RwLock};
 use std::thread::{self, ThreadId};
 
-use foldhash::{HashMap, HashMapExt};
-
-use crate::{ERR_POISONED_LOCK, EventName, ObservationBagSync, Observations};
+use crate::{ERR_POISONED_LOCK, EventName, HashMap, ObservationBagSync, Observations};
 
 type ObservationBagMap = HashMap<EventName, Arc<ObservationBagSync>>;
 
@@ -25,7 +23,7 @@ pub(crate) struct LocalEventRegistry<'g> {
 impl<'g> LocalEventRegistry<'g> {
     pub(crate) fn new(global_registry: &'g GlobalEventRegistry) -> Self {
         Self {
-            observation_bags: RefCell::new(HashMap::new()),
+            observation_bags: RefCell::new(HashMap::default()),
             thread_id: thread::current().id(),
             global_registry,
             _single_threaded: PhantomData,
@@ -86,8 +84,8 @@ impl GlobalEventRegistry {
     pub(crate) fn new() -> Self {
         Self {
             state: RwLock::new(GlobalObservationBagsState {
-                thread_observation_bags: HashMap::new(),
-                archived_observation_bags: HashMap::new(),
+                thread_observation_bags: HashMap::default(),
+                archived_observation_bags: HashMap::default(),
             }),
         }
     }
@@ -114,7 +112,7 @@ impl GlobalEventRegistry {
         let thread_bags = state
             .thread_observation_bags
             .entry(thread_id)
-            .or_insert_with(|| RwLock::new(HashMap::new()));
+            .or_insert_with(|| RwLock::new(HashMap::default()));
 
         register_core(thread_id, name, observation_bag, thread_bags);
     }

@@ -20,11 +20,11 @@ use crate::process::capture;
 /// its subject line.
 ///
 /// `analyze` orders a series by first-parent topology and filters it by the
-/// `--since`/`--until` window. The window is a per-commit property — a commit's
+/// `--since` cutoff. The cutoff is a per-commit property — a commit's
 /// committer date — that topology alone decides, letting out-of-window objects be
 /// skipped before any stored object is fetched. `committer_time` is `None` only
 /// when `git` emitted an unparseable date, which a real commit never does; such a
-/// commit is treated as in-window (never excluded by the window).
+/// commit is treated as in-window (never excluded by the cutoff).
 ///
 /// `subject` is the commit's title (`git`'s `%s`), harvested on the same walk so
 /// `examine` can label each data point with what its commit changed. It is empty
@@ -67,7 +67,7 @@ pub trait GitHistory {
     ///
     /// This is the linear mainline of the ref — the timeline `analyze` orders a
     /// series by. Each commit carries its committer timestamp, which `analyze`
-    /// uses to apply the `--since`/`--until` window before fetching any object,
+    /// uses to apply the `--since` cutoff before fetching any object,
     /// and its subject line, which `examine` uses to label each data point.
     /// An unresolvable ref yields an empty list.
     fn first_parent(
@@ -291,6 +291,10 @@ mod fake {
     /// which is exactly the topology `analyze` consults: first-parent ancestry and
     /// the merge-base along it. Named refs (including `HEAD`) point at commits.
     ///
+    /// Each query can be made to fail instead of answering (`fail_resolve` and its
+    /// siblings), so a caller's per-operation error handling can be told apart from
+    /// its neighbours' in a test.
+    ///
     /// It deliberately cannot represent a merge commit (a commit has a single
     /// parent), so its [`merge_base`](GitHistory::merge_base) walks first-parent
     /// chains only and diverges from real `git merge-base` (full DAG) on
@@ -311,6 +315,25 @@ mod fake {
         default_branch: Option<String>,
         /// Whether the working tree has uncommitted changes.
         dirty: bool,
+        /// Which queries answer with an I/O error instead of a result.
+        failures: Failures,
+    }
+
+    /// Which of the fake's queries fail, one flag per [`GitHistory`] method.
+    #[derive(Clone, Debug, Default)]
+    struct Failures {
+        resolve: bool,
+        default_branch: bool,
+        merge_base: bool,
+        first_parent: bool,
+        committer_time: bool,
+        is_dirty: bool,
+    }
+
+    /// The error a failing query answers with. It names the query so a test that
+    /// wires up the wrong one is diagnosable from the message alone.
+    fn injected(query: &str) -> io::Error {
+        io::Error::other(format!("injected git {query} failure"))
     }
 
     impl FakeGitHistory {
@@ -324,6 +347,7 @@ mod fake {
                 subjects: HashMap::new(),
                 default_branch: None,
                 dirty: false,
+                failures: Failures::default(),
             }
         }
 
@@ -381,6 +405,45 @@ mod fake {
             self
         }
 
+        /// Makes [`resolve`](GitHistory::resolve) fail instead of answering.
+        pub fn fail_resolve(&mut self) -> &mut Self {
+            self.failures.resolve = true;
+            self
+        }
+
+        /// Makes [`default_branch`](GitHistory::default_branch) fail instead of
+        /// answering.
+        pub fn fail_default_branch(&mut self) -> &mut Self {
+            self.failures.default_branch = true;
+            self
+        }
+
+        /// Makes [`merge_base`](GitHistory::merge_base) fail instead of answering.
+        pub fn fail_merge_base(&mut self) -> &mut Self {
+            self.failures.merge_base = true;
+            self
+        }
+
+        /// Makes [`first_parent`](GitHistory::first_parent) fail instead of
+        /// answering.
+        pub fn fail_first_parent(&mut self) -> &mut Self {
+            self.failures.first_parent = true;
+            self
+        }
+
+        /// Makes [`committer_time`](GitHistory::committer_time) fail instead of
+        /// answering.
+        pub fn fail_committer_time(&mut self) -> &mut Self {
+            self.failures.committer_time = true;
+            self
+        }
+
+        /// Makes [`is_dirty`](GitHistory::is_dirty) fail instead of answering.
+        pub fn fail_is_dirty(&mut self) -> &mut Self {
+            self.failures.is_dirty = true;
+            self
+        }
+
         /// Resolves a ref or raw commit ID to a commit ID, without async.
         fn resolve_sync(&self, reference: &str) -> Option<String> {
             if let Some(commit_id) = self.refs.get(reference) {
@@ -421,14 +484,23 @@ mod fake {
 
     impl GitHistory for FakeGitHistory {
         fn resolve(&self, reference: &str) -> impl Future<Output = io::Result<Option<String>>> {
+            if self.failures.resolve {
+                return ready(Err(injected("resolve")));
+            }
             ready(Ok(self.resolve_sync(reference)))
         }
 
         fn default_branch(&self) -> impl Future<Output = io::Result<Option<String>>> {
+            if self.failures.default_branch {
+                return ready(Err(injected("default-branch")));
+            }
             ready(Ok(self.default_branch.clone()))
         }
 
         fn merge_base(&self, a: &str, b: &str) -> impl Future<Output = io::Result<Option<String>>> {
+            if self.failures.merge_base {
+                return ready(Err(injected("merge-base")));
+            }
             let base = self.merge_base_sync(a, b);
             ready(Ok(base))
         }
@@ -437,6 +509,9 @@ mod fake {
             &self,
             reference: &str,
         ) -> impl Future<Output = io::Result<Vec<FirstParentCommit>>> {
+            if self.failures.first_parent {
+                return ready(Err(injected("first-parent")));
+            }
             let Some(commit_id) = self.resolve_sync(reference) else {
                 return ready(Ok(Vec::new()));
             };
@@ -457,6 +532,9 @@ mod fake {
             &self,
             reference: &str,
         ) -> impl Future<Output = io::Result<Option<Timestamp>>> {
+            if self.failures.committer_time {
+                return ready(Err(injected("committer-time")));
+            }
             let time = self
                 .resolve_sync(reference)
                 .and_then(|commit_id| self.times.get(&commit_id).copied());
@@ -464,6 +542,9 @@ mod fake {
         }
 
         fn is_dirty(&self) -> impl Future<Output = io::Result<bool>> {
+            if self.failures.is_dirty {
+                return ready(Err(injected("is-dirty")));
+            }
             ready(Ok(self.dirty))
         }
     }
@@ -472,6 +553,8 @@ mod fake {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::array;
+
     use futures::executor::block_on;
 
     use super::*;
@@ -736,5 +819,42 @@ mod tests {
             .branch("b", "b0");
         assert_eq!(block_on(git.merge_base("a", "b")).unwrap(), None);
         assert_eq!(block_on(git.merge_base("a", "absent")).unwrap(), None);
+    }
+
+    /// Whether each query fails, in the same order as the knobs below.
+    fn query_failures(git: &FakeGitHistory) -> [bool; 6] {
+        [
+            block_on(git.resolve("master")).is_err(),
+            block_on(git.default_branch()).is_err(),
+            block_on(git.merge_base("master", "feature")).is_err(),
+            block_on(git.first_parent("master")).is_err(),
+            block_on(git.committer_time("master")).is_err(),
+            block_on(git.is_dirty()).is_err(),
+        ]
+    }
+
+    #[test]
+    fn fake_failure_knobs_fail_only_their_own_query() {
+        let knobs: [fn(&mut FakeGitHistory) -> &mut FakeGitHistory; 6] = [
+            FakeGitHistory::fail_resolve,
+            FakeGitHistory::fail_default_branch,
+            FakeGitHistory::fail_merge_base,
+            FakeGitHistory::fail_first_parent,
+            FakeGitHistory::fail_committer_time,
+            FakeGitHistory::fail_is_dirty,
+        ];
+
+        assert_eq!(query_failures(&fixture()), [false; 6]);
+
+        // Applying one knob at a time and probing every query pins each knob to the
+        // query it names, so one wired to the wrong flag fails this test rather than
+        // silently misdirecting a caller that expects a specific failure.
+        for (index, knob) in knobs.into_iter().enumerate() {
+            let mut git = fixture();
+            knob(&mut git);
+
+            let expected = array::from_fn(|query| query == index);
+            assert_eq!(query_failures(&git), expected);
+        }
     }
 }

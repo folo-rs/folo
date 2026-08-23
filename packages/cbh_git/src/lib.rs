@@ -33,4 +33,6 @@ pub use git::parse_git_info;
 #[cfg_attr(docsrs, doc(cfg(feature = "private-test-util")))]
 pub use git_history::FakeGitHistory;
 pub use git_history::{FirstParentCommit, GitHistory, SystemGitHistory};
-pub use process::{BenchRunner, CommandOutput, EngineStatus, TokioBenchRunner, capture};
+pub use process::{
+    BenchRunner, CommandOutput, EngineStatus, TokioBenchRunner, capture, capture_in_worktree,
+};

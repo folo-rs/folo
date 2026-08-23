@@ -1,9 +1,9 @@
 use crate::harness::*;
 
 /// `examine` pivots one `(benchmark, metric)` series into its raw per-commit data
-/// points: one JSON row per recorded observation, oldest first by git topology,
-/// pairing each value with the commit it was measured against and that commit's
-/// title.
+/// points: one JSON row per commit in the listed range, oldest first by git
+/// topology, pairing each value with the commit it was measured against and that
+/// commit's title.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn examine_pivots_a_rising_history_into_points() {
@@ -26,7 +26,11 @@ async fn examine_pivots_a_rising_history_into_points() {
     let sets = parsed["sets"].as_array().unwrap();
     assert_eq!(sets.len(), 1, "one comparable set: {message}");
     let points = sets[0]["points"].as_array().unwrap();
-    assert_eq!(points.len(), 6, "one point per commit: {message}");
+    assert_eq!(
+        points.len(),
+        MIN_SERIES_POINTS,
+        "one point per commit: {message}"
+    );
 
     // The values follow the seeded rising history in topology order, each paired
     // with its commit's title (the commit message the harness stamps).
@@ -34,20 +38,18 @@ async fn examine_pivots_a_rising_history_into_points() {
         .iter()
         .map(|point| point["value"].as_f64().unwrap())
         .collect();
-    assert_eq!(
-        values,
-        vec![100.0, 100.0, 100.0, 130.0, 130.0, 130.0],
-        "{message}"
-    );
-    let titles: Vec<&str> = points
-        .iter()
-        .map(|point| point["title"].as_str().unwrap())
+    let expected_values: Vec<f64> = std::iter::repeat_n(100.0, MIN_REGIME)
+        .chain(std::iter::repeat_n(130.0, MIN_REGIME))
         .collect();
-    assert_eq!(
-        titles,
-        vec!["c1", "c2", "c3", "c4", "c5", "c6"],
-        "{message}"
-    );
+    assert_eq!(values, expected_values, "{message}");
+    let titles: Vec<String> = points
+        .iter()
+        .map(|point| point["title"].as_str().unwrap().to_owned())
+        .collect();
+    let expected_titles: Vec<String> = (1..=MIN_SERIES_POINTS)
+        .map(|index| format!("c{index}"))
+        .collect();
+    assert_eq!(titles, expected_titles, "{message}");
     assert!(
         points.iter().all(|point| point["dirty"] == false),
         "every seeded run is clean: {message}"
@@ -94,16 +96,31 @@ async fn examine_renders_a_text_pivot_with_titles() {
         message.contains(&short_head),
         "short head id present: {message}"
     );
-    // Values and their titles both appear.
+    // Values and their titles both appear. The tip is checked as a whole row — its
+    // short commit paired with its value and title — with the title derived from
+    // the fixture length, so raising the evidence gate cannot leave this asserting
+    // an interior commit while the real tip goes unrendered.
     assert!(message.contains("100"), "{message}");
-    assert!(message.contains("130"), "{message}");
+    let tip_title = format!("c{MIN_SERIES_POINTS}");
     assert!(
-        message.contains("c6"),
-        "the tip's title is shown: {message}"
+        message.contains(&format!("  {short_head}  130  {tip_title}\n")),
+        "the tip's point row is shown: {message}"
     );
+    // The series is charted before its data points: the rasciigraph axis marker
+    // appears ahead of the first point row. Match c1's title with its leading
+    // column gap and trailing newline so the short commit hash (which can contain
+    // "c1") cannot be mistaken for the point row.
+    let axis = message
+        .find('┤')
+        .or_else(|| message.find('┼'))
+        .expect("a chart leads the points");
+    let first_point = message
+        .find("  c1\n")
+        .expect("the first point row is present");
+    assert!(axis < first_point, "a chart leads the points: {message}");
 }
 
-/// `examine` renders a per-set Markdown table with a row per observation.
+/// `examine` renders a per-set Markdown table with a row per listed commit.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn examine_renders_a_markdown_table() {
@@ -126,12 +143,18 @@ async fn examine_renders_a_markdown_table() {
         markdown.contains("# Data points for nm/nm::observe/pull"),
         "{markdown}"
     );
-    assert!(
-        markdown.contains("| Commit | Value | Kind | Title |"),
-        "the table header is present: {markdown}"
-    );
+    let table = markdown
+        .find("| Commit | Value | Kind | Title |")
+        .expect("the table header is present");
     assert!(markdown.contains("| clean | c1 |"), "{markdown}");
     assert!(markdown.contains("130"), "{markdown}");
+    // The two-point series is charted, fenced as a `text` block before the table.
+    assert!(
+        markdown.contains('┤') || markdown.contains('┼'),
+        "a chart is drawn: {markdown}"
+    );
+    let fence = markdown.find("```text").expect("the chart is fenced");
+    assert!(fence < table, "the chart precedes the table: {markdown}");
 }
 
 /// `examine` names one metric, isolating it from the other metrics recorded on the
@@ -171,17 +194,31 @@ async fn examine_selects_only_the_named_metric() {
 }
 
 /// Like `analyze`, `examine` repeats per matching discriminant set and honors the
-/// facet filters: with two comparable pools present, a `--target-triple` scopes the
+/// discriminant filters: with two comparable pools present, a `--target-triple` scopes the
 /// pivot to just the matching set.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn examine_facet_selection_mirrors_analyze() {
+async fn examine_discriminant_selection_mirrors_analyze() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_callgrind_in("x86_64-unknown-linux-gnu", "synthetic", "c1", 100.0);
-    workspace.seed_callgrind_in("x86_64-pc-windows-msvc", "synthetic", "c1", 50.0);
+    workspace.seed_callgrind_in(
+        "x86_64-unknown-linux-gnu",
+        HARNESS_AUTO_MACHINE_KEY,
+        "c1",
+        100.0,
+    );
+    workspace.seed_callgrind_in(
+        "x86_64-pc-windows-msvc",
+        HARNESS_AUTO_MACHINE_KEY,
+        "c1",
+        50.0,
+    );
 
-    // Unfiltered, both comparable sets pivot.
+    // Across triples (`--target-triple all`), both comparable sets pivot. An
+    // auto-detected triple would scope to the host's set alone — every set obeys the
+    // target-triple filter — so widening to `all` is what surfaces both pools here.
+    // Both pools share the harness's auto-detected machine key, so the machine-key
+    // discriminant admits them.
     let message = workspace
         .drive_json(&[
             "examine",
@@ -189,6 +226,8 @@ async fn examine_facet_selection_mirrors_analyze() {
             "nm/nm::observe/pull",
             "--metric",
             "instruction_count",
+            "--target-triple",
+            "all",
         ])
         .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
@@ -383,6 +422,105 @@ async fn examine_dirty_tree_on_the_base_warns() {
     assert!(parsed["warning"].is_null(), "{message}");
 }
 
+/// A commit inside the listed range that recorded nothing for the series is listed
+/// as `n/a` rather than skipped, so the table represents the same commits the
+/// leading chart draws columns for.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn examine_lists_commits_without_data_as_n_a() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
+    workspace.commit_dated("2024-01-02", "c2");
+    workspace.commit_dated("2024-01-03", "c3");
+    workspace.seed_callgrind("c3", 130.0);
+
+    let message = workspace
+        .drive_json(&[
+            "examine",
+            "--benchmark",
+            "nm/nm::observe/pull",
+            "--metric",
+            "instruction_count",
+        ])
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
+    let points = parsed["sets"][0]["points"].as_array().unwrap();
+    assert_eq!(points.len(), 3, "one row per commit c1..=c3: {message}");
+    assert_eq!(points[0]["value"].as_f64().unwrap(), 100.0, "{message}");
+    assert!(
+        points[1]["value"].is_null(),
+        "c2 recorded nothing: {message}"
+    );
+    assert!(
+        points[1].get("dirty").is_none(),
+        "a data-less entry carries no cleanliness flag: {message}"
+    );
+    assert_eq!(
+        points[1]["title"], "c2",
+        "the data-less row still names its commit: {message}"
+    );
+    assert_eq!(points[2]["value"].as_f64().unwrap(), 130.0, "{message}");
+
+    // The text pivot lists the same three commits, the middle one without a value.
+    let RunOutcome::Completed { message } = workspace
+        .drive(&[
+            "examine",
+            "--benchmark",
+            "nm/nm::observe/pull",
+            "--metric",
+            "instruction_count",
+        ])
+        .await
+        .unwrap()
+    else {
+        panic!("expected a completed outcome");
+    };
+    assert!(message.contains("n/a"), "{message}");
+}
+
+/// The listed range spans the merge-base on a feature branch: base-side and
+/// branch-side commits are listed alike, and the ones carrying no data read `n/a`.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn examine_lists_the_range_across_a_merge_base() {
+    let workspace = Workspace::repo(&storage_only_config());
+    workspace.commit_dated("2024-01-01", "c1");
+    workspace.seed_callgrind("c1", 100.0);
+    workspace.commit_dated("2024-01-02", "c2");
+    workspace.checkout_new_branch("feature");
+    workspace.commit_dated("2024-01-03", "f1");
+    workspace.commit_dated("2024-01-04", "f2");
+    workspace.seed_callgrind("f2", 130.0);
+
+    let message = workspace
+        .drive_json(&[
+            "examine",
+            "--benchmark",
+            "nm/nm::observe/pull",
+            "--metric",
+            "instruction_count",
+        ])
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
+    let points = parsed["sets"][0]["points"].as_array().unwrap();
+    let titles: Vec<&str> = points
+        .iter()
+        .map(|point| point["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        titles,
+        vec!["c1", "c2", "f1", "f2"],
+        "the range runs from the earliest observation through the branch tip: {message}"
+    );
+    let values: Vec<Option<f64>> = points.iter().map(|point| point["value"].as_f64()).collect();
+    assert_eq!(
+        values,
+        vec![Some(100.0), None, None, Some(130.0)],
+        "{message}"
+    );
+}
+
 /// An unknown `--metric` is rejected up front, before any load, listing the valid
 /// names so the maintainer can correct the typo.
 #[tokio::test]
@@ -402,14 +540,7 @@ async fn examine_rejects_an_unknown_metric() {
         ])
         .await
         .unwrap_err();
-    let RunError::Analyze { message } = error else {
-        panic!("expected an analyze error, got {error:?}");
-    };
-    assert!(message.contains("unknown metric"), "{message}");
-    assert!(
-        message.contains("instruction_count"),
-        "the error lists valid names: {message}"
-    );
+    assert!(error.find_source::<cbh_analyze::AnalyzeError>().is_some());
 }
 
 /// An unmatched benchmark id is not an error: runs enter the analysis but none
@@ -456,10 +587,7 @@ async fn examine_without_a_repository_errors() {
         ])
         .await
         .unwrap_err();
-    let RunError::Analyze { message } = error else {
-        panic!("expected an analyze error, got {error:?}");
-    };
-    assert!(message.contains("requires a git repository"), "{message}");
+    assert!(error.find_source::<cbh_analyze::AnalyzeError>().is_some());
 }
 
 /// The benchmark id names the series to pivot, so it must be present: an empty
@@ -481,13 +609,7 @@ async fn examine_rejects_an_empty_benchmark() {
         ])
         .await
         .unwrap_err();
-    let RunError::Analyze { message } = error else {
-        panic!("expected an analyze error, got {error:?}");
-    };
-    assert!(
-        message.contains("--benchmark must not be empty"),
-        "{message}"
-    );
+    assert!(error.find_source::<cbh_analyze::AnalyzeError>().is_some());
 }
 
 /// `--no-text` suppresses the text report, so with no file output requested there
@@ -510,10 +632,7 @@ async fn examine_requires_an_output() {
         ])
         .await
         .unwrap_err();
-    let RunError::Analyze { message } = error else {
-        panic!("expected an analyze error, got {error:?}");
-    };
-    assert!(message.contains("no output selected"), "{message}");
+    assert!(error.find_source::<cbh_analyze::AnalyzeError>().is_some());
 }
 
 /// When runs exist but the selection window excludes them all, `examine` gives the

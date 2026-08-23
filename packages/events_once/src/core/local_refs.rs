@@ -1,5 +1,6 @@
 use std::alloc::{Layout, alloc, dealloc};
 use std::any::type_name;
+use std::cell::UnsafeCell;
 use std::fmt;
 use std::mem::MaybeUninit;
 use std::ops::Deref;
@@ -8,34 +9,87 @@ use std::ptr::NonNull;
 use crate::LocalEvent;
 
 /// Enables a sender or receiver to reference the event that connects them.
-pub(crate) trait LocalRef<T>: Deref<Target = LocalEvent<T>> + fmt::Debug {
-    /// Releases the event, asserting that the last endpoint has been dropped
-    /// and nothing will access the event after this call.
-    fn release_event(&self);
+///
+/// An implementation owns the storage strategy of one event: it turns the storage into the
+/// shared reference that every event operation goes through, and it releases that storage once
+/// the state machine has handed cleanup responsibility to a single endpoint.
+///
+/// Implementations are plain handles that carry no pinning requirements of their own, hence the
+/// `Unpin` bound, which is what lets a pinned endpoint be projected to its core without unsafe
+/// code even when the payload is `!Unpin`.
+///
+/// # Safety
+///
+/// An implementation must guarantee that:
+///
+/// * `Deref::deref()` returns a reference to one specific event that is initialized, aligned
+///   and located at a stable address, and that stays valid for as long as any endpoint holding
+///   the reference can access it.
+/// * No exclusive reference to that event exists for that duration, so the only aliasing is
+///   between shared references, which is what the event's `UnsafeCell` interior mutability
+///   requires.
+/// * `release_event()` releases the storage in whatever manner the storage strategy requires
+///   and does not access the event afterwards.
+pub(crate) unsafe trait LocalRef<T>:
+    Deref<Target = UnsafeCell<LocalEvent<T>>> + fmt::Debug + Unpin
+{
+    /// Releases the event.
+    ///
+    /// # Safety
+    ///
+    /// The caller must have observed the terminal state transition that granted it sole
+    /// responsibility for cleaning up the event (see `state.rs`), and must not access the event
+    /// through this or any other reference afterwards.
+    unsafe fn release_event(&self);
 }
 
 /// References an event stored anywhere, via raw pointer.
+///
+/// The storage belongs to whoever placed the event into it, so releasing the event here does not
+/// release any memory.
 pub(crate) struct PtrLocalRef<T> {
-    event: NonNull<LocalEvent<T>>,
+    event: NonNull<UnsafeCell<LocalEvent<T>>>,
 }
 
 impl<T: 'static> PtrLocalRef<T> {
+    /// Creates a reference to an event that lives in storage owned by someone else.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that the pointer references an initialized event that remains
+    /// valid, remains at a stable address and is only ever accessed through shared references,
+    /// for as long as any endpoint created from this reference can access it.
     #[must_use]
-    pub(crate) fn new(event: NonNull<LocalEvent<T>>) -> Self {
+    pub(crate) unsafe fn new(event: NonNull<UnsafeCell<LocalEvent<T>>>) -> Self {
         Self { event }
     }
 }
 
-impl<T: 'static> LocalRef<T> for PtrLocalRef<T> {
+// SAFETY: The pointer comes from the caller of `new()`, whose contract is exactly the event
+// identity, validity, stable address and shared-only aliasing that this trait requires.
+// Releasing the event releases no storage (the placer owns it) and only clears the event's own
+// diagnostic state before returning.
+unsafe impl<T: 'static> LocalRef<T> for PtrLocalRef<T> {
     #[inline]
-    fn release_event(&self) {}
+    unsafe fn release_event(&self) {
+        // The storage is owned by whoever placed the event there and is reused without dropping
+        // the event, so we clear its diagnostic state before we let go of it.
+        #[cfg(debug_assertions)]
+        LocalEvent::clear_awaiter_backtrace(self);
+    }
 }
 
 impl<T: 'static> Deref for PtrLocalRef<T> {
-    type Target = LocalEvent<T>;
+    type Target = UnsafeCell<LocalEvent<T>>;
 
     fn deref(&self) -> &Self::Target {
-        // SAFETY: The creator of the reference is responsible for ensuring the event outlives it.
+        // SAFETY: Validity: `LocalEvent::placed_core()` derives this pointer from pinned
+        // `EmbeddedLocalEvent<T>` storage with the matching type and alignment, initializes the
+        // complete outer event, and ends its exclusive initialization borrow before creating the
+        // endpoints. The placement caller promises not to move, destroy or reuse that storage
+        // while an endpoint can access it. Aliasing: initialization has ended and every later
+        // event access is through shared references to the outer `UnsafeCell`, while the placement
+        // contract excludes another event or exclusive reference in the same storage.
         unsafe { self.event.as_ref() }
     }
 }
@@ -50,8 +104,11 @@ impl<T: 'static> fmt::Debug for PtrLocalRef<T> {
 }
 
 /// References an event stored on the heap.
+///
+/// The two references returned by [`new_pair()`][Self::new_pair] share one allocation, which the
+/// last endpoint to release the event frees.
 pub(crate) struct BoxedLocalRef<T> {
-    event: NonNull<LocalEvent<T>>,
+    event: NonNull<UnsafeCell<LocalEvent<T>>>,
 }
 
 impl<T: 'static> BoxedLocalRef<T> {
@@ -64,7 +121,11 @@ impl<T: 'static> BoxedLocalRef<T> {
 
         // SAFETY: MaybeUninit is a transparent wrapper, so the layout matches.
         // This is the only reference, so we have exclusive access rights.
-        let event_as_maybe_uninit = unsafe { event.cast::<MaybeUninit<LocalEvent<T>>>().as_mut() };
+        let event_as_maybe_uninit = unsafe {
+            event
+                .cast::<UnsafeCell<MaybeUninit<LocalEvent<T>>>>()
+                .as_mut()
+        };
 
         LocalEvent::new_in_inner(event_as_maybe_uninit);
 
@@ -76,13 +137,25 @@ impl<T: 'static> BoxedLocalRef<T> {
     }
 }
 
-impl<T: 'static> LocalRef<T> for BoxedLocalRef<T> {
-    fn release_event(&self) {
+// SAFETY: The allocation is made here with the exact event layout and initialized before any
+// reference escapes, so both handles preserve its type, alignment and stable address. Event
+// methods scope their last dereference before any callback that may perform the single state-
+// machine-authorized release, and never dereference afterwards. The only references handed out
+// are shared references to the outer `UnsafeCell`; initialization's exclusive borrow has ended.
+// Releasing frees the matching allocation once and does not touch the event afterwards.
+unsafe impl<T: 'static> LocalRef<T> for BoxedLocalRef<T> {
+    unsafe fn release_event(&self) {
         // The caller tells us that they are the last endpoint, so nothing else can possibly
         // be accessing the event any more. We can safely release the memory.
 
-        // SAFETY: Still the same type - all is well. We rely on the event state machine
-        // to ensure that there is no double-release happening.
+        // Releasing the memory does not drop the event, so we clear its diagnostic state first.
+        #[cfg(debug_assertions)]
+        LocalEvent::clear_awaiter_backtrace(self);
+
+        // SAFETY: The pointer and layout are the ones from the matching `alloc()` in
+        // `new_pair()`, and the caller of `release_event()` guaranteed that the state machine
+        // selected them as the only endpoint responsible for cleanup, so this is the only
+        // release of this allocation.
         unsafe {
             dealloc(self.event.as_ptr().cast(), Self::layout());
         }
@@ -90,11 +163,16 @@ impl<T: 'static> LocalRef<T> for BoxedLocalRef<T> {
 }
 
 impl<T: 'static> Deref for BoxedLocalRef<T> {
-    type Target = LocalEvent<T>;
+    type Target = UnsafeCell<LocalEvent<T>>;
 
     fn deref(&self) -> &Self::Target {
-        // SAFETY: Storage is automatically managed - as long as either sender/receiver
-        // are alive, we are guaranteed that the event is alive.
+        // SAFETY: Validity: `new_pair()` allocated this exact layout, preserved its alignment and
+        // type while casting, initialized the complete outer event and ended the exclusive
+        // initialization borrow before either handle escaped. The state machine permits one
+        // release, and every callback-capable event method makes this dereference its last access
+        // before that callback, so no earlier callback can have freed the allocation here.
+        // Aliasing: every post-initialization access is through a shared reference to the outer
+        // `UnsafeCell`; no exclusive reference exists.
         unsafe { self.event.as_ref() }
     }
 }

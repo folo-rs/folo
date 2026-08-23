@@ -2,12 +2,11 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![doc(hidden)]
 #![expect(
-    clippy::exhaustive_enums,
     clippy::exhaustive_structs,
     reason = "this crate's `pub` items form an internal handoff boundary between the \
               cargo-bench-history sub-crates rather than a stable public API, so \
-              exhaustive matching and construction of its value types by those \
-              in-workspace consumers is intended"
+              exhaustive construction of its value types by those in-workspace \
+              consumers is intended"
 )]
 
 //! Implementation crate for [`cargo-bench-history`]; do not depend on this directly.
@@ -33,11 +32,13 @@
 //!
 //! [`cargo-bench-history`]: https://github.com/folo-rs/folo
 
+mod announce;
 mod bless;
+mod comparison_base;
 mod dataset;
+mod discriminants;
 mod error;
 mod examine;
-mod facets;
 mod history;
 mod list;
 mod load;
@@ -49,21 +50,32 @@ mod window;
 
 pub use bless::{bless, unbless};
 pub(crate) use cbh_detect::{Series, SeriesFilter, apply_blessings};
-pub(crate) use cbh_render::{ReportFormat, format_value};
+pub(crate) use cbh_render::{ReportFormat, chart_series, format_value};
 pub(crate) use dataset::{empty_history_hint, select_dataset};
+pub use discriminants::AutoDiscriminants;
+pub(crate) use discriminants::resolve_discriminants;
 pub use error::AnalyzeError;
+pub(crate) use error::{
+    BaseBranchUnavailableError, BlessBaseRequiredError, BlessDiscriminantsRequiredError,
+    BlessSelectionRequiredError, CommitterTimeFailedError, DefaultBranchProbeFailedError,
+    EmptyBenchmarkError, FirstParentWalkFailedError, InvalidBlessingError, InvalidResultSetError,
+    InvalidStoredUtf8Error, InvalidWindowValueError, ListAllUnsupportedError, MergeBaseFailedError,
+    MergeBaseUnavailableError, NoOutputSelectedError, PruneBaseConfirmationRequiredError,
+    PruneSelectionRequiredError, ResolveRefFailedError, ToolchainProbeFailedError,
+    UnknownEngineError, UnknownMetricError, UnresolvedRefError, WindowOutOfRangeError,
+    WorkingTreeProbeFailedError,
+};
 pub use examine::execute as examine;
-pub(crate) use facets::{AutoFacets, resolve_facets};
 pub(crate) use history::{
-    DirtyTipPolicy, ResolvedHistory, dirty_base_exception_warning, resolve_base_name,
-    resolve_base_ref, resolve_history,
+    DirtyTipPolicy, ResolvedHistory, dirty_base_exception_warning, resolve_history,
 };
 pub use list::execute as list;
-pub(crate) use load::{RunIndex, facet_filtered_candidates};
+pub(crate) use load::{RunIndex, discriminant_filtered_candidates};
 pub use pipeline::execute as analyze;
-pub(crate) use pipeline::{detect_auto_facets, resolve_now};
+pub(crate) use pipeline::{resolve_auto_discriminants, resolve_now};
 pub use prune::execute as prune;
 pub use report::RenderedReports;
 pub(crate) use report::ReportRequest;
 pub(crate) use selection::Selection;
-pub(crate) use window::{WindowEdge, parse_since, parse_until, window_excludes};
+pub use window::auto_mode;
+pub(crate) use window::{before_since_cutoff, parse_since};

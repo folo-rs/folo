@@ -100,7 +100,7 @@ async fn prune_dry_run_reports_without_deleting() {
     assert_eq!(parsed["totals"]["runs"], 1, "{message}");
 }
 
-/// An engine facet scopes the prune: a callgrind-scoped `prune --dirty` leaves a
+/// An engine discriminant scopes the prune: a callgrind-scoped `prune --dirty` leaves a
 /// dirty criterion snapshot on the same commit untouched.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
@@ -147,12 +147,12 @@ async fn prune_dirty_scopes_by_engine() {
     assert_eq!(parsed["sets"][0]["engine"], "criterion", "{message}");
 }
 
-/// A target-triple facet scopes the prune just like it scopes `analyze`/`list`:
+/// A target-triple filter scopes the prune just like it scopes `analyze`/`list`:
 /// the same target commit hosts a dirty Linux (callgrind) run and a dirty Windows
 /// (criterion) run, and `--target-triple <linux>` removes only the former.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn prune_dirty_scopes_by_target_triple_facet() {
+async fn prune_dirty_scopes_by_target_triple_discriminant() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.commit_dated("2024-01-01", "c1");
     workspace.seed_callgrind("c1", 100.0);
@@ -179,7 +179,7 @@ async fn prune_dirty_scopes_by_target_triple_facet() {
     assert_eq!(parsed["sets"][0]["engine"], "callgrind", "{message}");
 
     // The Windows (criterion) dirty run survives: a Windows-triple pass still finds
-    // it once the machine facet is widened to its non-host machine key.
+    // it once the machine discriminant is widened to its non-host machine key.
     let message = workspace
         .drive_json(&[
             "prune",
@@ -218,8 +218,9 @@ async fn prune_dirty_removes_runs_across_multiple_discriminant_sets() {
     workspace.seed_dirty_criterion("2024-01-02", "f1", "m1", 20.0);
 
     // Text format exercises the plural "discriminant sets" summary branch. The
-    // facets widen to every triple/machine so the synthetic callgrind set and the
-    // windows-keyed criterion set are both in scope regardless of host.
+    // discriminants widen to every triple/machine so the callgrind set (under the harness
+    // machine key) and the `m1`-keyed criterion set are both in scope regardless of
+    // host.
     let RunOutcome::Completed { message } = workspace
         .drive(&[
             "prune",
@@ -297,40 +298,8 @@ async fn prune_dirty_since_only_removes_runs_on_or_after_the_cutoff() {
     );
 }
 
-/// `--until` removes only the runs on or before the cutoff: the mirror of `--since`,
-/// also reading object bodies to recover each run's commit time.
-#[tokio::test]
-#[cfg_attr(miri, ignore)]
-async fn prune_dirty_until_only_removes_runs_on_or_before_the_cutoff() {
-    let workspace = Workspace::repo(&storage_only_config());
-    workspace.commit_dated("2024-01-01", "c1");
-    workspace.seed_callgrind("c1", 100.0);
-    workspace.checkout_new_branch("feature");
-    workspace.commit_dated("2024-01-02", "f1");
-    workspace.seed_dirty_callgrind("2024-01-02", "f1", 100.0);
-    workspace.commit_dated("2024-01-05", "f2");
-    workspace.seed_dirty_callgrind("2024-01-05", "f2", 200.0);
-
-    // Only the 2024-01-02 run is on or before the cutoff.
-    let message = workspace
-        .drive_json(&["prune", "--dirty", "--until", "2024-01-03"])
-        .await;
-    let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
-    assert_eq!(parsed["totals"]["runs"], 1, "{message}");
-
-    // The later run survives the cutoff; only the on-or-before run was removed.
-    let message = workspace
-        .drive_json(&["prune", "--dirty", "--dry-run"])
-        .await;
-    let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
-    assert_eq!(
-        parsed["totals"]["runs"], 1,
-        "the later run survived the cutoff: {message}"
-    );
-}
-
-/// The `--all` scope deletes clean *and* dirty runs (and their blessing sidecars)
-/// for the narrowed selection. A `<commit>` argument selecting one feature commit removes its
+/// The `--all` scope deletes clean *and* dirty runs for the narrowed selection. A
+/// `<commit>` argument selecting one feature commit removes its
 /// clean and dirty runs while leaving the base-branch run intact.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
@@ -357,8 +326,9 @@ async fn prune_all_removes_clean_and_dirty_for_a_commit() {
     assert_eq!(parsed["totals"]["runs"], 1, "{message}");
 }
 
-/// `prune` requires a scope: invoking it without `--clean`, `--dirty`, or `--all`
-/// is rejected at parse time, protecting against an accidental wipe with no intent.
+/// `prune` requires an action: invoking it without `--clean`, `--dirty`, `--all`,
+/// or `--include-blessings` is rejected at parse time, protecting against an
+/// accidental wipe with no intent.
 #[test]
 fn prune_requires_a_scope() {
     let error = Cli::from_args(&["cargo-bench-history"], &["prune"]).unwrap_err();
@@ -405,7 +375,53 @@ async fn prune_all_removes_only_the_feature_side() {
     );
 }
 
-/// `--clean` deletes clean runs (and their blessings) while leaving dirty snapshots
+/// `prune` preserves base-side history even when the base was merged into the branch,
+/// so the merge-base sits off the context's first-parent line. The fork point on that
+/// line (the newest shared commit) still divides base-side history from the branch's
+/// own commits, so a shared commit is never deleted without the base-branch opt-in.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn prune_preserves_base_side_when_the_base_is_merged_in() {
+    let workspace = Workspace::repo(&storage_only_config());
+    // master:  root - c1 - c2
+    //                  \
+    // feature:          f1 - M - f2   (M merges master's tip c2 into feature)
+    // merge-base(feature, master) = c2, off feature's first-parent line
+    // [root, c1, f1, M, f2]; the fork point is the newest shared commit, c1.
+    workspace.commit("c1");
+    workspace.seed_callgrind("c1", 100.0);
+    workspace.checkout_new_branch("feature");
+    workspace.commit("f1");
+    workspace.seed_callgrind("f1", 100.0);
+    workspace.checkout("master");
+    workspace.commit("c2");
+    workspace.checkout("feature");
+    workspace.merge("master", "M");
+    workspace.commit("f2");
+    workspace.seed_callgrind("f2", 100.0);
+
+    // Only the branch's own commits (f1, f2) are eligible; the shared c1 is base-side.
+    let message = workspace
+        .drive_json(&["prune", "--all", "--context", "feature"])
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
+    assert_eq!(
+        parsed["totals"]["runs"], 2,
+        "only the two branch-own runs are deleted, not the shared base commit: {message}"
+    );
+
+    // The shared base commit c1 survives on the context's first-parent line.
+    let message = workspace
+        .drive_json(&["list", "runs", "--context", "feature"])
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
+    assert_eq!(
+        parsed["totals"]["runs"], 1,
+        "the shared base-side run is preserved: {message}"
+    );
+}
+
+/// `--clean` deletes clean runs while leaving dirty snapshots
 /// in place — the inverse of `--dirty`.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
@@ -435,11 +451,12 @@ async fn prune_clean_scope_removes_clean_and_keeps_dirty() {
     assert_eq!(parsed["totals"]["runs"], 1, "dirty f1 survived: {message}");
 }
 
-/// A blessing sidecar follows its clean run: deleting a commit's clean run with the
-/// default scope also removes the blessing recorded there.
+/// Pruning a run never removes a blessing; only `--include-blessings` (or `unbless`)
+/// does. The default `--all` prune deletes the clean run but leaves the blessing,
+/// which `--include-blessings` then removes.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn prune_removes_a_blessing_with_its_clean_run() {
+async fn include_blessings_is_required_to_prune_a_blessing() {
     let workspace = Workspace::clean_repo(&storage_only_config());
     workspace.seed_rising_callgrind_history();
     let head = workspace.head();
@@ -455,13 +472,30 @@ async fn prune_removes_a_blessing_with_its_clean_run() {
         "{message}"
     );
 
-    // Pruning HEAD's clean run also deletes the blessing that rode on it. The
-    // checkout is the base branch tip, so the base-branch guard must be confirmed.
+    // The default `--all` prune removes HEAD's clean run but leaves the blessing.
+    // The checkout is the base branch tip, so the base-branch guard must be confirmed.
     let message = workspace
         .drive_json(&["prune", &head, "--all", "--prune-base"])
         .await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert_eq!(parsed["totals"]["runs"], 1, "the clean HEAD run: {message}");
+    assert_eq!(parsed["totals"]["blessings"], 0, "{message}");
+
+    // The blessing survives the run prune.
+    let message = workspace.drive_json(&["list", "blessings"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
+    assert_eq!(
+        parsed["blessings"].as_array().unwrap().len(),
+        1,
+        "the blessing outlived its clean run: {message}"
+    );
+
+    // `--include-blessings` removes the now-orphan blessing.
+    let message = workspace
+        .drive_json(&["prune", &head, "--include-blessings", "--prune-base"])
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
+    assert_eq!(parsed["totals"]["runs"], 0, "no runs left: {message}");
     assert_eq!(parsed["totals"]["blessings"], 1, "{message}");
 
     // The blessing is gone.
@@ -469,7 +503,41 @@ async fn prune_removes_a_blessing_with_its_clean_run() {
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
     assert!(
         parsed["blessings"].as_array().unwrap().is_empty(),
-        "the blessing was removed with its clean run: {message}"
+        "the blessing was removed by --include-blessings: {message}"
+    );
+}
+
+/// `--all` and `--include-blessings` are additive and combine in a single
+/// invocation: the run and its blessing are both removed in one pass.
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn all_and_include_blessings_combine_in_one_invocation() {
+    let workspace = Workspace::clean_repo(&storage_only_config());
+    workspace.seed_rising_callgrind_history();
+    let head = workspace.head();
+
+    workspace.drive(&["bless", "nm/nm::observe"]).await.unwrap();
+
+    // A single pass with both flags removes the clean HEAD run and its blessing.
+    let message = workspace
+        .drive_json(&[
+            "prune",
+            &head,
+            "--all",
+            "--include-blessings",
+            "--prune-base",
+        ])
+        .await;
+    let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
+    assert_eq!(parsed["totals"]["runs"], 1, "the clean HEAD run: {message}");
+    assert_eq!(parsed["totals"]["blessings"], 1, "the blessing: {message}");
+
+    // Both are gone.
+    let message = workspace.drive_json(&["list", "blessings"]).await;
+    let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
+    assert!(
+        parsed["blessings"].as_array().unwrap().is_empty(),
+        "the blessing was removed alongside its run: {message}"
     );
 }
 
@@ -481,8 +549,5 @@ async fn prune_without_a_repository_errors() {
     let workspace = Workspace::new(&storage_only_config());
 
     let error = workspace.drive(&["prune", "--dirty"]).await.unwrap_err();
-    let RunError::Analyze { message } = error else {
-        panic!("expected an analyze error, got {error:?}");
-    };
-    assert!(message.contains("requires a git repository"), "{message}");
+    assert!(error.find_source::<cbh_analyze::AnalyzeError>().is_some());
 }

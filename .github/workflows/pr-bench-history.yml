@@ -1,0 +1,526 @@
+name: PR Benchmark history
+
+# Per-push benchmark feedback on pull requests: the PR counterpart of bench-history.yml. Where that
+# workflow collects on every push to `main` and files a rolling ISSUE about long-range trends, this
+# one runs on every push to a PR branch, benchmarks only the packages the PR impacts (the changed
+# packages plus their dependents, cargo-delta scoped), compares the PR head's benchmark level
+# against `main` in BRANCH mode, and posts/updates a rolling PR COMMENT with the findings. PR-head
+# points are written into the SAME prod Azure store as the `main` baseline (branch-mode comparison
+# reads a single backend); PR commits are
+# topologically branch-unique, so they never enter `main`'s history analysis. Findings are advisory:
+# they never gate the merge, only inform. See .github/workflows/design.md (Benchmark history).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+# Key by the PR head ref and cancel in progress: a newer push supersedes the running benchmark,
+# because a PR's benchmark is only ever interesting for its current tip (unlike bench-history.yml,
+# which keys per-SHA with NO cancel because each `main` commit is a permanent data point). The
+# companion cancel-pr-bench-history.yml joins this SAME group on `pull_request: closed` to tear down
+# an in-flight run when the PR merges or closes; its hardcoded group string must stay byte-identical
+# to the one built here from ${{ github.workflow }} (the name "PR Benchmark history").
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+# The hidden HTML marker that identifies this workflow's rolling PR comment, defined once and shared by
+# the `analyze` job (which posts/updates it with results), the `mark-stale` job (which seeds/refreshes an
+# in-progress placeholder carrying it), and the `cleanup` job (which deletes it when the PR no longer
+# touches any benchmarkable package). The comment module dedups solely on this marker, so a single
+# definition keeps the post, placeholder and delete paths from drifting apart.
+#
+# PR_COMMIT_MARKER_PREFIX is the prefix of a SECOND hidden marker the `analyze` job embeds to record
+# which commit its numbers describe (`<prefix><full-sha> -->`). The `mark-stale` job parses that SHA
+# back out to measure how far the displayed results now lag HEAD. Defined here once so the writer
+# (analyze compose step) and the reader (mark-stale) cannot drift, mirroring PR_COMMENT_MARKER.
+env:
+  PR_COMMENT_MARKER: "<!-- folo-bench-history-pr -->"
+  PR_COMMIT_MARKER_PREFIX: "<!-- folo-bench-history-commit:"
+
+jobs:
+  # Compute which packages the PR impacts (cargo-delta vs origin/main: the changed packages plus
+  # their dependents), filtered to the benchmarkable set (everything except the slow,
+  # special-purpose `benchmarks` crate). The result
+  # gates the whole workflow: a non-empty set drives collect+analyze, an empty set routes to
+  # cleanup. Runs only for same-repo PRs - fork runs cannot federate into Azure (no secrets), so
+  # like bench-history.yml's fork gate they are skipped silently; because every downstream job
+  # `needs` this one, a skipped delta cascades to skip them too.
+  delta:
+    if: github.repository == 'folo-rs/folo' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.compute.outputs.packages }}
+      packages_json: ${{ steps.compute.outputs.packages_json }}
+      skip_all: ${{ steps.compute.outputs.skip_all }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        # Full history so cargo-delta can diff against origin/main in a throwaway worktree (the
+        # merge ref the pull_request event checks out is fine for the diff; only collect/analyze
+        # need the real head SHA for branch-mode topology).
+        with:
+          fetch-depth: 0
+
+      - name: Setup environment
+        # Same composite the package-scoped jobs use, so cargo-delta is installed once (via
+        # `just install-tools`) and the shared prerequisites cache is primed for the collect job.
+        uses: ./.github/actions/setup-environment
+
+      - name: Compute delta
+        id: compute
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          # The cargo-delta pipeline lives in the Pester-tested Delta module (shared with the local
+          # `just delta` recipe and validation.yml so they cannot drift); Select-BenchmarkablePackage
+          # lives in the collection module so the same "drop benchmarks" rule the collect step uses
+          # also decides here whether anything is left to bench. See scripts/build/Delta.psm1 and
+          # scripts/bench-history/BenchHistoryCollect.psm1.
+          Import-Module ./scripts/build/Delta.psm1 -Force
+          Import-Module ./scripts/bench-history/BenchHistoryCollect.psm1 -Force
+
+          # Full history is already present (fetch-depth: 0), so -SkipFetch avoids a redundant fetch;
+          # the module analyzes origin/main in a throwaway worktree and cleans up after itself.
+          $affected = @(Invoke-CargoDelta -SkipFetch)
+          # Drop the excluded `benchmarks` crate BEFORE shaping the outputs, so `skip_all` reflects
+          # the benchmarkable set: a PR that impacts only `benchmarks` (or nothing) collects nothing
+          # and instead has its stale comment (if any) cleaned up.
+          $benchmarkable = @(Select-BenchmarkablePackage -Package $affected)
+          $output = Get-DeltaOutput -Affected $benchmarkable
+
+          if ($benchmarkable.Count -eq 0) {
+            Write-Host 'No benchmarkable packages impacted by this PR; collection will be skipped and any stale rolling comment removed.'
+          } else {
+            Write-Host "Benchmarkable packages impacted by this PR: $($output.Packages)"
+          }
+
+          @(
+            "packages=$($output.Packages)"
+            "packages_json=$($output.PackagesJson)"
+            "skip_all=$($output.SkipAll)"
+          ) | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
+
+  # At the START of every collecting run (delta non-empty), keep the rolling PR comment honest about the
+  # fresh run in two complementary ways. If a comment with real results already exists, flag it STALE so
+  # a reader is not misled by hours-old numbers while the multi-hour collect+analyze runs. If the PR has
+  # no comment yet - the common case on a PR's first push - seed a "benchmarking in progress" placeholder
+  # instead, so the author knows results are on the way rather than seeing nothing for hours; the same
+  # step refreshes that placeholder's disclosed scope on later pushes and steps aside once analyze writes
+  # real findings. Deliberately lightweight - default (shallow) checkout + preinstalled gh + a direct
+  # module call, no build-env setup, no Azure, no full history - so the signal appears within minutes of
+  # the push (right after this short delta job), long before analyze rewrites the comment. The staleness
+  # side reads the analyzed-commit marker from the current comment and asks the GitHub compare API how
+  # far HEAD is ahead, which needs no clone and still resolves a commit orphaned by a force-push. Gated on
+  # skip_all != 'true' for the same reason collect is: when the PR now touches nothing benchmarkable the
+  # `cleanup` job DELETES the comment instead, and posting or marking a comment about to be deleted would
+  # only race that delete. Runs in parallel with collect (both `needs: delta`), and mirrors collect's
+  # gating exactly - no `always()`, so a FAILED or skipped delta skips this job too rather than acting on
+  # a comment for a run that will never collect; the same-repo gate rides along from delta, which is
+  # skipped on forks (skipping this dependent with it).
+  mark-stale:
+    needs: delta
+    if: needs.delta.outputs.skip_all != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # pull-requests to POST/PATCH the rolling comment; contents so the compare API can read commit
+    # topology and the checkout can put the shared BenchHistoryComment module on disk (the marking and
+    # placeholder logic lives there so it is unit-tested against a mocked gh, mirroring how analyze posts
+    # via the same module).
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        # Default shallow checkout is enough: the commits-behind count is computed server-side by the
+        # compare API, so no local history is walked here - only the module needs to be on disk.
+        uses: actions/checkout@v7
+
+      - name: Signal the new run on the rolling PR comment
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MARKER: ${{ env.PR_COMMENT_MARKER }}
+          COMMIT_MARKER_PREFIX: ${{ env.PR_COMMIT_MARKER_PREFIX }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_PACKAGES: ${{ needs.delta.outputs.packages }}
+        # Import and call the shared module directly (like cleanup) rather than via `just`: this job
+        # deliberately skips setup-environment to stay lightweight, so it must not assume `just` is
+        # preinstalled on the runner image. The real logic (SHA/repo validation, compare-distance lookup,
+        # banner insertion, placeholder rendering) lives in the Pester-tested module; this step is just
+        # glue. The two calls are ordered stale-then-placeholder so they compose: Set-RollingCommentStaleness
+        # marks an existing results comment (and no-ops on a placeholder or when there is no comment), then
+        # Publish-InProgressComment seeds/refreshes the placeholder only when there are no results yet.
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Import-Module ./scripts/bench-history/BenchHistoryComment.psm1 -Force
+
+          Write-Host "Flagging any prior benchmark results on $env:REPO PR #$env:PR_NUMBER as stale relative to head $env:HEAD_SHA."
+          $marked = Set-RollingCommentStaleness `
+            -Repo $env:REPO `
+            -PrNumber $env:PR_NUMBER `
+            -Marker $env:MARKER `
+            -CommitMarkerPrefix $env:COMMIT_MARKER_PREFIX `
+            -HeadSha $env:HEAD_SHA `
+            -Verbose
+          if ($marked) {
+            Write-Host "Added a staleness warning to the rolling PR comment."
+          } else {
+            Write-Host "No staleness warning needed (no results comment yet, an in-progress placeholder, or it already reflects head)."
+          }
+
+          Write-Host "Ensuring an in-progress placeholder is present so the author knows benchmark results are coming."
+          $posted = Publish-InProgressComment `
+            -Repo $env:REPO `
+            -PrNumber $env:PR_NUMBER `
+            -Marker $env:MARKER `
+            -Packages $env:PR_PACKAGES `
+            -Verbose
+          if ($posted) {
+            Write-Host "Posted or refreshed the in-progress benchmark placeholder comment."
+          } else {
+            Write-Host "No placeholder change needed (the PR already has a rolling comment with results, or the placeholder is current)."
+          }
+
+  # Benchmark ONLY the impacted packages across the benchmark platform matrix, keyed by the PR head
+  # commit, appending the results into the prod store. Skipped when the PR impacts nothing
+  # benchmarkable (delta.skip_all). Mirrors bench-history.yml's collect job, differing only in the
+  # checkout (real head SHA, full history) and the package-scoped recipe.
+  collect:
+    needs: delta
+    if: needs.delta.outputs.skip_all != 'true'
+
+    strategy:
+      # One platform's benchmarks failing must not abandon the others for this PR head; each
+      # platform stores into its own partition independently.
+      fail-fast: false
+      matrix:
+        # x86_64 Linux and Windows only, matching bench-history.yml: ARM and macOS are only
+        # nominally supported (test-pass parity, see validation.yml) and are kept out of
+        # benchmarking so we do not spend runner minutes on platforms we do not track.
+        platform: [ubuntu-latest, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+    # Same ceiling as the main collect: `--best-of 3` roughly triples the ~60-75 min suite, and the
+    # 360-minute cap (GitHub's hosted maximum) bounds only a genuinely stuck run since the matrix
+    # runs in parallel.
+    timeout-minutes: 360
+
+    # id-token to self-federate with Entra (the prod identity's `pull_request` federated credential,
+    # added by infra/azure-bench-history-prod/, matches a same-repo PR run's OIDC subject), contents
+    # for the checkout. Same on-demand OIDC minting as the main collect keeps a multi-hour run
+    # authenticated past the ~1h access-token lifetime.
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        # Check out the REAL PR head commit with FULL history, NOT the default pull_request merge ref
+        # (refs/pull/N/merge): that merge commit's first parent is `main`, which would corrupt
+        # branch-mode topology. A full clone is required (not shallow) because cargo-bench-history
+        # walks the head's first-parent ancestry and computes the merge-base with the base; fetch-depth
+        # 0 also populates refs/remotes/origin/main for the analyze job's base ref.
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Setup environment
+        # Collection runs the Callgrind measurement engine, which drives Valgrind.
+        uses: ./.github/actions/setup-environment
+        with:
+          install-valgrind: "true"
+
+      # Reused unchanged from bench-history.yml: export the prod identity's client id and tenant
+      # under the standard names cargo-bench-history reads, then let the tool mint OIDC assertions on
+      # demand (no azure/login). The same prod identity backs main and PR runs. See
+      # scripts/bench-history/AzureFederation.psm1.
+      - name: Configure Azure federation identity from constants.env
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
+          Set-AzureFederationEnv -ConstantsPath constants.env -EnvFilePath $env:GITHUB_ENV | Out-Null
+
+      # Collect only the delta-affected packages (space-separated from the delta job), keyed by the
+      # PR head commit and stamped with THIS runner's real hardware fingerprint (no fixed key) so the
+      # wall-clock series lives on the same per-machine-key partitions as main's baseline.
+      # `--skip-existing` makes a re-run of the same head SHA a no-op append.
+      - name: Collect PR benchmark history
+        shell: pwsh
+        env:
+          PR_PACKAGES: ${{ needs.delta.outputs.packages }}
+        run: just gh-collect-pr-bench-history "$env:PR_PACKAGES"
+
+      # Record THIS runner's real hardware fingerprint so the single analyze job can thread the exact
+      # keys collected this run into its `--machine-key` filter (collect is a matrix, analyze is not).
+      # Runs only after a SUCCESSFUL collect - the default step behavior - so a failed leg's key is
+      # not threaded. The write recipe logs the fingerprint components under --verbose.
+      - name: Record runner machine key
+        shell: pwsh
+        env:
+          KEY_FILE: ${{ runner.temp }}/machine-key.txt
+        run: just gh-write-bench-history-machine-key "$env:KEY_FILE"
+
+      # Upload this leg's key under a per-platform artifact name so the analyze job can download every
+      # leg's key together (one file per platform). if-no-files-found: error catches a broken
+      # key-write step loudly rather than silently dropping a key from the analysis.
+      - name: Upload runner machine key
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr-bench-history-machine-key-${{ matrix.platform }}
+          path: ${{ runner.temp }}/machine-key.txt
+          if-no-files-found: error
+
+  # Compare the PR head against `main` in branch mode and post/update the rolling PR comment. Runs
+  # after every platform finishes (even partially: fail-fast is off) so the comparison reflects
+  # whatever landed. Uses `!cancelled()` (NOT always()) so a partially-failed collect still analyzes -
+  # a failed leg is not a cancellation - while a run SUPERSEDED by a newer push (concurrency
+  # cancel-in-progress) does NOT: always() would run even when cancelled and publish results for the now
+  # stale head SHA, exactly the "stale results, no warning" case this workflow guards against (the
+  # analyze post path's own live-head self-check backstops the narrow window where cancellation races the
+  # final post). The explicit same-repo + skip_all gates keep it from running on forks or empty deltas.
+  analyze:
+    needs: [delta, collect]
+    if: >-
+      !cancelled()
+      && github.repository == 'folo-rs/folo'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && needs.delta.outputs.skip_all != 'true'
+    runs-on: ubuntu-latest
+    # Analysis loads the store and reduces it; far faster than benchmarking, but the cap must clear a
+    # cold-cache setup-environment on top of the analysis.
+    timeout-minutes: 150
+
+    # id-token to self-federate with Entra (reads the history), contents for checkout,
+    # pull-requests to post/update the rolling comment, and actions:read so the machine-key
+    # download below can enumerate this run's artifacts through the REST run-artifacts endpoint
+    # (see that step's note) rather than the attempt-scoped internal artifact service.
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+      actions: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        # Same real-head-SHA + full-history checkout as collect: branch mode walks the head's
+        # first-parent ancestry and needs origin/main (from fetch-depth 0) for the merge-base.
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Configure Azure federation identity from constants.env
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
+          Set-AzureFederationEnv -ConstantsPath constants.env -EnvFilePath $env:GITHUB_ENV | Out-Null
+
+      # All bench-history scratch - the read-through cache and every rendered report/summary/notable/
+      # comment-body file - lives under the runner temp directory, OUTSIDE the repo checkout, so
+      # analyze's own `git status --porcelain` dirty-check never sees these files. The individual
+      # filenames (cache/, report.md, report.json, summary.md, notable.txt) are the contract the
+      # gh-analyze-pr-bench-history recipe writes; comment-body.md is composed here.
+      - name: Resolve scratch directory
+        id: scratch
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $dir = Join-Path $env:RUNNER_TEMP 'bench-history'
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+          "dir=$dir" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
+
+      # RESTORE-ONLY the read-through cache produced on `main` (the default-branch caches are visible
+      # to PR branches), so the baseline history is warm without every PR saving its own cache entry
+      # (which would clutter the cache with per-PR mirrors). PR runs never SAVE; the append-only
+      # store keeps a slightly-stale mirror harmless. The path MUST match the `--cache` directory the
+      # gh-analyze-pr-bench-history recipe passes (`<scratch>/cache`).
+      - name: Restore benchmark-history read-through cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ steps.scratch.outputs.dir }}/cache
+          key: bench-history-cache-pr-${{ github.run_id }}
+          restore-keys: |
+            bench-history-cache-
+
+      # Download every collect leg's machine-key file (one per-platform artifact) into a single
+      # directory so the analysis can thread the EXACT fingerprints collected this run into its
+      # `--machine-key` filter. The default (no merge-multiple) keeps one subdirectory per artifact;
+      # the recipe scans recursively. A leg whose collection failed uploaded nothing, so its key is
+      # simply absent; if EVERY leg failed the pattern download matches nothing (it does not fail) and
+      # the recipe treats the empty directory as "nothing to analyze".
+      #
+      # `github-token` (with `run-id`, defaulted to this run) is what routes the download through the
+      # public REST run-artifacts endpoint instead of the attempt-bound internal artifact service.
+      # That endpoint lists a run's artifacts across ALL of its attempts, so after a PARTIAL re-run
+      # (e.g. `gh run rerun --failed` on one flaky collect leg) the surviving leg's artifact - which
+      # stays under the earlier attempt - still resolves. Without the token the action pins each
+      # artifact to the current attempt and 404s ("workflow run not found") on any older-attempt
+      # artifact, leaving `analyze` impossible to green without re-running the whole matrix.
+      - name: Download collected machine keys
+        uses: actions/download-artifact@v8
+        with:
+          pattern: pr-bench-history-machine-key-*
+          path: ${{ steps.scratch.outputs.dir }}/machine-keys
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+
+      # Renders report.md (full Markdown), report.json (full JSON), summary.md (the condensed
+      # top-findings Markdown) and notable.txt into the scratch directory, in BRANCH mode (PR head
+      # vs origin/main), including improvements as well as regressions. Findings never fail the
+      # recipe (the tool always exits 0); the PR comment is advisory, not a gate. Analysis is
+      # deliberately run UNSCOPED: `analyze`'s always-on ghost-exclusion (only benchmarks present at
+      # the PR head are analyzed) restricts it to exactly the collected packages, so no per-package
+      # filter is needed - and the ghost exclusion is unconditional, so it can never be turned off.
+      # See the recipe / design.md.
+      # The third argument is the downloaded machine-key directory whose fingerprints scope the
+      # analysis.
+      - name: Analyze PR benchmark history
+        shell: pwsh
+        env:
+          SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
+        run: just gh-analyze-pr-bench-history "$env:SCRATCH_DIR" origin/main "$env:SCRATCH_DIR/machine-keys"
+
+      - name: Read notable flag
+        id: notable
+        shell: pwsh
+        env:
+          SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $value = (Get-Content (Join-Path $env:SCRATCH_DIR 'notable.txt') -Raw).Trim()
+          "value=$value" | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8
+
+      # Attach the full Markdown and JSON reports to the run as a single artifact when there are
+      # findings, so the rolling comment can carry only the condensed summary (staying under GitHub's
+      # 65,536-character comment limit) while a reader can still download the complete reports.
+      - name: Upload full benchmark reports
+        id: full_reports
+        if: steps.notable.outputs.value == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr-bench-history-full-report
+          path: |
+            ${{ steps.scratch.outputs.dir }}/report.md
+            ${{ steps.scratch.outputs.dir }}/report.json
+          if-no-files-found: error
+
+      # Compose the rolling comment body (always, into comment-body.md): when notable, the condensed
+      # summary + a link to the full-report artifact + a "how to read" footer; otherwise the verdict the
+      # report's own coverage state warrants, so an all-clear is claimed only when series were actually
+      # judged. The hidden marker is embedded so the module finds this same comment on the next push. The
+      # comment is advisory - it explicitly is NOT a merge gate. The composition lives in
+      # BenchHistoryComment.psm1 behind the gh-compose-pr-bench-comment recipe, so it is Pester-tested and
+      # runnable locally rather than being inline YAML no test can reach.
+      - name: Compose PR benchmark comment
+        shell: pwsh
+        env:
+          MARKER: ${{ env.PR_COMMENT_MARKER }}
+          COMMIT_MARKER_PREFIX: ${{ env.PR_COMMIT_MARKER_PREFIX }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPORT_ARTIFACT_URL: ${{ steps.full_reports.outputs.artifact-url }}
+          SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
+          PACKAGES: ${{ needs.delta.outputs.packages }}
+        run: just gh-compose-pr-bench-comment "$env:SCRATCH_DIR" "$env:MARKER" "$env:COMMIT_MARKER_PREFIX" "$env:HEAD_SHA" "$env:PACKAGES" "$env:REPORT_ARTIFACT_URL"
+
+      # Defense-in-depth against publishing already-stale results. The comment composed above describes
+      # the head SHA frozen when this run was triggered, but a benchmark run takes hours. A newer push
+      # normally supersedes this run before it posts (concurrency cancel-in-progress, and the analyze
+      # gate above is `!cancelled()` so a superseded run never reaches here), yet a push that RACES this
+      # final post could still publish numbers for a commit that is no longer the PR tip. This reads the
+      # LIVE PR head and, when it no longer matches the analyzed SHA, injects the same staleness banner
+      # the mark-stale job uses into the composed body BEFORE it is posted, so a superseded result never
+      # appears fresh. Best-effort - a `gh` hiccup leaves the body as composed and never fails the
+      # advisory comment. Lands right before the post so it sees the final body.
+      - name: Flag composed comment stale if the PR advanced
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MARKER: ${{ env.PR_COMMENT_MARKER }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
+        run: just gh-flag-pr-comment-if-stale "$env:REPO" "$env:PR_NUMBER" "$env:MARKER" "$env:HEAD_SHA" (Join-Path $env:SCRATCH_DIR 'comment-body.md')
+
+      # One rolling comment per PR, updated in place (deduped by the hidden marker) so repeated pushes
+      # never spam the thread. Posted via `gh` through the shared gh-file-pr-comment recipe (the
+      # workflow's one comment path) so the body file can live in the runner temp dir, outside the
+      # repo checkout.
+      - name: Post rolling PR comment
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MARKER: ${{ env.PR_COMMENT_MARKER }}
+          SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
+        run: just gh-file-pr-comment "$env:REPO" "$env:PR_NUMBER" "$env:MARKER" (Join-Path $env:SCRATCH_DIR 'comment-body.md')
+
+  # When the PR no longer touches any benchmarkable package (delta.skip_all), remove any rolling
+  # comment left by an EARLIER iteration of the same PR - e.g. a benchmarked change that was later
+  # reverted - so a stale, misleading comment does not linger. A no-op when there is no such comment.
+  # Deliberately lightweight (checkout + preinstalled gh + direct module import, no build-env setup,
+  # no Azure, no history), mirroring bench-history.yml's alert/resolve-alert jobs.
+  cleanup:
+    needs: delta
+    if: needs.delta.outputs.skip_all == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # pull-requests to delete the rolling comment, contents for the checkout that puts the shared
+    # BenchHistoryComment module on disk (the removal logic lives there so it is unit-tested against
+    # a mocked gh, mirroring how the analyze job posts via the same module).
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Remove stale rolling comment if present
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MARKER: ${{ env.PR_COMMENT_MARKER }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          Import-Module ./scripts/bench-history/BenchHistoryComment.psm1 -Force
+
+          $removed = Remove-RollingComment -Repo $env:REPO -PrNumber $env:PR_NUMBER -Marker $env:MARKER -Verbose
+          if ($removed) {
+            Write-Host "Removed a stale rolling benchmark comment from PR #$env:PR_NUMBER (the PR no longer touches any benchmarkable package)."
+          } else {
+            Write-Host "No rolling benchmark comment to remove on PR #$env:PR_NUMBER."
+          }

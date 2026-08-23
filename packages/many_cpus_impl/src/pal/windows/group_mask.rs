@@ -57,15 +57,31 @@ impl GroupMask {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use crate::EfficiencyClass;
+    use crate::{EfficiencyClass, RelativeSpeed};
 
     #[test]
     fn smoke_test() {
         let mut mask = GroupMask::none();
         assert_eq!(mask.value(), 0);
 
-        let p0 = ProcessorImpl::new(0, 0, 0, 0, EfficiencyClass::Performance);
-        let p7 = ProcessorImpl::new(0, 7, 7, 0, EfficiencyClass::Performance);
+        let p0 = ProcessorImpl::new(
+            0,
+            0,
+            0,
+            0,
+            EfficiencyClass::Performance,
+            RelativeSpeed::from_raw(1),
+            None,
+        );
+        let p7 = ProcessorImpl::new(
+            0,
+            7,
+            7,
+            0,
+            EfficiencyClass::Performance,
+            RelativeSpeed::from_raw(1),
+            None,
+        );
 
         mask.add(&p0);
         assert_eq!(mask.value(), 1 << 0);
@@ -75,7 +91,15 @@ mod tests {
 
         let mut mask = GroupMask::none();
 
-        let p0_g1 = ProcessorImpl::new(1, 0, 1, 0, EfficiencyClass::Performance);
+        let p0_g1 = ProcessorImpl::new(
+            1,
+            0,
+            1,
+            0,
+            EfficiencyClass::Performance,
+            RelativeSpeed::from_raw(1),
+            None,
+        );
 
         mask.add(&p0_g1);
         assert_eq!(mask.value(), 1 << 0);
@@ -87,8 +111,24 @@ mod tests {
         let mut mask = GroupMask::none();
         assert_eq!(mask.value(), 0);
 
-        let p_g0 = ProcessorImpl::new(0, 0, 0, 0, EfficiencyClass::Performance);
-        let p_g1 = ProcessorImpl::new(1, 0, 1, 0, EfficiencyClass::Performance);
+        let p_g0 = ProcessorImpl::new(
+            0,
+            0,
+            0,
+            0,
+            EfficiencyClass::Performance,
+            RelativeSpeed::from_raw(1),
+            None,
+        );
+        let p_g1 = ProcessorImpl::new(
+            1,
+            0,
+            1,
+            0,
+            EfficiencyClass::Performance,
+            RelativeSpeed::from_raw(1),
+            None,
+        );
 
         mask.add(&p_g0);
         mask.add(&p_g1);
@@ -113,9 +153,33 @@ mod tests {
     fn contains_by_index_in_group() {
         // Create a mask with bits 0, 3, and 7 set
         let mut mask = GroupMask::none();
-        let p0 = ProcessorImpl::new(0, 0, 0, 0, EfficiencyClass::Performance);
-        let p3 = ProcessorImpl::new(0, 3, 3, 0, EfficiencyClass::Performance);
-        let p7 = ProcessorImpl::new(0, 7, 7, 0, EfficiencyClass::Performance);
+        let p0 = ProcessorImpl::new(
+            0,
+            0,
+            0,
+            0,
+            EfficiencyClass::Performance,
+            RelativeSpeed::from_raw(1),
+            None,
+        );
+        let p3 = ProcessorImpl::new(
+            0,
+            3,
+            3,
+            0,
+            EfficiencyClass::Performance,
+            RelativeSpeed::from_raw(1),
+            None,
+        );
+        let p7 = ProcessorImpl::new(
+            0,
+            7,
+            7,
+            0,
+            EfficiencyClass::Performance,
+            RelativeSpeed::from_raw(1),
+            None,
+        );
 
         mask.add(&p0);
         mask.add(&p3);

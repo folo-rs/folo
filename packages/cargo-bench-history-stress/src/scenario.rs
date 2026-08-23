@@ -19,7 +19,8 @@
 //! * family 0 — a gradual upward drift across the whole history (a `history`-mode
 //!   drift finding),
 //! * family 1 — a sustained step up at the midpoint (a `history`-mode regression),
-//! * family 2 — a sustained step down at ~70% (a `history`-mode improvement),
+//! * family 2 — a sustained step down at ~70% (a real move `history` mode judges and
+//!   declines to report, since it watches for regressions only),
 //! * family 3 — a sustained step up at ~75% that a blessing re-baselines in some
 //!   sets but not others (so the same step is suppressed in blessed sets and
 //!   flagged elsewhere),
@@ -27,6 +28,16 @@
 //!
 //! One cross-cutting step drives the other mode: an elevation on the feature
 //! branch for `b % BRANCH_DIVISOR == 0` (a `branch`-mode regression).
+//!
+//! A seeded shape only becomes a *finding* once the history carries the evidence
+//! the analysis gates demand: a series is judged at all only from the detectors'
+//! minimum number of points, and a step is trusted only when a full regime sits on
+//! each side of it. Roughly half the commits carry a run, so a `commits` below
+//! twice the minimum series length produces no findings at all, and for a stretch
+//! above that only part of the seeded set surfaces, since whether a given step
+//! keeps a whole regime behind it depends on where it lands among the run-carrying
+//! commits. Eight times the minimum regime sits clear of that stretch, and is the
+//! size the smoke tests seed.
 
 // The synthetic values are illustrative magnitudes, not real measurements:
 // bounded small-integer index arithmetic and lossy integer/f64 conversions here
@@ -44,7 +55,9 @@
               behavior is intentional and cannot misbehave for the sizes used here"
 )]
 
-use cbh_model::{BenchmarkId, DiscriminantSet, Engine, Metric, MetricKind};
+use cbh_model::{
+    BenchmarkId, DiscriminantSet, Engine, MachineKey, Metric, MetricKind, TargetTriple,
+};
 use jiff::Timestamp;
 use nonempty::nonempty;
 
@@ -66,8 +79,8 @@ const FAMILY_COUNT: usize = 5;
 /// The family whose ~75% step a blessing re-baselines (in the blessed sets).
 const BLESSABLE_FAMILY: usize = 3;
 
-/// Discriminant sets at or before this index receive the family-3 blessing; the
-/// rest keep the un-blessed step, so the two cases contrast in one run.
+/// Discriminant sets below this index receive the family-3 blessing; the rest
+/// keep the un-blessed step, so the two cases contrast in one run.
 const BLESSED_SET_LIMIT: usize = 3;
 
 /// Every benchmark whose index is a multiple of this is elevated on the feature
@@ -128,8 +141,8 @@ const TRIPLES: [&str; 6] = [
     "aarch64-apple-darwin",
 ];
 
-/// Machine key for the hardware-dependent engines, whose series are partitioned
-/// per machine. The synthetic dataset attributes them all to one fixed rig.
+/// Machine key every engine partitions under, since every series is per-machine.
+/// The stress dataset attributes them all to one fixed rig.
 const MACHINE_KEY: &str = "stress-rig";
 
 /// Whether `triple` targets Linux — the only platform Callgrind can run on (it
@@ -142,20 +155,22 @@ fn targets_linux(triple: &str) -> bool {
 /// triples it can run on.
 ///
 /// Callgrind is gated to Linux because Valgrind runs there only; the other engines
-/// span all six triples. Hardware-dependent engines (Criterion, `all_the_time`)
-/// carry a [`MACHINE_KEY`]; the hardware-independent ones (Callgrind,
-/// `alloc_tracker`) use the literal `synthetic` machine key. The data is not meant
-/// to be realistic across engines — the point is that every engine's partition is
-/// populated so `analyze` exercises each one.
+/// span all six triples. Every engine is machine-keyed, so every set carries the
+/// [`MACHINE_KEY`]. The data is not meant to be realistic across engines — the
+/// point is that every engine's partition is populated so `analyze` exercises each
+/// one.
 pub(crate) fn discriminant_sets() -> Vec<DiscriminantSet> {
     let mut sets = Vec::new();
     for engine in Engine::ALL {
-        let machine = engine.is_hardware_dependent().then_some(MACHINE_KEY);
         for triple in TRIPLES {
             if engine == Engine::Callgrind && !targets_linux(triple) {
                 continue;
             }
-            sets.push(DiscriminantSet::new(engine, triple, machine));
+            sets.push(DiscriminantSet::new(
+                engine,
+                &TargetTriple::from(triple),
+                &MachineKey::from(MACHINE_KEY),
+            ));
         }
     }
     sets
@@ -165,10 +180,12 @@ pub(crate) fn discriminant_sets() -> Vec<DiscriminantSet> {
 ///
 /// Deterministic engines record an exact integer count with no dispersion; noisy
 /// engines record the estimate plus a tight confidence band, mirroring a real run
-/// so the noise-aware gates have the dispersion they need.
+/// so the noise-aware gates have the dispersion they need. This split is a
+/// property of the stress dataset only, not a claim about which engines are
+/// machine-dependent (every engine is).
 pub(crate) fn metric_for(engine: Engine, value: f64) -> Metric {
     let kind = primary_metric(engine);
-    if engine.is_hardware_dependent() {
+    if matches!(engine, Engine::Criterion | Engine::AllTheTime) {
         let std_dev = value * NOISE_FRACTION;
         let half = std_dev * NOISE_CI_Z;
         Metric::new(kind, value).with_dispersion(
@@ -413,30 +430,25 @@ mod tests {
         // Every engine is represented at least once.
         for engine in Engine::ALL {
             assert!(
-                sets.iter().any(|set| set.engine == engine.as_str()),
+                sets.iter().any(|set| set.engine == engine),
                 "missing engine {engine}"
             );
         }
 
         // Callgrind sets are Linux-only.
         for set in &sets {
-            if set.engine == Engine::Callgrind.as_str() {
+            if set.engine == Engine::Callgrind {
                 assert!(
-                    targets_linux(&set.target_triple),
+                    targets_linux(set.target_triple.as_str()),
                     "callgrind set on non-Linux triple {}",
                     set.target_triple
                 );
             }
         }
 
-        // Hardware-dependent engines carry the machine key; the others are synthetic.
+        // Every engine is machine-keyed, so every set carries the machine key.
         for set in &sets {
-            let engine = Engine::from_name(&set.engine).expect("known engine");
-            if engine.is_hardware_dependent() {
-                assert_eq!(set.machine_key, MACHINE_KEY, "{}", set.engine);
-            } else {
-                assert!(set.is_synthetic(), "{}", set.engine);
-            }
+            assert_eq!(set.machine_key, MACHINE_KEY, "{}", set.engine);
         }
 
         // No two sets collide on their storage key.

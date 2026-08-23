@@ -3,10 +3,13 @@
 
 use std::path::PathBuf;
 
+use cbh_analyze::AutoDiscriminants;
 use cbh_storage::StorageOverride;
+use ohno::AppError;
 use tick::Clock;
 
-use crate::{Command, RunError, RunOutcome, commands};
+use crate::errors::WorkingDirectoryFailedError;
+use crate::{Command, RunOutcome, commands};
 
 /// Test-only overrides for [`run_with_overrides`].
 ///
@@ -38,6 +41,11 @@ pub struct Overrides {
     /// against an Azurite backend behind a locally-faked Entra token and a
     /// certificate-trusting transport, which no configuration could produce.
     pub storage_override: Option<StorageOverride>,
+    /// The auto-detected discriminant values (host target triple + machine key) the
+    /// query commands default to when a filter is omitted. `None` probes the host;
+    /// integration tests inject fixed values so the suite is independent of the host
+    /// it runs on.
+    pub auto_discriminants: Option<AutoDiscriminants>,
 }
 
 /// Executes a parsed command.
@@ -47,10 +55,10 @@ pub struct Overrides {
 ///
 /// # Errors
 ///
-/// Returns a `RunError` if a command fails (for example, a configuration or
-/// storage error).
+/// Returns an error if a command fails (for example, a configuration or storage
+/// error).
 #[doc(hidden)]
-pub async fn run(command: &Command) -> Result<RunOutcome, RunError> {
+pub async fn run(command: &Command) -> Result<RunOutcome, AppError> {
     run_with_overrides(command, Overrides::default()).await
 }
 
@@ -65,23 +73,24 @@ pub async fn run(command: &Command) -> Result<RunOutcome, RunError> {
 ///
 /// # Errors
 ///
-/// Returns a `RunError` if a command fails (for example, a configuration or
-/// storage error).
+/// Returns an error if a command fails (for example, a configuration or storage
+/// error).
 #[doc(hidden)]
 pub async fn run_with_overrides(
     command: &Command,
     overrides: Overrides,
-) -> Result<RunOutcome, RunError> {
+) -> Result<RunOutcome, AppError> {
     let Overrides {
         workspace_dir,
         target_root,
         bench_command,
         clock,
         storage_override,
+        auto_discriminants,
     } = overrides;
     let workspace_dir = match workspace_dir {
         Some(dir) => dir,
-        None => std::env::current_dir().map_err(RunError::Io)?,
+        None => std::env::current_dir().map_err(WorkingDirectoryFailedError::caused_by)?,
     };
     let workspace_dir = workspace_dir.as_path();
     let storage_override = storage_override.map(StorageOverride::into_facade);
@@ -97,22 +106,58 @@ pub async fn run_with_overrides(
             .await
         }
         Command::Install(options) => commands::install(options, workspace_dir).await,
+        Command::Import(options) => {
+            commands::import(options, workspace_dir, storage_override).await
+        }
         Command::Analyze(options) => {
-            commands::analyze(options, workspace_dir, clock, storage_override).await
+            commands::analyze(
+                options,
+                workspace_dir,
+                clock,
+                storage_override,
+                auto_discriminants,
+            )
+            .await
         }
         Command::List(options) => {
-            commands::list(options, workspace_dir, clock, storage_override).await
+            commands::list(
+                options,
+                workspace_dir,
+                clock,
+                storage_override,
+                auto_discriminants,
+            )
+            .await
         }
         Command::Examine(options) => {
-            commands::examine(options, workspace_dir, clock, storage_override).await
+            commands::examine(
+                options,
+                workspace_dir,
+                clock,
+                storage_override,
+                auto_discriminants,
+            )
+            .await
         }
         Command::Prune(options) => {
-            commands::prune(options, workspace_dir, clock, storage_override).await
+            commands::prune(
+                options,
+                workspace_dir,
+                clock,
+                storage_override,
+                auto_discriminants,
+            )
+            .await
         }
         Command::Backfill(options) => {
             commands::backfill(options, workspace_dir, bench_command).await
         }
-        Command::Bless(options) => commands::bless(options, workspace_dir, clock).await,
-        Command::Unbless(options) => commands::unbless(options, workspace_dir).await,
+        Command::Bless(options) => {
+            commands::bless(options, workspace_dir, clock, auto_discriminants).await
+        }
+        Command::Unbless(options) => {
+            commands::unbless(options, workspace_dir, auto_discriminants).await
+        }
+        Command::MachineKey(options) => commands::machine_key(options).await,
     }
 }

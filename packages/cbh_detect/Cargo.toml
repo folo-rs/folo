@@ -4,7 +4,7 @@
 name = "cbh_detect"
 description = "Implementation crate for cargo-bench-history - do not reference directly"
 publish = true
-version = "0.0.4"
+version = "0.2.1"
 
 authors.workspace = true
 edition.workspace = true
@@ -17,9 +17,11 @@ rust-version.workspace = true
 doc = false
 
 [features]
-# Internal-only API surface for in-workspace tests: the `testing::synchronous_spawner`
-# the `cargo-bench-history` shell crate's tests (and this crate's own tests) inject in
-# place of the production Tokio spawner, so neither needs a Tokio runtime. Never
+# Internal-only API surface for in-workspace tests and documentation figures: the
+# `testing::synchronous_spawner` the `cargo-bench-history` shell crate's tests (and this
+# crate's own tests) inject in place of the production Tokio spawner, so neither needs a
+# Tokio runtime, and the `examples` catalogue of named series, series/context builders and
+# scatter helpers that the documentation figures render and the tests assert on. Never
 # forwarded by the shell crate, so end-user builds never see it. See
 # docs/impl-crate-split.md for the `test-util` vs `private-test-util` distinction.
 private-test-util = ["dep:thread_aware"]

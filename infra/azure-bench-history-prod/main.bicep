@@ -6,9 +6,10 @@
 //
 //   * a Storage account (Entra-only: shared-key access disabled, HTTPS only) that
 //     holds the real, long-lived benchmark history;
-//   * a dedicated user-assigned managed identity (the prod CI principal) with a
-//     GitHub OIDC federated credential for `main`, so the nightly workflow can
-//     sign in without a stored secret;
+//   * a dedicated user-assigned managed identity (the prod CI principal) with
+//     GitHub OIDC federated credentials for `main` and for same-repo pull requests,
+//     so both the nightly workflow and the PR benchmark-history workflow can sign in
+//     without a stored secret;
 //   * `Storage Blob Data Contributor` role assignments on the account for that
 //     managed identity and (optionally) a local developer principal.
 //
@@ -39,6 +40,9 @@ param githubBranches array = [
   'main'
 ]
 
+@description('Whether to trust pull-request workflow runs from the same repository.')
+param trustPullRequests bool = true
+
 @description('Object id of a local developer principal (user or group) to grant data access. Empty skips the grant.')
 param localPrincipalId string = ''
 
@@ -60,14 +64,31 @@ var blobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 var githubIssuer = 'https://token.actions.githubusercontent.com'
 var federationAudience = 'api://AzureADTokenExchange'
 
-// The nightly collection only ever runs on `main` (schedule and gated dispatch),
-// so unlike the test identity there is no pull-request credential here.
-var federatedCredentials = [
+// The nightly collection runs on `main` (schedule and gated dispatch), and the PR
+// benchmark-history workflow (.github/workflows/pr-bench-history.yml) collects and
+// analyzes on same-repo pull requests, writing PR-head points into this same prod
+// store so branch-mode analyze can compare them against main's baseline. That PR
+// workflow needs its own OIDC subject, so — mirroring the test identity — this
+// grants one federated credential per trusted branch PLUS a pull-request credential
+// (subject `…:pull_request`). Adding the PR credential deliberately widens prod's
+// write surface to same-repo PR runs; forks cannot federate (no secrets on fork
+// runs), so only same-repo PRs are trusted. Set `trustPullRequests` to false to
+// revert prod to main-only.
+var branchCredentials = [
   for branch in githubBranches: {
     name: 'github-branch-${replace(branch, '/', '-')}'
     subject: 'repo:${githubOrg}/${githubRepo}:ref:refs/heads/${branch}'
   }
 ]
+var pullRequestCredential = trustPullRequests
+  ? [
+      {
+        name: 'github-pull-request'
+        subject: 'repo:${githubOrg}/${githubRepo}:pull_request'
+      }
+    ]
+  : []
+var federatedCredentials = concat(branchCredentials, pullRequestCredential)
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageAccountName

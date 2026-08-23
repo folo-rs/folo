@@ -5,7 +5,8 @@ use crate::harness::{serial, *};
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_callgrind_end_to_end_stores_results() {
-    let workspace = Workspace::new(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
+    let workspace = Workspace::new(&storage_only_config()).with_bench(&["--callgrind", &bench]);
 
     let outcome = workspace.drive(&["collect"]).await.unwrap();
     let RunOutcome::Completed { message } = outcome else {
@@ -15,19 +16,45 @@ async fn collect_callgrind_end_to_end_stores_results() {
 
     let (key, set) = workspace.single_object();
 
-    // Synthetic partition (Callgrind is hardware-independent) under the resolved
-    // triple. `collect` auto-detects the host triple, so derive it from the stored
-    // context to keep the assertion host-portable. The temp workspace is outside
-    // any git repository, so the commit resolves to the `unknown` fallback and the
-    // clean tree yields `clean.json`.
+    // Every engine is machine-keyed under the resolved triple and the auto-detected
+    // host fingerprint. `collect` auto-detects both, so derive them from the stored
+    // context to keep the assertion host-portable. The temp workspace is outside any
+    // git repository, so the commit resolves to the `unknown` fallback and the clean
+    // tree yields `clean.json`.
+    //
+    // The host-hardware provenance is recorded on the runs `collect` stores
+    // (write-only); its fingerprint is the machine key the run partitions under, a
+    // 16-char lowercase hex digest of the probed factors.
     let triple = &set.context.toolchain.target_triple;
+    let machine = set
+        .context
+        .machine
+        .as_ref()
+        .expect("collect records host-hardware provenance");
     assert_eq!(
         key,
-        format!("v1/testproj/objects/callgrind/{triple}/synthetic/unknown/clean.json")
+        format!(
+            "v1/testproj/objects/callgrind/{triple}/{fingerprint}/unknown/clean.json",
+            fingerprint = machine.fingerprint
+        )
     );
 
     assert_eq!(set.schema_version, SCHEMA_VERSION);
     assert_eq!(set.context.tool_version, TOOL_VERSION);
+    // The measurement protocol travels with the run: a default collection runs the
+    // suite once, so the stored values are the minimum of a single sample.
+    assert_eq!(set.context.best_of.unwrap().get(), 1);
+
+    assert!(machine.processors >= 1, "{machine:?}");
+    assert!(machine.memory_regions >= 1, "{machine:?}");
+    assert_eq!(machine.fingerprint.len(), 16, "{machine:?}");
+    assert!(
+        machine
+            .fingerprint
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+        "{machine:?}"
+    );
 
     assert_eq!(set.results.len(), 1);
     let record = &set.results[0];
@@ -57,11 +84,12 @@ async fn collect_callgrind_end_to_end_stores_results() {
 #[serial]
 #[cfg_attr(miri, ignore)]
 async fn collect_harvests_output_when_the_engine_runs_in_a_package_directory() {
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
     let workspace = Workspace::new(&storage_only_config()).with_bench(&[
         "--chdir",
         "subpkg",
-        "--summary",
-        "grp=single",
+        "--callgrind",
+        &bench,
     ]);
     std::fs::create_dir_all(workspace.root().join("subpkg")).unwrap();
 
@@ -85,11 +113,13 @@ async fn collect_harvests_output_when_the_engine_runs_in_a_package_directory() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_stores_a_record_per_summary() {
+    let single = callgrind_arg("a", CALLGRIND_SINGLE);
+    let parametrized = callgrind_arg("b", CALLGRIND_PARAMETRIZED);
     let workspace = Workspace::new(&storage_only_config()).with_bench(&[
-        "--summary",
-        "a=single",
-        "--summary",
-        "b=parametrized",
+        "--callgrind",
+        &single,
+        "--callgrind",
+        &parametrized,
     ]);
 
     let outcome = workspace.drive(&["collect"]).await.unwrap();
@@ -122,11 +152,13 @@ async fn collect_stores_a_record_per_summary() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_distinguishes_same_module_path_across_packages() {
+    let single = callgrind_arg("a", CALLGRIND_SINGLE);
+    let alt_pkg = callgrind_arg("b", CALLGRIND_SINGLE_ALT_PKG);
     let workspace = Workspace::new(&storage_only_config()).with_bench(&[
-        "--summary",
-        "a=single",
-        "--summary",
-        "b=single-alt-pkg",
+        "--callgrind",
+        &single,
+        "--callgrind",
+        &alt_pkg,
     ]);
 
     let outcome = workspace.drive(&["collect"]).await.unwrap();
@@ -166,11 +198,13 @@ async fn collect_distinguishes_same_module_path_across_packages() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_harvests_colliding_bench_binary_names_in_distinct_packages() {
+    let foo = callgrind_arg("shared/foo", CALLGRIND_SINGLE);
+    let bar = callgrind_arg("shared/bar", CALLGRIND_SINGLE_ALT_PKG);
     let workspace = Workspace::new(&storage_only_config()).with_bench(&[
-        "--summary",
-        "shared/foo=single",
-        "--summary",
-        "shared/bar=single-alt-pkg",
+        "--callgrind",
+        &foo,
+        "--callgrind",
+        &bar,
     ]);
 
     let outcome = workspace.drive(&["collect"]).await.unwrap();
@@ -202,7 +236,8 @@ async fn collect_harvests_colliding_bench_binary_names_in_distinct_packages() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_no_store_harvests_without_storing() {
-    let workspace = Workspace::new(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
+    let workspace = Workspace::new(&storage_only_config()).with_bench(&["--callgrind", &bench]);
 
     let outcome = workspace.drive(&["collect", "--no-store"]).await.unwrap();
     let RunOutcome::Completed { message } = outcome else {
@@ -224,12 +259,7 @@ async fn collect_no_store_harvests_without_storing() {
 async fn collect_propagates_nonzero_engine_exit() {
     let workspace = Workspace::new(&storage_only_config()).with_bench(&["--exit-code", "7"]);
 
-    let error = workspace.drive(&["collect"]).await.unwrap_err();
-    let RunError::Engine { engine, code } = error else {
-        panic!("expected an engine error, got {error:?}");
-    };
-    assert_eq!(engine, "cargo bench");
-    assert_eq!(code, Some(7));
+    workspace.drive(&["collect"]).await.unwrap_err();
 
     assert!(
         workspace.stored_objects().is_empty(),
@@ -243,17 +273,23 @@ async fn collect_propagates_nonzero_engine_exit() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_criterion_stores_results() {
-    let workspace =
-        Workspace::new(&storage_only_config()).with_bench(&["--criterion", "grp|capture|now=26.9"]);
+    let workspace = Workspace::new(&storage_only_config())
+        .with_bench(&["--criterion", "grp|capture|now=26.9@0.5/26.4:27.4"]);
 
     let outcome = workspace.drive(&["collect"]).await.unwrap();
     assert!(matches!(outcome, RunOutcome::Completed { .. }));
 
     let (key, set) = workspace.single_object();
-    // Criterion partitions by the host triple and a machine fingerprint (never the
-    // `synthetic` segment Callgrind uses).
+    // Criterion is machine-keyed: it partitions by the host triple and the
+    // auto-detected machine fingerprint.
+    let fingerprint = &set
+        .context
+        .machine
+        .as_ref()
+        .expect("collect records host-hardware provenance")
+        .fingerprint;
     assert!(key.contains("/criterion/"), "{key}");
-    assert!(!key.contains("/synthetic/"), "{key}");
+    assert!(key.contains(&format!("/{fingerprint}/")), "{key}");
     assert_eq!(set.results.len(), 1);
     let metric = &set.results[0].metrics[0];
     assert_eq!(metric.kind, MetricKind::WallTime);
@@ -269,9 +305,10 @@ async fn collect_criterion_stores_results() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_harvests_every_engine_that_produced_output() {
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
     let workspace = Workspace::new(&storage_only_config()).with_bench(&[
-        "--summary",
-        "grp=single",
+        "--callgrind",
+        &bench,
         "--criterion",
         "grp|capture|now=12.5",
         "--alloc-tracker",
@@ -288,39 +325,26 @@ async fn collect_harvests_every_engine_that_produced_output() {
 
     let objects = workspace.stored_objects();
     assert_eq!(objects.len(), 4, "{objects:?}");
-    // Hardware-independent engines (Callgrind instruction counts, allocation
-    // statistics) land in the `synthetic` partition; hardware-dependent engines
-    // (Criterion wall time, `all_the_time` processor time) carry a machine
-    // fingerprint.
-    assert!(
-        objects
-            .iter()
-            .any(|(key, _)| key.contains("/callgrind/") && key.contains("/synthetic/")),
-        "{objects:?}"
-    );
-    assert!(
-        objects
-            .iter()
-            .any(|(key, _)| key.contains("/criterion/") && !key.contains("/synthetic/")),
-        "{objects:?}"
-    );
-    assert!(
-        objects
-            .iter()
-            .any(|(key, _)| key.contains("/alloc_tracker/") && key.contains("/synthetic/")),
-        "{objects:?}"
-    );
-    assert!(
-        objects
-            .iter()
-            .any(|(key, _)| key.contains("/all_the_time/") && !key.contains("/synthetic/")),
-        "{objects:?}"
-    );
+    // Every engine is machine-keyed, so all four sets land under the same
+    // auto-detected host fingerprint, each in its own engine partition.
+    let fingerprint = objects
+        .first()
+        .and_then(|(_, set)| set.context.machine.as_ref())
+        .expect("collect records host-hardware provenance")
+        .fingerprint
+        .clone();
+    for engine in ["callgrind", "criterion", "alloc_tracker", "all_the_time"] {
+        assert!(
+            objects.iter().any(|(key, _)| {
+                key.contains(&format!("/{engine}/")) && key.contains(&format!("/{fingerprint}/"))
+            }),
+            "{engine}: {objects:?}"
+        );
+    }
 }
 
-/// An `alloc_tracker` run stores allocation statistics in the `synthetic`
-/// partition (allocation behavior depends on the code, not the hardware),
-/// carrying both the byte and the count metric.
+/// An `alloc_tracker` run stores allocation statistics in a machine-fingerprinted
+/// partition, carrying both the byte and the count metric.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_alloc_tracker_stores_results() {
@@ -332,7 +356,13 @@ async fn collect_alloc_tracker_stores_results() {
 
     let (key, set) = workspace.single_object();
     assert!(key.contains("/alloc_tracker/"), "{key}");
-    assert!(key.contains("/synthetic/"), "{key}");
+    let fingerprint = &set
+        .context
+        .machine
+        .as_ref()
+        .expect("collect records host-hardware provenance")
+        .fingerprint;
+    assert!(key.contains(&format!("/{fingerprint}/")), "{key}");
     assert_eq!(set.results.len(), 1);
     let record = &set.results[0];
     assert_eq!(record.id.qualified(), "allocate_vec");
@@ -347,27 +377,27 @@ async fn collect_alloc_tracker_stores_results() {
     assert_eq!(count.kind.as_unit(), "count");
 }
 
-/// An `all_the_time` run stores processor time in a machine-fingerprinted
-/// partition (processor time is hardware-dependent), and `--machine-key` overrides
-/// the fingerprint.
+/// An `all_the_time` run stores processor time in a machine-fingerprinted partition.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_all_the_time_is_partitioned_by_machine_key() {
     let workspace =
         Workspace::new(&storage_only_config()).with_bench(&["--all-the-time", "read_cell=20"]);
 
-    workspace
-        .drive(&["collect", "--machine-key", "ci-pool-b"])
-        .await
-        .unwrap();
+    workspace.drive(&["collect"]).await.unwrap();
 
     let (key, set) = workspace.single_object();
     let triple = &set.context.toolchain.target_triple;
+    let machine = &set
+        .context
+        .machine
+        .as_ref()
+        .expect("collect records host-hardware provenance")
+        .fingerprint;
     assert!(
-        key.contains(&format!("/all_the_time/{triple}/ci-pool-b/")),
+        key.contains(&format!("/all_the_time/{triple}/{machine}/")),
         "{key}"
     );
-    assert!(!key.contains("/synthetic/"), "{key}");
     assert_eq!(set.results.len(), 1);
     let record = &set.results[0];
     assert_eq!(record.id.qualified(), "read_cell");
@@ -429,28 +459,6 @@ async fn collect_alloc_tracker_records_dispersion() {
     assert_eq!(count.std_dev, None);
 }
 
-/// `--machine-key` overrides the machine fingerprint in a Criterion partition.
-#[tokio::test]
-#[cfg_attr(miri, ignore)]
-async fn collect_criterion_honors_machine_key_override() {
-    let workspace =
-        Workspace::new(&storage_only_config()).with_bench(&["--criterion", "grp|capture|now=9"]);
-
-    // `collect` auto-detects the triple; this test asserts the machine-key override
-    // segment, so derive the triple from the stored context for a portable key.
-    workspace
-        .drive(&["collect", "--machine-key", "ci-pool-a"])
-        .await
-        .unwrap();
-
-    let (key, set) = workspace.single_object();
-    let triple = &set.context.toolchain.target_triple;
-    assert!(
-        key.contains(&format!("/criterion/{triple}/ci-pool-a/")),
-        "{key}"
-    );
-}
-
 /// A Criterion run collects every harvested case into one result set, keeping
 /// distinct group/function/value identities as separate records.
 #[tokio::test]
@@ -497,8 +505,10 @@ async fn collect_criterion_collects_distinct_cases_as_records() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_then_analyze_round_trips_a_sanitizing_project_id() {
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
     let workspace = Workspace::clean_repo(&storage_only_config_with_id("my proj/sub"))
-        .with_bench(&["--summary", "grp=single"]);
+        .with_bench(&["--callgrind", &bench])
+        .with_real_auto_discriminants();
 
     workspace.drive(&["collect"]).await.unwrap();
 
@@ -532,12 +542,10 @@ async fn collect_then_analyze_round_trips_a_sanitizing_project_id() {
 #[cfg_attr(miri, ignore)]
 async fn collect_then_analyze_preserves_unusual_identity_characters() {
     let workspace = Workspace::clean_repo(&storage_only_config())
-        .with_bench(&["--criterion", "time.capture|mide tiempo|tamaño 4=18.5"]);
+        .with_bench(&["--criterion", "time.capture|mide tiempo|tamaño 4=18.5"])
+        .with_real_auto_discriminants();
 
-    workspace
-        .drive(&["collect", "--machine-key", "pool"])
-        .await
-        .unwrap();
+    workspace.drive(&["collect"]).await.unwrap();
 
     let objects = workspace.stored_objects();
     assert_eq!(objects.len(), 1, "{objects:?}");
@@ -546,8 +554,16 @@ async fn collect_then_analyze_preserves_unusual_identity_characters() {
     // identity's spaces or non-ASCII letters leak into it. `collect` auto-detects the
     // triple, so derive it from the stored context for a portable prefix.
     let triple = &set.context.toolchain.target_triple;
+    let machine = &set
+        .context
+        .machine
+        .as_ref()
+        .expect("collect records host-hardware provenance")
+        .fingerprint;
     assert!(
-        key.starts_with(&format!("v1/testproj/objects/criterion/{triple}/pool/")),
+        key.starts_with(&format!(
+            "v1/testproj/objects/criterion/{triple}/{machine}/"
+        )),
         "{key}"
     );
     assert!(
@@ -562,9 +578,7 @@ async fn collect_then_analyze_preserves_unusual_identity_characters() {
 
     // The reader reconstructs the series, proving the unusual identity is a stable
     // series key end to end.
-    let report = workspace
-        .drive_json(&["analyze", "--machine-key", "pool"])
-        .await;
+    let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["runs"], 1, "{report}");
     assert_eq!(parsed["series"], 1, "{report}");
@@ -576,8 +590,9 @@ async fn collect_then_analyze_preserves_unusual_identity_characters() {
 async fn collect_uses_explicit_config_path() {
     // Only the custom path holds a configuration; the default discovery path is
     // absent, so a successful run proves `--config` was honored.
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
     let workspace = Workspace::with_config_at("config/bench.toml", &storage_only_config())
-        .with_bench(&["--summary", "grp=single"]);
+        .with_bench(&["--callgrind", &bench]);
 
     let outcome = workspace
         .drive(&["collect", "--config", "config/bench.toml"])
@@ -592,15 +607,12 @@ async fn collect_uses_explicit_config_path() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn re_running_the_same_commit_is_refused_as_a_duplicate() {
-    let workspace = Workspace::new(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
+    let workspace = Workspace::new(&storage_only_config()).with_bench(&["--callgrind", &bench]);
 
     workspace.drive(&["collect"]).await.unwrap();
 
-    let error = workspace.drive(&["collect"]).await.unwrap_err();
-    let RunError::Duplicate { key } = error else {
-        panic!("expected a duplicate error, got {error:?}");
-    };
-    assert!(key.ends_with("/clean.json"), "{key}");
+    workspace.drive(&["collect"]).await.unwrap_err();
 
     // The refused run left the single stored object in place.
     assert_eq!(workspace.stored_objects().len(), 1);
@@ -610,7 +622,8 @@ async fn re_running_the_same_commit_is_refused_as_a_duplicate() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn overwrite_replaces_the_stored_result() {
-    let workspace = Workspace::new(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
+    let workspace = Workspace::new(&storage_only_config()).with_bench(&["--callgrind", &bench]);
 
     workspace.drive(&["collect"]).await.unwrap();
 

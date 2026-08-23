@@ -2,14 +2,13 @@
 
 use std::fmt::Debug;
 use std::io;
+use std::num::NonZero;
 #[cfg(test)]
 use std::sync::Arc;
 
-use libc::cpu_set_t;
-
 #[cfg(test)]
 use crate::pal::linux::MockBindings;
-use crate::pal::linux::{Bindings, BuildTargetBindings};
+use crate::pal::linux::{Bindings, BuildTargetBindings, CpuMask};
 
 /// Enum to hide the real/mock choice behind a single wrapper type.
 #[derive(Clone)]
@@ -32,11 +31,11 @@ impl BindingsFacade {
 }
 
 impl Bindings for BindingsFacade {
-    fn sched_setaffinity_current(&self, cpuset: &cpu_set_t) -> Result<(), io::Error> {
+    fn sched_setaffinity_current(&self, mask: &CpuMask) -> Result<(), io::Error> {
         match self {
-            Self::Target(bindings) => bindings.sched_setaffinity_current(cpuset),
+            Self::Target(bindings) => bindings.sched_setaffinity_current(mask),
             #[cfg(test)]
-            Self::Mock(mock) => mock.sched_setaffinity_current(cpuset),
+            Self::Mock(mock) => mock.sched_setaffinity_current(mask),
         }
     }
 
@@ -48,11 +47,11 @@ impl Bindings for BindingsFacade {
         }
     }
 
-    fn sched_getaffinity_current(&self) -> Result<cpu_set_t, io::Error> {
+    fn sched_getaffinity_current(&self, words: NonZero<usize>) -> Result<CpuMask, io::Error> {
         match self {
-            Self::Target(bindings) => bindings.sched_getaffinity_current(),
+            Self::Target(bindings) => bindings.sched_getaffinity_current(words),
             #[cfg(test)]
-            Self::Mock(mock) => mock.sched_getaffinity_current(),
+            Self::Mock(mock) => mock.sched_getaffinity_current(words),
         }
     }
 }

@@ -8,13 +8,15 @@ use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) use cargo_bench_history::{
-    BenchmarkId, BenchmarkResult, Cli, Command, EnvironmentInfo, GitInfo, Metric, MetricKind,
-    Overrides, Run, RunContext, RunError, RunOutcome, SCHEMA_VERSION, ToolchainInfo,
+    AutoDiscriminants, BenchmarkId, BenchmarkResult, Cli, Command, EnvironmentInfo, GitInfo,
+    Metric, MetricKind, Overrides, Run, RunContext, RunOutcome, SCHEMA_VERSION, ToolchainInfo,
     default_template, run, run_with_overrides,
 };
 use cbh_codec as codec;
+use cbh_model::{DiscriminantSet, Engine, MachineKey, TargetTriple};
 pub(crate) use jiff::Timestamp;
 use nonempty::nonempty;
+pub(crate) use ohno::AppError;
 pub(crate) use serial_test::serial;
 pub(crate) use testing::CwdGuard;
 use tick::Clock;
@@ -22,6 +24,65 @@ use tick::Clock;
 /// The tool version recorded with each run. The integration test compiles within
 /// the package, so its `CARGO_PKG_VERSION` matches the version `collect` records.
 pub(crate) const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The target triple the harness pins the auto-detected discriminant value to, matching the
+/// triple the seed helpers write their partitions under. Pinning it keeps the
+/// suite host-independent: sets obey the target-triple filter (a `list`/`analyze`
+/// with an auto triple never sees foreign-triple data), so a bare query must
+/// auto-detect the seeded triple regardless of the host the test runs on.
+pub(crate) const HARNESS_AUTO_TRIPLE: &str = "x86_64-unknown-linux-gnu";
+
+/// The machine key the harness pins the auto-detected discriminant value to. Every engine is
+/// machine-keyed, so a bare query must auto-detect a machine key the seeded sets
+/// share; the callgrind/alloc seed helpers plant their objects under this key so a
+/// default query matches them regardless of the host the test runs on. Tests that
+/// exercise per-machine isolation seed additional, explicit machine keys and
+/// select them with an explicit `--machine-key`.
+pub(crate) const HARNESS_AUTO_MACHINE_KEY: &str = "harness-auto-machine";
+
+/// The minimum number of points a change-point regime (the flat side and the
+/// stepped side of a split) must hold before the history detector trusts the
+/// split. Mirrors `cbh_detect::MIN_REGIME`; the
+/// [`fixture_gate_sizes_match_the_detector_defaults`] guard test keeps the two in
+/// lockstep. Fixtures build a flat regime and a stepped regime of this size so a
+/// seeded step clears the detector's per-regime persistence gate.
+pub(crate) const MIN_REGIME: usize = 5;
+
+/// The minimum number of points a series must carry to be analysed at all — below
+/// it the series is not judged and is not even counted in the false-discovery
+/// family. Equal to two full regimes and mirrors
+/// `cbh_detect::MIN_SERIES_POINTS` (also the value of
+/// `DRIFT_MIN_POINTS` and the base-side commit-level floor branch mode demands).
+/// Fixtures seed at least this many points so their series is judged rather than
+/// silently skipped.
+pub(crate) const MIN_SERIES_POINTS: usize = 2 * MIN_REGIME;
+
+/// The committer date of the first commit the rising Callgrind fixture
+/// ([`Workspace::seed_rising_callgrind_history`]) stamps; each later commit is one
+/// calendar day on. Named so a test that must know where the fixture's timeline
+/// starts or ends derives it (via [`sequential_dates`]) instead of restating a
+/// date that moves whenever the fixture's length does.
+pub(crate) const RISING_HISTORY_FIRST_DATE: &str = "2024-01-01";
+
+/// Canonical faker `--callgrind` identity/metric fragments, kept in lockstep with
+/// what the `collect` identity assertions expect. A fragment is everything after
+/// the on-disk `GROUP` — `MODULE|FUNCTION[|ID[|PACKAGE_DIR]]=IR/BC/BI`; the
+/// [`callgrind_arg`] helper prepends the group.
+///
+/// `CALLGRIND_SINGLE` is an unparametrized bench in package `fast_time`
+/// (`Ir`/`Bc`/`Bi` = 36/4/2); `CALLGRIND_PARAMETRIZED` adds the `two_instants` id
+/// (87/2/1); `CALLGRIND_SINGLE_ALT_PKG` keeps `CALLGRIND_SINGLE`'s identity but
+/// reports a different `package_dir` (package `other_pkg`), to exercise
+/// cross-package bench-name collisions.
+pub(crate) const CALLGRIND_SINGLE: &str = "fast_time_timestamp_performance_cg::timestamp_capture::timestamp_capture_std_now|timestamp_capture_std_now||/mnt/c/Source/folo/packages/fast_time=36/4/2";
+pub(crate) const CALLGRIND_PARAMETRIZED: &str = "fast_time_timestamp_performance_cg::timestamp_capture::timestamp_capture_instant_saturating_duration_since|timestamp_capture_instant_saturating_duration_since|two_instants|/mnt/c/Source/folo/packages/fast_time=87/2/1";
+pub(crate) const CALLGRIND_SINGLE_ALT_PKG: &str = "fast_time_timestamp_performance_cg::timestamp_capture::timestamp_capture_std_now|timestamp_capture_std_now||/work/packages/other_pkg=36/4/2";
+
+/// Builds a faker `--callgrind` argument value for on-disk `group` from one of the
+/// `CALLGRIND_*` identity/metric fragments (prepends `GROUP|`).
+pub(crate) fn callgrind_arg(group: &str, fragment: &str) -> String {
+    format!("{group}|{fragment}")
+}
 
 /// A process-global base repository template: a `master`-branch repo carrying the
 /// volatile-directory excludes and one empty `root` commit, built once via the real
@@ -380,7 +441,7 @@ pub(crate) struct Workspace {
     committer_times: RefCell<HashMap<String, Timestamp>>,
     /// Arguments passed to the mock benchmark engine that `collect`/`backfill` invoke
     /// in place of `cargo bench`. They tell the mock which fixtures to emit (which
-    /// `--summary` / `--criterion` cases, or an `--exit-code`), so each engine's
+    /// `--callgrind` / `--criterion` cases, or an `--exit-code`), so each engine's
     /// output tree is produced by the single benchmark command `collect` invokes.
     bench: Vec<String>,
     /// Streams commit creation through one long-lived `git fast-import` rather than
@@ -395,6 +456,15 @@ pub(crate) struct Workspace {
     /// tests that exercise the no-storage-configured error path, and azure tests use
     /// their own workspace type entirely.
     inject_local: bool,
+    /// Whether [`drive`](Self::drive) uses real host auto-detection for the query
+    /// discriminant values instead of the pinned [`HARNESS_AUTO_TRIPLE`] /
+    /// [`HARNESS_AUTO_MACHINE_KEY`].
+    /// The standard constructors pin the discriminant values so seeded-partition tests are
+    /// host-independent; [`with_real_auto_discriminants`](Self::with_real_auto_discriminants)
+    /// enables real detection for the `collect`→`analyze` round-trip tests, whose
+    /// whole point is that a real `collect` (which stamps the host triple) and a
+    /// bare `analyze` resolve the *same* host partition.
+    real_auto_discriminants: bool,
 }
 
 impl Drop for Workspace {
@@ -419,6 +489,7 @@ impl Workspace {
             bench: Vec::new(),
             graph: RefCell::new(GitGraph::new(root, "master")),
             inject_local: true,
+            real_auto_discriminants: false,
         };
         let cargo_dir = workspace.root().join(".cargo");
         fs::create_dir_all(&cargo_dir).unwrap();
@@ -454,6 +525,7 @@ impl Workspace {
             bench: Vec::new(),
             graph: RefCell::new(GitGraph::new(root, "master")),
             inject_local: false,
+            real_auto_discriminants: false,
         }
     }
 
@@ -468,6 +540,7 @@ impl Workspace {
             bench: Vec::new(),
             graph: RefCell::new(GitGraph::new(root, "master")),
             inject_local: true,
+            real_auto_discriminants: false,
         };
         let path = workspace.root().join(relative);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -490,6 +563,32 @@ impl Workspace {
     pub(crate) fn without_local_storage(mut self) -> Self {
         self.inject_local = false;
         self
+    }
+
+    /// Uses real host auto-detection for the discriminant filters instead of the pinned
+    /// harness defaults (consuming builder). Reserved for `collect`→`analyze`
+    /// round-trip tests: a real `collect` stamps the host triple, so a bare
+    /// `analyze` must auto-detect that same host triple to find the run. Every
+    /// other test seeds a fixed-triple partition and relies on the pin.
+    pub(crate) fn with_real_auto_discriminants(mut self) -> Self {
+        self.real_auto_discriminants = true;
+        self
+    }
+
+    /// The auto-detected discriminant override a drive injects through `Overrides`.
+    ///
+    /// Pinned to [`HARNESS_AUTO_TRIPLE`]/[`HARNESS_AUTO_MACHINE_KEY`] by default so
+    /// the suite is host-independent; `None` (real detection) when
+    /// [`with_real_auto_discriminants`](Self::with_real_auto_discriminants) opted in.
+    fn auto_discriminants_override(&self) -> Option<AutoDiscriminants> {
+        if self.real_auto_discriminants {
+            None
+        } else {
+            Some(AutoDiscriminants {
+                triple: HARNESS_AUTO_TRIPLE.to_owned(),
+                machine_key: HARNESS_AUTO_MACHINE_KEY.to_owned(),
+            })
+        }
     }
 
     /// Builds the effective CLI arguments for a drive, injecting `--verbose` for
@@ -648,10 +747,10 @@ impl Workspace {
     /// at UTC midnight), on the current branch and returns its full commit ID, reusing the
     /// commit ID (without redating) if the label already exists.
     ///
-    /// Pinning the author and committer date lets the window tests exercise
-    /// `--since`/`--until`: `analyze`/`list` read each commit's committer timestamp
-    /// from git topology to decide the window before any object is fetched, so the
-    /// date stamped here governs how a seeded object behaves under the window.
+    /// Pinning the author and committer date lets the cutoff tests exercise
+    /// `--since`: `analyze`/`list` read each commit's committer timestamp
+    /// from git topology to decide the cutoff before any object is fetched, so the
+    /// date stamped here governs how a seeded object behaves under the cutoff.
     pub(crate) fn commit_dated(&self, date: &str, label: &str) -> String {
         if let Some(commit_id) = self.commits.borrow().get(label) {
             return commit_id.clone();
@@ -744,7 +843,7 @@ impl Workspace {
     /// Commits a tracked file with `contents` at `relative` on the current branch
     /// and returns the new commit's full ID. Unlike [`commit`](Self::commit), the
     /// commit changes the tree, so the file appears in any worktree checked out to
-    /// it — used to stand in for a "broken" commit the mock engine reacts to. It
+    /// it — used to stand in for a "broken" commit the faker reacts to. It
     /// takes the next synthetic committer date, keeping the timeline monotonic and
     /// in-window like the surrounding empty commits.
     pub(crate) fn commit_with_file(&self, message: &str, relative: &str, contents: &str) -> String {
@@ -798,7 +897,7 @@ impl Workspace {
     }
 
     /// Drives a command with `args` against this workspace.
-    pub(crate) async fn drive(&self, args: &[&str]) -> Result<RunOutcome, RunError> {
+    pub(crate) async fn drive(&self, args: &[&str]) -> Result<RunOutcome, AppError> {
         self.flush_git();
         // Point the harvest at this workspace's own `target/` explicitly, so a
         // shared ambient `CARGO_TARGET_DIR` (as `cargo llvm-cov` sets during
@@ -807,10 +906,10 @@ impl Workspace {
         // keeps the test hermetic without mutating the process environment.
         let target_root = self.root().join("target");
 
-        // Drive `collect`/`backfill` against the mock engine instead of `cargo bench`:
+        // Drive `collect`/`backfill` against the faker instead of `cargo bench`:
         // the program plus its fixture-describing arguments form the benchmark
         // command, which the single bench invocation runs to produce engine output.
-        let mut bench_command = vec![mock_bench_engine::binary_path().to_owned()];
+        let mut bench_command = vec![cargo_bench_history_faker::binary_path().to_owned()];
         bench_command.extend(self.bench.iter().cloned());
 
         let effective = self.effective_args(args);
@@ -823,6 +922,7 @@ impl Workspace {
                 bench_command: Some(bench_command),
                 clock: Some(Clock::new_frozen_at(analysis_now())),
                 storage_override: None,
+                auto_discriminants: self.auto_discriminants_override(),
             },
         )
         .await
@@ -845,9 +945,9 @@ impl Workspace {
     pub(crate) async fn drive_resolving_target_root(
         &self,
         args: &[&str],
-    ) -> Result<RunOutcome, RunError> {
+    ) -> Result<RunOutcome, AppError> {
         self.flush_git();
-        let mut bench_command = vec![mock_bench_engine::binary_path().to_owned()];
+        let mut bench_command = vec![cargo_bench_history_faker::binary_path().to_owned()];
         bench_command.extend(self.bench.iter().cloned());
 
         let effective = self.effective_args(args);
@@ -861,6 +961,7 @@ impl Workspace {
                 bench_command: Some(bench_command),
                 clock: Some(Clock::new_frozen_at(analysis_now())),
                 storage_override: None,
+                auto_discriminants: self.auto_discriminants_override(),
             },
         )
         .await
@@ -988,8 +1089,11 @@ impl Workspace {
 
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
-        let key = format!(
-            "v1/testproj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit_id}/clean.json"
+        let key = seed_clean_key(
+            Engine::Callgrind,
+            "x86_64-unknown-linux-gnu",
+            HARNESS_AUTO_MACHINE_KEY,
+            &commit_id,
         );
         let mut object: serde_json::Value = serde_json::from_str(
             &ir_result_set(observed.as_second(), &commit_id, ir_value)
@@ -1012,7 +1116,12 @@ impl Workspace {
     /// own git committer date, so the test owns the topology the window is decided
     /// from.
     pub(crate) fn seed_callgrind(&self, label: &str, value: f64) {
-        self.seed_callgrind_in("x86_64-unknown-linux-gnu", "synthetic", label, value);
+        self.seed_callgrind_in(
+            "x86_64-unknown-linux-gnu",
+            HARNESS_AUTO_MACHINE_KEY,
+            label,
+            value,
+        );
     }
 
     /// Seeds one clean Callgrind result set into the `triple`/`machine` partition
@@ -1021,8 +1130,7 @@ impl Workspace {
     pub(crate) fn seed_callgrind_in(&self, triple: &str, machine: &str, label: &str, value: f64) {
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
-        let key =
-            format!("v1/testproj/objects/callgrind/{triple}/{machine}/{commit_id}/clean.json");
+        let key = seed_clean_key(Engine::Callgrind, triple, machine, &commit_id);
         self.seed(
             &key,
             &ir_result_set(observed.as_second(), &commit_id, value),
@@ -1037,9 +1145,12 @@ impl Workspace {
     pub(crate) fn seed_dirty_callgrind(&self, observed: &str, label: &str, value: f64) {
         let commit_id = self.commit_id(label);
         let effective: Timestamp = format!("{observed}T00:00:00Z").parse().unwrap();
-        let key = format!(
-            "v1/testproj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit_id}/dirty-{}.json",
-            effective.as_second()
+        let key = seed_dirty_key(
+            Engine::Callgrind,
+            "x86_64-unknown-linux-gnu",
+            HARNESS_AUTO_MACHINE_KEY,
+            &commit_id,
+            effective.as_second(),
         );
         self.seed(
             &key,
@@ -1052,8 +1163,11 @@ impl Workspace {
     pub(crate) fn seed_metrics(&self, label: &str, metrics: Vec<Metric>) {
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
-        let key = format!(
-            "v1/testproj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit_id}/clean.json"
+        let key = seed_clean_key(
+            Engine::Callgrind,
+            "x86_64-unknown-linux-gnu",
+            HARNESS_AUTO_MACHINE_KEY,
+            &commit_id,
         );
         self.seed(
             &key,
@@ -1061,31 +1175,50 @@ impl Workspace {
         );
     }
 
-    /// Seeds a flat history followed by a clear, sustained upward step — a
-    /// regression with enough points on each side to satisfy the change-point
-    /// detector's persistence requirement.
+    /// Seeds a flat-then-stepped clean Callgrind history: [`MIN_REGIME`] commits at
+    /// `baseline` then [`MIN_REGIME`] commits at `raised`, labeled `{prefix}1`..
+    /// and dated one day apart from `first_date` (`YYYY-MM-DD`). The series holds
+    /// [`MIN_SERIES_POINTS`] points — the minimum the change-point detector will
+    /// analyse — with each regime long enough to clear the per-regime persistence
+    /// gate, so a step between the regimes is a trustable sustained change.
+    pub(crate) fn seed_stepped_callgrind(
+        &self,
+        first_date: &str,
+        prefix: &str,
+        baseline: f64,
+        raised: f64,
+    ) {
+        for (index, date) in sequential_dates(first_date, MIN_SERIES_POINTS)
+            .into_iter()
+            .enumerate()
+        {
+            let label = format!(
+                "{prefix}{}",
+                index.checked_add(1).expect("commit index overflow")
+            );
+            self.commit_dated(&date, &label);
+            let value = if index < MIN_REGIME { baseline } else { raised };
+            self.seed_callgrind(&label, value);
+        }
+    }
+
+    /// Seeds a flat clean Callgrind history followed by a clear, sustained upward
+    /// step: [`MIN_REGIME`] commits at 100 then [`MIN_REGIME`] commits at 130,
+    /// labeled `c1`.. and dated one day apart from [`RISING_HISTORY_FIRST_DATE`].
+    /// The series holds [`MIN_SERIES_POINTS`] points — long enough that the
+    /// change-point detector analyses it, with each regime clearing the per-regime
+    /// persistence gate.
     pub(crate) fn seed_rising_callgrind_history(&self) {
-        self.commit_dated("2024-01-01", "c1");
-        self.seed_callgrind("c1", 100.0);
-        self.commit_dated("2024-01-02", "c2");
-        self.seed_callgrind("c2", 100.0);
-        self.commit_dated("2024-01-03", "c3");
-        self.seed_callgrind("c3", 100.0);
-        self.commit_dated("2024-01-04", "c4");
-        self.seed_callgrind("c4", 130.0);
-        self.commit_dated("2024-01-05", "c5");
-        self.seed_callgrind("c5", 130.0);
-        self.commit_dated("2024-01-06", "c6");
-        self.seed_callgrind("c6", 130.0);
+        self.seed_stepped_callgrind(RISING_HISTORY_FIRST_DATE, "c", 100.0, 130.0);
     }
 
     /// Seeds a rising Callgrind history for `count` distinct benchmarks sharing one
     /// partition, so a single analysis pass yields `count` regression findings of
     /// distinct magnitudes. Each benchmark holds a flat baseline of 100 across the
-    /// first three commits, then steps to a benchmark-specific higher value across
-    /// the last three — a sustained regression the change-point detector flags.
-    /// Benchmark `i` steps to `120 + i`, so magnitudes are distinct and strictly
-    /// increasing, giving the global ranking a deterministic order.
+    /// first [`MIN_REGIME`] commits, then steps to a benchmark-specific higher value
+    /// across the last [`MIN_REGIME`] — a sustained regression the change-point
+    /// detector flags. Benchmark `i` steps to `120 + i`, so magnitudes are distinct
+    /// and strictly increasing, giving the global ranking a deterministic order.
     pub(crate) fn seed_many_rising_callgrind_history(&self, count: usize) {
         let baseline = vec![100.0; count];
         // `count` is a small test parameter; a u16 cast keeps the value exact and
@@ -1095,32 +1228,32 @@ impl Workspace {
                 120.0 + f64::from(u16::try_from(index).expect("benchmark count fits in u16"))
             })
             .collect();
-        for (date, label) in [
-            ("2024-01-01", "c1"),
-            ("2024-01-02", "c2"),
-            ("2024-01-03", "c3"),
-        ] {
-            self.commit_dated(date, label);
-            self.seed_many_callgrind(label, &baseline);
-        }
-        for (date, label) in [
-            ("2024-01-04", "c4"),
-            ("2024-01-05", "c5"),
-            ("2024-01-06", "c6"),
-        ] {
-            self.commit_dated(date, label);
-            self.seed_many_callgrind(label, &raised);
+        for (index, date) in sequential_dates("2024-01-01", MIN_SERIES_POINTS)
+            .into_iter()
+            .enumerate()
+        {
+            let label = format!("c{}", index.checked_add(1).expect("commit index overflow"));
+            self.commit_dated(&date, &label);
+            let values = if index < MIN_REGIME {
+                &baseline
+            } else {
+                &raised
+            };
+            self.seed_many_callgrind(&label, values);
         }
     }
 
     /// Seeds one Callgrind result set carrying one `Ir` benchmark per entry in
     /// `values` for the previously created commit `label`, all in the shared
-    /// `x86_64`/`synthetic` partition.
-    fn seed_many_callgrind(&self, label: &str, values: &[f64]) {
+    /// `x86_64`/[`HARNESS_AUTO_MACHINE_KEY`] partition.
+    pub(crate) fn seed_many_callgrind(&self, label: &str, values: &[f64]) {
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
-        let key = format!(
-            "v1/testproj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit_id}/clean.json"
+        let key = seed_clean_key(
+            Engine::Callgrind,
+            "x86_64-unknown-linux-gnu",
+            HARNESS_AUTO_MACHINE_KEY,
+            &commit_id,
         );
         self.seed(
             &key,
@@ -1133,8 +1266,11 @@ impl Workspace {
     pub(crate) fn seed_criterion(&self, label: &str, machine: &str, value: f64) {
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
-        let key = format!(
-            "v1/testproj/objects/criterion/x86_64-pc-windows-msvc/{machine}/{commit_id}/clean.json"
+        let key = seed_clean_key(
+            Engine::Criterion,
+            "x86_64-pc-windows-msvc",
+            machine,
+            &commit_id,
         );
         self.seed(
             &key,
@@ -1155,9 +1291,12 @@ impl Workspace {
     ) {
         let commit_id = self.commit_id(label);
         let effective: Timestamp = format!("{observed}T00:00:00Z").parse().unwrap();
-        let key = format!(
-            "v1/testproj/objects/criterion/x86_64-pc-windows-msvc/{machine}/{commit_id}/dirty-{}.json",
-            effective.as_second()
+        let key = seed_dirty_key(
+            Engine::Criterion,
+            "x86_64-pc-windows-msvc",
+            machine,
+            &commit_id,
+            effective.as_second(),
         );
         self.seed(
             &key,
@@ -1166,25 +1305,20 @@ impl Workspace {
     }
 
     /// Seeds a flat Criterion `wall_time` history then a clear, sustained upward
-    /// step. Four points on each side give the rank-sum gate enough power to
-    /// distinguish the step from noise.
+    /// step: [`MIN_REGIME`] commits at 20 then [`MIN_REGIME`] commits at 30, labeled
+    /// `d1`.. and dated one day apart from 2024-02-01. The series holds
+    /// [`MIN_SERIES_POINTS`] points, long enough for the change-point detector to
+    /// analyse it with each regime clearing the per-regime persistence gate.
     pub(crate) fn seed_rising_criterion_history(&self, machine: &str) {
-        self.commit_dated("2024-02-01", "d1");
-        self.seed_criterion("d1", machine, 20.0);
-        self.commit_dated("2024-02-02", "d2");
-        self.seed_criterion("d2", machine, 20.0);
-        self.commit_dated("2024-02-03", "d3");
-        self.seed_criterion("d3", machine, 20.0);
-        self.commit_dated("2024-02-04", "d4");
-        self.seed_criterion("d4", machine, 20.0);
-        self.commit_dated("2024-02-05", "d5");
-        self.seed_criterion("d5", machine, 30.0);
-        self.commit_dated("2024-02-06", "d6");
-        self.seed_criterion("d6", machine, 30.0);
-        self.commit_dated("2024-02-07", "d7");
-        self.seed_criterion("d7", machine, 30.0);
-        self.commit_dated("2024-02-08", "d8");
-        self.seed_criterion("d8", machine, 30.0);
+        for (index, date) in sequential_dates("2024-02-01", MIN_SERIES_POINTS)
+            .into_iter()
+            .enumerate()
+        {
+            let label = format!("d{}", index.checked_add(1).expect("commit index overflow"));
+            self.commit_dated(&date, &label);
+            let value = if index < MIN_REGIME { 20.0 } else { 30.0 };
+            self.seed_criterion(&label, machine, value);
+        }
     }
 
     /// Seeds one Callgrind result set carrying two distinct benchmark identities,
@@ -1193,8 +1327,11 @@ impl Workspace {
     pub(crate) fn seed_two_benchmarks(&self, label: &str, alpha: f64, beta: f64) {
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
-        let key = format!(
-            "v1/testproj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit_id}/clean.json"
+        let key = seed_clean_key(
+            Engine::Callgrind,
+            "x86_64-unknown-linux-gnu",
+            HARNESS_AUTO_MACHINE_KEY,
+            &commit_id,
         );
         self.seed(
             &key,
@@ -1204,13 +1341,15 @@ impl Workspace {
 
     /// Seeds one clean `alloc_tracker` result set for `operation` on the previously
     /// created commit `label`, recording `bytes` mean bytes and `allocs` mean
-    /// allocations per iteration. Allocation counts are hardware-independent, so the
-    /// partition is `synthetic` (no machine key).
+    /// allocations per iteration in the [`HARNESS_AUTO_MACHINE_KEY`] partition.
     pub(crate) fn seed_alloc_tracker(&self, label: &str, operation: &str, bytes: f64, allocs: f64) {
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
-        let key = format!(
-            "v1/testproj/objects/alloc_tracker/x86_64-unknown-linux-gnu/synthetic/{commit_id}/clean.json"
+        let key = seed_clean_key(
+            Engine::AllocTracker,
+            "x86_64-unknown-linux-gnu",
+            HARNESS_AUTO_MACHINE_KEY,
+            &commit_id,
         );
         self.seed(
             &key,
@@ -1220,8 +1359,7 @@ impl Workspace {
 
     /// Seeds one clean `all_the_time` result set for `operation` on the previously
     /// created commit `label`, recording `nanos` mean processor-time nanoseconds
-    /// per iteration in the `machine`-keyed partition (processor time is
-    /// hardware-dependent).
+    /// per iteration in the `machine`-keyed partition.
     pub(crate) fn seed_all_the_time(
         &self,
         label: &str,
@@ -1231,8 +1369,11 @@ impl Workspace {
     ) {
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
-        let key = format!(
-            "v1/testproj/objects/all_the_time/x86_64-unknown-linux-gnu/{machine}/{commit_id}/clean.json"
+        let key = seed_clean_key(
+            Engine::AllTheTime,
+            "x86_64-unknown-linux-gnu",
+            machine,
+            &commit_id,
         );
         self.seed(
             &key,
@@ -1254,8 +1395,11 @@ impl Workspace {
     ) {
         let commit_id = self.commit_id(label);
         let observed = self.committer_time(&commit_id);
-        let key = format!(
-            "v1/testproj/objects/all_the_time/x86_64-unknown-linux-gnu/{machine}/{commit_id}/clean.json"
+        let key = seed_clean_key(
+            Engine::AllTheTime,
+            "x86_64-unknown-linux-gnu",
+            machine,
+            &commit_id,
         );
         self.seed(
             &key,
@@ -1268,6 +1412,39 @@ impl Workspace {
             ),
         );
     }
+}
+
+/// The project every seeded object is recorded under, matching the identity the
+/// faker-backed `collect`/`import` runs resolve for the test repository.
+const SEED_PROJECT: &str = "testproj";
+
+/// Builds a clean-object storage key through the model's key builder — the exact
+/// code path `run` writes under — so a seed helper cannot drift from the
+/// production storage layout by hand-formatting a key string.
+fn seed_clean_key(engine: Engine, triple: &str, machine: &str, commit: &str) -> String {
+    DiscriminantSet::new(
+        engine,
+        &TargetTriple::from(triple),
+        &MachineKey::from(machine),
+    )
+    .clean_key(SEED_PROJECT, commit)
+}
+
+/// Builds a dirty-snapshot storage key through the model's key builder, keyed by
+/// `observation_unix` exactly as a real dirty run is.
+fn seed_dirty_key(
+    engine: Engine,
+    triple: &str,
+    machine: &str,
+    commit: &str,
+    observation_unix: i64,
+) -> String {
+    DiscriminantSet::new(
+        engine,
+        &TargetTriple::from(triple),
+        &MachineKey::from(machine),
+    )
+    .dirty_key(SEED_PROJECT, commit, observation_unix)
 }
 
 /// Clears `CARGO_TARGET_DIR` from the process environment for its lifetime,
@@ -1306,6 +1483,23 @@ impl Drop for ClearedTargetDir {
             std::env::set_var("CARGO_TARGET_DIR", previous);
         }
     }
+}
+
+/// Produces `count` consecutive `YYYY-MM-DD` date strings starting at `start`
+/// (`YYYY-MM-DD`), one calendar day apart. Fixtures use it to generate commit
+/// chains long enough to clear the detectors' minimum-evidence gates without
+/// hand-writing every date. Callers keep `start` and `count` inside `analyze`'s
+/// default six-month look-back window (see [`analysis_now`]).
+pub(crate) fn sequential_dates(start: &str, count: usize) -> Vec<String> {
+    let mut date: jiff::civil::Date = start.parse().expect("start is a valid YYYY-MM-DD date");
+    let mut dates = Vec::with_capacity(count);
+    for _ in 0..count {
+        dates.push(date.to_string());
+        date = date
+            .tomorrow()
+            .expect("date stays within the supported range");
+    }
+    dates
 }
 
 /// A fixed clock anchor for `analyze`/`list`'s history-mode default `--since`
@@ -1505,6 +1699,37 @@ pub(crate) fn time_result_set_with_dispersion(
     Run::new(context, vec![record])
 }
 
+/// The number of series a rendered text report states it judged, read from the
+/// coverage field every analysis report carries in its header.
+///
+/// Panics when the report carries no coverage field: a report with nothing in scope
+/// cannot support any claim about the detectors.
+pub(crate) fn judged_series(report: &str) -> usize {
+    let (_, tail) = report
+        .split_once("in-scope series judged: ")
+        .unwrap_or_else(|| panic!("the report header states its series coverage: {report}"));
+    let (judged, _) = tail
+        .split_once(" of ")
+        .unwrap_or_else(|| panic!("the coverage field reads `judged of in-scope`: {report}"));
+    judged
+        .parse()
+        .unwrap_or_else(|_| panic!("the coverage field counts series: {report}"))
+}
+
+/// Asserts that an analysis actually reached a verdict on at least one series.
+///
+/// An assertion that nothing was flagged only says something about the detectors
+/// when the data reached them. The same silence is also what a history too short to
+/// judge, a ghost-filtered benchmark, or a detector switched off by a bad gate
+/// produces — so a test asserting an absence states this first, and thereby cannot
+/// pass vacuously.
+pub(crate) fn assert_history_was_judged(report: &str) {
+    assert!(
+        judged_series(report) > 0,
+        "the analysis judged nothing, so its silence proves nothing: {report}"
+    );
+}
+
 pub(crate) fn ir_of(record: &BenchmarkResult) -> f64 {
     record
         .metrics
@@ -1606,4 +1831,21 @@ fn commit_dated_reuses_the_existing_commit() {
     let first = workspace.commit_dated("2024-01-01", "c1");
     let again = workspace.commit_dated("2024-01-05", "c1");
     assert_eq!(first, again, "the label reuses c1's commit");
+}
+
+/// The fixture sizing constants must track the detector's public defaults; if a
+/// gate default moves, this guard fails so the fixtures are re-derived rather than
+/// silently seeding too little (or needless) history.
+#[test]
+fn fixture_gate_sizes_match_the_detector_defaults() {
+    assert_eq!(
+        MIN_REGIME,
+        cbh_detect::MIN_REGIME,
+        "MIN_REGIME must match the detector's per-regime persistence gate"
+    );
+    assert_eq!(
+        MIN_SERIES_POINTS,
+        cbh_detect::MIN_SERIES_POINTS,
+        "MIN_SERIES_POINTS must match the detector's minimum-series-length gate"
+    );
 }

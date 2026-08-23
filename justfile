@@ -14,6 +14,7 @@ _default:
 
 import 'justfiles/just_basics.just'
 import 'justfiles/just_automation.just'
+import 'justfiles/just_book.just'
 import 'justfiles/just_delta.just'
 import 'justfiles/just_quality.just'
 import 'justfiles/just_release.just'

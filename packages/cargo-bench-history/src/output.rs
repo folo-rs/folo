@@ -21,8 +21,9 @@ use std::path::{Path, PathBuf};
 use cbh_analyze::RenderedReports;
 use cbh_config::rebase;
 use cbh_diag::{Reporter, ReporterExt};
+use ohno::AppError;
 
-use crate::RunError;
+use crate::errors::WriteReportFailedError;
 
 /// Writes a rendered report to a destination path, overwriting any existing file.
 ///
@@ -79,7 +80,7 @@ impl OutputWriter for TokioOutputWriter {
 ///
 /// # Errors
 ///
-/// Returns [`RunError::Io`] if writing a requested file fails.
+/// Returns a [`WriteReportFailedError`] if writing a requested file fails.
 pub(crate) async fn write_reports<W: OutputWriter>(
     writer: &W,
     reporter: &dyn Reporter,
@@ -87,7 +88,7 @@ pub(crate) async fn write_reports<W: OutputWriter>(
     json: Option<&Path>,
     markdown_summary: Option<&Path>,
     rendered: &RenderedReports,
-) -> Result<(), RunError> {
+) -> Result<(), AppError> {
     debug_assert_eq!(
         markdown.is_some(),
         rendered.markdown.is_some(),
@@ -124,8 +125,11 @@ async fn write_report<W: OutputWriter>(
     path: &Path,
     contents: &str,
     label: &str,
-) -> Result<(), RunError> {
-    writer.write(path, contents).await.map_err(RunError::Io)?;
+) -> Result<(), AppError> {
+    writer
+        .write(path, contents)
+        .await
+        .map_err(|error| WriteReportFailedError::caused_by(label, path, error))?;
     reporter.note_with(|| {
         format!(
             "wrote the {label} report to {} ({})",
@@ -284,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn write_reports_maps_a_write_failure_to_an_io_error() {
+    fn write_reports_names_the_report_that_could_not_be_written() {
         let json = PathBuf::from("report.json");
         let rendered = RenderedReports {
             json: Some("Json".to_owned()),
@@ -302,8 +306,10 @@ mod tests {
             &rendered,
         ))
         .unwrap_err();
-
-        assert!(matches!(error, RunError::Io(_)), "{error:?}");
+        let write_error = error.find_source::<WriteReportFailedError>().unwrap();
+        assert_eq!(write_error.label, "JSON");
+        assert_eq!(write_error.path, json);
+        assert!(error.find_source::<io::Error>().is_some());
     }
 }
 

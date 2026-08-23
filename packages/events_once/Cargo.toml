@@ -2,7 +2,7 @@
 name = "events_once"
 description = "Efficient oneshot events (channels) with support for single-threaded events, object embedding, event pools and event lakes"
 publish = true
-version = "0.5.31"
+version = "0.5.33"
 
 authors.workspace = true
 edition.workspace = true
@@ -17,8 +17,7 @@ all-features = true
 default = []
 
 [dependencies]
-hash_hasher = { workspace = true }
-infinity_pool = { workspace = true }
+plurality = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -36,25 +35,12 @@ gungraun = { workspace = true, features = ["default"] }
 workspace = true
 
 [[bench]]
-name = "events_once_local"
+name = "events_once_ops"
 harness = false
 
 [[bench]]
-name = "events_once_sync"
+name = "events_once_ops_cg"
 harness = false
-
-[[bench]]
-name = "events_once_vs_3p"
-harness = false
-
-[[bench]]
-name = "events_once_local_cg"
-harness = false
-
-[[bench]]
-name = "events_once_sync_cg"
-harness = false
-
 
 
 

@@ -6,6 +6,15 @@
 //! This package provides several types of object pools designed for different use cases,
 //! from basic pooling to advanced memory layouts with custom drop policies.
 //!
+//! # Maintenance status
+//!
+//! This package receives maintenance only.
+//!
+//! For owned pinned values, prefer [`plurality`]. It offers `Pool<T>` for one concrete type
+//! and `MultiPool` for heterogeneous types, with detachable owning handles that can be
+//! type-erased. This package remains available where its raw manual-lifetime handles or
+//! macro-generated trait-object casting are required.
+//!
 //! # Motivating scenario
 //!
 //! The primary characteristics of the target scenario are:
@@ -132,6 +141,7 @@
 //! ```
 //!
 //! [casting]: define_pooled_dyn_cast
+//! [`plurality`]: https://crates.io/crates/plurality
 
 mod blind;
 mod builders;

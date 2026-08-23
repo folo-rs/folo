@@ -28,6 +28,6 @@ mod command;
 
 pub use command::{
     AnalyzeOptions, BackfillOptions, BlessOptions, CacheSelection, CollectOptions, Command,
-    ExamineOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection, PruneOptions,
-    UnblessOptions,
+    ExamineOptions, ImportOptions, InstallOptions, ListOptions, ListSubject, LocalStorageSelection,
+    MachineKeyOptions, PruneOptions, UnblessOptions,
 };

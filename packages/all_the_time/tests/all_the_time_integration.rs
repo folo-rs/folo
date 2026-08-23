@@ -4,25 +4,39 @@
 //! processor time. All tests require non-zero measurements to pass.
 
 use std::hint::black_box;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use all_the_time::Session;
+use cpu_time::ThreadTime;
 
-/// Performs intensive CPU work that should be measurable as processor time.
+/// Processor time the measurable work loop consumes before it stops.
 ///
-/// This function performs enough work to ensure reliable measurement
-/// on any platform that supports processor time tracking.
+/// The value sits far above both the tests' 1 ms assertion floor and the coarse
+/// (~15.6 ms) resolution of the Windows processor-time clocks, so the recorded
+/// measurement stays comfortably non-zero even after quantization.
+const WORK_PROCESSOR_TIME_TARGET: Duration = Duration::from_millis(100);
+
+/// Performs intensive CPU work that reliably registers as processor time.
+///
+/// The loop keeps working until the current thread has consumed
+/// [`WORK_PROCESSOR_TIME_TARGET`] of processor time. Bounding on consumed
+/// processor time rather than wall-clock time keeps the amount of *measurable*
+/// work constant regardless of how the operating system schedules this thread,
+/// so a heavily loaded host cannot let real time elapse without the work being
+/// counted.
+///
+/// Thread processor time is a subset of process-wide processor time, so reaching
+/// the target on this thread guarantees the process-wide clock has advanced by at
+/// least as much, making the bound valid for both thread and process spans.
 ///
 /// Returns the number of operations performed.
 fn perform_measurable_cpu_work() -> u64 {
-    let start = Instant::now();
+    let start = ThreadTime::now();
     let mut iterations = 0_u64;
     let mut accumulator = 0_u64;
 
-    // Perform intensive work for at least 50ms of real time
-    // This should be easily measurable as processor time
     loop {
-        // Intensive arithmetic that cannot be optimized away
+        // Intensive arithmetic that cannot be optimized away.
         for i in 0..50_000_u32 {
             accumulator = accumulator
                 .wrapping_add(u64::from(i))
@@ -34,13 +48,12 @@ fn perform_measurable_cpu_work() -> u64 {
             let temp = accumulator.wrapping_pow(2);
             accumulator = accumulator.wrapping_add(temp);
 
-            // Additional complex operations
             accumulator = accumulator.rotate_left(1).wrapping_sub(i.into());
         }
-        iterations = iterations.wrapping_add(50000);
+        iterations = iterations.wrapping_add(50_000);
         black_box(accumulator);
 
-        if start.elapsed() >= Duration::from_millis(50) {
+        if start.elapsed() >= WORK_PROCESSOR_TIME_TARGET {
             break;
         }
     }
@@ -85,7 +98,8 @@ fn real_platform_thread_span_measures_nonzero_time() {
     // Verify that the span recorded measurable processor time
     let total_time = report_processor_time(&session, "thread_work");
 
-    // With 50ms+ of intensive work, we must get a non-zero measurement
+    // The work loop consumes WORK_PROCESSOR_TIME_TARGET of processor time, so we
+    // must get a non-zero measurement.
     assert!(
         total_time > Duration::ZERO,
         "Expected measurable processor time for intensive work, but got {total_time:?}"
@@ -123,7 +137,8 @@ fn real_platform_process_span_measures_nonzero_time() {
     // Verify that the span recorded measurable processor time
     let total_time = report_processor_time(&session, "process_work");
 
-    // With 50ms+ of intensive work, we must get a non-zero measurement
+    // The work loop consumes WORK_PROCESSOR_TIME_TARGET of processor time, so we
+    // must get a non-zero measurement.
     assert!(
         total_time > Duration::ZERO,
         "Expected measurable processor time for intensive work, but got {total_time:?}"

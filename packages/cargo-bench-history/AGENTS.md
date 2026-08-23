@@ -8,12 +8,11 @@ analysis, codec, and rendering, plus the extracted IO adapters (git, storage, pr
 engines) — released in lockstep with the shell. Several expose a `private-test-util`
 feature carrying in-workspace test/bench utilities.
 
-> **This file is agent instructions, not a design doc.** The *what* and *why* — data model,
-> storage/comparability rules, command semantics, analysis algorithms, architecture — live in
-> [`docs/DESIGN.md`](docs/DESIGN.md), and the `analyze` load/detect flow in
-> [`docs/analyze.md`](docs/analyze.md). **Keep both in sync** when you change a design
-> decision, the data model, the crate layout, the storage format, a command's behaviour, or
-> the analyze pipeline. Do not restate their content here — point at them.
+> **This file is agent instructions, not a design or implementation guide.** User-visible
+> behavior lives in [`docs/DESIGN.md`](docs/DESIGN.md). Package ownership and internal tenets
+> live in [`docs/implementation.md`](docs/implementation.md), with the `analyze` data flow in
+> [`docs/analyze.md`](docs/analyze.md). Keep the owning document in sync when changing behavior,
+> package boundaries, storage format, or the analysis pipeline. Do not restate that content here.
 
 ## Ports and fakes
 
@@ -48,20 +47,33 @@ New per-series logic must be side-effect-free. Flow and rationale: [`docs/analyz
 ## Selection lockstep (analyze / list / prune / examine)
 
 `analyze`, `list`, `prune`, and `examine` share one **data-set-selection pipeline** in
-`analyze/mod.rs` (`Selection` + `parsed_facets` + `facet_filtered_candidates` +
-`resolve_history`/`select_dataset`), and all four live inside the `analyze` module tree
-(`list.rs`, `prune.rs`, `examine.rs`, each `pub(crate) mod`; `bless`/`unbless` in `bless.rs`
-reuse the same facet selection). **A selection parameter added to one must be added to all
-four** unless genuinely inapplicable. The analysis-only flags
-(`--include-improvements`, `--include-inactive`) and the analyze-only condensed
-`--markdown-summary` output are **not** part of the lockstep — only `analyze` detects;
-`list`/`prune`/`examine` reuse the selection but never analyze. Each is
+`analyze/mod.rs` (`Selection` + `resolve_discriminants` +
+`discriminant_filtered_candidates` + `resolve_history`/`select_dataset`), and all four live
+inside the `analyze` module tree (`list.rs`, `prune.rs`, `examine.rs`, each
+`pub(crate) mod`; `bless`/`unbless` in `bless.rs` reuse the same discriminant-filter
+selection). **A selection parameter added to one must be added to all four** unless
+genuinely inapplicable. The analyze-only condensed `--markdown-summary` output is **not**
+part of the lockstep — only `analyze` detects; `list`/`prune`/`examine` reuse the selection
+but never analyze.
+The always-on **ghost filter** likewise changes only *which reconstructed series are detected
+on* (it drops benchmarks absent at the context commit), not which runs are *selected*,
+so `list runs` may report more series than `analyze` now analyzes. Each is
 generic over the `GitHistory` + `Storage` ports so tests drive it with fakes + `block_on`.
 Semantics and per-command behaviour: DESIGN §7–§8.
 
 `analyze` needs a resolvable repository (topology at query time); `list discriminants` is the
 one query view that does **not** (a pure index over storage keys). `examine` is the one
 command that names a `--metric` (its input is an `analyze` finding, which prints the metric).
+
+## Hidden `import` command
+
+`import` is a hidden, unsupported sibling of `collect` — the store path with the `cargo bench`
+run removed — reusing `collect`'s finalize-and-store helper. **Keep the two on one code path**:
+a store rule added to `collect` (keying, overwrite/skip-existing, dirty coexistence) must hold
+for `import` for free. Its invariants are easy to break: the harvest is **ungated** (freshness
+`None`), so `--target-dir` is **required** and must never fall back to `<repo>/target`; the three overrides (`--target-triple` / `--commit` / `--dirty`) attribute imported data without manual machine key selection; `import` assumes nothing about the data being synthetic (real output must import identically).
+`--commit` is git-resolved (unknown = hard error) and never checks the commit out. Semantics:
+DESIGN §7.9.
 
 ## CLI (clap derive)
 
@@ -76,11 +88,15 @@ cargo tools share these grouped conventions. Full group/flag map: DESIGN §7.
 through the guarded `ReporterExt` surface — `note_with(|| format!(…))` for one lazy line,
 `if_enabled(|notes| …)` for a block; the unconditional `Sink` is sealed, so there is no
 `enabled()`/`note()` guard to forget. Stage timings are a separate channel
-(`ReporterExt::timing`). Production `StderrReporter` writes `[bench-history] …` to **stderr
-only when verbose** (never stdout, so machine-readable output stays clean). The reporter is
+(`ReporterExt::timing`). A third channel, `ReporterExt::announce`, is **always on** (not
+verbose-gated): use it only for the one-line effective-selection / effective-partition
+summaries that must appear on every run, never for per-object chatter. Production
+`StderrReporter` writes `[bench-history] …` to **stderr** (notes/timings only when verbose;
+announcements always) — never stdout, so machine-readable output stays clean. The reporter is
 `&dyn` (not `+ Sync`) so run futures stay `!Send` / Miri-driven. Notes must be **explanatory,
 not conclusion-only** (see `docs/standalone-binaries.md`). Tests use the `#[cfg(test)]`
-`RecordingReporter`.
+`RecordingReporter` (`notes()`/`contains()` for notes, `announcements()`/`announced()` for the
+always-on channel).
 
 ## Storage & engines (essentials)
 
@@ -88,15 +104,14 @@ not conclusion-only** (see `docs/standalone-binaries.md`). Tests use the `#[cfg(
   callers hand/receive plain JSON. `MemoryStorage` deliberately stays **plaintext** (keeps the
   Miri `analyze` suite fast) — do not compress it.
 * The backend is chosen at run time by `--local` / configured cloud (never a local path in the
-  committed config); read commands add a `--cache` read-through mirror. `--machine-key` is
-  CLI-only for the same reason (the config is committed). Details: DESIGN §4, §6.
+  committed config); read commands add a `--cache` read-through mirror. Details: DESIGN §4, §6.
 * Four engines are parsed in `bench/`. None is deterministic; they differ by whether each
   point carries a confidence interval (`criterion`, `all_the_time`, and `alloc_tracker` all
   record one on every operation) or is a single value (`callgrind`, plus any legacy mean-only
   file the adapter still tolerates). An interval is only ever an extra veto that can suppress
-  a candidate finding, never create one. `collect`/`backfill` invoke `cargo bench` once and
-  harvest whatever ran; `--engine` is an `analyze` facet, not a collect flag. Details:
-  DESIGN §1.
+  a candidate finding, never create one. `collect`/`backfill` invoke `cargo bench` (once, or
+  `--best-of N` times keeping the per-metric minimum) and harvest whatever ran; `--engine` is
+  an `analyze` discriminant filter, not a collect flag. Details: DESIGN §1, §7.1.
 
 ## Testing
 
@@ -105,14 +120,17 @@ not conclusion-only** (see `docs/standalone-binaries.md`). Tests use the `#[cfg(
 test touching the real filesystem/process/runtime/wall-clock or the network emulator must be
 `#[tokio::test]` (or `#[test]`) **and** `#[cfg_attr(miri, ignore = "…")]` with a reason.
 
-**Mock engine.** End-to-end tests launch the standalone `publish = false` **`mock_bench_engine`
-package** (kept out of the shipped crate so `cargo install` places only the one real binary).
-Tests resolve it via `mock_bench_engine::binary_path()`; every `just` recipe that runs the
-suite under nextest pre-builds it once and passes `MOCK_BENCH_ENGINE` (avoids per-process
-`cargo build` races). Its crate root needs
-`#![cfg_attr(coverage_nightly, feature(coverage_attribute))]`. It writes per-engine fixture
-output on demand via repeatable flags (`--summary`/`--criterion`/`--alloc-tracker`/
-`--all-the-time`) and `--fail-if-exists` to simulate a failing commit.
+**Faker (test-support engine).** End-to-end tests launch the standalone
+**`cargo-bench-history-faker` lib+bin package** — a stand-in benchmark engine. It is a
+published-but-unsupported crate (`#![doc(hidden)]`, no stable API/CLI); the workspace consumes
+its `binary_path()` locator behind the `private-test-util` feature, so `cargo install
+cargo-bench-history` still places only the one real binary on PATH. Tests resolve the binary via
+`cargo_bench_history_faker::binary_path()`; every `just` recipe that runs the suite under nextest
+pre-builds it once and passes `CBH_FAKER` (avoids per-process `cargo build` races). It writes
+per-engine fixture output on demand via repeatable flags (`--callgrind`/`--criterion`/
+`--alloc-tracker`/`--all-the-time`) and `--fail-if-exists` to simulate a failing commit. The
+value cores behind those writers live in the faker's public `writers` module, so unit and
+fidelity tests can build the exact same documents without spawning a process.
 
 **CWD & target root.** Almost every test — including the real-adapter e2e — pins its own
 tempdir workspace and target root through the `run_with_overrides` entry (`workspace_dir` +

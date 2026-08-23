@@ -31,15 +31,20 @@ directly:
 * **Check for a package-local `AGENTS.md`** before doing nontrivial work in a
   specific crate (e.g. `packages/events_once/AGENTS.md`). Package-local
   guidance refines and sometimes overrides the workspace-wide rules.
-* **`AGENTS.md` files are agent instructions, not design docs.** A package-local
-  `AGENTS.md` holds only actionable guidance for working in that package —
-  conventions to follow, gotchas, invariants to preserve, how to run and test.
-  It must **not** duplicate design documentation (that lives in the
-  `docs/design.md`-style files), restate implementation detail, or keep a
-  decision/change history. If a fact explains *what* the code is or *why* it is
-  shaped that way, it belongs in a design doc; if it is trivia that does not
-  change how an agent works, leave it out. Point at the design doc instead of
-  repeating it.
+* **`AGENTS.md` files are agent instructions, not design or implementation
+  docs.** A package-local `AGENTS.md` holds only actionable guidance for working
+  in that package — conventions to follow, gotchas, invariants to preserve, how
+  to run and test. It must **not** duplicate design or implementation
+  documentation or keep a decision/change history. User-visible behavior and its
+  tenets belong in the owning package's `docs/design.md`; internal architecture,
+  ownership boundaries, and implementation tenets belong in the package's
+  `docs/implementation.md`. If a fact is trivia that does not change how an agent
+  works, leave it out. Point at the appropriate document instead of repeating it.
+  The private `cbh_*` crates are implementation partitions of
+  `cargo-bench-history`: their user-visible behavioral contracts belong in the
+  parent application's design and API documentation, while partition-local
+  documentation covers only implementation ownership and boundaries and links to
+  the parent.
 
 ## Chapters
 
@@ -77,14 +82,23 @@ builder method, or variable.
 
 ### [docs/design.md](docs/design.md)
 
-Where design documentation lives (inline `//` comments, package-level
-`docs/design.md`, per-component files), what it should contain (high-level
-patterns, tenets, and relationships — *what* and *why*, never *how*), and what to
-keep out of it (implementation detail, listings/catalogues, changelogs, decision
-logs).
+Which packages own design documentation, where it lives (package-level
+`docs/design.md` and optional component files), what it should contain
+(user-visible behavior and design tenets), and what to keep out of it
+(implementation detail, listings/catalogues, changelogs, decision logs).
 
-**Open this when**: writing or maintaining design documentation, and keeping it up
-to date with every commit.
+**Open this when**: writing or maintaining design documentation; changing
+user-visible behavior or its design tenets.
+
+### [docs/implementation.md](docs/implementation.md)
+
+The implementation-guide requirement for every package, including private
+implementation crates; how owning packages link their component guides into one
+architecture; and what belongs in implementation documentation rather than
+behavioral design documentation.
+
+**Open this when**: writing or maintaining implementation documentation; changing
+internal architecture, package ownership boundaries, or implementation tenets.
 
 ### [docs/file-organization.md](docs/file-organization.md)
 
@@ -124,6 +138,20 @@ for intra-doc links to feature-gated items.
 `README.md`; adding a diagram; rustdoc fails with `unresolved link` because a
 linked item exists only under a non-default feature; the
 `docs-default-features` validation step flags a broken link.
+
+### [docs/external-types.md](docs/external-types.md)
+
+The external-types check: a validation gate (`just check-external-types`, backed
+by `cargo-check-external-types` on a dedicated pinned nightly) that fails when a
+library's public API exposes an external type absent from that crate's
+`[package.metadata.cargo_check_external_types]` allow-list. Covers the
+catch-accidents intent, the glob-the-internal/list-the-external convention,
+canonical partition paths, and the separate `RUST_NIGHTLY_EXTERNAL_TYPES` pin.
+
+**Open this when**: a PR fails the external-types check; intentionally exposing an
+external or cross-crate first-party type in a public API; adding a dependency
+whose types appear in public signatures; adding a new library crate; bumping the
+tool or its nightly pin.
 
 ### [docs/examples.md](docs/examples.md)
 
@@ -179,12 +207,16 @@ Callgrind file with its Criterion counterpart.
 
 The `unwrap()` / `expect()` rules in both test and production code, checked
 arithmetic, `Drop`-time invariant checks with `thread::panicking()` guards,
-and the `NonZero<usize>` preference for non-zero numeric parameters.
+the `NonZero<usize>` preference for non-zero numeric parameters, and how `ohno`
+error boundaries use private condition leaves and public aggregates for semantic
+library operations, foreign errors for mechanism-only boundaries, and
+application-level `AppError` (supported decision queries, constructor visibility,
+`#[display]` scoping, and which derives survive).
 
 **Open this when**: choosing between `unwrap`, `expect`, `?`, or explicit
 error handling; auditing arithmetic that could overflow; writing a `Drop` impl
 that validates invariants; designing a numeric parameter that must be
-non-zero.
+non-zero; adding or reshaping any error type.
 
 ### [docs/unsafe-code.md](docs/unsafe-code.md)
 

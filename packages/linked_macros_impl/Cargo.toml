@@ -2,7 +2,7 @@
 name = "linked_macros_impl"
 description = "Internal dependency of the 'linked_macros' package - do not reference directly"
 publish = true
-version = "1.0.16"
+version = "1.0.18"
 
 authors.workspace = true
 edition.workspace = true
@@ -12,6 +12,12 @@ rust-version.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true
+
+# Baseline of external types intentionally exposed in the public API. Any new
+# external type here trips the check so accidental exposures are caught.
+# Ref: docs/external-types.md.
+[package.metadata.cargo_check_external_types]
+allowed_external_types = ["proc_macro2::TokenStream"]
 
 [lib]
 doc = false

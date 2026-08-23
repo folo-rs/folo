@@ -72,7 +72,13 @@ pub enum Harvest {
 
 /// Collects the output an engine produced during a run.
 pub trait BenchOutputSource {
-    /// Returns every output `engine` wrote at or after `since`.
+    /// Returns the output `engine` wrote, gated by `since`.
+    ///
+    /// `since` is the freshness boundary: `Some(t)` keeps only files modified at or
+    /// after `t` (minus a small slack), discarding stale leftovers from an earlier
+    /// run in the same tree; `None` disables the gate and admits every matching
+    /// file, so a caller that curates the tree itself (such as `import`) harvests
+    /// everything present.
     ///
     /// `reporter` receives a diagnostic note for each directory scanned and each
     /// candidate file included or excluded, so a `--verbose` run can explain an
@@ -84,7 +90,7 @@ pub trait BenchOutputSource {
     fn collect(
         &self,
         engine: Engine,
-        since: SystemTime,
+        since: Option<SystemTime>,
         reporter: &dyn Reporter,
     ) -> impl Future<Output = io::Result<Harvest>>;
 }
@@ -107,10 +113,10 @@ impl FsBenchOutputSource {
     /// Walks `{target_root}/gungraun` for fresh `summary.json` files.
     async fn collect_callgrind(
         &self,
-        since: SystemTime,
+        since: Option<SystemTime>,
         reporter: &dyn Reporter,
     ) -> io::Result<Vec<RawSummary>> {
-        let threshold = since.checked_sub(MTIME_SLACK).unwrap_or(since);
+        let threshold = since.map(freshness_threshold);
         let summary_name = OsStr::new(SUMMARY_FILE);
 
         let root = self.target_root.join(GUNGRAUN_DIR);
@@ -118,7 +124,7 @@ impl FsBenchOutputSource {
             format!(
                 "callgrind: scanning {} for {SUMMARY_FILE} files modified at or after {}",
                 root.display(),
-                format_mtime(threshold)
+                format_threshold(threshold)
             )
         });
 
@@ -142,7 +148,7 @@ impl FsBenchOutputSource {
                     stack.push(path);
                 } else if path.file_name() == Some(summary_name) {
                     let modified = entry.metadata().await?.modified()?;
-                    if modified >= threshold {
+                    if threshold.is_none_or(|threshold| modified >= threshold) {
                         reporter.note_with(|| format!("callgrind: including {}", path.display()));
                         let content = tokio::fs::read_to_string(&path).await?;
                         summaries.push(RawSummary { path, content });
@@ -176,10 +182,10 @@ impl FsBenchOutputSource {
     /// older than the run-start boundary. Incomplete pairs are skipped.
     async fn collect_criterion(
         &self,
-        since: SystemTime,
+        since: Option<SystemTime>,
         reporter: &dyn Reporter,
     ) -> io::Result<Vec<RawCriterionCase>> {
-        let threshold = since.checked_sub(MTIME_SLACK).unwrap_or(since);
+        let threshold = since.map(freshness_threshold);
         let benchmark_name = OsStr::new(CRITERION_BENCHMARK_FILE);
         let estimates_name = OsStr::new(CRITERION_ESTIMATES_FILE);
         let new_dir_name = OsStr::new(CRITERION_NEW_DIR);
@@ -189,7 +195,7 @@ impl FsBenchOutputSource {
             "criterion: scanning {} for {CRITERION_NEW_DIR}/ cases with {CRITERION_ESTIMATES_FILE} \
              modified at or after {}",
             root.display(),
-            format_mtime(threshold)
+            format_threshold(threshold)
         ));
 
         let mut cases = Vec::new();
@@ -235,7 +241,7 @@ impl FsBenchOutputSource {
                 });
                 continue;
             };
-            if modified >= threshold {
+            if threshold.is_none_or(|threshold| modified >= threshold) {
                 reporter.note_with(|| format!("criterion: including {}", dir.display()));
                 let benchmark =
                     tokio::fs::read_to_string(dir.join(CRITERION_BENCHMARK_FILE)).await?;
@@ -277,10 +283,10 @@ impl FsBenchOutputSource {
         &self,
         engine_dir: &str,
         label: &str,
-        since: SystemTime,
+        since: Option<SystemTime>,
         reporter: &dyn Reporter,
     ) -> io::Result<Vec<RawOperationFile>> {
-        let threshold = since.checked_sub(MTIME_SLACK).unwrap_or(since);
+        let threshold = since.map(freshness_threshold);
         let json_extension = OsStr::new("json");
 
         let root = self.target_root.join(engine_dir);
@@ -288,7 +294,7 @@ impl FsBenchOutputSource {
             format!(
                 "{label}: scanning {} for *.json files modified at or after {}",
                 root.display(),
-                format_mtime(threshold)
+                format_threshold(threshold)
             )
         });
 
@@ -309,7 +315,7 @@ impl FsBenchOutputSource {
                 continue;
             }
             let modified = entry.metadata().await?.modified()?;
-            if modified >= threshold {
+            if threshold.is_none_or(|threshold| modified >= threshold) {
                 reporter.note_with(|| format!("{label}: including {}", path.display()));
                 let content = tokio::fs::read_to_string(&path).await?;
                 files.push(RawOperationFile { path, content });
@@ -339,7 +345,7 @@ impl BenchOutputSource for FsBenchOutputSource {
     async fn collect(
         &self,
         engine: Engine,
-        since: SystemTime,
+        since: Option<SystemTime>,
         reporter: &dyn Reporter,
     ) -> io::Result<Harvest> {
         match engine {
@@ -359,6 +365,31 @@ impl BenchOutputSource for FsBenchOutputSource {
             )),
         }
     }
+}
+
+/// The effective mtime cutoff for a freshness boundary: `since` minus
+/// [`MTIME_SLACK`] (saturating at the epoch).
+///
+/// Callers apply it per boundary via [`Option::map`], so a disabled gate (`None`)
+/// stays `None` and admits every candidate file.
+fn freshness_threshold(since: SystemTime) -> SystemTime {
+    let since_epoch = since
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO);
+    SystemTime::UNIX_EPOCH
+        .checked_add(since_epoch.saturating_sub(MTIME_SLACK))
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+}
+
+/// Renders a freshness threshold for a diagnostic note.
+///
+/// A disabled gate (`None`) is described in words, since there is no instant to
+/// format.
+fn format_threshold(threshold: Option<SystemTime>) -> String {
+    threshold.map_or_else(
+        || "the beginning of time (freshness gate disabled)".to_owned(),
+        format_mtime,
+    )
 }
 
 /// Formats a filesystem modification time for a diagnostic note, falling back to
@@ -404,13 +435,18 @@ mod tests {
     /// Collects through the source with a recording reporter, returning both the
     /// harvest and the reporter so a test can assert on either. Most tests ignore
     /// the reporter; the verbose-output tests inspect its notes.
+    ///
+    /// Takes a bare `SystemTime` boundary (wrapped as `Some`) since almost every
+    /// test exercises the gated path;
+    /// `disabled_gate_admits_summaries_older_than_any_boundary` covers the `None`
+    /// path directly.
     async fn harvest_with(
         source: &FsBenchOutputSource,
         engine: Engine,
         since: SystemTime,
         reporter: &RecordingReporter,
     ) -> io::Result<Harvest> {
-        source.collect(engine, since, reporter).await
+        source.collect(engine, Some(since), reporter).await
     }
 
     /// Collects through the source, discarding the diagnostic notes.
@@ -449,6 +485,37 @@ mod tests {
     fn format_mtime_renders_a_known_instant_as_rfc3339() {
         let time = SystemTime::UNIX_EPOCH + Duration::from_secs(3);
         assert_eq!(format_mtime(time), "1970-01-01T00:00:03Z");
+    }
+
+    #[test]
+    fn format_threshold_describes_a_disabled_gate_in_words() {
+        assert_eq!(
+            format_threshold(None),
+            "the beginning of time (freshness gate disabled)"
+        );
+    }
+
+    #[test]
+    fn format_threshold_renders_an_enabled_gate_as_its_instant() {
+        let time = SystemTime::UNIX_EPOCH + Duration::from_secs(3);
+        assert_eq!(format_threshold(Some(time)), "1970-01-01T00:00:03Z");
+    }
+
+    #[test]
+    fn freshness_threshold_subtracts_the_slack() {
+        let since = SystemTime::UNIX_EPOCH + Duration::from_secs(50);
+        assert_eq!(
+            freshness_threshold(since),
+            SystemTime::UNIX_EPOCH + Duration::from_secs(50) - MTIME_SLACK
+        );
+    }
+
+    #[test]
+    fn freshness_threshold_saturates_at_the_epoch_for_near_epoch_boundaries() {
+        // A boundary within MTIME_SLACK of the epoch must not push the cutoff
+        // forward: saturating at the epoch keeps every old file admitted.
+        let since = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+        assert_eq!(freshness_threshold(since), SystemTime::UNIX_EPOCH);
     }
 
     #[test]
@@ -528,6 +595,28 @@ mod tests {
             callgrind_summaries(harvest).is_empty(),
             "stale summary should be excluded"
         );
+    }
+
+    #[tokio::test]
+    #[cfg_attr(miri, ignore)] // Touches the real filesystem, which Miri cannot access.
+    async fn disabled_gate_admits_summaries_older_than_any_boundary() {
+        let dir = tempdir().unwrap();
+        let stale = write_summary(dir.path(), "group/summary.json", "stale");
+
+        // Backdate the file far into the past. A gated harvest at `now` would drop
+        // it (see the test above); a `None` gate must admit it regardless of age,
+        // which is what `import` relies on to take a curated tree wholesale.
+        set_mtime(&stale, SystemTime::now() - Duration::from_hours(1));
+
+        let source = FsBenchOutputSource::new(dir.path());
+        let harvest = source
+            .collect(Engine::Callgrind, None, &RecordingReporter::new())
+            .await
+            .unwrap();
+
+        let summaries = callgrind_summaries(harvest);
+        let contents: Vec<&str> = summaries.iter().map(|s| s.content.as_str()).collect();
+        assert_eq!(contents, vec!["stale"]);
     }
 
     #[tokio::test]

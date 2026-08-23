@@ -7,6 +7,8 @@
 //! [`cli`](super::cli) (each child gets its own environment) rather than in
 //! process here.
 
+use cbh_storage::StorageError;
+
 use crate::harness::*;
 
 /// A configuration carrying a project id plus an Azure cloud backend, used to
@@ -28,7 +30,8 @@ fn cloud_config() -> String {
 async fn collect_local_flag_with_a_relative_path_rebases_against_the_workspace() {
     // `--local=store` is supplied explicitly (no harness injection), so this
     // exercises the real relative-path rebasing the flag performs.
-    let workspace = Workspace::new(&storage_only_config()).with_bench(&["--summary", "grp=single"]);
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
+    let workspace = Workspace::new(&storage_only_config()).with_bench(&["--callgrind", &bench]);
 
     let outcome = workspace
         .drive(&["collect", "--local=store"])
@@ -51,7 +54,8 @@ async fn collect_local_flag_with_a_relative_path_rebases_against_the_workspace()
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_local_flag_overrides_a_configured_cloud_backend() {
-    let workspace = Workspace::new(&cloud_config()).with_bench(&["--summary", "grp=single"]);
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
+    let workspace = Workspace::new(&cloud_config()).with_bench(&["--callgrind", &bench]);
 
     let outcome = workspace
         .drive(&["collect", "--local=store"])
@@ -74,16 +78,13 @@ async fn collect_local_flag_overrides_a_configured_cloud_backend() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_without_a_storage_selection_or_cloud_config_errors() {
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
     let workspace = Workspace::new(&storage_only_config())
         .without_local_storage()
-        .with_bench(&["--summary", "grp=single"]);
+        .with_bench(&["--callgrind", &bench]);
 
     let error = workspace.drive(&["collect"]).await.unwrap_err();
-    let RunError::Storage(storage) = error else {
-        panic!("expected a storage error, got {error:?}");
-    };
-    let rendered = storage.to_string();
-    assert!(rendered.contains("no storage configured"), "{rendered}");
+    assert!(error.find_source::<StorageError>().is_some());
 
     assert!(
         workspace.stored_objects().is_empty(),
@@ -101,14 +102,7 @@ async fn assert_command_errors_without_storage(args: &[&str]) {
     let workspace = Workspace::new(&storage_only_config()).without_local_storage();
 
     let error = workspace.drive(args).await.unwrap_err();
-    let RunError::Storage(storage) = error else {
-        panic!("expected a storage error from {args:?}, got {error:?}");
-    };
-    let rendered = storage.to_string();
-    assert!(
-        rendered.contains("no storage configured"),
-        "{args:?}: {rendered}"
-    );
+    assert!(error.find_source::<StorageError>().is_some());
 }
 
 /// `analyze` fails fast with the storage configuration error when no backend is
@@ -164,9 +158,10 @@ async fn backfill_without_a_storage_selection_or_cloud_config_errors() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_no_store_needs_no_storage_selection() {
+    let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
     let workspace = Workspace::new(&storage_only_config())
         .without_local_storage()
-        .with_bench(&["--summary", "grp=single"]);
+        .with_bench(&["--callgrind", &bench]);
 
     let outcome = workspace.drive(&["collect", "--no-store"]).await.unwrap();
     let RunOutcome::Completed { message } = outcome else {

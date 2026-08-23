@@ -2,7 +2,7 @@ use std::hint::black_box;
 use std::mem::offset_of;
 use std::num::NonZero;
 use std::ptr::NonNull;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use folo_ffi::NativeBuffer;
 use itertools::Itertools;
@@ -21,7 +21,7 @@ use windows::core::HRESULT;
 
 use crate::pal::windows::{Bindings, BindingsFacade, ProcessorGroupIndex, ProcessorIndexInGroup};
 use crate::pal::{GroupMask, Platform, ProcessorFacade, ProcessorImpl};
-use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
+use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 
 /// Singleton instance of `BuildTargetPlatform`, used by public API types
 /// to hook up to the correct PAL implementation.
@@ -82,6 +82,8 @@ impl Platform for BuildTargetPlatform {
 
         let efficiency_classes = self.get_processor_efficiency_classes();
         let memory_regions = self.get_processor_memory_regions();
+        let relative_speeds = self.get_processor_relative_speeds();
+        let models = self.get_processor_models();
         let allowed_processors = self.processors_allowed_by_job_constraints();
 
         // We are required to return all the processors ordered by the processor ID.
@@ -111,6 +113,10 @@ impl Platform for BuildTargetPlatform {
 
                 let efficiency_class = *efficiency_classes.get(processor_id as usize).expect("we expect to have the efficiency class for every processor ID unless the platform lied to us at some point");
 
+                let relative_speed = *relative_speeds.get(processor_id as usize).expect("we expect to have the relative speed for every processor ID unless the platform lied to us at some point");
+
+                let model = models.get(processor_id as usize).expect("we expect to have the model slot for every processor ID unless the platform lied to us at some point").clone();
+
                 Some(ProcessorImpl::new(
                     group_index
                         .try_into()
@@ -118,7 +124,9 @@ impl Platform for BuildTargetPlatform {
                     index_in_group,
                     processor_id,
                     memory_region_index,
-                    efficiency_class
+                    efficiency_class,
+                    relative_speed,
+                    model,
                 ))
             })
         ).expect(
@@ -599,6 +607,39 @@ impl BuildTargetPlatform {
             .into_boxed_slice()
     }
 
+    /// Gets the relative speed of all processors on the system, ordered by processor ID.
+    /// This also returns data for offline processors but the value for those is unspecified.
+    #[must_use]
+    fn get_processor_relative_speeds(&self) -> Box<[RelativeSpeed]> {
+        // The bindings surface each processor's nominal maximum clock frequency (MHz) by reading
+        // the values Windows records in the registry for every logical processor across all
+        // processor groups. This is a passive read that never changes any thread's affinity. The
+        // MHz value is scaled into the abstract relative-speed domain by `from_os_metric`;
+        // processors the platform reports no value for (0 MHz) map to a fallback value.
+        self.bindings
+            .get_processor_max_mhz(self.max_processor_count())
+            .into_iter()
+            .map(RelativeSpeed::from_os_metric)
+            .collect_vec()
+            .into_boxed_slice()
+    }
+
+    /// Gets the model strings of all processors on the system, ordered by processor ID.
+    /// This also returns data for offline processors. Processors the platform reports no model
+    /// for map to `None`.
+    #[must_use]
+    fn get_processor_models(&self) -> Box<[Option<Arc<str>>]> {
+        // The bindings surface each processor's model string by reading the `ProcessorNameString`
+        // value Windows records in the registry for every logical processor across all processor
+        // groups. This is a passive read that never changes any thread's affinity.
+        self.bindings
+            .get_processor_name_strings(self.max_processor_count())
+            .into_iter()
+            .map(|name| name.map(Arc::from))
+            .collect_vec()
+            .into_boxed_slice()
+    }
+
     /// Gets the efficiency classes of all processors on the system, ordered by processor ID.
     /// This also returns data for offline processors.
     #[must_use]
@@ -926,6 +967,99 @@ mod tests {
         assert_eq!(p3.as_target().group_index, 0);
         assert_eq!(p3.as_target().index_in_group, 3);
         assert_eq!(p3.as_target().memory_region_id, 0);
+    }
+
+    #[test]
+    fn get_all_processors_reports_relative_speed() {
+        // A simple single-group system with 4 logical processors. The simulated layout reports a
+        // distinct nominal clock speed per processor - processor `i` reports `(i + 1) * 1000` MHz -
+        // which is scaled by `RelativeSpeed::from_os_metric` into the processor's relative speed.
+        // The raw MHz figure is deliberately scaled (by pi), not surfaced unchanged, so the
+        // assertion below compares against `from_os_metric` rather than the raw MHz value.
+        let mut bindings = MockBindings::new();
+        simulate_processor_layout(
+            &mut bindings,
+            [4],
+            [4],
+            [vec![0, 0, 0, 0]],
+            [vec![0, 0, 0, 0]],
+            None,
+        );
+
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
+
+        let processors = platform.get_all_processors();
+
+        assert_eq!(processors.len(), 4);
+
+        for (index, processor) in processors.iter().enumerate() {
+            let expected_mhz = (u32::try_from(index).unwrap() + 1) * 1000;
+            assert_eq!(
+                processor.as_target().relative_speed,
+                RelativeSpeed::from_os_metric(expected_mhz)
+            );
+        }
+    }
+
+    #[test]
+    fn get_all_processors_reports_model() {
+        // A simple single-group system with 4 logical processors. The simulated layout reports the
+        // same model string for every processor, which must surface unchanged as the processor's
+        // model.
+        let mut bindings = MockBindings::new();
+        simulate_processor_layout(
+            &mut bindings,
+            [4],
+            [4],
+            [vec![0, 0, 0, 0]],
+            [vec![0, 0, 0, 0]],
+            None,
+        );
+
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
+
+        let processors = platform.get_all_processors();
+
+        assert_eq!(processors.len(), 4);
+
+        for processor in &processors {
+            assert_eq!(
+                processor.as_target().model.as_deref(),
+                Some("Test Processor Model")
+            );
+        }
+    }
+
+    #[test]
+    fn get_all_processors_reports_relative_speed_across_groups() {
+        // Two processor groups with two logical processors each. The registry-backed binding reports
+        // one nominal clock speed per processor across all groups at once, so this proves that
+        // processors in every group - not just the first - receive their reported relative speed.
+        // Processor `i` (global ID) reports `(i + 1) * 1000` MHz, and the two groups occupy processor
+        // IDs 0..2 and 2..4.
+        let mut bindings = MockBindings::new();
+        simulate_processor_layout(
+            &mut bindings,
+            [2, 2],
+            [2, 2],
+            [vec![0, 0], vec![0, 0]],
+            [vec![0, 0], vec![1, 1]],
+            None,
+        );
+
+        let platform = BuildTargetPlatform::new(BindingsFacade::from_mock(bindings));
+
+        let processors = platform.get_all_processors();
+
+        assert_eq!(processors.len(), 4);
+
+        for (index, processor) in processors.iter().enumerate() {
+            let expected_mhz = (u32::try_from(index).unwrap() + 1) * 1000;
+            assert_eq!(
+                processor.as_target().relative_speed,
+                RelativeSpeed::from_os_metric(expected_mhz)
+            );
+        }
     }
 
     #[test]
@@ -1320,6 +1454,8 @@ mod tests {
             &group_active_counts,
             &efficiency_ratings_per_group,
         );
+        simulate_get_relative_speeds(bindings);
+        simulate_get_models(bindings);
 
         // Transform the booleans to IDs.
         let job_affinitized_processors_per_group =
@@ -1376,6 +1512,40 @@ mod tests {
 
             move |group_number| u32::from(group_max_counts[group_number as usize])
         });
+    }
+
+    /// Registers a default `get_processor_max_mhz` expectation that reports a distinct nominal clock
+    /// speed per processor ID: processor `i` reports `(i + 1) * 1000` MHz. The binding surfaces one
+    /// value per processor across all processor groups, indexed directly by processor ID, so this
+    /// gives every simulated processor a unique, real (non-fallback) relative speed and lets tests
+    /// observe the value flowing through `get_all_processors()` for processors in every group.
+    fn simulate_get_relative_speeds(bindings: &mut MockBindings) {
+        bindings
+            .expect_get_processor_max_mhz()
+            .returning(move |max_processor_count| {
+                (0..max_processor_count)
+                    .map(|processor_id| {
+                        let processor_id =
+                            u32::try_from(processor_id).expect("processor ID fits in u32");
+                        (processor_id + 1) * 1000
+                    })
+                    .collect_vec()
+            });
+    }
+
+    /// Registers a default `get_processor_name_strings` expectation that reports the same model
+    /// string for every processor ID, mirroring a homogeneous machine. The binding surfaces one
+    /// value per processor across all processor groups, indexed directly by processor ID, so this
+    /// lets tests observe the model flowing through `get_all_processors()` for processors in every
+    /// group.
+    fn simulate_get_models(bindings: &mut MockBindings) {
+        bindings
+            .expect_get_processor_name_strings()
+            .returning(move |max_processor_count| {
+                std::iter::repeat_with(|| Some("Test Processor Model".to_string()))
+                    .take(max_processor_count)
+                    .collect_vec()
+            });
     }
 
     fn simulate_get_numa_relations(

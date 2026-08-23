@@ -1,13 +1,13 @@
 use derive_more::derive::Display;
 
 use crate::pal::AbstractProcessor;
-use crate::{EfficiencyClass, MemoryRegionId, ProcessorId};
+use crate::{EfficiencyClass, MemoryRegionId, ProcessorId, RelativeSpeed};
 
 /// A fallback processor implementation for unsupported platforms.
 ///
 /// This processor always reports itself as being in memory region 0 with Performance efficiency
 /// class. The actual hardware topology is not inspected on unsupported platforms.
-#[derive(Clone, Copy, Debug, Display, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Display)]
 #[display("ProcessorImpl({id})")]
 pub(crate) struct ProcessorImpl {
     id: ProcessorId,
@@ -34,5 +34,17 @@ impl AbstractProcessor for ProcessorImpl {
         // We do not have real topology information, so we assume all processors
         // are performance processors.
         EfficiencyClass::Performance
+    }
+
+    #[cfg_attr(test, mutants::skip)] // Some mutations are not testable due to simulated nature of this PAL.
+    fn relative_speed(&self) -> RelativeSpeed {
+        // We do not have real speed information, so every processor reports the fallback value.
+        RelativeSpeed::UNDETERMINED
+    }
+
+    #[cfg_attr(test, mutants::skip)] // Some mutations are not testable due to simulated nature of this PAL.
+    fn model(&self) -> Option<&str> {
+        // We do not have real model information on the fallback platform.
+        None
     }
 }

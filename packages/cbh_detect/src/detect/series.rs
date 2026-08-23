@@ -13,14 +13,16 @@
 //! a large history, so the storage key is reduced to a 4-byte ordinal and the
 //! per-point commit string is interned to a shared `Arc<str>` rather than cloned.
 
-use std::collections::HashMap;
+use std::cmp::Ordering;
 use std::collections::hash_map::Entry as MapEntry;
+use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasher;
 use std::sync::Arc;
 
 use cbh_model::{
     BenchmarkId, BenchmarkIdPrefix, BlessingRecord, DiscriminantSet, MetricKind, Run, StorageKey,
 };
+use cbh_stats as stats;
 use foldhash::fast::RandomState;
 use foldhash::{HashMap as FoldHashMap, HashMapExt};
 use hashbrown::HashTable;
@@ -65,7 +67,7 @@ pub struct SeriesPoint {
 /// In history analysis a series with a matching blessing is *re-baselined* to the
 /// blessed commit — the detector treats the blessed level as the new baseline and
 /// only sees points from that commit onward, while the pre-blessing points are
-/// retained for charting (drawn greyed). See the *Re-baselining* analysis
+/// retained for charting. See the *Re-baselining* analysis
 /// section of `DESIGN.md`.
 #[derive(Clone, Debug)]
 pub struct Blessing {
@@ -84,6 +86,23 @@ pub struct Blessing {
 /// did not report one), and the blessing record itself.
 pub type BlessingPlacement = (usize, Option<Timestamp>, BlessingRecord);
 
+/// One clean base-ref commit level used by branch-mode comparison.
+///
+/// Branch mode builds its baseline from the base ref's first-parent history rather
+/// than the analyzed context line. Each value is already collapsed to one
+/// per-commit level, but it keeps the commit coordinate and any representative
+/// engine confidence interval so the branch detector can apply the same
+/// interval-overlap veto history mode applies to raw regimes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BaseLevel {
+    /// First-parent topological index of the base-ref commit.
+    pub topo_index: usize,
+    /// Median value of this series' clean runs at the commit.
+    pub value: f64,
+    /// Representative confidence interval for the commit's runs, when available.
+    pub interval: Option<(f64, f64)>,
+}
+
 /// A per-`(set, benchmark, metric kind)` time series ordered by git topology.
 #[derive(Clone, Debug)]
 pub struct Series {
@@ -95,10 +114,19 @@ pub struct Series {
     pub kind: MetricKind,
     /// Observations ordered by `(topo_index, dirty, object_ordinal)`.
     pub points: Vec<SeriesPoint>,
+    /// Branch mode's base-ref comparison levels, oldest first.
+    ///
+    /// These levels are reconstructed from the base ref's own first-parent history,
+    /// not from the context ref's ancestry. Each entry is one clean base commit's
+    /// median level for this series. It retains each commit's coordinate and
+    /// representative interval so branch-mode lag reporting and interval vetoes use
+    /// the same base state the prediction interval judged. Detection truncates this
+    /// window further only when the base ref itself recently moved to a new regime.
+    pub base_window: Vec<BaseLevel>,
     /// Index into `points` where the active (post-blessing) window begins; `0`
     /// when the series is unblessed (every point is active). History-mode
-    /// detection considers only `points[active_start..]`, while charts draw the
-    /// whole series with the pre-`active_start` prefix greyed.
+    /// detection considers only `points[active_start..]`; the full `points` are
+    /// retained for reporting.
     pub active_start: usize,
     /// The blessing that re-baselined this series, if any (the report anchor).
     pub blessing: Option<Blessing>,
@@ -434,6 +462,7 @@ impl SeriesBuilder {
                         id: id.clone(),
                         kind,
                         points,
+                        base_window: Vec::new(),
                         active_start: 0,
                         blessing: None,
                     });
@@ -467,6 +496,94 @@ impl SeriesBuilder {
 
         series
     }
+}
+
+/// Attaches base-ref comparison windows to matching context series.
+///
+/// `base_series` is reconstructed from clean runs on the base ref's own
+/// first-parent history, while `series` is reconstructed from the context ref's
+/// first-parent history. Both slices are in `(set, id, kind)` order, so matching is a
+/// linear merge. Each attached window is the newest `compare_window` per-commit
+/// levels of the base series, with repeated runs for one commit collapsed to their
+/// median just like branch detection's in-series commit-level logic.
+pub fn attach_base_windows(series: &mut [Series], base_series: &[Series], compare_window: usize) {
+    let mut base = base_series.iter().peekable();
+    for one in series {
+        while base
+            .peek()
+            .is_some_and(|candidate| series_cmp(candidate, one).is_lt())
+        {
+            _ = base.next();
+        }
+        let Some(candidate) = base.peek() else {
+            break;
+        };
+        if series_cmp(candidate, one).is_eq() {
+            one.base_window = base_window_levels(candidate, compare_window);
+        }
+    }
+}
+
+fn series_cmp(left: &Series, right: &Series) -> Ordering {
+    left.set
+        .cmp(&right.set)
+        .then_with(|| left.id.cmp(&right.id))
+        .then_with(|| left.kind.cmp(&right.kind))
+}
+
+fn base_window_levels(series: &Series, compare_window: usize) -> Vec<BaseLevel> {
+    let levels = commit_levels(&series.points);
+    let start = levels.len().saturating_sub(compare_window);
+    levels.get(start..).unwrap_or_default().to_vec()
+}
+
+fn commit_levels(points: &[SeriesPoint]) -> Vec<BaseLevel> {
+    let mut levels = Vec::new();
+    let mut values: Vec<f64> = Vec::new();
+    let mut lows: Vec<f64> = Vec::new();
+    let mut highs: Vec<f64> = Vec::new();
+    let mut current: Option<(usize, bool)> = None;
+    for point in points {
+        let key = (point.topo_index, point.dirty);
+        if current != Some(key) {
+            if let Some((topo_index, _)) = current {
+                push_base_level(&mut levels, topo_index, &mut values, &mut lows, &mut highs);
+            }
+            values.clear();
+            lows.clear();
+            highs.clear();
+            current = Some(key);
+        }
+        values.push(point.value);
+        if let Some(low) = point.interval_low {
+            lows.push(low);
+        }
+        if let Some(high) = point.interval_high {
+            highs.push(high);
+        }
+    }
+    if let Some((topo_index, _)) = current {
+        push_base_level(&mut levels, topo_index, &mut values, &mut lows, &mut highs);
+    }
+    levels
+}
+
+fn push_base_level(
+    levels: &mut Vec<BaseLevel>,
+    topo_index: usize,
+    values: &mut [f64],
+    lows: &mut [f64],
+    highs: &mut [f64],
+) {
+    let Some(value) = stats::median_in_place(values) else {
+        return;
+    };
+    let interval = stats::median_in_place(lows).zip(stats::median_in_place(highs));
+    levels.push(BaseLevel {
+        topo_index,
+        value,
+        interval,
+    });
 }
 
 /// Re-baselines each series to its latest matching blessing (history mode).
@@ -508,6 +625,67 @@ pub fn apply_blessings<S: BuildHasher>(
             commit_time: *commit_time,
         });
     }
+}
+
+/// Drops every series whose benchmark is not present at `context_commit`, keeping
+/// only the benchmarks the context commit actually measured.
+///
+/// Presence is evaluated per `(discriminant set, benchmark id)`: a benchmark is
+/// kept when at least one of its points was measured against `context_commit` — a
+/// clean run or a dirty snapshot on that commit — after which *all* of its
+/// metric-kind series are retained. A benchmark with points only on earlier commits
+/// is a "ghost" that no longer exists in the current suite; all of its series are
+/// removed so the detectors never re-flag a benchmark that is gone.
+///
+/// The check reads each series' raw points, so it is independent of any blessing
+/// re-baselining; call it *before* [`apply_blessings`]. When `context_commit` was
+/// itself never measured, every benchmark is a ghost and the whole list is emptied
+/// — the caller distinguishes that empty outcome for the user.
+///
+/// Returns one entry per removed metric series, ordered by `(set, id, kind)`. That
+/// is the unit the series census counts, so a caller's diagnostics and its census
+/// reconcile against each other; deduplicating on `(set, id)` recovers the ghost
+/// benchmarks behind them.
+#[must_use]
+pub fn retain_present_at_context(
+    series: &mut Vec<Series>,
+    context_commit: &str,
+) -> Vec<(DiscriminantSet, BenchmarkId, MetricKind)> {
+    // The benchmarks the context commit measured: a single series carrying a point
+    // on that commit marks its whole benchmark present, across every metric kind.
+    // Keyed by `(set, id)` so a benchmark present in one discriminant set does not
+    // rescue a same-named ghost in another — sets are analyzed independently.
+    let mut present: HashSet<(DiscriminantSet, BenchmarkId)> = HashSet::new();
+    for one in series.iter() {
+        let measured_here = one
+            .points
+            .iter()
+            .any(|point| point.commit.as_deref() == Some(context_commit));
+        if measured_here {
+            present.insert((one.set.clone(), one.id.clone()));
+        }
+    }
+
+    // Retain the present benchmarks and record every dropped series, so the report is
+    // in the same unit the census counts rather than a coarser benchmark identity.
+    let mut removed: Vec<(DiscriminantSet, BenchmarkId, MetricKind)> = Vec::new();
+    series.retain(|one| {
+        // Clone the identity key once per series and reuse it for both the presence
+        // test and the removal record, avoiding a second clone per ghost.
+        let key = (one.set.clone(), one.id.clone());
+        if present.contains(&key) {
+            true
+        } else {
+            let (set, id) = key;
+            removed.push((set, id, one.kind));
+            false
+        }
+    });
+
+    // A stable, deterministic order for the diagnostics the caller emits. The triple
+    // is unique per series, so the unstable sort has no ties to reorder.
+    removed.sort_unstable();
+    removed
 }
 
 #[cfg(test)]
@@ -569,9 +747,8 @@ mod tests {
 
     /// A clean object at `commit` carrying the given instruction-count value.
     fn clean_object(commit: &str, observation: i64, value: f64) -> LoadedObject {
-        let object_key = format!(
-            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json"
-        );
+        let object_key =
+            format!("v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/clean.json");
         LoadedObject {
             key: parse_key(&object_key).unwrap(),
             object_key,
@@ -582,7 +759,7 @@ mod tests {
     /// A dirty snapshot at `commit` taken at `unix`, carrying the given value.
     fn dirty_object(commit: &str, unix: i64, value: f64) -> LoadedObject {
         let object_key = format!(
-            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/dirty-{unix}.json"
+            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/dirty-{unix}.json"
         );
         LoadedObject {
             key: parse_key(&object_key).unwrap(),
@@ -619,7 +796,7 @@ mod tests {
             .map(|(package, commit, topo_index, dirty, ordinal, value)| {
                 let run = run_for_package(ts(1), commit, value, Some(package));
                 let object_key = format!(
-                    "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/{commit}/clean.json"
+                    "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/clean.json"
                 );
                 let key = parse_key(&object_key).unwrap();
                 (
@@ -768,8 +945,7 @@ mod tests {
     fn build_series_separates_sets() {
         // A second run in a different triple is a different (incomparable) series.
         let other_key =
-            "v1/proj/objects/callgrind/aarch64-unknown-linux-gnu/synthetic/c0/clean.json"
-                .to_owned();
+            "v1/proj/objects/callgrind/aarch64-unknown-linux-gnu/m1/c0/clean.json".to_owned();
         let other = LoadedObject {
             key: parse_key(&other_key).unwrap(),
             object_key: other_key,
@@ -785,9 +961,9 @@ mod tests {
         // Two results share group/case/kind and set but belong to different
         // packages, so they must form two series rather than silently merging.
         let foo_key =
-            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json".to_owned();
+            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/c0/clean.json".to_owned();
         let bar_key =
-            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c1/clean.json".to_owned();
+            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/c1/clean.json".to_owned();
         let objects = vec![
             LoadedObject {
                 key: parse_key(&foo_key).unwrap(),
@@ -808,9 +984,9 @@ mod tests {
     fn build_series_applies_prefix_filter() {
         // Two benchmarks in different packages; a prefix selects only one family.
         let foo_key =
-            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json".to_owned();
+            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/c0/clean.json".to_owned();
         let bar_key =
-            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c1/clean.json".to_owned();
+            "v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/c1/clean.json".to_owned();
         let objects = vec![
             LoadedObject {
                 key: parse_key(&foo_key).unwrap(),
@@ -924,11 +1100,10 @@ mod tests {
         let mut series = four_commit_series();
         // A blessing recorded only for a *different* set (a different target triple),
         // so the lookup for this series' set misses.
-        let other_set = parse_key(
-            "v1/proj/objects/callgrind/aarch64-unknown-linux-gnu/synthetic/c0/clean.json",
-        )
-        .unwrap()
-        .set;
+        let other_set =
+            parse_key("v1/proj/objects/callgrind/aarch64-unknown-linux-gnu/m1/c0/clean.json")
+                .unwrap()
+                .set;
         let mut map = HashMap::new();
         map.insert(
             other_set,
@@ -944,6 +1119,287 @@ mod tests {
         assert!(series[0].blessing.is_none(), "no blessing recorded");
     }
 
+    /// A clean/dirty object at `commit` under `triple` whose run carries one
+    /// `InstructionCount` result per `(package, value)`, so several benchmarks share
+    /// one stored run exactly as a real `clean.json` holds a whole suite.
+    fn multi_object(
+        triple: &str,
+        commit: &str,
+        filename: &str,
+        observation: i64,
+        benches: &[(&str, f64)],
+    ) -> LoadedObject {
+        let object_key = format!("v1/proj/objects/callgrind/{triple}/m1/{commit}/{filename}");
+        let context = RunContext::new(
+            ts(observation),
+            GitInfo {
+                commit: Some(format!("{commit}full")),
+                branch: Some("main".to_owned()),
+                dirty: filename != "clean.json",
+            },
+            EnvironmentInfo::default(),
+            ToolchainInfo::default(),
+            "0.0.1".to_owned(),
+        );
+        let records = benches
+            .iter()
+            .map(|(package, value)| {
+                BenchmarkResult::new(
+                    BenchmarkId::new(
+                        NonEmpty::from_vec(vec![
+                            (*package).to_owned(),
+                            "group".to_owned(),
+                            "case".to_owned(),
+                        ])
+                        .unwrap(),
+                    ),
+                    vec![Metric::new(MetricKind::InstructionCount, *value)],
+                )
+            })
+            .collect();
+        LoadedObject {
+            key: parse_key(&object_key).unwrap(),
+            object_key,
+            result: Run::new(context, records),
+        }
+    }
+
+    /// A clean object under the default triple.
+    fn clean_multi(commit: &str, observation: i64, benches: &[(&str, f64)]) -> LoadedObject {
+        multi_object(
+            "x86_64-unknown-linux-gnu",
+            commit,
+            "clean.json",
+            observation,
+            benches,
+        )
+    }
+
+    #[test]
+    fn retain_present_at_context_drops_a_benchmark_absent_at_the_context() {
+        // `pkgb` was measured at c0 but not at the context commit c1, so it is a
+        // ghost: every one of its series is removed, and `pkga` (present at c1)
+        // stays. The dropped identity is reported for diagnostics.
+        let objects = vec![
+            clean_multi("c0", 100, &[("pkga", 10.0), ("pkgb", 20.0)]),
+            clean_multi("c1", 200, &[("pkga", 11.0)]),
+        ];
+        let mut series = build_series(&objects, &order(&["c0", "c1"]), &SeriesFilter::default());
+        assert_eq!(
+            series.len(),
+            2,
+            "both benchmarks build a series before filtering"
+        );
+
+        let removed = retain_present_at_context(&mut series, "c1");
+
+        assert_eq!(series.len(), 1);
+        assert_eq!(series[0].id.qualified(), "pkga/group/case");
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].1.qualified(), "pkgb/group/case");
+    }
+
+    #[test]
+    fn retain_present_at_context_keeps_every_metric_kind_of_a_present_benchmark() {
+        // The benchmark carried two metric kinds historically but only
+        // InstructionCount at the context commit. Presence is benchmark-level, so
+        // the ConditionalBranches series — which has no point at c1 — is retained
+        // because its benchmark is present, and nothing is reported as a ghost.
+        let objects = vec![
+            clean_metrics(
+                "c0",
+                100,
+                "pkga",
+                &[
+                    (MetricKind::InstructionCount, 10.0),
+                    (MetricKind::ConditionalBranches, 100.0),
+                ],
+            ),
+            clean_metrics("c1", 200, "pkga", &[(MetricKind::InstructionCount, 11.0)]),
+        ];
+        let mut series = build_series(&objects, &order(&["c0", "c1"]), &SeriesFilter::default());
+        assert_eq!(series.len(), 2, "one series per metric kind");
+
+        let removed = retain_present_at_context(&mut series, "c1");
+
+        assert_eq!(series.len(), 2, "both metric-kind series survive");
+        assert!(
+            removed.is_empty(),
+            "the benchmark is present, so nothing is a ghost"
+        );
+    }
+
+    /// A clean object whose single `package` result carries several metric kinds.
+    fn clean_metrics(
+        commit: &str,
+        observation: i64,
+        package: &str,
+        metrics: &[(MetricKind, f64)],
+    ) -> LoadedObject {
+        let object_key =
+            format!("v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/{commit}/clean.json");
+        let context = RunContext::new(
+            ts(observation),
+            GitInfo {
+                commit: Some(format!("{commit}full")),
+                branch: Some("main".to_owned()),
+                dirty: false,
+            },
+            EnvironmentInfo::default(),
+            ToolchainInfo::default(),
+            "0.0.1".to_owned(),
+        );
+        let record = BenchmarkResult::new(
+            BenchmarkId::new(
+                NonEmpty::from_vec(vec![
+                    package.to_owned(),
+                    "group".to_owned(),
+                    "case".to_owned(),
+                ])
+                .unwrap(),
+            ),
+            metrics
+                .iter()
+                .map(|(kind, value)| Metric::new(*kind, *value))
+                .collect::<Vec<_>>(),
+        );
+        LoadedObject {
+            key: parse_key(&object_key).unwrap(),
+            object_key,
+            result: Run::new(context, vec![record]),
+        }
+    }
+
+    #[test]
+    fn retain_present_at_context_reports_a_ghost_once_per_metric_series() {
+        // `pkgb` carries two metric kinds and disappears before the context commit.
+        // The account is in metric series, so both of its series are named rather
+        // than the benchmark once — a caller that reported per benchmark could not
+        // reconcile its diagnostics against the series census.
+        let objects = vec![
+            clean_metrics(
+                "c0",
+                100,
+                "pkgb",
+                &[
+                    (MetricKind::InstructionCount, 10.0),
+                    (MetricKind::ConditionalBranches, 100.0),
+                ],
+            ),
+            clean_metrics("c1", 200, "pkga", &[(MetricKind::InstructionCount, 11.0)]),
+        ];
+        let mut series = build_series(&objects, &order(&["c0", "c1"]), &SeriesFilter::default());
+
+        let removed = retain_present_at_context(&mut series, "c1");
+
+        assert_eq!(series.len(), 1, "only the present benchmark survives");
+        assert_eq!(removed.len(), 2);
+        assert_eq!(removed[0].1.qualified(), "pkgb/group/case");
+        assert_eq!(removed[1].1.qualified(), "pkgb/group/case");
+        assert_ne!(
+            removed[0].2, removed[1].2,
+            "each of the ghost's metric series is named"
+        );
+    }
+
+    #[test]
+    fn retain_present_at_context_empties_when_the_context_has_no_runs() {
+        // c2 is an analyzed commit that carries no runs. Every benchmark is a ghost,
+        // so the list empties — the caller turns this into the "collect at the
+        // context commit" hint.
+        let objects = vec![
+            clean_multi("c0", 100, &[("pkga", 10.0)]),
+            clean_multi("c1", 200, &[("pkga", 11.0)]),
+        ];
+        let mut series = build_series(
+            &objects,
+            &order(&["c0", "c1", "c2"]),
+            &SeriesFilter::default(),
+        );
+
+        let removed = retain_present_at_context(&mut series, "c2");
+
+        assert!(series.is_empty(), "no benchmark is present at c2");
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].1.qualified(), "pkga/group/case");
+    }
+
+    #[test]
+    fn retain_present_at_context_is_evaluated_per_discriminant_set() {
+        // The same benchmark id exists under two triples. It is present at the
+        // context c1 in the linux set but only at c0 in the arm set, so it is kept
+        // in one set and dropped in the other — presence never leaks across sets.
+        let objects = vec![
+            multi_object(
+                "x86_64-unknown-linux-gnu",
+                "c0",
+                "clean.json",
+                100,
+                &[("pkga", 10.0)],
+            ),
+            multi_object(
+                "x86_64-unknown-linux-gnu",
+                "c1",
+                "clean.json",
+                200,
+                &[("pkga", 11.0)],
+            ),
+            multi_object(
+                "aarch64-unknown-linux-gnu",
+                "c0",
+                "clean.json",
+                100,
+                &[("pkga", 20.0)],
+            ),
+        ];
+        let mut series = build_series(&objects, &order(&["c0", "c1"]), &SeriesFilter::default());
+        assert_eq!(series.len(), 2, "one series per set");
+
+        let removed = retain_present_at_context(&mut series, "c1");
+
+        assert_eq!(
+            series.len(),
+            1,
+            "the arm-set ghost is dropped, the linux one kept"
+        );
+        assert_eq!(
+            series[0].points.len(),
+            2,
+            "the surviving series is the linux one (c0 + c1)"
+        );
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].1.qualified(), "pkga/group/case");
+        assert_ne!(
+            removed[0].0, series[0].set,
+            "the dropped ghost is in the other discriminant set"
+        );
+    }
+
+    #[test]
+    fn retain_present_at_context_admits_a_dirty_snapshot_at_the_context() {
+        // `pkga` exists at the context commit only as a dirty snapshot (the
+        // uncommitted-work case), which still counts as present; `pkgb`, seen only
+        // at c0, is the ghost.
+        let objects = vec![
+            clean_multi("c0", 100, &[("pkga", 10.0), ("pkgb", 20.0)]),
+            multi_object(
+                "x86_64-unknown-linux-gnu",
+                "c1",
+                "dirty-200.json",
+                200,
+                &[("pkga", 11.0)],
+            ),
+        ];
+        let mut series = build_series(&objects, &order(&["c0", "c1"]), &SeriesFilter::default());
+
+        let removed = retain_present_at_context(&mut series, "c1");
+
+        assert_eq!(series.len(), 1);
+        assert_eq!(series[0].id.qualified(), "pkga/group/case");
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].1.qualified(), "pkgb/group/case");
+    }
+
     #[test]
     fn push_and_merge_grow_the_id_table_across_resizes() {
         // Folding many distinct benchmark ids into one discriminant set forces the
@@ -952,9 +1408,8 @@ mod tests {
         // rehash closure would silently drop or conflate series, so check that every
         // distinct id survives as its own series across both resize paths.
         let prefixes: Arc<[BenchmarkIdPrefix]> = Arc::from(Vec::new());
-        let key =
-            parse_key("v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json")
-                .unwrap();
+        let key = parse_key("v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/c0/clean.json")
+            .unwrap();
 
         let mut first = SeriesBuilder::with_prefixes(Arc::clone(&prefixes));
         for index in 0_u32..64 {
@@ -1020,9 +1475,8 @@ mod tests {
             ],
         );
         let run = Run::new(context, vec![record]);
-        let key =
-            parse_key("v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/synthetic/c0/clean.json")
-                .unwrap();
+        let key = parse_key("v1/proj/objects/callgrind/x86_64-unknown-linux-gnu/m1/c0/clean.json")
+            .unwrap();
 
         let mut builder = SeriesBuilder::new(SeriesFilter::default());
         builder.push(&key.set, 0, false, 0, &key.commit, &RunPoints::from(&run));

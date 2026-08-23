@@ -27,15 +27,11 @@ mutants SHARD="" CAREFUL='false':
     $mutantArgs = @(Get-MutantsExcludeArgument -IsWindowsPlatform $IsWindows -IsLinuxPlatform $IsLinux)
 
     $mutantArgs += "--jobs"
-    if ($careful) {
-        # In careful mode, only one mutation is tested at a time. Combined with
-        # `RUST_TEST_THREADS=1` set below, this ensures that exactly one test runs at any
-        # given moment across the entire mutation testing run.
-        $mutantArgs += "1"
-    } else {
-        # Experimentally determined heuristics.
-        $mutantArgs += [int]([Math]::Floor([Environment]::ProcessorCount / 6)) + 1
-    }
+    # Experimentally determined heuristics. Careful mode deliberately keeps this same
+    # mutation-job parallelism; it only serializes the tests within each job (via
+    # `RUST_TEST_THREADS=1` set below), so latent per-test timeouts are not masked by
+    # concurrent tests.
+    $mutantArgs += [int]([Math]::Floor([Environment]::ProcessorCount / 6)) + 1
 
     # Optional sharding lets CI split mutation testing across multiple parallel runners. We accept
     # the same 1-based "N/M" format as `miri-harder` (so `1/8 .. 8/8` for 8 shards); the module
@@ -72,16 +68,16 @@ mutants SHARD="" CAREFUL='false':
     # This allows mutations that cause infinite loops to hang as expected.
     $env:MUTATION_TESTING = "1"
 
-    # Mirror the `just test*` recipes: pre-build the `mock_bench_engine` test-support binary
-    # and hand its absolute path to the cargo-bench-history integration tests via
-    # MOCK_BENCH_ENGINE. Without this, those tests build the engine on demand inside every
+    # Mirror the `just test*` recipes: pre-build the `cargo-bench-history-faker` test-support
+    # binary and hand its absolute path to the cargo-bench-history integration tests via
+    # CBH_FAKER. Without this, those tests build the faker on demand inside every
     # mutant's fresh target tree, and under the CPU contention of a full parallel mutation run
     # that per-mutant build can push an otherwise-fast test past the `--timeout` ceiling and
-    # report a spurious TIMEOUT (issue #349). The engine is excluded from mutation (see
+    # report a spurious TIMEOUT (issue #349). The faker is excluded from mutation (see
     # Get-MutantsExcludeArgument), so a pre-built binary masks no mutant. Build it before
     # RUSTFLAGS gains `--cfg mutants` below so the artifact matches the one `just test`
     # produces and neither run churns the other's cache.
-    $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
+    $env:CBH_FAKER = just _faker-path | Select-Object -Last 1
 
     # Enable the `mutants` cfg so tests carrying `#[cfg_attr(mutants, ignore = "<why>")]`
     # opt out of mutation runs. cargo-mutants defines no cfg of its own, but it preserves
@@ -94,10 +90,11 @@ mutants SHARD="" CAREFUL='false':
     }
 
     if ($careful) {
-        # Force libtest to run a single test at a time within each `cargo test` invocation.
-        # Combined with `--jobs 1` above, this ensures that exactly one test runs at any
-        # given moment, which helps diagnose tests that are sensitive to concurrent
-        # execution or otherwise interact in unexpected ways.
+        # Disable libtest's intra-suite parallelism so each mutation job runs its tests
+        # one at a time. Mutation jobs still run concurrently (the `--jobs` heuristic
+        # above is unchanged); only test concurrency within a job is removed. Serial
+        # tests surface latent per-test timeouts that concurrent execution can otherwise
+        # hide, which is the entire point of the `mutants-careful` recipe.
         $env:RUST_TEST_THREADS = "1"
     }
 
@@ -114,6 +111,6 @@ mutants SHARD="" CAREFUL='false':
     Invoke-Expression "cargo mutants {{ target_package }} --baseline=skip --timeout=60 --no-shuffle --caught --unviable $expanded_args"
     exit $LASTEXITCODE
 
-# Run mutation tests with no parallelism: one mutation at a time, one test at a time within each mutation. Slow but useful for investigating flaky or concurrency-sensitive tests.
+# Run mutation tests like `mutants` (mutation jobs still run in parallel) but with test concurrency disabled, so only one test runs at a time within each mutation job. Slower, but surfaces per-test timeouts that concurrent test execution can hide.
 [group('quality')]
 mutants-careful: (mutants "" "true")

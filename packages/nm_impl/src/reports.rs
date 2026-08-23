@@ -2,10 +2,9 @@ use std::fmt::{self, Display, Write};
 use std::num::NonZero;
 use std::{cmp, iter};
 
-use foldhash::{HashMap, HashMapExt};
 use new_zealand::nz;
 
-use crate::{EventName, GLOBAL_REGISTRY, Magnitude, ObservationBagSnapshot, Observations};
+use crate::{EventName, GLOBAL_REGISTRY, HashMap, Magnitude, ObservationBagSnapshot, Observations};
 
 /// A human- and machine-readable report about observed occurrences of events.
 ///
@@ -46,7 +45,7 @@ impl Report {
     #[must_use]
     pub fn collect() -> Self {
         // We must first collect all observations from all threads and merge them per-event.
-        let mut event_name_to_merged_snapshot = HashMap::new();
+        let mut event_name_to_merged_snapshot = HashMap::default();
 
         GLOBAL_REGISTRY.inspect(|observation_bags| {
             for (event_name, observation_bag) in observation_bags {

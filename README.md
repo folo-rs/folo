@@ -89,21 +89,19 @@ general-purpose mechanism and it pays a price in performance for that generality
 allocating a large number of objects of specific sizes, we can benefit from special-purpose
 allocators that keep the memory around for reuse, so the next allocation is simple and fast.
 
-While allocator APIs are still an unstable Rust feature, there are stable-API alternatives.
-Another term for special-purpose allocators is object pools and [`infinity_pool`][infinity_pool]
-offers several of them, from basic `Vec<T>` style pinned object collections to type-agnostic object
-pools that can allocate any type of object. While the safe-API variants come with substantial
-overheads compared to the unsafe-API variants, they both can surpass the efficiency of using the
-global memory allocator under many conditions. Your mileage may vary - measure 100 times,
-cut 10 times.
+While allocator APIs are still an unstable Rust feature, object pools provide stable alternatives.
+[`plurality`][plurality] offers `Pool<T>` for one concrete type and `MultiPool` for heterogeneous
+types, retaining storage for per-object slot reuse. [`infinity_pool`][infinity_pool] receives
+maintenance only and remains available where its raw manual-lifetime handles or macro-generated
+trait-object casting are required. Special-purpose pools can surpass the efficiency of the global
+memory allocator under many conditions. Your mileage may vary - measure 100 times, cut 10 times.
 
 A surprising source of memory allocations in high-performance code can be signaling. We are used
 to thinking of oneshot channels as cheap and efficient things and while this is true, they are
 still built upon shared memory allocated from the heap. Every signaling channel you create is a
 heap allocation and they can add up fast! [`events_once`][events_once] provides you with pooled
-signaling channels that take advantage of `infinity_pool` to reuse memory allocations, as well
-as providing single-threaded and unsafe-code-managed events for lower overhead in specialized
-scenarios.
+signaling channels that reuse memory allocations, as well as providing single-threaded and
+unsafe-code-managed events for lower overhead in specialized scenarios.
 
 ```
 bagels_cooked_weight_grams: 2300; sum 744000; mean 323
@@ -138,14 +136,23 @@ can sacrifice precision but still want satisfactory performance, [`fast_time`][f
 a clock that is much cheaper to query. It will not give you precise numbers but it is safe to
 query tens of thousands of times per second.
 
+A single benchmark run is only a snapshot. The numbers that matter emerge over time: a hot
+path that slowly regresses across dozens of commits, or a "harmless" refactor that doubles the
+allocation count. [`cargo-bench-history`][cargo_bench_history] maintains a long-lived history of
+your benchmark results - from [Criterion][criterion], [`all_the_time`][all_the_time],
+[`alloc_tracker`][alloc_tracker] and [Callgrind][gungraun] - and analyzes it to detect
+regressions and improvements across commits, so a
+performance change cannot slip by unnoticed between one release and the next.
+
 
 # Extras
 
 Auxiliary packages developed and published by this project:
 
 * [`awaiter_set`][awaiter_set] - zero-allocation awaiter tracking for async synchronization primitives.
-* `cargo-detect-package` - cargo subcommand to detect which package is used based on a provided path and to run another subcommand on that package.
-* `cpulist` - utilities for parsing and emitting Linux cpulist strings, used by `many_cpus`.
+* [`cargo-detect-package`][cargo_detect_package] - cargo subcommand to detect which package is used based on a provided path and to run another subcommand on that package.
+* [`cargo-freeze-deps`][cargo_freeze_deps] - cargo subcommand that freezes floating dependency versions in a `Cargo.toml` to their resolved literal values.
+* [`cpulist`][cpulist] - utilities for parsing and emitting Linux cpulist strings, used by `many_cpus`.
 * [`events`][events] - async manual-reset and auto-reset events for multi-use signaling.
 * [`future_deque`][future_deque] - pool-backed deque collections for managing groups of futures with precise control over polling order and result retrieval.
 * `new_zealand` - [utilities for working with non-zero integers][nonzero].
@@ -153,21 +160,27 @@ Auxiliary packages developed and published by this project:
 Packages present in the repo but not relevant to a general audience:
 
 * `benchmarks` - random pile of benchmarks to explore relevant scenarios and guide Folo development.
+* `cargo-bench-history-faker` - unsupported synthetic benchmark-output generator that validates `cargo-bench-history` end to end (in this repo and sibling repos); published as a convenience binary but has no stable API or CLI.
+* `cargo-bench-history-stress` - on-demand stress harness that seeds a synthetic benchmark history and times `cargo-bench-history` analysis modes over it; not published.
 * `folo_ffi` - utilities for working with FFI logic; exists for internal use in Folo packages; no stable API surface.
 * `folo_utils` - utilities for internal use in Folo packages; exists for internal use in Folo packages; no stable API surface.
-* `linked_macros` - internal proc-macro dependency of the `linked` package; do not reference directly.
-* `linked_macros_impl` - internal proc-macro dependency of the `linked_macros` package; do not reference directly.
 * `testing` - private helpers for testing and examples in Folo packages.
 * `ui_tests` - compile-time UI tests for workspace packages; not published.
+* Various `_impl` packages (and the `linked_macros`/`cbh_*` families) that exist only to separate public and private API surface for implementation purposes; do not reference them directly.
 
 [all_the_time]: packages/all_the_time/README.md
 [alloc_tracker]: packages/alloc_tracker/README.md
 [awaiter_set]: packages/awaiter_set/README.md
+[cargo_bench_history]: packages/cargo-bench-history/README.md
+[cargo_detect_package]: packages/cargo-detect-package/README.md
+[cargo_freeze_deps]: packages/cargo-freeze-deps/README.md
+[cpulist]: packages/cpulist/README.md
 [criterion]: https://bheisler.github.io/criterion.rs/book/criterion_rs.html
 [events]: packages/events/README.md
 [events_once]: packages/events_once/README.md
 [fast_time]: packages/fast_time/README.md
 [future_deque]: packages/future_deque/README.md
+[gungraun]: https://crates.io/crates/gungraun
 [infinity_pool]: packages/infinity_pool/README.md
 [linked]: packages/linked/README.md
 [many_cpus]: packages/many_cpus/README.md
@@ -177,6 +190,7 @@ Packages present in the repo but not relevant to a general audience:
 [nonzero]: https://github.com/rust-lang/rfcs/pull/3786
 [numa]: https://www.kernel.org/doc/html/v4.18/vm/numa.html
 [par_bench]: packages/par_bench/README.md
+[plurality]: https://crates.io/crates/plurality
 [region_cached]: packages/region_cached/README.md
 [region_local]: packages/region_local/README.md
 [structural_changes]: https://sander.saares.eu/2025/03/31/structural-changes-for-48-throughput-in-a-rust-web-service/

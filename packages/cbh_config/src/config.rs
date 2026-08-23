@@ -1,11 +1,12 @@
 //! Configuration loaded from `.cargo/bench_history.toml`: which project this is
 //! and where its benchmark history is stored.
 
-use std::error::Error;
+use std::io;
 use std::path::Path;
-use std::{fmt, io};
 
 use serde::Deserialize;
+
+use crate::{ConfigError, ParseConfigError, ReadConfigError};
 
 /// The starter configuration written by `install`.
 const DEFAULT_TEMPLATE: &str = "\
@@ -28,7 +29,10 @@ const DEFAULT_TEMPLATE: &str = "\
 # Authentication is always Microsoft Entra ID (OAuth): the endpoint must be
 # HTTPS and the identity running the tool is granted data-plane access to the
 # container. In CI, GitHub Actions federates into Azure without a stored secret;
-# for setup, see
+# the federated credential's subject must match the triggering event — e.g.
+# `repo:<owner>/<repo>:ref:refs/heads/main` for a default-branch run, or
+# `repo:<owner>/<repo>:pull_request` for a pull-request run (same-repo only).
+# For setup, see
 # https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-azure
 #
 # [storage.azure]
@@ -104,7 +108,8 @@ pub struct AzureStorageConfig {
 /// the configuration schema.
 pub fn parse_config(text: &str) -> Result<Config, ConfigError> {
     toml::from_str(text)
-        .map_err(|error| ConfigError::new(format!("failed to parse configuration: {error}")))
+        .map_err(ParseConfigError::from)
+        .map_err(ConfigError::from)
 }
 
 /// Loads and parses the configuration file at `path`.
@@ -128,10 +133,7 @@ pub async fn load_config(path: &Path, explicit: bool) -> Result<Config, ConfigEr
             return Ok(Config::default());
         }
         Err(error) => {
-            return Err(ConfigError::new(format!(
-                "failed to read configuration at {}: {error}",
-                path.display()
-            )));
+            return Err(ReadConfigError::caused_by(path, error).into());
         }
     };
     parse_config(&text)
@@ -143,39 +145,13 @@ pub fn default_template() -> &'static str {
     DEFAULT_TEMPLATE
 }
 
-/// An error encountered while loading configuration.
-///
-/// Carries a single human-readable message rather than categorizing failures:
-/// the construction sites (a file read, a TOML parse, an unresolvable
-/// `--local`/`--cache` selection) each bake their context into the message, and
-/// nothing downstream branches on a kind.
-#[derive(Debug)]
-pub struct ConfigError {
-    message: String,
-}
-
-impl ConfigError {
-    /// Creates a configuration error carrying `message`.
-    #[must_use]
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl Error for ConfigError {}
-
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use ohno::ErrorExt;
+
     use super::*;
+    use crate::{ParseConfigError, ReadConfigError};
 
     #[test]
     fn default_template_has_no_engines_section() {
@@ -330,17 +306,8 @@ key = \"ci-pool-a\"
         // leftover `[storage.local]` table is not silently ignored the way a wholly
         // unknown section is: it fails to parse, pointing the user at `--local`.
         let error = parse_config("[storage.local]\npath = \"x\"\n").unwrap_err();
-        let message = error.to_string();
-        assert!(
-            message.contains("unknown variant `local`"),
-            "unexpected parse error: {message}"
-        );
-    }
-
-    #[test]
-    fn config_error_display_is_the_message() {
-        let error = ConfigError::new("boom");
-        assert_eq!(error.to_string(), "boom");
+        assert!(error.find_source::<ParseConfigError>().is_some());
+        assert!(error.find_source::<toml::de::Error>().is_some());
     }
 
     #[tokio::test]
@@ -369,12 +336,9 @@ key = \"ci-pool-a\"
         // An explicitly requested file that does not exist is an error.
         let error = load_config(&path, true).await.unwrap_err();
 
-        let message = error.to_string();
-        assert!(
-            message.contains("failed to read configuration"),
-            "{message}"
-        );
-        assert!(message.contains("absent.toml"), "{message}");
+        let read = error.find_source::<ReadConfigError>().unwrap();
+        assert_eq!(read.path, path);
+        assert!(error.find_source::<io::Error>().is_some());
     }
 
     #[tokio::test]

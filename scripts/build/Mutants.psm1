@@ -68,15 +68,29 @@ function Get-MutantsExcludeArgument {
         '-e', (protect 'packages/testing/**'),
         '-e', (protect 'packages/benchmarks/**'),
 
-        # The mock benchmark engine is a test-support binary (its own never-published
-        # `mock_bench_engine` package, which the integration tests spawn). It is scaffolding,
-        # not shipped code, so mutating it yields no production coverage signal.
-        '-e', (protect 'packages/mock_bench_engine/**'),
+        # The benchmark faker (its own `cargo-bench-history-faker` lib+bin package, which the
+        # integration tests spawn) is test-support scaffolding. It is published so sibling repos
+        # can consume it, but it carries no supported API contract and drives no production
+        # behaviour, so mutating it yields no meaningful coverage signal.
+        '-e', (protect 'packages/cargo-bench-history-faker/**'),
+
+        # The appendix figure generator is unpublished book infrastructure. Mutating drawing
+        # helpers and generated-table formatters yields no production coverage signal; the
+        # lockstep tests exist to keep the book honest, not to certify plotters call sites.
+        '-e', (protect 'packages/cargo-bench-history-figures/**'),
 
         # `testing.rs` is an in-workspace test utility (gated behind the `private-test-util`
         # feature, consumed only by the shell crate's tests). It is scaffolding with no public
         # API contract, so mutating it yields no production coverage signal.
         '-e', (protect 'packages/cbh_detect/src/testing.rs'),
+
+        # `examples.rs` and `scatter.rs` are the shared example-series fixtures (gated behind
+        # `private-test-util`): the curated data sets the appendix figures and detector tests
+        # draw from, plus the deterministic noise source that scatters them. They are fixture
+        # scaffolding with no production behaviour, so mutating a generated data point yields
+        # no coverage signal - the tests assert on detector verdicts, not on fixture contents.
+        '-e', (protect 'packages/cbh_detect/src/detect/examples.rs'),
+        '-e', (protect 'packages/cbh_detect/src/detect/scatter.rs'),
 
         # Some of our systems are single-processor, yet the code may only be meaningfully testable
         # on multi-processor systems. As a "good enough" approximation, we skip mutation testing

@@ -2,8 +2,7 @@
 
 use events_once::{Event, IntoValueError};
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let (sender, receiver) = Event::<String>::boxed();
 
     // into_value() is designed for synchronous scenarios where you do not want to wait but

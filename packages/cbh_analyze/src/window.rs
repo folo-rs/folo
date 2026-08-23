@@ -1,13 +1,13 @@
-//! `--since` / `--until` window resolution: parsing the edges, deciding the
+//! `--since` cutoff resolution: parsing the lower-bound edge, deciding the
 //! history-mode default look-back, and testing each committer time against the
-//! resolved window.
+//! resolved cutoff.
 
 use cbh_detect::AnalysisMode;
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use jiff::{Span, Timestamp};
 
-use crate::AnalyzeError;
+use crate::{AnalyzeError, InvalidWindowValueError, WindowOutOfRangeError};
 
 /// Auto-detects the analysis mode from the resolved topology and recorded data.
 ///
@@ -21,7 +21,12 @@ use crate::AnalyzeError;
 /// checkout with no admitted dirty run still analyzes as history. The merge-base
 /// is always known here: an undeterminable one is a hard error in `resolve_history`,
 /// never a silent fallback to this mode.
-pub(crate) fn auto_mode(tip_is_merge_base: bool, dirty_tip_run_present: bool) -> AnalysisMode {
+///
+/// Public so the book's generated mode table is derived from this rule rather than
+/// transcribed beside it: the appendix documents mode selection, and a table nothing
+/// checks would drift the first time the rule changed.
+#[must_use]
+pub fn auto_mode(tip_is_merge_base: bool, dirty_tip_run_present: bool) -> AnalysisMode {
     if tip_is_merge_base && !dirty_tip_run_present {
         AnalysisMode::History
     } else {
@@ -67,9 +72,7 @@ fn default_history_since(now: Timestamp) -> Result<Timestamp, AnalyzeError> {
     now.to_zoned(TimeZone::UTC)
         .checked_sub(Span::new().months(HISTORY_DEFAULT_LOOKBACK_MONTHS))
         .map(|zoned| zoned.timestamp())
-        .map_err(|error| AnalyzeError::Analyze {
-            message: format!("default --since window is out of the representable range: {error}"),
-        })
+        .map_err(|error| WindowOutOfRangeError::caused_by("default --since window", error).into())
 }
 
 /// Parses the `--since` option into an absolute lower-bound instant, if set.
@@ -83,48 +86,22 @@ pub(crate) fn parse_since(
     parse_instant(value, "--since", now)
 }
 
-/// Parses the `--until` option into an absolute upper-bound instant, if set.
+/// Decides whether a commit's `committer_time` places it before the `--since`
+/// lower bound (an inclusive-on-or-after cutoff), matching the object-timestamp
+/// comparison the analysis used before topology carried the time.
 ///
-/// See [`parse_instant`] for the accepted input forms. `now` anchors a relative
-/// duration.
-pub(crate) fn parse_until(
-    value: Option<&str>,
-    now: Timestamp,
-) -> Result<Option<Timestamp>, AnalyzeError> {
-    parse_instant(value, "--until", now)
-}
-
-/// Which edge of the `--since`/`--until` window a commit falls outside of.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WindowEdge {
-    /// The commit predates the `--since` lower bound.
-    Since,
-    /// The commit postdates the `--until` upper bound.
-    Until,
-}
-
-/// Decides whether a commit's `committer_time` places it outside the
-/// `--since`/`--until` window, reporting which edge it fell off.
-///
-/// `--since` is an inclusive-on-or-after lower bound and `--until` an
-/// inclusive-on-or-before upper bound, matching the object-timestamp comparison
-/// the analysis used before topology carried the time. A commit with an unknown
-/// time (`None`) is never excluded — git always reports a committer date for a
-/// real commit, so this only guards a degenerate input conservatively (by
-/// keeping the object and letting the rest of the pipeline judge it).
-pub(crate) fn window_excludes(
+/// A commit with an unknown time (`None`) is never excluded — git always reports a
+/// committer date for a real commit, so this only guards a degenerate input
+/// conservatively (by keeping the object and letting the rest of the pipeline
+/// judge it).
+pub(crate) fn before_since_cutoff(
     committer_time: Option<Timestamp>,
     since: Option<Timestamp>,
-    until: Option<Timestamp>,
-) -> Option<WindowEdge> {
-    let time = committer_time?;
-    if since.is_some_and(|since| time < since) {
-        return Some(WindowEdge::Since);
-    }
-    if until.is_some_and(|until| time > until) {
-        return Some(WindowEdge::Until);
-    }
-    None
+) -> bool {
+    let Some(time) = committer_time else {
+        return false;
+    };
+    since.is_some_and(|since| time < since)
 }
 
 /// Parses a time-cutoff option into an absolute instant, if set.
@@ -168,12 +145,7 @@ fn parse_instant(
     if let Ok(span) = value.parse::<Span>() {
         return Ok(Some(instant_before(span, flag, now)?));
     }
-    Err(AnalyzeError::Analyze {
-        message: format!(
-            "invalid {flag} value {value:?}; expected an RFC 3339 timestamp, a YYYY-MM-DD \
-             date, or a relative duration such as \"6 months\" or \"30 days ago\""
-        ),
-    })
+    Err(InvalidWindowValueError::new(flag, value).into())
 }
 
 /// Resolves a relative [`Span`] to the instant that far before `now`, treating the
@@ -185,9 +157,7 @@ fn instant_before(span: Span, flag: &str, now: Timestamp) -> Result<Timestamp, A
     now.to_zoned(TimeZone::UTC)
         .checked_sub(span.abs())
         .map(|zoned| zoned.timestamp())
-        .map_err(|error| AnalyzeError::Analyze {
-            message: format!("{flag} duration is out of the representable range: {error}"),
-        })
+        .map_err(|error| WindowOutOfRangeError::caused_by(format!("{flag} duration"), error).into())
 }
 
 #[cfg(test)]
@@ -195,9 +165,9 @@ fn instant_before(span: Span, flag: &str, now: Timestamp) -> Result<Timestamp, A
 mod tests {
     use cbh_detect::AnalysisMode;
     use jiff::Timestamp;
+    use ohno::ErrorExt as _;
 
     use super::*;
-    use crate::AnalyzeError;
 
     fn ts(seconds: i64) -> Timestamp {
         Timestamp::from_second(seconds).unwrap()
@@ -271,27 +241,17 @@ mod tests {
     }
 
     #[test]
-    fn window_excludes_decides_each_edge_from_committer_time() {
+    fn before_since_cutoff_decides_from_committer_time() {
         let since = Some(ts(10));
-        let until = Some(ts(20));
-        // Before the lower bound, after the upper bound, and inside the window.
-        assert_eq!(
-            window_excludes(Some(ts(5)), since, until),
-            Some(WindowEdge::Since)
-        );
-        assert_eq!(
-            window_excludes(Some(ts(25)), since, until),
-            Some(WindowEdge::Until)
-        );
-        assert_eq!(window_excludes(Some(ts(15)), since, until), None);
-        // Both bounds are inclusive: a commit exactly on an edge stays in-window.
-        assert_eq!(window_excludes(Some(ts(10)), since, until), None);
-        assert_eq!(window_excludes(Some(ts(20)), since, until), None);
-        // An open bound never excludes on that side.
-        assert_eq!(window_excludes(Some(ts(0)), None, until), None);
-        assert_eq!(window_excludes(Some(ts(99)), since, None), None);
-        // An unknown committer time is never excluded, even with both bounds set.
-        assert_eq!(window_excludes(None, since, until), None);
+        // Before the lower bound is excluded; on or after it stays in.
+        assert!(before_since_cutoff(Some(ts(5)), since));
+        assert!(!before_since_cutoff(Some(ts(15)), since));
+        // The bound is inclusive: a commit exactly on the edge stays in.
+        assert!(!before_since_cutoff(Some(ts(10)), since));
+        // An open bound never excludes.
+        assert!(!before_since_cutoff(Some(ts(0)), None));
+        // An unknown committer time is never excluded, even with a bound set.
+        assert!(!before_since_cutoff(None, since));
     }
 
     #[test]
@@ -340,6 +300,27 @@ mod tests {
     fn since_rejects_garbage() {
         let now: Timestamp = "2024-06-01T00:00:00Z".parse().unwrap();
         let error = parse_since(Some("not-a-date"), now).unwrap_err();
-        assert!(matches!(error, AnalyzeError::Analyze { .. }), "{error:?}");
+        let found = error.find_source::<InvalidWindowValueError>().unwrap();
+        assert_eq!(found.flag, "--since");
+        assert_eq!(found.value, "not-a-date");
+    }
+
+    #[test]
+    fn a_default_window_below_the_representable_range_is_an_error() {
+        // Six months before the earliest representable instant does not exist, so the
+        // calendar subtraction fails rather than silently saturating.
+        let error = default_history_since(Timestamp::MIN).unwrap_err();
+        let found = error.find_source::<WindowOutOfRangeError>().unwrap();
+        assert_eq!(found.window, "default --since window");
+        assert!(error.find_source::<jiff::Error>().is_some());
+    }
+
+    #[test]
+    fn a_relative_since_below_the_representable_range_is_an_error() {
+        // Same for an explicit relative duration.
+        let error = parse_since(Some("5 months"), Timestamp::MIN).unwrap_err();
+        let found = error.find_source::<WindowOutOfRangeError>().unwrap();
+        assert_eq!(found.window, "--since duration");
+        assert!(error.find_source::<jiff::Error>().is_some());
     }
 }

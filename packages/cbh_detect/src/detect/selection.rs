@@ -8,19 +8,46 @@
 //! *target-side* (clean and dirty runs count). The async git calls live in
 //! [`detect`](super); keeping the split here pure keeps it Miri-testable.
 
+/// How a selected commit treats dirty (uncommitted-tree) snapshots.
+///
+/// Replacing a pair of booleans, this makes the base-branch exception's invariant
+/// structural: the exception is a *kind* of admission, so a commit can never
+/// claim the exception while excluding dirty runs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirtyAdmission {
+    /// Dirty snapshots are excluded: a base-side commit, or `--no-dirty`.
+    Excluded,
+    /// Dirty snapshots are admitted for a target-side commit.
+    Admitted,
+    /// Dirty snapshots are admitted *only* by the base-branch dirty-tree exception:
+    /// a base-side tip whose dirty runs are the user's current in-flight work. When
+    /// such a run is actually included, `analyze` warns that it is ephemeral (see
+    /// the `analyze` command in `DESIGN.md`).
+    BaseException,
+}
+
+impl DirtyAdmission {
+    /// Whether dirty snapshots on the commit are admitted at all.
+    #[must_use]
+    pub fn admits_dirty(self) -> bool {
+        matches!(self, Self::Admitted | Self::BaseException)
+    }
+
+    /// Whether admission is granted *only* by the base-branch dirty-tree exception,
+    /// the case that triggers the ephemeral-data warning.
+    #[must_use]
+    pub fn is_base_exception(self) -> bool {
+        matches!(self, Self::BaseException)
+    }
+}
+
 /// One commit selected for analysis, in oldest-first topological position.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SelectedCommit {
     /// The commit ID (the storage commit-directory segment).
     pub commit: String,
-    /// Whether dirty snapshots on this commit are admitted (target-side, or the
-    /// base-side tip under the dirty-working-tree exception).
-    pub admit_dirty: bool,
-    /// Whether `admit_dirty` is granted *only* by the base-branch dirty-tree
-    /// exception (a base-side tip whose dirty runs are the user's current work).
-    /// When such a run is actually included, `analyze` warns that it is
-    /// ephemeral (see the `analyze` command in `DESIGN.md`).
-    pub dirty_base_exception: bool,
+    /// How this commit treats dirty (uncommitted-tree) snapshots.
+    pub dirty: DirtyAdmission,
 }
 
 /// Splits the target's first-parent `ancestry` (oldest-first) at the `merge_base`
@@ -37,7 +64,7 @@ pub struct SelectedCommit {
 /// `dirty_tip_exception` carves out the on-the-base-branch scenario: when the
 /// **tip** commit is base-side (an official view) but the working tree is
 /// currently dirty, its dirty snapshots are the user's in-flight work, so they are
-/// admitted (flagged via [`SelectedCommit::dirty_base_exception`] so the caller can
+/// admitted (flagged via [`DirtyAdmission::BaseException`] so the caller can
 /// warn). Earlier base-side commits are unaffected — only the tip. `allow_dirty`
 /// still gates it, so `--no-dirty` overrides the exception.
 #[must_use]
@@ -55,11 +82,16 @@ pub fn select_commits(
         .map(|(index, commit)| {
             let target_side = split.is_none_or(|boundary| index > boundary);
             let is_tip = tip_index == Some(index);
-            let dirty_base_exception = !target_side && is_tip && allow_dirty && dirty_tip_exception;
+            let dirty = if !target_side && is_tip && allow_dirty && dirty_tip_exception {
+                DirtyAdmission::BaseException
+            } else if target_side && allow_dirty {
+                DirtyAdmission::Admitted
+            } else {
+                DirtyAdmission::Excluded
+            };
             SelectedCommit {
                 commit: commit.clone(),
-                admit_dirty: (target_side && allow_dirty) || dirty_base_exception,
-                dirty_base_exception,
+                dirty,
             }
         })
         .collect()
@@ -77,7 +109,7 @@ mod tests {
     fn admit(selection: &[SelectedCommit]) -> Vec<(&str, bool)> {
         selection
             .iter()
-            .map(|selected| (selected.commit.as_str(), selected.admit_dirty))
+            .map(|selected| (selected.commit.as_str(), selected.dirty.admits_dirty()))
             .collect()
     }
 
@@ -94,7 +126,7 @@ mod tests {
         assert!(
             selection
                 .iter()
-                .all(|selected| !selected.dirty_base_exception)
+                .all(|selected| !selected.dirty.is_base_exception())
         );
     }
 
@@ -114,7 +146,11 @@ mod tests {
     fn no_dirty_suppresses_target_side_admission() {
         let ancestry = commit_ids(&["c0", "c1", "f1", "f2"]);
         let selection = select_commits(&ancestry, Some("c1"), false, false);
-        assert!(selection.iter().all(|selected| !selected.admit_dirty));
+        assert!(
+            selection
+                .iter()
+                .all(|selected| !selected.dirty.admits_dirty())
+        );
     }
 
     #[test]
@@ -130,7 +166,11 @@ mod tests {
         // inclusive (target-side) treatment.
         let ancestry = commit_ids(&["c0", "c1", "c2"]);
         let selection = select_commits(&ancestry, Some("zz"), true, false);
-        assert!(selection.iter().all(|selected| selected.admit_dirty));
+        assert!(
+            selection
+                .iter()
+                .all(|selected| selected.dirty.admits_dirty())
+        );
     }
 
     #[test]
@@ -157,7 +197,7 @@ mod tests {
         );
         let flagged: Vec<&str> = selection
             .iter()
-            .filter(|selected| selected.dirty_base_exception)
+            .filter(|selected| selected.dirty.is_base_exception())
             .map(|selected| selected.commit.as_str())
             .collect();
         assert_eq!(flagged, vec!["c3"], "only the tip carries the exception");
@@ -168,11 +208,15 @@ mod tests {
         // --no-dirty (allow_dirty == false) overrides the dirty-tree exception.
         let ancestry = commit_ids(&["c0", "c1", "c2", "c3"]);
         let selection = select_commits(&ancestry, Some("c3"), false, true);
-        assert!(selection.iter().all(|selected| !selected.admit_dirty));
         assert!(
             selection
                 .iter()
-                .all(|selected| !selected.dirty_base_exception)
+                .all(|selected| !selected.dirty.admits_dirty())
+        );
+        assert!(
+            selection
+                .iter()
+                .all(|selected| !selected.dirty.is_base_exception())
         );
     }
 
@@ -185,7 +229,7 @@ mod tests {
         assert!(
             selection
                 .iter()
-                .all(|selected| !selected.dirty_base_exception),
+                .all(|selected| !selected.dirty.is_base_exception()),
             "a target-side tip is admitted normally, not via the exception"
         );
     }

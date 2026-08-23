@@ -3,13 +3,20 @@
 name = "cargo-bench-history"
 description = "A Cargo tool that maintains a long-lived history of benchmark results and analyzes it for trends"
 publish = true
-version = "0.0.4"
+version = "0.2.1"
 
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+# Baseline of external types intentionally exposed in the public API.
+# `cargo-bench-history` is the public shell over its own `cbh_*` implementation
+# partitions, so re-exporting any partition type is by-design layering, not
+# accidental exposure. Ref: docs/external-types.md; docs/impl-crate-split.md.
+[package.metadata.cargo_check_external_types]
+allowed_external_types = ["cbh_*::*"]
 
 [package.metadata.binstall]
 # Prebuilt binaries are published by .github/workflows/release.yml (see
@@ -33,11 +40,9 @@ cbh_git = { workspace = true }
 cbh_model = { workspace = true }
 cbh_probe = { workspace = true }
 cbh_storage = { workspace = true }
-futures = { workspace = true }
 jiff = { workspace = true, features = ["serde"] }
 mimalloc = { workspace = true }
-nonempty = { workspace = true }
-serde_json = { workspace = true }
+ohno = { workspace = true, features = ["app-err"] }
 tick = { workspace = true, features = ["tokio"] }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thread"] }
 
@@ -51,21 +56,25 @@ azure_core = { workspace = true }
 # and neither `cargo check` nor the emulator-less test runs catch that. This is
 # the same "defaults pick a backend" situation that keeps `clap` on its
 # defaults. The workspace declarations keep `default-features = false`, so the
-# defaults are scoped to this package alone. The Azure SDK is only a
-# dev-dependency now (the `cbh_azure` end-to-end test builds a backend directly
-# via `azure_backend_from_parts`); production storage lives in `cbh_storage`.
+# defaults are scoped to this package alone. `azure_identity` and
+# `azure_storage_blob` are used by the shell's `cbh_azure` test; production
+# storage lives in `cbh_storage`.
 azure_identity = { workspace = true, features = ["default"] }
 azure_storage_blob = { workspace = true, features = ["default"] }
 base64 = { workspace = true }
+cargo-bench-history-faker = { path = "../cargo-bench-history-faker", features = ["private-test-util"] }
 cbh_codec = { path = "../cbh_codec" }
+cbh_detect = { path = "../cbh_detect" }
 cbh_diag = { path = "../cbh_diag", features = ["private-test-util"] }
 cbh_git = { path = "../cbh_git", features = ["private-test-util"] }
 cbh_storage = { path = "../cbh_storage", features = ["private-test-util"] }
 futures = { workspace = true, features = ["executor"] }
-mock_bench_engine = { path = "../mock_bench_engine" }
 mutants = { workspace = true }
+nonempty = { workspace = true }
 reqwest = { workspace = true, features = ["gzip", "rustls"] }
+serde_json = { workspace = true }
 serial_test = { workspace = true }
+static_assertions = { workspace = true }
 tempfile = { workspace = true }
 testing = { path = "../testing" }
 tick = { workspace = true, features = ["test-util"] }

@@ -1,8 +1,8 @@
 [package]
 name = "future_deque"
-description = "Pool-backed deque collections for managing groups of futures"
+description = "Deque collections for managing groups of futures"
 publish = true
-version = "0.1.14"
+version = "0.1.16"
 
 authors.workspace = true
 edition.workspace = true
@@ -13,14 +13,22 @@ rust-version.workspace = true
 [package.metadata.docs.rs]
 all-features = true
 
+# Baseline of external types intentionally exposed in the public API. Any new
+# external type here trips the check so accidental exposures are caught.
+# Ref: docs/external-types.md.
+[package.metadata.cargo_check_external_types]
+allowed_external_types = ["futures_core::stream::Stream"]
+
 [features]
 futures-stream = ["dep:futures-core"]
 
 [dependencies]
 futures-core = { workspace = true, optional = true }
-infinity_pool = { workspace = true }
+plurality = { workspace = true }
 
 [dev-dependencies]
+all_the_time = { path = "../all_the_time" }
+alloc_tracker = { path = "../alloc_tracker" }
 criterion = { workspace = true }
 events_once = { path = "../events_once" }
 futures = { workspace = true, features = ["executor"] }
@@ -42,4 +50,3 @@ harness = false
 [[bench]]
 name = "future_deque_cg"
 harness = false
-

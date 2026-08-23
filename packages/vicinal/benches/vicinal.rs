@@ -1,6 +1,5 @@
 #![expect(missing_docs, reason = "benchmarks")]
 
-use std::fs::File;
 use std::hint::black_box;
 use std::thread;
 use std::time::Instant;
@@ -18,9 +17,40 @@ use vicinal::Pool;
 #[global_allocator]
 static ALLOCATOR: Allocator<std::alloc::System> = Allocator::system();
 
+/// Keeps the low and high cases distinct without making each sample excessively long.
+const TASK_BATCH_SIZE: usize = 100;
+
+/// Matches the number of workers Vicinal assigns to each processor.
+const THREADPOOL_WORKER_COUNT: usize = 2;
+
+/// Makes it likely that every comparison-pool worker executes the pinning callback.
+const THREADPOOL_PIN_TASK_COUNT: usize = 30;
+
+/// Provides enough arithmetic to keep the task body observable without masking dispatch costs.
+const WORK_STEP_COUNT: usize = 32;
+
+/// A deterministic input prevents the optimizer from replacing the task body with a constant.
+const WORK_SEED: u32 = 42;
+
+/// Standard LCG parameters provide inexpensive deterministic arithmetic.
+const LCG_MULTIPLIER: u32 = 1_664_525;
+const LCG_INCREMENT: u32 = 1_013_904_223;
+
+/// A small, deterministic, CPU-only stand-in for a real task body.
+///
+/// These benchmarks measure the overhead of *dispatching* work onto a worker,
+/// so the task body must be cheap and predictable. It performs no syscalls (see
+/// `docs/benchmarks.md`), which would otherwise inject kernel and filesystem
+/// noise unrelated to the scheduling under test. A handful of LCG steps seeded
+/// with `black_box` gives a fixed cost the optimizer cannot fold away.
 fn simulate_work() -> u32 {
-    drop(File::open("Q:\\non_existent_file.txt"));
-    42
+    let mut value = black_box(WORK_SEED);
+    for _ in 0..WORK_STEP_COUNT {
+        value = value
+            .wrapping_mul(LCG_MULTIPLIER)
+            .wrapping_add(LCG_INCREMENT);
+    }
+    value
 }
 
 fn entrypoint(c: &mut Criterion) {
@@ -37,8 +67,8 @@ fn entrypoint(c: &mut Criterion) {
 
     let mut g = c.benchmark_group("vicinal/spawn");
 
-    let spawn_single_alloc = allocs.operation("spawn_single");
-    let spawn_single_time = times.operation("spawn_single");
+    let spawn_single_alloc = allocs.operation("vicinal/spawn/spawn_single");
+    let spawn_single_time = times.operation("vicinal/spawn/spawn_single");
 
     g.bench_function("spawn_single", |b| {
         let pool = Pool::new();
@@ -58,22 +88,22 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let spawn_100_alloc = allocs.operation("spawn_100");
-    let spawn_100_time = times.operation("spawn_100");
+    let spawn_100_alloc = allocs.operation("vicinal/spawn/spawn_100");
+    let spawn_100_time = times.operation("vicinal/spawn/spawn_100");
 
     g.bench_function("spawn_100", |b| {
         let pool = Pool::new();
         let scheduler = pool.scheduler();
 
         b.iter_custom(|iterations| {
-            let mut handles = Vec::with_capacity(100);
+            let mut handles = Vec::with_capacity(TASK_BATCH_SIZE);
 
             let _alloc_span = spawn_100_alloc.measure_process().iterations(iterations);
             let _time_span = spawn_100_time.measure_process().iterations(iterations);
             let start = Instant::now();
 
             for _ in 0..iterations {
-                for _ in 0..100 {
+                for _ in 0..TASK_BATCH_SIZE {
                     handles.push(scheduler.spawn(move || black_box(simulate_work())));
                 }
 
@@ -90,8 +120,8 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let spawn_urgent_single_alloc = allocs.operation("spawn_urgent_single");
-    let spawn_urgent_single_time = times.operation("spawn_urgent_single");
+    let spawn_urgent_single_alloc = allocs.operation("vicinal/spawn/spawn_urgent_single");
+    let spawn_urgent_single_time = times.operation("vicinal/spawn/spawn_urgent_single");
 
     g.bench_function("spawn_urgent_single", |b| {
         let pool = Pool::new();
@@ -115,15 +145,15 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let spawn_urgent_100_alloc = allocs.operation("spawn_urgent_100");
-    let spawn_urgent_100_time = times.operation("spawn_urgent_100");
+    let spawn_urgent_100_alloc = allocs.operation("vicinal/spawn/spawn_urgent_100");
+    let spawn_urgent_100_time = times.operation("vicinal/spawn/spawn_urgent_100");
 
     g.bench_function("spawn_urgent_100", |b| {
         let pool = Pool::new();
         let scheduler = pool.scheduler();
 
         b.iter_custom(|iterations| {
-            let mut handles = Vec::with_capacity(100);
+            let mut handles = Vec::with_capacity(TASK_BATCH_SIZE);
 
             let _alloc_span = spawn_urgent_100_alloc
                 .measure_process()
@@ -134,7 +164,7 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             for _ in 0..iterations {
-                for _ in 0..100 {
+                for _ in 0..TASK_BATCH_SIZE {
                     handles.push(scheduler.spawn_urgent(move || black_box(simulate_work())));
                 }
 
@@ -151,8 +181,8 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let thread_single_alloc = allocs.operation("thread_single");
-    let thread_single_time = times.operation("thread_single");
+    let thread_single_alloc = allocs.operation("vicinal/spawn/thread_single");
+    let thread_single_time = times.operation("vicinal/spawn/thread_single");
 
     g.bench_function("thread_single", |b| {
         b.iter_custom(|iterations| {
@@ -169,19 +199,19 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let thread_100_alloc = allocs.operation("thread_100");
-    let thread_100_time = times.operation("thread_100");
+    let thread_100_alloc = allocs.operation("vicinal/spawn/thread_100");
+    let thread_100_time = times.operation("vicinal/spawn/thread_100");
 
     g.bench_function("thread_100", |b| {
         b.iter_custom(|iterations| {
-            let mut handles = Vec::with_capacity(100);
+            let mut handles = Vec::with_capacity(TASK_BATCH_SIZE);
 
             let _alloc_span = thread_100_alloc.measure_process().iterations(iterations);
             let _time_span = thread_100_time.measure_process().iterations(iterations);
             let start = Instant::now();
 
             for _ in 0..iterations {
-                for _ in 0..100 {
+                for _ in 0..TASK_BATCH_SIZE {
                     handles.push(thread::spawn(move || black_box(simulate_work())));
                 }
 
@@ -198,18 +228,17 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let threadpool_single_alloc = allocs.operation("threadpool_single");
-    let threadpool_single_time = times.operation("threadpool_single");
+    let threadpool_single_alloc = allocs.operation("vicinal/spawn/threadpool_single");
+    let threadpool_single_time = times.operation("vicinal/spawn/threadpool_single");
 
     g.bench_function("threadpool_single", |b| {
-        // Vicinal pool defaults to 2 threads per processor, so we match.
-        let pool = ThreadPool::new(2);
+        // Match the number of workers Vicinal assigns to the selected processor.
+        let pool = ThreadPool::new(THREADPOOL_WORKER_COUNT);
         let event_pool = EventPool::<u32>::new();
 
-        // Ensure the thread pool threads are pinned to the same processor as main().
-        // There is no guarantee on what thread each task gets scheduled on, so we
-        // spam a whole bunch of these to make it more likely we hit both threads.
-        for _ in 0..30 {
+        // Submit more pinning callbacks than workers because the pool does not guarantee
+        // which worker runs each callback.
+        for _ in 0..THREADPOOL_PIN_TASK_COUNT {
             pool.execute({
                 let one_processor = one_processor.clone();
                 move || {
@@ -241,18 +270,17 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let threadpool_100_alloc = allocs.operation("threadpool_100");
-    let threadpool_100_time = times.operation("threadpool_100");
+    let threadpool_100_alloc = allocs.operation("vicinal/spawn/threadpool_100");
+    let threadpool_100_time = times.operation("vicinal/spawn/threadpool_100");
 
     g.bench_function("threadpool_100", |b| {
-        // Vicinal pool defaults to 2 threads per processor, so we match.
-        let pool = ThreadPool::new(2);
+        // Match the number of workers Vicinal assigns to the selected processor.
+        let pool = ThreadPool::new(THREADPOOL_WORKER_COUNT);
         let event_pool = EventPool::<u32>::new();
 
-        // Ensure the thread pool threads are pinned to the same processor as main().
-        // There is no guarantee on what thread each task gets scheduled on, so we
-        // spam a whole bunch of these to make it more likely we hit both threads.
-        for _ in 0..30 {
+        // Submit more pinning callbacks than workers because the pool does not guarantee
+        // which worker runs each callback.
+        for _ in 0..THREADPOOL_PIN_TASK_COUNT {
             pool.execute({
                 let one_processor = one_processor.clone();
                 move || {
@@ -264,7 +292,7 @@ fn entrypoint(c: &mut Criterion) {
         pool.join();
 
         b.iter_custom(|iterations| {
-            let mut rxs = Vec::with_capacity(100);
+            let mut rxs = Vec::with_capacity(TASK_BATCH_SIZE);
 
             let _alloc_span = threadpool_100_alloc
                 .measure_process()
@@ -273,7 +301,7 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             for _ in 0..iterations {
-                for _ in 0..100 {
+                for _ in 0..TASK_BATCH_SIZE {
                     let (tx, rx) = event_pool.rent();
                     rxs.push(rx);
                     pool.execute(move || {
@@ -300,8 +328,10 @@ fn entrypoint(c: &mut Criterion) {
     // This group includes both regular spawn (with event) and spawn_and_forget for fair comparison.
     let mut g = c.benchmark_group("vicinal/fire_and_forget");
 
-    let spawn_with_event_single_alloc = allocs.operation("spawn_with_event_single");
-    let spawn_with_event_single_time = times.operation("spawn_with_event_single");
+    let spawn_with_event_single_alloc =
+        allocs.operation("vicinal/fire_and_forget/spawn_with_event_single");
+    let spawn_with_event_single_time =
+        times.operation("vicinal/fire_and_forget/spawn_with_event_single");
 
     g.bench_function("spawn_with_event_single", |b| {
         let pool = Pool::new();
@@ -331,8 +361,9 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let spawn_with_event_100_alloc = allocs.operation("spawn_with_event_100");
-    let spawn_with_event_100_time = times.operation("spawn_with_event_100");
+    let spawn_with_event_100_alloc =
+        allocs.operation("vicinal/fire_and_forget/spawn_with_event_100");
+    let spawn_with_event_100_time = times.operation("vicinal/fire_and_forget/spawn_with_event_100");
 
     g.bench_function("spawn_with_event_100", |b| {
         let pool = Pool::new();
@@ -340,7 +371,7 @@ fn entrypoint(c: &mut Criterion) {
         let event_pool = EventPool::<()>::new();
 
         b.iter_custom(|iterations| {
-            let mut rxs = Vec::with_capacity(100);
+            let mut rxs = Vec::with_capacity(TASK_BATCH_SIZE);
 
             let _alloc_span = spawn_with_event_100_alloc
                 .measure_process()
@@ -351,7 +382,7 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             for _ in 0..iterations {
-                for _ in 0..100 {
+                for _ in 0..TASK_BATCH_SIZE {
                     let (tx, rx) = event_pool.rent();
                     rxs.push(rx);
                     let _handle = scheduler.spawn(move || {
@@ -374,8 +405,10 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let spawn_and_forget_single_alloc = allocs.operation("spawn_and_forget_single");
-    let spawn_and_forget_single_time = times.operation("spawn_and_forget_single");
+    let spawn_and_forget_single_alloc =
+        allocs.operation("vicinal/fire_and_forget/spawn_and_forget_single");
+    let spawn_and_forget_single_time =
+        times.operation("vicinal/fire_and_forget/spawn_and_forget_single");
 
     g.bench_function("spawn_and_forget_single", |b| {
         let pool = Pool::new();
@@ -404,8 +437,9 @@ fn entrypoint(c: &mut Criterion) {
         });
     });
 
-    let spawn_and_forget_100_alloc = allocs.operation("spawn_and_forget_100");
-    let spawn_and_forget_100_time = times.operation("spawn_and_forget_100");
+    let spawn_and_forget_100_alloc =
+        allocs.operation("vicinal/fire_and_forget/spawn_and_forget_100");
+    let spawn_and_forget_100_time = times.operation("vicinal/fire_and_forget/spawn_and_forget_100");
 
     g.bench_function("spawn_and_forget_100", |b| {
         let pool = Pool::new();
@@ -413,7 +447,7 @@ fn entrypoint(c: &mut Criterion) {
         let event_pool = EventPool::<()>::new();
 
         b.iter_custom(|iterations| {
-            let mut rxs = Vec::with_capacity(100);
+            let mut rxs = Vec::with_capacity(TASK_BATCH_SIZE);
 
             let _alloc_span = spawn_and_forget_100_alloc
                 .measure_process()
@@ -424,7 +458,7 @@ fn entrypoint(c: &mut Criterion) {
             let start = Instant::now();
 
             for _ in 0..iterations {
-                for _ in 0..100 {
+                for _ in 0..TASK_BATCH_SIZE {
                     let (tx, rx) = event_pool.rent();
                     rxs.push(rx);
                     scheduler.spawn_and_forget(move || {

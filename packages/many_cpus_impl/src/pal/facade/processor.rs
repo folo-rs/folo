@@ -10,7 +10,7 @@ use crate::fake::platform::FakeProcessor;
 use crate::pal::fallback::ProcessorImpl as FallbackProcessor;
 use crate::pal::{AbstractProcessor, ProcessorImpl};
 
-#[derive(Clone, Copy, Display, Eq, Hash, PartialEq)]
+#[derive(Clone, Display)]
 pub(crate) enum ProcessorFacade {
     Target(ProcessorImpl),
 
@@ -71,6 +71,26 @@ impl AbstractProcessor for ProcessorFacade {
             Self::Fallback(p) => p.efficiency_class(),
             #[cfg(any(test, feature = "test-util"))]
             Self::Fake(p) => p.efficiency_class(),
+        }
+    }
+
+    fn relative_speed(&self) -> crate::RelativeSpeed {
+        match self {
+            Self::Target(p) => p.relative_speed(),
+            #[cfg(test)]
+            Self::Fallback(p) => p.relative_speed(),
+            #[cfg(any(test, feature = "test-util"))]
+            Self::Fake(p) => p.relative_speed(),
+        }
+    }
+
+    fn model(&self) -> Option<&str> {
+        match self {
+            Self::Target(p) => p.model(),
+            #[cfg(test)]
+            Self::Fallback(p) => p.model(),
+            #[cfg(any(test, feature = "test-util"))]
+            Self::Fake(p) => p.model(),
         }
     }
 }

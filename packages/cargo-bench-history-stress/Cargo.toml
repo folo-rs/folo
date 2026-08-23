@@ -27,6 +27,7 @@ tick = { workspace = true, features = ["test-util"] }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt-multi-thread"] }
 
 [dev-dependencies]
+cbh_detect = { path = "../cbh_detect", default-features = false }
 futures = { workspace = true, features = ["executor"] }
 tempfile = { workspace = true }
 

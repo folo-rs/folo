@@ -13,14 +13,14 @@ coverage-measure:
     # simply sums up all the data in the target folder, even if it is from old builds.
     cargo +{{ env_var('RUST_NIGHTLY') }} llvm-cov clean --workspace
 
-    # Pre-build the mock benchmark engine once and hand each per-test process its path via
-    # MOCK_BENCH_ENGINE. nextest runs every test in its own process, so this spares each
+    # Pre-build the benchmark faker once and hand each per-test process its path via
+    # CBH_FAKER. nextest runs every test in its own process, so this spares each
     # cargo-bench-history integration test a redundant on-demand Cargo freshness check. The
-    # engine builds into its own dedicated target directory (see `_mock-engine-path`), so
+    # faker builds into its own dedicated target directory (see `_faker-path`), so
     # neither this pre-build nor any residual on-demand build relinks a binary out of the
     # shared coverage tree while another test is spawning it - the transient "No such file or
-    # directory" engine-spawn races previously seen on macOS (issue #332).
-    $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
+    # directory" spawn races previously seen on macOS (issue #332).
+    $env:CBH_FAKER = just _faker-path | Select-Object -Last 1
 
     # This will run tests and generate test coverage data files, to be analyzed separately.
     #
@@ -39,9 +39,20 @@ coverage-package := if package == "" { "" } else { "-p " + replace(package, " ",
 coverage-report:
     cargo +{{ env_var('RUST_NIGHTLY') }} llvm-cov report {{ coverage-package }} --open
 
+# Writes the lcov report the CI coverage upload consumes. A measured scope that contains no
+# instrumented code at all yields no report file instead of an error - see
+# scripts/build/Coverage.psm1 (Pester-tested via `just test-scripts`), which owns that decision,
+# leaving this recipe a thin import + call.
 [group('quality')]
+[script]
 coverage-report-ci:
-    cargo +{{ env_var('RUST_NIGHTLY') }} llvm-cov report --lcov --output-path lcov.info
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    Import-Module "{{ justfile_directory() }}/scripts/build/Coverage.psm1" -Force
+
+    Export-CoverageReport -Toolchain "{{ env_var('RUST_NIGHTLY') }}" -OutputPath "lcov.info" | Out-Null
 
 [group('quality')]
 [no-cd]
@@ -111,10 +122,17 @@ validate-scripts:
 
     if ($results.Count -gt 0) {
         foreach ($finding in $results) {
-            $relative = $finding.ScriptName.Substring($root.Length).TrimStart('\', '/')
+            $scriptName = [string]$finding.ScriptName
+            if ($scriptName.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $relative = $scriptName.Substring($root.Length).TrimStart('\', '/')
+            } else {
+                $relative = $scriptName
+            }
             Write-Host ("{0}:{1} [{2}] {3}: {4}" -f $relative, $finding.Line, $finding.Severity, $finding.RuleName, $finding.Message)
         }
-        throw "PSScriptAnalyzer reported $($results.Count) issue(s). Fix them (or add a justified SuppressMessageAttribute) so the tree stays clean."
+        $issueNoun = if ($results.Count -eq 1) { 'issue' } else { 'issues' }
+        $issuePronoun = if ($results.Count -eq 1) { 'it' } else { 'them' }
+        throw "PSScriptAnalyzer reported $($results.Count) $issueNoun. Fix $issuePronoun (or add a justified SuppressMessageAttribute) so the tree stays clean."
     }
 
     Write-Host "PSScriptAnalyzer: no issues in scripts/."
@@ -133,6 +151,83 @@ machete:
 default-features-check:
     cargo ensure-no-default-features
 
+# Fails when a library exposes an external type (one that is neither std nor defined by the crate
+# itself - a type from another crate, first-party or not) in its public API that is not on that
+# crate's allow-list, so accidental growth of the external surface is caught in review rather than
+# shipped. Removing an exposure is not a failure, so this is an additive allow policy, not an exact
+# two-way baseline. The allow-list lives in each crate's
+# `[package.metadata.cargo_check_external_types]`; see docs/external-types.md for the principle and
+# how to intentionally allow a type. A dedicated nightly toolchain (RUST_NIGHTLY_EXTERNAL_TYPES) is
+# required because the tool consumes an exact, unstable rustdoc JSON schema. The check runs once per
+# package so the delta-scoped CI job can check only the crates a branch changed; the tool skips
+# crates it cannot document (proc-macro and binary-only) via `--skip-unsupported`. The public surface
+# is platform-dependent (cfg-gated items), so this runs on every OS that `validate-local` targets.
+[group('quality')]
+[script]
+check-external-types:
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+
+    Import-Module "{{ justfile_directory() }}/scripts/build/ExternalTypes.psm1" -Force
+
+    $filter = "{{ package }}"
+    $manifests = @(Get-ExternalTypesManifest -PackagesRoot "packages" -PackageFilter $filter)
+    if ($manifests.Count -eq 0) {
+        if ([string]::IsNullOrWhiteSpace($filter)) {
+            # An empty filter means "all packages", so resolving nothing implies a broken workspace
+            # rather than a legitimately empty selection.
+            Write-Host "No packages found to check for external types." -ForegroundColor Red
+            exit 1
+        }
+        # A non-empty filter that resolves to nothing is a typo or a stale name, not a clean pass:
+        # cargo-delta only names extant, affected packages, so surface it loudly.
+        Write-Host "No packages matched '$filter'; nothing to check for external types." -ForegroundColor Red
+        exit 1
+    }
+
+    $packageWord = if ($manifests.Count -eq 1) { "package" } else { "packages" }
+    Write-Host "Checking external types in $($manifests.Count) $packageWord (toolchain $env:RUST_NIGHTLY_EXTERNAL_TYPES)"
+    Write-Host ""
+
+    # This check only consumes rustdoc's JSON description of the public type surface; doc lints are
+    # irrelevant to it and are validated separately by the docs job. Capping lints is not cosmetic:
+    # the pinned nightly's rustdoc can ICE while rendering a doc-link warning (it panics inside the
+    # annotate-snippet renderer), which would fail the check for a reason unrelated to external types.
+    # Suppressing the warning avoids that. Deliberately no `--cfg docsrs`: it only toggles doc-cfg
+    # badges, never the type surface, and the baselines were captured without it.
+    $env:RUSTDOCFLAGS = "--cap-lints allow"
+
+    # Inspect each manifest's exit code by hand so one failing crate does not abort the loop: this
+    # aggregates every failure into one report instead of stopping at the first. A nonzero cargo exit
+    # must therefore not throw, so native-command error promotion is disabled for the loop.
+    $PSNativeCommandUseErrorActionPreference = $false
+
+    $failures = @()
+    foreach ($manifest in $manifests) {
+        Write-Host "Checking $manifest..." -ForegroundColor Cyan
+        cargo +$env:RUST_NIGHTLY_EXTERNAL_TYPES check-external-types --skip-unsupported --all-features --manifest-path $manifest
+        if ($LASTEXITCODE -ne 0) {
+            $failures += $manifest
+        }
+    }
+
+    if ($failures.Count -gt 0) {
+        Write-Host ""
+        Write-Host "External-types check failed for:" -ForegroundColor Red
+        foreach ($failure in $failures) {
+            Write-Host "  - $failure" -ForegroundColor Red
+        }
+        Write-Host ""
+        Write-Host ("A library exposes an external type that is not on its allow-list. If the exposure " +
+            "is intentional, add the type to that crate's [package.metadata.cargo_check_external_types] " +
+            "allowed_external_types in Cargo.toml. See docs/external-types.md.") -ForegroundColor Yellow
+        exit 1
+    }
+
+    Write-Host ""
+    Write-Host "External-types check passed." -ForegroundColor Green
+
 [group('quality')]
 [script]
 careful FILTER="":
@@ -140,10 +235,10 @@ careful FILTER="":
     $ErrorActionPreference = "Stop"
     $PSNativeCommandUseErrorActionPreference = $true
 
-    # Pre-build the mock benchmark engine once and pass its path via MOCK_BENCH_ENGINE, so the
-    # cargo-bench-history integration tests skip the per-process on-demand engine build (the
+    # Pre-build the benchmark faker once and pass its path via CBH_FAKER, so the
+    # cargo-bench-history integration tests skip the per-process on-demand faker build (the
     # same pattern the `test` and `coverage-measure` recipes use).
-    $env:MOCK_BENCH_ENGINE = just _mock-engine-path | Select-Object -Last 1
+    $env:CBH_FAKER = just _faker-path | Select-Object -Last 1
 
     cargo +$env:RUST_NIGHTLY careful test {{ target_package }} --no-fail-fast --all-features {{ FILTER }} --locked
 
@@ -180,6 +275,7 @@ validate-local:
     just package="{{ package }}" miri
     just package="{{ package }}" machete
     just package="{{ package }}" default-features-check
+    just package="{{ package }}" check-external-types
     just package="{{ package }}" check release
     just package="{{ package }}" clippy release
     just package="{{ package }}" build release
