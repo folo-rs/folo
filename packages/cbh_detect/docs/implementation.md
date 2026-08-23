@@ -48,10 +48,11 @@ base turn holds out one reference-lane commit and adds the real branch value to 
 references. Scores sum normalized, gate-surviving range excesses across the rectangular family.
 This comparison supplies report-level context and never suppresses an individual factual
 excursion. Family selection deduplicates identical candidate sets, considers chronological
-minimum-size windows and pairwise set intersections, and deduplicates equal member families before
-computing their complete shared candidate intersection. This keeps the production-cap workload
-bounded while admitting shared candidates that are not consecutive in any one series. History mode
-remains the only path that produces calibrated p-values and applies the
+minimum-size windows and every pairwise set intersection, then explores a deterministic bounded
+set of additional multi-way intersections. Equal member families are deduplicated before their
+complete shared candidate intersection is computed. This admits shared candidates that are not
+consecutive in any one series without allowing the intersection search to grow combinatorially.
+History mode remains the only path that produces calibrated p-values and applies the
 Benjamini–Hochberg filter.
 
 History-mode change-point calibration needs the size of the later false-discovery family before

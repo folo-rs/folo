@@ -1,6 +1,6 @@
 //! Branch-mode current-regime selection and historical report comparison.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::num::NonZero;
 use std::ops::Range;
 use std::sync::Arc;
@@ -17,6 +17,15 @@ use crate::detect::findings::{
 use crate::detect::gate_log::{Gate, GateLog, GateStage, StageLog};
 use crate::detect::parallel::{balanced_chunk_sizes, worker_count};
 use crate::detect::{BaseLevel, Series, SeriesPoint, Testability, UnjudgedReason, noise_gates};
+
+/// Maximum number of pairwise and derived seeds retained for multi-way family search.
+///
+/// The historical comparison is explanatory context and never suppresses findings, so
+/// a deterministic bounded search is preferable to an exact set-intersection closure
+/// whose candidate count can grow combinatorially. The budget keeps the extra closure
+/// work proportional to a production-sized benchmark suite while the complete
+/// chronological-window and pairwise passes remain uncapped.
+const MAX_BRANCH_MULTIWAY_SEEDS: usize = 1_024;
 
 /// One value that can take a candidate or reference role.
 #[derive(Clone, Copy)]
@@ -820,53 +829,95 @@ fn select_family(
     let minimum = noise_gates::MIN_BRANCH_COMPARISON_COMMITS;
     let mut seen_members = HashSet::new();
     let mut best: Option<HistoricalFamily> = None;
-    let mut seeds: std::collections::VecDeque<Vec<usize>> = std::collections::VecDeque::new();
-    let mut seen_seeds = HashSet::new();
-    let mut seed_order = Vec::new();
     for (candidates, _) in &groups {
         let ordered: Vec<usize> = candidates.iter().copied().collect();
         for seed in ordered.windows(minimum) {
-            let seed = seed.to_vec();
-            if seen_seeds.insert(seed.clone()) {
-                seeds.push_back(seed.clone());
-                seed_order.push(seed);
-            }
+            consider_family_seed(
+                seed,
+                &commit_members,
+                &groups,
+                bits_per_word,
+                &mut seen_members,
+                &mut best,
+            );
         }
     }
+
+    let pair_seed_limit = MAX_BRANCH_MULTIWAY_SEEDS
+        .checked_div(2)
+        .expect("the multi-way seed budget has a nonzero divisor");
+    let mut closure_seeds = VecDeque::new();
+    let mut seen_closure_seeds = HashSet::new();
     for (left_index, (left, _)) in groups.iter().enumerate() {
         for (right, _) in groups.iter().skip(left_index.saturating_add(1)) {
             let intersection: Vec<usize> = left.intersection(right).copied().collect();
-            if intersection.len() >= minimum && seen_seeds.insert(intersection.clone()) {
-                seeds.push_back(intersection.clone());
-                seed_order.push(intersection);
+            if intersection.len() < minimum {
+                continue;
             }
+            consider_family_seed(
+                &intersection,
+                &commit_members,
+                &groups,
+                bits_per_word,
+                &mut seen_members,
+                &mut best,
+            );
+            enqueue_family_seed(
+                intersection,
+                pair_seed_limit,
+                &mut seen_closure_seeds,
+                &mut closure_seeds,
+            );
         }
     }
-    let mut queue = seeds;
-    while let Some(seed) = queue.pop_front() {
+
+    'closure: while let Some(seed) = closure_seeds.pop_front() {
         for (candidates, _) in &groups {
+            if seen_closure_seeds.len() >= MAX_BRANCH_MULTIWAY_SEEDS {
+                break 'closure;
+            }
             let intersection: Vec<usize> = seed
                 .iter()
                 .copied()
                 .filter(|commit| candidates.contains(commit))
                 .collect();
-            if intersection.len() >= minimum && seen_seeds.insert(intersection.clone()) {
-                queue.push_back(intersection.clone());
-                seed_order.push(intersection);
+            if intersection.len() < minimum {
+                continue;
+            }
+            if enqueue_family_seed(
+                intersection.clone(),
+                MAX_BRANCH_MULTIWAY_SEEDS,
+                &mut seen_closure_seeds,
+                &mut closure_seeds,
+            ) {
+                consider_family_seed(
+                    &intersection,
+                    &commit_members,
+                    &groups,
+                    bits_per_word,
+                    &mut seen_members,
+                    &mut best,
+                );
             }
         }
     }
-    for seed in seed_order {
-        consider_family_seed(
-            &seed,
-            &commit_members,
-            &groups,
-            bits_per_word,
-            &mut seen_members,
-            &mut best,
-        );
-    }
     best.filter(|family| family.candidate_commits.len() >= minimum)
+}
+
+fn enqueue_family_seed(
+    seed: Vec<usize>,
+    limit: usize,
+    seen: &mut HashSet<Vec<usize>>,
+    queue: &mut VecDeque<Vec<usize>>,
+) -> bool {
+    if seen.len() >= limit {
+        return false;
+    }
+    if !seen.insert(seed.clone()) {
+        return false;
+    }
+    queue.push_back(seed);
+    true
 }
 
 fn consider_family_seed(
@@ -1938,6 +1989,22 @@ mod tests {
     }
 
     #[test]
+    fn three_way_shared_candidates_can_exceed_the_minimum_family() {
+        let mut first = series("first-wide", "m1", &[100.0; 20], 100.0);
+        let mut second = series("second-wide", "m1", &[100.0; 20], 100.0);
+        let mut third = series("third-wide", "m1", &[100.0; 20], 100.0);
+        replace_reference_commits(&mut first, &[10, 15, 20, 30, 35, 40, 50, 60], 200);
+        replace_reference_commits(&mut second, &[10, 15, 20, 30, 40, 45, 50, 60], 200);
+        replace_reference_commits(&mut third, &[10, 20, 30, 35, 40, 45, 50, 60], 200);
+
+        let detection = find_changes(&[first, second, third], &context(200));
+        let comparison = &detection.branch_comparisons[0];
+
+        assert_eq!(comparison.series, 3);
+        assert_eq!(comparison.evaluated_base_commits, 6);
+    }
+
+    #[test]
     fn family_ranking_uses_members_then_commits_then_recency() {
         let current = HistoricalFamily {
             member_indices: vec![0, 1],
@@ -1986,6 +2053,27 @@ mod tests {
             Some(&current)
         ));
         assert!(!family_is_better(&current, Some(&current)));
+    }
+
+    #[test]
+    fn multi_way_seed_queue_deduplicates_and_obeys_its_budget() {
+        let mut seen = HashSet::new();
+        let mut queue = VecDeque::new();
+
+        assert!(enqueue_family_seed(vec![1, 2, 3], 1, &mut seen, &mut queue));
+        assert!(!enqueue_family_seed(
+            vec![1, 2, 3],
+            1,
+            &mut seen,
+            &mut queue
+        ));
+        assert!(!enqueue_family_seed(
+            vec![4, 5, 6],
+            1,
+            &mut seen,
+            &mut queue
+        ));
+        assert_eq!(queue.into_iter().collect::<Vec<_>>(), vec![vec![1, 2, 3]]);
     }
 
     #[test]
