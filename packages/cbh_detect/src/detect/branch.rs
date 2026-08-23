@@ -963,9 +963,12 @@ fn score_candidate(
 fn latest_context_points(points: &[SeriesPoint], context_index: usize) -> Option<&[SeriesPoint]> {
     let start = points.partition_point(|point| point.topo_index < context_index);
     let end = points.partition_point(|point| point.topo_index <= context_index);
-    let points = points.get(start..end)?;
+    let points = points.get(start..end).filter(|points| !points.is_empty())?;
     let dirty_start = points.partition_point(|point| !point.dirty);
-    Some(points.get(dirty_start..).unwrap_or(points))
+    let dirty_points = points
+        .get(dirty_start..)
+        .filter(|dirty_points| !dirty_points.is_empty());
+    Some(dirty_points.unwrap_or(points))
 }
 
 fn observation_of_level(level: &BaseLevel) -> Observation {
@@ -1134,7 +1137,8 @@ mod tests {
                 .map(|(object_ordinal, &(dirty, value))| SeriesPoint {
                     topo_index: tip_index,
                     dirty,
-                    object_ordinal: object_ordinal as u32,
+                    object_ordinal: u32::try_from(object_ordinal)
+                        .expect("test fixture has fewer than u32::MAX points"),
                     commit: Some(Arc::from("branch-tip")),
                     value,
                     interval_low: None,
@@ -1252,6 +1256,55 @@ mod tests {
         assert!(
             finding.is_none(),
             "the tip commit should be judged from its per-commit median rather than the last point",
+        );
+    }
+
+    #[test]
+    fn repeated_clean_context_points_are_collapsed_before_evaluation() {
+        let one = series_with_tip_points(
+            "collapsed-clean",
+            "m1",
+            &[100.0; 20],
+            &[(false, 100.0), (false, 100.0), (false, 130.0)],
+        );
+        let (finding, _) = evaluate_with_log(&one, &context(20));
+
+        assert!(
+            finding.is_none(),
+            "clean context points must remain eligible when there is no dirty snapshot",
+        );
+    }
+
+    #[test]
+    fn dirty_context_points_replace_clean_points_from_the_same_commit() {
+        let one = series_with_tip_points(
+            "dirty-preferred",
+            "m1",
+            &[100.0; 20],
+            &[(false, 160.0), (true, 100.0)],
+        );
+        let (finding, _) = evaluate_with_log(&one, &context(20));
+
+        assert!(
+            finding.is_none(),
+            "dirty snapshot points represent the analyzed workspace when both lanes exist",
+        );
+    }
+
+    #[test]
+    fn missing_context_commit_is_unjudged() {
+        let mut one = series("missing-context", "m1", &[100.0; 20], 130.0);
+        one.points.clear();
+
+        let detection = find_changes(std::slice::from_ref(&one), &context(20));
+
+        assert!(detection.findings.is_empty());
+        assert_eq!(
+            detection
+                .census
+                .reasons()
+                .find(|&(reason, _)| reason == UnjudgedReason::NotMeasuredOnBranch),
+            Some((UnjudgedReason::NotMeasuredOnBranch, 1))
         );
     }
 
