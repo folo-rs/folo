@@ -282,14 +282,17 @@ where
     // Apply blessings on the topology each mode analyzes. History re-baselines the
     // context series; branch mode truncates each base-ref comparison window.
     let rebaseline_started = Instant::now();
-    match dataset.mode {
-        AnalysisMode::History => apply_blessings(&mut series, &dataset.blessings),
-        AnalysisMode::Branch => apply_base_blessings(&mut series, &dataset.blessings),
-    }
-    reporter.timing(
-        "re-baseline blessed series (apply_blessings)",
-        rebaseline_started.elapsed(),
-    );
+    let blessing_timing = match dataset.mode {
+        AnalysisMode::History => {
+            apply_blessings(&mut series, &dataset.blessings);
+            "re-baseline blessed series (apply_blessings)"
+        }
+        AnalysisMode::Branch => {
+            apply_base_blessings(&mut series, &dataset.blessings);
+            "truncate blessed base evidence (apply_base_blessings)"
+        }
+    };
+    reporter.timing(blessing_timing, rebaseline_started.elapsed());
     let context = AnalysisContext {
         mode: dataset.mode,
         merge_base_index: dataset.merge_base_index,

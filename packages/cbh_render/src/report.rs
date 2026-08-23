@@ -592,9 +592,7 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
         format!("  {}", header.join("  ")),
     ];
 
-    let has_branch_context = input.sets.iter().any(|summary| {
-        summary.branch_comparison.is_some() || !summary.comparison_base_lags.is_empty()
-    });
+    let render_empty_branch_sets = input.mode == AnalysisMode::Branch && input.findings.is_empty();
     if input.findings.is_empty() {
         lines.push(coverage.verdict().to_owned());
         // Silence is a claim about the judged series only, so state how far it
@@ -606,7 +604,7 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
             lines.push(String::new());
             lines.push(hint.to_owned());
         }
-        if !has_branch_context {
+        if !render_empty_branch_sets {
             push_warning(&mut lines, input.warning);
             return finish(&lines);
         }
@@ -620,6 +618,7 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
         if summary.findings.is_empty()
             && summary.branch_comparison.is_none()
             && summary.comparison_base_lags.is_empty()
+            && !render_empty_branch_sets
         {
             continue;
         }
@@ -1120,9 +1119,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
         ));
     }
 
-    let has_branch_context = input.sets.iter().any(|summary| {
-        summary.branch_comparison.is_some() || !summary.comparison_base_lags.is_empty()
-    });
+    let render_empty_branch_sets = input.mode == AnalysisMode::Branch && input.findings.is_empty();
     if input.findings.is_empty() {
         lines.push(String::new());
         lines.push(coverage.verdict().to_owned());
@@ -1134,7 +1131,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
             lines.push(String::new());
             lines.push(hint.to_owned());
         }
-        if !has_branch_context {
+        if !render_empty_branch_sets {
             push_warning(&mut lines, input.warning);
             return finish(&lines);
         }
@@ -1147,6 +1144,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
         if summary.findings.is_empty()
             && summary.branch_comparison.is_none()
             && summary.comparison_base_lags.is_empty()
+            && !render_empty_branch_sets
         {
             continue;
         }
@@ -1248,9 +1246,7 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
         ));
     }
 
-    let has_branch_context = input.sets.iter().any(|summary| {
-        summary.branch_comparison.is_some() || !summary.comparison_base_lags.is_empty()
-    });
+    let render_empty_branch_sets = input.mode == AnalysisMode::Branch && input.findings.is_empty();
     if input.findings.is_empty() {
         lines.push(String::new());
         lines.push(coverage.verdict().to_owned());
@@ -1262,29 +1258,24 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
             lines.push(String::new());
             lines.push(hint.to_owned());
         }
-        if !has_branch_context {
+        if !render_empty_branch_sets {
             push_warning(&mut lines, input.warning);
             return finish(&lines);
         }
     }
     if input.findings.is_empty() {
         for summary in input.sets {
-            if summary.branch_comparison.is_none() && summary.comparison_base_lags.is_empty() {
-                continue;
-            }
             lines.push(String::new());
             lines.push(format!("## {}", set_label(summary.set)));
             lines.push(String::new());
             for lag in &summary.comparison_base_lags {
                 lines.push(format!("> {}", comparison_base_lag_warning(lag)));
             }
-            if let Some(comparison) = summary.branch_comparison {
-                lines.push(String::new());
-                lines.push(format!(
-                    "**Historical comparison:** {}",
-                    historical_comparison_text(Some(comparison), false)
-                ));
-            }
+            lines.push(String::new());
+            lines.push(format!(
+                "**Historical comparison:** {}",
+                historical_comparison_text(summary.branch_comparison, false)
+            ));
             push_set_filter_footer(&mut lines, summary.set);
         }
         push_warning(&mut lines, input.warning);
@@ -2485,7 +2476,7 @@ mod tests {
         let comparison = BranchComparison {
             set: set.clone(),
             evaluated_base_commits: 10,
-            at_least_as_much: 0,
+            at_least_as_much: 3,
             series: 1,
         };
         let summaries = vec![SetSummary {
@@ -2517,8 +2508,8 @@ mod tests {
         let text = render(&input, ReportFormat::Text, false);
         assert!(
             text.contains(
-                "None of 10 comparable base commits showed as much out-of-range movement as this \
-                 branch (1 series compared)."
+                "3 of 10 comparable base commits showed at least as much out-of-range movement as \
+                 this branch (1 series compared)."
             ),
             "{text}"
         );
@@ -2536,12 +2527,12 @@ mod tests {
             serde_json::from_str(&render(&input, ReportFormat::Json, false)).unwrap();
         assert_eq!(json["findings"][0]["method"], "branch_excursion");
         assert_eq!(json["findings"][0]["branch"]["reference_min"], 99.0);
-        assert_eq!(json["sets"][0]["branch_comparison"]["at_least_as_much"], 0);
+        assert_eq!(json["sets"][0]["branch_comparison"]["at_least_as_much"], 3);
 
         let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
         assert!(
             summary.contains(
-                "None of 10 comparable base commits showed as much out-of-range movement"
+                "3 of 10 comparable base commits showed at least as much out-of-range movement"
             ),
             "{summary}"
         );
@@ -2552,7 +2543,7 @@ mod tests {
 
         let markdown = render(&input, ReportFormat::Markdown, false);
         assert!(
-            markdown.contains("**Historical comparison:** None of 10 comparable base commits"),
+            markdown.contains("**Historical comparison:** 3 of 10 comparable base commits"),
             "{markdown}"
         );
         assert!(
@@ -2637,6 +2628,46 @@ mod tests {
             "{summary}"
         );
         assert!(summary.contains("Not judged: 1 series"), "{summary}");
+    }
+
+    #[test]
+    fn quiet_branch_report_discloses_when_no_historical_family_exists() {
+        let set = discriminant_set();
+        let summaries = vec![SetSummary {
+            set: &set,
+            runs: 21,
+            series: 1,
+            findings: Vec::new(),
+            comparison_base_lags: Vec::new(),
+            branch_comparison: None,
+        }];
+        let input = ReportInput {
+            project: "folo",
+            tip_commit: "1234567890abcdef1234",
+            tip_dirty: false,
+            mode: AnalysisMode::Branch,
+            notable: false,
+            runs: 21,
+            series: 1,
+            commit_span: None,
+            report_improvements: true,
+            findings: &[],
+            sets: &summaries,
+            hint: None,
+            warning: None,
+            ghosts_excluded: 0,
+            census: judged_census(1),
+        };
+        let expected = "There was not enough comparable base history for a report-wide comparison.";
+
+        let text = render(&input, ReportFormat::Text, false);
+        assert!(text.contains(expected), "{text}");
+
+        let markdown = render(&input, ReportFormat::Markdown, false);
+        assert!(markdown.contains(expected), "{markdown}");
+
+        let summary = render_markdown_summary(&input, DEFAULT_SUMMARY_LIMIT);
+        assert!(summary.contains(expected), "{summary}");
     }
 
     #[test]
@@ -2800,8 +2831,31 @@ mod tests {
             Some("The branch value matches the regime preceding base commit abcdef012345.")
         );
 
-        finding.branch = None;
-        assert_eq!(previous_regime_text(&finding), None);
+        let mut findings = [finding];
+        {
+            let set = discriminant_set();
+            let mut summaries = Vec::new();
+            let mut input = single_set_input("folo", &set, &findings, &mut summaries);
+            input.mode = AnalysisMode::Branch;
+
+            let text = render(&input, ReportFormat::Text, false);
+            assert!(
+                text.contains(
+                    "The branch value matches the regime preceding base commit abcdef012345."
+                ),
+                "{text}"
+            );
+            let markdown = render(&input, ReportFormat::Markdown, false);
+            assert!(
+                markdown.contains(
+                    "The branch value matches the regime preceding base commit abcdef012345."
+                ),
+                "{markdown}"
+            );
+        }
+
+        findings[0].branch = None;
+        assert_eq!(previous_regime_text(&findings[0]), None);
     }
 
     #[test]
@@ -2830,6 +2884,10 @@ mod tests {
         );
         assert!(markdown.contains("**+30.00%**"), "{markdown}");
         assert!(markdown.contains("**-5.00%**"), "{markdown}");
+        assert_eq!(
+            method_label(FindingMethod::BranchExcursion),
+            "branch excursion"
+        );
 
         // The per-set JSON tallies count each direction independently: this set
         // holds one regression and one improvement.

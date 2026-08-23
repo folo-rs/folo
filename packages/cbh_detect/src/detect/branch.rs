@@ -311,14 +311,6 @@ fn select_regime(series: &Series) -> RegimeSelection {
         .filter(|(index, _)| is_selector_position(*index))
         .map(|(_, level)| level)
         .collect();
-    if selector.len() < noise_gates::MIN_SERIES_POINTS {
-        return RegimeSelection {
-            current_start: 0,
-            previous_range: None,
-            boundary_commit: None,
-            unresolved: true,
-        };
-    }
 
     // Every accepted split advances by at least one minimum regime, while another
     // search requires two minimum regimes to remain. This is the largest number of
@@ -412,12 +404,12 @@ fn regime_search_alpha(selector_len: usize) -> f64 {
 }
 
 fn supported_boundary(kind: MetricKind, values: &[f64], split: usize, superiority: f64) -> bool {
-    let Some(before) = values.get(..split) else {
-        return false;
-    };
     let Some(after) = values.get(split..) else {
         return false;
     };
+    let before = values
+        .get(..split)
+        .expect("the same split was bounded by the values slice");
     let (Some(before_level), Some(after_level)) = (stats::median(before), stats::median(after))
     else {
         return false;
@@ -434,24 +426,23 @@ fn recent_step_is_unresolved(kind: MetricKind, selector: &[&BaseLevel]) -> bool 
         let before_start = split.saturating_sub(noise_gates::MIN_REGIME);
         // An unresolved regime is a local discontinuity. Comparing the short tail with the
         // complete earlier window would mistake a smooth long-running trend for a recent step.
-        let Some(before_levels) = selector.get(before_start..split) else {
-            continue;
-        };
-        let Some(after_levels) = selector.get(split..) else {
-            continue;
-        };
+        let before_levels = selector
+            .get(before_start..split)
+            .expect("the saturating look-back ends at a bounded split");
+        let after_levels = selector
+            .get(split..)
+            .expect("the trailing split was derived from the selector length");
         if before_levels.len() < noise_gates::MIN_REGIME {
             continue;
         }
         let before: Vec<f64> = before_levels.iter().map(|level| level.value).collect();
         let after: Vec<f64> = after_levels.iter().map(|level| level.value).collect();
-        let (Some(before_level), Some(after_level), Some(superiority)) = (
-            stats::median(&before),
-            stats::median(&after),
-            stats::mann_whitney_superiority(&before, &after),
-        ) else {
-            continue;
-        };
+        let before_level =
+            stats::median(&before).expect("a complete preceding regime is non-empty");
+        let after_level =
+            stats::median(&after).expect("the configured trailing group is non-empty");
+        let superiority = stats::mann_whitney_superiority(&before, &after)
+            .expect("both emerging-regime samples are non-empty");
         let delta = after_level - before_level;
         if relative_delta(delta, before_level).abs() >= noise_gates::BRANCH_PRACTICAL_RELATIVE
             && delta.abs() >= absolute_floor(kind)
@@ -466,9 +457,8 @@ fn recent_step_is_unresolved(kind: MetricKind, selector: &[&BaseLevel]) -> bool 
 fn regime_is_stable(levels: &[BaseLevel]) -> bool {
     let values: Vec<f64> = levels.iter().map(|level| level.value).collect();
     let trend = stats::mann_kendall(&values);
-    let Some((slope, _)) = stats::theil_sen_line(&values) else {
-        return true;
-    };
+    let (slope, _) =
+        stats::theil_sen_line(&values).expect("a judged current regime has multiple observations");
     let span = count_to_f64(values.len().saturating_sub(1));
     let movement = slope * span;
     let baseline = stats::median(&values).unwrap_or(0.0);
@@ -509,6 +499,20 @@ fn evaluate_excursion(
     };
     let excess = candidate.value - edge;
     let relative_excess = relative_delta(excess, edge);
+    let mut evaluation = ExcursionEvaluation {
+        relation,
+        reference_count: references.len(),
+        reference_min: Some(minimum),
+        reference_max: Some(maximum),
+        edge: Some(edge),
+        excess: Some(excess),
+        relative_excess: Some(relative_excess),
+        relative_floor_passed: None,
+        absolute_floor_passed: None,
+        interval_disjoint_passed: None,
+        noise_band_passed: None,
+        survives: false,
+    };
     let mut stage = log.stage(GateStage::Branch);
     stage.numeric(Gate::NonZeroDelta, excess.abs(), 0.0, true);
     let relative_floor_passed = relative_excess.abs() >= noise_gates::BRANCH_PRACTICAL_RELATIVE;
@@ -518,6 +522,11 @@ fn evaluate_excursion(
         noise_gates::BRANCH_PRACTICAL_RELATIVE,
         relative_floor_passed,
     );
+    evaluation.relative_floor_passed = Some(relative_floor_passed);
+    if !relative_floor_passed {
+        return evaluation;
+    }
+
     let floor = absolute_floor(kind);
     let absolute_floor_passed = excess.abs() >= floor;
     stage.numeric(
@@ -526,25 +535,21 @@ fn evaluate_excursion(
         floor,
         absolute_floor_passed,
     );
-    let interval_disjoint_passed = intervals_allow(relation, candidate, references, &mut stage);
-    let noise_band_passed = noise_band_allows(excess, candidate, references, &mut stage);
-    ExcursionEvaluation {
-        relation,
-        reference_count: references.len(),
-        reference_min: Some(minimum),
-        reference_max: Some(maximum),
-        edge: Some(edge),
-        excess: Some(excess),
-        relative_excess: Some(relative_excess),
-        relative_floor_passed: Some(relative_floor_passed),
-        absolute_floor_passed: Some(absolute_floor_passed),
-        interval_disjoint_passed,
-        noise_band_passed,
-        survives: relative_floor_passed
-            && absolute_floor_passed
-            && interval_disjoint_passed.unwrap_or(true)
-            && noise_band_passed.unwrap_or(true),
+    evaluation.absolute_floor_passed = Some(absolute_floor_passed);
+    if !absolute_floor_passed {
+        return evaluation;
     }
+
+    let interval_disjoint_passed = intervals_allow(relation, candidate, references, &mut stage);
+    evaluation.interval_disjoint_passed = interval_disjoint_passed;
+    if interval_disjoint_passed == Some(false) {
+        return evaluation;
+    }
+
+    let noise_band_passed = noise_band_allows(excess, candidate, references, &mut stage);
+    evaluation.noise_band_passed = noise_band_passed;
+    evaluation.survives = noise_band_passed.unwrap_or(true);
+    evaluation
 }
 
 fn unavailable_excursion() -> ExcursionEvaluation {
@@ -1053,12 +1058,12 @@ fn score_candidate(
         if !evaluation.survives {
             return score;
         }
-        let Some(edge) = evaluation.edge else {
-            return score;
-        };
-        let Some(excess) = evaluation.excess else {
-            return score;
-        };
+        let edge = evaluation
+            .edge
+            .expect("a surviving excursion has an observed-range edge");
+        let excess = evaluation
+            .excess
+            .expect("a surviving excursion has an excess beyond the edge");
         let scale = edge
             .abs()
             .max(absolute_floor(source.kind) / noise_gates::BRANCH_PRACTICAL_RELATIVE);
@@ -1351,6 +1356,20 @@ mod tests {
     }
 
     #[test]
+    fn minimum_base_evidence_passes_the_recorded_gate() {
+        let base = vec![100.0; noise_gates::MIN_SERIES_POINTS];
+        let one = series("minimum-base", "m1", &base, 130.0);
+        let (_, log) = evaluate_with_log(&one, &context(base.len()));
+        let outcome = log
+            .entries()
+            .iter()
+            .find(|outcome| outcome.gate == Gate::MinBaseCommits)
+            .expect("branch evaluation records the base-evidence gate");
+
+        assert!(outcome.passed);
+    }
+
+    #[test]
     fn repeated_context_commit_points_are_collapsed_before_evaluation() {
         let one = series_with_tip_points(
             "collapsed",
@@ -1380,6 +1399,25 @@ mod tests {
             finding.is_none(),
             "clean context points must remain eligible when there is no dirty snapshot",
         );
+    }
+
+    #[test]
+    fn context_intervals_are_collapsed_with_the_context_values() {
+        let mut one = series_with_tip_points(
+            "collapsed-intervals",
+            "m1",
+            &[100.0; 20],
+            &[(false, 100.0), (false, 120.0)],
+        );
+        one.points[0].interval_low = Some(90.0);
+        one.points[0].interval_high = Some(110.0);
+        one.points[1].interval_low = Some(110.0);
+        one.points[1].interval_high = Some(130.0);
+
+        let observation = observation_of_points(&one.points);
+
+        assert_eq!(observation.value, 110.0);
+        assert_eq!(observation.interval, Some((100.0, 120.0)));
     }
 
     #[test]
@@ -1510,6 +1548,20 @@ mod tests {
         assert!(!supported_boundary(
             MetricKind::InstructionCount,
             &supported,
+            supported.len().saturating_add(1),
+            1.0,
+        ));
+        for split in [0, supported.len()] {
+            assert!(!supported_boundary(
+                MetricKind::InstructionCount,
+                &supported,
+                split,
+                1.0,
+            ));
+        }
+        assert!(!supported_boundary(
+            MetricKind::InstructionCount,
+            &supported,
             10,
             0.5
         ));
@@ -1587,6 +1639,38 @@ mod tests {
         let selector: Vec<&BaseLevel> = one.base_window.iter().collect();
 
         assert!(recent_step_is_unresolved(
+            MetricKind::InstructionCount,
+            &selector
+        ));
+    }
+
+    #[test]
+    fn a_clean_short_decline_is_recognized_as_an_emerging_regime() {
+        let one = series(
+            "emerging-decline",
+            "m1",
+            &[200.0, 200.0, 200.0, 200.0, 200.0, 100.0, 100.0],
+            80.0,
+        );
+        let selector: Vec<&BaseLevel> = one.base_window.iter().collect();
+
+        assert!(recent_step_is_unresolved(
+            MetricKind::InstructionCount,
+            &selector
+        ));
+    }
+
+    #[test]
+    fn an_overlapping_short_tail_is_not_an_emerging_regime() {
+        let one = series(
+            "overlapping-tail",
+            "m1",
+            &[100.0, 100.0, 100.0, 130.0, 130.0, 130.0, 130.0],
+            140.0,
+        );
+        let selector: Vec<&BaseLevel> = one.base_window.iter().collect();
+
+        assert!(!recent_step_is_unresolved(
             MetricKind::InstructionCount,
             &selector
         ));
@@ -1713,6 +1797,118 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_reference_set_cannot_form_an_excursion() {
+        let evaluation = evaluate_excursion(
+            MetricKind::InstructionCount,
+            Observation {
+                value: 130.0,
+                interval: None,
+            },
+            &[],
+            &mut GateLog::disabled(),
+        );
+
+        assert_eq!(evaluation.relation, BranchRangeRelation::Unavailable);
+        assert_eq!(evaluation.reference_count, 0);
+        assert_eq!(evaluation.reference_min, None);
+        assert_eq!(evaluation.reference_max, None);
+        assert_eq!(evaluation.edge, None);
+        assert_eq!(evaluation.excess, None);
+        assert_eq!(evaluation.relative_excess, None);
+        assert_eq!(evaluation.relative_floor_passed, None);
+        assert_eq!(evaluation.absolute_floor_passed, None);
+        assert_eq!(evaluation.interval_disjoint_passed, None);
+        assert_eq!(evaluation.noise_band_passed, None);
+        assert!(!evaluation.survives);
+    }
+
+    #[test]
+    fn branch_gates_stop_at_the_first_decline() {
+        let references = [Observation {
+            value: 100.0,
+            interval: None,
+        }];
+        let mut relative_log = GateLog::recording();
+        let relative = evaluate_excursion(
+            MetricKind::InstructionCount,
+            Observation {
+                // This is outside the range but below the relative floor.
+                value: 104.0,
+                interval: None,
+            },
+            &references,
+            &mut relative_log,
+        );
+        assert_eq!(
+            relative_log
+                .entries()
+                .iter()
+                .map(|outcome| outcome.gate)
+                .collect::<Vec<_>>(),
+            vec![Gate::NonZeroDelta, Gate::RelativeFloor]
+        );
+        assert_eq!(relative.absolute_floor_passed, None);
+        assert_eq!(relative.interval_disjoint_passed, None);
+        assert_eq!(relative.noise_band_passed, None);
+
+        let mut absolute_log = GateLog::recording();
+        let absolute = evaluate_excursion(
+            MetricKind::InstructionCount,
+            Observation {
+                // The small baseline clears the relative floor while the move remains
+                // below the count metric's absolute floor.
+                value: 14.0,
+                interval: None,
+            },
+            &[Observation {
+                value: 10.0,
+                interval: None,
+            }],
+            &mut absolute_log,
+        );
+        assert_eq!(
+            absolute_log
+                .entries()
+                .iter()
+                .map(|outcome| outcome.gate)
+                .collect::<Vec<_>>(),
+            vec![Gate::NonZeroDelta, Gate::RelativeFloor, Gate::AbsoluteFloor]
+        );
+        assert_eq!(absolute.absolute_floor_passed, Some(false));
+        assert_eq!(absolute.interval_disjoint_passed, None);
+        assert_eq!(absolute.noise_band_passed, None);
+
+        let mut interval_log = GateLog::recording();
+        let interval = evaluate_excursion(
+            MetricKind::InstructionCount,
+            Observation {
+                value: 130.0,
+                interval: Some((100.0, 140.0)),
+            },
+            &[Observation {
+                value: 100.0,
+                interval: Some((90.0, 110.0)),
+            }],
+            &mut interval_log,
+        );
+        assert_eq!(
+            interval_log
+                .entries()
+                .iter()
+                .map(|outcome| outcome.gate)
+                .collect::<Vec<_>>(),
+            vec![
+                Gate::NonZeroDelta,
+                Gate::RelativeFloor,
+                Gate::AbsoluteFloor,
+                Gate::IntervalDisjoint
+            ]
+        );
+        assert_eq!(interval.interval_disjoint_passed, Some(false));
+        assert_eq!(interval.noise_band_passed, None);
+    }
+
+    #[test]
     fn interval_vetoes_require_strict_separation_on_both_sides() {
         let references = [
             Observation {
@@ -1789,6 +1985,39 @@ mod tests {
             ),
             None
         );
+        let without_reference_intervals = [Observation {
+            value: 100.0,
+            interval: None,
+        }];
+        assert_eq!(
+            intervals_allow(
+                BranchRangeRelation::Above,
+                Observation {
+                    value: 130.0,
+                    interval: Some((111.0, 140.0)),
+                },
+                &without_reference_intervals,
+                &mut log.stage(GateStage::Branch),
+            ),
+            None
+        );
+        for relation in [
+            BranchRangeRelation::Inside,
+            BranchRangeRelation::Unavailable,
+        ] {
+            assert_eq!(
+                intervals_allow(
+                    relation,
+                    Observation {
+                        value: 100.0,
+                        interval: Some((90.0, 110.0)),
+                    },
+                    &references,
+                    &mut log.stage(GateStage::Branch),
+                ),
+                None
+            );
+        }
     }
 
     #[test]

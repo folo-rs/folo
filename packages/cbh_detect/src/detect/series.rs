@@ -613,9 +613,10 @@ fn push_base_level(
 /// Applies each series' latest matching blessing to its branch base window.
 ///
 /// Branch mode positions blessings on the base ref's first-parent history. A matching
-/// blessing is a hard evidence boundary: base levels before its commit are removed,
-/// while the blessed commit itself opens the retained baseline. The branch context
-/// points are not re-indexed because they live on a different first-parent line.
+/// blessing is a hard evidence boundary: levels before its commit position are removed,
+/// and the retained baseline begins with the first measured level at or after that
+/// position. The branch context points are not re-indexed because they live on a
+/// different first-parent line.
 pub fn apply_base_blessings<S: BuildHasher>(
     series: &mut [Series],
     blessings: &HashMap<DiscriminantSet, Vec<BlessingPlacement>, S>,
