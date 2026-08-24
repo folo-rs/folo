@@ -1,5 +1,5 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
-#![doc(hidden)]
+#![cfg_attr(docsrs, doc(hidden))]
 
 //! Implementation crate for [`cargo-bench-history`]; do not depend on this directly.
 //!

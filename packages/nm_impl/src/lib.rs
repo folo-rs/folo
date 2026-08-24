@@ -1,6 +1,6 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(hidden)]
+#![cfg_attr(docsrs, doc(hidden))]
 
 //! Implementation crate for the [`nm`] crate.
 //!

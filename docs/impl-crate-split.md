@@ -29,7 +29,7 @@ For a published crate `foo`, the pattern is:
 | Crate      | Role                                                                  |
 | ---------- | --------------------------------------------------------------------- |
 | `foo`      | Thin shell. All user-facing documentation lives here. Re-exports the public-API subset of items from `foo_impl`. |
-| `foo_impl` | Hosts the entire implementation. `#![doc(hidden)]` crate root. Published only so `foo` can depend on it. Marked `[lib] doc = false`. |
+| `foo_impl` | Hosts the entire implementation. `#![cfg_attr(docsrs, doc(hidden))]` crate root. Published only so `foo` can depend on it. Marked `[lib] doc = false`. |
 
 The visibility model becomes:
 
@@ -52,7 +52,7 @@ off-limits via:
 - `description = "Implementation crate for foo - do not reference directly"`
   in `Cargo.toml` (avoid backticks in the description — Cargo's description
   text does not render Markdown).
-- `#![doc(hidden)]` at the crate root.
+- `#![cfg_attr(docsrs, doc(hidden))]` at the crate root.
 - `[lib] doc = false` in `Cargo.toml` (so `cargo doc` does not render it).
 - A `README.md` that says "do not depend on this directly".
 - A pointer back to `foo` in the crate-level rustdoc.
@@ -158,7 +158,7 @@ crate, and its sibling shell (the binary or facade that wraps it) is the
 consumer. What drops away is the part of the pattern that exists to **wrap and
 hide a companion crate**: the consumer is the application itself, not a thin
 re-export library, so there is no narrow re-export list and no re-export smoke
-test, and the `-core` package need not mark itself `#![doc(hidden)]` /
+test, and the `-core` package need not mark itself `#![cfg_attr(docsrs, doc(hidden))]` /
 `[lib] doc = false` / "do not depend on this directly" (it has no public-shell
 twin to defer documentation to). A *published* private-use impl crate may still
 opt into those markings — to discourage external dependents on crates.io — as the
@@ -402,7 +402,7 @@ unreachable from `foo` and stay in the impl crate's internal scope.
    automatically so it always points at the just-released `foo_impl`.
 
 7. Inside `foo_impl/src/lib.rs`:
-   - Put `#![doc(hidden)]` at the top.
+   - Put `#![cfg_attr(docsrs, doc(hidden))]` at the top.
    - Add a brief crate-level doc comment that points to `foo`.
    - Declare modules and re-export items just as the original `foo` lib.rs
      did.
@@ -475,7 +475,7 @@ The original worked example. Concrete files to study:
 - `packages/nm_impl/Cargo.toml` — impl manifest with `[lib] doc = false`, the
   `private-test-util` feature for internal helpers, and the `nm` dev-dep for
   the doctest cycle.
-- `packages/nm_impl/src/lib.rs` — `#![doc(hidden)]` root.
+- `packages/nm_impl/src/lib.rs` — `#![cfg_attr(docsrs, doc(hidden))]` root.
 - `packages/nm_impl/src/reports.rs` —
   `#[cfg(any(test, feature = "private-test-util"))] #[doc(hidden)] pub fn fake(...)`
   constructors on `Report`, `EventMetrics`, and `Histogram`.
@@ -498,7 +498,7 @@ The second worked example. Concrete files to study:
   `features = ["private-test-util"]` so the impl-hosted benches can build
   input reports via `Report::fake`. Both `[[bench]]` entries declare
   `required-features = ["private-test-util"]`.
-- `packages/nm_otel_impl/src/lib.rs` — `#![doc(hidden)]` root that re-exports
+- `packages/nm_otel_impl/src/lib.rs` — `#![cfg_attr(docsrs, doc(hidden))]` root that re-exports
   the public-API subset for the shell crate plus feature-gated `EventState` for
   the alloc-tracking integration test.
 - `packages/nm_otel_impl/README.md` — "do not depend on this directly" notice.
@@ -532,13 +532,13 @@ Concrete files to study:
   `pub fn get_all_processors_for_bench`, and
   `pub fn affinity_mask_to_processor_ids_for_bench` wrappers on
   `BuildTargetPlatform`. These are plain `pub fn` rather than feature-gated,
-  because the entire impl crate is `#![doc(hidden)]` and "do not depend on
+  because the entire impl crate is `#![cfg_attr(docsrs, doc(hidden))]` and "do not depend on
   directly", so end users never see them; the `_for_bench` name suffix
   signals the intent at the call site.
 - `packages/many_cpus_impl/benches/many_cpus_pal_windows.rs` — consumes those
   helpers via `use many_cpus_impl::pal::BUILD_TARGET_PLATFORM;`, bypassing
   the high-level public API to measure the PAL primitives directly.
-- `packages/many_cpus_impl/src/lib.rs` — `#![doc(hidden)]` root that
+- `packages/many_cpus_impl/src/lib.rs` — `#![cfg_attr(docsrs, doc(hidden))]` root that
   re-exports the public-API subset plus `pub mod pal;` (no `#[doc(hidden)]`
   needed on the module — the crate root already hides everything from
   docs.rs).
@@ -558,7 +558,7 @@ package treated as an impl crate directly, with no companion `_impl` shell (see
 crates consume them directly, so there is nothing to wrap or hide behind a thin
 re-export twin.
 
-Unlike the minimal private-use form, these crates *are* `#![doc(hidden)]` /
+Unlike the minimal private-use form, these crates *are* `#![cfg_attr(docsrs, doc(hidden))]` /
 `[lib] doc = false` / "do not depend on this directly". They are published to
 crates.io so they can be released in lockstep with the CLI, and the doc-hidden
 marking discourages external dependents even though there is no re-export shell
@@ -566,7 +566,7 @@ deferring their documentation. Concrete files to study:
 
 - `packages/cbh_detect/Cargo.toml` — declares
   `private-test-util = ["dep:thread_aware"]` and `[lib] doc = false`.
-- `packages/cbh_detect/src/lib.rs` — `#![doc(hidden)]` root that re-exports
+- `packages/cbh_detect/src/lib.rs` — `#![cfg_attr(docsrs, doc(hidden))]` root that re-exports
   every type flat from the crate root.
 - `packages/cbh_detect/src/testing.rs` — the `synchronous_spawner` helper,
   gated `#[cfg(feature = "private-test-util")]` (feature-only rather than the

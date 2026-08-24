@@ -809,14 +809,18 @@ impl BuildTargetPlatform {
         cpu_ratio * system_processor_count
     }
 
-    // Exposed so benches can call into the PAL directly, bypassing higher-level caching.
+    /// Returns the processors assigned to the current thread without facade caching.
+    ///
+    /// This entry point exists for direct PAL benchmarks.
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Just for benchmarking, not real code.
     pub fn current_thread_processors_for_bench(&self) -> NonEmpty<ProcessorId> {
         self.current_thread_processors()
     }
 
-    // Exposed so benches can call into the PAL directly, bypassing higher-level caching.
+    /// Converts a Windows group affinity directly into logical processor IDs.
+    ///
+    /// This entry point exists for direct PAL benchmarks.
     #[must_use]
     #[cfg_attr(test, mutants::skip)] // Just for benchmarking, not real code.
     pub fn affinity_mask_to_processor_ids_for_bench(
@@ -826,7 +830,9 @@ impl BuildTargetPlatform {
         self.affinity_mask_to_processor_ids(mask)
     }
 
-    // Exposed so benches can call into the PAL directly, bypassing higher-level caching.
+    /// Enumerates all processors without facade caching.
+    ///
+    /// This entry point consumes the result so benchmarks measure the complete PAL operation.
     #[cfg_attr(test, mutants::skip)] // Just for benchmarking, not real code.
     pub fn get_all_processors_for_bench(&self) {
         black_box(self.get_all_processors());

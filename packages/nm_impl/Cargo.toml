@@ -13,6 +13,12 @@ rust-version.workspace = true
 [package.metadata.docs.rs]
 all-features = true
 
+# Baseline of external types intentionally exposed in the public API. Any new
+# external type must be reviewed and added explicitly.
+# Ref: docs/external-types.md.
+[package.metadata.cargo_check_external_types]
+allowed_external_types = ["num_traits::cast::AsPrimitive"]
+
 [lib]
 # nm_impl exists only to host the implementation of `nm` and to expose internal
 # items to in-workspace tests and benchmarks; user-facing documentation lives in `nm`.

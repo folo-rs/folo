@@ -103,6 +103,12 @@ crates it cannot document (proc-macro and binary-only). It is part of
 Warnings about types inside `#[doc(hidden)]` items are expected and do not fail
 the check: rustdoc records those items in a way the tool cannot inspect.
 
+Published crates whose entire surface is hidden on docs.rs must use
+`#![cfg_attr(docsrs, doc(hidden))]`, not an unconditional `#![doc(hidden)]`.
+The check deliberately omits the `docsrs` cfg so rustdoc JSON retains the public
+surface for inspection. `[lib] doc = false` may still suppress ordinary direct
+documentation builds for implementation crates.
+
 ## Platform coverage
 
 A public API can differ by platform through cfg-gated items, so the check runs on
@@ -121,4 +127,3 @@ item is gated on `target_arch`. If that ever stops holding — a dependency or
 public type gated specifically on `cfg(target_os = "macos")`, or an
 architecture-gated public item — extend the check's CI matrix to cover that
 target, because a Linux or Windows run cannot see it.
-
