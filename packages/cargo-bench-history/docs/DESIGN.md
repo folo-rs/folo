@@ -899,8 +899,8 @@ with a blessing (§8.6).
 The same gates run for every engine; only their inputs differ. A change-point needs a minimum
 number of points on **each** side of the split, so a one-off blip on the newest point cannot
 flag; a series too short to hold two such regimes is not evaluated at all, since no split in
-it could satisfy that floor. Whether a series meets that minimum in the window its mode reads
-is also what makes it a member of the false-discovery family (§8.3).
+it could satisfy that floor. In history mode, whether a series meets that minimum in the window
+the mode reads is also what makes it a member of the false-discovery family (§8.3).
 
 Pettitt *locates* the split (its analytic p-value is too conservative on short series to gate
 on), and a change-point is reported only when all of these hold: a **Mann–Whitney** rank test
@@ -1417,9 +1417,13 @@ reportable move survived the gates. Under every other state, some or all in-scop
 not judged. The states that judged nothing stay distinct because their remedies differ: look
 at collection, at the analyzed context commit, or at the evidence the gates require.
 
-The set of judged series is exactly the false-discovery family (§8.3), so what a report counts as
-judged is the same set the correction is computed over and the two cannot drift apart. The
-denominator it is counted against is a separate question, answered by the in-scope rule above.
+What makes a series judged is mode-specific, because the two modes ask different questions of it.
+In **history** mode the judged set is exactly the false-discovery family (§8.3), so what a report
+counts as judged is the same set the correction is computed over and the two cannot drift apart.
+In **branch** mode there is no such family: a series is judged when it carried enough current-base
+evidence to establish a range for the context run to be compared against, and unjudged when it did
+not. In either mode, the denominator the judged count is reported against is a separate question,
+answered by the in-scope rule above.
 
 How it surfaces (§8.7) follows what a reader needs where:
 

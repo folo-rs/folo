@@ -7,8 +7,8 @@
 //! that into a failing test rather than into prose that has quietly become wrong.
 
 use cbh_detect::{
-    AnalysisMode, DRIFT_MIN_POINTS, Finding, MIN_REGIME, MIN_SERIES_POINTS, Series,
-    evaluate_with_log, examples,
+    AnalysisMode, DRIFT_MIN_POINTS, Finding, MIN_BRANCH_REGIME_SELECTION_COMMITS, MIN_REGIME,
+    MIN_SERIES_POINTS, Series, evaluate_with_log, examples,
 };
 use cbh_model::MetricKind;
 
@@ -330,9 +330,10 @@ fn branch_contended_runner() -> Vec<Asset> {
 
 /// How many base-side commits the branch figures lay out.
 ///
-/// Chosen above the comparison window's own minimum so the figures show a window being
-/// selected from a longer history rather than one that happens to be the whole series.
-const BASE_COMMITS: usize = 20;
+/// Set at the threshold where branch mode starts separating regimes, so the figures show
+/// the regime-selection path readers meet in practice rather than the short-history
+/// fallback that compares against the whole base range.
+const BASE_COMMITS: usize = MIN_BRANCH_REGIME_SELECTION_COMMITS;
 
 /// Runs the real history-mode detector over `values` and returns the series, the verdict,
 /// and the plotted observations.

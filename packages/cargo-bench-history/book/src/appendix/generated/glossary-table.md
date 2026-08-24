@@ -25,8 +25,10 @@
 | outlier-resistant slope | A trend line fitted from the middle of all the pairwise slopes, so a few odd measurements cannot tilt it. | Theil-Sen estimator | [Detection](detection.md) |
 | partition | One discriminant set's slice of the store. |  | [Collection](collection.md) |
 | rank comparison | A test for whether two regimes differ that weighs each measurement by its rank among all of them rather than by its size, so a few extreme values cannot dominate. Tested two-sided. | Mann-Whitney U test | [Detection](detection.md) |
+| reference lane | The other half of the base observations, which the branch is compared against and which never helps choose that comparison. |  | [Detection](detection.md) |
 | regime | A stretch of commits over which a series holds one level. |  | [Detection](detection.md) |
 | scatter | Between-commit variation in a series when nothing has changed. |  | [Detection](detection.md) |
+| selector lane | The half of the base observations allowed to decide where the current regime begins. |  | [Detection](detection.md) |
 | series | One metric of one benchmark, tracked across commits. |  | [Reconstruction](reconstruction.md) |
 | split search | A scan for the single most likely place a series changed level. | Pettitt test | [Detection](detection.md) |
 | typical residual | How far a representative point sits from the history model fitted to the series: a level for a change point, a line for a drift. | median absolute residual | [Noise gates](gates.md) |

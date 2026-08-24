@@ -76,10 +76,11 @@ diagnostic — see [Insights](insights.md).
 
 ## No certainty score is reported
 
-The report gives no confidence or certainty score. The chance levels used inside history and
-branch detection come from different tests answering different questions, so they are not on a
-common scale. The group-wide correction that runs afterwards does not turn them into a comparable
-finding score.
+The report gives no confidence or certainty score. History detection reaches its findings through
+chance levels; branch detection reaches its findings by comparing the context run against an
+observed range, which produces no chance level at all. The two are not measurements of the same
+thing, so there is no scale both could be placed on. The group-wide correction history applies
+afterwards does not turn its chance levels into a comparable finding score either.
 
 *What to do:* rank findings by size of move, which is the comparable quantity the report provides.
 

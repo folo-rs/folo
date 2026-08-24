@@ -83,7 +83,7 @@ See [Noise gates](gates.md#each-detector-has-its-own-sequence).
 
 ### Absolute floors
 
-See [Noise gates](gates.md#is-the-move-big-enough-to-matter).
+See [Noise gates](gates.md#gate-logic-is-the-move-big-enough-to-matter-relative_floor-absolute_floor).
 
 {{#include generated/gates-floors.md}}
 

@@ -14,36 +14,38 @@ so it can tell a real trend apart from run-to-run noise and point at the commit
 that moved it.
 
 Analyzing that history is what turns it into a verdict. On a pull request it runs
-in **branch mode** — judging the branch tip against the base level — and produces a
-report like this: one regression and one improvement, each charted against the
-baseline it is compared to (the flat run on the left) so the tip's step is obvious:
+in **branch mode** — judging the branch tip against the range the base has been
+holding — and produces a report like this: one regression and one improvement, each
+charted against the base observations it is compared to, so the tip's step out of
+that range is obvious:
 
 ```text
 Analyzed project folo (branch mode)
   commit: 4f2a1c9
-  runs: 218 (9c1d0ab → 4f2a1c9)  regressions: 1  improvements: 1
+  runs: 218 (9c1d0ab → 4f2a1c9)  in-scope series judged: 2 of 2  regressions: 1  improvements: 1
 
 callgrind/x86_64-unknown-linux-gnu/a1b2c3d4e5f60718
   runs: 218  regressions: 1  improvements: 1
   filter: --engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key a1b2c3d4e5f60718
+  2 of 40 comparable base commits showed at least as much out-of-range movement as this branch (2 series compared).
 
 many_cpus/hardware_info/query
-  +13.00% instruction_count
-    regression via change point · 100 → 113 · @ 4f2a1c9
- 113 ┤                               ╭───────────────
- 110 ┤                             ╭─╯
- 106 ┤                           ╭─╯
- 103 ┤                         ╭─╯
- 100 ┼─────────────────────────╯
+  113 instruction_count - higher than all 20 current-base observations
+    current base range: 99.5-100.5 · branch excess: +12.5 / +12.44% · @ 4f2a1c9
+ 113 ┤                    ╭
+ 110 ┤                    │
+ 106 ┤                    │
+ 103 ┼────╮╭──────────────╯
+ 100 ┤    ╰╯
 
 events_once/emit/one_subscriber
-  -15.00% instruction_count
-    improvement via change point · 50 → 42.5 · @ 4f2a1c9
- 50.44 ┼─────────────────────────╮
- 48.45 ┤                         ╰─╮
- 46.47 ┤                           ╰─╮
- 44.48 ┤                             ╰──────╮
- 42.50 ┤                                    ╰──────────
+  42.5 instruction_count - lower than all 20 current-base observations
+    current base range: 49.75-50.25 · branch excess: -7.25 / -14.57% · @ 4f2a1c9
+ 50.25 ┼────────────────────╮
+ 48.31 ┤                    │
+ 46.38 ┤                    │
+ 44.44 ┤                    │
+ 42.50 ┤                    ╰
 ```
 
 What you get out of it:

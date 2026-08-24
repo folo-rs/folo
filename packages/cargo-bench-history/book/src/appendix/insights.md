@@ -28,8 +28,9 @@ flowchart TD
     BR --> TIP["Re-run the tip;<br/>check for a lag warning"]
 ```
 
-Note that a branch finding is labeled `change point` in the report — the method names the shape
-of the comparison, not the mode. The report's header tells you which mode ran.
+Note that the method named on a finding tells you which comparison produced it: `change point` and
+`drift` come from history mode, `branch excursion` from branch mode. The report's header tells you
+which mode ran.
 
 ### A change point
 

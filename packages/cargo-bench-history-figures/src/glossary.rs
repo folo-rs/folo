@@ -132,6 +132,20 @@ pub const TERMS: &[Term] = &[
         chapter: "detection.md",
     },
     Term {
+        phrase: "selector lane",
+        definition: "The half of the base observations allowed to decide where the current \
+                     regime begins.",
+        formal_name: "",
+        chapter: "detection.md",
+    },
+    Term {
+        phrase: "reference lane",
+        definition: "The other half of the base observations, which the branch is compared \
+                     against and which never helps choose that comparison.",
+        formal_name: "",
+        chapter: "detection.md",
+    },
+    Term {
         phrase: "agreement share",
         definition: "The fraction of before-and-after pairs that agree the level moved in \
                      the same direction.",
