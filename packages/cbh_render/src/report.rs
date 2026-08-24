@@ -560,6 +560,14 @@ impl Drop for ColorOverride {
     }
 }
 
+/// Whether a quiet branch report must continue into its per-set context.
+fn should_render_empty_branch_sets(input: &ReportInput<'_>) -> bool {
+    matches!(
+        (input.mode, input.findings.is_empty()),
+        (AnalysisMode::Branch, true)
+    )
+}
+
 fn render_text(input: &ReportInput<'_>, color: bool) -> String {
     // Force `colored` to honor this explicit decision rather than its own ambient
     // terminal auto-detection, so tests and pipes are deterministic regardless of how
@@ -592,7 +600,7 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
         format!("  {}", header.join("  ")),
     ];
 
-    let render_empty_branch_sets = input.mode == AnalysisMode::Branch && input.findings.is_empty();
+    let render_empty_branch_sets = should_render_empty_branch_sets(input);
     if input.findings.is_empty() {
         lines.push(coverage.verdict().to_owned());
         // Silence is a claim about the judged series only, so state how far it
@@ -1119,7 +1127,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
         ));
     }
 
-    let render_empty_branch_sets = input.mode == AnalysisMode::Branch && input.findings.is_empty();
+    let render_empty_branch_sets = should_render_empty_branch_sets(input);
     if input.findings.is_empty() {
         lines.push(String::new());
         lines.push(coverage.verdict().to_owned());
@@ -1246,7 +1254,7 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
         ));
     }
 
-    let render_empty_branch_sets = input.mode == AnalysisMode::Branch && input.findings.is_empty();
+    let render_empty_branch_sets = should_render_empty_branch_sets(input);
     if input.findings.is_empty() {
         lines.push(String::new());
         lines.push(coverage.verdict().to_owned());

@@ -423,6 +423,10 @@ mod tests {
         );
         assert!(
             !log.stage(GateStage::Branch)
+                .numeric(Gate::RelativeFloor, 0.01, 0.05, false)
+        );
+        assert!(
+            !log.stage(GateStage::Branch)
                 .boolean(Gate::IntervalDisjoint, false)
         );
     }
