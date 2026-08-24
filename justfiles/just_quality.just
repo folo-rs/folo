@@ -269,6 +269,7 @@ validate-local:
     just package="{{ package }}" check dev
     just package="{{ package }}" clippy dev
     just package="{{ package }}" test
+    just package="{{ package }}" test-benches-criterion
     just package="{{ package }}" test-docs
     just package="{{ package }}" docs
     just package="{{ package }}" docs-default-features

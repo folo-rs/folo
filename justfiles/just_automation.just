@@ -6,26 +6,26 @@
 # thin wrappers over the tool, free of local-developer conveniences.
 
 # Collects the whole workspace's benchmark history (excluding the slow, special-purpose
-# `benchmarks` package) into the prod Azure store, keyed by the current commit. The machine
-# partition for every engine is the runner's OWN auto-detected hardware fingerprint,
-# NOT a fixed key: the GitHub-hosted runner pool is heterogeneous, and pinning every runner onto one
-# shared series just mixes incomparable machines and jitters daily. Letting each runner stamp
-# its real fingerprint splits the data into one clean series per hardware type; the analyze job is
-# fed the exact fingerprints collected this run (see gh-analyze-bench-history) so it surveys only
-# those series. Every engine is partitioned this way — even Callgrind and the allocation/time
-# counters, whose simulated figures still vary across microarchitectures as libraries dispatch to
-# different code paths. `--best-of 3` counteracts the same runner noise from the other direction: the
-# suite runs three times and each metric keeps its minimum sample, since benchmark interference
-# on a shared runner is one-sided (it only ever makes a case slower) and the runs are spaced far
-# enough apart in time that a transient slowdown is unlikely to hit every one. This roughly
-# triples the wall-clock benchmark portion of the collect job (see bench-history.yml's
-# `timeout-minutes`). `--verbose` makes the collect log spell out the resolved machine key and the
-# fingerprint components behind it, so a key change (a runner hardware shift) is debuggable from the
-# log alone. `--skip-existing` makes a re-run on an unchanged commit a no-op append (each
-# already-stored object is skipped, not overwritten), so a re-triggered run of an
-# already-collected commit never bumps the cache-invalidation marker the `analyze` job's
-# read-through cache depends on - a re-run of the same commit is not "better" data, so there is
-# nothing to replace.
+# `benchmarks` package) with every selected package's Cargo features enabled, so targets guarded by
+# `required-features` are included. Results go into the prod Azure store, keyed by the current
+# commit. The machine partition for every engine is the runner's OWN auto-detected hardware
+# fingerprint, NOT a fixed key: the GitHub-hosted runner pool is heterogeneous, and pinning every
+# runner onto one shared series just mixes incomparable machines and jitters daily. Letting each
+# runner stamp its real fingerprint splits the data into one clean series per hardware type; the
+# analyze job is fed the exact fingerprints collected this run (see gh-analyze-bench-history) so it
+# surveys only those series. Every engine is partitioned this way — even Callgrind and the
+# allocation/time counters, whose simulated figures still vary across microarchitectures as
+# libraries dispatch to different code paths. `--best-of 3` counteracts the same runner noise from
+# the other direction: the suite runs three times and each metric keeps its minimum sample, since
+# benchmark interference on a shared runner is one-sided (it only ever makes a case slower) and the
+# runs are spaced far enough apart in time that a transient slowdown is unlikely to hit every one.
+# This roughly triples the wall-clock benchmark portion of the collect job (see
+# bench-history.yml's `timeout-minutes`). `--verbose` makes the collect log spell out the resolved
+# machine key and the fingerprint components behind it, so a key change (a runner hardware shift)
+# is debuggable from the log alone. `--skip-existing` makes a re-run on an unchanged commit a no-op
+# append (each already-stored object is skipped, not overwritten), so a re-triggered run of the
+# same commit never bumps the cache-invalidation marker the `analyze` job's read-through cache
+# depends on - a re-run of the same commit is not "better" data, so there is nothing to replace.
 #
 # RECOLLECT MODE. When the environment variable `RECOLLECT_COMMIT_ID` is set (the bench-history.yml
 # `collect` job wires it from the optional `recollect_commit_id` workflow_dispatch input), this
@@ -84,11 +84,12 @@ gh-collect-bench-history:
 # and it is safe because branch-mode `analyze` only ever flags a series that has a data point at the
 # branch-unique head commit, i.e. exactly the packages collected here (see
 # gh-analyze-pr-bench-history and .github/workflows/design.md). Everything else is identical to the
-# push-to-main collect: each runner stamps its OWN real hardware fingerprint (no fixed key), so PR
-# wall-clock series live on the same per-machine-key partitions as main's baseline, `--best-of 3`
-# sheds one-sided runner jitter, `--verbose` logs the resolved key and its components, and
-# `--skip-existing` makes a re-run of the same head SHA a no-op append. There is no recollect mode on
-# PRs (that repairs main's permanent history); the scope decision lives in
+# push-to-main collect: all Cargo features are enabled so required-feature targets run, each runner
+# stamps its OWN real hardware fingerprint (no fixed key), so PR wall-clock series live on the same
+# per-machine-key partitions as main's baseline, `--best-of 3` sheds one-sided runner jitter,
+# `--verbose` logs the resolved key and its components, and `--skip-existing` makes a re-run of the
+# same head SHA a no-op append. There is no recollect mode on PRs (that repairs main's permanent
+# history); the scope decision lives in
 # scripts/bench-history/BenchHistoryCollect.psm1 (Pester-tested via `just test-scripts`), so this is
 # a thin import + call. `packages` must be non-empty - the workflow only invokes this recipe when
 # the delta produced at least one benchmarkable package, and an empty scope would wrongly fall back
@@ -140,12 +141,12 @@ gh-collect-pr-bench-history packages:
 # oldest first-parent commit reachable from that end and newer than 14 days, since older points have
 # no comparison value against current tips. An EMPTY argument vector means no commit is eligible yet
 # (every commit is still inside the quarantine), which is a successful no-op rather than a failure.
-# The scope, `--best-of 3` and `--verbose` are the same ones gh-collect-bench-history uses - a point
-# measured with a narrower scope or a lower best-of would not be comparable to its pushed neighbours,
-# and would still count as recorded and never be revisited. `--ignore-errors` walks past a commit
-# that fails to build instead of abandoning the rest of the window; there is no `--overwrite` (an
-# existing point is exactly what should be skipped) and no `--machine-key` (each runner stamps its
-# own real hardware fingerprint).
+# The package scope, `--all-features`, `--best-of 3` and `--verbose` are the same ones
+# gh-collect-bench-history uses - a point measured with different feature coverage, a narrower scope
+# or a lower best-of would not be comparable to its pushed neighbours, and would still count as
+# recorded and never be revisited. `--ignore-errors` walks past a commit that fails to build instead
+# of abandoning the rest of the window; there is no `--overwrite` (an existing point is exactly what
+# should be skipped) and no `--machine-key` (each runner stamps its own real hardware fingerprint).
 #
 # Each commit is built with the toolchain it pins, but the RUSTFLAGS below come from HEAD's
 # constants.env, so a commit older than the newest change to them is measured slightly differently

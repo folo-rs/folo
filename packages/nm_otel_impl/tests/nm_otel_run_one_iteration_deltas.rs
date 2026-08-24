@@ -1,93 +1,64 @@
-//! Integration test for delta computation across multiple iterations.
+//! Integration test for delta computation across explicitly requested collections.
 //!
-//! This test is in a separate binary to establish controlled circumstances - no other tests
-//! will have recorded nm events, so we can verify the exact metrics exported.
+//! A separate binary prevents other tests from recording nm events, allowing exact assertions
+//! about the exported metrics.
 
 use nm::Event;
 use nm_otel::Publisher;
-use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
-use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
+use nm_otel_impl::{create_test_provider, find_u64_sum};
 use tick::Clock;
+
+// A test-specific name lets the assertion distinguish this event from registry noise.
+const EVENT_NAME: &str = "delta_test_event";
+// Distinct batches make the second assertion sensitive to lost publisher state.
+const INITIAL_EVENT_COUNT: usize = 5;
+const ADDITIONAL_EVENT_COUNT: usize = 3;
+const CUMULATIVE_EVENT_COUNT: usize = INITIAL_EVENT_COUNT + ADDITIONAL_EVENT_COUNT;
+// Distinct nonzero magnitudes ensure both collections exercise histogram export.
+const INITIAL_MAGNITUDE: i64 = 50;
+const ADDITIONAL_MAGNITUDE: i64 = 30;
 
 thread_local! {
     static TEST_EVENT: Event = Event::builder()
-        .name("delta_test_event")
+        .name(EVENT_NAME)
         .build();
 }
 
-fn create_test_provider() -> (SdkMeterProvider, InMemoryMetricExporter) {
-    let exporter = InMemoryMetricExporter::default();
-    let reader = PeriodicReader::builder(exporter.clone()).build();
-    let provider = SdkMeterProvider::builder().with_reader(reader).build();
-    (provider, exporter)
-}
-
-// OpenTelemetry SDK uses system time calls not available under Miri isolation.
-#[cfg_attr(miri, ignore)]
 #[test]
-fn run_one_iteration_computes_deltas_across_iterations() {
-    // Record initial events.
+#[cfg_attr(
+    miri,
+    ignore = "OpenTelemetry SDK resource detection requires OS metadata unavailable under Miri."
+)]
+fn run_one_iteration_computes_deltas_across_collections() {
     TEST_EVENT.with(|event| {
-        event.batch(5).observe(50);
+        event.batch(INITIAL_EVENT_COUNT).observe(INITIAL_MAGNITUDE);
     });
 
-    let (provider, exporter) = create_test_provider();
+    let (provider, reader) = create_test_provider();
 
-    let mut pub_instance = Publisher::builder()
+    let mut publisher = Publisher::builder()
         .provider(provider.clone())
         .clock(Clock::new_frozen())
         .build();
 
-    // First iteration.
-    pub_instance.run_one_iteration();
-    provider.force_flush().unwrap();
+    publisher.run_one_iteration_for_test();
+    let metrics = reader.collect();
+    assert_eq!(
+        find_u64_sum(&metrics, EVENT_NAME),
+        Some((true, u64::try_from(INITIAL_EVENT_COUNT).unwrap()))
+    );
 
-    // Verify first iteration exported count of 5.
-    let metrics = exporter.get_finished_metrics().unwrap();
-    let mut first_count = None;
-    for resource_metrics in &metrics {
-        for scope_metrics in resource_metrics.scope_metrics() {
-            for metric in scope_metrics.metrics() {
-                if metric.name() == "delta_test_event" {
-                    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
-                        panic!("expected Sum<u64> metric data");
-                    };
-                    let mut data_points = sum.data_points();
-                    let first = data_points.next().unwrap();
-                    assert!(data_points.next().is_none());
-                    first_count = Some(first.value());
-                }
-            }
-        }
-    }
-    assert_eq!(first_count, Some(5));
-
-    // Record more events.
     TEST_EVENT.with(|event| {
-        event.batch(3).observe(30);
+        event
+            .batch(ADDITIONAL_EVENT_COUNT)
+            .observe(ADDITIONAL_MAGNITUDE);
     });
 
-    // Second iteration.
-    pub_instance.run_one_iteration();
-    provider.force_flush().unwrap();
-
-    // Verify second iteration shows cumulative count of 8.
-    let metrics = exporter.get_finished_metrics().unwrap();
-    let mut second_count = None;
-    for resource_metrics in &metrics {
-        for scope_metrics in resource_metrics.scope_metrics() {
-            for metric in scope_metrics.metrics() {
-                if metric.name() == "delta_test_event" {
-                    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
-                        panic!("expected Sum<u64> metric data");
-                    };
-                    let mut data_points = sum.data_points();
-                    let first = data_points.next().unwrap();
-                    assert!(data_points.next().is_none());
-                    second_count = Some(first.value());
-                }
-            }
-        }
-    }
-    assert_eq!(second_count, Some(8));
+    publisher.run_one_iteration_for_test();
+    let metrics = reader.collect();
+    assert_eq!(
+        find_u64_sum(&metrics, EVENT_NAME),
+        Some((true, u64::try_from(CUMULATIVE_EVENT_COUNT).unwrap()))
+    );
+    drop(provider);
 }

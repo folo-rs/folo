@@ -22,7 +22,9 @@
 #
 # Collection scope is orthogonal to the mode: with no explicit package list the whole workspace is
 # benched except the special-purpose `benchmarks` crate (the push-to-main default); the PR workflow
-# instead passes the delta-affected packages so it benches only what the PR impacts.
+# instead passes the delta-affected packages so it benches only what the PR impacts. Every selected
+# package is benched with all Cargo features enabled, so Cargo includes targets guarded by
+# `required-features` and builds each package in its all-features configuration.
 # Select-BenchmarkablePackage is the shared helper that drops `benchmarks` from a delta-affected set
 # before both the scope decision and the "is there anything to bench at all" gate.
 #
@@ -84,9 +86,10 @@ function Select-BenchmarkablePackage {
 }
 
 function Get-BenchHistoryScopeArgument {
-    # Builds the scope + noise-reduction flags EVERY benchmark-history run shares, so a `collect` and
-    # a `backfill` can never measure the same commit differently. `collect` and `backfill` flatten the
-    # same clap arg groups, so this array applies verbatim to either subcommand.
+    # Builds the scope + feature-selection + noise-reduction flags EVERY benchmark-history run
+    # shares, so a `collect` and a `backfill` can never measure the same commit differently.
+    # `collect` and `backfill` flatten the same clap arg groups, so this array applies verbatim to
+    # either subcommand.
     #
     # $Package selects the collection scope. When empty (the push-to-main and nightly-backfill
     # default), the whole workspace is benched except the excluded `benchmarks` crate (`--workspace
@@ -94,13 +97,16 @@ function Get-BenchHistoryScopeArgument {
     # packages), the run is scoped to exactly those packages (`--package <name>` each); the caller is
     # expected to have already dropped `benchmarks` via Select-BenchmarkablePackage.
     #
+    # `--all-features` ensures Cargo runs benchmark targets guarded by `required-features` and
+    # compiles feature-gated code paths into every selected package's benchmarks.
+    #
     # Each runner stamps its results with its OWN real hardware fingerprint, so a heterogeneous
-    # GitHub runner pool splits into one clean wall-clock series per
-    # hardware type instead of one jittery series mixing incomparable machines. `--best-of 3` keeps
-    # each metric's minimum across three runs to shed one-sided runner jitter - a point taken at a
-    # lower best-of would sit systematically higher than its neighbours and manufacture a step change
-    # in the series. `--verbose` makes the log spell out the resolved machine key and the fingerprint
-    # components behind it, so a key change is debuggable from the log alone.
+    # GitHub runner pool splits into one clean wall-clock series per hardware type instead of one
+    # jittery series mixing incomparable machines. `--best-of 3` keeps each metric's minimum across
+    # three runs to shed one-sided runner jitter - a point taken at a lower best-of would sit
+    # systematically higher than its neighbours and manufacture a step change in the series.
+    # `--verbose` makes the log spell out the resolved machine key and the fingerprint components
+    # behind it, so a key change is debuggable from the log alone.
     [CmdletBinding()]
     [OutputType([string[]])]
     param(
@@ -124,6 +130,7 @@ function Get-BenchHistoryScopeArgument {
     }
 
     return $selection + @(
+        '--all-features',
         '--best-of', '3',
         '--verbose'
     )

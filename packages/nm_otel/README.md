@@ -8,26 +8,30 @@ enabling export of nm-collected metrics to any OpenTelemetry-compatible backend.
 ## Example
 
 ```rust
-use std::time::Duration;
-
+use nm::Event;
+use nm_otel::Publisher;
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
+use opentelemetry_stdout::MetricExporter;
 use tick::Clock;
+
+thread_local! {
+    static REQUESTS: Event = Event::builder().name("requests").build();
+}
 
 #[tokio::main]
 async fn main() {
-    // Set up an OpenTelemetry meter provider with your exporter of choice.
-    let exporter = opentelemetry_stdout::MetricExporter::default();
+    let exporter = MetricExporter::default();
     let reader = PeriodicReader::builder(exporter).build();
-    let my_meter_provider = SdkMeterProvider::builder().with_reader(reader).build();
+    let meter_provider = SdkMeterProvider::builder().with_reader(reader).build();
 
-    // Create and run the nm-to-OpenTelemetry publisher.
-    let mut nm_publisher = nm_otel::Publisher::builder()
-        .provider(my_meter_provider)
+    REQUESTS.with(Event::observe_once);
+
+    let mut publisher = Publisher::builder()
+        .provider(meter_provider)
         .clock(Clock::new_tokio())
-        .interval(Duration::from_mins(1))
         .build();
 
-    nm_publisher.publish_forever().await;
+    publisher.publish_forever().await;
 }
 ```
 
@@ -43,8 +47,8 @@ Each `nm::Event` is exported as one or more OpenTelemetry metrics:
 
 ## Histogram format
 
-Histograms are exported as separate counter and gauge metrics because the OpenTelemetry
-Rust SDK does not yet support recording pre-aggregated histogram data.
+Histograms are represented by cumulative bucket counters, an observation-count counter, and an
+observation-sum gauge.
 
 The format uses cumulative bucket counts with a `le` (less-than-or-equal) attribute:
 
@@ -59,7 +63,10 @@ http_latency_ms_sum               → sum of all observed values
 
 ## See also
 
-More details in the [package documentation](https://docs.rs/nm_otel/).
+See the [package documentation](https://docs.rs/nm_otel/) for API details.
+
+The package's user-visible behavior and internal architecture are described in the
+[design](docs/design.md) and [implementation](docs/implementation.md) documents.
 
 This is part of the [Folo project](https://github.com/folo-rs/folo) that provides mechanisms for
 high-performance hardware-aware programming in Rust.

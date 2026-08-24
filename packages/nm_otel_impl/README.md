@@ -1,14 +1,17 @@
 # `nm_otel_impl`
 
-Implementation crate for [`nm_otel`](https://crates.io/crates/nm_otel). Do not depend on this
-crate directly.
+Internal implementation of the
+[`nm_otel`](https://crates.io/crates/nm_otel) OpenTelemetry metrics publisher.
+Applications and libraries depend on `nm_otel`, not this crate.
 
 This crate exists so the `nm_otel` package can keep its published API surface minimal
 while still permitting in-workspace tests and benchmarks (hosted here in `nm_otel_impl`)
-to reach internal items that should not appear on `docs.rs/nm_otel`. See
-[`docs/impl-crate-split.md`](../../docs/impl-crate-split.md) in the repository for the
-broader convention.
+to reach internal items that are not part of the `nm_otel` API. See the
+[`nm_otel` implementation guide] for the package architecture.
 
-Anything beyond what `nm_otel` re-exports is **not** part of any public API contract:
-items here may be renamed, removed, or change behavior at any time, including in patch
-releases. Downstream consumers should always depend on `nm_otel` instead.
+Only the items re-exported by `nm_otel` are part of its public API contract.
+Internal test and benchmark helpers are available only through the `private-test-util`
+feature, which the `nm_otel` shell does not forward.
+
+[`nm_otel` implementation guide]:
+    https://github.com/folo-rs/folo/blob/main/packages/nm_otel/docs/implementation.md
