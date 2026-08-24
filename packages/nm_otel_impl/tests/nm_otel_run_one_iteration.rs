@@ -40,7 +40,7 @@ fn run_one_iteration_exports_recorded_events() {
         .clock(Clock::new_frozen())
         .build();
 
-    publisher.run_one_iteration();
+    publisher.run_one_iteration_for_test();
     let metrics = reader.collect();
 
     assert_eq!(

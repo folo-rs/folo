@@ -18,7 +18,15 @@ all-features = true
 # development dependencies appear unused.
 # Ignore them here to silence false positives.
 [package.metadata.cargo-udeps.ignore]
-development = ["criterion", "gungraun", "many_cpus", "nm_otel", "par_bench"]
+development = [
+    "alloc_tracker",
+    "criterion",
+    "gungraun",
+    "many_cpus",
+    "new_zealand",
+    "nm_otel",
+    "par_bench",
+]
 
 [lib]
 # nm_otel_impl exists only to host the implementation of `nm_otel` and to expose
@@ -69,6 +77,10 @@ tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time
 # Gungraun drives Valgrind-based Callgrind benchmarks; Linux-only.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 gungraun = { workspace = true, features = ["default"] }
+
+[[test]]
+name = "nm_otel_histogram_deltas_alloc"
+required-features = ["private-test-util"]
 
 [[test]]
 name = "nm_otel_publish_forever"

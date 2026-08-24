@@ -25,7 +25,9 @@ mod state;
 mod test_metric_reader;
 
 pub use publisher::*;
-pub use state::*;
+#[cfg(any(test, feature = "private-test-util"))]
+#[doc(hidden)]
+pub use state::EventState;
 #[cfg(any(test, feature = "private-test-util"))]
 #[doc(hidden)]
 pub use test_metric_reader::*;

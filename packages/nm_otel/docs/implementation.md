@@ -12,6 +12,11 @@ The two crates form one library and are versioned together. `nm_otel_impl` is no
 API or documentation owner; architectural changes in that partition are described here, and
 user-visible changes are described in [the design document](design.md).
 
+Production collection remains private to the publisher. The implementation crate's
+`private-test-util` feature exposes a separately named one-iteration driver, pre-built report
+driver, and histogram delta state only to in-workspace tests and benchmarks. The shell does not
+forward this feature.
+
 ## Recording pipeline
 
 On each publisher interval, the implementation obtains an aggregated report from `nm`, associates
@@ -30,6 +35,18 @@ The instrument names, including the underscore shift that keeps companion-shaped
 apart, are derived at that point rather than per export. Once the event and histogram
 configuration is established, the steady-state histogram path looks up this state, computes
 deltas, and records them without allocating.
+
+### Delta discontinuities and limits
+
+OpenTelemetry counters accept only nonnegative increments. If an upstream cumulative count or
+bucket total decreases, the publisher treats it as a discontinuity: it records no increment for
+that collection and replaces the retained baseline. Later increases are measured from the
+replacement baseline instead of being suppressed until they exceed the old value.
+
+Converting non-cumulative histogram buckets into cumulative `u64` values clamps totals at
+`u64::MAX`. The counter representation cannot encode a larger value, and wrapping would fabricate
+a smaller total and a false discontinuity. Iterator indexing is not metric arithmetic and remains
+checked as a structural invariant.
 
 Both the delta state and the instrument cache are keyed by event name and hashed with the
 standard library's `HashDoS`-resistant default rather than a faster non-cryptographic hasher.

@@ -492,15 +492,15 @@ The second worked example. Concrete files to study:
   explicit `pub use nm_otel_impl::{Publisher, PublisherBuilder};`.
 - `packages/nm_otel/tests/nm_otel_reexports.rs` — re-export smoke test.
 - `packages/nm_otel_impl/Cargo.toml` — impl manifest with `[lib] doc = false`,
-  the `private-test-util` feature gating
-  `Publisher::run_one_iteration_with_report`, the `nm_otel` dev-dep for the
-  doctest cycle, and the `nm_impl` dev-dep with
+  the `private-test-util` feature gating one-iteration publisher drivers and
+  histogram delta test state, the `nm_otel` dev-dep for the doctest cycle, and
+  the `nm_impl` dev-dep with
   `features = ["private-test-util"]` so the impl-hosted benches can build
   input reports via `Report::fake`. Both `[[bench]]` entries declare
   `required-features = ["private-test-util"]`.
 - `packages/nm_otel_impl/src/lib.rs` — `#![doc(hidden)]` root that re-exports
-  the public-API subset for the shell crate plus `EventState` for the
-  alloc-tracking integration test.
+  the public-API subset for the shell crate plus feature-gated `EventState` for
+  the alloc-tracking integration test.
 - `packages/nm_otel_impl/README.md` — "do not depend on this directly" notice.
 - `release-plz.toml` — `version_group = "nm_otel"` entries for `nm_otel` and
   `nm_otel_impl`.
@@ -584,4 +584,3 @@ deferring their documentation. Concrete files to study:
   to every crate in the family: each `cbh_*` package is pinned `=0.0.3` in
   `[workspace.dependencies]` and shares `version_group = "cargo-bench-history"`
   with the CLI, so the published set can never drift to mismatched versions.
-

@@ -30,7 +30,7 @@ pub(crate) struct CollectionState {
     hasher: RandomState,
 
     /// Previous state per event name.
-    events: HashTable<(EventName, EventState)>,
+    events: HashTable<(EventName, EventDeltaState)>,
 }
 
 impl CollectionState {
@@ -43,7 +43,7 @@ impl CollectionState {
     }
 
     /// Gets or creates the state for an event.
-    pub(crate) fn event_state(&mut self, name: &EventName) -> &mut EventState {
+    pub(crate) fn event_state(&mut self, name: &EventName) -> &mut EventDeltaState {
         let hash = self.hasher.hash_one(name);
         let hasher = &self.hasher;
         // The three closures fed to `entry()`:
@@ -63,7 +63,7 @@ impl CollectionState {
                 // name is seen. Every later export for the same name takes the occupied branch
                 // above and performs no clone.
                 &mut vacant
-                    .insert((name.clone(), EventState::default()))
+                    .insert((name.clone(), EventDeltaState::default()))
                     .into_mut()
                     .1
             }
@@ -71,7 +71,7 @@ impl CollectionState {
     }
 }
 
-/// Previous cumulative state for a single event, used to derive per-collection deltas.
+/// Retains one event's cumulative values to derive per-collection deltas.
 ///
 /// nm reports counter-type metrics (the occurrence count and each histogram bucket) as
 /// running cumulative totals, but OpenTelemetry counters are fed deltas. This type retains
@@ -79,7 +79,7 @@ impl CollectionState {
 /// subtract them and publish only the increment. It holds no gauge-type state, because sum
 /// is exported as an absolute value and needs no history.
 #[derive(Debug, Default)]
-pub struct EventState {
+pub(crate) struct EventDeltaState {
     /// Previous cumulative count.
     pub(crate) count: u64,
 
@@ -88,11 +88,14 @@ pub struct EventState {
     pub(crate) histogram_buckets: Vec<u64>,
 }
 
-impl EventState {
+impl EventDeltaState {
     /// Computes the delta for the count metric.
     ///
     /// Returns the delta and updates internal state.
     pub(crate) fn count_delta(&mut self, current: u64) -> u64 {
+        // A counter decrease is a discontinuity: counters cannot accept a negative increment,
+        // so publish zero and replace the baseline to measure later growth from the new value.
+        // Ref: packages/nm_otel/docs/implementation.md, "Delta discontinuities and limits".
         let delta = current.saturating_sub(self.count);
         self.count = current;
         delta
@@ -124,7 +127,7 @@ impl EventState {
     /// fixed for the lifetime of an event. The check fires either when an extra bucket
     /// is yielded beyond the established length, or when the source iterator is exhausted
     /// before all established buckets have been visited.
-    pub fn histogram_deltas<'a>(
+    pub(crate) fn histogram_deltas<'a>(
         &'a mut self,
         magnitudes: impl IntoIterator<Item = Magnitude> + 'a,
         non_cumulative_counts: impl IntoIterator<Item = u64> + 'a,
@@ -150,13 +153,39 @@ impl EventState {
     }
 }
 
+/// Exposes histogram delta state to in-workspace allocation tests.
+///
+/// The production exporter owns [`EventDeltaState`] privately. This facade exists only when
+/// `private-test-util` is active so integration tests can measure the same streaming operation
+/// without making its callback-capable iterator part of the normal implementation-crate surface.
+#[cfg(any(test, feature = "private-test-util"))]
+#[doc(hidden)]
+#[derive(Debug, Default)]
+pub struct EventState {
+    inner: EventDeltaState,
+}
+
+#[cfg(any(test, feature = "private-test-util"))]
+impl EventState {
+    /// Computes streaming cumulative histogram values and deltas.
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    pub fn histogram_deltas<'a>(
+        &'a mut self,
+        magnitudes: impl IntoIterator<Item = Magnitude> + 'a,
+        non_cumulative_counts: impl IntoIterator<Item = u64> + 'a,
+    ) -> impl Iterator<Item = (Magnitude, u64, u64)> + 'a {
+        self.inner
+            .histogram_deltas(magnitudes, non_cumulative_counts)
+    }
+}
+
 /// Running cumulative bucket total before any observation has been folded in.
 const INITIAL_CUMULATIVE: u64 = 0;
 
 /// Index of the first histogram bucket.
 const FIRST_BUCKET_INDEX: usize = 0;
 
-/// Streaming iterator returned by [`EventState::histogram_deltas`].
+/// Streams histogram deltas while updating retained bucket state.
 ///
 /// On the first call `buckets` starts empty and is grown lazily as items are yielded.
 /// On subsequent calls `buckets` already has the established length and we index into
@@ -184,6 +213,9 @@ where
             return None;
         };
 
+        // Clamp a cumulative total that exceeds the u64 counter range. Wrapping would fabricate
+        // a smaller total and a false reset that OpenTelemetry cannot represent meaningfully.
+        // Ref: packages/nm_otel/docs/implementation.md, "Delta discontinuities and limits".
         self.running_cumulative = self.running_cumulative.saturating_add(non_cumulative);
 
         let previous = if self.first_call {
@@ -200,6 +232,8 @@ where
             previous
         };
 
+        // Apply the same discontinuity policy as the event count. The new cumulative value is
+        // stored below, so later growth is measured from the replacement baseline.
         let delta = self.running_cumulative.saturating_sub(previous);
 
         #[expect(
@@ -210,7 +244,10 @@ where
         {
             self.buckets[self.index] = self.running_cumulative;
         }
-        self.index = self.index.saturating_add(1);
+        self.index = self
+            .index
+            .checked_add(1)
+            .expect("a Vec cannot contain more than usize::MAX histogram buckets");
 
         Some((magnitude, self.running_cumulative, delta))
     }
@@ -239,7 +276,7 @@ mod tests {
 
     #[test]
     fn event_state_count_delta_first_collection() {
-        let mut state = EventState::default();
+        let mut state = EventDeltaState::default();
         let delta = state.count_delta(100);
         assert_eq!(delta, 100);
         assert_eq!(state.count, 100);
@@ -247,7 +284,7 @@ mod tests {
 
     #[test]
     fn event_state_count_delta_subsequent_collections() {
-        let mut state = EventState::default();
+        let mut state = EventDeltaState::default();
 
         let first_delta = state.count_delta(100);
         assert_eq!(first_delta, 100);
@@ -262,6 +299,15 @@ mod tests {
         assert_eq!(later_increase_delta, 50);
     }
 
+    #[test]
+    fn event_state_count_delta_replaces_a_decreased_baseline() {
+        let mut state = EventDeltaState::default();
+
+        assert_eq!(state.count_delta(100), 100);
+        assert_eq!(state.count_delta(40), 0);
+        assert_eq!(state.count_delta(45), 5);
+    }
+
     // `Iterator::eq` against a finite expected array is the bounded-consumption pattern
     // we use throughout these tests: it calls `self.next()` at most `expected.len() + 1`
     // times and returns `false` on the first value mismatch. That makes it self-bounded
@@ -273,7 +319,7 @@ mod tests {
 
     #[test]
     fn event_state_histogram_deltas_first_collection() {
-        let mut state = EventState::default();
+        let mut state = EventDeltaState::default();
 
         let magnitudes = [10, 50, 100, Magnitude::MAX];
         let non_cumulative = [5, 12, 8, 2];
@@ -299,7 +345,7 @@ mod tests {
 
     #[test]
     fn event_state_histogram_deltas_subsequent_collections() {
-        let mut state = EventState::default();
+        let mut state = EventDeltaState::default();
 
         let magnitudes = [10, 50, 100, Magnitude::MAX];
 
@@ -334,6 +380,42 @@ mod tests {
     }
 
     #[test]
+    fn event_state_histogram_deltas_replace_decreased_baselines() {
+        let mut state = EventDeltaState::default();
+        let magnitudes = [10, Magnitude::MAX];
+
+        assert!(
+            state
+                .histogram_deltas(magnitudes, [5, 10])
+                .eq([(10, 5, 5), (Magnitude::MAX, 15, 15)])
+        );
+        assert!(
+            state
+                .histogram_deltas(magnitudes, [2, 3])
+                .eq([(10, 2, 0), (Magnitude::MAX, 5, 0)])
+        );
+        assert!(
+            state
+                .histogram_deltas(magnitudes, [3, 4])
+                .eq([(10, 3, 1), (Magnitude::MAX, 7, 2)])
+        );
+    }
+
+    #[test]
+    fn event_state_histogram_cumulative_values_saturate() {
+        let mut state = EventDeltaState::default();
+
+        assert!(
+            state
+                .histogram_deltas([10, Magnitude::MAX], [u64::MAX, 1])
+                .eq([
+                    (10, u64::MAX, u64::MAX),
+                    (Magnitude::MAX, u64::MAX, u64::MAX),
+                ])
+        );
+    }
+
+    #[test]
     fn collection_state_creates_event_state_on_demand() {
         let mut state = CollectionState::new();
 
@@ -364,7 +446,7 @@ mod tests {
         // enough events to force multiple grows and then reads every entry back to
         // verify the rehash closure produces hashes consistent with the lookup-time
         // hashing — otherwise entries would land in the wrong buckets after a grow
-        // and the reads would return fresh `EventState::default()` values instead of
+        // and the reads would return fresh `EventDeltaState::default()` values instead of
         // the values we wrote.
         //
         // A freshly constructed `HashTable` starts with no heap capacity, so this count
@@ -375,7 +457,7 @@ mod tests {
         let mut state = CollectionState::new();
 
         for i in 0..NUM_EVENTS {
-            // Use distinguishable non-zero values so a re-defaulted `EventState` (count = 0)
+            // Use distinguishable non-zero values so a re-defaulted `EventDeltaState` (count = 0)
             // would be detectable.
             state.event_state(&format!("growth_event_{i}").into()).count =
                 i.saturating_mul(7).saturating_add(1);
@@ -392,7 +474,7 @@ mod tests {
 
     #[test]
     fn event_state_histogram_deltas_same_bucket_count_works() {
-        let mut state = EventState::default();
+        let mut state = EventDeltaState::default();
 
         let magnitudes = [10, 50, 100];
 
@@ -430,7 +512,7 @@ mod tests {
 
     #[test]
     fn event_state_histogram_deltas_bucket_count_mismatch_panics() {
-        let mut state = EventState::default();
+        let mut state = EventDeltaState::default();
 
         // First call establishes three buckets.
         let first_magnitudes = [10, 50, 100];
@@ -458,7 +540,7 @@ mod tests {
 
     #[test]
     fn event_state_histogram_deltas_fewer_buckets_panics() {
-        let mut state = EventState::default();
+        let mut state = EventDeltaState::default();
 
         // First call establishes three buckets.
         let first_magnitudes = [10, 50, 100];

@@ -9,6 +9,7 @@
 
 use std::cell::RefCell;
 use std::hint::black_box;
+use std::iter;
 
 use alloc_tracker::{Allocator, Session as AllocSession};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
@@ -16,7 +17,7 @@ use many_cpus::SystemHardware;
 use new_zealand::nz;
 use nm::{EventMetrics, Histogram, Magnitude, Report};
 use nm_otel::Publisher;
-use nm_otel_impl::create_test_provider;
+use nm_otel_impl::{EventState, create_test_provider};
 use par_bench::{ResourceUsageExt, Run, ThreadPool};
 use tick::Clock;
 
@@ -89,6 +90,7 @@ criterion_main!(benches);
 
 fn entrypoint(c: &mut Criterion) {
     benchmark_bucket_cardinality(c);
+    benchmark_delta_computation(c);
     benchmark_multi_event_allocations(c);
 }
 
@@ -113,6 +115,27 @@ fn benchmark_bucket_cardinality(c: &mut Criterion) {
         b.iter_batched_ref(
             setup_high_bucket_cardinality_positive_delta,
             run_export,
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.finish();
+}
+
+fn benchmark_delta_computation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("nm_otel_export/delta");
+
+    group.bench_function("low_bucket_cardinality_positive_delta", |b| {
+        b.iter_batched_ref(
+            || setup_delta(LOW_CARDINALITY_BUCKET_BOUNDS),
+            run_delta,
+            BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("high_bucket_cardinality_positive_delta", |b| {
+        b.iter_batched_ref(
+            || setup_delta(HIGH_CARDINALITY_BUCKET_BOUNDS),
+            run_delta,
             BatchSize::SmallInput,
         );
     });
@@ -256,4 +279,54 @@ fn setup_high_bucket_cardinality_positive_delta() -> ExportInputs {
 fn run_export(inputs: &mut ExportInputs) {
     let (publisher, report) = inputs;
     publisher.run_one_iteration_with_report(black_box(report));
+}
+
+/// Carries warm delta state and the next collection's non-cumulative bucket counts.
+#[derive(Debug)]
+struct DeltaInputs {
+    state: EventState,
+    bucket_bounds: &'static [Magnitude],
+    counts: Vec<u64>,
+}
+
+fn setup_delta(bucket_bounds: &'static [Magnitude]) -> DeltaInputs {
+    let mut state = EventState::default();
+    let bucket_count = bucket_bounds
+        .len()
+        .checked_add(1)
+        .expect("the benchmark bucket count fits in usize");
+    let initial_counts = vec![WARM_PER_BUCKET_COUNT; bucket_count];
+    _ = state
+        .histogram_deltas(
+            bucket_bounds
+                .iter()
+                .copied()
+                .chain(iter::once(Magnitude::MAX)),
+            initial_counts,
+        )
+        .count();
+
+    DeltaInputs {
+        state,
+        bucket_bounds,
+        counts: vec![POSITIVE_DELTA_PER_BUCKET_COUNT; bucket_count],
+    }
+}
+
+fn run_delta(inputs: &mut DeltaInputs) {
+    let DeltaInputs {
+        state,
+        bucket_bounds,
+        counts,
+    } = inputs;
+
+    for delta in state.histogram_deltas(
+        bucket_bounds
+            .iter()
+            .copied()
+            .chain(iter::once(Magnitude::MAX)),
+        black_box(counts).iter().copied(),
+    ) {
+        black_box(delta);
+    }
 }

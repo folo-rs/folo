@@ -255,7 +255,6 @@ where
     ///
     /// Only the whole number part of the duration is used; fractional milliseconds are ignored.
     /// Values outside the i64 range are not guaranteed to be correctly represented.
-    #[inline]
     pub fn observe_millis(&self, duration: Duration) {
         #[expect(
             clippy::cast_possible_truncation,
@@ -275,7 +274,6 @@ where
     /// # Reentrancy
     ///
     /// The measured function may observe this event or any other event.
-    #[inline]
     pub fn observe_duration_millis<F, R>(&self, f: F) -> R
     where
         F: FnOnce() -> R,
