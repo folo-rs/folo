@@ -1826,11 +1826,9 @@ async fn analyze_machine_key_discriminant_selects_one_set() {
 #[cfg_attr(miri, ignore)]
 async fn analyze_criterion_feature_branch_admits_dirty_snapshots() {
     let workspace = Workspace::repo(&storage_only_config());
-    // A clean Criterion baseline on master, long enough to give branch mode the
-    // `MIN_SERIES_POINTS` base-side commit levels its observed-range comparison needs. The
-    // levels alternate 19.9/20.1 ns: a wall time is a slope fitted over a run's
-    // iterations and never repeats a value, and a base window that did repeat one
-    // would carry no scatter for the tip to be judged against.
+    // A clean Criterion baseline on master with enough commits for branch mode's
+    // observed-range comparison. The alternating values exercise a narrow base range;
+    // branch mode would also accept a flat range.
     for (index, date) in sequential_dates("2024-02-01", MIN_SERIES_POINTS)
         .into_iter()
         .enumerate()
@@ -1840,9 +1838,9 @@ async fn analyze_criterion_feature_branch_admits_dirty_snapshots() {
         let level = if index % 2 == 0 { 19.9 } else { 20.1 };
         workspace.seed_criterion(&label, "mk", level);
     }
-    // Branch off master, add a clean point, then dirty snapshots that step up; the
-    // branch tip's dirty cohort is the "after" sample branch mode compares against
-    // the base level.
+    // Branch off master, add a clean point, then repeated dirty snapshots at the tip.
+    // Branch mode prefers the dirty lane and collapses those runs to one commit
+    // observation before comparing it with the base range.
     workspace.checkout_new_branch("feature");
     workspace.commit_dated("2024-03-01", "f1");
     workspace.seed_criterion("f1", "mk", 20.0);
