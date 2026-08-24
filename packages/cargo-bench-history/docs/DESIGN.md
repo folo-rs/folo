@@ -992,12 +992,15 @@ between two stable lanes. Assigning by observation order keeps both lanes popula
 benchmark data exists only on a sparse subset of first-parent commits. The **selector lane** alone
 may choose regime boundaries; the **reference lane** is reserved for the report-wide historical
 comparison below. Selector observations are searched recursively for supported change points, with
-the complete search sharing one declared selection-adjusted error budget. Every accepted boundary
+the complete search sharing one declared selection-adjusted error budget. Each search takes the
+strongest split in the stretch it is given and then searches both sides of it, because the
+strongest split is not always a supported one and a negligible step must not conceal a large
+boundary sitting behind it. Every accepted boundary
 must have full regimes on both sides, clear the practical relative and absolute floors, and show
 near-complete population separation. The current regime starts at the first selector observation
 known to be after the boundary; an interleaved reference observation whose side is ambiguous is
-excluded. Repeating the search on the retained suffix makes the newest supported regime the
-comparison regime rather than averaging across older operating conditions.
+excluded. Taking the newest supported boundary makes the newest supported regime the comparison
+regime rather than averaging across older operating conditions.
 
 A strongly separated recent group that is still shorter than a full regime leaves the current
 regime **unresolved**. Branch mode withholds that series instead of comparing against a level that

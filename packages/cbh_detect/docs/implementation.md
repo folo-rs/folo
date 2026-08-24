@@ -22,8 +22,7 @@ a threshold to make the decision observable.
 Branch analysis is a dedicated all-series path rather than another independent per-series
 detector. Per-series preparation remains parallel: it applies the base blessing boundary,
 alternates chronologically ordered observed levels between selector and reference lanes, locates
-the latest supported regime using only selectors, skipping unsupported candidate boundaries and
-evaluating the context value against the
+the latest supported regime using only selectors, and evaluates the context value against the
 resulting observed range. The branch tip itself is first collapsed to one observation per commit,
 preferring the dirty snapshot lane when present, so a commit with repeated measurements does not
 depend on storage order. Alternating observations rather than raw topology coordinates preserves
@@ -32,11 +31,16 @@ comparison needs a rectangular family of stable series sharing the same referenc
 commits.
 
 Selector/reference separation prevents a historical candidate from helping choose the boundary it
-is later judged against. Recursive boundary searches share one predeclared selection-adjusted error
-budget. A current regime starts at the first selector observation known to be after a split, leaving
-an interleaved reference observation out when its side is ambiguous. Histories too short for this
-separation still support the weaker complete-window range comparison; a strongly separated recent
-group too short to establish a regime makes the series explicitly unjudged.
+is later judged against. The boundary search segments the selector lane: each search takes the
+strongest split in its segment and then recurses into both sides, keeping every split that clears
+the support gates and adopting the latest of them. Recursing into the earlier side is what makes
+the search honest, because the strongest split need not be a supported one and a negligible step
+must not discard the candidates behind it. All searches share one predeclared selection-adjusted
+error budget, sized for the deepest tree the recursion can build. A current regime starts at the
+first selector observation known to be after a split, leaving an interleaved reference observation
+out when its side is ambiguous. Histories too short for this separation still support the weaker
+complete-window range comparison; a strongly separated recent group too short to establish a
+regime makes the series explicitly unjudged.
 
 Range judgment retains every observation in the selected regime. A value is a branch excursion
 only outside the recorded minimum or maximum, and its magnitude is excess beyond the nearest edge.

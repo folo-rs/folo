@@ -312,68 +312,35 @@ fn select_regime(series: &Series) -> RegimeSelection {
         .map(|(_, level)| level)
         .collect();
 
-    // Every accepted split advances by at least one minimum regime, while another
-    // search requires two minimum regimes to remain. This is the largest number of
-    // searches any recursive path can perform, including its final rejected search.
     let search_alpha = regime_search_alpha(selector.len());
-    let mut selector_start = 0_usize;
-    let mut current_start = 0_usize;
-    let mut previous_start = None;
-    let mut boundary_commit = None;
+    let mut boundaries = Vec::new();
+    collect_supported_boundaries(series.kind, &selector, 0, search_alpha, &mut boundaries);
+    boundaries.sort_unstable();
 
-    loop {
-        let suffix = selector.get(selector_start..).unwrap_or_default();
-        if suffix.len() < noise_gates::MIN_SERIES_POINTS {
-            break;
-        }
-        let values: Vec<f64> = suffix.iter().map(|level| level.value).collect();
-        let calibration = stats::SelectionCalibration {
-            permutation_order_budget: NonZero::new(noise_gates::MIN_CHANGE_PERMUTATION_ORDER)
-                .expect("the configured permutation order is nonzero"),
-            analytic_weight: noise_gates::CHANGE_ANALYTIC_WEIGHT,
-            accept_analytic_below: search_alpha,
-            reject_at_or_above: search_alpha,
-        };
-        let Some(change) =
-            stats::selection_adjusted_change_point(&values, noise_gates::MIN_REGIME, calibration)
-        else {
-            break;
-        };
-        if change.adjusted_p >= search_alpha {
-            break;
-        }
-        if !supported_boundary(series.kind, &values, change.index, change.superiority) {
-            // Skip the unsupported boundary and keep searching later suffixes.
-            selector_start = selector_start.saturating_add(change.index);
-            continue;
-        }
-        let split_after = suffix
-            .get(change.index)
-            .expect("a supported split leaves a nonempty after regime");
-        // A reference-lane commit can sit between the selector observations on either
-        // side of the split. Its regime is ambiguous, so it cannot honestly define the
-        // current range; start at the first selector observation known to be after the
-        // boundary instead.
-        let next_start = series
-            .base_window
-            .partition_point(|level| level.topo_index < split_after.topo_index);
-        debug_assert!(
-            next_start > current_start,
-            "a recursive regime search must advance the base boundary"
-        );
-        previous_start = Some(current_start);
-        current_start = next_start;
-        selector_start = selector_start.saturating_add(change.index);
-        boundary_commit = series
+    // The newest supported regime is the comparison regime; every older one belongs to the
+    // history the branch is no longer measured against. Ref: docs/DESIGN.md, "Branch mode".
+    let current_selector_start = boundaries.last().copied().unwrap_or(0);
+    let current_start = boundaries
+        .last()
+        .map_or(0, |&boundary| base_start_after(series, &selector, boundary));
+    let previous_start = (!boundaries.is_empty()).then(|| {
+        boundaries
+            .len()
+            .checked_sub(2)
+            .and_then(|index| boundaries.get(index))
+            .map_or(0, |&boundary| base_start_after(series, &selector, boundary))
+    });
+    let boundary_commit = boundaries.last().and_then(|_| {
+        series
             .base_window
             .get(current_start)
             .and_then(|level| level.commit.as_deref())
-            .map(str::to_owned);
-    }
+            .map(str::to_owned)
+    });
 
     let unresolved = recent_step_is_unresolved(
         series.kind,
-        selector.get(selector_start..).unwrap_or_default(),
+        selector.get(current_selector_start..).unwrap_or_default(),
     );
     let previous_range = previous_start.and_then(|start| {
         range_of(
@@ -393,7 +360,77 @@ fn select_regime(series: &Series) -> RegimeSelection {
     }
 }
 
+/// Collects every supported regime boundary in `selector`, as selector-lane indices.
+///
+/// Each search locates the strongest split in its segment and then recurses into *both*
+/// sides. Recursing into the earlier side is what makes the search honest: the strongest
+/// split need not be a supported one, and a statistically real but practically negligible
+/// step must not discard the candidates sitting on either side of it. Skipping only
+/// forward would let such a step permanently hide a large earlier boundary, leaving older
+/// operating conditions inside the comparison range. Ref: docs/DESIGN.md, "Branch mode".
+fn collect_supported_boundaries(
+    kind: MetricKind,
+    selector: &[&BaseLevel],
+    offset: usize,
+    search_alpha: f64,
+    boundaries: &mut Vec<usize>,
+) {
+    if selector.len() < noise_gates::MIN_SERIES_POINTS {
+        return;
+    }
+    let values: Vec<f64> = selector.iter().map(|level| level.value).collect();
+    let calibration = stats::SelectionCalibration {
+        permutation_order_budget: NonZero::new(noise_gates::MIN_CHANGE_PERMUTATION_ORDER)
+            .expect("the configured permutation order is nonzero"),
+        analytic_weight: noise_gates::CHANGE_ANALYTIC_WEIGHT,
+        accept_analytic_below: search_alpha,
+        reject_at_or_above: search_alpha,
+    };
+    let Some(change) =
+        stats::selection_adjusted_change_point(&values, noise_gates::MIN_REGIME, calibration)
+    else {
+        return;
+    };
+    if change.adjusted_p >= search_alpha {
+        return;
+    }
+    if supported_boundary(kind, &values, change.index, change.superiority) {
+        boundaries.push(offset.saturating_add(change.index));
+    }
+    // A split always leaves a full regime on each side, so both halves are strictly
+    // shorter than the segment and the recursion terminates.
+    let (before, after) = selector.split_at(change.index);
+    collect_supported_boundaries(kind, before, offset, search_alpha, boundaries);
+    collect_supported_boundaries(
+        kind,
+        after,
+        offset.saturating_add(change.index),
+        search_alpha,
+        boundaries,
+    );
+}
+
+/// Maps a selector-lane boundary to the first base observation known to be after it.
+///
+/// A reference-lane commit can sit between the selector observations on either side of
+/// the split. Its regime is ambiguous, so it cannot honestly define the current range;
+/// start at the first selector observation known to be after the boundary instead.
+fn base_start_after(series: &Series, selector: &[&BaseLevel], boundary: usize) -> usize {
+    let Some(split_after) = selector.get(boundary) else {
+        return 0;
+    };
+    series
+        .base_window
+        .partition_point(|level| level.topo_index < split_after.topo_index)
+}
+
 /// Allocates the declared boundary-error budget across every possible recursive search.
+///
+/// The search recurses into both sides of every split it accepts, so its shape is a
+/// binary tree. Charging one search per node, the most searches any such tree can perform
+/// is one fewer than the number of minimum regimes the observations divide into: each
+/// extra search must leave a whole regime behind, and the deepest tree spends its budget
+/// peeling one regime off at a time.
 fn regime_search_alpha(selector_len: usize) -> f64 {
     let max_searches = selector_len
         .saturating_sub(noise_gates::MIN_SERIES_POINTS)
@@ -1582,6 +1619,30 @@ mod tests {
 
         assert_eq!(selection.current_start, 0);
         assert_eq!(selection.boundary_commit, None);
+    }
+
+    #[test]
+    fn an_unsupported_split_does_not_hide_an_earlier_supported_one() {
+        // The 100 -> 100.5 step is statistically real but far below the practical floor,
+        // and it sits closer to the middle than the large 90 -> 100 step, so the strongest
+        // split lands on it. Searching only later suffixes would discard the supported
+        // boundary behind it and leave the 90 observations inside the comparison range.
+        let mut base = vec![90.0; 10];
+        base.extend(std::iter::repeat_n(100.0, 30));
+        base.extend(std::iter::repeat_n(100.5, 30));
+        let one = series("earlier-supported-split", "m1", &base, 90.0);
+        let selection = select_regime(&one);
+
+        assert_eq!(selection.current_start, 10);
+        assert_eq!(selection.boundary_commit.as_deref(), Some("c10"));
+        assert!(!selection.unresolved);
+
+        let detection = find_changes(std::slice::from_ref(&one), &context(base.len()));
+        let finding = detection
+            .findings
+            .first()
+            .expect("the tip sits below every observation in the current regime");
+        assert_eq!(finding.direction, Direction::Improvement);
     }
 
     #[test]
