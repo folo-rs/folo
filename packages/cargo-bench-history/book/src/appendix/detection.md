@@ -293,6 +293,12 @@ known to follow the boundary; an interleaved reference observation whose side is
 used. If a strongly separated recent group is still too short to establish a regime, the series is
 reported as unjudged rather than compared with stale history.
 
+A base regression that was later reverted needs a second look. The point where such a stretch ends
+looks like no change at all beside the matching observations further back, so the search finishes
+by re-examining whatever follows the newest boundary it accepted, against that stretch alone.
+Without that step the reverted observations would stay in the comparison range and hide a branch
+move of the same size.
+
 {{#include generated/detection-branch-base-moved.svg}}
 
 {{#include generated/detection-branch-base-moved.md}}

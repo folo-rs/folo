@@ -995,7 +995,11 @@ comparison below. Selector observations are searched recursively for supported c
 the complete search sharing one declared selection-adjusted error budget. Each search takes the
 strongest split in the stretch it is given and then searches both sides of it, because the
 strongest split is not always a supported one and a negligible step must not conceal a large
-boundary sitting behind it. Every accepted boundary
+boundary sitting behind it. A stretch that begins and ends at the same level — a base regression
+that was later reverted, say — hides the boundary that ends it, because that boundary looks like no
+change at all when it is measured against the matching observations further back. The search
+therefore finishes by re-examining the stretch that follows the newest boundary it accepted,
+against that stretch alone, until no later boundary is left. Every accepted boundary
 must have full regimes on both sides, clear the practical relative and absolute floors, and show
 near-complete population separation. The current regime starts at the first selector observation
 known to be after the boundary; an interleaved reference observation whose side is ambiguous is

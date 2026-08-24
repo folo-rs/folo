@@ -33,10 +33,14 @@ commits.
 Selector/reference separation prevents a historical candidate from helping choose the boundary it
 is later judged against. The boundary search segments the selector lane: each search takes the
 strongest split in its segment and then recurses into both sides, keeping every split that clears
-the support gates and adopting the latest of them. Recursing into the earlier side is what makes
-the search honest, because the strongest split need not be a supported one and a negligible step
-must not discard the candidates behind it. All searches share one predeclared selection-adjusted
-error budget, sized for the deepest tree the recursion can build. A current regime starts at the
+the support gates and adopting the latest of them. Recursion continues through splits that clear
+no gate, because the strongest split need not be a supported one and a negligible step must not
+discard the candidates behind it. Segmentation alone cannot certify the boundary that ends a
+stretch whose two neighbours share a level, since that boundary is measured against the matching
+observations further back and looks like no change; a forward extension pass therefore re-searches
+the suffix starting at the newest accepted boundary until it accepts no more. All searches share
+one predeclared selection-adjusted error budget, sized for the deepest tree the recursion can build
+plus one extension round per regime it can peel off. A current regime starts at the
 first selector observation known to be after a split, leaving an interleaved reference observation
 out when its side is ambiguous. Histories too short for this separation still support the weaker
 complete-window range comparison; a strongly separated recent group too short to establish a
@@ -60,12 +64,17 @@ History mode remains the only path that produces calibrated p-values and applies
 Benjamini–Hochberg filter.
 
 History-mode change-point calibration needs the size of the later false-discovery family before
-it can choose its analytic acceptance boundary and permutation precision. Detection therefore
-begins with a serial testability prepass that builds the census and obtains its judged count.
-The same verdict also governs branch mode, including unresolved current-base regimes, so the
-census, the detector, and the verbose diagnostics stay aligned. Workers then run each judged
-series independently. The expensive statistical work remains inside the existing per-series
-worker chunks; only the cheap classification pass is serial.
+it can choose its analytic acceptance boundary and permutation precision. History detection
+therefore begins with a serial testability prepass that builds the census and obtains its judged
+count, and workers then run each judged series independently. The expensive statistical work
+remains inside the existing per-series worker chunks; only the cheap classification pass is
+serial.
+
+Branch mode needs no prepass, because a factual excursion does not depend on how many other
+series were judged. Every series goes straight into the parallel preparation chunks, and the
+census is assembled from the prepared entries after they are recombined. Both pipelines reach
+their verdicts through one shared testability definition, including unresolved current-base
+regimes, so the census, the detector, and the verbose diagnostics stay aligned.
 
 Permutation-independent magnitude and noise gates run before selection adjustment. The detector
 also fits the drift before calibration and calibrates a step only when that model fits at least as

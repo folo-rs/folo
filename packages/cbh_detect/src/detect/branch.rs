@@ -315,6 +315,7 @@ fn select_regime(series: &Series) -> RegimeSelection {
     let search_alpha = regime_search_alpha(selector.len());
     let mut boundaries = Vec::new();
     collect_supported_boundaries(series.kind, &selector, 0, search_alpha, &mut boundaries);
+    extend_current_regime(series.kind, &selector, search_alpha, &mut boundaries);
 
     // The newest supported regime is the comparison regime; every older one belongs to the
     // history the branch is no longer measured against. Ref: docs/DESIGN.md, "Branch mode".
@@ -362,11 +363,11 @@ fn select_regime(series: &Series) -> RegimeSelection {
 /// Appends every supported regime boundary in `selector`, in ascending selector-lane order.
 ///
 /// Each search locates the strongest split in its segment and then recurses into *both*
-/// sides. Recursing into the earlier side is what makes the search honest: the strongest
-/// split need not be a supported one, and a statistically real but practically negligible
-/// step must not discard the candidates sitting on either side of it. Skipping only
-/// forward would let such a step permanently hide a large earlier boundary, leaving older
-/// operating conditions inside the comparison range. Ref: docs/DESIGN.md, "Branch mode".
+/// sides, whether or not that split turned out to be a boundary. The strongest split need
+/// not be a real one, and a statistically negligible step must not discard the candidates
+/// sitting on either side of it: descending regardless is what keeps a large earlier
+/// boundary from being hidden behind a step that merely happens to sit nearer the middle.
+/// Ref: docs/DESIGN.md, "Branch mode".
 fn collect_supported_boundaries(
     kind: MetricKind,
     selector: &[&BaseLevel],
@@ -374,9 +375,72 @@ fn collect_supported_boundaries(
     search_alpha: f64,
     boundaries: &mut Vec<usize>,
 ) {
-    if selector.len() < noise_gates::MIN_SERIES_POINTS {
+    let Some(split) = strongest_split(kind, selector, search_alpha) else {
         return;
+    };
+    // A split always leaves a full regime on each side, so both halves are strictly
+    // shorter than the segment and the recursion terminates. Visiting the earlier half,
+    // then this split, then the later half appends the boundaries in ascending order.
+    let (before, after) = selector.split_at(split.index);
+    collect_supported_boundaries(kind, before, offset, search_alpha, boundaries);
+    if split.supported {
+        boundaries.push(offset.saturating_add(split.index));
     }
+    collect_supported_boundaries(
+        kind,
+        after,
+        offset.saturating_add(split.index),
+        search_alpha,
+        boundaries,
+    );
+}
+
+/// Advances the comparison regime past boundaries the segmentation could not certify.
+///
+/// A stretch that starts and ends at the same level — a base regression that was later
+/// reverted, say — hides its exit. Measured against everything that came before it, the
+/// exit's two sides have the same median and its step statistic is diluted by the matching
+/// prefix, so segmentation certifies only the entry and leaves the stretch inside the
+/// comparison range. Re-searching the suffix that begins at the newest certified boundary
+/// measures the exit against the stretch it actually ends, which is the comparison the
+/// range depends on. Ref: docs/DESIGN.md, "Branch mode".
+fn extend_current_regime(
+    kind: MetricKind,
+    selector: &[&BaseLevel],
+    search_alpha: f64,
+    boundaries: &mut Vec<usize>,
+) {
+    // Every accepted boundary leaves a whole regime behind it, so each round moves the
+    // suffix start forward by at least one minimum regime and the loop is bounded.
+    loop {
+        let start = boundaries.last().copied().unwrap_or(0);
+        let suffix = selector.get(start..).unwrap_or_default();
+        let Some(split) = strongest_split(kind, suffix, search_alpha) else {
+            return;
+        };
+        if !split.supported {
+            return;
+        }
+        boundaries.push(start.saturating_add(split.index));
+    }
+}
+
+/// The strongest split of one segment, and what the searcher concluded about it.
+struct StrongestSplit {
+    /// Where the segment divides, as an offset from its own start.
+    index: usize,
+
+    /// Whether the division is significant enough to survive the shared error budget *and*
+    /// large enough to matter, making it a regime boundary rather than a mere search step.
+    supported: bool,
+}
+
+/// Searches one segment for its strongest split, charging the search to the shared budget.
+fn strongest_split(
+    kind: MetricKind,
+    selector: &[&BaseLevel],
+    search_alpha: f64,
+) -> Option<StrongestSplit> {
     let values: Vec<f64> = selector.iter().map(|level| level.value).collect();
     let calibration = stats::SelectionCalibration {
         permutation_order_budget: NonZero::new(noise_gates::MIN_CHANGE_PERMUTATION_ORDER)
@@ -385,29 +449,15 @@ fn collect_supported_boundaries(
         accept_analytic_below: search_alpha,
         reject_at_or_above: search_alpha,
     };
-    let Some(change) =
-        stats::selection_adjusted_change_point(&values, noise_gates::MIN_REGIME, calibration)
-    else {
-        return;
-    };
-    if change.adjusted_p >= search_alpha {
-        return;
-    }
-    // A split always leaves a full regime on each side, so both halves are strictly
-    // shorter than the segment and the recursion terminates. Visiting the earlier half,
-    // then this split, then the later half appends the boundaries in ascending order.
-    let (before, after) = selector.split_at(change.index);
-    collect_supported_boundaries(kind, before, offset, search_alpha, boundaries);
-    if supported_boundary(kind, &values, change.index, change.superiority) {
-        boundaries.push(offset.saturating_add(change.index));
-    }
-    collect_supported_boundaries(
-        kind,
-        after,
-        offset.saturating_add(change.index),
-        search_alpha,
-        boundaries,
-    );
+    // A segment too short to hold a full regime on each side yields no split at all, which
+    // is what ends the recursion.
+    let change =
+        stats::selection_adjusted_change_point(&values, noise_gates::MIN_REGIME, calibration)?;
+    Some(StrongestSplit {
+        index: change.index,
+        supported: change.adjusted_p < search_alpha
+            && supported_boundary(kind, &values, change.index, change.superiority),
+    })
 }
 /// Maps a selector-lane boundary to the first base observation known to be after it.
 ///
@@ -423,20 +473,23 @@ fn base_start_after(series: &Series, selector: &[&BaseLevel], boundary: usize) -
         .partition_point(|level| level.topo_index < split_after.topo_index)
 }
 
-/// Allocates the declared boundary-error budget across every possible recursive search.
+/// Allocates the declared boundary-error budget across every possible search.
 ///
-/// The search recurses into both sides of every split it accepts, so its shape is a
-/// binary tree. Charging one search per node, the most searches any such tree can perform
-/// is one fewer than the number of minimum regimes the observations divide into: each
-/// extra search must leave a whole regime behind, and the deepest tree spends its budget
-/// peeling one regime off at a time.
+/// Boundaries are located in two stages, and either stage can place one, so the budget
+/// covers both. Segmentation recurses into both sides of every split it accepts, so its
+/// shape is a binary tree; charging one search per node, the most searches any such tree
+/// can perform is one fewer than the number of minimum regimes the observations divide
+/// into, because each extra search must leave a whole regime behind. The forward extension
+/// then searches one suffix per round, and every round but its last moves the suffix start
+/// forward by a whole regime, so it adds one search to that same count.
 fn regime_search_alpha(selector_len: usize) -> f64 {
-    let max_searches = selector_len
+    let segmentation_searches = selector_len
         .saturating_sub(noise_gates::MIN_SERIES_POINTS)
         .checked_div(noise_gates::MIN_REGIME)
         .unwrap_or(0)
         .saturating_add(1);
-    noise_gates::MAX_BRANCH_REGIME_CHANCE_LEVEL / count_to_f64(max_searches.max(1))
+    let max_searches = segmentation_searches.saturating_mul(2).saturating_add(1);
+    noise_gates::MAX_BRANCH_REGIME_CHANCE_LEVEL / count_to_f64(max_searches)
 }
 
 fn supported_boundary(kind: MetricKind, values: &[f64], split: usize, superiority: f64) -> bool {
@@ -1545,14 +1598,20 @@ mod tests {
     }
 
     #[test]
-    fn regime_search_budget_is_shared_across_recursive_searches() {
+    fn regime_search_budget_is_shared_across_every_search() {
+        // Forty selector observations divide into eight minimum regimes, so segmentation can
+        // perform seven searches and the forward extension eight, and the budget covers all
+        // fifteen.
         assert_eq!(
             regime_search_alpha(40),
-            noise_gates::MAX_BRANCH_REGIME_CHANCE_LEVEL / 7.0
+            noise_gates::MAX_BRANCH_REGIME_CHANCE_LEVEL / 15.0
         );
+        // The shortest searchable lane holds two minimum regimes: one segmentation search,
+        // and an extension round for the boundary it may place plus the round that finds the
+        // remaining half too short to divide.
         assert_eq!(
             regime_search_alpha(noise_gates::MIN_SERIES_POINTS),
-            noise_gates::MAX_BRANCH_REGIME_CHANCE_LEVEL
+            noise_gates::MAX_BRANCH_REGIME_CHANCE_LEVEL / 3.0
         );
     }
 
@@ -1672,6 +1731,32 @@ mod tests {
         assert_eq!(selection.current_start, 40);
         assert_eq!(selection.boundary_commit.as_deref(), Some("c40"));
         assert!(!selection.unresolved);
+    }
+
+    #[test]
+    fn a_reverted_base_regression_does_not_stay_inside_the_comparison_range() {
+        // The base stepped up and then back down, so the strongest split of the whole lane
+        // is the step back down - and measured against everything before it, both of its
+        // sides have the same median. Segmentation can only certify the step up; the
+        // forward extension has to certify the step back down against the raised stretch
+        // it ends, or the raised observations stay inside the comparison range.
+        let mut base = vec![100.0; 50];
+        base.extend(std::iter::repeat_n(200.0, 10));
+        base.extend(std::iter::repeat_n(100.0, 68));
+        let one = series("reverted-base-regression", "m1", &base, 150.0);
+        let selection = select_regime(&one);
+
+        assert_eq!(selection.current_start, 60);
+        assert_eq!(selection.boundary_commit.as_deref(), Some("c60"));
+        assert_eq!(selection.previous_range, Some((200.0, 200.0)));
+        assert!(!selection.unresolved);
+
+        let detection = find_changes(std::slice::from_ref(&one), &context(base.len()));
+        let finding = detection
+            .findings
+            .first()
+            .expect("the tip sits above every observation in the current regime");
+        assert_eq!(finding.direction, Direction::Regression);
     }
 
     #[test]

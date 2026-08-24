@@ -27,7 +27,7 @@ Analyzed project folo (branch mode)
 callgrind/x86_64-unknown-linux-gnu/a1b2c3d4e5f60718
   runs: 218  regressions: 1  improvements: 1
   filter: --engine callgrind --target-triple x86_64-unknown-linux-gnu --machine-key a1b2c3d4e5f60718
-  2 of 40 comparable base commits showed at least as much out-of-range movement as this branch (2 series compared).
+  2 of 10 comparable base commits showed at least as much out-of-range movement as this branch (2 series compared).
 
 many_cpus/hardware_info/query
   113 instruction_count - higher than all 20 current-base observations
