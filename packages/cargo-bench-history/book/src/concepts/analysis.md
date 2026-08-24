@@ -6,7 +6,7 @@ that are real and stay silent on measurement jitter. Because
 [no engine is deterministic](engines.md#why-no-engine-is-deterministic), the detector treats
 every metric as noisy and never trusts a value as exact.
 
-## Two finding methods
+## History finding methods
 
 History mode evaluates two finding methods for each series, and the resulting findings are
 ranked together by descending relative move:
@@ -55,7 +55,7 @@ on a move that is noise at its scale.
 > metric. The [Noise gates](../appendix/gates.md) appendix chapter walks every one of them, with
 > the current values and worked examples.
 
-## Judging a context commit
+## Branch excursion method
 
 [Branch mode](#analysis-modes) asks a different question from history mode — not "did this
 series change somewhere" but "is this context commit outside every value recently observed in

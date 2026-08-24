@@ -1,14 +1,20 @@
 # Multiplicity and coverage
 
-A gate-passing candidate has cleared every check that looks at it *individually*. History
+A gate-passing result has cleared every check that looks at its series *individually*. History
 detection has also corrected for choices made within that series, such as searching across
-possible change points. One question remains, and no amount of scrutiny of a single series can
-answer it:
+possible change points. Each mode then asks a different report-wide question:
 
-**Given how many things were tested, should we believe this one?**
+- **History:** given how many series were tested, does this candidate survive the group-wide
+  false-discovery correction?
+- **Branch:** among the comparable base-history arrangements, how many showed at least as much
+  out-of-range movement as this branch?
 
-This chapter is that question and its consequence — the report's account of what it actually
-covered.
+The history answer decides whether the candidate is reported. The branch answer is finite
+historical context for an excursion that has already been established from the observed
+current-base range; it never suppresses that factual excursion.
+
+This chapter explains those questions and their consequence — the report's account of what it
+actually covered.
 
 ## Terms used here
 

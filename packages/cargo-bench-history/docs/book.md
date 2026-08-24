@@ -127,12 +127,12 @@ the commands that exercise them and down into the appendix for mechanism.
 #### Analysis
 
 - **Goal**: how findings are produced with high signal-to-noise.
-- **Teach**: the two finding methods (change-point step vs. monotonic drift) and how one wins per
-  series; the noise-aware gates and the practical-magnitude floor (relative *and* absolute, on
-  every metric) and what they are *not* for (tenet 2); how branch mode judges the *tip commit*
-  against the observed current-base range and compares the whole report with historical base
-  turns; that a finding carries no confidence score; the history false-discovery family being
-  every judged history series; the two
+- **Teach**: history's two finding methods (change-point step vs. monotonic drift) and how one wins
+  per series; branch excursion as a separate method that judges the *tip commit* against the
+  observed current-base range; the noise-aware gates and the practical-magnitude floor (relative
+  *and* absolute, on every metric) and what they are *not* for (tenet 2); how branch mode compares
+  the whole report with historical base turns; that a finding carries no confidence score; the
+  history false-discovery family being every judged history series; the two
   auto-selected modes (tenet 7); full-history vs. bounded baseline-and-tip charts; re-baselining
   via blessings; the three report formats sharing one pass and the
   advisory-finding / JSON-is-the-signal split (tenet 6); no severity classification.
