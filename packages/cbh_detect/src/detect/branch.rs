@@ -315,7 +315,6 @@ fn select_regime(series: &Series) -> RegimeSelection {
     let search_alpha = regime_search_alpha(selector.len());
     let mut boundaries = Vec::new();
     collect_supported_boundaries(series.kind, &selector, 0, search_alpha, &mut boundaries);
-    boundaries.sort_unstable();
 
     // The newest supported regime is the comparison regime; every older one belongs to the
     // history the branch is no longer measured against. Ref: docs/DESIGN.md, "Branch mode".
@@ -360,7 +359,7 @@ fn select_regime(series: &Series) -> RegimeSelection {
     }
 }
 
-/// Collects every supported regime boundary in `selector`, as selector-lane indices.
+/// Appends every supported regime boundary in `selector`, in ascending selector-lane order.
 ///
 /// Each search locates the strongest split in its segment and then recurses into *both*
 /// sides. Recursing into the earlier side is what makes the search honest: the strongest
@@ -394,13 +393,14 @@ fn collect_supported_boundaries(
     if change.adjusted_p >= search_alpha {
         return;
     }
+    // A split always leaves a full regime on each side, so both halves are strictly
+    // shorter than the segment and the recursion terminates. Visiting the earlier half,
+    // then this split, then the later half appends the boundaries in ascending order.
+    let (before, after) = selector.split_at(change.index);
+    collect_supported_boundaries(kind, before, offset, search_alpha, boundaries);
     if supported_boundary(kind, &values, change.index, change.superiority) {
         boundaries.push(offset.saturating_add(change.index));
     }
-    // A split always leaves a full regime on each side, so both halves are strictly
-    // shorter than the segment and the recursion terminates.
-    let (before, after) = selector.split_at(change.index);
-    collect_supported_boundaries(kind, before, offset, search_alpha, boundaries);
     collect_supported_boundaries(
         kind,
         after,
@@ -409,7 +409,6 @@ fn collect_supported_boundaries(
         boundaries,
     );
 }
-
 /// Maps a selector-lane boundary to the first base observation known to be after it.
 ///
 /// A reference-lane commit can sit between the selector observations on either side of
@@ -1619,6 +1618,23 @@ mod tests {
 
         assert_eq!(selection.current_start, 0);
         assert_eq!(selection.boundary_commit, None);
+    }
+
+    #[test]
+    fn the_newest_of_several_supported_boundaries_becomes_the_comparison_regime() {
+        // Three supported steps. The search finds the middle one first and reaches the
+        // outer two by recursing into both of its sides, so the boundaries must still come
+        // out in chronological order for the newest to win.
+        let mut base = vec![10_000.0; 20];
+        base.extend(std::iter::repeat_n(11_000.0, 20));
+        base.extend(std::iter::repeat_n(30_000.0, 20));
+        base.extend(std::iter::repeat_n(33_000.0, 20));
+        let one = series("several-supported-splits", "m1", &base, 40_000.0);
+        let selection = select_regime(&one);
+
+        assert_eq!(selection.current_start, 60);
+        assert_eq!(selection.boundary_commit.as_deref(), Some("c60"));
+        assert_eq!(selection.previous_range, Some((30_000.0, 30_000.0)));
     }
 
     #[test]
