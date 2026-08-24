@@ -1,5 +1,5 @@
 use std::any::type_name;
-#[cfg(debug_assertions)]
+#[cfg(all(test, debug_assertions))]
 use std::backtrace::Backtrace;
 use std::cell::UnsafeCell;
 use std::fmt;
@@ -9,7 +9,7 @@ use std::mem::{MaybeUninit, offset_of};
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
-#[cfg(any(debug_assertions, test))]
+#[cfg(test)]
 use std::sync::Arc;
 #[cfg(any(debug_assertions, test))]
 use std::sync::Mutex;
@@ -21,7 +21,7 @@ use crate::NEVER_POISONED;
 #[cfg(debug_assertions)]
 use crate::{BacktraceType, capture_backtrace};
 use crate::{
-    BoxedReceiver, BoxedRef, BoxedSender, Disconnected, EVENT_AWAITING, EVENT_BOUND,
+    BoxedReceiver, BoxedRef, BoxedSender, Cancellation, Disconnected, EVENT_AWAITING, EVENT_BOUND,
     EVENT_DISCONNECTED, EVENT_SET, EVENT_SIGNALING, EmbeddedEvent, PtrRef, RawReceiver, RawSender,
     ReceiverCore, SenderCore,
 };
@@ -39,6 +39,10 @@ use crate::{
 /// is likewise user-supplied code. Such a callback may operate on the sender endpoint of the event
 /// being polled: it may send a value and it may drop the sender. The poll observes the resulting
 /// state.
+///
+/// Destruction of a registered waker or discarded payload may also run arbitrary user code. The
+/// event completes any endpoint and storage cleanup that must survive unwinding before invoking
+/// such a destructor.
 pub struct Event<T> {
     /// The logical state of the event; see constants in `state.rs`.
     pub(crate) state: AtomicU8,
@@ -94,8 +98,8 @@ pub struct Event<T> {
 //   and leave another endpoint waiting for a transition that will not come.
 // * User-controlled code that can unwind - waker clones, wakes, waker drops and payload drops -
 //   therefore always runs where state and storage agree, so a caught panic leaves an event that
-//   the remaining endpoint can still complete or clean up. The worst outcome is that the event
-//   storage is leaked, which is safe. The unwinding regression tests exercise this.
+//   the remaining endpoint can still complete or clean up. The unwinding regression tests exercise
+//   this.
 impl<T: Send + 'static> UnwindSafe for Event<T> {}
 impl<T: Send + 'static> RefUnwindSafe for Event<T> {}
 
@@ -274,17 +278,30 @@ where
         (RawSender::new(sender_core), RawReceiver::new(receiver_core))
     }
 
-    /// Returns a snapshot of the backtrace of the most recent awaiter of this event,
-    /// if there has been an awaiter and if backtrace capturing is enabled.
+    /// Returns the address of this event's type-independent diagnostic cell.
     ///
-    /// This method is only available in debug builds (`cfg(debug_assertions)`).
-    /// For any data to be present, `RUST_BACKTRACE=1` or `RUST_LIB_BACKTRACE=1` must be set.
+    /// # Safety
     ///
-    /// The snapshot is a shared owner of the backtrace and remains valid even if the event is
-    /// released afterwards. Callers that want to hand a backtrace to user code must take a
-    /// snapshot instead of inspecting the event under its lock, so that no lock is held while
-    /// user code runs.
+    /// `event` must point to an initialized event at a stable address. Until the returned pointer
+    /// is discarded, the event must remain alive at that address and no exclusive reference to it
+    /// may exist.
     #[cfg(debug_assertions)]
+    pub(crate) unsafe fn awaiter_backtrace_cell(
+        event: NonNull<UnsafeCell<Self>>,
+    ) -> NonNull<Mutex<Option<BacktraceType>>> {
+        // SAFETY: The caller guarantees validity, initialization and shared-only aliasing for the
+        // event. `UnsafeCell` permits this shared access to its initialized contents.
+        let event_cell = unsafe { event.as_ref() };
+
+        // SAFETY: The same caller guarantee excludes an exclusive reference while this shared
+        // reference exists, and the event outlives this function call.
+        let event = unsafe { &*event_cell.get() };
+
+        NonNull::from(&event.backtrace)
+    }
+
+    /// Returns a snapshot of the most recent awaiter backtrace.
+    #[cfg(all(test, debug_assertions))]
     pub(crate) fn awaiter_backtrace(&self) -> Option<Arc<Backtrace>> {
         let backtrace = self.backtrace.lock().expect(NEVER_POISONED);
 
@@ -311,10 +328,10 @@ where
 
     /// Sets the value of the event and notifies the receiver's awaiter, if there is one.
     ///
-    /// Returns `Err` if the receiver has already disconnected and the caller must clean up the
-    /// event now.
+    /// Returns the payload to the caller if the receiver has already disconnected. The caller
+    /// owns cleanup in that case and must release the event before dropping the payload.
     #[inline]
-    pub(crate) fn set(event_cell: &UnsafeCell<Self>, value: T) -> Result<(), Disconnected> {
+    pub(crate) fn set(event_cell: &UnsafeCell<Self>, value: T) -> Result<(), T> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
         // still exist because something was able to call this method.
@@ -404,15 +421,14 @@ where
             }
             EVENT_DISCONNECTED => {
                 // The receiver has already been dropped, so we need to clean up the event.
-                // We have to first drop the value that we inserted into the event, though.
+                // Move the value back to the sender core so it can release the event before the
+                // payload destructor invokes user code.
 
                 // SAFETY: The receiver is gone - there is nobody else who might be touching
                 // the event anymore, we are essentially in a single-threaded mode now.
                 // We also just inserted the value, so it must still be there because we never
                 // entered a state where the receiver had the permission to extract the value.
-                unsafe {
-                    event.destroy_value();
-                }
+                let value = unsafe { event.take_value() };
 
                 // Before it is safe to destroy the event, we need to synchronize with whatever
                 // writes the receiver may have done into its state (e.g. it may have removed
@@ -420,7 +436,7 @@ where
                 atomic::fence(atomic::Ordering::Acquire);
 
                 // The sender (the caller) needs to clean up the event.
-                Err(Disconnected)
+                Err(value)
             }
             // Defensive: state machine guarantees this is unreachable.
             _ => {
@@ -833,8 +849,49 @@ where
         )
     }
 
-    /// Attempts to obtain the value from the event, if one has been sent, while indicating
-    /// that no further polls will be performed by the receiver.
+    /// Extracts the terminal result after the receiver has observed a completed event.
+    ///
+    /// The receiver owns event cleanup after either result.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the event is not in a terminal state.
+    // Callgrind and disassembly show that terminal extraction must remain inline with
+    // `into_value()` to keep cancellation machinery off that hot path.
+    #[inline]
+    pub(crate) fn take_result(event_cell: &UnsafeCell<Self>) -> Result<T, Disconnected> {
+        // SAFETY: The event reference contract guarantees shared access through this outer
+        // UnsafeCell for as long as the receiver still owns its endpoint reference.
+        let event = unsafe { &*event_cell.get() };
+
+        #[cfg(debug_assertions)]
+        event
+            .backtrace
+            .lock()
+            .expect(NEVER_POISONED)
+            .replace(capture_backtrace());
+
+        // Terminal states are stable, so no sender can race this exchange. AcqRel both acquires
+        // the sender's payload/disconnection writes and publishes receiver cleanup.
+        let previous_state = event
+            .state
+            .swap(EVENT_DISCONNECTED, atomic::Ordering::AcqRel);
+
+        match previous_state {
+            EVENT_SET => {
+                // SAFETY: EVENT_SET guarantees that the payload is initialized and that this
+                // receiver acquired its synchronization block through the exchange above.
+                Ok(unsafe { event.take_value() })
+            }
+            EVENT_DISCONNECTED => Err(Disconnected),
+            // Defensive: the caller must have observed a terminal state.
+            _ => {
+                unreachable!("invalid {} state: {previous_state}", type_name::<Self>());
+            }
+        }
+    }
+
+    /// Cancels the receiver, returning the final event observation and any deferred callback.
     ///
     /// Returns `Ok(None)` if the sender has not yet sent a value. In this case, the sender will
     /// eventually clean up the event.
@@ -843,7 +900,7 @@ where
     /// Returns `Err` if the sender has already disconnected without sending a value.
     /// In both of these cases, the receiver must clean up the event now.
     #[inline]
-    pub(crate) fn final_poll(event_cell: &UnsafeCell<Self>) -> Result<Option<T>, Disconnected> {
+    pub(crate) fn cancel(event_cell: &UnsafeCell<Self>) -> Cancellation<T> {
         // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
         // The event lives until both sender and receiver are dropped or inert, so we know it must
         // still exist because something was able to call this method.
@@ -858,13 +915,12 @@ where
             .expect(NEVER_POISONED)
             .replace(capture_backtrace());
 
-        // The receiver (who is calling this) may still own the waker if the waker has not
-        // been used. If this is the case, we need to destroy the waker before proceeding.
-        // This is only the case if we are in the AWAITING state - in all other states, we
-        // either do not have a waker or the sender will destroy it.
+        // The receiver may still own the waker if the waker has not been used. If this is the case,
+        // move it out and defer its destruction until the state handoff and any storage release
+        // have completed.
         // We implement this check by attempting to revert ourselves back to the BOUND state.
-        // If successful, we know we were in AWAITING and can destroy the waker.
-        if event
+        // If successful, we know we were in AWAITING and can extract the waker.
+        let awaiter = if event
             .state
             .compare_exchange(
                 EVENT_AWAITING,
@@ -877,10 +933,10 @@ where
             // SAFETY: The `awaiter` is guaranteed to be present because we just came from
             // `EVENT_AWAITING`. The sender will only touch the awaiter in `EVENT_SIGNALING`,
             // which never entered. Therefore, we are the only one who can touch the awaiter now.
-            unsafe {
-                event.destroy_awaiter();
-            }
-        }
+            Some(unsafe { event.take_awaiter() })
+        } else {
+            None
+        };
 
         // We must transition the event into DISCONNECTED, but we cannot do so while the
         // sender is in the middle of a SIGNALING transition — writing DISCONNECTED via swap
@@ -917,7 +973,7 @@ where
             }
         };
 
-        match previous_state {
+        let result = match previous_state {
             EVENT_BOUND => {
                 // The sender had not yet set any value. It will clean up the event later.
                 Ok(None)
@@ -949,7 +1005,28 @@ where
                     type_name::<Self>()
                 );
             }
+        };
+
+        Cancellation {
+            result,
+            _awaiter: awaiter,
         }
+    }
+
+    /// Extracts the waker registered in `awaiter`, leaving that cell uninitialized.
+    ///
+    /// # Safety
+    ///
+    /// The caller must have acquired the synchronization block for `awaiter` and `awaiter` must
+    /// hold an initialized waker.
+    unsafe fn take_awaiter(&self) -> Waker {
+        // SAFETY: Forwarding guarantees from the caller.
+        let awaiter_cell_maybe = unsafe { self.awaiter.get().as_mut() };
+        // SAFETY: UnsafeCell pointer is never null.
+        let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
+
+        // SAFETY: Forwarding guarantees from the caller.
+        unsafe { awaiter_cell.assume_init_read() }
     }
 
     /// Drops the waker registered in `awaiter`, leaving that cell uninitialized.
@@ -960,32 +1037,23 @@ where
     /// hold an initialized waker.
     unsafe fn destroy_awaiter(&self) {
         // SAFETY: Forwarding guarantees from the caller.
-        let awaiter_cell_maybe = unsafe { self.awaiter.get().as_mut() };
-        // SAFETY: UnsafeCell pointer is never null.
-        let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
-
-        // SAFETY: Forwarding guarantees from the caller.
-        unsafe {
-            awaiter_cell.assume_init_drop();
-        }
+        drop(unsafe { self.take_awaiter() });
     }
 
-    /// Drops the payload stored in `value`, leaving that cell uninitialized.
+    /// Extracts the payload stored in `value`, leaving that cell uninitialized.
     ///
     /// # Safety
     ///
     /// The caller must have acquired the synchronization block for `value` and `value` must hold
     /// an initialized payload.
-    unsafe fn destroy_value(&self) {
+    unsafe fn take_value(&self) -> T {
         // SAFETY: Forwarding guarantees from the caller.
         let value_cell_maybe = unsafe { self.value.get().as_mut() };
         // SAFETY: UnsafeCell pointer is never null.
         let value_cell = unsafe { value_cell_maybe.unwrap_unchecked() };
 
         // SAFETY: Forwarding guarantees from the caller.
-        unsafe {
-            value_cell.assume_init_drop();
-        }
+        unsafe { value_cell.assume_init_read() }
     }
 }
 

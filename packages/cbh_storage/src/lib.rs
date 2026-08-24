@@ -1,6 +1,6 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![doc(hidden)]
+#![cfg_attr(docsrs, doc(hidden))]
 #![expect(
     clippy::exhaustive_enums,
     reason = "this crate's `pub` items form an internal handoff boundary between the \

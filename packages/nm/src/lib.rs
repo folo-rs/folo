@@ -4,18 +4,18 @@
 //! # nm - nanometer
 //!
 //! Collect metrics about observed events with low overhead even in
-//! highly multithreaded applications running on 100+ processors.
+//! highly multithreaded applications running on more than 100 logical processors.
 //!
-//! Using arbitrary development hardware, we measure between 2 and 20 nanoseconds per
-//! observation, depending on how the event is configured. Benchmarks are included.
+//! Included benchmarks have measured between 2 and 20 nanoseconds per observation,
+//! depending on event configuration. Results vary by hardware.
 //!
 //! # Collected metrics
 //!
-//! For each defined event, the following metrics are collected:
+//! Each defined event collects:
 //!
 //! * Count of observations (`u64`).
 //! * Mean magnitude of observations (`i64`).
-//! * (Optional) Histogram of magnitudes, with configurable bucket boundaries (`[i64]`).
+//! * An optional histogram of magnitudes with configurable bucket boundaries (`[i64]`).
 //!
 //! # Defining events
 //!
@@ -37,15 +37,15 @@
 //!
 //! Recommended event name format: `big_medium_small_units`.
 //!
-//! The above two events are merely counters, so there are no units in the name.
+//! These counter events have no magnitude unit to include in their names.
 //!
-//! When only an event name is provided to the builder, only the count and mean magnitude of
-//! observations will be recorded. If you want to capture more information about the distribution
-//! of event magnitudes, you must specify the histogram buckets to use.
+//! When only an event name is provided, the event records its count and mean magnitude.
+//! Configure histogram buckets to also capture the magnitude distribution.
 //!
 //! ```
 //! use nm::{Event, Magnitude};
 //!
+//! // Broad ranges keep the example readable while covering typical package weights.
 //! const PACKAGE_WEIGHT_GRAMS_BUCKETS: &[Magnitude] = &[0, 100, 200, 500, 1000, 2000, 5000, 10000];
 //!
 //! thread_local! {
@@ -61,52 +61,120 @@
 //! }
 //! ```
 //!
-//! Choose the bucket boundaries based on the expected distribution of magnitudes.
+//! Choose bucket boundaries that distinguish the ranges relevant to the workload.
 //!
 //! # Capturing observations
 //!
-//! To capture an observation, call `observe()` on the event.
-//! Different variants of this method are provided to capture observations with different
-//! characteristics:
+//! Use [`Event::observe()`] when each occurrence has a meaningful magnitude:
 //!
 //! ```
 //! # use nm::{Event, Magnitude};
 //! #
-//! # const PACKAGE_WEIGHT_GRAMS_BUCKETS: &[Magnitude] = &[0, 100, 200, 500, 1000, 2000, 5000, 10000];
+//! # const PACKAGE_WEIGHT_GRAMS_BUCKETS: &[Magnitude] =
+//! #     &[0, 100, 200, 500, 1000, 2000, 5000, 10000];
 //! #
 //! # thread_local! {
-//! #     static PACKAGES_RECEIVED: Event = Event::builder()
-//! #         .name("packages_received")
-//! #         .build();
-//! #
 //! #     static PACKAGES_RECEIVED_WEIGHT_GRAMS: Event = Event::builder()
 //! #         .name("packages_received_weight_grams")
 //! #         .histogram(PACKAGE_WEIGHT_GRAMS_BUCKETS)
 //! #         .build();
-//! #
-//! #     static PACKAGE_SEND_DURATION_MS: Event = Event::builder()
-//! #         .name("package_send_duration_ms")
-//! #         .build();
 //! # }
+//!
+//! // This sample falls within the configured histogram and is easy to locate in a report.
+//! const SAMPLE_PACKAGE_WEIGHT_GRAMS: Magnitude = 900;
+//!
+//! PACKAGES_RECEIVED_WEIGHT_GRAMS.with(|event| event.observe(SAMPLE_PACKAGE_WEIGHT_GRAMS));
+//! ```
+//!
+//! Use [`Event::observe_once()`] for occurrences without a meaningful magnitude:
+//!
+//! ```
+//! use nm::Event;
+//!
+//! thread_local! {
+//!     static PACKAGES_RECEIVED: Event = Event::builder()
+//!         .name("packages_received")
+//!         .build();
+//! }
+//!
+//! PACKAGES_RECEIVED.with(Event::observe_once);
+//! ```
+//!
+//! Use [`Event::observe_millis()`] to convert a duration into a millisecond magnitude:
+//!
+//! ```
 //! use std::time::Duration;
 //!
-//! // observe(x) observes an event with a magnitude of `x`.
-//! PACKAGES_RECEIVED_WEIGHT_GRAMS.with(|e| e.observe(900));
+//! use nm::Event;
 //!
-//! // observe_once() observes an event with a nominal magnitude of 1, to clearly express that
-//! // this event has no concept of magnitude and we use 1 as a nominal placeholder.
-//! PACKAGES_RECEIVED.with(|e| e.observe_once());
+//! thread_local! {
+//!     static PACKAGE_SEND_DURATION_MS: Event = Event::builder()
+//!         .name("package_send_duration_ms")
+//!         .build();
+//! }
 //!
-//! // observe_millis(x) observes an event with a magnitude of `x` in milliseconds while
-//! // ensuring that any data type conversions respect the crate panic and mathematics policies.
+//! // A nonzero sample makes the converted magnitude visible in a report.
 //! let send_duration = Duration::from_millis(150);
-//! PACKAGE_SEND_DURATION_MS.with(|e| e.observe_millis(send_duration));
+//! PACKAGE_SEND_DURATION_MS.with(|event| event.observe_millis(send_duration));
+//! ```
 //!
-//! // batch(count) allows you to observe `count` occurrences in one call,
-//! // each with the same magnitude, for greater efficiency in batch operations.
-//! PACKAGES_RECEIVED_WEIGHT_GRAMS.with(|e| e.batch(500).observe(8));
-//! PACKAGES_RECEIVED.with(|e| e.batch(500).observe_once());
-//! PACKAGE_SEND_DURATION_MS.with(|e| e.batch(500).observe_millis(send_duration));
+//! Use [`Event::batch()`] to record occurrences with a common magnitude in one call:
+//!
+//! ```
+//! use nm::{Event, Magnitude};
+//!
+//! thread_local! {
+//!     static PACKAGES_RECEIVED_WEIGHT_GRAMS: Event = Event::builder()
+//!         .name("packages_received_weight_grams")
+//!         .build();
+//! }
+//!
+//! // A multi-item workload demonstrates that one call records the complete batch.
+//! const BATCH_SIZE: usize = 500;
+//! // This sample is straightforward to locate in a report.
+//! const SAMPLE_PACKAGE_WEIGHT_GRAMS: Magnitude = 900;
+//!
+//! PACKAGES_RECEIVED_WEIGHT_GRAMS.with(|event| {
+//!     event.batch(BATCH_SIZE).observe(SAMPLE_PACKAGE_WEIGHT_GRAMS);
+//! });
+//! ```
+//!
+//! A batch can represent repeated occurrences without meaningful magnitudes:
+//!
+//! ```
+//! use nm::Event;
+//!
+//! thread_local! {
+//!     static PACKAGES_RECEIVED: Event = Event::builder()
+//!         .name("packages_received")
+//!         .build();
+//! }
+//!
+//! // A multi-item workload demonstrates that one call records the complete batch.
+//! const BATCH_SIZE: usize = 500;
+//!
+//! PACKAGES_RECEIVED.with(|event| event.batch(BATCH_SIZE).observe_once());
+//! ```
+//!
+//! A batch can also represent repeated occurrences with a common duration:
+//!
+//! ```
+//! use std::time::Duration;
+//!
+//! use nm::Event;
+//!
+//! thread_local! {
+//!     static PACKAGE_SEND_DURATION_MS: Event = Event::builder()
+//!         .name("package_send_duration_ms")
+//!         .build();
+//! }
+//!
+//! // A multi-item workload demonstrates that one call records the complete batch.
+//! const BATCH_SIZE: usize = 500;
+//! // A nonzero sample makes the converted magnitude visible in a report.
+//! let send_duration = Duration::from_millis(150);
+//!
+//! PACKAGE_SEND_DURATION_MS.with(|event| event.batch(BATCH_SIZE).observe_millis(send_duration));
 //! ```
 //!
 //! ## Observing durations of operations
@@ -116,6 +184,7 @@
 //! ```
 //! use nm::{Event, Magnitude};
 //!
+//! // Fine lower ranges and broader upper ranges illustrate latency-oriented boundaries.
 //! const CONNECT_TIME_MS_BUCKETS: &[Magnitude] = &[0, 10, 20, 50, 100, 200, 500, 1000];
 //!
 //! thread_local! {
@@ -126,11 +195,7 @@
 //! }
 //!
 //! pub fn http_connect() {
-//!     CONNECT_TIME_MS.with(|e| {
-//!         e.observe_duration_millis(|| {
-//!             do_http_connect();
-//!         })
-//!     });
+//!     CONNECT_TIME_MS.with(|event| event.observe_duration_millis(do_http_connect));
 //! }
 //! # http_connect();
 //! # fn do_http_connect() {}
@@ -140,10 +205,8 @@
 //! clock optimized for high-frequency capture. The measurement has a granularity of
 //! roughly 1-20 ms. Durations shorter than the granularity may appear as zero.
 //!
-//! It is not practical to measure the duration of individual operations at a finer level of
-//! precision because the measurement overhead becomes prohibitive. If you are observing
-//! operations that last nanoseconds or microseconds, you should only measure them in
-//! aggregate (e.g. duration per batch of 10000).
+//! Measuring individual nanosecond- or microsecond-scale operations would add prohibitive
+//! overhead. Measure such operations in sufficiently large batches instead.
 //!
 //! # Reporting to terminal
 //!
@@ -159,8 +222,8 @@
 //!
 //! # Reporting to external systems
 //!
-//! A report can be inspected to extract the data within and deliver it to an external system,
-//! such as an OpenTelemetry exporter for storage in a metrics database.
+//! Inspect a report to export its data to an external system, such as an OpenTelemetry
+//! metrics backend.
 //!
 //! ```
 //! use nm::Report;
@@ -169,7 +232,7 @@
 //!
 //! for event in report.events() {
 //!     println!(
-//!         "Event {} has occurred {} times with a total magnitude of {}",
+//!         "Event {}: count {}, total magnitude {}",
 //!         event.name(),
 //!         event.count(),
 //!         event.sum()
@@ -177,92 +240,81 @@
 //! }
 //! ```
 //!
-//! Note that the report accumulates data from the start of the process. This means the
-//! data does not reset between reports. If you only want to record differences, you need
-//! to account for the previous state of the event yourself.
+//! Reports accumulate data from the start of the process and do not reset event metrics.
+//! An exporter that needs interval metrics computes differences from its previous report.
 //!
-//! # Minimizing overhead by on-demand publishing
+//! # Publishing models
 //!
-//! The ultimate goal of the metrics collected by an [`Event`] is to end up in a [`Report`].
+//! Event metrics reach reports through a pull or push publishing model:
 //!
-//! There are two models by which this can happen:
+//! - **Pull publishing:** A report reads the latest metrics from each event. This is the
+//!   default and requires no explicit publication.
+//! - **Push publishing:** An event records metrics in a thread-local [`MetricsPusher`].
+//!   Calling [`MetricsPusher::push()`] publishes them for subsequent reports.
 //!
-//! - **Pull** model - the reporting system queries each event in the process for its latest data
-//!   set when generating a report. This is the default and requires no action from you.
-//! - **Push** model - data from an event only flows to a thread-local [`MetricsPusher`], which
-//!   publishes the data into the reporting system on demand. This requires you to periodically
-//!   trigger the publishing via [`MetricsPusher::push()`][MetricsPusher::push].
-//!
-//! The push model has lower measurement overhead due to a more optimal internal data layout
-//! but requires action from you to ensure that data is published. If you never push the data,
-//! it will never show up in a report.
-//!
-//! The previous examples all use the default pull model. Here is an example with the push model:
+//! Push publishing can lower observation overhead, but metrics remain absent from reports until
+//! the observing thread publishes them. The following example shows report contents at each stage:
 //!
 //! ```
-//! use nm::{Event, MetricsPusher, Push};
+//! use nm::{Event, MetricsPusher, Push, Report};
 //!
 //! thread_local! {
 //!     static HTTP_EVENTS_PUSHER: MetricsPusher = MetricsPusher::new();
 //!
-//!     static CONNECT_TIME_MS: Event<Push> = Event::builder()
-//!         .name("net_http_connect_time_ms")
+//!     static HTTP_CONNECTIONS: Event<Push> = Event::builder()
+//!         .name("net_http_connections")
 //!         .pusher_local(&HTTP_EVENTS_PUSHER)
 //!         .build();
 //! }
 //!
-//! pub fn http_connect() {
-//!     CONNECT_TIME_MS.with(|e| {
-//!         e.observe_duration_millis(|| {
-//!             do_http_connect();
-//!         })
-//!     });
-//! }
+//! let before_observation = Report::collect();
+//! println!("Before observation:");
+//! print!("{before_observation}");
 //!
-//! loop {
-//!     http_connect();
+//! HTTP_CONNECTIONS.with(Event::observe_once);
 //!
-//!     // Periodically push the data to the reporting system.
-//!     if is_time_to_push() {
-//!         HTTP_EVENTS_PUSHER.with(MetricsPusher::push);
-//!     }
-//!     # break; // Avoid infinite loop when running example.
-//! }
-//! # fn do_http_connect() {}
-//! # fn is_time_to_push() -> bool { true }
+//! let before_publication = Report::collect();
+//! println!("After observation, before publication:");
+//! print!("{before_publication}");
+//!
+//! HTTP_EVENTS_PUSHER.with(MetricsPusher::push);
+//!
+//! let after_publication = Report::collect();
+//! println!("After publication:");
+//! print!("{after_publication}");
 //! ```
 //!
-//! You should consider using the push model when an event is only used under controlled conditions
-//! where you are certain that every thread that will be observing an event is guaranteed to call
-//! [`MetricsPusher::push()`][MetricsPusher::push] at some point.
+//! Use push publishing only when every observing thread reliably calls
+//! [`MetricsPusher::push()`].
 //!
-//! The choice of publishing model can be made separately for each event.
+//! Choose the publishing model independently for each event.
 //!
 //! # Dynamically registered events
 //!
-//! It is not strictly required to define events as thread-local statics. You can also create
-//! instances of `Event` on the fly using the same `Event::builder()` mechanism. This can be useful
-//! if you do not know at compile time which events you will need, such as when creating one event
-//! per item defined in a configuration file.
+//! Events may also be constructed at runtime with [`Event::builder()`]. This supports cases where
+//! event names are not known at compile time, such as events derived from configuration entries.
 //!
-//! Note, however, that each event (each unique event name) can only be registered once per thread.
-//! Any attempt to register an event two times with the same name on the same thread will result
-//! in a panic.
+//! Each unique event name can be registered only once per thread. Registering the same name again
+//! on that thread panics.
 //!
 //! # Panic policy
 //!
-//! This crate may panic when registering events if an invalid configuration
-//! is supplied for the event.
+//! Registering an event with an invalid configuration may panic.
 //!
-//! This crate will not panic for "mathematical" reasons during observation of events,
-//! such as overflow or underflow due to excessively large event counts or magnitudes.
+//! Observation does not panic because of arithmetic overflow or underflow caused by
+//! excessively large event counts or magnitudes.
 //!
 //! # Mathematics policy
 //!
-//! Attempting to use excessively large values, either instantaneous or cumulative, may result in
-//! mangled data. For example, attempting to observe events with magnitudes near `i64::MAX`. There
-//! is no guarantee made about what the specific outcome will be in this case (though the panic
-//! policy above still applies). Do not stray near `i64` boundaries and you should be fine.
+//! Instantaneous or cumulative values near the limits of `i64` may produce unspecified metric
+//! values. The panic policy still applies.
+//!
+//! Behavioral rationale is documented in the package
+//! [design][design]. The [implementation guide][implementation] describes the `nm` package family
+//! architecture.
+//!
+//! [design]: https://github.com/folo-rs/folo/blob/main/packages/nm/docs/design.md
+//! [implementation]: https://github.com/folo-rs/folo/blob/main/packages/nm/docs/implementation.md
 
 pub use nm_impl::{
     Event, EventBuilder, EventMetrics, EventName, Histogram, Magnitude, MetricsPusher,

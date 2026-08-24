@@ -12,6 +12,18 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+# Baseline of external types intentionally exposed in the public API. Any new
+# external type must be reviewed and added explicitly.
+# Ref: docs/external-types.md.
+[package.metadata.cargo_check_external_types]
+allowed_external_types = [
+    "cbh_command::command::CacheSelection",
+    "cbh_command::command::LocalStorageSelection",
+    "ohno::enrichable::Enrichable",
+    "ohno::error_ext::ErrorExt",
+    "serde_core::de::Deserialize",
+]
+
 [lib]
 # This is an implementation crate whose surface is documented on `cargo-bench-history`.
 doc = false

@@ -17,7 +17,6 @@ all-features = true
 default = []
 
 [dependencies]
-hash_hasher = { workspace = true }
 plurality = { workspace = true }
 
 [dev-dependencies]
@@ -42,7 +41,6 @@ harness = false
 [[bench]]
 name = "events_once_ops_cg"
 harness = false
-
 
 
 

@@ -1,13 +1,14 @@
 use std::any::type_name;
 #[cfg(debug_assertions)]
 use std::backtrace::Backtrace;
-use std::cell::RefCell;
 use std::fmt;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::rc::Rc;
 #[cfg(debug_assertions)]
 use std::sync::Arc;
 
+#[cfg(debug_assertions)]
+use crate::LocalEventRegistry;
 use crate::{
     LocalPoolState, LocalReceiverCore, LocalSenderCore, PooledLocalReceiver, PooledLocalRef,
     PooledLocalSender,
@@ -38,11 +39,9 @@ pub struct LocalEventPool<T: 'static> {
     core: Rc<LocalPoolCore<T>>,
 }
 
-// The RefCell inside LocalPoolCore causes !RefUnwindSafe via auto-trait inference through Rc.
-// The pool is borrowed only for the duration of a rent or release operation, neither of which
-// can unwind while the borrow is held, so a pool observed after a panic still has consistent
-// slot bookkeeping. This holds regardless of the payload, which the pool never exposes: a value
-// is reachable only through the endpoints of the event that carries it.
+// `plurality::Pool` and the diagnostic registry leave their bookkeeping consistent if allocation
+// or backtrace snapshotting unwinds. Payloads are reachable only through their endpoints, so a
+// panic cannot expose partially initialized event storage through the pool.
 impl<T: 'static> UnwindSafe for LocalEventPool<T> {}
 impl<T: 'static> RefUnwindSafe for LocalEventPool<T> {}
 
@@ -55,8 +54,12 @@ impl<T: 'static> fmt::Debug for LocalEventPool<T> {
     }
 }
 
+/// Owns typed local event storage and diagnostics shared by managed pool handles.
 pub(crate) struct LocalPoolCore<T: 'static> {
-    pub(crate) state: RefCell<LocalPoolState<T>>,
+    pub(crate) state: LocalPoolState<T>,
+
+    #[cfg(debug_assertions)]
+    pub(crate) registry: Rc<LocalEventRegistry>,
 }
 
 impl<T: 'static> LocalEventPool<T> {
@@ -65,7 +68,9 @@ impl<T: 'static> LocalEventPool<T> {
     pub fn new() -> Self {
         Self {
             core: Rc::new(LocalPoolCore {
-                state: RefCell::new(LocalPoolState::new()),
+                state: LocalPoolState::new(),
+                #[cfg(debug_assertions)]
+                registry: Rc::new(LocalEventRegistry::new()),
             }),
         }
     }
@@ -77,10 +82,17 @@ impl<T: 'static> LocalEventPool<T> {
     #[inline]
     #[must_use]
     pub fn rent(&self) -> (PooledLocalSender<T>, PooledLocalReceiver<T>) {
-        let event = self.core.state.borrow_mut().rent();
+        let event = self.core.state.rent();
 
         #[cfg(debug_assertions)]
-        let core = Rc::clone(&self.core);
+        {
+            // SAFETY: Plurality keeps this initialized slot at a stable address until release,
+            // which occurs only after unregistration. Endpoints and the registry create only shared
+            // references to the event throughout that interval.
+            unsafe {
+                self.core.registry.register(event);
+            }
+        }
 
         // SAFETY: The event was just rented from this pool's state and has not been released.
         // The endpoints below and the pool's debug-only registry are the only reachers of the
@@ -88,7 +100,7 @@ impl<T: 'static> LocalEventPool<T> {
         let event_ref = unsafe {
             PooledLocalRef::new(
                 #[cfg(debug_assertions)]
-                core,
+                Rc::clone(&self.core.registry),
                 event,
             )
         };
@@ -105,13 +117,13 @@ impl<T: 'static> LocalEventPool<T> {
     /// Returns `true` if no events have currently been rented from the pool.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.core.state.borrow().is_empty()
+        self.core.state.is_empty()
     }
 
     /// Returns the number of events that have currently been rented from the pool.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.core.state.borrow().len()
+        self.core.state.len()
     }
 
     /// Uses the provided closure to inspect the backtraces of the most recent awaiter of each
@@ -138,12 +150,12 @@ impl<T: 'static> LocalEventPool<T> {
 
     /// Snapshots the backtrace of the most recent awaiter of each awaited event in the pool.
     ///
-    /// The pool borrow is released before this returns, so the caller may pass the snapshots to
-    /// user-supplied code without holding any borrow. Each snapshot is a shared owner of the
-    /// backtrace, so it stays valid even if its event is released in the meantime.
+    /// The diagnostic registry borrow is released before this returns, so the caller may pass the
+    /// snapshots to user-supplied code without holding any borrow. Each snapshot is a shared owner
+    /// of the backtrace, so it stays valid even if its event is released in the meantime.
     #[cfg(debug_assertions)]
     pub(crate) fn awaiter_backtraces(&self) -> Vec<Arc<Backtrace>> {
-        self.core.state.borrow().awaiter_backtraces()
+        self.core.registry.awaiter_backtraces()
     }
 }
 
@@ -164,15 +176,21 @@ impl<T: 'static> Clone for LocalEventPool<T> {
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: 'static> fmt::Debug for LocalPoolCore<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct(type_name::<Self>())
-            .field("state", &self.state)
-            .finish()
+        let mut f = f.debug_struct(type_name::<Self>());
+
+        f.field("state", &self.state);
+
+        #[cfg(debug_assertions)]
+        f.field("registry", &self.registry);
+
+        f.finish()
     }
 }
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::cell::RefCell;
     use std::iter;
     use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::task::{self, Poll, Waker};
@@ -182,9 +200,13 @@ mod tests {
     use testing::assert_panics_with;
 
     use super::*;
-    use crate::Disconnected;
     #[cfg(debug_assertions)]
     use crate::assert_inspect_awaiters_is_reentrant;
+    use crate::{
+        Disconnected, PanickingPayload, assert_disconnected_send_payload_panic_releases_event,
+        assert_receiver_waker_panic_handoff_releases_event,
+        assert_unread_payload_panic_releases_event,
+    };
 
     // The payload is itself thread-safe, so the pool is what confines this to one thread.
     assert_not_impl_any!(LocalEventPool<u32>: Send, Sync);
@@ -192,6 +214,39 @@ mod tests {
     // The payload satisfies only the bound that the pool's API requires (`'static`) and is
     // neither `UnwindSafe` nor `RefUnwindSafe`, so both traits come from the pool itself.
     assert_impl_all!(LocalEventPool<Rc<RefCell<u32>>>: UnwindSafe, RefUnwindSafe);
+
+    #[test]
+    fn disconnected_send_payload_panic_releases_event() {
+        let pool = LocalEventPool::<PanickingPayload>::new();
+
+        assert_disconnected_send_payload_panic_releases_event(
+            || pool.rent(),
+            PooledLocalSender::send,
+            || pool.is_empty(),
+        );
+    }
+
+    #[test]
+    fn receiver_waker_panic_handoff_releases_event() {
+        let pool = LocalEventPool::<i32>::new();
+
+        assert_receiver_waker_panic_handoff_releases_event(
+            || pool.rent(),
+            PooledLocalSender::send,
+            || pool.is_empty(),
+        );
+    }
+
+    #[test]
+    fn unread_payload_panic_releases_event() {
+        let pool = LocalEventPool::<PanickingPayload>::new();
+
+        assert_unread_payload_panic_releases_event(
+            || pool.rent(),
+            PooledLocalSender::send,
+            || pool.is_empty(),
+        );
+    }
 
     #[test]
     fn len() {
@@ -613,11 +668,11 @@ mod tests {
             |message| assert!(message.contains("pass-through")),
         );
 
-        // The pool is still usable, which proves that the panic did not leave any borrow behind.
         assert_eq!(pool.len(), 1);
 
         let mut inspected_count = 0;
 
+        // Reborrowing the diagnostic registry proves that the panic released its prior borrow.
         pool.inspect_awaiters(|_bt| {
             inspected_count += 1;
         });

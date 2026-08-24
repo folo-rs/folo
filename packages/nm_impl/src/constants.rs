@@ -1,2 +1,7 @@
-// A poisoned lock means the process is in an unrecoverable/unsafe state and must exit (we panic).
-pub(crate) const ERR_POISONED_LOCK: &str = "encountered poisoned lock - continued execution is not safe because we can no longer ensure that we uphold security and privacy guarantees";
+use crate::Magnitude;
+
+/// Event APIs create a batch internally so all observation paths share one implementation.
+pub(crate) const ONE_ITEM_BATCH: usize = 1;
+
+/// Events without an inherent magnitude use the multiplicative identity.
+pub(crate) const IMPLICIT_OCCURRENCE_MAGNITUDE: Magnitude = 1;

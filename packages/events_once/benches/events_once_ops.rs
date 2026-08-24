@@ -376,6 +376,8 @@ fn rent(c: &mut Criterion) {
     let mut g = c.benchmark_group("events_once_ops/rent");
     let local_pool = warm_local_pool();
     let sync_pool = warm_sync_pool();
+    let local_lake = warm_local_lake();
+    let sync_lake = warm_sync_lake();
 
     g.bench_function("local/pooled", |b| {
         b.iter_batched(
@@ -394,6 +396,28 @@ fn rent(c: &mut Criterion) {
             |pool| {
                 let endpoints = black_box(pool.rent());
                 black_box((pool, endpoints))
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    g.bench_function("local/lake", |b| {
+        b.iter_batched(
+            || local_lake.clone(),
+            |lake| {
+                let endpoints = black_box(lake.rent::<i32>());
+                black_box((lake, endpoints))
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    g.bench_function("sync/lake", |b| {
+        b.iter_batched(
+            || sync_lake.clone(),
+            |lake| {
+                let endpoints = black_box(lake.rent::<i32>());
+                black_box((lake, endpoints))
             },
             BatchSize::SmallInput,
         );
@@ -1033,7 +1057,7 @@ fn is_ready(c: &mut Criterion) {
 // or the caller's embedded place - is returned from the measured closure so that its
 // own teardown stays outside the measured region.
 //
-// Three start states are measured per storage and model:
+// Four start states are measured per storage and model:
 //
 // - `sender_first_bound`: the receiver never polled, so there is no waker to consume.
 // - `sender_first_awaiting`: the receiver parked a waker, which the sender consumes and
@@ -1041,6 +1065,9 @@ fn is_ready(c: &mut Criterion) {
 //   `src/core/state.rs` and described in `docs/implementation.md`.
 // - `receiver_first_bound`: the receiver is dropped before polling, which makes the
 //   sender the endpoint that releases the storage.
+// - `receiver_first_awaiting`: the receiver is dropped after parking a waker, so receiver
+//   cancellation includes the waker cleanup and state handoff before the sender releases
+//   the storage.
 fn cancel(c: &mut Criterion) {
     let mut g = c.benchmark_group("events_once_ops/cancel");
 
@@ -1080,6 +1107,18 @@ fn cancel(c: &mut Criterion) {
         sync_boxed_bound,
         receiver_first
     );
+    bench_cancel_boxed!(
+        g,
+        "local/boxed/receiver_first_awaiting",
+        local_boxed_awaiting,
+        receiver_first
+    );
+    bench_cancel_boxed!(
+        g,
+        "sync/boxed/receiver_first_awaiting",
+        sync_boxed_awaiting,
+        receiver_first
+    );
 
     bench_cancel_owned!(
         g,
@@ -1115,6 +1154,18 @@ fn cancel(c: &mut Criterion) {
         g,
         "sync/embedded/receiver_first_bound",
         sync_embedded_bound,
+        receiver_first
+    );
+    bench_cancel_owned!(
+        g,
+        "local/embedded/receiver_first_awaiting",
+        local_embedded_awaiting,
+        receiver_first
+    );
+    bench_cancel_owned!(
+        g,
+        "sync/embedded/receiver_first_awaiting",
+        sync_embedded_awaiting,
         receiver_first
     );
 
@@ -1154,6 +1205,18 @@ fn cancel(c: &mut Criterion) {
         sync_pooled_bound,
         receiver_first
     );
+    bench_cancel_owned!(
+        g,
+        "local/pooled/receiver_first_awaiting",
+        local_pooled_awaiting,
+        receiver_first
+    );
+    bench_cancel_owned!(
+        g,
+        "sync/pooled/receiver_first_awaiting",
+        sync_pooled_awaiting,
+        receiver_first
+    );
 
     bench_cancel_owned!(
         g,
@@ -1189,6 +1252,18 @@ fn cancel(c: &mut Criterion) {
         g,
         "sync/raw_pooled/receiver_first_bound",
         sync_raw_pooled_bound,
+        receiver_first
+    );
+    bench_cancel_owned!(
+        g,
+        "local/raw_pooled/receiver_first_awaiting",
+        local_raw_pooled_awaiting,
+        receiver_first
+    );
+    bench_cancel_owned!(
+        g,
+        "sync/raw_pooled/receiver_first_awaiting",
+        sync_raw_pooled_awaiting,
         receiver_first
     );
 
@@ -1228,6 +1303,18 @@ fn cancel(c: &mut Criterion) {
         sync_lake_bound,
         receiver_first
     );
+    bench_cancel_owned!(
+        g,
+        "local/lake/receiver_first_awaiting",
+        local_lake_awaiting,
+        receiver_first
+    );
+    bench_cancel_owned!(
+        g,
+        "sync/lake/receiver_first_awaiting",
+        sync_lake_awaiting,
+        receiver_first
+    );
 
     bench_cancel_owned!(
         g,
@@ -1263,6 +1350,18 @@ fn cancel(c: &mut Criterion) {
         g,
         "sync/raw_lake/receiver_first_bound",
         sync_raw_lake_bound,
+        receiver_first
+    );
+    bench_cancel_owned!(
+        g,
+        "local/raw_lake/receiver_first_awaiting",
+        local_raw_lake_awaiting,
+        receiver_first
+    );
+    bench_cancel_owned!(
+        g,
+        "sync/raw_lake/receiver_first_awaiting",
+        sync_raw_lake_awaiting,
         receiver_first
     );
 

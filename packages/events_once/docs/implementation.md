@@ -40,6 +40,19 @@ Two properties of the state machine matter beyond the event implementations them
   as the result of the transition it performed. No endpoint may derive that right from an
   observation it made earlier, because the other endpoint may act in between.
 
+## User destructors are callback boundaries
+
+Waker vtable operations and payload destruction may reenter the event or storage owner and may
+unwind. The state machine therefore finishes the observable transition and releases any borrow or
+lock before invoking them. When an endpoint is ending its lifecycle, it first transfers or
+completes storage cleanup, while temporarily owning any waker or payload whose destructor must be
+deferred. A panic from that destructor can then propagate without stranding a rented slot.
+
+Terminal value extraction is separate from receiver cancellation. The extraction path handles only
+stable terminal states and remains inline with the normal receiver flow. Synchronized cancellation
+contains the callback-bearing state handoff and storage release in a cold, out-of-line helper, so
+completed-receiver destruction does not inherit the cancellation state machine.
+
 ## Unsafe reference ownership and the release boundary
 
 The endpoint reference is the package's central unsafe abstraction, so its obligations are
@@ -69,9 +82,33 @@ records this, which lets the receiver cores project a pinned reference to themse
 unsafe code, and turns any future pin-sensitive state into a compile error rather than a silent
 change of an assumption.
 
+## Pools and lakes share the release boundary
+
+Typed event pools use `plurality::Pool<T>` because every slot has one known event type. Event
+lakes use `plurality::MultiPool`, which routes allocations by their size and alignment. Payload
+types whose complete event representations have compatible layouts can therefore reuse the same
+slots without a payload-type registry. Thread-safe lakes serialize allocation through their
+existing mutex because `MultiPool` has a single allocator, while local lakes rely on thread
+confinement.
+
+Renting detaches a `plurality::Box` from its owner and stores only its pointer in the endpoint
+references. Final endpoint cleanup reconstructs that box and returns the slot directly, without
+accessing the pool or lake. Plurality keeps the backing storage alive while detached boxes exist,
+which lets managed endpoints outlive their pool or lake handle. Raw variants retain their
+caller-enforced owner-outlives-endpoints contract.
+
 ## Diagnostics are a debug-build concern
 
 The awaiter backtrace that pools and lakes expose for leak investigation exists only in debug
-builds, along with the pool-side registry of live events that makes it reachable. The debug-only
-state is released by the same endpoint that releases the event, because event storage may be
-reused or freed without dropping the event.
+builds, along with a storage-independent registry of live events that makes it reachable. The
+registry stores pointers to the type-independent backtrace cell in each event, so one registry can
+inspect every payload type in a lake. Managed endpoints share ownership of the registry to keep it
+alive after the pool or lake handle is dropped; raw endpoints rely on their existing lifetime
+contract.
+
+Allocation and diagnostics use separate synchronization. Snapshotting retains the registry lock
+or borrow only while cloning the stored backtraces, then releases it before invoking user code.
+Final endpoint cleanup unregisters the backtrace cell before returning the plurality slot, so a
+snapshot can never observe storage after it has been released. Keeping the synchronization
+separate also permits diagnostic callbacks to rent or release events and to inspect the same owner
+again.

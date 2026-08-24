@@ -103,21 +103,19 @@ produces the same count across builds. One subtle way to break that is a
 
 These default seeds are not fixed at compile time. `std`'s `RandomState` draws
 its seed from the operating system RNG, so it varies from run to run.
-`foldhash::fast::RandomState` instead derives its seed from process memory
-addresses (stack pointers and code/static segment locations). The address-based
-scheme is stable within a single binary under Valgrind — which disables ASLR, so
-the benchmark reproduces run-to-run — but a **different build** (a different
-commit, or even the same commit linked at a different address) gets a different
-seed. Either way the seed is unrelated to the benchmark's logic, so hash
-iteration order and probe counts shift, changing the instruction count on
+`foldhash::fast::RandomState` mixes process memory addresses (stack pointers and
+code/static segment locations) with the wall-clock time at first use, so it also
+varies from run to run, even under Valgrind — which disables ASLR but does not
+freeze the clock. Either way the seed is unrelated to the benchmark's logic, so
+hash iteration order and probe counts shift, changing the instruction count on
 byte-identical source. The result is phantom regressions and improvements in
 benchmark history that track nothing but the seed.
 
 The symptom is distinctive: only the benchmarks that **build or iterate a hash
 container** jitter across builds, while every other benchmark is bit-stable. A
-demonstration on `nm_impl` showed the same binary swing by ~7% (18260 vs 19607
-instructions) from a stack-address change alone; after switching to a fixed seed
-the count became immovable under the same perturbation.
+demonstration showed the same binary swing by ~7% (18260 vs 19607 instructions)
+from a stack-address change alone; with a fixed seed the count became immovable
+under the same perturbation.
 
 If a benchmarked code path uses a hash container, give it a **fixed-seed
 hasher** so the measurement depends only on the code, not on load addresses. In
@@ -132,8 +130,16 @@ let map = HashMap::default(); // FixedState: Default, so this is deterministic
 ```
 
 Only drop the randomized seed where the keys are trusted rather than
-attacker-controlled, since a fixed seed forfeits HashDoS resistance. For
-internal registries keyed by a bounded set of trusted names (the `nm_impl`
-case) that trade-off is appropriate; for maps keyed by untrusted external
-input, keep the randomized seed and instead avoid measuring hash-container
-iteration in an instruction-count benchmark.
+attacker-controlled, since `foldhash` documents a fixed seed as trivially
+vulnerable to HashDoS. Keys that reach a container through a public API are not
+trusted, even when every caller inside this workspace supplies a constant.
+
+Randomizing the seed is not by itself the property such a container needs.
+`foldhash` calls itself only minimally DoS-resistant and tells callers not to
+rely on it for security regardless of seeding, whereas the standard library
+states that its default `HashMap` hasher is selected to resist HashDoS and is
+seeded from the host's secure randomness. A container keyed by names the caller
+chooses — `nm`'s event registries and the `nm_otel` export path, which accept
+runtime-derived event names — therefore uses `std::hash::RandomState` and accepts
+both the extra hashing cost and the instruction-count variance. Reserve the
+fixed seed for containers whose keys the benchmarked code chooses itself.

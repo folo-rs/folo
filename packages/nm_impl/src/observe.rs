@@ -28,8 +28,8 @@ pub trait Observe {
     ///         .build();
     /// }
     ///
-    /// // Count a single request occurrence
-    /// REQUESTS.with(|event| event.observe_once());
+    /// // Count a single request occurrence.
+    /// REQUESTS.with(Event::observe_once);
     /// ```
     fn observe_once(&self);
 
@@ -46,14 +46,14 @@ pub trait Observe {
     ///         .build();
     /// }
     ///
-    /// // Record sending 1024 bytes
+    /// // Record the number of bytes sent.
     /// SENT_BYTES.with(|event| event.observe(1024));
     /// ```
     fn observe(&self, magnitude: impl AsPrimitive<Magnitude>);
 
     /// Observes an event with the magnitude being the indicated duration in milliseconds.
     ///
-    /// Only the whole number part of the duration is used - fractional milliseconds are ignored.
+    /// Only the whole number part of the duration is used; fractional milliseconds are ignored.
     /// Values outside the i64 range are not guaranteed to be correctly represented.
     ///
     /// # Example
@@ -92,13 +92,18 @@ pub trait Observe {
     /// }
     ///
     /// fn query_database() -> String {
-    /// #     // Simulated database query
+    /// #     // Simulated database query.
     /// #     "result".to_string()
     /// }
     ///
-    /// let result =
-    ///     DATABASE_QUERY_TIME.with(|event| event.observe_duration_millis(|| query_database()));
+    /// let measure_query = |event: &Event| event.observe_duration_millis(query_database);
+    /// let result = DATABASE_QUERY_TIME.with(measure_query);
+    /// assert_eq!(result, "result");
     /// ```
+    ///
+    /// # Reentrancy
+    ///
+    /// The measured function may observe the same event or any other event.
     fn observe_duration_millis<F, R>(&self, f: F) -> R
     where
         F: FnOnce() -> R;

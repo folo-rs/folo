@@ -186,9 +186,9 @@ fn boxed_receiver_cancel_with_sender_dropping_waker_preserves_storage() {
     drop(waker);
     assert!(!sender_dropped.get());
 
-    // Dropping the receiver cancels the wait. `final_poll` returns the event to BOUND before
-    // dropping the stored waker, whose destructor drops the sender. The sender publishes
-    // DISCONNECTED and leaves the receiver to perform the sole cleanup.
+    // Dropping the receiver cancels the wait. `cancel` extracts the stored waker and publishes
+    // DISCONNECTED before deferring its destruction. The waker destructor drops the sender, which
+    // observes the disconnection and performs the sole cleanup.
     drop(receiver);
 
     assert!(sender_dropped.get(), "{REENTRANCY_REQUIRED}");
@@ -198,7 +198,7 @@ fn boxed_receiver_cancel_with_sender_dropping_waker_preserves_storage() {
 /// a terminal state.
 ///
 /// The reentrancy tests below release this from inside a sender operation, where dropping the
-/// receiver re-enters `Event::final_poll`. That call spins while the event is in the
+/// receiver re-enters `Event::cancel`. That call spins while the event is in the
 /// transient `EVENT_SIGNALING` state, and the sender that would leave that state is the very
 /// operation blocked in this destructor - so a regression in terminal-state publication would
 /// hang the test instead of failing it. Checking readiness first turns that regression into a

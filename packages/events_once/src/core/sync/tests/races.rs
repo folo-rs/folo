@@ -171,17 +171,17 @@ fn boxed_poll_awaiting_races_sender_disconnect() {
     });
 }
 
-// This test verifies that `final_poll` correctly handles the case where the sender is
-// mid-SIGNALING when the receiver is dropped. The fix uses a CAS loop in `final_poll`
+// This test verifies that `cancel` correctly handles the case where the sender is
+// mid-SIGNALING when the receiver is dropped. The cancellation CAS loop
 // that spins on SIGNALING, so the receiver waits for the sender to finish before writing
-// DISCONNECTED. The receiver-drop must happen on a separate thread because `final_poll`
+// DISCONNECTED. The receiver-drop must happen on a separate thread because `cancel`
 // will spin until the sender completes, and the sender is blocked on the hook barrier.
 #[test]
-// The receiver's `final_poll` spins while the event is in SIGNALING, and here the sender only
+// The receiver's `cancel` spins while the event is in SIGNALING, and here the sender only
 // leaves SIGNALING once the test releases its barrier. Miri's interpreter makes such a
 // cross-thread spin extremely slow, so this scenario is reserved for native runs.
 #[cfg_attr(miri, ignore)]
-fn boxed_final_poll_races_sender_signaling() {
+fn boxed_cancel_races_sender_signaling() {
     with_watchdog(|| {
         let BarrierHook {
             entered,
@@ -208,7 +208,7 @@ fn boxed_final_poll_races_sender_signaling() {
             // Wait for the hook to fire (sender is in SIGNALING).
             entered.wait();
 
-            // Drop the receiver on a separate thread. final_poll
+            // Drop the receiver on a separate thread. cancel
             // will spin on SIGNALING until the sender completes
             // its transition, so we cannot block this thread — we
             // need it to release the sender via proceed.wait().
@@ -217,7 +217,7 @@ fn boxed_final_poll_races_sender_signaling() {
             });
 
             // Release the sender so it can complete its transition
-            // from SIGNALING -> SET. This unblocks final_poll's
+            // from SIGNALING -> SET. This unblocks cancel's
             // spin, which then sees SET and reads the value.
             proceed.wait();
 

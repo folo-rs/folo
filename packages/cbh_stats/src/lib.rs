@@ -1,5 +1,5 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
-#![doc(hidden)]
+#![cfg_attr(docsrs, doc(hidden))]
 #![expect(
     clippy::exhaustive_structs,
     reason = "this crate's `pub` items form an in-workspace handoff boundary to the \

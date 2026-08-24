@@ -63,9 +63,12 @@ obtained through any other construction path.
 Waker cloning, waking and destruction, together with payload destruction, are callback
 boundaries because they can execute caller code. Before invoking one, an event completes the
 observable state transition that led to it and releases every borrow or lock that callback code
-could re-enter.
+could re-enter. It also completes endpoint and storage cleanup that must survive if the callback
+unwinds, so catching a callback panic through an unwind-safe endpoint leaves pooled storage
+available for reuse.
 
 A waker cloned while a receiver is being polled may send through or drop the corresponding
 sender. A registered waker that runs while an event completes or is cancelled may poll the
 receiver to completion or drop either endpoint. These operations observe the state published
-before the callback.
+before the callback. A destructor for a discarded payload or registered waker may likewise use
+the event's pool or lake and drop a surviving endpoint.

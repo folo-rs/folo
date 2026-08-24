@@ -7,39 +7,39 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 
 #[cfg(debug_assertions)]
-use crate::LocalPoolCore;
+use crate::LocalEventRegistry;
 use crate::{LocalEvent, LocalRef, destroy_local_event};
 
-/// References an event rented from a [`LocalEventPool`][crate::LocalEventPool].
+/// References a local event rented from a managed pool or lake.
 ///
-/// The slot of a rented event is owned by the pointer to it, not by the pool, so releasing the
-/// event needs neither the pool nor a borrow of it (see `local_state.rs`). The shared owner of
-/// the pool core exists only in debug builds, where the event must be removed from the pool's
-/// diagnostic registry before it is destroyed.
+/// [`LocalEventPool`][crate::LocalEventPool] and [`LocalEventLake`][crate::LocalEventLake] use the
+/// same detached plurality-slot release path. The pointer owns the slot, so release needs neither
+/// allocation owner nor borrow (see `local_state.rs`). In debug builds, the shared registry owner
+/// keeps diagnostics alive until the event is unregistered.
 pub(crate) struct PooledLocalRef<T: 'static> {
-    // Only debug builds need the core, to reach the diagnostic registry.
+    // Only debug builds need the registry for awaiter inspection.
     #[cfg(debug_assertions)]
-    core: Rc<LocalPoolCore<T>>,
+    registry: Rc<LocalEventRegistry>,
 
     event: NonNull<UnsafeCell<LocalEvent<T>>>,
 }
 
 impl<T: 'static> PooledLocalRef<T> {
-    /// Creates a reference to an event rented from a pool.
+    /// Creates a reference to an event rented from a managed pool or lake.
     ///
     /// # Safety
     ///
-    /// The event must be one that `LocalPoolState::rent()` returned and that has not yet been
-    /// released, in debug builds from the state inside `core`. Nothing may create an exclusive
-    /// reference to the event while any endpoint created from this reference can access it.
+    /// The event must be one that `initialize_local_event()` returned and that has not yet been
+    /// released. In debug builds, it must be registered in `registry`. Nothing may create an
+    /// exclusive reference to the event while any endpoint can access it.
     #[must_use]
     pub(crate) unsafe fn new(
-        #[cfg(debug_assertions)] core: Rc<LocalPoolCore<T>>,
+        #[cfg(debug_assertions)] registry: Rc<LocalEventRegistry>,
         event: NonNull<UnsafeCell<LocalEvent<T>>>,
     ) -> Self {
         Self {
             #[cfg(debug_assertions)]
-            core,
+            registry,
             event,
         }
     }
@@ -49,26 +49,33 @@ impl<T: 'static> Clone for PooledLocalRef<T> {
     fn clone(&self) -> Self {
         Self {
             #[cfg(debug_assertions)]
-            core: Rc::clone(&self.core),
+            registry: Rc::clone(&self.registry),
             event: self.event,
         }
     }
 }
 
-// SAFETY: The caller of `new()` guaranteed that the event was rented from the pool and has not
-// been released, so it is initialized and stays at a fixed address in the pool's storage, which
-// outlives every event rented from it. Everything that reaches the event - the endpoints holding
-// this reference and its clones, plus the pool's diagnostic registry in debug builds - creates
-// only shared references, and the caller guaranteed that nothing creates an exclusive one.
+// SAFETY: The caller of `new()` guaranteed that the event occupies an initialized, detached
+// plurality slot and has not been released. The slot stays at a fixed address, and plurality keeps
+// its backing storage alive while it is detached. Everything that reaches the event - the
+// endpoints holding this reference and its clones, plus the diagnostic registry in debug builds -
+// creates only shared references, and the caller guaranteed that nothing creates an exclusive one.
 // `release_event()` returns the slot through `destroy_local_event()`, the release operation of
 // this storage strategy, and the reference does not touch the event afterwards.
 unsafe impl<T: 'static> LocalRef<T> for PooledLocalRef<T> {
     #[inline]
     unsafe fn release_event(&self) {
         #[cfg(debug_assertions)]
-        self.core.state.borrow_mut().unregister(self.event);
+        {
+            // SAFETY: The `new()` contract requires this registered event to remain in its stable
+            // plurality slot with shared-only access. The caller owns its sole cleanup right, so
+            // those conditions hold until this unregistration returns.
+            unsafe {
+                self.registry.unregister(self.event);
+            }
+        }
 
-        // SAFETY: The pointer came from the pool state's `rent()`, as the `new()` contract
+        // SAFETY: The pointer came from `initialize_local_event()`, as the `new()` contract
         // requires. The caller was granted sole cleanup ownership of the event by the state
         // machine, so this is the only release of this event and nothing accesses it afterwards.
         unsafe {
@@ -82,10 +89,10 @@ impl<T: 'static> Deref for PooledLocalRef<T> {
 
     fn deref(&self) -> &Self::Target {
         // SAFETY: Validity: the `new()` contract gives us a rented, initialized event that keeps
-        // its address in pool storage that outlives it, and cleanup ownership is granted to a
+        // its address in plurality storage that outlives it, and cleanup ownership is granted to a
         // single endpoint, so the event is not yet released while any endpoint can call this.
         // Aliasing: the event is reached only through shared references, whether from an
-        // endpoint or from the pool's debug-only registry, which is what its interior mutability
+        // endpoint or from the debug-only registry, which is what its interior mutability
         // requires.
         unsafe { self.event.as_ref() }
     }
@@ -97,7 +104,7 @@ impl<T: 'static> fmt::Debug for PooledLocalRef<T> {
         let mut f = f.debug_struct(type_name::<Self>());
 
         #[cfg(debug_assertions)]
-        f.field("core", &self.core);
+        f.field("registry", &self.registry);
 
         f.field("event", &self.event).finish()
     }

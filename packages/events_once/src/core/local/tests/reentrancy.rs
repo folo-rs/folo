@@ -112,11 +112,11 @@ fn boxed_sender_drop_with_reentrant_waker_observes_disconnected() {
     });
 }
 
-// Regression test for cancellation through a reentrant waker destructor. `final_poll` returns
-// the event to BOUND while the receiver retains cleanup ownership, then drops the stored waker.
-// Its destructor drops the sender, which publishes DISCONNECTED and defers cleanup to the
-// receiver. Ref: docs/callback-safety.md. This runs under Miri so an ordering regression that
-// accesses released storage is detected.
+// Regression test for cancellation through a reentrant waker destructor. `cancel` extracts the
+// stored waker and publishes DISCONNECTED before deferring its destruction. The waker destructor
+// drops the sender, which observes the disconnection and performs the sole cleanup. Ref:
+// docs/callback-safety.md. This runs under Miri so an ordering regression that accesses released
+// storage is detected.
 #[test]
 fn boxed_receiver_cancel_with_sender_dropping_waker_preserves_storage() {
     let (sender, receiver) = LocalEvent::<i32>::boxed();
@@ -136,8 +136,8 @@ fn boxed_receiver_cancel_with_sender_dropping_waker_preserves_storage() {
     drop(waker);
     assert!(!sender_dropped.get());
 
-    // Dropping the receiver releases the stored waker. Its destructor drops the sender, which
-    // publishes DISCONNECTED and leaves the receiver to perform the sole cleanup.
+    // Dropping the receiver publishes DISCONNECTED before releasing the stored waker. Its
+    // destructor drops the sender, which observes the disconnection and performs the sole cleanup.
     drop(receiver);
 
     assert!(sender_dropped.get(), "{REENTRANCY_REQUIRED}");
