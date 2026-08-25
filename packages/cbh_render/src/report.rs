@@ -661,7 +661,7 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
             .copied()
             .filter(|finding| !is_primary_finding(summary, finding))
             .collect();
-        if summary.branch_comparison.is_some() && !additional.is_empty() {
+        if !additional.is_empty() {
             lines.push(String::new());
             lines.push("  Additional excursions outside this comparison:".to_owned());
         }
@@ -1211,7 +1211,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
             .copied()
             .filter(|finding| !is_primary_finding(summary, finding))
             .collect();
-        if summary.branch_comparison.is_some() && !additional.is_empty() {
+        if !additional.is_empty() {
             lines.push(String::new());
             lines.push("### Additional excursions outside this comparison".to_owned());
         }
