@@ -500,13 +500,26 @@ pub struct Finding {
     pub method: FindingMethod,
     /// Whether the move is a regression or an improvement.
     pub direction: Direction,
-    /// The before-regime representative value the after regime was compared to.
+    /// Reference value the latest measurement was compared against.
+    ///
+    /// In history mode this is the before-regime representative. In branch mode it is
+    /// the nearest observed current-base range edge; there is no before regime.
     pub baseline: f64,
-    /// The after-regime representative value.
+    /// Latest measured value.
+    ///
+    /// In history mode this is the after-regime representative. In branch mode it is
+    /// the context-commit observation.
     pub latest: f64,
-    /// The absolute change (`latest - baseline`).
+    /// Signed difference from [`baseline`](Self::baseline).
+    ///
+    /// In history mode this is `latest - baseline`. In branch mode it is the signed
+    /// excess beyond the nearest range edge, matching [`BranchExcursion::excess`].
     pub delta: f64,
-    /// The change relative to the baseline (`delta / baseline`).
+    /// Signed difference relative to [`baseline`](Self::baseline).
+    ///
+    /// In history mode this is `delta / baseline`. In branch mode it is the signed
+    /// excess relative to the nearest range edge, matching
+    /// [`BranchExcursion::relative_excess`].
     pub relative_delta: f64,
     /// Commit the change is attributed to, if known. For a change point this is the
     /// first commit of the new level; for a branch comparison it is the context

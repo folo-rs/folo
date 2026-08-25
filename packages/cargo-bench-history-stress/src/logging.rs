@@ -29,10 +29,13 @@ impl Logger {
     // Takes `self` for call-site symmetry with `detail_with` (both are
     // `logger.x(..)`), even though a phase marker is unconditional and reads no
     // state.
+    // Stderr I/O is not asserted by unit tests; cargo-mutants then waits out the
+    // process-spawning smoke suite and tips the 60s timeout on slower Windows shards.
     #[expect(
         clippy::unused_self,
         reason = "kept an instance method so callers use one logger handle uniformly"
     )]
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn step(self, message: &str) {
         eprintln!("==> {message}");
     }

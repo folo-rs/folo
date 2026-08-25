@@ -509,6 +509,7 @@ dependencies = [
  "futures",
  "jiff",
  "mimalloc",
+ "mutants",
  "nonempty",
  "serde",
  "serde_json",

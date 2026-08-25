@@ -315,11 +315,21 @@ struct JsonFinding<'a> {
     method: FindingMethod,
     /// Whether the move is a regression or an improvement.
     direction: Direction,
-    /// The before-regime representative value.
+    /// Reference value the latest measurement was compared against.
+    ///
+    /// In history mode this is the before-regime representative. In branch mode it is
+    /// the nearest observed current-base range edge; there is no before regime.
     baseline: f64,
-    /// The after-regime representative value.
+    /// Latest measured value.
+    ///
+    /// In history mode this is the after-regime representative. In branch mode it is
+    /// the context-commit observation.
     latest: f64,
-    /// The change relative to the baseline (`(latest - baseline) / baseline`).
+    /// Signed difference relative to `baseline`.
+    ///
+    /// In history mode this is `(latest - baseline) / baseline`. In branch mode it is
+    /// the signed excess relative to the nearest range edge, matching
+    /// [`BranchExcursion::relative_excess`].
     relative_delta: f64,
     /// Commit the change is attributed to, if known. For a drift this is the newest
     /// commit the trend reached; `window_start` names where it began.
