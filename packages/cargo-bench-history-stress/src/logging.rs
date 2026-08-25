@@ -61,11 +61,29 @@ impl Logger {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::cell::Cell;
+
     use super::Logger;
 
     #[test]
     fn verbose_reports_the_constructed_flag() {
         assert!(Logger::new(true).verbose());
         assert!(!Logger::new(false).verbose());
+    }
+
+    #[test]
+    fn verbose_details_are_built_only_when_enabled() {
+        let built = Cell::new(false);
+        Logger::new(false).detail_with(|| {
+            built.set(true);
+            "disabled".to_owned()
+        });
+        assert!(!built.get());
+
+        Logger::new(true).detail_with(|| {
+            built.set(true);
+            "enabled".to_owned()
+        });
+        assert!(built.get());
     }
 }

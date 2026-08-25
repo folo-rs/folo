@@ -114,3 +114,15 @@ impl ModeArg {
         }
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::ModeArg;
+
+    #[test]
+    fn mode_keywords_match_the_analyze_modes() {
+        assert_eq!(ModeArg::History.keyword(), "history");
+        assert_eq!(ModeArg::Branch.keyword(), "branch");
+    }
+}

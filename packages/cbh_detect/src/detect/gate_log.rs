@@ -315,6 +315,11 @@ pub(crate) struct StageLog<'a> {
 
 impl StageLog<'_> {
     /// Records a gate that compared `value` against `threshold`, yielding `passed`.
+    //
+    // The identity return is pinned directly below. Mutating it can force every detector
+    // past a rejection gate and leave expensive statistical fixtures running beyond the
+    // mutation timeout even though the direct assertion has already failed.
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn numeric(&mut self, gate: Gate, value: f64, threshold: f64, passed: bool) -> bool {
         self.log.record(GateOutcome {
             stage: self.stage,

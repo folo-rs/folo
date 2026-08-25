@@ -640,19 +640,17 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
         if input.mode == AnalysisMode::Branch {
             lines.push(format!(
                 "  {}",
-                historical_comparison_text(summary.branch_comparison, !summary.findings.is_empty(),)
+                historical_comparison_text(
+                    summary.branch_comparison,
+                    has_findings_in_historical_comparison(summary),
+                )
             ));
         }
         let included: Vec<&Finding> = summary
             .findings
             .iter()
             .copied()
-            .filter(|finding| {
-                finding
-                    .branch
-                    .as_ref()
-                    .is_none_or(|branch| branch.included_in_historical_comparison)
-            })
+            .filter(|finding| is_primary_finding(summary, finding))
             .collect();
         for finding in included {
             push_finding_block(&mut lines, finding, scope);
@@ -661,12 +659,7 @@ fn render_text(input: &ReportInput<'_>, color: bool) -> String {
             .findings
             .iter()
             .copied()
-            .filter(|finding| {
-                finding
-                    .branch
-                    .as_ref()
-                    .is_some_and(|branch| !branch.included_in_historical_comparison)
-            })
+            .filter(|finding| !is_primary_finding(summary, finding))
             .collect();
         if summary.branch_comparison.is_some() && !additional.is_empty() {
             lines.push(String::new());
@@ -837,6 +830,24 @@ fn historical_comparison_text(comparison: Option<&BranchComparison>, has_finding
          branch ({} series compared).",
         comparison.at_least_as_much, comparison.evaluated_base_commits, comparison.series,
     )
+}
+
+fn has_findings_in_historical_comparison(summary: &SetSummary<'_>) -> bool {
+    summary
+        .findings
+        .iter()
+        .any(|finding| is_in_historical_comparison(finding))
+}
+
+fn is_primary_finding(summary: &SetSummary<'_>, finding: &Finding) -> bool {
+    summary.branch_comparison.is_none() || is_in_historical_comparison(finding)
+}
+
+fn is_in_historical_comparison(finding: &Finding) -> bool {
+    finding
+        .branch
+        .as_ref()
+        .is_some_and(|branch| branch.included_in_historical_comparison)
 }
 
 /// Context note when the branch returns to the regime immediately before the current one.
@@ -1179,19 +1190,17 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
             lines.push(String::new());
             lines.push(format!(
                 "**Historical comparison:** {}",
-                historical_comparison_text(summary.branch_comparison, !summary.findings.is_empty(),)
+                historical_comparison_text(
+                    summary.branch_comparison,
+                    has_findings_in_historical_comparison(summary),
+                )
             ));
         }
         let included: Vec<&Finding> = summary
             .findings
             .iter()
             .copied()
-            .filter(|finding| {
-                finding
-                    .branch
-                    .as_ref()
-                    .is_none_or(|branch| branch.included_in_historical_comparison)
-            })
+            .filter(|finding| is_primary_finding(summary, finding))
             .collect();
         for finding in included {
             push_finding_markdown(&mut lines, finding, "###", scope);
@@ -1200,12 +1209,7 @@ fn render_markdown(input: &ReportInput<'_>) -> String {
             .findings
             .iter()
             .copied()
-            .filter(|finding| {
-                finding
-                    .branch
-                    .as_ref()
-                    .is_some_and(|branch| !branch.included_in_historical_comparison)
-            })
+            .filter(|finding| !is_primary_finding(summary, finding))
             .collect();
         if summary.branch_comparison.is_some() && !additional.is_empty() {
             lines.push(String::new());
@@ -1329,17 +1333,12 @@ pub fn render_markdown_summary(input: &ReportInput<'_>, limit: NonZero<usize>) -
                     set_label(summary.set),
                     historical_comparison_text(
                         summary.branch_comparison,
-                        !summary.findings.is_empty(),
+                        has_findings_in_historical_comparison(summary),
                     )
                 ));
             }
         }
-        if summary.is_some_and(|summary| summary.branch_comparison.is_some())
-            && finding
-                .branch
-                .as_ref()
-                .is_some_and(|branch| !branch.included_in_historical_comparison)
-        {
+        if summary.is_some_and(|summary| !is_primary_finding(summary, finding)) {
             lines.push(String::new());
             lines.push(
                 "> **Outside the historical comparison:** This excursion did not meet the \
@@ -2764,15 +2763,45 @@ mod tests {
             summary.contains("**Outside the historical comparison:**"),
             "{summary}"
         );
+        assert!(
+            summary.contains(
+                "The branch produced no reportable out-of-range movement in this comparison"
+            ),
+            "{summary}"
+        );
+        assert!(
+            !summary.contains("showed as much out-of-range movement as this branch"),
+            "{summary}"
+        );
 
         let text = render(&input, ReportFormat::Text, false);
         assert!(
             text.contains("Additional excursions outside this comparison:"),
             "{text}"
         );
+        assert!(
+            text.contains(
+                "The branch produced no reportable out-of-range movement in this comparison"
+            ),
+            "{text}"
+        );
+        assert!(
+            !text.contains("showed as much out-of-range movement as this branch"),
+            "{text}"
+        );
         let markdown = render(&input, ReportFormat::Markdown, false);
         assert!(
             markdown.contains("### Additional excursions outside this comparison"),
+            "{markdown}"
+        );
+        assert!(
+            markdown.contains(
+                "The branch produced no reportable out-of-range movement in this comparison"
+            ),
+            "{markdown}"
+        );
+        assert!(
+            !markdown.contains("showed as much out-of-range movement as this branch"),
             "{markdown}"
         );
     }

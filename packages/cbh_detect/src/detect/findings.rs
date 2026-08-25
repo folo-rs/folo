@@ -2771,6 +2771,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "the multi-series permutation fixture takes hours under Miri"
+    )]
     fn a_strong_noisy_signal_survives_the_false_discovery_filter() {
         // One unmistakable step alongside many flat series. The false-discovery
         // correction divides by the number of *testable* series, so the single real

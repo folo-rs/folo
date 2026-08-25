@@ -344,11 +344,14 @@ fn select_regime(series: &Series) -> RegimeSelection {
         selector.get(current_selector_start..).unwrap_or_default(),
     );
     let previous_range = previous_start.and_then(|start| {
+        // The reference observation immediately before `current_start` lies between the
+        // selector observations that establish the boundary, so neither adjacent regime
+        // can claim it as evidence.
+        let end = current_start.checked_sub(1)?;
         range_of(
             series
                 .base_window
-                .get(start..current_start)
-                .unwrap_or_default()
+                .get(start..end)?
                 .iter()
                 .map(|level| level.value),
         )
@@ -1609,6 +1612,25 @@ mod tests {
     }
 
     #[test]
+    fn an_ambiguous_reference_observation_is_not_previous_regime_evidence() {
+        let mut base = vec![200.0; 20];
+        base[19] = 150.0;
+        base.extend(std::iter::repeat_n(100.0, 20));
+        let one = series("ambiguous-reference", "m1", &base, 150.0);
+        let detection = find_changes(std::slice::from_ref(&one), &context(base.len()));
+        let branch = detection.findings[0]
+            .branch
+            .as_ref()
+            .expect("a branch excursion carries its range context");
+
+        assert_eq!(
+            detection.branch_trace.series[0].previous_range,
+            Some((200.0, 200.0))
+        );
+        assert!(!branch.matches_previous_regime);
+    }
+
+    #[test]
     fn regime_search_budget_is_shared_across_every_search() {
         // Forty selector observations divide into eight minimum regimes. The initial search
         // can perform seven tests; successive suffixes can perform six, five, and so on.
@@ -1743,6 +1765,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "the permutation-heavy 128-observation segmentation takes hours under Miri"
+    )]
     fn a_reverted_base_regression_does_not_stay_inside_the_comparison_range() {
         // The base stepped up and then back down, so the strongest split of the whole lane
         // is the step back down - and measured against everything before it, both of its
@@ -1769,6 +1795,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "the permutation-heavy 116-observation segmentation takes hours under Miri"
+    )]
     fn an_unsupported_suffix_split_does_not_hide_a_reverted_base_regression() {
         // The long-running 100 -> 102 move is the strongest split after the 200 plateau
         // begins, but it is too small to define a regime. Segmenting around it must still
