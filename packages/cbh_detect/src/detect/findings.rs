@@ -1029,7 +1029,7 @@ fn max_selection_adjusted_chance_level() -> f64 {
     noise_gates::MAX_CHANGE_CHANCE_LEVEL / count_to_f64(noise_gates::HISTORY_DETECTOR_COUNT)
 }
 
-fn passes_significance(chance_level: f64, limit: f64) -> bool {
+pub(super) fn passes_significance(chance_level: f64, limit: f64) -> bool {
     chance_level < limit
 }
 

@@ -38,9 +38,10 @@ no gate, because the strongest split need not be a supported one and a negligibl
 discard the candidates behind it. Segmentation alone cannot certify the boundary that ends a
 stretch whose two neighbours share a level, since that boundary is measured against the matching
 observations further back and looks like no change; a forward extension pass therefore re-searches
-the suffix starting at the newest accepted boundary until it accepts no more. All searches share
-one predeclared selection-adjusted error budget, sized for the deepest tree the recursion can build
-plus one extension round per regime it can peel off. A current regime starts at the
+the suffix starting at the newest accepted boundary with the same recursive segmentation until it
+accepts no more. All searches share one predeclared selection-adjusted error budget, sized as the
+triangular sum of the maximum search trees for the initial lane and every successively shorter
+suffix. A current regime starts at the
 first selector observation known to be after a split, leaving an interleaved reference observation
 out when its side is ambiguous. Histories too short for this separation still support the weaker
 complete-window range comparison; a strongly separated recent group too short to establish a

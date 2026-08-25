@@ -12,7 +12,8 @@ use cbh_stats as stats;
 use crate::detect::findings::{
     AnalysisContext, BranchComparison, BranchComparisonTrace, BranchEvaluationTrace,
     BranchExcursion, BranchRangeRelation, BranchSeriesTrace, Detection, Direction, Finding,
-    FindingMethod, SeriesCensus, count_to_f64, materialize_chart, short_commit,
+    FindingMethod, SeriesCensus, count_to_f64, materialize_chart, passes_significance,
+    short_commit,
 };
 use crate::detect::gate_log::{Gate, GateLog, GateStage, StageLog};
 use crate::detect::parallel::{balanced_chunk_sizes, worker_count};
@@ -401,28 +402,38 @@ fn collect_supported_boundaries(
 /// reverted, say — hides its exit. Measured against everything that came before it, the
 /// exit's two sides have the same median and its step statistic is diluted by the matching
 /// prefix, so segmentation certifies only the entry and leaves the stretch inside the
-/// comparison range. Re-searching the suffix that begins at the newest certified boundary
-/// measures the exit against the stretch it actually ends, which is the comparison the
-/// range depends on. Ref: docs/DESIGN.md, "Branch mode".
+/// comparison range. Segmenting the suffix that begins at the newest certified boundary
+/// measures the exit against the stretch it actually ends and searches around any stronger
+/// unsupported split in that suffix. Ref: docs/DESIGN.md, "Branch mode".
 fn extend_current_regime(
     kind: MetricKind,
     selector: &[&BaseLevel],
     search_alpha: f64,
     boundaries: &mut Vec<usize>,
 ) {
-    // Every accepted boundary leaves a whole regime behind it, so each round moves the
-    // suffix start forward by at least one minimum regime and the loop is bounded.
-    loop {
-        let start = boundaries.last().copied().unwrap_or(0);
+    let Some(mut start) = boundaries.last().copied() else {
+        // Repeating the initial segmentation cannot discover anything new.
+        return;
+    };
+    let max_rounds = selector
+        .len()
+        .checked_div(noise_gates::MIN_REGIME)
+        .unwrap_or(0)
+        .saturating_sub(1);
+    for _ in 0..max_rounds {
         let suffix = selector.get(start..).unwrap_or_default();
-        let Some(split) = strongest_split(kind, suffix, search_alpha) else {
+        // Segmenting the suffix, rather than accepting only its strongest split, lets an
+        // irrelevant long-running move conceal neither side of a shorter supported regime.
+        collect_supported_boundaries(kind, suffix, start, search_alpha, boundaries);
+        let Some(next_start) = boundaries.last().copied() else {
             return;
         };
-        if !split.supported {
+        if next_start == start {
             return;
         }
-        boundaries.push(start.saturating_add(split.index));
+        start = next_start;
     }
+    unreachable!("each extension round advances by at least one complete regime");
 }
 
 /// The strongest split of one segment, and what the searcher concluded about it.
@@ -455,7 +466,7 @@ fn strongest_split(
         stats::selection_adjusted_change_point(&values, noise_gates::MIN_REGIME, calibration)?;
     Some(StrongestSplit {
         index: change.index,
-        supported: change.adjusted_p < search_alpha
+        supported: passes_significance(change.adjusted_p, search_alpha)
             && supported_boundary(kind, &values, change.index, change.superiority),
     })
 }
@@ -476,19 +487,19 @@ fn base_start_after(series: &Series, selector: &[&BaseLevel], boundary: usize) -
 /// Allocates the declared boundary-error budget across every possible search.
 ///
 /// Boundaries are located in two stages, and either stage can place one, so the budget
-/// covers both. Segmentation recurses into both sides of every split it accepts, so its
-/// shape is a binary tree; charging one search per node, the most searches any such tree
-/// can perform is one fewer than the number of minimum regimes the observations divide
-/// into, because each extra search must leave a whole regime behind. The forward extension
-/// then searches one suffix per round, and every round but its last moves the suffix start
-/// forward by a whole regime, so it adds one search to that same count.
+/// covers both. One segmentation can search once fewer than the number of minimum regimes
+/// in its input. Each extension starts at least one minimum regime later than its
+/// predecessor, so the maximum across the initial segmentation and every possible suffix
+/// is the triangular sum of those per-segmentation bounds.
 fn regime_search_alpha(selector_len: usize) -> f64 {
-    let segmentation_searches = selector_len
-        .saturating_sub(noise_gates::MIN_SERIES_POINTS)
+    let minimum_regimes = selector_len
         .checked_div(noise_gates::MIN_REGIME)
-        .unwrap_or(0)
-        .saturating_add(1);
-    let max_searches = segmentation_searches.saturating_mul(2).saturating_add(1);
+        .unwrap_or(0);
+    let max_searches = minimum_regimes
+        .saturating_mul(minimum_regimes.saturating_sub(1))
+        .checked_div(2)
+        .expect("the triangular-number divisor is nonzero")
+        .max(1);
     noise_gates::MAX_BRANCH_REGIME_CHANCE_LEVEL / count_to_f64(max_searches)
 }
 
@@ -1599,19 +1610,17 @@ mod tests {
 
     #[test]
     fn regime_search_budget_is_shared_across_every_search() {
-        // Forty selector observations divide into eight minimum regimes, so segmentation can
-        // perform seven searches and the forward extension eight, and the budget covers all
-        // fifteen.
+        // Forty selector observations divide into eight minimum regimes. The initial search
+        // can perform seven tests; successive suffixes can perform six, five, and so on.
         assert_eq!(
             regime_search_alpha(40),
-            noise_gates::MAX_BRANCH_REGIME_CHANCE_LEVEL / 15.0
+            noise_gates::MAX_BRANCH_REGIME_CHANCE_LEVEL / 28.0
         );
-        // The shortest searchable lane holds two minimum regimes: one segmentation search,
-        // and an extension round for the boundary it may place plus the round that finds the
-        // remaining half too short to divide.
+        // The shortest searchable lane permits exactly one statistical split search. A
+        // shorter suffix returns before testing a boundary and consumes none of the budget.
         assert_eq!(
             regime_search_alpha(noise_gates::MIN_SERIES_POINTS),
-            noise_gates::MAX_BRANCH_REGIME_CHANCE_LEVEL / 3.0
+            noise_gates::MAX_BRANCH_REGIME_CHANCE_LEVEL
         );
     }
 
@@ -1748,6 +1757,31 @@ mod tests {
 
         assert_eq!(selection.current_start, 60);
         assert_eq!(selection.boundary_commit.as_deref(), Some("c60"));
+        assert_eq!(selection.previous_range, Some((200.0, 200.0)));
+        assert!(!selection.unresolved);
+
+        let detection = find_changes(std::slice::from_ref(&one), &context(base.len()));
+        let finding = detection
+            .findings
+            .first()
+            .expect("the tip sits above every observation in the current regime");
+        assert_eq!(finding.direction, Direction::Regression);
+    }
+
+    #[test]
+    fn an_unsupported_suffix_split_does_not_hide_a_reverted_base_regression() {
+        // The long-running 100 -> 102 move is the strongest split after the 200 plateau
+        // begins, but it is too small to define a regime. Segmenting around it must still
+        // find the fully separated 200 -> 100 exit or the plateau remains in the range.
+        let mut base = vec![100.0; 20];
+        base.extend(std::iter::repeat_n(200.0, 10));
+        base.extend(std::iter::repeat_n(100.0, 24));
+        base.extend(std::iter::repeat_n(102.0, 62));
+        let one = series("unsupported-suffix-split", "m1", &base, 150.0);
+        let selection = select_regime(&one);
+
+        assert_eq!(selection.current_start, 30);
+        assert_eq!(selection.boundary_commit.as_deref(), Some("c30"));
         assert_eq!(selection.previous_range, Some((200.0, 200.0)));
         assert!(!selection.unresolved);
 

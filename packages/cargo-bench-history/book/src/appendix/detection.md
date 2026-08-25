@@ -295,9 +295,9 @@ reported as unjudged rather than compared with stale history.
 
 A base regression that was later reverted needs a second look. The point where such a stretch ends
 looks like no change at all beside the matching observations further back, so the search finishes
-by re-examining whatever follows the newest boundary it accepted, against that stretch alone.
-Without that step the reverted observations would stay in the comparison range and hide a branch
-move of the same size.
+by re-examining whatever follows the newest boundary it accepted, against that stretch alone and
+with the same search on both sides of an unsupported split. Without that step the reverted
+observations would stay in the comparison range and hide a branch move of the same size.
 
 {{#include generated/detection-branch-base-moved.svg}}
 
