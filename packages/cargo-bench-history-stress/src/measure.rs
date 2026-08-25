@@ -95,6 +95,9 @@ struct ReportCounts {
 /// # Errors
 ///
 /// Returns an error if the analysis fails or its report cannot be parsed.
+// The only coverage of this function is the process-spawning smoke suite, which
+// exceeds the 60s cargo-mutants timeout on slower Windows shards.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) async fn measure(
     workspace: &Path,
     repo: &Path,
