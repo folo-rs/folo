@@ -541,8 +541,8 @@ fn note_branch_evaluation<R: Reporter + ?Sized>(reporter: &R, trace: &BranchEval
             if let Some((minimum, maximum)) = series.current_range {
                 notes.note(&format!(
                     "branch evidence for {} {} in {} used current-base range {minimum}..={maximum} \
-                     from {} observations; selector commits {:?}, reference commits {:?}, boundary \
-                     {:?}, branch relation {:?}",
+                     from {} observations; selector commits {:?}, reference commits {:?}, \
+                     current-regime start {:?}, branch relation {:?}",
                     series.id.qualified(),
                     series.kind.as_str(),
                     series.set,
@@ -1719,6 +1719,8 @@ mod tests {
         );
         assert!(
             reporter.contains("reference commits")
+                && reporter.contains("current-regime start Some(")
+                && !reporter.contains("boundary Some(")
                 && reporter.contains("branch relation Above")
                 && reporter.contains(
                     "historical comparison for callgrind/x86_64-unknown-linux-gnu/m1 scored"

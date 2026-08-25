@@ -247,11 +247,11 @@ impl UnjudgedReason {
 /// Whether a series carries enough evidence for its mode's detector to reach a
 /// verdict, and if not, what it lacks.
 ///
-/// The false-discovery family is exactly the [`Judged`](Testability::Judged) series.
-/// A series that cannot be judged is not a hypothesis that was tested, so counting it
-/// in the family would only dilute the correction. Conversely a series that *is*
-/// judged must be counted whether or not it raised a candidate, since it had the same
-/// opportunity to produce a false positive as any other.
+/// History mode's false-discovery family is exactly its
+/// [`Judged`](Testability::Judged) series. An unjudged history series is not a tested
+/// hypothesis, while every judged history series must be counted whether or not it raised
+/// a candidate. Branch mode uses the same verdict for its coverage census but does not form
+/// a false-discovery family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Testability {
     /// The detector reached a verdict on the series.
@@ -1407,10 +1407,11 @@ pub async fn find_changes_spawned(
 /// verdict, and if not, what it lacks.
 ///
 /// This is the single definition of what "judged" means: detection consults it to
-/// decide whether to evaluate a series at all, the census counts its answers, and the
-/// false-discovery family is exactly the series it calls
-/// [`Judged`](Testability::Judged). Branch mode reuses the branch detector's final
-/// verdict, so unresolved current-base regimes stay unjudged everywhere that matters.
+/// decide whether to evaluate a series at all, and the census counts its answers.
+/// History mode's false-discovery family is exactly the history series it calls
+/// [`Judged`](Testability::Judged). Branch mode reuses the branch detector's final verdict
+/// for coverage accounting but applies no false-discovery correction, so unresolved
+/// current-base regimes stay unjudged everywhere that matters.
 #[must_use]
 pub fn testability(series: &Series, context: &AnalysisContext) -> Testability {
     match context.mode {

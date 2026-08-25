@@ -20,7 +20,7 @@
 pub const MIN_REGIME: usize = 5;
 
 /// Default `min_series_points`: a series shorter than this is not evaluated at all,
-/// and does not count toward the false-discovery family.
+/// and in history mode does not count toward the false-discovery family.
 ///
 /// Two full regimes are the least a change-point can be built from. Below this floor
 /// no split can satisfy [`MIN_REGIME`] on both sides, so evaluating the series can
