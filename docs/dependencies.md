@@ -36,13 +36,16 @@ its `cbh_*` implementation crates.
 Such crates must always be released at the same version. Enforce this in two
 places, and keep both in sync:
 
-* **`release-plz.toml`** — give every crate in the set the same `version_group`
-  so release-plz bumps them together.
-* **The workspace `Cargo.toml`** — the public crate keeps a normal compatible
-  version requirement, but every *internal* crate it depends on (the `_impl` /
-  `_core` / macro crates) is referenced with an **exact `=` pin**
-  (`version = "=1.2.3"`). The exact pin means a downstream consumer of the public
-  crate can never resolve a mismatched version of its internal companion.
+* **`[workspace.metadata.release-plan.groups]`** in the root `Cargo.toml` —
+  every crate in the set is a member of the same group so `cargo-release-plan`
+  expands an increment across all of them. See [release-versioning.md](release-versioning.md).
+* **The workspace `Cargo.toml` `[workspace.dependencies]`** — the public crate
+  keeps a normal compatible version requirement, but every *internal* crate it
+  depends on (the `_impl` / `_core` / macro crates) is referenced with an
+  **exact `=` pin** (`version = "=1.2.3"`). The exact pin means a downstream
+  consumer of the public crate can never resolve a mismatched version of its
+  internal companion. The `increment-versions` skill rewrites these pins with
+  the increment.
 
 For example, `many_cpus` is referenced as `version = "2.4.9"` while
 `many_cpus_impl` is referenced as `version = "=2.4.9"`; likewise each `cbh_*`

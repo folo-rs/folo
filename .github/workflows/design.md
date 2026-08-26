@@ -129,10 +129,14 @@ Bash holdout because it bootstraps PowerShell itself.
 
 ## Required checks fan-in
 
-`main` is protected by a single required status check named `required-checks`. GitHub's
-required-checks field is a string match on the check name: it cannot express "this matrix
-job, but only the legs that actually ran", and it cannot see a check that was skipped
-rather than posted. A job with both `strategy.matrix` and a job-level `if:` that evaluates
+`main` is protected by a single required status check named `required-checks`.
+Version classification (`validate-versions`) is one of the jobs that fan in here;
+see [`docs/release-versioning.md`](../../docs/release-versioning.md) for that
+process.
+
+GitHub's required-checks field is a string match on the check name: it cannot
+express "this matrix job, but only the legs that actually ran", and it cannot
+see a check that was skipped rather than posted. A job with both `strategy.matrix` and a job-level `if:` that evaluates
 false never expands the matrix, so contexts such as `test-x64 (ubuntu-latest)` stay on
 Expected — Waiting for status to be reported forever if they are listed as required.
 
