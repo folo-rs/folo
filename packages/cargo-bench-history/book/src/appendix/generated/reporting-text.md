@@ -11,7 +11,7 @@ criterion/x86_64-unknown-linux-gnu/a1b2c3d4
 
 http_parse/case
   +29.57% wall_time
-    regression via change point · 100.4 → 130.1 · @ commit10
+    regression via change point · 100.4 → 130.1 · somewhere near commit10
  135 ┤           ╭─╮╭─╮╭╮           
  126 ┤         ╭─╯ ╰╯ ╰╯╰─          
  116 ┤         │                    

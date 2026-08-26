@@ -366,8 +366,8 @@ fn finding_annotated() -> String {
     writeln!(
         markdown,
         "| `{detail}` | The detail: direction, the detector that produced the finding, \
-         the baseline and latest representative values, and the commit the change is \
-         attributed to. |"
+         the baseline and latest representative values, and a commit somewhere near \
+         the change. |"
     )
     .expect("writing to a String never fails");
     markdown.push_str(

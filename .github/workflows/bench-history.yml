@@ -323,8 +323,9 @@ jobs:
       # The body carries the CONDENSED summary (not the full report) so it fits the issue
       # limit, followed by a link to the attached full reports and a footer with two parts:
       # a minimal "Issue lifecycle" summary (refreshed only on runs that still have findings,
-      # never auto-closed) and a "What do I do?" section pointing at `examine` and the
-      # bless-an-intentional-change vs. fix-a-defect decision - see the File step.
+      # never auto-closed) and a "What do I do?" section pointing at `examine` to narrow a
+      # change-point estimate, then the bless-an-intentional-change vs. fix-a-defect
+      # decision - see the File step.
       - name: Compose regression issue
         if: steps.notable.outputs.value == 'true'
         shell: pwsh
@@ -349,9 +350,9 @@ jobs:
 
           **What do I do?**
 
-          First, see exactly how the series moved over time. Copy the benchmark id and metric from the finding above and run:
+          A change-point location is an estimate: the change occurred somewhere near the named commit, not necessarily at it. Use `cargo bench-history examine` to narrow down on the specific commit where the change occurred. Copy the benchmark id, metric, and discriminant filters from the finding above and run:
 
-          `cargo bench-history examine --benchmark <id> --metric <name>`
+          `cargo bench-history examine --benchmark <id> --metric <name> --engine <engine> --target-triple <triple> --machine-key <key>`
 
           Then decide what the change is:
 

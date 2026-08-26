@@ -331,8 +331,10 @@ struct JsonFinding<'a> {
     /// the signed excess relative to the nearest range edge, matching
     /// [`BranchExcursion::relative_excess`].
     relative_delta: f64,
-    /// Commit the change is attributed to, if known. For a drift this is the newest
-    /// commit the trend reached; `window_start` names where it began.
+    /// Commit associated with the finding, if known. For a change point this is the
+    /// detector's estimate of where the new level begins, not a claim that that commit
+    /// introduced it. For a drift this is the newest commit the trend reached;
+    /// `window_start` names where it began.
     #[serde(skip_serializing_if = "Option::is_none")]
     commit: Option<&'a str>,
     /// The oldest commit of a drift's accumulation window, present only for a drift, so
@@ -790,10 +792,11 @@ fn runs_with_span(runs: usize, span: Option<(&str, &str)>) -> String {
 }
 
 /// The plain-text detail body shared by the text and Markdown reports: the
-/// direction, detector, the `baseline → latest` move, and the commit it is attributed
-/// to. A drift belongs to its whole window rather than one commit, so it names the
-/// range it accumulated over (`from … to …`) instead of a single commit. Carries no
-/// styling and no leading indent; each format applies its own.
+/// direction, detector, the `baseline → latest` move, and the commit associated with
+/// it. A change point names a commit somewhere near the split; a drift belongs to its
+/// whole window rather than one commit, so it names the range it accumulated over
+/// (`from … to …`). Carries no styling and no leading indent; each format applies
+/// its own.
 fn detail_text(finding: &Finding) -> String {
     if let Some(branch) = &finding.branch {
         return format!(
@@ -876,16 +879,24 @@ fn previous_regime_text(finding: &Finding) -> Option<String> {
     ))
 }
 
-/// The commit(s) a finding is attributed to, for the detail body. A change point or
-/// branch comparison names one commit (`@ <commit>`); a drift names the range it
-/// accumulated over (`accumulated <oldest> → <newest>`), because no single commit is
-/// responsible — [`examine`](../commands/examine.md) is where to see the shape within
-/// it.
+/// The commit(s) a finding is associated with, for the detail body.
+///
+/// A change point names a commit somewhere near the detected split, because the split
+/// search estimates a regime boundary and cannot always identify the first commit that
+/// introduced the new level. A branch comparison names the context commit
+/// (`@ <commit>`). A drift names the range it accumulated over
+/// (`accumulated <oldest> → <newest>`), because no single commit is responsible.
+/// A missing commit is attributed across the analyzed window, matching the book
+/// fragments, rather than naming a placeholder.
 fn attribution_text(finding: &Finding) -> String {
-    let commit = finding.commit.as_deref().unwrap_or("unknown");
-    match finding.window_start_commit.as_deref() {
-        Some(start) => format!("accumulated {start} → {commit}"),
-        None => format!("@ {commit}"),
+    match (finding.method, finding.commit.as_deref()) {
+        (_, None) => "across the analyzed window".to_owned(),
+        (FindingMethod::ChangePoint, Some(commit)) => format!("somewhere near {commit}"),
+        (FindingMethod::Drift, Some(commit)) => match finding.window_start_commit.as_deref() {
+            Some(start) => format!("accumulated {start} → {commit}"),
+            None => format!("accumulated ending at {commit}"),
+        },
+        (FindingMethod::BranchExcursion, Some(commit)) => format!("@ {commit}"),
     }
 }
 
@@ -3907,11 +3918,36 @@ mod tests {
     }
 
     #[test]
-    fn attribution_text_names_a_commit_or_a_drift_range() {
-        // A change point (no window start) is attributed to its single commit.
-        assert_eq!(attribution_text(&regression()), "@ deadbee");
+    fn attribution_text_names_a_nearby_commit_or_a_drift_range() {
+        // A change point names an estimated location, not the exact first commit.
+        assert_eq!(attribution_text(&regression()), "somewhere near deadbee");
         // A drift names the whole range it accumulated over, not one commit.
         assert_eq!(attribution_text(&drift()), "accumulated f00dcafe → deadbee");
+        let mut drift_without_start = drift();
+        drift_without_start.window_start_commit = None;
+        assert_eq!(
+            attribution_text(&drift_without_start),
+            "accumulated ending at deadbee"
+        );
+        // A branch comparison names the context commit itself.
+        assert_eq!(attribution_text(&branch_regression(true)), "@ deadbee");
+        // A series point may lack commit metadata; do not invent a placeholder name.
+        let mut unattributed = regression();
+        unattributed.commit = None;
+        assert_eq!(
+            attribution_text(&unattributed),
+            "across the analyzed window"
+        );
+        unattributed.method = FindingMethod::Drift;
+        assert_eq!(
+            attribution_text(&unattributed),
+            "across the analyzed window"
+        );
+        unattributed.method = FindingMethod::BranchExcursion;
+        assert_eq!(
+            attribution_text(&unattributed),
+            "across the analyzed window"
+        );
     }
 
     fn darwin_set() -> DiscriminantSet {

@@ -58,8 +58,10 @@ The step detector works in three moves.
 3. **Size.** Each side's median becomes its level, and the difference between them is the
    move. Medians rather than averages, so one outlier cannot invent a step or hide one.
 
-The change is attributed to **the first commit of the after-side** — the earliest commit that
-already shows the new level.
+The report names a commit **somewhere near** the split — the detector's best estimate of where
+the new level begins, not a guarantee of the first commit that introduced it. Use
+[`examine`](../commands/examine.md) to inspect the series and narrow the location if a
+specific commit can be identified.
 
 > The split search's own chance level is not used as evidence. It only locates the boundary.
 > The rank comparison decides whether the regimes differ, and the correction below makes that

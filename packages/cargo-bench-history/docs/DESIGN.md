@@ -4,8 +4,8 @@ A Cargo subcommand that maintains a **long-lived history** of benchmark results 
 analyzes that history for trends that snapshot / "previous run" tools cannot see:
 
 * slow incremental drift (a scenario that got 30 % slower over a year, 1 % at a time);
-* step changes attributable to a specific commit, visible only in hindsight once the
-  noise averages out;
+* step changes whose approximate location in history becomes visible only in hindsight
+  once the noise averages out;
 * regressions distinguished from measurement jitter by engine-aware statistics rather
   than a single noisy neighbour.
 
@@ -870,10 +870,10 @@ move:
 
 1. **Change-point (step)** — the primary finding. A single most-likely level shift is
    located with the **Pettitt** nonparametric change-point test, splitting the series into
-   a before regime and an after regime; the change is attributed to the commit at the start
-   of the after regime, answering "what changed, and after which commit". Persistence is
-   built in — both regimes must contain a minimum number of points — so a single-commit
-   blip cannot trip it.
+   a before regime and an after regime. The report names a commit somewhere near that
+   split, as an estimate of where the new level begins rather than a claim that that
+   commit introduced it. Persistence is built in — both regimes must contain a minimum
+   number of points — so a single-commit blip cannot trip it.
 2. **Monotonic drift** — a separate finding type for slow trends. A **Mann–Kendall** trend
    test establishes that a monotonic trend exists and a robust **Theil–Sen** slope
    estimates its magnitude.
@@ -1316,7 +1316,8 @@ tallies. JSON keeps full precision and omits the per-commit series (a charting c
 human reports draw from internally, not data a consumer reconstructs); the text and
 Markdown values round to four significant figures. A consumer keys off a top-level
 "notable" flag (post or stay silent) and reads each finding's direction, magnitude, and
-attribution.
+associated commit. A change-point finding's commit is an estimate of where the new level
+begins, not a claim that that commit introduced it.
 
 Every format also states what the analysis **judged** (§8.9): a coverage tally in the header of
 all three, prose qualifying a silent verdict where there are no findings, and, in JSON, a
