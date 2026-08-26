@@ -34,6 +34,15 @@ Two consequences follow directly:
   undetectable behavioural break, a meaningful feature addition, keeping a version group
   aligned), but may never lower it below.
 
+### On a pull request
+
+The author finishes the change, then runs the `increment-versions` skill — or the
+`validate-versions` check fails and names that skill, which is enough to continue without
+having read this chapter. The skill proposes one increment *level* per version group and per
+ungrouped package. The author may raise a level above the `cargo-semver-checks` floor; they
+may not lower one. Group membership, `=`-pin rewrites and the lockfile are applied without a
+second question. Merge publishes.
+
 ## The anchor and the rule
 
 The version increment *is* the release event, so the git repository holds everything needed to
@@ -77,18 +86,20 @@ Two branches cut from the same commit both increment `foo` 0.6.1 → 0.6.2. Git 
 identical single-line edits without a conflict, so without care the second merge lands changed
 code under a version crates.io already has, and `release-plz release` skips it.
 
-Requiring branches to be up to date before merge closes this. Once the first pull request has
-merged, the second one's base contains 0.6.2, so its declared version has *not* increased
-relative to its anchor — while its content has. The check demands 0.6.3.
+A merge queue closes this. Each pull request is rebased onto the latest `main` before its
+checks run, so once the first has merged, the second's base contains 0.6.2 and its declared
+version has *not* increased relative to its anchor — while its content has. The check demands
+0.6.3, the skill applies it, and the pull request re-enters the queue.
+
+Requiring branches to be up to date *without* a queue would give the same guarantee and
+serialise the author: every competing merge is a manual rebase and a second skill run. The
+queue performs the rebase. It is the only GitHub merge requirement this design adds.
 
 The residual window is a second pull request merging while the first one's publish is still in
 flight. Nothing is lost even then: because the rule covers every publishable package, the next
 pull request to run reports it and it goes out one merge later. The cost is that a later pull
 request is asked to resolve drift it did not cause. That is inherent to a check that reports what
 must be released rather than who caused it, and the skill makes resolving it cheap.
-
-Requiring up-to-date branches serialises merges. If pull request throughput ever suffers, a merge
-queue is the better answer and provides the same guarantee.
 
 ## Released content
 
@@ -216,9 +227,12 @@ have unreleased changes *and* belong to an inconsistent group, and both are repo
 Packages with `publish = false` are excluded entirely.
 
 Whether a crate has ever reached crates.io is a different question, answered by the existing
-`check-never-published` recipe, which is unaffected by this design. It matters because crates.io
-Trusted Publishing cannot perform a crate's first publish, so a new crate needs one manual
-`cargo publish`; it does not change what this check enforces.
+`check-never-published` recipe. crates.io Trusted Publishing cannot perform a crate's first
+publish, so a new crate needs one manual `cargo publish` as documented in
+[`RELEASING.md`](../RELEASING.md). The skill's preflight runs that recipe and **stops** if any
+crate in the increment set has never been published — first-publish is not folded into
+`apply`, because the OIDC publisher cannot perform it. The version check itself does not
+change: a never-published crate with a version increment is `releasing`.
 
 The check fails closed on a shallow or truncated history: if the anchor walk reaches the end of
 available history without finding a version change, that is an error, not a pass. Otherwise a
@@ -337,15 +351,21 @@ on the base branch's first-parent line, and a shallow history.
 ## The `increment-versions` skill
 
 `.github/skills/increment-versions/SKILL.md` — the repository's first skill. It is invoked when a
-pull request is ready to merge, or when the `validate-versions` check fails.
+pull request is ready to merge, or when the `validate-versions` check fails. The check's failure
+annotation names the skill and the recipe, so a failed job is a sufficient prompt.
 
 Mechanics live in `just` recipes, per the repository rule that logic worth testing must not live
-in prose; the skill file carries the judgement.
+in prose; the skill file carries the judgement. The only judgement it asks for is the increment
+*level*. Everything that follows from a chosen level — group expansion, `=`-pin rewrites, the
+lockfile refresh, `just verify-lockfile` — is applied without a second question: skipping a
+group member diverges the group, skipping a pin leaves a stale `=` requirement, and skipping
+the lockfile fails `--locked` builds.
 
-1. **Preflight.** Run the `cargo-semver-checks` canary. A `cargo-semver-checks` that fails to
-   *run* — classically one too old for the toolchain's rustdoc JSON format — must never be read as
-   "no breaking changes". This is the trap the current `verify-semver-checks` recipe guards
-   against, and the guard survives the removal of `release-plz update`.
+1. **Preflight.** Run the `cargo-semver-checks` canary and `just check-never-published`. A
+   `cargo-semver-checks` that fails to *run* — classically one too old for the toolchain's rustdoc
+   JSON format — must never be read as "no breaking changes". This is the trap the current
+   `verify-semver-checks` recipe guards against, and the guard survives the removal of
+   `release-plz update`. A never-published crate in the increment set is a stop, not a bump.
 2. **Collect.** `just release-report <dir>` runs `cargo release-plan report` and then
    `cargo semver-checks --workspace --all-features`, capturing both.
 
@@ -362,16 +382,19 @@ in prose; the skill file carries the judgement.
    groups, propagate `=` pins, and re-check that the expansion did not create new work. Every
    crate here is `0.x` or `1.x`, so under Cargo's semantics a breaking change to a `0.x` crate is
    a *minor* increment.
-4. **Present.** One table for the human: package, current version, proposed version, level, the
-   floor `cargo-semver-checks` reported, and a one-line justification citing the actual change.
+4. **Present.** One table for the human, **one row per version group and per ungrouped
+   package** — not one row per crate. A version group is one decision, regardless of how many
+   members it has. Each row shows current version, proposed version, level, the floor
+   `cargo-semver-checks` reported, the members the level will apply to, and a one-line
+   justification citing the actual change.
    Where the proposal exceeds the floor, the reason is stated explicitly — that is the entire
    point of the exercise. Diffs stay on disk and are cited by path rather than pasted, since one
    package's unreleased changes can run to thousands of lines.
-5. **Apply, on approval.** `cargo release-plan apply`, then re-run `check` and the scoped
-   `cargo semver-checks` to confirm the result, and write the summary into the pull request
-   description. Further changes may follow the increment without invalidating it. The plan is not
-   committed: the check verifies manifest state, not intent, so a plan file in the repository
-   would be inert churn.
+5. **Apply, on approval.** `cargo release-plan apply`, then `just verify-lockfile`, then re-run
+   `check` and the scoped `cargo semver-checks` to confirm the result, and write the summary into
+   the pull request description. Further changes may follow the increment without invalidating
+   it. The plan is not committed: the check verifies manifest state, not intent, so a plan file
+   in the repository would be inert churn.
 
 ## The GitHub check
 
@@ -388,7 +411,7 @@ validate-versions:
   outputs:
     released: ${{ steps.check.outputs.released }}
   steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0   # anchors are found by walking the base branch's version history
     - uses: ./.github/actions/setup-environment
@@ -401,9 +424,13 @@ validate-versions:
 
 The recipe is a thin wrapper over `cargo release-plan check --base <sha> --format github`, which
 also emits the set of packages this pull request releases, for the next job. Passing the base SHA
-from the event payload avoids inferring it from refs. No PowerShell module is introduced: the
-classification logic is the Rust tool's job and is tested there. The job joins `alert`'s `needs:`
-list.
+from the event payload avoids inferring it from refs. On a merge-queue run the base SHA is the
+commit the queue rebased onto, which is what makes the concurrent-PR rule hold. No PowerShell
+module is introduced: the classification logic is the Rust tool's job and is tested there. The
+job joins `alert`'s `needs:` list.
+
+A failing check prints one actionable line per offence and names the skill. That is the entire
+recovery path — the author does not have to reconstruct a plan from this chapter.
 
 ### `semver-checks`
 
@@ -427,12 +454,12 @@ job as well.
 ```mermaid
 flowchart TD
     A["Author finishes changes"] --> B["increment-versions: report + semver-checks"]
-    B --> C["Proposed plan with per-package justification"]
+    B --> C["Proposed plan with per-group justification"]
     C --> D{"Human approves?"}
     D -- adjust --> C
     D -- yes --> E["apply: versions, pins, groups, lockfile"]
     E --> F["validate-versions + scoped semver-checks"]
-    F --> G["Merge to main"]
+    F --> G["Merge queue rebases onto main"]
     G --> H["release.yml publishes every unpublished version"]
 ```
 
@@ -451,16 +478,15 @@ versioning.
 
 ## Migration
 
-The check cannot be switched on against the current tree: 23 of 44 publishable packages have
-released content sitting past their anchor, an artifact of version incrementing having been
-batched and occasional. The exclusions bring that to 15; the 8 they resolve are packages whose
-only unreleased changes are benchmarks or package-local documentation.
+The check cannot be switched on until every publishable package is clean against its anchor.
+Batched versioning leaves packages with released content sitting past their last increment;
+the exclusions remove those whose only drift is benches or package-local documentation.
 
 1. Fix the `include_str!` call sites that reach from `src/` into `tests/fixtures/`.
 2. Land the exclusions and the reconciliation increments together, and let `release.yml` publish.
    They must land together because an `exclude` edit is itself a manifest change.
 3. Confirm `cargo release-plan check` is clean on `main`.
-4. Make `validate-versions` a required check, and require branches to be up to date.
+4. Make `validate-versions` a required check, and put `main` behind a merge queue.
 
 Steps 1–3 must complete before step 4, or every pull request is immediately red.
 
