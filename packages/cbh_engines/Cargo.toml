@@ -28,6 +28,14 @@ allowed_external_types = [
 # This is an implementation crate whose surface is documented on `cargo-bench-history`.
 doc = false
 
+[features]
+# Internal-only API surface for in-workspace tests: the committed parser fixtures
+# that other crates' tests (and this crate's own tests) use instead of embedding a
+# second compile-time copy. Never forwarded by the shell crate, so end-user builds
+# never see it. See docs/impl-crate-split.md for the `test-util` vs
+# `private-test-util` distinction.
+private-test-util = []
+
 [dependencies]
 cbh_diag = { workspace = true }
 cbh_model = { workspace = true }

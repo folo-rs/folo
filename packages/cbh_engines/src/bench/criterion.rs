@@ -191,14 +191,12 @@ mod tests {
         RefUnwindSafe
     );
 
-    const STD_INSTANT_BENCHMARK: &str =
-        include_str!("../../tests/fixtures/criterion/std_instant/benchmark.json");
-    const STD_INSTANT_ESTIMATES: &str =
-        include_str!("../../tests/fixtures/criterion/std_instant/estimates.json");
-    const FAST_TIME_BENCHMARK: &str =
-        include_str!("../../tests/fixtures/criterion/fast_time_clock/benchmark.json");
-    const FAST_TIME_ESTIMATES: &str =
-        include_str!("../../tests/fixtures/criterion/fast_time_clock/estimates.json");
+    use crate::testing::{
+        CRITERION_FAST_TIME_CLOCK_BENCHMARK as FAST_TIME_BENCHMARK,
+        CRITERION_FAST_TIME_CLOCK_ESTIMATES as FAST_TIME_ESTIMATES,
+        CRITERION_STD_INSTANT_BENCHMARK as STD_INSTANT_BENCHMARK,
+        CRITERION_STD_INSTANT_ESTIMATES as STD_INSTANT_ESTIMATES,
+    };
 
     #[test]
     fn parses_identity_from_benchmark_json() {

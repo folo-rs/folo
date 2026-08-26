@@ -280,10 +280,10 @@ mod tests {
         RefUnwindSafe
     );
 
-    const SINGLE_FIXTURE: &str =
-        include_str!("../../tests/fixtures/callgrind/single_unparametrized.summary.json");
-    const PARAMETRIZED_FIXTURE: &str =
-        include_str!("../../tests/fixtures/callgrind/parametrized.summary.json");
+    use crate::testing::{
+        CALLGRIND_PARAMETRIZED as PARAMETRIZED_FIXTURE,
+        CALLGRIND_SINGLE_UNPARAMETRIZED as SINGLE_FIXTURE,
+    };
 
     fn metric(record: &BenchmarkResult, kind: MetricKind) -> &Metric {
         record

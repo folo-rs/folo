@@ -147,14 +147,15 @@ the no-override path (`Workspace::drive_resolving_target_root`) to prove `collec
 integration coverage of that wiring — keep it, and keep the harvest hermetic there by other
 means than a target-root override.
 
-**Fixtures.** The Criterion and Callgrind fixtures under `tests/fixtures/**` are **real**
+**Fixtures.** Parser fixtures live in `cbh_engines` (`tests/fixtures/**`, exposed here as
+`cbh_engines::testing` behind `private-test-util`). Criterion and Callgrind files are **real**
 committed output of those external tools, doubling as schema-drift canaries — do not
 hand-edit to make a test pass; regenerate from a real run. The in-workspace engines
-(`alloc_tracker`, `all_the_time`) are guarded differently: `src/bench/schema_roundtrip.rs`
-drives the **real** producer and feeds its output straight through the adapter, so
-producer/consumer drift fails the build automatically. Their `tests/fixtures/**` files are
-therefore representative samples of the current schema for the value-asserting unit tests, not
-the drift canary — keep them in sync with the producer's shape, but the round-trip test is
+(`alloc_tracker`, `all_the_time`) are guarded differently: `cbh_engines`'s
+`schema_roundtrip` test drives the **real** producer and feeds its output straight through
+the adapter, so producer/consumer drift fails the build automatically. Their fixture files
+are therefore representative samples of the current schema for the value-asserting unit tests,
+not the drift canary — keep them in sync with the producer's shape, but the round-trip test is
 authoritative.
 
 **Backfill coverage.** Planning/skip/overwrite/error logic is exhaustively covered by
