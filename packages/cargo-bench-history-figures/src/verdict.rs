@@ -30,14 +30,15 @@ fn history_reported(finding: &Finding, reading: &str) -> String {
         FindingMethod::BranchExcursion => "branch excursion",
     };
 
-    // A change point names the commit the new level starts at, which is a claim about
-    // where something happened. A drift belongs to its whole window rather than one commit,
-    // so it names the range it accumulated over. Rendering a drift as a single commit would
-    // invite the reader to go looking at one commit's diff, which is exactly the wrong thing
-    // to do with one.
+    // A change point names a commit somewhere near the split, because the detector
+    // estimates a regime boundary and cannot always identify the first commit that
+    // introduced the new level. A drift belongs to its whole window rather than one
+    // commit, so it names the range it accumulated over. Rendering a drift as a
+    // single commit would invite the reader to go looking at one commit's diff, which
+    // is exactly the wrong thing to do with one.
     let attribution = match (finding.method, finding.commit.as_deref()) {
         (_, None) => "across the analyzed window".to_owned(),
-        (FindingMethod::ChangePoint, Some(commit)) => format!("first seen at `{commit}`"),
+        (FindingMethod::ChangePoint, Some(commit)) => format!("somewhere near `{commit}`"),
         (FindingMethod::Drift, Some(commit)) => match finding.window_start_commit.as_deref() {
             Some(start) => format!("accumulated from `{start}` to `{commit}`"),
             None => format!("accumulated across the window ending at `{commit}`"),
@@ -159,6 +160,7 @@ mod tests {
 
         assert!(fragment.contains("Reported."));
         assert!(fragment.contains("% via"));
+        assert!(fragment.contains("somewhere near"));
         assert!(fragment.contains("Because the level changed."));
     }
 
@@ -178,7 +180,7 @@ mod tests {
         assert!(fragment.contains("excess beyond its nearest edge"));
         assert!(!fragment.contains('%'));
         assert!(!fragment.contains("via change point"));
-        assert!(!fragment.contains("first seen"));
+        assert!(!fragment.contains("somewhere near"));
         assert!(!fragment.contains("the level moved"));
     }
 

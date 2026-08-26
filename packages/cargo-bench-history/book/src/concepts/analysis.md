@@ -12,7 +12,7 @@ History mode evaluates two finding methods for each series, and the resulting fi
 ranked together by descending relative move:
 
 1. **Change-point (step)** — the primary finding. A single most-likely level shift is located,
-   attributing the change to the commit at the start of the after-regime. Persistence is built
+   and the report names a commit somewhere near that split. Persistence is built
    in, so a single-commit blip cannot trip it.
 2. **Monotonic drift** — a separate finding type for slow trends, established by a trend test
    and sized by an outlier-resistant slope.

@@ -521,15 +521,17 @@ pub struct Finding {
     /// excess relative to the nearest range edge, matching
     /// [`BranchExcursion::relative_excess`].
     pub relative_delta: f64,
-    /// Commit the change is attributed to, if known. For a change point this is the
-    /// first commit of the new level; for a branch comparison it is the context
-    /// commit; for a drift it is the newest commit the trend reached (paired with
-    /// [`window_start_commit`](Self::window_start_commit) to name the accumulation
-    /// range, since a drift belongs to the whole window rather than one commit).
+    /// Commit associated with the finding, if known. For a change point this is the
+    /// detector's estimate of where the new level begins — somewhere near the true
+    /// first commit of that level, which cannot always be identified. For a branch
+    /// comparison it is the context commit; for a drift it is the newest commit the
+    /// trend reached (paired with [`window_start_commit`](Self::window_start_commit)
+    /// to name the accumulation range, since a drift belongs to the whole window
+    /// rather than one commit).
     pub commit: Option<String>,
     /// The oldest commit of a drift's accumulation window, so the report can name the
     /// range the trend accrued over. `Some` only for a drift finding; `None` for a
-    /// change point or branch comparison, which are attributed to a single commit.
+    /// change point or branch comparison.
     pub window_start_commit: Option<String>,
     /// Abbreviated commit of the blessing that re-baselined this series, if any.
     pub blessed_at: Option<String>,

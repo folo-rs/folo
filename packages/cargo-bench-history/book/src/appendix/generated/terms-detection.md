@@ -1,7 +1,7 @@
 | Term | What it means |
 |---|---|
 | **chance level** | How often pure chance alone would produce a pattern at least this strong. |
-| **change point** | The commit where a series stops holding one level and starts holding another. |
+| **change point** | An estimated location near which a series stops holding one level and starts holding another. |
 | **detector** | The procedure that examines one series for one shape of change: a change point, a drift, or a branch comparison. |
 | **drift** | A series that moves steadily in one direction rather than stepping between levels. |
 | **level** | The value a series sits at over a stretch of commits, ignoring run-to-run scatter. |

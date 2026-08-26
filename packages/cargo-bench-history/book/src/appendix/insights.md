@@ -16,7 +16,7 @@ flowchart TD
     F["A finding"] --> Q0{"Which mode<br/>produced the report?"}
     Q0 -->|"branch"| BR["It compares your tip<br/>to the base"]
     Q0 -->|"history"| Q1{"Which method?"}
-    Q1 -->|"change point"| CP["It names a commit"]
+    Q1 -->|"change point"| CP["It names a nearby commit"]
     Q1 -->|"drift"| DR["It names a window"]
     CP --> Q2{"Did anything else move<br/>at the same commit?"}
     Q2 -->|"many series"| SHARED["Look for a shared cause:<br/>code or environment"]
@@ -34,14 +34,14 @@ which mode ran.
 
 ### A change point
 
-The finding names the **first commit that already shows the new level**. That is not
-necessarily the commit that caused it — if collection is sparse, the cause is somewhere in the
-gap before it.
+The finding names a commit **somewhere near** the change, not the exact first commit that
+introduced the new level. A specific causal commit is not always identifiable; if collection
+is sparse, the cause is somewhere in the gap before the named commit.
 
 1. **Look at the series.** `cargo bench-history examine --benchmark <qualified-id> --metric <name>`
    prints every stored point. Both values come from the finding. The chart in the report is a
    summary; this is the data.
-2. **Check whether the attributed commit has a neighbor gap.** If the previous observation is
+2. **Check whether the named commit has a neighbor gap.** If the previous observation is
    twenty commits back, your suspect list is those twenty commits, not one.
 3. **Check what else moved.** Many simultaneous steps suggest a shared cause, not a specific
    one. The cause may be shared code such as an allocator, runtime or dependency, or an

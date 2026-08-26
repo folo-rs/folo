@@ -4,7 +4,7 @@
 | blessing | A recorded decision to treat a change as accepted, so earlier measurements no longer influence analysis. |  | [Reconstruction](reconstruction.md) |
 | census | The report's account of how many series it judged, and why it did not judge the rest. |  | [Reporting](reporting.md) |
 | chance level | How often pure chance alone would produce a pattern at least this strong. | p-value | [Detection](detection.md) |
-| change point | The commit where a series stops holding one level and starts holding another. |  | [Detection](detection.md) |
+| change point | An estimated location near which a series stops holding one level and starts holding another. |  | [Detection](detection.md) |
 | comparison-base lag | A branch comparison made against base data from several commits back. |  | [Reporting](reporting.md) |
 | confidence interval | A range the benchmark engine reports alongside a measurement to say how precisely it pinned it down. |  | [Noise gates](gates.md) |
 | detector | The procedure that examines one series for one shape of change: a change point, a drift, or a branch comparison. |  | [Detection](detection.md) |

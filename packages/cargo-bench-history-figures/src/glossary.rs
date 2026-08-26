@@ -77,8 +77,8 @@ pub const TERMS: &[Term] = &[
     },
     Term {
         phrase: "change point",
-        definition: "The commit where a series stops holding one level and starts \
-                     holding another.",
+        definition: "An estimated location near which a series stops holding one \
+                     level and starts holding another.",
         formal_name: "",
         chapter: "detection.md",
     },
