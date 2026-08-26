@@ -886,15 +886,17 @@ fn previous_regime_text(finding: &Finding) -> Option<String> {
 /// introduced the new level. A branch comparison names the context commit
 /// (`@ <commit>`). A drift names the range it accumulated over
 /// (`accumulated <oldest> → <newest>`), because no single commit is responsible.
+/// A missing commit is attributed across the analyzed window, matching the book
+/// fragments, rather than naming a placeholder.
 fn attribution_text(finding: &Finding) -> String {
-    let commit = finding.commit.as_deref().unwrap_or("unknown");
-    match finding.method {
-        FindingMethod::ChangePoint => format!("somewhere near {commit}"),
-        FindingMethod::Drift => match finding.window_start_commit.as_deref() {
+    match (finding.method, finding.commit.as_deref()) {
+        (_, None) => "across the analyzed window".to_owned(),
+        (FindingMethod::ChangePoint, Some(commit)) => format!("somewhere near {commit}"),
+        (FindingMethod::Drift, Some(commit)) => match finding.window_start_commit.as_deref() {
             Some(start) => format!("accumulated {start} → {commit}"),
             None => format!("accumulated ending at {commit}"),
         },
-        FindingMethod::BranchExcursion => format!("@ {commit}"),
+        (FindingMethod::BranchExcursion, Some(commit)) => format!("@ {commit}"),
     }
 }
 
@@ -3921,8 +3923,31 @@ mod tests {
         assert_eq!(attribution_text(&regression()), "somewhere near deadbee");
         // A drift names the whole range it accumulated over, not one commit.
         assert_eq!(attribution_text(&drift()), "accumulated f00dcafe → deadbee");
+        let mut drift_without_start = drift();
+        drift_without_start.window_start_commit = None;
+        assert_eq!(
+            attribution_text(&drift_without_start),
+            "accumulated ending at deadbee"
+        );
         // A branch comparison names the context commit itself.
         assert_eq!(attribution_text(&branch_regression(true)), "@ deadbee");
+        // A series point may lack commit metadata; do not invent a placeholder name.
+        let mut unattributed = regression();
+        unattributed.commit = None;
+        assert_eq!(
+            attribution_text(&unattributed),
+            "across the analyzed window"
+        );
+        unattributed.method = FindingMethod::Drift;
+        assert_eq!(
+            attribution_text(&unattributed),
+            "across the analyzed window"
+        );
+        unattributed.method = FindingMethod::BranchExcursion;
+        assert_eq!(
+            attribution_text(&unattributed),
+            "across the analyzed window"
+        );
     }
 
     fn darwin_set() -> DiscriminantSet {

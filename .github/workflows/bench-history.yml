@@ -350,9 +350,9 @@ jobs:
 
           **What do I do?**
 
-          A change-point location is an estimate: the change occurred somewhere near the named commit, not necessarily at it. Use `cargo bench-history examine <filters>` to narrow down on the specific commit where the change occurred. Copy the benchmark id, metric, and discriminant filters from the finding above and run:
+          A change-point location is an estimate: the change occurred somewhere near the named commit, not necessarily at it. Use `cargo bench-history examine` to narrow down on the specific commit where the change occurred. Copy the benchmark id, metric, and discriminant filters from the finding above and run:
 
-          `cargo bench-history examine --benchmark <id> --metric <name>`
+          `cargo bench-history examine --benchmark <id> --metric <name> --engine <engine> --target-triple <triple> --machine-key <key>`
 
           Then decide what the change is:
 
