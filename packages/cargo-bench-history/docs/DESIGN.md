@@ -1073,6 +1073,12 @@ false positive. Testability is one mode-aware predicate (enough points in the wi
 mode's detector reads), and detection short-circuits on that same predicate, so a series is
 either judged *and* counted or neither.
 
+A series that meets the detection minimum is judged and counted even when a lone change-point
+at that length cannot clear the group-wide bar in a large family. Rank comparisons on so few
+points have a floor, and the rank-1 threshold shrinks with the family; the two miss each other
+well before a production-scale suite. The short series still tightens every other series' bar.
+It can still be reported when it is not alone.
+
 The correction and the report must cover the same set, because a rate controlled over one
 set says nothing about a subset of it. A mode that reports only one direction (§8.5)
 therefore discards the other direction's candidates **before** the correction runs, so every
