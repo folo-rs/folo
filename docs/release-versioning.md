@@ -132,23 +132,24 @@ counts as a released-content change and forces a publish. This keeps the rule un
 comparison for every file in the package — at the price of an occasional gratuitous release. The
 alternative, comparing parsed manifests, is more machinery than the problem deserves.
 
-### Opting content out
+### What ships
 
-Content that ships today but need not — `benches/`, `tests/`, package-local `docs/`, `book/`,
-`AGENTS.md` — is removed from the artifact with `exclude` in the package's `Cargo.toml`, after
-which edits to it no longer trigger a release. Nothing is special-cased in the tool, and a reader
-of `Cargo.toml` can see exactly what is released.
+The published crate is the consumer build: `src/` and `README.md` (crates.io renders it).
+Everything else — `tests/`, `benches/`, `examples/`, package-local `docs/`, `book/`,
+`AGENTS.md` — stays in git. Each publishable package declares that with `include` in
+`Cargo.toml`. Nothing is special-cased in the tool, and a reader of `Cargo.toml` can see
+exactly what is released.
 
-* **`README.md` stays** — crates.io renders it.
-* **`examples/` stays.** Examples are API documentation aimed at consumers, and this repository
-  holds them to production quality (see [`examples.md`](examples.md)).
-* **Excluding `tests/` requires a fix first.** `cbh_engines` and `cargo-bench-history` have
-  `include_str!` call sites under `src/` that reach into `tests/fixtures/`. A `src/` file
-  depending on `tests/` is invalid layering regardless of packaging, and is corrected as part of
-  this work rather than worked around.
+`include` is the allow-list, not `exclude`. A denylist grows every time a new non-source
+directory appears; an allow-list does not.
 
-An `exclude` edit is a change to `Cargo.toml`, which is always released content, so adding
-exclusions requires an increment in the same change.
+An `include` edit is a change to `Cargo.toml`, which is always released content, so adding
+it requires an increment in the same change.
+
+`src/` must not `include_str!` (or `include_bytes!` / `include!`) a path outside `src/`.
+That is invalid layering regardless of packaging. Shared test inputs belong with the crate
+that owns the parser, and callers of that parser use it as a dependency rather than
+embedding a second copy.
 
 ### Inherited workspace values
 
@@ -344,7 +345,7 @@ attribution and plan expansion. Integration tests build fixture repositories in
 `cargo-bench-history`'s test harness (pinned identity, no signing, no autogc). Fixtures cover an
 increment placed early in a branch with further changes after it, unreleased content already
 present on the base branch, group closure with an unpublished member, `=`-pin propagation, a
-deleted packaged file, a newly excluded directory, a moved package directory, a
+deleted packaged file, a path dropped from `include`, a moved package directory, a
 workspace-inherited field change, a manifest reformatted without a version change, a merge commit
 on the base branch's first-parent line, and a shallow history.
 
@@ -480,11 +481,14 @@ versioning.
 
 The check cannot be switched on until every publishable package is clean against its anchor.
 Batched versioning leaves packages with released content sitting past their last increment;
-the exclusions remove those whose only drift is benches or package-local documentation.
+restricting the crate to `src/` and `README.md` removes those whose only drift is tests,
+benches, examples or package-local documentation.
 
-1. Fix the `include_str!` call sites that reach from `src/` into `tests/fixtures/`.
-2. Land the exclusions and the reconciliation increments together, and let `release.yml` publish.
-   They must land together because an `exclude` edit is itself a manifest change.
+1. Stop `src/` from embedding files outside `src/`. Shared parser fixtures live in the
+   crate that owns the parser; dependents call that crate instead of carrying a second copy.
+2. Land the `include` allow-lists and the reconciliation increments together, and let
+   `release.yml` publish. They must land together because an `include` edit is itself a
+   manifest change.
 3. Confirm `cargo release-plan check` is clean on `main`.
 4. Make `validate-versions` a required check, and put `main` behind a merge queue.
 
@@ -523,9 +527,9 @@ never fails the check while a run is working through it.
 ## Reuse outside this repository
 
 The tool is an ordinary published Cargo subcommand from the start — binstall metadata, trusted
-publisher, no folo-specific behaviour compiled in. Group definitions and exclusions come from
-configuration, so another workspace adopts it by writing `[workspace.metadata.release-plan]` and
-pointing a check at `cargo release-plan check`.
+publisher, no folo-specific behaviour compiled in. Group definitions come from configuration
+and packaging from each crate's `include`, so another workspace adopts it by writing
+`[workspace.metadata.release-plan]` and pointing a check at `cargo release-plan check`.
 
 The skill and the `just` recipes stay local for now. The skill is the part most entangled with
 local conventions, and skills are new to this repository; extracting it is worth doing only once
