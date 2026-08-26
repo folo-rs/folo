@@ -19,27 +19,63 @@ reachable only by retuning a threshold. Where a test needs to know which gate de
 the detectors record their gate evaluations to an optional log it can inspect, rather than relaxing
 a threshold to make the decision observable.
 
-Evidence selection is separated from evidence judgment. Deciding which base-window levels a branch
-comparison may see — discarding a stale prefix when the base itself moved, and discarding an
-isolated measurement excursion — happens once, before the comparison itself is judged, so the
-judgment gates see one already-chosen sample and the prediction interval's centre and scatter
-always come from that same sample. This is a hard constraint rather than a tidiness preference: a robust scale estimator
-paired with a non-robust centre was measured to invent regressions on unchanged code.
+Branch analysis is a dedicated all-series path rather than another independent per-series
+detector. Per-series preparation remains parallel: it applies the base blessing boundary,
+alternates chronologically ordered observed levels between selector and reference lanes, locates
+the latest supported regime using only selectors, and evaluates the context value against the
+resulting observed range. The branch tip itself is first collapsed to one observation per commit,
+preferring the dirty snapshot lane when present, so a commit with repeated measurements does not
+depend on storage order. Alternating observations rather than raw topology coordinates preserves
+both lanes for sparse histories. Finalization is serial because the report-wide historical
+comparison needs a rectangular family of stable series sharing the same reference-lane candidate
+commits.
 
-Selection is nonetheless bounded by the eligibility gate rather than the reverse. That one gate
-runs first, so whether a series can be judged at all is settled on its window as recorded, which
-keeps the decision in exact correspondence with the public testability projection the census counts
-and the false-discovery family is sized from. Narrowing that happens afterwards cannot make the
-census untruthful, because the floor was met before anything was discarded. It follows that no
-selection step may discard so much that the remainder falls under the minimum regime length; the
-removal allowance is set far below that margin.
+Selector/reference separation prevents a historical candidate from helping choose the boundary it
+is later judged against. The boundary search segments the selector lane: each search takes the
+strongest split in its segment and then recurses into both sides, keeping every split that clears
+the support gates and adopting the latest of them. Recursion continues through splits that clear
+no gate, because the strongest split need not be a supported one and a negligible step must not
+discard the candidates behind it. Segmentation alone cannot certify the boundary that ends a
+stretch whose two neighbours share a level, since that boundary is measured against the matching
+observations further back and looks like no change; a forward extension pass therefore re-searches
+the suffix starting at the newest accepted boundary with the same recursive segmentation until it
+accepts no more. All searches share one predeclared selection-adjusted error budget, sized as the
+triangular sum of the maximum search trees for the initial lane and every successively shorter
+suffix. A current regime starts at the
+first selector observation known to be after a split, leaving an interleaved reference observation
+out when its side is ambiguous. Histories too short for this separation still support the weaker
+complete-window range comparison; a strongly separated recent group too short to establish a
+regime makes the series explicitly unjudged.
+
+Range judgment retains every observation in the selected regime. A value is a branch excursion
+only outside the recorded minimum or maximum, and its magnitude is excess beyond the nearest edge.
+No isolated observation is deleted: doing so would strengthen a finding by hiding contrary
+evidence.
+
+The historical comparison treats the real branch and each eligible base commit symmetrically. A
+base turn holds out one reference-lane commit and adds the real branch value to the remaining
+references. Scores sum normalized, gate-surviving range excesses across the rectangular family.
+This comparison supplies report-level context and never suppresses an individual factual
+excursion. Family selection deduplicates identical candidate sets, considers chronological
+minimum-size windows and every pairwise set intersection, then explores a deterministic bounded
+set of additional multi-way intersections. Equal member families are deduplicated before their
+complete shared candidate intersection is computed. This admits shared candidates that are not
+consecutive in any one series without allowing the intersection search to grow combinatorially.
+History mode remains the only path that produces calibrated p-values and applies the
+Benjamini–Hochberg filter.
 
 History-mode change-point calibration needs the size of the later false-discovery family before
-it can choose its analytic acceptance boundary and permutation precision. Detection therefore
-begins with a serial, metadata-only testability prepass that builds the census and obtains its
-judged count. Workers evaluate the same pure predicate to short-circuit unjudged series, then run
-each judged series independently. The expensive statistical work remains inside the existing
-per-series worker chunks; only the cheap classification pass is serial.
+it can choose its analytic acceptance boundary and permutation precision. History detection
+therefore begins with a serial testability prepass that builds the census and obtains its judged
+count, and workers then run each judged series independently. The expensive statistical work
+remains inside the existing per-series worker chunks; only the cheap classification pass is
+serial.
+
+Branch mode needs no prepass, because a factual excursion does not depend on how many other
+series were judged. Every series goes straight into the parallel preparation chunks, and the
+census is assembled from the prepared entries after they are recombined. Both pipelines reach
+their verdicts through one shared testability definition, including unresolved current-base
+regimes, so the census, the detector, and the verbose diagnostics stay aligned.
 
 Permutation-independent magnitude and noise gates run before selection adjustment. The detector
 also fits the drift before calibration and calibrates a step only when that model fits at least as

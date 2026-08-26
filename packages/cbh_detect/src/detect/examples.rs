@@ -25,7 +25,7 @@ use cbh_model::{BenchmarkId, DiscriminantSet, Engine, MetricKind};
 use nonempty::nonempty;
 
 use crate::detect::findings::count_to_f64;
-use crate::detect::noise_gates::{COMPARE_WINDOW, MIN_REGIME};
+use crate::detect::noise_gates::{MAX_BRANCH_BASE_COMMITS, MIN_REGIME};
 pub use crate::detect::recorded::{
     CONTENDED_RUNNER_BASE, CONTENDED_RUNNER_EXCURSION, CONTENDED_RUNNER_LEVEL,
     CONTENDED_RUNNER_LEVEL_START, STATIONARY_BIMODAL_BASE, STATIONARY_BIMODAL_HIGH,
@@ -193,6 +193,7 @@ pub fn series(name: &str, values: &[f64], kind: MetricKind, topo_start: usize) -
         kind,
         points,
         base_window: Vec::new(),
+        base_history_count: 0,
         active_start: 0,
         blessing: None,
     }
@@ -225,7 +226,7 @@ pub fn with_base_window(mut series: Series, base_ref_index: usize) -> Series {
     attach_base_windows(
         slice::from_mut(&mut series),
         slice::from_ref(&base),
-        COMPARE_WINDOW,
+        MAX_BRANCH_BASE_COMMITS,
     );
     series
 }

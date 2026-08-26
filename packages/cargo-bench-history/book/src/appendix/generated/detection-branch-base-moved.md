@@ -1,5 +1,5 @@
-> **Reported.** A regression of +10.22% at the context commit against the base prediction interval.
+> **Reported.** An improvement at the context commit, outside every observed current-base value.
 >
-> The context run is 145 against a base level of 131.6.
+> The context run is 100; the observed range is 124.6-135.2, and the excess beyond its nearest edge is 24.65.
 >
-> The prediction is centered on the newer base regime, not on the whole mixed window.
+> The context value matches the older regime but is faster than every observation in the current regime.

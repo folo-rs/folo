@@ -32,7 +32,8 @@ top of the base tip is treated as an unnamed feature branch, which is what it ef
 A dirty *checkout* alone does not do this — only a dirty run that was actually admitted into
 the analysis.
 
-Both modes correct for false discoveries across everything they judged.
+History mode corrects calibrated chance levels across everything it judged. Branch mode retains
+factual current-range excursions and compares the complete report with comparable base commits.
 
 See [Analysis](../concepts/analysis.md) for what each mode detects.
 
@@ -73,6 +74,11 @@ Every report also states how many series it **judged**, and names the reason for
 did not, so that "no notable changes" can be read for what it covers rather than taken as a
 blanket all-clear. See
 [Reading a silent report](../concepts/analysis.md#reading-a-silent-report).
+
+In branch mode each finding states the observed current-base range and the excess beyond its
+nearest edge. Each discriminant-set section also states how many comparable base commits showed at
+least as much report-wide out-of-range movement. The JSON set carries the same counts under
+`branch_comparison`; each JSON finding carries its range and excess under `branch`.
 
 > **Comparison-base warnings (branch mode)**
 > On rotating CI machine pools the newest base commits may carry data only under a different

@@ -106,10 +106,12 @@ detection judges only the active part. A blessed series that is left with too fe
 judge is reported with its own distinct reason, rather than being lumped in with series that
 were simply too short.
 
-A few asymmetries worth knowing:
+A few details worth knowing:
 
-- **History mode only.** Branch mode ignores blessings entirely — see
-  [Limits](limits.md#branch-mode-ignores-blessings).
+- **The evidence line depends on the mode.** History applies the blessing to the context history.
+  Branch mode applies it to the base ref's first-parent history, because that is the evidence the
+  branch is judged against. In both cases the blessed commit remains and earlier evidence is
+  excluded.
 - **A blessing is a prefix of the benchmark identity.** The blessed value is matched as a plain
   string prefix of the slash-joined benchmark identity (`group/case`, `package/module/fn`, …),
   so blessing `foo/bar` also accepts `foo/barbaz`. Bear that in mind when names share a stem.
@@ -132,8 +134,8 @@ single observation, judged against a base that is itself one clean point per com
 
 ## What reconstruction hands on
 
-A set of series, each an ordered sequence of points, with ghosts removed and blessed series
-sliced to their active window.
+A set of series, each an ordered sequence of points, with ghosts removed and blessings positioned
+on the mode's evidence line.
 
 Next: [Detection](detection.md), which locates possible moves and corrects for its own search before
 handing candidates onward.

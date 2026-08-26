@@ -29,10 +29,13 @@ impl Logger {
     // Takes `self` for call-site symmetry with `detail_with` (both are
     // `logger.x(..)`), even though a phase marker is unconditional and reads no
     // state.
+    // Stderr I/O is not asserted by unit tests; cargo-mutants then waits out the
+    // process-spawning smoke suite and tips the 60s timeout on slower Windows shards.
     #[expect(
         clippy::unused_self,
         reason = "kept an instance method so callers use one logger handle uniformly"
     )]
+    #[cfg_attr(test, mutants::skip)]
     pub(crate) fn step(self, message: &str) {
         eprintln!("==> {message}");
     }
@@ -61,11 +64,29 @@ impl Logger {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::cell::Cell;
+
     use super::Logger;
 
     #[test]
     fn verbose_reports_the_constructed_flag() {
         assert!(Logger::new(true).verbose());
         assert!(!Logger::new(false).verbose());
+    }
+
+    #[test]
+    fn verbose_details_are_built_only_when_enabled() {
+        let built = Cell::new(false);
+        Logger::new(false).detail_with(|| {
+            built.set(true);
+            "disabled".to_owned()
+        });
+        assert!(!built.get());
+
+        Logger::new(true).detail_with(|| {
+            built.set(true);
+            "enabled".to_owned()
+        });
+        assert!(built.get());
     }
 }

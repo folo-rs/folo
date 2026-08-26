@@ -76,36 +76,37 @@ diagnostic — see [Insights](insights.md).
 
 ## No certainty score is reported
 
-The report gives no confidence or certainty score. The chance levels used inside history and
-branch detection come from different tests answering different questions, so they are not on a
-common scale. The group-wide correction that runs afterwards does not turn them into a comparable
-finding score.
+The report gives no confidence or certainty score. History detection reaches its findings through
+chance levels; branch detection reaches its findings by comparing the context run against an
+observed range, which produces no chance level at all. The two are not measurements of the same
+thing, so there is no scale both could be placed on. The group-wide correction history applies
+afterwards does not turn its chance levels into a comparable finding score either.
 
 *What to do:* rank findings by size of move, which is the comparable quantity the report provides.
 
-## Branch-mode base-window narrowing is not selection-adjusted
+## Branch historical comparison is finite context, not probability
 
-To decide whether the recent base window should be narrowed, branch mode searches several suffixes
-and split positions, then predicts from the selected trailing regime when one qualifies. The
-prediction interval's chance level treats that regime as though it had been fixed in advance. It
-therefore does not account for the search that selected both the regime's centre and its scatter.
+Branch mode reports an excursion when the context value lies outside the observed current-base
+range. Its report-wide historical comparison then counts comparable base commits whose complete
+report score tied with or exceeded the branch score.
 
-The stricter boundary gates reduce false narrowing but do not calibrate the resulting chance
-level. The limitation is most important for benchmarks that naturally switch between levels and
-for counted metrics whose selected trailing regime can have no observed scatter. The later
-group-wide correction cannot repair a per-series chance level that is already too optimistic.
+That count is limited by the base evidence available after windowing, regime selection, and
+blessings. It does not estimate all possible future benchmark outcomes and is not reported as a
+p-value or confidence. With too few shared reference-lane commits, no report-wide comparison is
+shown; factual per-series excursions remain.
 
-*What to do:* treat a branch finding as a reason to inspect the chart and the base measurements,
-not as a calibrated probability that the branch caused a change. Use
-[`examine`](../commands/examine.md) when the base window appears to contain more than one level.
+*What to do:* read the count literally and inspect the chart or
+[`examine`](../commands/examine.md) when the base range appears to contain more than one operating
+condition. Gather more ordinary base measurements when you need a broader empirical comparison.
 
-## Branch mode ignores blessings
+## A recent blessing can leave branch evidence short
 
-A blessing re-baselines a series in history mode. Branch mode does not consult them at all.
+A blessing is an intentional evidence boundary in both modes. Branch mode keeps the blessed base
+commit and excludes every earlier one, even when that leaves too few base commits to judge the
+branch.
 
-*Why:* a blessing accepts a change *in the base's history*. Branch mode's question is whether
-the tip differs from the base's current level, and a blessing does not change what that level
-is.
+*Why:* using evidence the blessing explicitly retired would silently undo the user's decision.
+The report names the shortfall rather than falling back across the boundary.
 
 ## Cross-machine comparison is never attempted
 
@@ -121,7 +122,8 @@ history.
 The store records more than the analysis uses:
 
 - **`std_dev`**, which Criterion reports, is stored and never consulted. Analysis uses
-  confidence intervals for dispersion checks and the series' own scatter for everything else.
+  confidence intervals for dispersion checks, history residuals for history noise, and observed
+  ranges for branch excursions.
 - **`machine`** — the full hardware description behind the machine key — is provenance for a
   human, not an input.
 - **`best_of`** records how many repetitions a run took, and does not affect analysis.

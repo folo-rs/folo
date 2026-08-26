@@ -7,11 +7,10 @@
 //! that into a failing test rather than into prose that has quietly become wrong.
 
 use cbh_detect::{
-    AnalysisMode, COMPARE_WINDOW, DRIFT_MIN_POINTS, Finding, MAX_CHANGE_CHANCE_LEVEL, MIN_REGIME,
+    AnalysisMode, DRIFT_MIN_POINTS, Finding, MIN_BRANCH_REGIME_SELECTION_COMMITS, MIN_REGIME,
     MIN_SERIES_POINTS, Series, evaluate_with_log, examples,
 };
 use cbh_model::MetricKind;
-use cbh_stats::{mean, sample_std_dev, student_t_two_sided_p};
 
 use crate::assets::Asset;
 use crate::styles::plot::{Mark, Observation, Plot};
@@ -45,7 +44,7 @@ fn branch() -> Vec<Asset> {
         let (values, finding) = branch_finding(name, tip);
 
         let tip_index = values.len().saturating_sub(1);
-        let prediction = branch_prediction_band(
+        let observed_range = branch_observed_range(
             values
                 .get(..tip_index)
                 .expect("the branch figure always has base-ref values before its context run"),
@@ -74,8 +73,8 @@ fn branch() -> Vec<Asset> {
             .value_band(
                 0,
                 tip_index,
-                prediction,
-                "predicted range",
+                observed_range,
+                "observed current-base range",
                 theme::ALTERNATE,
             )
             .split(tip_index, "context commit");
@@ -103,54 +102,26 @@ const BRANCH_CASES: [(&str, f64, &str); 2] = [
     (
         "detection-branch-reported",
         BRANCH_BASE_LEVEL * 1.30,
-        "the context run sits outside the range a further measurement was expected in",
+        "the context run is slower than every observation in the current base regime",
     ),
     (
         "detection-branch-quiet",
         BRANCH_BASE_LEVEL,
-        "the context run is inside the range the base window predicts, so there is nothing to \
-         report",
+        "the context run is inside the observed current-base range, so there is nothing to report",
     ),
 ];
 
-/// The value interval the branch figures shade as the base window's prediction.
-///
-/// This is the detector's prediction interval at its own significance level, not an
-/// illustrative width: from the same cleaned base sample the significance gate reads, it is
-/// the range a single further measurement stays inside unless its two-sided Student-t
-/// p-value falls below [`MAX_CHANGE_CHANCE_LEVEL`](cbh_detect::MAX_CHANGE_CHANCE_LEVEL). A context run drawn
-/// outside this band is therefore exactly one the significance gate rejects, so the band is
-/// the real cutoff the figure's verdict turns on.
-fn branch_prediction_band(values: &[f64]) -> (f64, f64) {
-    let centre = mean(values).expect("the branch figure's base window is not empty");
-    let scatter = sample_std_dev(values)
-        .expect("the branch figure's base window has enough points to estimate scatter");
-    let sample_count = crate::coord::of(values.len());
-    let standard_error = scatter * (1.0 + 1.0 / sample_count).sqrt();
-    let half_width = standard_error * critical_t(MAX_CHANGE_CHANCE_LEVEL, sample_count - 1.0);
-    (centre - half_width, centre + half_width)
-}
-
-/// The two-sided Student-t statistic whose p-value equals `alpha`.
-///
-/// [`student_t_two_sided_p`] has no closed form to invert, but it falls monotonically from
-/// `1.0` at `t = 0` toward `0.0`, so bisection converges on the one statistic that yields
-/// `alpha`. That statistic is the significance gate's cutoff: a measurement falls outside
-/// the prediction interval exactly when its own statistic exceeds it.
-fn critical_t(alpha: f64, degrees_of_freedom: f64) -> f64 {
-    // `t = 0` gives `p = 1.0`, above any `alpha`; this upper bound gives a p-value far below
-    // it, so the two bracket the root. Halving to convergence needs a fixed, generous count.
-    let mut low = 0.0_f64;
-    let mut high = 1.0e6_f64;
-    for _ in 0..100 {
-        let mid = f64::midpoint(low, high);
-        if student_t_two_sided_p(mid, degrees_of_freedom) > alpha {
-            low = mid;
-        } else {
-            high = mid;
-        }
-    }
-    f64::midpoint(low, high)
+/// The minimum and maximum values observed in a branch figure's current base regime.
+fn branch_observed_range(values: &[f64]) -> (f64, f64) {
+    let first = *values
+        .first()
+        .expect("the branch figure's current base regime is not empty");
+    values
+        .iter()
+        .copied()
+        .fold((first, first), |(minimum, maximum), value| {
+            (minimum.min(value), maximum.max(value))
+        })
 }
 
 /// Runs the real branch detector over the shared base window with `tip` appended, and
@@ -183,15 +154,15 @@ const MOVED_BASE_CURRENT_LEVEL: f64 = 130.0;
 
 /// The context level in the branch-base-moved figure.
 ///
-/// Chosen outside the current regime's prediction band so the generated verdict proves
-/// that the comparison was formed from the newer base level.
-const MOVED_BASE_TIP_LEVEL: f64 = 145.0;
+/// Equal to the older regime, so reporting it proves the current range excludes that regime.
+const MOVED_BASE_TIP_LEVEL: f64 = MOVED_BASE_OLD_LEVEL;
 
 /// How many commits each base regime occupies in the branch-base-moved figure.
 ///
-/// Equal halves fill the default comparison window while satisfying the stricter evidence
-/// floor for accepting a base-side regime boundary.
-const MOVED_BASE_REGIME: usize = 8;
+/// Two equal halves supply enough total evidence for regime selection. Alternating them into
+/// selector and reference lanes leaves [`MIN_REGIME`] selector observations on each side of
+/// the boundary.
+const MOVED_BASE_REGIME: usize = MIN_SERIES_POINTS;
 
 /// Builds the branch-base-moved example and returns its values and detector verdict.
 fn branch_base_moved_finding() -> (Vec<f64>, Option<Finding>) {
@@ -216,19 +187,19 @@ fn branch_base_moved_finding() -> (Vec<f64>, Option<Finding>) {
     (values, finding)
 }
 
-/// A branch base that changed recently, so the older base level is discarded.
+/// A branch base that changed recently, so the older level is outside the current regime.
 fn branch_base_moved() -> Vec<Asset> {
     let (values, finding) = branch_base_moved_finding();
     let finding = finding.expect(
-        "the moved-base example places the context run outside the current regime's prediction \
-         band, so it must report if the detector uses the newer regime",
+        "the moved-base example returns to the older level and must report if the detector uses \
+         the newer regime",
     );
     let tip_index = values.len().saturating_sub(1);
     let current_start = MOVED_BASE_REGIME;
     let current_values = values
         .get(current_start..tip_index)
         .expect("the moved-base example has a current base regime before the context run");
-    let prediction = branch_prediction_band(current_values);
+    let observed_range = branch_observed_range(current_values);
 
     let plot = Plot::new("a context commit after the base level moved", values.len())
         .value_label("ns")
@@ -238,7 +209,7 @@ fn branch_base_moved() -> Vec<Asset> {
             if index < current_start {
                 observation.marked(Mark::Removed)
             } else if index == tip_index {
-                observation.marked(Mark::Regression)
+                observation.marked(Mark::Focus)
             } else {
                 observation
             }
@@ -246,14 +217,14 @@ fn branch_base_moved() -> Vec<Asset> {
         .band(
             0,
             current_start.saturating_sub(1),
-            "discarded older base level",
+            "older base regime",
             theme::MUTED,
         )
         .value_band(
             current_start,
             tip_index,
-            prediction,
-            "predicted range from current base",
+            observed_range,
+            "observed current-base range",
             theme::ALTERNATE,
         )
         .split(current_start, "current-base boundary");
@@ -264,19 +235,15 @@ fn branch_base_moved() -> Vec<Asset> {
             "detection-branch-base-moved.md",
             verdict::reported(
                 &finding,
-                "the prediction is centered on the newer base regime, not on the whole \
-                 mixed window",
+                "the context value matches the older regime but is faster than every \
+                 observation in the current regime",
                 AnalysisMode::Branch,
             ),
         ),
     ]
 }
 
-/// How much the contended-runner figure's context run moves above its base level.
-///
-/// A move well clear of the practical floor but far smaller than the recorded excursion,
-/// so the figure is about whether the excursion hides an ordinary regression rather than
-/// about an extreme one.
+/// How much the contended-runner figure's context run moves above its ordinary base level.
 const CONTENDED_TIP_RELATIVE: f64 = 1.10;
 
 /// Builds the contended-runner example and returns its values, the index the excursion
@@ -307,21 +274,16 @@ fn contended_runner_finding() -> (Vec<f64>, usize, Option<Finding>) {
 /// A base window holding one commit the runner lost time on, drawn from real stored results.
 fn branch_contended_runner() -> Vec<Asset> {
     let (values, excursion, finding) = contended_runner_finding();
-    let finding = finding.expect(
-        "the contended-runner example places an ordinary regression against a window whose only \
-         unusual reading is discarded, so it must report",
+    assert!(
+        finding.is_none(),
+        "a context value inside the observed current-regime range must stay quiet",
     );
     let tip_index = values.len().saturating_sub(1);
-    let window_start = tip_index.saturating_sub(COMPARE_WINDOW);
-    let prediction = branch_prediction_band(
-        &values
+    let window_start = 0;
+    let observed_range = branch_observed_range(
+        values
             .get(window_start..tip_index)
-            .expect("the contended-runner example has a base window before its context run")
-            .iter()
-            .enumerate()
-            .filter(|&(index, _)| index.saturating_add(window_start) != excursion)
-            .map(|(_, &value)| value)
-            .collect::<Vec<f64>>(),
+            .expect("the contended-runner example has a base window before its context run"),
     );
 
     let plot = Plot::new(
@@ -332,10 +294,8 @@ fn branch_contended_runner() -> Vec<Asset> {
     .scattered()
     .observations(values.iter().enumerate().map(|(index, &value)| {
         let observation = Observation::new(index, value);
-        if index == excursion {
-            observation.marked(Mark::Removed)
-        } else if index == tip_index {
-            observation.marked(Mark::Regression)
+        if index == excursion || index == tip_index {
+            observation.marked(Mark::Focus)
         } else {
             observation
         }
@@ -349,8 +309,8 @@ fn branch_contended_runner() -> Vec<Asset> {
     .value_band(
         window_start,
         tip_index,
-        prediction,
-        "predicted range without the discarded reading",
+        observed_range,
+        "observed current-base range",
         theme::ALTERNATE,
     )
     .split(tip_index, "context commit");
@@ -359,11 +319,10 @@ fn branch_contended_runner() -> Vec<Asset> {
         Asset::new("detection-branch-contended.svg", plot.render()),
         Asset::new(
             "detection-branch-contended.md",
-            verdict::reported(
-                &finding,
-                "the isolated reading is left out of the comparison, so the window still \
-                 describes the level the context run is judged against",
-                AnalysisMode::Branch,
+            verdict::quiet(
+                None,
+                "the context run remains inside the observed range, including the disturbed \
+                 reading, so the evidence does not support an excursion",
             ),
         ),
     ]
@@ -371,9 +330,10 @@ fn branch_contended_runner() -> Vec<Asset> {
 
 /// How many base-side commits the branch figures lay out.
 ///
-/// Chosen above the comparison window's own minimum so the figures show a window being
-/// selected from a longer history rather than one that happens to be the whole series.
-const BASE_COMMITS: usize = 18;
+/// Set at the threshold where branch mode starts separating regimes, so the figures show
+/// the regime-selection path readers meet in practice rather than the short-history
+/// fallback that compares against the whole base range.
+const BASE_COMMITS: usize = MIN_BRANCH_REGIME_SELECTION_COMMITS;
 
 /// Runs the real history-mode detector over `values` and returns the series, the verdict,
 /// and the plotted observations.
@@ -815,17 +775,16 @@ mod tests {
         assert!(noisy.is_none(), "scatter around one level must not report");
     }
 
-    /// The contended-runner figure's whole lesson is that the disturbed reading does not cost
-    /// the window its sight. Were the reading averaged in, this comparison would fall silent
-    /// while the figure still claimed otherwise, so the claim is pinned against the detector.
+    /// The contended-runner figure demonstrates that recorded evidence is not deleted merely
+    /// because it is inconvenient for sensitivity.
     #[test]
-    fn the_contended_window_still_sees_an_ordinary_regression() {
+    fn the_contended_window_keeps_the_disturbed_reading_as_evidence() {
         let (_, _, finding) = contended_runner_finding();
 
-        let finding =
-            finding.expect("a window whose only unusual reading is discarded must report");
-
-        assert_eq!(finding.direction, Direction::Regression);
+        assert!(
+            finding.is_none(),
+            "a context value inside the full observed range must stay quiet"
+        );
     }
 
     #[test]

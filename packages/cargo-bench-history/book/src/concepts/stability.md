@@ -86,12 +86,10 @@ Consequences worth planning for:
   history-mode analysis reads the step as an accepted baseline change rather than a regression.
   The step *will* be reported until you do: noticing that the measured level moved is the
   detector's job, and recognizing that a build-flag change caused it is yours.
-- **Pull-request comparisons re-baseline on their own.** Blessing re-baselines history-mode
-  analysis only; a pull request is judged directly against the recent base-branch points, which
-  blessing does not adjust. Until enough aligned points accumulate on the base branch, a pull
-  request that touches an affected wall-clock benchmark can show a one-time-shift-sized move in its
-  performance comment. Those findings are advisory rather than merge gates and clear themselves
-  once the aligned baseline fills in.
+- **Pull-request comparisons honor the same boundary.** Branch mode keeps the blessed commit and
+  excludes every earlier base observation. Until enough aligned points accumulate at or after the
+  blessing, an affected wall-clock series is reported as unjudged rather than compared across the
+  configuration change.
 - **Backfilling across the change mixes the two configurations.** `RUSTFLAGS` reaches
   [`backfill`](../commands/backfill.md) from the invocation, not from the commit being measured,
   so backfilling commits that predate the alignment change measures them *with* alignment while

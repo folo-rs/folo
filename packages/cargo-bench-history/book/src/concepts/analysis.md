@@ -6,7 +6,7 @@ that are real and stay silent on measurement jitter. Because
 [no engine is deterministic](engines.md#why-no-engine-is-deterministic), the detector treats
 every metric as noisy and never trusts a value as exact.
 
-## Two finding methods
+## History finding methods
 
 History mode evaluates two finding methods for each series, and the resulting findings are
 ranked together by descending relative move:
@@ -55,11 +55,11 @@ on a move that is noise at its scale.
 > metric. The [Noise gates](../appendix/gates.md) appendix chapter walks every one of them, with
 > the current values and worked examples.
 
-## Judging a context commit
+## Branch excursion method
 
 [Branch mode](#analysis-modes) asks a different question from history mode — not "did this
-series change somewhere" but "is one new commit at this level surprising, given how much the
-base ref's level moves from commit to commit?" Two properties follow from that:
+series change somewhere" but "is this context commit outside every value recently observed in
+the base ref's current regime?" Two properties follow from that:
 
 - **A commit is one observation.** Several stored runs at one commit are re-measurements of a
   single build on a single runner, not independent evidence about the base level, so each
@@ -68,36 +68,35 @@ base ref's level moves from commit to commit?" Two properties follow from that:
   a handful of commits wherever a repository records several runs each. History mode does not
   collapse this way: it ranks the series' raw points, so a commit carrying several stored runs
   weighs on it once per run.
-- **One new observation, not a second sample.** The context commit is judged against a
-  **prediction interval** for a single future observation drawn from the recent base-ref commits,
-  so the interval accounts for both how much the base level scatters and how well those few
-  commits pin down its centre. The move the finding reports is measured from that same centre, so
-  the number you read is the number that was tested.
+- **One new observation, not a second sample.** The context commit is judged against the
+  **observed range** of the current base regime. It reports only when the value is strictly below
+  every observed base value or strictly above every one, and reports the excess beyond the nearest
+  range edge. It does not invent a probability distribution for the one branch observation.
 
 Branch mode also holds its relative floor above history's — a pull-request comment is read by
 everyone who touches the branch, so a false alarm costs more there. Where the engine reports
 per-point dispersion, further suppression-only vetoes apply.
 
-Neither mode attaches a confidence score to a finding. Every finding has already cleared its
-test, so such a number would read as near-certainty on all of them and rank almost nothing.
-Reports rank findings by the size of the move instead.
+Neither mode attaches a confidence score to a finding. History reports have calibrated chance
+levels internally; branch reports instead state how many comparable base commits produced at least
+as much report-wide out-of-range movement. Reports rank individual findings by the size of the
+move.
 
 > The [Detection](../appendix/detection.md) appendix chapter has the full comparison of the two
-> modes, including how the base window is narrowed when the base itself recently moved, and why
-> the bar for accepting such a boundary is higher than the bar for reporting a finding.
+> modes, including how selector and reference observations prevent the base commit being judged
+> from choosing its own regime boundary.
 
 ## Controlling false discoveries
 
-A repository has many benchmarks × metrics, so testing each independently would flood the
-report. Every candidate enters a single false-discovery-rate procedure, and only survivors are
-reported. The family it corrects over is every series this analysis judged — including every
-series that produced no candidate — because that is what a false-discovery rate is defined over.
-That family is exactly the set of series the report counts as
-[judged](#reading-a-silent-report).
+A repository has many benchmarks × metrics, so a per-series result is not enough to understand a
+whole report. History candidates enter a false-discovery-rate procedure whose family is every
+history series this analysis judged, including series that produced no candidate.
 
-One consequence is worth knowing up front: a finding has to clear a stricter bar for a large
+One consequence is worth knowing up front: a history finding has to clear a stricter bar for a large
 judged family than for a small one. The report's judged count is the denominator to inspect.
-See [Multiplicity and coverage](../appendix/coverage.md) for why that is the honest trade.
+Branch mode cannot honestly apply that procedure to one observation. It keeps factual excursions
+and compares the complete branch report with the same analysis run on eligible base commits in
+turn. See [Multiplicity and coverage](../appendix/coverage.md) for both controls.
 
 ## Reading a silent report
 
@@ -130,6 +129,10 @@ the gates require:
 - **not measured on the branch** — branch mode has no context measurement to judge.
 - **too few base-ref commits to compare against** — branch mode has a context measurement but
   too little base-ref history to compare it with.
+- **too few base-ref commits since its blessing** — the blessing deliberately excluded older
+  base evidence and too little remains.
+- **current base regime unresolved** — the latest base observations appear to have moved, but the
+  new level is not yet long enough to establish.
 
 `Judged 0 of N` is the case to watch: nothing was tested, so the no-reportable-move line is
 not evidence that every measured level stayed flat. The report says so outright. It usually
@@ -160,8 +163,9 @@ modes, auto-detected from git topology (there is no flag to force a mode):
 |---|---|---|
 | Change-point (Pettitt + engine gating) | ✅ | — |
 | Monotonic drift (Mann–Kendall + Theil–Sen) | ✅ | — |
-| Context commit vs. base (Student-t prediction interval) | — | ✅ |
-| Benjamini–Hochberg false-discovery filter | ✅ | ✅ |
+| Context commit vs. current-base observed range | — | ✅ |
+| Benjamini–Hochberg false-discovery filter | ✅ | — |
+| Symmetric historical report comparison | — | ✅ |
 | Improvements reported | — | ✅ |
 
 - **history** — the base-branch view: long-range change-point and drift detection; reports
@@ -190,8 +194,10 @@ against* and never changes which findings are reported or the exit code.
 ## Re-baselining
 
 A long history should not keep re-flagging an event you have already dealt with. A
-[blessing](../commands/bless.md) re-baselines a series from the blessed commit forward, so the
-pre-blessing step is no longer re-flagged while earlier points still feed the chart.
+[blessing](../commands/bless.md) re-baselines a history series from the blessed commit forward, so
+the pre-blessing step is no longer re-flagged while earlier points still feed the chart. In branch
+mode it is a hard evidence boundary: the blessed base commit remains, but every earlier base
+observation is excluded from regime selection, range construction, and historical comparison.
 
 Blessing is how you dispose of a shift that is real but not about your code — a runner swap, a
 toolchain bump, a deliberate tradeoff. The detector reports that the level moved; you record,

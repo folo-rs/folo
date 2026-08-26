@@ -20,7 +20,7 @@
 pub const MIN_REGIME: usize = 5;
 
 /// Default `min_series_points`: a series shorter than this is not evaluated at all,
-/// and does not count toward the false-discovery family.
+/// and in history mode does not count toward the false-discovery family.
 ///
 /// Two full regimes are the least a change-point can be built from. Below this floor
 /// no split can satisfy [`MIN_REGIME`] on both sides, so evaluating the series can
@@ -140,113 +140,50 @@ pub const PRACTICAL_ABSOLUTE_TIME: f64 = 1.0;
 /// amortizing across a run's iterations can manufacture.
 pub const PRACTICAL_ABSOLUTE_ALLOC: f64 = 1.0;
 
-/// Default `scatter_floor_count`: the smallest scatter an instruction or branch
-/// count can express.
+/// Maximum recent base-side **commits** branch mode inspects.
 ///
-/// This is the metric's *quantum* rather than a significance threshold. It bounds
-/// the base window's standard deviation from below in the branch-mode prediction
-/// interval, so a window that happens to repeat one integer still yields a usable
-/// standard error instead of a degenerate one. A stored count is a per-iteration
-/// figure and so need not be a whole number, but no sample of it can establish a
-/// scatter finer than the unit it counts.
-pub const SCATTER_FLOOR_COUNT: f64 = 1.0;
-
-/// Default `scatter_floor_time`: timing metrics have no quantum, so their scatter is
-/// not bounded from below at all.
-///
-/// A stored time is a through-origin regression slope over the many iterations of a
-/// run, which resolves far below a clock tick — a benchmark reported at a couple of
-/// nanoseconds an iteration is measured that finely. Any positive floor here would
-/// impose an absolute detection threshold in units of the standard error and cost
-/// short benchmarks several-fold sensitivity, so what a timing move must clear is
-/// left to [`PRACTICAL_ABSOLUTE_TIME`] alone. The price is that a base window with
-/// exactly zero scatter yields no verdict, which is silence rather than a spurious
-/// certainty.
-pub const SCATTER_FLOOR_TIME: f64 = 0.0;
-
-/// Default `scatter_floor_alloc`: the smallest scatter an allocation metric can
-/// express.
-///
-/// The case it exists for is code that allocated nothing and now allocates: a base
-/// window of zeroes has exactly zero scatter, and without a floor the standard error
-/// collapses and the move cannot be judged at all. The finest scatter the underlying
-/// count can distinguish is the unit it counts.
-pub const SCATTER_FLOOR_ALLOC: f64 = 1.0;
-
-/// Default `compare_window`: how many recent base-side **commits** branch mode
-/// inspects.
-///
-/// The window is the evidence branch mode inspects to understand the current base
-/// level. When it contains a genuine level shift, branch mode narrows the prediction
-/// interval to the trailing regime after that shift; otherwise the whole window is
-/// the comparison sample. Its size sets how small a move branch mode can resolve and
-/// how far back it can look for a current-regime boundary. The detectable move
-/// shrinks steeply up to about this many commits and only marginally beyond, while a
-/// longer window reaches further back into history that may no longer describe the
-/// current base level.
+/// The cap supplies enough history for regime selection and useful historical
+/// comparison ranks while bounding the cost of evaluating every comparable commit
+/// as the candidate in turn. Shorter histories remain fully supported.
 ///
 /// It counts commits rather than stored runs because several runs can share one
 /// commit and collapse to a single level before the comparison: a point-counted
 /// window would hold a different number of levels depending on how many runs fell
 /// inside it, and could shrink to a useless sample however long the history grew.
-pub const COMPARE_WINDOW: usize = 16;
+///
+/// Ref: `../../cargo-bench-history/docs/DESIGN.md`, "Branch analysis".
+pub const MAX_BRANCH_BASE_COMMITS: usize = 128;
+
+/// Base commits required before branch mode attempts to separate historical regimes.
+///
+/// Alternating selector and reference lanes leave the selector lane with half of the
+/// observations. Requiring this many base commits therefore leaves enough selector
+/// observations for two minimum-sized regimes.
+pub const MIN_BRANCH_REGIME_SELECTION_COMMITS: usize = 2 * MIN_SERIES_POINTS;
+
+/// Consecutive selector observations required before a short trailing group can make the
+/// current base regime unresolved.
+///
+/// A single unusual base observation is evidence about the observed range, not evidence of a
+/// new regime. Requiring a repeated level distinguishes an emerging step from an isolated
+/// extreme while still withholding judgment before a complete [`MIN_REGIME`] is established.
+pub const MIN_UNRESOLVED_BRANCH_REGIME_POINTS: usize = 2;
+
+/// Comparable base commits required for a report-wide historical comparison.
+///
+/// This matches the minimum supported regime size, preserving a useful leave-one-out
+/// comparison without manufacturing additional observations.
+pub const MIN_BRANCH_COMPARISON_COMMITS: usize = MIN_REGIME;
+
+/// Overall false-boundary budget for recursive branch regime selection.
+///
+/// The budget is shared conservatively across every possible recursive search, so
+/// repeatedly looking for a newer supported step cannot amplify weak evidence.
+pub const MAX_BRANCH_REGIME_CHANCE_LEVEL: f64 = MAX_CHANGE_CHANCE_LEVEL;
 
 /// Default `branch_practical_relative`: a branch move must reach this fraction,
 /// raised above the history floor, to keep pull-request false positives down.
 pub const BRANCH_PRACTICAL_RELATIVE: f64 = 0.05;
-
-/// Default `excursion_relative_magnitude`: how far a base-window level must stand from
-/// its surroundings before branch mode treats it as a measurement excursion rather than
-/// as evidence.
-///
-/// Set where measurement wobble stops and runner interference starts, measured on this
-/// project's own stored history: across the wall-time series, isolated levels straying up
-/// to roughly a quarter from their surroundings stray high and low about equally often —
-/// the two-sided signature of ordinary measurement scatter — while beyond this threshold
-/// they are almost exclusively *slow*, which is the one-sided signature of a runner
-/// losing time to something else. Setting it lower would discard ordinary scatter, which
-/// is the sample's own dispersion and the very thing the comparison is judged against.
-///
-/// It also sits far above [`BRANCH_PRACTICAL_RELATIVE`], so no level a branch move could
-/// be reported against is anywhere near being treated as an excursion.
-pub const EXCURSION_RELATIVE_MAGNITUDE: f64 = 0.30;
-
-/// Default `excursion_neighbour_agreement`: how closely the levels on either side of a
-/// candidate excursion must agree before it can be discarded.
-///
-/// Held equal to [`BRANCH_PRACTICAL_RELATIVE`] because that is the smallest move branch
-/// mode would report: surroundings that agree to within it describe one level as far as
-/// any verdict is concerned, and surroundings that do not are a level shift, whose levels
-/// must be kept whatever their magnitude.
-pub const EXCURSION_NEIGHBOUR_AGREEMENT: f64 = BRANCH_PRACTICAL_RELATIVE;
-
-/// Default `excursion_neighbours`: how many levels on each side of a candidate form the
-/// surroundings it is judged against.
-///
-/// Enough that one *further* excursion adjacent to the candidate cannot by itself decide
-/// what a side says, since these arrive in clusters, and few enough that the surroundings
-/// stay local to the candidate rather than reaching across a level shift the window may
-/// legitimately contain.
-///
-/// A candidate without this many levels on *both* sides is never discarded. Judging one
-/// against a shorter side would let a single adjacent level speak for a whole side, which
-/// is precisely the case this count exists to outvote.
-pub const EXCURSION_NEIGHBOURS: usize = 3;
-
-/// Default `excursion_max_removals`: how many excursions a window may contain before it
-/// is left alone entirely.
-///
-/// One. A window offering a second is not a clean window with a bad reading in it: two
-/// separated levels agreeing on a value their surroundings do not is the signature of a
-/// benchmark that visits more than one level, and how often it does so is exactly what the
-/// comparison measures the context run against. Discarding a recurring level would leave a
-/// spuriously tight window in which the benchmark's own ordinary values read as large,
-/// certain regressions — the failure this whole rule exists to avoid causing.
-///
-/// Runner interference is rare enough per window that requiring uniqueness costs almost
-/// nothing: the stored history puts a second excursion inside the same window at well
-/// under a percent of comparisons.
-pub const EXCURSION_MAX_REMOVALS: usize = 1;
 
 /// Default `branch_noise_multiple`: multiple of the per-measurement noise floor a
 /// branch move must exceed where the engine reports per-point confidence intervals.

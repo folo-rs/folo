@@ -125,10 +125,24 @@ pub const TERMS: &[Term] = &[
         chapter: "detection.md",
     },
     Term {
-        phrase: "prediction interval",
-        definition: "The range a single further measurement is expected to land in, given \
-                     what the previous ones did.",
-        formal_name: "Student's t prediction interval",
+        phrase: "observed range",
+        definition: "The lowest through highest values actually recorded in the current base \
+                     regime.",
+        formal_name: "",
+        chapter: "detection.md",
+    },
+    Term {
+        phrase: "selector lane",
+        definition: "The half of the base observations allowed to decide where the current \
+                     regime begins.",
+        formal_name: "",
+        chapter: "detection.md",
+    },
+    Term {
+        phrase: "reference lane",
+        definition: "The other half of the base observations, which the branch is compared \
+                     against and which never helps choose that comparison.",
+        formal_name: "",
         chapter: "detection.md",
     },
     Term {
@@ -140,8 +154,8 @@ pub const TERMS: &[Term] = &[
     },
     Term {
         phrase: "typical residual",
-        definition: "How far a representative point sits from the model fitted to the series: \
-                     a level for a change point or branch comparison, a line for a drift.",
+        definition: "How far a representative point sits from the history model fitted to the \
+                     series: a level for a change point, a line for a drift.",
         formal_name: "median absolute residual",
         chapter: "gates.md",
     },
@@ -153,16 +167,9 @@ pub const TERMS: &[Term] = &[
         chapter: "gates.md",
     },
     Term {
-        phrase: "quantum",
-        definition: "The smallest step a metric can actually take, such as one whole \
-                     instruction.",
-        formal_name: "",
-        chapter: "gates.md",
-    },
-    Term {
         phrase: "false-discovery family",
-        definition: "Every series that carried enough data to be tested, which is the \
-                     group a finding has to stand out from.",
+        definition: "In history mode, every series that carried enough data to be tested: \
+                     the group a statistical finding has to stand out from.",
         formal_name: "",
         chapter: "coverage.md",
     },
@@ -182,8 +189,8 @@ pub const TERMS: &[Term] = &[
     },
     Term {
         phrase: "blessing",
-        definition: "A recorded decision to treat a change as accepted, so history stops \
-                     reporting it.",
+        definition: "A recorded decision to treat a change as accepted, so earlier measurements \
+                     no longer influence analysis.",
         formal_name: "",
         chapter: "reconstruction.md",
     },
@@ -228,8 +235,9 @@ pub const TERMS: &[Term] = &[
     },
     Term {
         phrase: "finding",
-        definition: "A move that survived detection, every gate, and the group-wide \
-                     correction.",
+        definition: "A reported move. A history finding survived the group-wide correction; \
+                     a branch finding exceeded the current base range and survived every \
+                     applicable gate.",
         formal_name: "",
         chapter: "reporting.md",
     },

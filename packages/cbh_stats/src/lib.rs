@@ -12,7 +12,7 @@
 //!
 //! Pure statistical primitives (means, medians and scatter, the Pettitt
 //! change-point test, Mann–Whitney, Mann–Kendall, Theil–Sen,
-//! Benjamini–Hochberg, the standard normal and Student-t distributions) for the
+//! Benjamini–Hochberg, and the standard normal distribution) for the
 //! analysis detectors, split out of `cargo-bench-history` so this
 //! deterministic, I/O-free, Miri-safe math is cheap to mutation-test in
 //! isolation. The `cbh_detect` detectors compose these primitives.
@@ -27,7 +27,6 @@ mod normal;
 mod p_value;
 mod selection;
 mod stats;
-mod student_t;
 
 #[cfg(test)]
 mod test_util;
@@ -36,4 +35,3 @@ pub(crate) use normal::*;
 pub(crate) use p_value::*;
 pub use selection::*;
 pub use stats::*;
-pub use student_t::*;

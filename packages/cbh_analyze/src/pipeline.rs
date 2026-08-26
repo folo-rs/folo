@@ -16,10 +16,10 @@ use cbh_config::{
     resolve_project_id, resolve_repo, storage_env,
 };
 use cbh_detect::{
-    AnalysisContext, AnalysisMode, COMPARE_WINDOW, Detection, DiscardedBaseReading,
-    DiscardedReading, MIN_REGIME, MIN_SERIES_POINTS, Series, SeriesCensus, SeriesFilter,
-    Testability, UnjudgedReason, apply_blessings, find_changes_spawned, retain_present_at_context,
-    short_commit, testability,
+    AnalysisContext, AnalysisMode, BranchComparison, BranchEvaluationTrace, Detection,
+    MAX_BRANCH_BASE_COMMITS, MIN_REGIME, MIN_SERIES_POINTS, Series, SeriesCensus, SeriesFilter,
+    Testability, UnjudgedReason, apply_base_blessings, apply_blessings, find_changes_spawned,
+    retain_present_at_context, short_commit, testability,
 };
 use cbh_diag::{Reporter, ReporterExt, StderrReporter, count_noun};
 use cbh_git::{GitHistory, SystemGitHistory};
@@ -279,14 +279,20 @@ where
         (benchmarks.len(), ghosts.len())
     };
 
-    // Re-baseline blessed series before detection (history mode only; branch
-    // mode carries an empty blessing map).
+    // Apply blessings on the topology each mode analyzes. History re-baselines the
+    // context series; branch mode truncates each base-ref comparison window.
     let rebaseline_started = Instant::now();
-    apply_blessings(&mut series, &dataset.blessings);
-    reporter.timing(
-        "re-baseline blessed series (apply_blessings)",
-        rebaseline_started.elapsed(),
-    );
+    let blessing_timing = match dataset.mode {
+        AnalysisMode::History => {
+            apply_blessings(&mut series, &dataset.blessings);
+            "re-baseline blessed series (apply_blessings)"
+        }
+        AnalysisMode::Branch => {
+            apply_base_blessings(&mut series, &dataset.blessings);
+            "truncate blessed base evidence (apply_base_blessings)"
+        }
+    };
+    reporter.timing(blessing_timing, rebaseline_started.elapsed());
     let context = AnalysisContext {
         mode: dataset.mode,
         merge_base_index: dataset.merge_base_index,
@@ -300,16 +306,18 @@ where
     let Detection {
         findings,
         mut census,
-        discarded,
+        branch_comparisons,
+        branch_trace,
     } = find_changes_spawned(Arc::clone(&series), context, spawner).await;
     // The ghost filter judged nothing either, and it ran before detection could see
     // those series, so its exclusions join the same account.
     census.record_unjudged(UnjudgedReason::Ghost, ghost_series);
-    reporter.timing(
-        "change detection (find_changes: per-series detectors + FDR filter)",
-        detect_started.elapsed(),
-    );
-    note_discarded_readings(reporter, &discarded);
+    let detection_stage = match dataset.mode {
+        AnalysisMode::History => "change detection (per-series detectors + FDR filter)",
+        AnalysisMode::Branch => "change detection (current-regime excursions + report comparison)",
+    };
+    reporter.timing(detection_stage, detect_started.elapsed());
+    note_branch_evaluation(reporter, &branch_trace);
     note_series_census(reporter, &series, &context, &census);
     let regressions = findings
         .iter()
@@ -351,6 +359,7 @@ where
                 .filter(|finding| &finding.set == set)
                 .collect(),
             comparison_base_lags: comparison_base_lags.get(set).cloned().unwrap_or_default(),
+            branch_comparison: branch_comparison_for_set(&branch_comparisons, set),
         })
         .collect();
 
@@ -407,6 +416,14 @@ where
     Ok((rendered, regressions))
 }
 
+/// Finds the historical branch comparison belonging to one comparable partition.
+fn branch_comparison_for_set<'a>(
+    comparisons: &'a [BranchComparison],
+    set: &DiscriminantSet,
+) -> Option<&'a BranchComparison> {
+    comparisons.iter().find(|comparison| &comparison.set == set)
+}
+
 /// The empty-outcome hint for the all-ghosts case: runs loaded and analyzed, but
 /// the ghost filter dropped every benchmark because none is present at the context
 /// commit. Distinct from [`empty_history_hint`], which speaks only to an empty load.
@@ -418,51 +435,6 @@ fn all_ghosts_hint(tip_commit: &str) -> String {
         from history.",
         short_commit(tip_commit)
     )
-}
-
-/// Explains, under `--verbose`, which base-window readings branch mode left out of its
-/// comparisons.
-///
-/// Discarding narrows the evidence a verdict rests on and so can change that verdict, in
-/// either direction, without any gate declining and without anything appearing in the
-/// report. Naming each discarded reading, what it measured, and the level its neighbours
-/// agreed on lets a reader tell a comparison that was narrowed from one that was not, and
-/// judge for themselves whether the reading deserved to go.
-fn note_discarded_readings<R: Reporter + ?Sized>(reporter: &R, discarded: &[DiscardedBaseReading]) {
-    if discarded.is_empty() {
-        return;
-    }
-    reporter.if_enabled(|notes| {
-        for one in discarded {
-            notes.note(&format!(
-                "discarding base commit at first-parent index {} from the comparison for {} {} \
-                 in {}: it measured {}, while the commits on both sides of it agree on {} — an \
-                 isolated excursion of {:+.1}%, which describes the runner rather than the code",
-                one.reading.topo_index,
-                one.id.qualified(),
-                one.kind.as_str(),
-                one.set,
-                one.reading.value,
-                one.reading.neighbour_level,
-                relative_excursion(&one.reading) * 100.0,
-            ));
-        }
-        notes.note(&format!(
-            "excursion filter: left {} out of the branch comparisons named above, each dropped \
-             rather than replaced by an estimate; every reading remains stored, charted, and \
-             counted toward whether its series had enough base history to be judged at all",
-            count_noun(discarded.len(), "isolated reading"),
-        ));
-    });
-}
-
-/// How far a discarded reading stood from the level its neighbours agreed on, as a
-/// fraction of that level.
-fn relative_excursion(reading: &DiscardedReading) -> f64 {
-    if reading.neighbour_level.abs() <= f64::EPSILON {
-        return 0.0;
-    }
-    (reading.value - reading.neighbour_level) / reading.neighbour_level
 }
 
 /// Explains, under `--verbose`, which series the detectors judged and what each of
@@ -483,16 +455,25 @@ fn note_series_census<R: Reporter + ?Sized>(
             let Testability::Unjudged(reason) = testability(one, context) else {
                 continue;
             };
-            // A blessed series is judged only on what came after the blessing, so name
-            // that window rather than the misleading full length.
-            let evidence = if one.active_start > 0 {
-                format!(
+            let evidence = match context.mode {
+                // A blessed history series is judged only on what came after the blessing,
+                // so name that window rather than the misleading full length.
+                AnalysisMode::History if one.active_start > 0 => format!(
                     "{}, of which {} since its blessing",
                     count_noun(one.points.len(), "point"),
                     one.points.len().saturating_sub(one.active_start),
-                )
-            } else {
-                count_noun(one.points.len(), "point")
+                ),
+                AnalysisMode::History => count_noun(one.points.len(), "point"),
+                AnalysisMode::Branch => {
+                    let retained = count_noun(one.base_window.len(), "base-branch commit");
+                    let available = count_noun(
+                        one.base_history_count.max(one.base_window.len()),
+                        "base-branch commit",
+                    );
+                    format!(
+                        "{retained} retained from {available} available before the cap and blessings"
+                    )
+                }
             };
             notes.note(&format!(
                 "not judging {} {} in {}: {} — it carries {evidence}",
@@ -513,7 +494,7 @@ fn note_series_census<R: Reporter + ?Sized>(
                 "branch mode judges a series only with a measurement on the branch and \
                  {} in the {}-commit comparison window to judge it against",
                 count_noun(MIN_SERIES_POINTS, "base-branch commit"),
-                COMPARE_WINDOW,
+                MAX_BRANCH_BASE_COMMITS,
             ),
         };
         // The trail states the same ratio the report's header and verdict do, read from
@@ -537,6 +518,56 @@ fn note_series_census<R: Reporter + ?Sized>(
     });
 }
 
+/// Explains branch regime selection and report-wide historical comparison.
+fn note_branch_evaluation<R: Reporter + ?Sized>(reporter: &R, trace: &BranchEvaluationTrace) {
+    reporter.if_enabled(|notes| {
+        for series in &trace.series {
+            if let Some(reason) = series.unresolved {
+                notes.note(&format!(
+                    "branch evidence for {} {} in {} was withheld: {}; {} base commits were \
+                     available, {} remained after the cap and blessings, split into {} selector \
+                     and {} reference commits",
+                    series.id.qualified(),
+                    series.kind.as_str(),
+                    series.set,
+                    reason.describe(),
+                    series.available_base_commits,
+                    series.retained_base_commits,
+                    series.selector_commits.len(),
+                    series.reference_commits.len(),
+                ));
+                continue;
+            }
+            if let Some((minimum, maximum)) = series.current_range {
+                notes.note(&format!(
+                    "branch evidence for {} {} in {} used current-base range {minimum}..={maximum} \
+                     from {} observations; selector commits {:?}, reference commits {:?}, \
+                     current-regime start {:?}, branch relation {:?}",
+                    series.id.qualified(),
+                    series.kind.as_str(),
+                    series.set,
+                    series.reference_count,
+                    series.selector_commits,
+                    series.reference_commits,
+                    series.current_regime_start,
+                    series.branch_relation,
+                ));
+            }
+        }
+        for comparison in &trace.comparisons {
+            notes.note(&format!(
+                "historical comparison for {} scored {} existing base commits against the same \
+                 rectangular family; {} tied or exceeded the branch score {} (base scores {:?})",
+                comparison.set,
+                comparison.base_scores.len(),
+                comparison.at_least_as_much,
+                comparison.branch_score,
+                comparison.base_scores,
+            ));
+        }
+    });
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -549,8 +580,8 @@ mod tests {
     use cbh_diag::RecordingReporter;
     use cbh_git::FakeGitHistory;
     use cbh_model::{
-        BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, BlessingRecord, EnvironmentInfo, GitInfo,
-        Metric, MetricKind, Run, RunContext, ToolchainInfo, sanitize_segment,
+        BenchmarkId, BenchmarkIdPrefix, BenchmarkResult, BlessingRecord, Engine, EnvironmentInfo,
+        GitInfo, Metric, MetricKind, Run, RunContext, ToolchainInfo, sanitize_segment,
     };
     use cbh_probe::{HardwareProfile, RustcInfo};
     use cbh_storage::{MemoryStorage, Storage};
@@ -602,6 +633,45 @@ mod tests {
 
         assert!(error.find_source::<ToolchainProbeFailedError>().is_some());
         assert!(error.find_source::<io::Error>().is_some());
+    }
+
+    #[test]
+    fn branch_comparisons_are_matched_to_their_exact_set() {
+        let left = DiscriminantSet {
+            engine: Engine::Callgrind,
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            machine_key: "left".into(),
+        };
+        let right = DiscriminantSet {
+            machine_key: "right".into(),
+            ..left.clone()
+        };
+        let comparisons = [
+            BranchComparison {
+                set: left.clone(),
+                evaluated_base_commits: 5,
+                at_least_as_much: 1,
+                series: 2,
+            },
+            BranchComparison {
+                set: right.clone(),
+                evaluated_base_commits: 7,
+                at_least_as_much: 3,
+                series: 4,
+            },
+        ];
+
+        assert_eq!(
+            branch_comparison_for_set(&comparisons, &right)
+                .expect("the right partition has a comparison")
+                .evaluated_base_commits,
+            7
+        );
+        let missing = DiscriminantSet {
+            machine_key: "missing".into(),
+            ..left
+        };
+        assert!(branch_comparison_for_set(&comparisons, &missing).is_none());
     }
 
     /// Builds a stored result set carrying one record with one `Ir` metric.
@@ -712,7 +782,7 @@ mod tests {
         "a history fixture must be long enough for the detectors to judge it"
     );
     const _: () = assert!(
-        BASE_COMMITS <= COMPARE_WINDOW,
+        BASE_COMMITS <= MAX_BRANCH_BASE_COMMITS,
         "a branch fixture's whole base line must fit the comparison window"
     );
     const _: () = assert!(
@@ -1475,6 +1545,70 @@ mod tests {
     }
 
     #[test]
+    fn branch_trace_reasons_match_the_complete_series_identity() {
+        let mut values = vec![100.0; 36];
+        values.extend(std::iter::repeat_n(200.0, 4));
+        values.push(220.0);
+        let exact = cbh_detect::examples::with_base_window(
+            cbh_detect::examples::series("exact", &values, MetricKind::InstructionCount, 0),
+            39,
+        );
+        let context = cbh_detect::examples::branch_context(&exact, 39);
+        assert_eq!(
+            testability(&exact, &context),
+            Testability::Unjudged(UnjudgedReason::CurrentBaseRegimeUnresolved)
+        );
+        let detection = cbh_detect::find_changes(std::slice::from_ref(&exact), &context);
+        assert_eq!(detection.census.judged(), 0);
+        assert_eq!(detection.census.unjudged(), 1);
+        assert_eq!(
+            detection.branch_trace.series[0].unresolved,
+            Some(UnjudgedReason::CurrentBaseRegimeUnresolved)
+        );
+
+        let mut different_set = exact.clone();
+        different_set.set.machine_key = "other".into();
+        let mut different_id = exact.clone();
+        different_id.id = BenchmarkId::new(nonempty!["different".to_owned()]);
+        let mut different_kind = exact.clone();
+        different_kind.kind = MetricKind::ConditionalBranches;
+        let series = [exact, different_set, different_id, different_kind];
+        let reporter = RecordingReporter::new();
+
+        note_series_census(&reporter, &series, &context, &detection.census);
+
+        let recorded_notes = reporter.notes();
+        let notes: Vec<&str> = recorded_notes
+            .iter()
+            .map(String::as_str)
+            .filter(|note| note.starts_with("not judging"))
+            .collect();
+        assert_eq!(notes.len(), 4, "{notes:?}");
+        for expected in [
+            "exact/case instruction_count in callgrind/t/m1",
+            "exact/case instruction_count in callgrind/t/other",
+            "different instruction_count in callgrind/t/m1",
+            "exact/case conditional_branches in callgrind/t/m1",
+        ] {
+            assert!(
+                notes.iter().any(|note| note.contains(expected)),
+                "{notes:?}"
+            );
+        }
+        assert!(
+            notes
+                .iter()
+                .all(|note| note.contains("current base regime is unresolved"))
+        );
+        assert!(notes.iter().all(|note| {
+            note.contains(
+                "40 base-branch commits retained from 40 base-branch commits available before \
+                 the cap and blessings",
+            )
+        }));
+    }
+
+    #[test]
     fn a_blessed_series_with_too_little_evidence_left_names_its_active_window() {
         // A blessing re-baselines a series, so the points before it are no longer
         // evidence. Such a series is long yet unjudged, and the trail must state the
@@ -1512,6 +1646,55 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_base_ref_blessing_off_the_feature_history_truncates_branch_evidence() {
+        // The feature forked before the blessing, so the blessed commit exists only on
+        // the base ref's first-parent line. Branch mode must still apply it because the
+        // blessing governs the base evidence, not the feature's ancestry.
+        let storage = MemoryStorage::new();
+        seed_raised_feature(&storage, BASE_COMMITS);
+        let blessed_at = commit_name(BASE_COMMITS - 2);
+        let record = BlessingRecord::new(
+            blessed_at.clone(),
+            ts(i64::try_from(BASE_COMMITS).unwrap()),
+            vec![BenchmarkIdPrefix::new("nm").unwrap()],
+            "0.0.1".to_owned(),
+        );
+        let bless_key = format!(
+            "v1/folo/objects/callgrind/x86_64-unknown-linux-gnu/m1/{blessed_at}/bless-3.json"
+        );
+        block_on(storage.put(&bless_key, record.to_json().unwrap().as_bytes())).unwrap();
+        let git = feature_chain(BASE_COMMITS, REGIME_COMMITS - 1);
+
+        let (report, regressions, reporter) = analyze_json(&git, &storage, "folo", &options());
+        assert_eq!(
+            regressions, 0,
+            "pre-blessing base data must not be used: {report}"
+        );
+        assert_eq!(parse_census_judged(&report), 0, "{report}");
+        let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(
+            parsed["census"]["reasons"][0]["reason"], "too_few_base_commits_since_blessing",
+            "{report}"
+        );
+        assert!(
+            reporter.contains(
+                "with too few base-ref commits remaining since being blessed; 10 base commits \
+                 were available, 2 remained after the cap and blessings"
+            ),
+            "{:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains(
+                "it carries 2 base-branch commits retained from 10 base-branch commits available \
+                 before the cap and blessings"
+            ),
+            "{:?}",
+            reporter.notes()
+        );
+    }
+
     /// The `census.judged` tally of a rendered JSON report.
     fn parse_census_judged(report: &str) -> u64 {
         serde_json::from_str::<serde_json::Value>(report).unwrap()["census"]["judged"]
@@ -1520,57 +1703,31 @@ mod tests {
     }
 
     #[test]
-    fn the_trail_names_a_base_reading_left_out_of_a_branch_comparison() {
-        // Discarding a base reading narrows the evidence a verdict rests on without any
-        // gate declining, so nothing else in the output would reveal that the comparison
-        // was not run against the window as measured. The trail must name the commit,
-        // what it measured, what its neighbours agreed on, and how far apart those are,
-        // so a reader can judge the removal rather than merely discover it.
-        let storage = MemoryStorage::new();
-        // Far enough clear of its neighbours to qualify, with a full set of them on both
-        // sides — the shape the filter exists for.
-        let excursion_at = BASE_COMMITS.checked_div(2).unwrap();
-        let mut base = vec![100.0; BASE_COMMITS];
-        // Half again above its neighbours: clear of the magnitude floor, and a ratio the
-        // reported percentage cannot match by accident, so the trail must have computed it
-        // from the reading rather than emitting a constant.
-        base[excursion_at] = 150.0;
-        seed_feature_over(&storage, &base);
-
-        let (report, _, reporter) = analyze_json(&branch_git(), &storage, "folo", &options());
-        assert!(
-            reporter.contains(&format!(
-                "discarding base commit at first-parent index {excursion_at} from the comparison"
-            )),
-            "the trail must name the discarded commit: {report}"
-        );
-        assert!(
-            reporter.contains(
-                "it measured 150, while the commits on both sides of it agree on \
-                 100 — an isolated excursion of +50.0%"
-            ),
-            "the trail must state what was discarded and what it stood clear of: {report}"
-        );
-        assert!(
-            reporter.contains(
-                "excursion filter: left 1 isolated reading out of the branch \
-                 comparisons named above"
-            ),
-            "the trail must summarise how much was left out: {report}"
-        );
-    }
-
-    #[test]
-    fn the_trail_stays_silent_when_no_base_reading_is_left_out() {
-        // The filter reports only what it did. An ordinary window must produce no note at
-        // all, so the presence of one is itself the signal that a comparison was narrowed.
+    fn the_branch_trail_explains_the_regime_and_historical_comparison() {
+        // The verbose trail carries the inputs and reasoning needed to reconstruct both
+        // the per-series range and the report-wide comparison.
         let storage = MemoryStorage::new();
         seed_raised_feature(&storage, BASE_COMMITS);
 
         let (report, _, reporter) = analyze_json(&branch_git(), &storage, "folo", &options());
         assert!(
-            !reporter.contains("excursion filter"),
-            "an undisturbed window must not be described as narrowed: {report}"
+            reporter.contains(
+                "used current-base range 100..=100 from 10 observations; selector commits"
+            ),
+            "{report}\n{:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains("reference commits")
+                && reporter.contains("current-regime start Some(")
+                && !reporter.contains("boundary Some(")
+                && reporter.contains("branch relation Above")
+                && reporter.contains(
+                    "historical comparison for callgrind/x86_64-unknown-linux-gnu/m1 scored"
+                )
+                && reporter.contains("against the same rectangular family"),
+            "{report}\n{:?}",
+            reporter.notes()
         );
     }
 

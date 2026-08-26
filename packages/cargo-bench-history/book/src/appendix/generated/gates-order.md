@@ -32,12 +32,8 @@ Each detector applies its own gates in its own order, and a candidate stops at t
 | Gate | What it compares | Threshold |
 |---|---|---|
 | `min_base_commits` | How many base-ref commit levels the comparison window holds. | 10 commit levels |
-| `non_zero_delta` | Whether the context run differs from the base level at all. | above zero |
-| `min_regime` | How many retained base-ref commit levels the comparison holds. | 5 commit levels |
+| `non_zero_delta` | Whether the context run lies strictly outside the observed current-base range. | above zero |
 | `relative_floor` | The move as a fraction of the baseline. | 5.0% |
 | `absolute_floor` | The move in the metric's own units. | the metric's own floor, below |
-| `residual_noise` | The move against the series' own typical residual. | 3× the typical residual |
-| `base_scatter` | Whether the base window has any dispersion — measured scatter, or an integer metric's quantum — to build a prediction interval from; with none, the context run cannot be judged and the candidate is dropped. | observed scatter, or one count, byte, or allocation of scale; flat timings have no quantum |
-| `significance` | The chance level of the context run against the base window's interval. | p < 0.05 |
-| `interval_disjoint` | The base sample's and the context run's reported confidence intervals. | the two intervals must not overlap |
+| `interval_disjoint` | The current-base observations' and context run's reported confidence intervals. | the two intervals must not overlap |
 | `interval_noise_band` | The move against the engine's own reported imprecision. | 2× the reported half-width |

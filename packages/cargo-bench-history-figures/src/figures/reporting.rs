@@ -163,14 +163,12 @@ fn silent_suite() -> Vec<Series> {
 /// One batch detection pass over `suite`, with ghosts accounted for after the pass.
 fn detect_suite(suite: &[Series]) -> Detection {
     let Detection {
-        findings,
-        census,
-        discarded,
+        findings, census, ..
     } = find_changes(suite, &suite_context(suite));
     Detection {
         findings,
         census: attach_ghosts(census),
-        discarded,
+        ..Detection::default()
     }
 }
 
@@ -211,6 +209,7 @@ impl Analysis {
             series: self.coverage().in_scope(),
             findings: self.findings.iter().collect(),
             comparison_base_lags: self.lags.clone(),
+            branch_comparison: None,
         }];
         let input = ReportInput {
             project: PROJECT,

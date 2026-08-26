@@ -425,6 +425,8 @@ fn reason_label(reason: UnjudgedReason) -> &'static str {
         UnjudgedReason::TooFewPointsSinceBlessing => "too few points since blessing",
         UnjudgedReason::NotMeasuredOnBranch => "not measured on the branch",
         UnjudgedReason::TooFewBaseCommits => "too few base-ref commits to compare against",
+        UnjudgedReason::TooFewBaseCommitsSinceBlessing => "too few base-ref commits since blessing",
+        UnjudgedReason::CurrentBaseRegimeUnresolved => "current base regime unresolved",
     }
 }
 
@@ -439,9 +441,10 @@ fn reason_color(reason: UnjudgedReason) -> RGBColor {
         // are drawn in the shade the theme reserves for what is present but not counted.
         UnjudgedReason::Ghost => theme::MUTED,
         UnjudgedReason::TooFewPoints | UnjudgedReason::TooFewBaseCommits => theme::HIGHLIGHT,
-        UnjudgedReason::TooFewPointsSinceBlessing | UnjudgedReason::NotMeasuredOnBranch => {
-            theme::ALTERNATE
-        }
+        UnjudgedReason::TooFewPointsSinceBlessing
+        | UnjudgedReason::TooFewBaseCommitsSinceBlessing
+        | UnjudgedReason::NotMeasuredOnBranch
+        | UnjudgedReason::CurrentBaseRegimeUnresolved => theme::ALTERNATE,
     }
 }
 
@@ -465,6 +468,14 @@ fn reason_remedy(reason: UnjudgedReason) -> &'static str {
         UnjudgedReason::TooFewBaseCommits => {
             "Measure more of the base ref. A comparison needs a base window to compare \
              against."
+        }
+        UnjudgedReason::TooFewBaseCommitsSinceBlessing => {
+            "Wait for more base-ref measurements after the blessing. Earlier evidence was \
+             intentionally excluded."
+        }
+        UnjudgedReason::CurrentBaseRegimeUnresolved => {
+            "Inspect the recent base history. It appears to have moved, but the new level has \
+             too little support for an honest comparison."
         }
     }
 }

@@ -1,22 +1,26 @@
 # Multiplicity and coverage
 
-A gate-passing candidate has cleared every check that looks at it *individually*. History
+A gate-passing result has cleared every check that looks at its series *individually*. History
 detection has also corrected for choices made within that series, such as searching across
-possible change points. Branch mode has a
-[known exception](limits.md#branch-mode-base-window-narrowing-is-not-selection-adjusted) when it
-narrows the base window. One question remains, and no amount of scrutiny of a single series can
-answer it:
+possible change points. Each mode then asks a different report-wide question:
 
-**Given how many things were tested, should we believe this one?**
+- **History:** given how many series were tested, does this candidate survive the group-wide
+  false-discovery correction?
+- **Branch:** among the comparable base-history arrangements, how many showed at least as much
+  out-of-range movement as this branch?
 
-This chapter is that question and its consequence — the report's account of what it actually
-covered.
+The history answer decides whether the candidate is reported. The branch answer is finite
+historical context for an excursion that has already been established from the observed
+current-base range; it never suppresses that factual excursion.
+
+This chapter explains those questions and their consequence — the report's account of what it
+actually covered.
 
 ## Terms used here
 
 {{#include generated/terms-coverage.md}}
 
-## Test enough things and something will look surprising
+## History: test enough things and something will look surprising
 
 Each gate-passing candidate cleared a test at a chance level below some threshold. Read that
 threshold literally: it is the rate at which *unchanged* series are expected to produce a
@@ -38,7 +42,7 @@ target, and only across many analyses does the average settle back to it.
 
 {{#include generated/coverage-staircase.md}}
 
-## The family is every series that could be tested
+## The history family is every series that could be tested
 
 This is the part that carries the weight, and it is easy to get wrong.
 
@@ -68,8 +72,7 @@ people stop reading benchmark reports.
 ## Why history filters direction first
 
 In history mode, improvements are neither displayed nor corrected. They leave the candidate set
-before the correction runs, so only regressions enter the sorted list. Branch mode reports both
-directions, so the same filter changes nothing there.
+before the correction runs, so only regressions enter the sorted list.
 
 The judged family does not shrink; the denominator remains every series the analysis judged.
 Only the directions being corrected change. Suppose ten series were judged, and two produced
@@ -91,11 +94,29 @@ unchanged series has at most half that chance to raise a candidate in one named 
 The bar the correction sets is therefore met with room to spare, which is why the target is an
 upper bound rather than a level the tool aims at.
 
+## Branch: compare the complete report with base history
+
+Branch mode has one context observation per series, so it does not manufacture per-series chance
+levels or feed excursions into the history correction. It keeps every excursion that the observed
+current-regime range and practical gates support.
+
+To show how remarkable the **complete report** is, it evaluates comparable reference-lane base
+commits as historical branch-like turns. Each turn holds out one base commit as the candidate,
+uses the remaining base observations plus the real branch value as references, applies the same
+range and noise gates, and sums normalized excess across a shared rectangular series family.
+
+The report states how many historical turns tied with or exceeded the branch score. "None of 10
+comparable base commits showed as much out-of-range movement as this branch" means exactly what it
+says; it is not relabelled as confidence. The factual findings remain visible when no report-wide
+family can be formed, so limited history reduces the context available to the reader rather than
+silently changing what was observed.
+
 ## What a report judged
 
-The same definition that builds the family also drives the report's coverage line. That is on
-purpose: the number the correction divided by and the number the report claims to have
-covered cannot drift apart, because they are the same number.
+The same testability decision that builds history's correction family and branch mode's eligible
+series drives the report's coverage line. In branch mode, that verdict includes unresolved
+current-base regimes, so the analysis and the report cannot disagree about whether a series was
+judged.
 
 Every report states it — the coverage line in the text and Markdown output, and the full census
 in the JSON, on every `analyze` run. How each format presents it is the

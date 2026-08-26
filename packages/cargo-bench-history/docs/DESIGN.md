@@ -881,8 +881,8 @@ move:
 When both fire on one series, the **better-fitting model wins**: the step and line models
 are each scored by their residual, so sharp steps route to the change-point method and
 smooth ramps to drift, and the two never double-report one event. A branch-mode finding is a
-level shift too, so it reports as a change-point; the difference is which test established it
-(§8.2).
+separate **branch excursion** method (§8.2), because it states that the context value lies outside
+the observed current-base range rather than claiming that a change point was located.
 
 ### 8.2 Noise-aware gating
 
@@ -899,8 +899,8 @@ with a blessing (§8.6).
 The same gates run for every engine; only their inputs differ. A change-point needs a minimum
 number of points on **each** side of the split, so a one-off blip on the newest point cannot
 flag; a series too short to hold two such regimes is not evaluated at all, since no split in
-it could satisfy that floor. Whether a series meets that minimum in the window its mode reads
-is also what makes it a member of the false-discovery family (§8.3).
+it could satisfy that floor. In history mode, whether a series meets that minimum in the window
+the mode reads is also what makes it a member of the false-discovery family (§8.3).
 
 Pettitt *locates* the split (its analytic p-value is too conservative on short series to gate
 on), and a change-point is reported only when all of these hold: a **Mann–Whitney** rank test
@@ -956,16 +956,14 @@ line; the confidence-interval-width gate is applied additionally when intervals 
 again only able to suppress a candidate and never to create one.
 
 **Judging a context commit.** Branch mode asks a different question — not "did this series
-change somewhere" but "is one new commit at this level surprising, given how much the base
-ref's level moves from commit to commit?" — so it needs its own statistic. Two properties
-shape it:
+change somewhere" but "is this context commit outside every value recently observed in the
+base ref's current regime?" Two properties shape it:
 
 * **A commit is one observation.** Several stored runs at one commit are re-measurements of a
   single build on a single runner, not independent evidence about the base level, so each
   commit's runs collapse to that commit's median before anything is compared. What remains is
-  the *between-commit* scatter, which is the only dispersion a new commit can be judged
-  against. The base window is taken from the base ref's own first-parent history, anchored
-  at the base ref, and is counted in **commits** for the same reason: a
+  one base observation per commit. The base window is taken from the base ref's own
+  first-parent history, anchored at the base ref, and is counted in **commits** for the same reason: a
   run-counted window would shrink to a handful of commits on any repository that records
   several runs each, and would mean a different thing on every repository.
 
@@ -977,90 +975,66 @@ shape it:
   replicates it was given. On a store that records one run per commit, which is the shape
   continuous integration produces, the two modes see the same data and the asymmetry does not
   arise.
-* **One new observation, not a second sample.** The context commit's level is judged against a
-  **Student-t prediction interval** for a single future observation drawn from the current base
-  regime, so the interval carries the scatter of that regime's levels *plus* the uncertainty in
-  their mean and widens correctly when the regime is short. The centre it measures from is that
-  regime's **mean**, and the magnitude the finding reports is measured from the same centre, so
-  the move a report states is the move its p-value tested.
+* **One new observation, not a second sample.** The context value is compared with the
+  **observed range** from the selected current-base regime. It is an excursion only when it is
+  strictly below the lowest observed value or strictly above the highest; equality with an edge is
+  inside the range. The reported magnitude is the excess beyond the nearest edge, not a difference
+  from an estimated centre. This is a factual statement about the recorded evidence and does not
+  manufacture a probability model for the one branch observation.
 
-  The recent base window is still the evidence window. If its collapsed commit levels contain a
-  genuine interior step, branch mode discards the stale prefix and compares against only the
-  trailing regime. A split is trusted only when the trailing and preceding sides each hold the
-  minimum regime size, the Pettitt-located boundary is confirmed by a Mann–Whitney significance
-  test, the Mann–Whitney probability of superiority reaches the **base-split separation floor**,
-  and the step clears both the branch practical relative floor and the metric's absolute floor. If
-  several such boundaries qualify, the newest one defines the current regime. If none does, the
-  whole recent window is the regime.
+The base window retains at most the most recent 128 base commits and needs at least ten to judge a
+series. With 10–19 commits the complete observed range is used without attempting to locate a
+regime boundary: the data can support the basic "outside everything observed" statement, but not
+the additional selection needed to throw older evidence away.
 
-  A boundary is also refused when the trailing regime it would select cannot support a prediction
-  interval at all — a timing regime that repeats one level exactly, so it carries neither observed
-  scatter nor a quantum to stand in for one. Narrowing exists to move the comparison onto the
-  level the branch merges into, not to withdraw it, so where the narrowed sample would be
-  unjudgeable the whole window stands and the context commit is still compared.
+With at least 20 commits, branch mode alternates the chronologically ordered observed base levels
+between two stable lanes. Assigning by observation order keeps both lanes populated even when
+benchmark data exists only on a sparse subset of first-parent commits. The **selector lane** alone
+may choose regime boundaries; the **reference lane** is reserved for the report-wide historical
+comparison below. Selector observations are searched recursively for supported change points, with
+the complete search sharing one declared selection-adjusted error budget. Each search takes the
+strongest split in the stretch it is given and then searches both sides of it, because the
+strongest split is not always a supported one and a negligible step must not conceal a large
+boundary sitting behind it. A stretch that begins and ends at the same level — a base regression
+that was later reverted, say — hides the boundary that ends it, because that boundary looks like no
+change at all when it is measured against the matching observations further back. The search
+therefore finishes by re-examining the stretch that follows the newest boundary it accepted,
+against that stretch alone and with the same both-sides search, until no later boundary is left.
+Every accepted boundary
+must have full regimes on both sides, clear the practical relative and absolute floors, and show
+near-complete population separation. The current regime starts at the first selector observation
+known to be after the boundary; an interleaved reference observation whose side is ambiguous is
+excluded. Taking the newest supported boundary makes the newest supported regime the comparison
+regime rather than averaging across older operating conditions.
 
-  That separation floor is held **above** the one a reported change point must clear, because the
-  two decisions carry asymmetric costs. Reporting a move makes a claim a human then checks;
-  accepting a boundary *discards evidence*, shrinking the comparison sample and rebuilding the
-  scatter estimate from the trailing regime alone. A boundary drawn through a stationary
-  oscillation can therefore collapse that estimate to a fraction of the window's true dispersion
-  and make the next ordinary context run read as a large, near-certain move — a far more
-  damaging error than a single over-eager report. A boundary that throws data away must be
-  unambiguous. The
-  statistic is coarse at these sample sizes (with the minimum regime on both sides its
-  probability of superiority moves in steps of one twenty-fifth), so the floor is read as
-  "essentially no pair of levels across the boundary may contradict it" rather than as a precise
-  probability. A stationary series that oscillates between two levels leaves several contradicting
-  pairs in every candidate boundary and is rejected on that basis, while a genuine level shift
-  leaves none.
+A strongly separated recent group that is still shorter than a full regime leaves the current
+regime **unresolved**. Branch mode withholds that series instead of comparing against a level that
+the latest evidence already contradicts. This is distinct from an ordinary short history and is
+reported in the coverage census.
 
-  The window is also scanned at every admissible starting offset, so several correlated
-  candidate boundaries are examined and any one of them may be accepted. A per-candidate
-  significance correction cannot discipline that scan: at the minimum regime size the smallest
-  attainable rank-test p-value for a perfectly separated split already exceeds what dividing the
-  significance level across the candidates would allow, so such a correction would reject the
-  genuine shifts the narrowing exists to follow. The effect-size floor is what disciplines the
-  scan instead, because it does not weaken as candidates multiply.
-
-  Within whichever regime is selected, both the centre and the scale are deliberately
-  non-robust. A settled base-side step moves them together onto one regime. Making only the scale
-  robust while the centre stayed a mixed-window mean would be strictly worse: the mean would sit
-  between two levels and a context run agreeing exactly with the current level would read as
-  displaced from it.
-
-  The scatter estimate is bounded below by the metric's **quantum** — the smallest difference a
-  stored value can express. A counted metric moves in whole units, so a base window can repeat
-  one integer and observe a scatter of exactly zero, and an unbounded estimate would make any
-  move infinitely significant; one count, one byte, or one allocation stands in for the missing
-  scatter. A time carries no quantum at all: it is a regression slope over a run's iterations,
-  which resolves far below a clock tick, so a timing base that observes no scatter is treated as
-  degenerate and yields no verdict rather than a manufactured one.
-
-  This quantum is a distinct quantity from the absolute magnitude floor below. The quantum
-  guards the *denominator* against a degenerate zero; the magnitude floor gates the *move*
-  against what is worth acting on. Conflating them would impose the magnitude floor as an
-  absolute detection threshold, which on a short benchmark costs several times the sensitivity
-  the statistics can otherwise deliver.
+No base observation is deleted as an "outlier." A historical extreme is evidence that the current
+regime has previously reached that value. If the branch falls inside the resulting observed range,
+the tool cannot honestly say it is faster or slower than everything in the current regime, even
+when deleting one inconvenient observation would make that statement possible.
 
 Branch mode holds its **relative** floor above history's — a pull-request comment is read by
 everyone who touches the branch, so a false alarm there costs more than a missed marginal
-move. That same relative floor applies to base-window regime splits: a base-side step too small
-to justify a branch finding is too small to justify discarding history. Where the engine reports
-per-point dispersion, two further vetoes apply: the base and context intervals must not overlap,
-and the move must clear a multiple of the measurement noise band. Like every interval-derived check,
-both can only *suppress* a candidate the other gates would report.
+move. Both practical floors apply to the excess beyond the observed range edge. The same floors
+apply to base-window regime splits: a base-side step too small to justify a branch finding is too
+small to justify discarding history. Where the engine reports per-point dispersion, two further
+vetoes apply: the context interval must lie beyond every current-regime interval in the finding's
+direction, and the excess must clear a multiple of the measurement noise band. Like every
+interval-derived check, both can only *suppress* a candidate the observed range would report.
 
 The chance level a finding must clear is **selection-adjusted in history mode**. A history
 series is examined by both detectors and at every interior split, so the raw significance of
 the split the detectors *chose* overstates how surprising it is; history mode corrects for
 that search, and for running two detectors, before applying the gate described in
-"Multiple-comparison discipline", so the
-significance level means what it says. Branch mode's final context-versus-base comparison is
-predetermined, but its optional base-window narrowing searches suffixes and split positions. Its
-chance level is not adjusted for that baseline selection. Neither mode reports a "confidence"
-figure: every finding already cleared a small chance level, so such a number would read as
-near-certainty on all of them while discriminating between almost none. Chance levels remain
-internal decision inputs rather than finding fields; reports rank findings by the size of the move.
+"Multiple-comparison discipline", so the significance level means what it says. Branch excursions
+have no per-series chance level: the report states the observed range and excess, then supplies the
+historical report-wide comparison described below. Neither mode reports a "confidence" figure.
+History chance levels remain internal decision inputs rather than finding fields; branch mode
+does not relabel its historical comparison as certainty.
 
 The **practical-magnitude floor** is a hard threshold below which no finding surfaces,
 regardless of engine, direction, mode, or how confidently it was measured. A change too small
@@ -1077,33 +1051,6 @@ whose baseline is a couple of nanoseconds turns scheduling jitter into a double-
 percentage move; without the relative floor a large baseline would flag on a move that is
 noise at its scale.
 
-Branch mode also **discards a single isolated measurement excursion** from the base window before
-it compares anything. A shared runner occasionally loses time to something else and records one
-commit far above the level its neighbours agree on; left in the window, that reading drags the
-comparison's centre and inflates its scatter, so a genuine regression passes silently unreported.
-
-A level is discarded only when three conditions hold together — its neighbours on either side
-agree with one another, it stands far clear of them, and it is the window's only such level:
-*the series was doing one thing, this one commit was not, and then it went back*. The rule is
-deliberately narrow, because discarding **tightens** the window and so makes the mode readier to
-report. These are therefore left exactly as measured:
-
-* a window offering a **second** candidate, which is a benchmark visiting more than one level —
-  precisely what the context run is measured against — not a clean window with one bad reading;
-* a level near the window's **ends**, which lacks the neighbours on both sides the judgment
-  consults;
-* a level the **context run itself stands at**, since the series may return to that level and so
-  it cannot be dropped from the description of what the series does.
-
-Two tenets bound the behaviour. Whether a series is judged at all is decided on the window **as
-recorded**, before anything is discarded — that check only asks whether a recent base history
-exists to compare against. And a discarded reading is named under `--verbose`, with what it
-measured and its neighbours' level, since narrowing a window changes a verdict without any gate
-declining and would otherwise leave no trace.
-
-History mode does not clean its evidence: its gates take their level and scatter from medians,
-which absorb a single wild reading on their own.
-
 The gate thresholds are centralized as a single policy rather than embedded throughout the
 detectors, so maintainers can review and tune the complete policy together. Each threshold is
 documented there with the reasoning that sets its value; this document describes the rules
@@ -1111,9 +1058,9 @@ rather than restating their numbers.
 
 ### 8.3 Multiple-comparison discipline
 
-A repository has many benchmarks × metrics; testing each independently would flood the
-report with false positives. Because no engine is exempt from noise, **every** candidate's
-p-value enters a single **Benjamini–Hochberg** false-discovery-rate procedure, and only
+A repository has many benchmarks × metrics; testing each history series independently would flood
+the report with false positives. Because no engine is exempt from noise, every **history-mode**
+candidate's p-value enters one **Benjamini–Hochberg** false-discovery-rate procedure, and only
 survivors are reported.
 
 The procedure only controls anything if its **family** is right. A false-discovery rate is
@@ -1136,10 +1083,26 @@ has at most half the chance of raising a candidate in a direction chosen in adva
 does of raising one either way; the target is an upper bound, and this order keeps the true
 rate under it.
 
-Every candidate supplies a p-value and uses the same family definition, so the correction applies
-mechanically to history and branch analysis rather than being a history-mode concept. Its
-false-discovery guarantee still depends on each input p-value being calibrated; branch mode's
-data-selected base-window narrowing does not currently satisfy that premise.
+Branch mode does not feed range excursions into this procedure: one branch observation against a
+short history does not provide the calibrated p-values the procedure requires. It instead compares
+the **whole branch report** with reports produced by treating eligible base commits as historical
+stand-ins for the branch.
+
+For each discriminant set, only stable series sharing a rectangular set of reference-lane commits
+enter this historical family. The real branch turn evaluates every member series against all of
+its current-regime base observations. Each historical turn holds out one reference-lane base commit
+as the candidate, uses the remaining base observations **plus the real branch value** as
+references, and applies the same range, practical, and interval gates. Adding the real branch value
+to historical turns makes candidate treatment symmetric; reserving the reference lane prevents a
+held-out value from influencing the regime boundaries selected on the other lane.
+
+Each surviving per-series excess is normalized by the larger of the range edge and the metric's
+practical absolute scale, then summed across the rectangular family. The report states how many
+eligible base commits produced a score tied with or greater than the branch score, in wording such
+as "None of 10 comparable base commits showed as much out-of-range movement as this branch." A
+factual branch excursion remains in the findings even when too few comparable commits exist or a
+series is excluded from this report-wide family; the comparison is context for human judgment,
+not a filter that silently erases observed extremes.
 
 **History mode carries a second, upstream correction.** The Benjamini–Hochberg family above
 controls false discoveries *across* benchmarks; it assumes each benchmark handed it an honest
@@ -1205,8 +1168,9 @@ drift that already passed remains the fallback if the preferred step fails signi
 
 After this split-search adjustment, history mode doubles both detectors' chance levels to account
 for choosing between change-point and drift. The result is the honest per-series chance level that
-the significance gate and family correction both consume. Branch mode does not use these history adjustments. Its final comparison is predetermined, but
-optional base-window narrowing searches suffixes and split positions and is not selection-adjusted.
+the significance gate and family correction both consume. Branch mode does not use these history
+adjustments; its regime search has its own selection-adjusted budget and its report-wide
+historical comparison is descriptive rather than a p-value.
 The upper series length in "Supported series length" and the per-candidate permutation ceiling jointly
 bound the work of history calibration. This is a worst-case bound rather than a uniform speed
 promise: an ambiguous maximum-length series may use the full ceiling.
@@ -1244,22 +1208,24 @@ never a silent fall-through to history.
 * **branch** — auto-selected otherwise (commits past the merge-base, a context line whose
   merge-base is off first-parent because the base was merged into the branch, or a dirty run
   admitted on the base tip by the exception above). It judges the analyzed context commit
-  against the recent base-ref level — a branch's intermediate commits say nothing about the
+  against the recent base-ref current-regime range — a branch's intermediate commits say nothing about the
   state being evaluated, so the branch's own history is discarded and only the context
   commit's newest runs are compared — reporting both directions.
 
 The two driving scenarios are a scheduled base-branch regression watch (history) and a
 per-PR feature-branch evaluation (branch). Long-range trend analysis is meaningless on one
-or two branch points, which is why the techniques differ by mode. The false-discovery
-correction is not one of the differences: it spans whichever series the running mode found
-testable, over the directions that mode reports (§8.3).
+or two branch points, which is why the techniques differ by mode. Their report-wide
+false-alarm controls differ too: history uses calibrated hypothesis tests and
+Benjamini–Hochberg, while branch mode reports factual range excursions alongside a symmetric
+historical report comparison (§8.3).
 
 | Technique | history | branch |
 |---|---|---|
 | Change-point (Pettitt + engine gating) | ✅ | — |
 | Monotonic drift (Mann–Kendall + Theil–Sen) | ✅ | — |
-| Context commit vs. base (Student-t prediction interval) | — | ✅ |
-| Benjamini–Hochberg false-discovery filter | ✅ | ✅ |
+| Context commit vs. current-base observed range | — | ✅ |
+| Benjamini–Hochberg false-discovery filter | ✅ | — |
+| Symmetric historical report comparison | — | ✅ |
 | Improvements reported | — | ✅ |
 
 Modes apply to `analyze` only; `list`, `prune`, and `examine` reuse the shared selection
@@ -1276,10 +1242,11 @@ via the base-tip dirty exception.
 A long history should not keep re-flagging an event a reviewer has already handled. A blessing
 (see `bless`) re-baselines a series from the blessed commit forward: the detectors run on the
 **active segment only**, so the pre-blessing step is no longer re-flagged, while the earlier
-points still feed the chart and any long-range technique that needs context. Blessings are
-honoured **only in history mode** — branch mode judges the context commit against the base, which is
-treated as fully blessed by construction. A re-baselined finding records the blessing's commit
-and time for provenance.
+points still feed the chart and any long-range technique that needs context. In branch mode the
+same blessing is a hard floor on base evidence: the blessed commit remains eligible, and every
+earlier base observation is excluded before regime selection, range construction, or historical
+comparison. A re-baselined finding records the blessing's commit and time for provenance. If too
+little post-blessing evidence remains, the series is unjudged with a blessing-specific reason.
 
 Blessing is also how a *real but uninteresting* shift is disposed of. The detector reports
 that the measured level moved; whether a runner swap, a toolchain bump, or a deliberate
@@ -1427,7 +1394,11 @@ carries exactly one reason — the first that applies in pipeline order:
   is not.
 * **not measured on the branch** — branch mode has no context observation to judge.
 * **too few base-ref commits to compare against** — branch mode has a context observation but
-  too few base levels to build a prediction interval from.
+  too few base levels to form an observed range.
+* **too few base-ref commits since its blessing** — enough base history existed before an
+  intentional evidence boundary, but too little remains at or after it.
+* **current base regime unresolved** — the latest base observations support a material move, but
+  the new level is still too short to establish as the current regime.
 
 Ghosts are excluded from the denominator, so what a report takes its ratio against — and
 derives its coverage state from — is the **in-scope** suite: every series accounted for except
@@ -1454,9 +1425,13 @@ reportable move survived the gates. Under every other state, some or all in-scop
 not judged. The states that judged nothing stay distinct because their remedies differ: look
 at collection, at the analyzed context commit, or at the evidence the gates require.
 
-The set of judged series is exactly the false-discovery family (§8.3), so what a report counts as
-judged is the same set the correction is computed over and the two cannot drift apart. The
-denominator it is counted against is a separate question, answered by the in-scope rule above.
+What makes a series judged is mode-specific, because the two modes ask different questions of it.
+In **history** mode the judged set is exactly the false-discovery family (§8.3), so what a report
+counts as judged is the same set the correction is computed over and the two cannot drift apart.
+In **branch** mode there is no such family: a series is judged when it carried enough current-base
+evidence to establish a range for the context run to be compared against, and unjudged when it did
+not. In either mode, the denominator the judged count is reported against is a separate question,
+answered by the in-scope rule above.
 
 How it surfaces (§8.7) follows what a reader needs where:
 
