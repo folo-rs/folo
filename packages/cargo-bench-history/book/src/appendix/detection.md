@@ -384,6 +384,11 @@ refuse data too sparse to trust — rather than a value the statistics derive on
 too low and the report fills with accidents; the thresholds here are picked to keep that from
 happening while still judging any series with a genuine history behind it.
 
+Clearing this floor puts a series in the judged family. In history mode that is not the
+same as being able to report a lone step: a rank comparison on so few points has a floor,
+and the group-wide correction's rank-1 bar shrinks as the family grows. See
+[Multiplicity and coverage](coverage.md#the-detection-minimum-is-not-a-reporting-guarantee).
+
 ## What detection hands on
 
 A history candidate carries the series, method, direction and size of the move, attribution, and

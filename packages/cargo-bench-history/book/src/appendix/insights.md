@@ -171,15 +171,19 @@ Work down this list. Each step names the chapter that explains it.
    metrics was dropped before detection. This is the single most common cause of a surprising
    silence. → [Reconstruction](reconstruction.md)
 3. **Is there enough history?** Both sides of a step need enough commits. A benchmark added
-   recently cannot produce a change point yet. → [Detection](detection.md)
+   recently cannot produce a change point yet. A series that has just cleared the detection
+   minimum is judged, but a lone step there cannot survive a large family's correction.
+   → [Detection](detection.md),
+   [Multiplicity and coverage](coverage.md#the-detection-minimum-is-not-a-reporting-guarantee)
 4. **Does the move clear both floors?** Relative *and* absolute. A large percentage of a tiny
    number does not qualify. → [Noise gates](gates.md)
 5. **Is the series too noisy?** In history mode, compare the move with the series' residual
    scatter. In branch mode, check whether historical extremes expanded the observed current-base
    range. → [Noise gates](gates.md)
 6. **What does the report-wide context say?** For history, a larger judged family sets a stricter
-   false-discovery bar. For branch mode, read how many comparable base commits tied or exceeded the
-   branch score.
+   false-discovery bar — strict enough that a series at the detection minimum cannot report a
+   lone step in a large family. For branch mode, read how many comparable base commits tied or
+   exceeded the branch score.
    → [Multiplicity and coverage](coverage.md)
 7. **Was it an improvement in history mode?** History mode watches for regressions only, so a
    move that made things faster never becomes a finding there. → [Reporting](reporting.md)

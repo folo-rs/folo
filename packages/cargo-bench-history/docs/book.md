@@ -182,7 +182,7 @@ against and what a user reads when a finding does not make sense.
 | 4. Reconstruction | How runs fold into series, and the four things that change what detection sees: ordering, gaps, ghosts, blessings. |
 | 5. Detection | What a signal is, which detector establishes it, how a history change point is tested fairly after searching across possible splits, and what each mode does and does not do. |
 | 6. Noise gates | Every gate, in application order, with its computation and its threshold — and that gates short-circuit. |
-| 7. Multiplicity and coverage | Why a per-series test is not enough; what the false-discovery family is and why it includes series that raised nothing; what the report means by *judged*. |
+| 7. Multiplicity and coverage | Why a per-series test is not enough; what the false-discovery family is and why it includes series that raised nothing; that a judged short series can still fail to report a lone finding as the family grows. |
 | 8. Reporting | Ranking, the three formats plus the lossy summary, charts, comparison-base lag, and why findings never fail a build. |
 | 9. Insights | Triage playbooks: what to do with each kind of finding, and what to do when an expected finding never arrives. |
 | 10. Limits | What the pipeline deliberately does not do, and what to do instead. |

@@ -18,6 +18,19 @@ are no longer current.
 *What to do:* use [`examine`](../commands/examine.md) when you need the full recorded shape. To
 judge an older era rather than the current one, move the analysis context to a commit in that era.
 
+## A short series cannot report a lone finding in a large family
+
+The detection minimum is the shortest history that is judged. That series still counts toward
+the false-discovery family, but a lone perfect step at that length cannot clear the group-wide
+bar once the family grows past a handful of series.
+
+*Why:* a rank comparison on so few points has a floor, and the rank-1 bar shrinks with the
+family. Those two numbers miss each other well before a production-scale suite.
+
+*What to do:* collect more history on the series you care about. The coverage chapter shows
+how family reach grows with length. See
+[Multiplicity and coverage](coverage.md#the-detection-minimum-is-not-a-reporting-guarantee).
+
 ## Distance between commits is invisible
 
 Detection is **positional**: a series with ten observations spread across a thousand commits and

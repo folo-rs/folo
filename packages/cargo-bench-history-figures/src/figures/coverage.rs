@@ -1,16 +1,20 @@
 //! Figures and worked examples for the Multiplicity and coverage chapter.
 //!
-//! The chapter makes two arithmetic claims — that the rank threshold tightens with the
-//! size of the family, and that filtering direction before correction is stricter than
-//! correcting both directions first — and one accounting claim, that every series an analysis
-//! did not judge is named. Each figure here is the arithmetic itself: the step-up decisions
-//! come from the real [`benjamini_hochberg`](cbh_stats::benjamini_hochberg) procedure and the
-//! coverage account from a real [`SeriesCensus`], so a change in either rewrites the chapter
-//! rather than leaving its numbers behind.
+//! The chapter makes three arithmetic claims — that the rank threshold tightens with the
+//! size of the family, that filtering direction before correction is stricter than
+//! correcting both directions first, and that a lone perfect step at the detection minimum
+//! cannot clear the rank-1 bar of a large family — and one accounting claim, that every
+//! series an analysis did not judge is named. Each figure here is the arithmetic itself: the
+//! step-up decisions come from the real [`benjamini_hochberg`](cbh_stats::benjamini_hochberg)
+//! procedure and the coverage account from a real [`SeriesCensus`], so a change in either
+//! rewrites the chapter rather than leaving its numbers behind.
 
 use std::fmt::Write as _;
 
-use cbh_detect::{SeriesCensus, TARGET_FALSE_DISCOVERY_RATE, Testability, UnjudgedReason};
+use cbh_detect::{
+    HISTORY_DETECTOR_COUNT, MIN_REGIME, MIN_SERIES_POINTS, SeriesCensus,
+    TARGET_FALSE_DISCOVERY_RATE, Testability, UnjudgedReason,
+};
 use cbh_render::{Coverage, CoverageState};
 use plotters::style::RGBColor;
 
@@ -23,6 +27,14 @@ use crate::theme;
 pub fn assets() -> Vec<Asset> {
     let mut assets = staircase();
     assets.extend(families());
+    assets.push(Asset::new(
+        "coverage-short-series.md",
+        short_series_lone_table(),
+    ));
+    assets.push(Asset::new(
+        "coverage-short-series-reach.md",
+        short_series_reach_table(),
+    ));
     assets.push(Asset::new(
         "coverage-direction-order.md",
         direction_order_table(),
@@ -278,6 +290,209 @@ fn family_size_case(family: usize) -> FamilyCase {
         judged,
         figure,
     }
+}
+
+/// A perfect midpoint step of a given length, and the largest judged family in which
+/// that lone step still reports.
+///
+/// The chance level is the two-sided Mann-Whitney floor for complete separation of a
+/// balanced split, multiplied by [`HISTORY_DETECTOR_COUNT`] so both history detectors
+/// are accounted for — the same doubling the detectors apply before the group-wide
+/// correction. The family size is what the real Benjamini-Hochberg procedure keeps
+/// at rank 1.
+struct LoneStep {
+    /// How many points the series holds.
+    points: usize,
+
+    /// Chance level the group-wide correction sees for this lone step.
+    chance_level: f64,
+
+    /// Largest judged family in which rank 1 still keeps this chance level.
+    largest_family: usize,
+}
+
+/// The worked example: a series at the detection minimum that is the only candidate.
+fn short_series_lone_table() -> String {
+    let step = lone_step(MIN_SERIES_POINTS);
+    let kept_family = step.largest_family;
+    let dropped_family = kept_family.saturating_add(1);
+    let kept = judge(&[("step", step.chance_level)], kept_family);
+    let dropped = judge(&[("step", step.chance_level)], dropped_family);
+
+    let mut table = String::from("| Judged family | Rank-1 bar | Outcome |\n");
+    table.push_str("|---:|---:|---|\n");
+    for (family, judged) in [(kept_family, &kept), (dropped_family, &dropped)] {
+        let candidate = judged
+            .first()
+            .expect("a lone candidate always has a rank-1 decision");
+        writeln!(
+            table,
+            "| {family} | {} | {} |",
+            chance(candidate.threshold),
+            candidate.outcome()
+        )
+        .expect("writing to a String never fails");
+    }
+    writeln!(
+        table,
+        "\nA series of {} points whose later half sits entirely above its earlier \
+         half has chance level {}. Rank 1 in a family of {kept_family} still admits \
+         it; rank 1 in a family of {dropped_family} does not.",
+        step.points,
+        chance(step.chance_level)
+    )
+    .expect("writing to a String never fails");
+
+    table
+}
+
+/// How family reach grows as the series gains balanced pairs of points.
+fn short_series_reach_table() -> String {
+    let lengths = lone_step_lengths();
+    let mut table = String::from(
+        "| Points | Chance level of a perfect midpoint step | \
+         Largest family that still reports that lone step |\n",
+    );
+    table.push_str("|---:|---:|---:|\n");
+    for points in &lengths {
+        let step = lone_step(*points);
+        writeln!(
+            table,
+            "| {} | {} | {} |",
+            step.points,
+            chance(step.chance_level),
+            step.largest_family
+        )
+        .expect("writing to a String never fails");
+    }
+    let last = lengths
+        .last()
+        .copied()
+        .expect("the reach table always includes the detection minimum");
+    writeln!(
+        table,
+        "\nThe family of {LARGE_FAMILY} used in the staircase above first admits a \
+         lone perfect midpoint step at {last} points."
+    )
+    .expect("writing to a String never fails");
+
+    table
+}
+
+/// Even lengths from the detection minimum through the first that still reports
+/// alone in [`LARGE_FAMILY`].
+fn lone_step_lengths() -> Vec<usize> {
+    let mut lengths = Vec::new();
+    let mut points = MIN_SERIES_POINTS;
+    loop {
+        lengths.push(points);
+        if lone_step(points).largest_family >= LARGE_FAMILY {
+            return lengths;
+        }
+        // One more observation on each side of the split: the next balanced length.
+        let next = points.saturating_add(2);
+        assert!(
+            next > points,
+            "balanced lengths must grow, or the reach table cannot terminate"
+        );
+        points = next;
+    }
+}
+
+/// A perfect midpoint step of `points` observations.
+fn lone_step(points: usize) -> LoneStep {
+    let chance_level = best_lone_chance_level(points);
+    LoneStep {
+        points,
+        chance_level,
+        largest_family: largest_family_keeping_lone(chance_level),
+    }
+}
+
+/// Chance level of complete separation at the most balanced split, after both
+/// history detectors are accounted for.
+fn best_lone_chance_level(points: usize) -> f64 {
+    let left = balanced_split(points);
+    assert!(
+        left >= MIN_REGIME && points.saturating_sub(left) >= MIN_REGIME,
+        "a lone-step example must still be a pair of full regimes"
+    );
+    let assignments = combinations(points, left);
+    let two_sided = 2.0 / binomial_as_f64(assignments);
+    two_sided * crate::coord::of(HISTORY_DETECTOR_COUNT)
+}
+
+/// Most balanced split `points` can offer.
+///
+/// That split is also the complete-separation ranking with the most assignments,
+/// and therefore the most surprising Mann-Whitney floor.
+fn balanced_split(points: usize) -> usize {
+    points
+        .checked_div(2)
+        .expect("a judged series has at least two points")
+}
+
+/// Number of ways to choose `k` of `n` distinct ranks.
+fn combinations(n: usize, k: usize) -> u128 {
+    let k = k.min(n.saturating_sub(k));
+    let mut count: u128 = 1;
+    for i in 1..=k {
+        let numerator = u128::try_from(n.saturating_sub(k).saturating_add(i))
+            .expect("split sizes used here fit in u128");
+        let i = u128::try_from(i).expect("the loop index fits in u128");
+        let product = count
+            .checked_mul(numerator)
+            .expect("binomial counts for the series lengths this appendix uses fit in u128");
+        // Multiplying in this order keeps every partial product divisible by i.
+        assert_eq!(
+            product.checked_rem(i),
+            Some(0),
+            "binomial partial products are integers"
+        );
+        count = product
+            .checked_div(i)
+            .expect("the loop index is at least 1");
+    }
+    count
+}
+
+/// `count` as an `f64`, for chance-level arithmetic over binomial assignments.
+fn binomial_as_f64(count: u128) -> f64 {
+    let count = usize::try_from(count)
+        .expect("binomial counts for the series lengths this appendix uses fit in usize");
+    crate::coord::of(count)
+}
+
+/// Whether rank 1 of `family` keeps a lone candidate at `chance_level`.
+fn keeps_lone(chance_level: f64, family: usize) -> bool {
+    cbh_stats::benjamini_hochberg(&[chance_level], fdr_q(), family)
+        .first()
+        .copied()
+        .unwrap_or(false)
+}
+
+/// Search bound for [`largest_family_keeping_lone`].
+///
+/// Well above any family a short-series Mann-Whitney floor can survive at rank 1.
+/// Crossing it means the length is no longer illustrating a short-series floor.
+const LONE_STEP_FAMILY_SEARCH_BOUND: usize = 100_000;
+
+/// Largest family in which a lone candidate at `chance_level` is still kept.
+fn largest_family_keeping_lone(chance_level: f64) -> usize {
+    assert!(
+        chance_level > 0.0,
+        "a zero chance level would report in every family"
+    );
+    let mut family = 1;
+    while keeps_lone(chance_level, family) {
+        family = family.saturating_add(1);
+        assert!(
+            family < LONE_STEP_FAMILY_SEARCH_BOUND,
+            "a chance level that still reports alone at this family size is not a \
+             short-series floor"
+        );
+    }
+    family.saturating_sub(1)
 }
 
 /// How many series the chapter's worked example says were judged when both directions were
@@ -568,11 +783,13 @@ mod tests {
     use super::*;
 
     /// Every asset the chapter includes, by the name it includes it under.
-    const EMBEDDED: [&str; 8] = [
+    const EMBEDDED: [&str; 10] = [
         "coverage-staircase.svg",
         "coverage-staircase.md",
         "coverage-family-size.svg",
         "coverage-family-size.md",
+        "coverage-short-series.md",
+        "coverage-short-series-reach.md",
         "coverage-direction-order.md",
         "coverage-census.svg",
         "coverage-reasons.md",
@@ -712,6 +929,82 @@ mod tests {
 
         assert!(table.contains(&format!("| {} |", family_size_of_run())));
         assert!(table.contains(&format!("| {LARGE_FAMILY} |")));
+    }
+
+    /// The detection minimum is judged, but a lone perfect step there cannot survive
+    /// the chapter's large family.
+    #[test]
+    fn a_lone_step_at_the_detection_minimum_reports_only_in_a_small_family() {
+        let step = lone_step(MIN_SERIES_POINTS);
+
+        assert!(step.largest_family > 0);
+        assert!(step.largest_family < LARGE_FAMILY);
+        assert!(keeps_lone(step.chance_level, step.largest_family));
+        assert!(!keeps_lone(
+            step.chance_level,
+            step.largest_family.saturating_add(1)
+        ));
+    }
+
+    #[test]
+    fn the_short_series_table_states_the_keep_and_drop_families() {
+        let step = lone_step(MIN_SERIES_POINTS);
+        let table = content("coverage-short-series.md");
+        let dropped = step.largest_family.saturating_add(1);
+
+        assert!(table.contains(&format!("| {} |", step.largest_family)));
+        assert!(table.contains(&format!("| {dropped} |")));
+        assert!(table.contains(&chance(step.chance_level)));
+        assert!(table.contains("kept"));
+        assert!(table.contains("dropped"));
+    }
+
+    /// The chance level the group-wide correction sees is the Mann-Whitney floor
+    /// after both detectors.
+    #[test]
+    fn the_lone_step_accounts_for_both_history_detectors() {
+        let step = lone_step(MIN_SERIES_POINTS);
+        let two_sided = 2.0
+            / binomial_as_f64(combinations(
+                MIN_SERIES_POINTS,
+                balanced_split(MIN_SERIES_POINTS),
+            ));
+        let expected = two_sided * crate::coord::of(HISTORY_DETECTOR_COUNT);
+
+        assert!((step.chance_level - expected).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn a_lone_step_eventually_reaches_the_large_family() {
+        let lengths = lone_step_lengths();
+        let first = *lengths
+            .first()
+            .expect("the reach table includes the detection minimum");
+        let last = *lengths
+            .last()
+            .expect("the reach table includes the detection minimum");
+
+        assert_eq!(first, MIN_SERIES_POINTS);
+        assert!(lone_step(last).largest_family >= LARGE_FAMILY);
+        if let Some(&previous) = lengths.get(lengths.len().saturating_sub(2)) {
+            assert!(lone_step(previous).largest_family < LARGE_FAMILY);
+        }
+    }
+
+    #[test]
+    fn the_reach_table_states_every_length() {
+        let table = content("coverage-short-series-reach.md");
+
+        for points in lone_step_lengths() {
+            let step = lone_step(points);
+            assert!(
+                table.contains(&format!("| {points} |")),
+                "{points} is missing from:\n{table}"
+            );
+            assert!(table.contains(&chance(step.chance_level)));
+            assert!(table.contains(&format!("| {} |", step.largest_family)));
+        }
+        assert!(table.contains(&LARGE_FAMILY.to_string()));
     }
 
     /// The chapter states that filtering first is stricter, so the arithmetic has to show

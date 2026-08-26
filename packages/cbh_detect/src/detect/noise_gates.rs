@@ -25,6 +25,10 @@ pub const MIN_REGIME: usize = 5;
 /// Two full regimes are the least a change-point can be built from. Below this floor
 /// no split can satisfy [`MIN_REGIME`] on both sides, so evaluating the series can
 /// only produce noise.
+///
+/// A series that meets this floor is judged, but a lone change-point at this length
+/// cannot clear the group-wide correction in a large family. Ref:
+/// `../../cargo-bench-history/docs/DESIGN.md`, "Multiple-comparison discipline".
 pub const MIN_SERIES_POINTS: usize = 2 * MIN_REGIME;
 
 /// The most points any one series is analyzed over: older points beyond this count are

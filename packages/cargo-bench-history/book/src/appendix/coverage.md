@@ -69,6 +69,29 @@ at once. The alternative — a fixed per-series bar — is a report where the ex
 false alarms grows with the size of your suite, which is precisely the failure that makes
 people stop reading benchmark reports.
 
+## The detection minimum is not a reporting guarantee
+
+The [detection minimum](detection.md#minimum-evidence) is the shortest history that can hold
+two regimes. Being judged is not the same as being able to produce a finding by itself.
+
+A rank comparison on a handful of points has a floor: even a perfect step — every later
+point above every earlier one — can only be so surprising, because there are only so many
+ways to assign those ranks. The group-wide correction then asks that lone strongest
+candidate to clear a bar that shrinks as the judged family grows. At the detection minimum
+those two numbers miss each other once the family is larger than a handful of series.
+
+{{#include generated/coverage-short-series.md}}
+
+The series is still judged. It still counts in the denominator, which tightens the bar for
+every other series. It just cannot be the only finding in a large family, no matter how
+large the step.
+
+{{#include generated/coverage-short-series-reach.md}}
+
+A short series that moves alongside other genuine findings can still be reported: later
+ranks carry looser bars. The bound above is specifically for a lone regression, which is
+also the case most worth catching.
+
 ## Why history filters direction first
 
 In history mode, improvements are neither displayed nor corrected. They leave the candidate set
