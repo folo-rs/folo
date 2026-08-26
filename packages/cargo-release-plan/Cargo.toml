@@ -1,0 +1,59 @@
+[package]
+# Cargo has its own logic for naming and expects dashes. Okay.
+name = "cargo-release-plan"
+description = "A Cargo subcommand that classifies publishable packages against their version anchors and applies increment plans"
+publish = true
+version = "0.1.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# Only the consumer build ships. Tests, the agent notes, and development
+# manifests stay in git. Ref: docs/design.md "Released content".
+include = ["src/**", "README.md", "docs/**"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+# Baseline of external types intentionally exposed in the public API. Any new
+# external type here trips the check so accidental exposures are caught.
+# Ref: docs/external-types.md.
+[package.metadata.cargo_check_external_types]
+allowed_external_types = [
+    "clap_builder::derive::Args",
+    "clap_builder::derive::CommandFactory",
+    "clap_builder::derive::FromArgMatches",
+    "clap_builder::derive::Parser",
+    "clap_builder::derive::Subcommand",
+    "clap_builder::derive::ValueEnum",
+]
+
+[package.metadata.binstall]
+# Prebuilt binaries are published by .github/workflows/release.yml (see
+# docs/release-automation.md). release-plz tags releases as `<crate>-v<version>`,
+# which cargo-binstall's auto-detection does not derive, so the URL is explicit.
+# Archives are `.zip` on every platform and the binary sits at the archive root.
+pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-v{ version }-{ target }.zip"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "zip"
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+ignore = { workspace = true }
+mimalloc = { workspace = true }
+ohno = { workspace = true, features = ["app-err"] }
+semver = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+toml_edit = { workspace = true, features = ["parse", "display"] }
+
+[dev-dependencies]
+mutants = { workspace = true }
+static_assertions = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
