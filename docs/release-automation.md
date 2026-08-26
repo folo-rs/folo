@@ -133,12 +133,15 @@ publish:
     id-token: write   # crates.io Trusted Publishing (OIDC)
   timeout-minutes: 180   # generous: covers up to 3 retry attempts (see below)
   steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
         # persist-credentials stays at its default (true): release-plz pushes the
         # release tags via git, which uses the checkout-persisted token.
     - uses: ./.github/actions/setup-environment
+    - name: Verify the checked-in lockfile is consistent
+      shell: pwsh
+      run: just verify-lockfile   # aborts before publish/tag if Cargo.lock is stale
     - name: Compose the CI release-plz config
       shell: pwsh
       run: just gh-compose-release-config "$env:RUNNER_TEMP/release-plz.ci.toml"
@@ -147,6 +150,20 @@ publish:
       env:
         GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # forge API (tags + GitHub releases)
 ```
+
+Before it publishes or tags anything, `publish` runs a **lockfile-consistency gate**
+(`just verify-lockfile`). The whole workspace shares a single `Cargo.lock`, so one entry
+that disagrees with its manifest — the classic case being a version bumped in a
+`Cargo.toml` without the matching lock entry updated — makes *every* `--locked` build fail.
+Nothing else stops such a commit from being tagged: `release-plz` publishes and tags on push
+to `main` before the ordinary `--locked` validation on that push can block it, so the broken
+lock would only surface downstream as a total `build-binaries` wipeout. The gate runs
+`cargo metadata --locked`, which resolves the graph against the committed lockfile and exits
+non-zero if the lock would need to change, turning that latent failure into an early, actionable
+abort — no crate is published and no tag is created. It is **verify-only**: it reads the
+checked-in lockfile and never regenerates it (workflows build the committed lockfile verbatim).
+The same recipe is runnable locally (`just verify-lockfile`) to catch a stale lock after a manual
+version edit, before pushing.
 
 Each step is a thin `pwsh` call into a `just` recipe; the publishing logic — deriving
 the binary crates, injecting `git_release_enable`, and the retry loop — lives in
@@ -233,7 +250,7 @@ build-binaries:
   permissions:
     contents: write   # upload assets to the release
   steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         ref: refs/tags/${{ matrix.tag }}   # build the exact released code
     - uses: ./.github/actions/setup-environment

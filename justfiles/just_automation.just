@@ -6,26 +6,26 @@
 # thin wrappers over the tool, free of local-developer conveniences.
 
 # Collects the whole workspace's benchmark history (excluding the slow, special-purpose
-# `benchmarks` package) into the prod Azure store, keyed by the current commit. The machine
-# partition for every engine is the runner's OWN auto-detected hardware fingerprint,
-# NOT a fixed key: the GitHub-hosted runner pool is heterogeneous, and pinning every runner onto one
-# shared series just mixes incomparable machines and jitters daily. Letting each runner stamp
-# its real fingerprint splits the data into one clean series per hardware type; the analyze job is
-# fed the exact fingerprints collected this run (see gh-analyze-bench-history) so it surveys only
-# those series. Every engine is partitioned this way — even Callgrind and the allocation/time
-# counters, whose simulated figures still vary across microarchitectures as libraries dispatch to
-# different code paths. `--best-of 3` counteracts the same runner noise from the other direction: the
-# suite runs three times and each metric keeps its minimum sample, since benchmark interference
-# on a shared runner is one-sided (it only ever makes a case slower) and the runs are spaced far
-# enough apart in time that a transient slowdown is unlikely to hit every one. This roughly
-# triples the wall-clock benchmark portion of the collect job (see bench-history.yml's
-# `timeout-minutes`). `--verbose` makes the collect log spell out the resolved machine key and the
-# fingerprint components behind it, so a key change (a runner hardware shift) is debuggable from the
-# log alone. `--skip-existing` makes a re-run on an unchanged commit a no-op append (each
-# already-stored object is skipped, not overwritten), so a re-triggered run of an
-# already-collected commit never bumps the cache-invalidation marker the `analyze` job's
-# read-through cache depends on - a re-run of the same commit is not "better" data, so there is
-# nothing to replace.
+# `benchmarks` package) with every selected package's Cargo features enabled, so targets guarded by
+# `required-features` are included. Results go into the prod Azure store, keyed by the current
+# commit. The machine partition for every engine is the runner's OWN auto-detected hardware
+# fingerprint, NOT a fixed key: the GitHub-hosted runner pool is heterogeneous, and pinning every
+# runner onto one shared series just mixes incomparable machines and jitters daily. Letting each
+# runner stamp its real fingerprint splits the data into one clean series per hardware type; the
+# analyze job is fed the exact fingerprints collected this run (see gh-analyze-bench-history) so it
+# surveys only those series. Every engine is partitioned this way — even Callgrind and the
+# allocation/time counters, whose simulated figures still vary across microarchitectures as
+# libraries dispatch to different code paths. `--best-of 3` counteracts the same runner noise from
+# the other direction: the suite runs three times and each metric keeps its minimum sample, since
+# benchmark interference on a shared runner is one-sided (it only ever makes a case slower) and the
+# runs are spaced far enough apart in time that a transient slowdown is unlikely to hit every one.
+# This roughly triples the wall-clock benchmark portion of the collect job (see
+# bench-history.yml's `timeout-minutes`). `--verbose` makes the collect log spell out the resolved
+# machine key and the fingerprint components behind it, so a key change (a runner hardware shift)
+# is debuggable from the log alone. `--skip-existing` makes a re-run on an unchanged commit a no-op
+# append (each already-stored object is skipped, not overwritten), so a re-triggered run of the
+# same commit never bumps the cache-invalidation marker the `analyze` job's read-through cache
+# depends on - a re-run of the same commit is not "better" data, so there is nothing to replace.
 #
 # RECOLLECT MODE. When the environment variable `RECOLLECT_COMMIT_ID` is set (the bench-history.yml
 # `collect` job wires it from the optional `recollect_commit_id` workflow_dispatch input), this
@@ -84,11 +84,12 @@ gh-collect-bench-history:
 # and it is safe because branch-mode `analyze` only ever flags a series that has a data point at the
 # branch-unique head commit, i.e. exactly the packages collected here (see
 # gh-analyze-pr-bench-history and .github/workflows/design.md). Everything else is identical to the
-# push-to-main collect: each runner stamps its OWN real hardware fingerprint (no fixed key), so PR
-# wall-clock series live on the same per-machine-key partitions as main's baseline, `--best-of 3`
-# sheds one-sided runner jitter, `--verbose` logs the resolved key and its components, and
-# `--skip-existing` makes a re-run of the same head SHA a no-op append. There is no recollect mode on
-# PRs (that repairs main's permanent history); the scope decision lives in
+# push-to-main collect: all Cargo features are enabled so required-feature targets run, each runner
+# stamps its OWN real hardware fingerprint (no fixed key), so PR wall-clock series live on the same
+# per-machine-key partitions as main's baseline, `--best-of 3` sheds one-sided runner jitter,
+# `--verbose` logs the resolved key and its components, and `--skip-existing` makes a re-run of the
+# same head SHA a no-op append. There is no recollect mode on PRs (that repairs main's permanent
+# history); the scope decision lives in
 # scripts/bench-history/BenchHistoryCollect.psm1 (Pester-tested via `just test-scripts`), so this is
 # a thin import + call. `packages` must be non-empty - the workflow only invokes this recipe when
 # the delta produced at least one benchmarkable package, and an empty scope would wrongly fall back
@@ -140,12 +141,12 @@ gh-collect-pr-bench-history packages:
 # oldest first-parent commit reachable from that end and newer than 14 days, since older points have
 # no comparison value against current tips. An EMPTY argument vector means no commit is eligible yet
 # (every commit is still inside the quarantine), which is a successful no-op rather than a failure.
-# The scope, `--best-of 3` and `--verbose` are the same ones gh-collect-bench-history uses - a point
-# measured with a narrower scope or a lower best-of would not be comparable to its pushed neighbours,
-# and would still count as recorded and never be revisited. `--ignore-errors` walks past a commit
-# that fails to build instead of abandoning the rest of the window; there is no `--overwrite` (an
-# existing point is exactly what should be skipped) and no `--machine-key` (each runner stamps its
-# own real hardware fingerprint).
+# The package scope, `--all-features`, `--best-of 3` and `--verbose` are the same ones
+# gh-collect-bench-history uses - a point measured with different feature coverage, a narrower scope
+# or a lower best-of would not be comparable to its pushed neighbours, and would still count as
+# recorded and never be revisited. `--ignore-errors` walks past a commit that fails to build instead
+# of abandoning the rest of the window; there is no `--overwrite` (an existing point is exactly what
+# should be skipped) and no `--machine-key` (each runner stamps its own real hardware fingerprint).
 #
 # Each commit is built with the toolchain it pins, but the RUSTFLAGS below come from HEAD's
 # constants.env, so a commit older than the newest change to them is measured slightly differently
@@ -314,9 +315,10 @@ gh-analyze-bench-history dir keydir:
 # ancestry's clean points as the baseline, and reports how the branch tip's level moved. `{{base}}`
 # is passed EXPLICITLY (the pr-bench-history.yml `analyze` job passes `origin/main`) because the PR
 # head is checked out detached, so there is no local `main` branch to auto-resolve, whereas
-# `fetch-depth: 0` populates the `origin/main` remote-tracking ref the merge-base needs.
-# `--include-improvements` is added so the rolling PR comment can also surface detected speedups, not
-# only regressions. Everything else matches the main analyze: the EXACT machine keys collected this
+# `fetch-depth: 0` populates the `origin/main` remote-tracking ref the merge-base needs. Branch mode
+# reports improvements alongside regressions on its own, so the rolling PR comment surfaces detected
+# speedups without any flag asking for them. Everything else matches the main analyze: the EXACT
+# machine keys collected this
 # run (threaded from {{keydir}} via Get-MachineKeyArgument, not the removed fixed `github` key), all
 # engines and triples, findings never fail the recipe (the tool always exits 0), `--verbose` logs the
 # effective machine-key selection, and `--cache` mirrors fetched cloud objects under {{dir}}/cache. A
@@ -370,8 +372,8 @@ gh-analyze-pr-bench-history dir base keydir:
 
     $common = @('--engine', 'all', '--target-triple', 'all') + $keyArgs
 
-    Write-Verbose "Analyzing PR benchmark history in branch mode (context HEAD vs base {{base}}); writing the full Markdown to $reportPath, the full JSON to $jsonPath and the condensed top-findings Markdown summary to $summaryPath, including improvements as well as regressions, and mirroring fetched cloud objects under $cacheDir." -Verbose
-    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --verbose --context HEAD --base '{{base}}' --include-improvements --cache=$cacheDir --no-text --markdown $reportPath --json $jsonPath --markdown-summary $summaryPath
+    Write-Verbose "Analyzing PR benchmark history in branch mode (context HEAD vs base {{base}}); writing the full Markdown to $reportPath, the full JSON to $jsonPath and the condensed top-findings Markdown summary to $summaryPath, and mirroring fetched cloud objects under $cacheDir. Branch mode judges the tip against the base in both directions, so the reports carry improvements as well as regressions." -Verbose
+    cargo run -p cargo-bench-history --bin cargo-bench-history --locked -- analyze @common --verbose --context HEAD --base '{{base}}' --cache=$cacheDir --no-text --markdown $reportPath --json $jsonPath --markdown-summary $summaryPath
     Write-Verbose "Computing the notable flag from the JSON report." -Verbose
     $json = Get-Content -LiteralPath $jsonPath -Raw | ConvertFrom-Json
     $notable = if (($json.PSObject.Properties.Name -contains 'notable') -and $json.notable) { 'true' } else { 'false' }
@@ -429,6 +431,36 @@ gh-file-pr-comment repo pr marker body_file:
         -BodyFile '{{body_file}}' `
         -Verbose
     Write-Verbose "Rolling PR comment is available at $url." -Verbose
+
+# Composes the rolling PR benchmark comment body from the artefacts gh-analyze-pr-bench-history left
+# in `dir` (report.json, summary.md, notable.txt), writing it to `dir`/comment-body.md for the
+# staleness check and the post step that follow. Thin wrapper over Format-PrBenchCommentBody in
+# scripts/bench-history/BenchHistoryComment.psm1 (Pester-tested via `just test-scripts`), where the
+# verdict logic lives: when the analysis flagged nothing, an all-clear is claimed only where the
+# report's own coverage state says every in-scope series was actually judged. `marker` is the hidden
+# dedup marker, `commit_marker_prefix` the hidden analyzed-commit marker's prefix, `analyzed_sha` the
+# full 40-char head SHA the numbers describe, `packages` the space-separated impacted-package list the
+# delta job produced, and `artifact_url` the full-report artifact link (empty when there were no
+# findings to attach). Touches no network.
+[group('automation')]
+[script]
+gh-compose-pr-bench-comment dir marker commit_marker_prefix analyzed_sha packages artifact_url='':
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = "Stop"
+    $PSNativeCommandUseErrorActionPreference = $true
+    Import-Module ./scripts/bench-history/BenchHistoryComment.psm1 -Force
+
+    $bodyFile = Join-Path '{{dir}}' 'comment-body.md'
+    Write-Verbose "Composing the rolling PR benchmark comment for analyzed commit {{analyzed_sha}} from the analysis artefacts in {{dir}}, writing it to $bodyFile." -Verbose
+    $body = Format-PrBenchCommentBody `
+        -Marker '{{marker}}' `
+        -CommitMarkerPrefix '{{commit_marker_prefix}}' `
+        -AnalyzedSha '{{analyzed_sha}}' `
+        -Packages '{{packages}}' `
+        -ScratchDir '{{dir}}' `
+        -ReportArtifactUrl '{{artifact_url}}' `
+        -Verbose
+    Set-Content -LiteralPath $bodyFile -Value $body -Encoding utf8
 
 # Defense-in-depth for the analyze post path (see .github/workflows/pr-bench-history.yml and
 # .github/workflows/design.md): a PR benchmark run takes hours, and although a newer push normally

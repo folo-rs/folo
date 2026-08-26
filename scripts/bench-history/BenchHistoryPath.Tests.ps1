@@ -1,8 +1,8 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
 
 # Pester suite for BenchHistoryPath.psm1. Proves the directory preparation the benchmark-history
-# automation recipes depend on - creating a scratch/report directory (and the machine-key file's
-# parent) before writing into it - actually runs, without a workflow run. Because a justfile [script]
+# automation recipes depend on - creating a scratch/report directory before writing into it -
+# actually runs, without a workflow run. Because a justfile [script]
 # block is invisible to both PSScriptAnalyzer and Pester, an invalid cmdlet invocation in this glue
 # (New-Item -LiteralPath, which New-Item does not support) once reached CI unvalidated; exercising the
 # extracted seam here executes the exact line that broke, so the same class of mistake fails loudly in

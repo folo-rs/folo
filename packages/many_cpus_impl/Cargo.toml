@@ -2,7 +2,7 @@
 name = "many_cpus_impl"
 description = "Implementation crate for many_cpus - do not reference directly"
 publish = true
-version = "2.4.14"
+version = "2.4.16"
 
 authors.workspace = true
 edition.workspace = true
@@ -12,6 +12,17 @@ rust-version.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true
+
+# Baseline of external types intentionally exposed in the public API. Any new
+# external type must be reviewed and added explicitly.
+# Ref: docs/external-types.md.
+[package.metadata.cargo_check_external_types]
+allowed_external_types = [
+    "heapless::vec::Vec",
+    "nonempty::Iter",
+    "nonempty::NonEmpty",
+    "windows::Win32::System::SystemInformation::GROUP_AFFINITY",
+]
 
 [lib]
 # many_cpus_impl exists only to host the implementation of `many_cpus` and to
@@ -33,6 +44,7 @@ itertools = { workspace = true }
 new_zealand = { workspace = true }
 nonempty = { workspace = true }
 rand = { workspace = true, features = ["thread_rng"] }
+smallvec = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
@@ -40,7 +52,6 @@ libc = { workspace = true }
 [target.'cfg(windows)'.dependencies]
 folo_ffi = { workspace = true }
 heapless = { workspace = true }
-smallvec = { workspace = true }
 windows = { workspace = true, features = [
     "Win32_System_JobObjects",
     "Win32_System_Kernel",

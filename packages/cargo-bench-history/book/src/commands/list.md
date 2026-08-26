@@ -23,8 +23,8 @@ cargo bench-history list blessings --local=./bench-history
   of the selected runs (each commit's clean/dirty split), oldest-first by topology.
 - **`discriminants`** — a different view: a discovery catalog of the sets present in storage.
   It requires **no repository** and so ignores the timeline and data-filtering groups. With no
-  facets it lists every stored partition, so you can find triples and machine keys you do not
-  already know.
+  discriminant filters it lists every stored partition, so you can find triples and machine keys
+  you do not already know.
 - **`blessings`** — audits blessings (see [bless / unbless](bless.md)): the sidecars at the
   current commit by default. Add `--all` to show the most recent blessing of every
   benchmark across the analysis window.

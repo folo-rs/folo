@@ -1,5 +1,5 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
-#![doc(hidden)]
+#![cfg_attr(docsrs, doc(hidden))]
 #![expect(
     clippy::exhaustive_enums,
     clippy::exhaustive_structs,
@@ -19,6 +19,8 @@
 //!
 //! [`cargo-bench-history`]: https://github.com/folo-rs/folo
 
+mod coverage;
 mod report;
 
+pub use coverage::*;
 pub use report::*;

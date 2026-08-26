@@ -89,21 +89,19 @@ general-purpose mechanism and it pays a price in performance for that generality
 allocating a large number of objects of specific sizes, we can benefit from special-purpose
 allocators that keep the memory around for reuse, so the next allocation is simple and fast.
 
-While allocator APIs are still an unstable Rust feature, there are stable-API alternatives.
-Another term for special-purpose allocators is object pools and [`infinity_pool`][infinity_pool]
-offers several of them, from basic `Vec<T>` style pinned object collections to type-agnostic object
-pools that can allocate any type of object. While the safe-API variants come with substantial
-overheads compared to the unsafe-API variants, they both can surpass the efficiency of using the
-global memory allocator under many conditions. Your mileage may vary - measure 100 times,
-cut 10 times.
+While allocator APIs are still an unstable Rust feature, object pools provide stable alternatives.
+[`plurality`][plurality] offers `Pool<T>` for one concrete type and `MultiPool` for heterogeneous
+types, retaining storage for per-object slot reuse. [`infinity_pool`][infinity_pool] receives
+maintenance only and remains available where its raw manual-lifetime handles or macro-generated
+trait-object casting are required. Special-purpose pools can surpass the efficiency of the global
+memory allocator under many conditions. Your mileage may vary - measure 100 times, cut 10 times.
 
 A surprising source of memory allocations in high-performance code can be signaling. We are used
 to thinking of oneshot channels as cheap and efficient things and while this is true, they are
 still built upon shared memory allocated from the heap. Every signaling channel you create is a
 heap allocation and they can add up fast! [`events_once`][events_once] provides you with pooled
-signaling channels that take advantage of `infinity_pool` to reuse memory allocations, as well
-as providing single-threaded and unsafe-code-managed events for lower overhead in specialized
-scenarios.
+signaling channels that reuse memory allocations, as well as providing single-threaded and
+unsafe-code-managed events for lower overhead in specialized scenarios.
 
 ```
 bagels_cooked_weight_grams: 2300; sum 744000; mean 323
@@ -192,6 +190,7 @@ Packages present in the repo but not relevant to a general audience:
 [nonzero]: https://github.com/rust-lang/rfcs/pull/3786
 [numa]: https://www.kernel.org/doc/html/v4.18/vm/numa.html
 [par_bench]: packages/par_bench/README.md
+[plurality]: https://crates.io/crates/plurality
 [region_cached]: packages/region_cached/README.md
 [region_local]: packages/region_local/README.md
 [structural_changes]: https://sander.saares.eu/2025/03/31/structural-changes-for-48-throughput-in-a-rust-web-service/

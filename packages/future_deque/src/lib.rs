@@ -1,7 +1,7 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-//! Pool-backed deque collections for managing groups of futures.
+//! Deque collections for managing groups of futures.
 //!
 //! This crate provides collection types for managing groups of futures with precise
 //! control over polling order and result retrieval.

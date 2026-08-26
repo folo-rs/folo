@@ -2,6 +2,15 @@
 
 Object pools with trait object support and multiple access models. Provides faster alternatives to `Box::pin()`, `Arc::pin()` and `Rc::pin()`.
 
+## Maintenance status
+
+This package receives maintenance only.
+
+For owned pinned values, prefer [`plurality`](https://crates.io/crates/plurality). It offers
+`Pool<T>` for one concrete type and `MultiPool` for heterogeneous types, with detachable owning
+handles that can be type-erased. `infinity_pool` remains available where its raw manual-lifetime
+handles or macro-generated trait-object casting are required.
+
 ## Pool types
 
 * **PinnedPool** - basic object pool for a single type with pinned memory guarantees

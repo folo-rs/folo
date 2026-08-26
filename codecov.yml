@@ -32,3 +32,12 @@ codecov:
   notify:
     manual_trigger: true
     wait_for_ci: false
+
+# `cargo-bench-history-figures` is unpublished book-generation infrastructure: it renders the
+# data-pipeline appendix's figures and tables. Its correctness is guaranteed by freshness and
+# completeness tests (the checked-in assets must match regenerated output, every enum's `ALL` is
+# covered, and the book build fails on a broken include) plus the book build itself — not by line
+# coverage of its SVG rendering and its `cbh-figures` generator binary, which line coverage cannot
+# meaningfully measure. Excluding it keeps the coverage signal focused on shipped logic.
+ignore:
+  - "packages/cargo-bench-history-figures"

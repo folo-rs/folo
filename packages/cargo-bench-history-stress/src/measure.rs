@@ -2,7 +2,7 @@
 //!
 //! Each mode is run through the real public [`run_with_overrides`] entry point, so
 //! the measured path is exactly production data-loading and detection — only the
-//! data underneath is synthetic. The facet filters are forced to `all` because the
+//! data underneath is synthetic. The discriminant filters are forced to `all` because the
 //! seeded triples and the seeded machine key never match the host the harness runs
 //! on; without that every object would be filtered out.
 
@@ -67,8 +67,8 @@ pub(crate) struct MeasureResult {
     pub(crate) series: usize,
     /// Flagged regressions.
     pub(crate) regressions: usize,
-    /// Flagged improvements.
-    pub(crate) improvements: usize,
+    /// Flagged improvements, or `None` in a mode that does not report them.
+    pub(crate) improvements: Option<usize>,
     /// Whether any finding survived (the downstream signal).
     pub(crate) notable: bool,
 }
@@ -82,8 +82,9 @@ struct ReportCounts {
     series: usize,
     /// Flagged regressions.
     regressions: usize,
-    /// Flagged improvements.
-    improvements: usize,
+    /// Flagged improvements. Absent from the report in a mode that does not report
+    /// improvements.
+    improvements: Option<usize>,
     /// Whether any finding survived.
     notable: bool,
 }
@@ -94,6 +95,9 @@ struct ReportCounts {
 /// # Errors
 ///
 /// Returns an error if the analysis fails or its report cannot be parsed.
+// The only coverage of this function is the process-spawning smoke suite, which
+// exceeds the 60s cargo-mutants timeout on slower Windows shards.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) async fn measure(
     workspace: &Path,
     repo: &Path,
@@ -107,8 +111,8 @@ pub(crate) async fn measure(
     logger.step(&format!("analyzing in {} mode", mode.keyword()));
     logger.detail_with(|| {
         format!(
-            "context={}, base={}, facets forced to all (seeded triples and the seeded machine key \
-         never match the host), repeats={repeat}",
+            "context={}, base={}, discriminant filters forced to all \
+             (seeded triples and the seeded machine key never match the host), repeats={repeat}",
             options.context.as_deref().unwrap_or(""),
             options.base.as_deref().unwrap_or(""),
         )
@@ -272,8 +276,6 @@ fn build_options(
         markdown: None,
         json: Some(PathBuf::from(ANALYZE_REPORT_FILE)),
         markdown_summary: None,
-        include_improvements: true,
-        include_inactive: false,
         verbose: false,
         timing,
     }
@@ -287,7 +289,7 @@ fn overrides(workspace: &Path, anchor: Timestamp) -> Overrides {
         bench_command: None,
         clock: Some(Clock::new_frozen_at(anchor)),
         storage_override: None,
-        auto_facets: None,
+        auto_discriminants: None,
     }
 }
 

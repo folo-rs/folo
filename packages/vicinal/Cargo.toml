@@ -2,7 +2,7 @@
 name = "vicinal"
 description = "Processor-local worker pool that schedules tasks in the vicinity of the caller"
 publish = true
-version = "0.1.34"
+version = "0.1.36"
 
 authors.workspace = true
 edition.workspace = true
@@ -13,6 +13,13 @@ rust-version.workspace = true
 [package.metadata.docs.rs]
 all-features = true
 
+# Baseline of external types intentionally exposed in the public API. Cross-crate
+# first-party types are listed individually by their canonical defining crate
+# (many_cpus re-exports `SystemHardware` from its `many_cpus_impl` partition).
+# Ref: docs/external-types.md.
+[package.metadata.cargo_check_external_types]
+allowed_external_types = ["many_cpus_impl::system_hardware::SystemHardware"]
+
 [features]
 default = []
 
@@ -20,11 +27,11 @@ default = []
 event-listener = { workspace = true }
 events_once = { workspace = true }
 fast_time = { workspace = true }
-infinity_pool = { workspace = true }
 many_cpus = { workspace = true }
 new_zealand = { workspace = true }
 nm = { workspace = true }
 pin-project = { workspace = true }
+plurality = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
@@ -45,4 +52,3 @@ workspace = true
 [[bench]]
 name = "vicinal"
 harness = false
-

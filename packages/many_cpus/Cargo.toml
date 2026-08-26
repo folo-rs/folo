@@ -2,7 +2,7 @@
 name = "many_cpus"
 description = "Efficiently schedule work and inspect the hardware environment on many-processor systems"
 publish = true
-version = "2.4.14"
+version = "2.4.16"
 
 authors.workspace = true
 edition.workspace = true
@@ -12,6 +12,13 @@ rust-version.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true
+
+# Baseline of external types intentionally exposed in the public API.
+# `many_cpus` is the public shell over its own `many_cpus_impl` partition, so
+# re-exporting any impl type is by-design layering, not accidental exposure.
+# Ref: docs/external-types.md; docs/impl-crate-split.md.
+[package.metadata.cargo_check_external_types]
+allowed_external_types = ["many_cpus_impl::*"]
 
 # `testing` is used by the Windows-only `*_obey_job_*` examples (inside
 # `#[cfg(windows)]` modules) but not by anything on Linux, so cargo-udeps

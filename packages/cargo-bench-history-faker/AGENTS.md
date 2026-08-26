@@ -4,7 +4,7 @@
 
 A test-support stand-in benchmark engine for `cargo-bench-history`. It is a
 `publish = true` **lib+bin** crate but **unsupported**: the crate root is
-`#![doc(hidden)]` and neither the library API nor the binary CLI carries a semver
+`#![cfg_attr(docsrs, doc(hidden))]` and neither the library API nor the binary CLI carries a semver
 contract. It is published only so sibling repositories can run the binary (via
 `cargo binstall`) without vendoring it.
 

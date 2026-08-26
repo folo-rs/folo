@@ -1,5 +1,5 @@
 use std::any::type_name;
-#[cfg(debug_assertions)]
+#[cfg(all(test, debug_assertions))]
 use std::backtrace::Backtrace;
 #[cfg(debug_assertions)]
 use std::cell::RefCell;
@@ -7,27 +7,44 @@ use std::cell::{Cell, UnsafeCell};
 use std::fmt;
 use std::marker::{PhantomData, PhantomPinned};
 use std::mem::{MaybeUninit, offset_of};
-use std::panic::RefUnwindSafe;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 use std::ptr::NonNull;
+#[cfg(all(test, debug_assertions))]
+use std::sync::Arc;
 use std::task::Waker;
 
 #[cfg(debug_assertions)]
 use crate::{BacktraceType, capture_backtrace};
 use crate::{
-    BoxedLocalReceiver, BoxedLocalRef, BoxedLocalSender, Disconnected, EVENT_AWAITING, EVENT_BOUND,
-    EVENT_DISCONNECTED, EVENT_SET, EmbeddedLocalEvent, LocalReceiverCore, LocalSenderCore,
-    PtrLocalRef, RawLocalReceiver, RawLocalSender,
+    BoxedLocalReceiver, BoxedLocalRef, BoxedLocalSender, Cancellation, Disconnected,
+    EVENT_AWAITING, EVENT_BOUND, EVENT_DISCONNECTED, EVENT_SET, EmbeddedLocalEvent,
+    LocalReceiverCore, LocalSenderCore, PtrLocalRef, RawLocalReceiver, RawLocalSender,
 };
 
 /// Coordinates delivery of a `T` at most once from a sender to a receiver on the same thread.
+///
+/// # Reentrancy
+///
+/// Completing or cancelling an event runs the awaiting task's waker, either waking it or dropping
+/// it. Such a callback may operate on the endpoints of the event it belongs to: it may poll the
+/// receiver to completion, and it may drop an endpoint - including the last one, which releases
+/// the event storage.
+///
+/// A poll that registers the task for later notification runs the waker's clone operation, which
+/// is likewise user-supplied code. Such a callback may operate on the sender endpoint of the event
+/// being polled: it may send a value and it may drop the sender. The poll observes the resulting
+/// state.
+///
+/// Destruction of a registered waker or discarded payload may also run arbitrary user code. The
+/// event completes any endpoint and storage cleanup that must survive unwinding before invoking
+/// such a destructor.
 pub struct LocalEvent<T> {
     /// The logical state of the event; see constants in `state.rs`.
     pub(crate) state: Cell<u8>,
 
-    /// If `state` is [`EVENT_AWAITING`], this field is initialized with the
-    /// waker of whoever most recently awaited the receiver. In other states, this field is not
-    /// initialized.
+    /// Holds the waker of whoever most recently awaited the receiver. The `state` field is what
+    /// records whether this field is initialized; see `state.rs`.
     ///
     /// We use `MaybeUninit` to minimize the storage and avoid an `Option` or enum overhead,
     /// as we already track the presence via `state`.
@@ -36,8 +53,8 @@ pub struct LocalEvent<T> {
     /// do our own synchronization of reads/writes.
     awaiter: UnsafeCell<MaybeUninit<Waker>>,
 
-    /// If `state` is `EVENT_SET`, this field is initialized with the value that was sent by
-    /// the sender. In other states, this field is not initialized.
+    /// Holds the value that was sent by the sender. The `state` field is what records whether
+    /// this field is initialized; see `state.rs`.
     ///
     /// We use `MaybeUninit` to minimize the storage and avoid an `Option` or enum overhead,
     /// as we already track the presence via `state`.
@@ -62,9 +79,17 @@ pub struct LocalEvent<T> {
 }
 
 // The Cell and UnsafeCell fields (state, awaiter, value) cause auto-trait
-// inference to mark LocalEvent as !RefUnwindSafe. However, the state
-// machine prevents any shared reference from observing inconsistent state
-// during unwind, making this safe.
+// inference to mark LocalEvent as !RefUnwindSafe, and a payload that is itself
+// !UnwindSafe would additionally make it !UnwindSafe. The event is unwind-safe
+// regardless of the payload because every mutation is panic-atomic: the payload
+// and the waker are moved into and out of their cells in single moves, the state
+// that records which of those cells is initialized is published by a single store
+// ordered after the move, and the user-controlled code that can unwind (payload,
+// waker and destructor code) only runs where state and storage agree. A caught
+// panic therefore leaves the event in a state that the remaining endpoint can
+// complete or clean up, which the unwinding-mid-poll regression tests below
+// exercise.
+impl<T: 'static> UnwindSafe for LocalEvent<T> {}
 impl<T: 'static> RefUnwindSafe for LocalEvent<T> {}
 
 impl<T: 'static> LocalEvent<T> {
@@ -73,11 +98,11 @@ impl<T: 'static> LocalEvent<T> {
     /// This is for internal use only and is wrapped by public methods that also
     /// wire up the sender and receiver after doing the initialization. An event
     /// without a sender and receiver is invalid.
-    pub(crate) fn new_in_inner(place: &mut MaybeUninit<Self>) -> NonNull<Self> {
+    pub(crate) fn new_in_inner(place: &mut UnsafeCell<MaybeUninit<Self>>) {
         // We can skip initializing the MaybeUninit fields because they start uninitialized
         // by design and the UnsafeCell wrapper is transparent, only affecting accesses and
         // not the contents.
-        let base_ptr = place.as_mut_ptr();
+        let base_ptr = place.get_mut().as_mut_ptr();
 
         // SAFETY: We are making a pointer to a known field at a compiler-guaranteed offset.
         let state_ptr = unsafe { base_ptr.byte_add(offset_of!(Self, state)) }.cast::<Cell<u8>>();
@@ -98,9 +123,6 @@ impl<T: 'static> LocalEvent<T> {
                 backtrace_ptr.write(RefCell::new(None));
             }
         }
-
-        // SAFETY: This came from a reference so guaranteed non-null.
-        unsafe { NonNull::new_unchecked(base_ptr) }
     }
 
     #[must_use]
@@ -150,17 +172,32 @@ impl<T: 'static> LocalEvent<T> {
 
     #[must_use]
     pub(crate) unsafe fn placed_core(
-        place: Pin<&mut MaybeUninit<Self>>,
+        place: Pin<&mut UnsafeCell<MaybeUninit<Self>>>,
     ) -> (
         LocalSenderCore<PtrLocalRef<T>, T>,
         LocalReceiverCore<PtrLocalRef<T>, T>,
     ) {
         // SAFETY: Nothing is getting moved, we just temporarily unwrap the Pin wrapper.
-        let event = Self::new_in_inner(unsafe { place.get_unchecked_mut() });
+        let place_mut = unsafe { place.get_unchecked_mut() };
+
+        Self::new_in_inner(place_mut);
+
+        // We cast away the MaybeUninit wrapper because it is now initialized.
+        let event = NonNull::from_mut(place_mut).cast::<UnsafeCell<Self>>();
+
+        // SAFETY: The event was just initialized into this storage, the caller of this function
+        // guaranteed that the storage stays valid and pinned at this address for the entire
+        // lifetime of the endpoints, and the endpoints only ever reach the event through the
+        // shared references that the reference policy hands out.
+        let sender_event = unsafe { PtrLocalRef::new(event) };
+
+        // SAFETY: Same as above - the second endpoint references the same initialized event in
+        // the same caller-guaranteed storage.
+        let receiver_event = unsafe { PtrLocalRef::new(event) };
 
         (
-            LocalSenderCore::new(PtrLocalRef::new(event)),
-            LocalReceiverCore::new(PtrLocalRef::new(event)),
+            LocalSenderCore::new(sender_event),
+            LocalReceiverCore::new(receiver_event),
         )
     }
 
@@ -185,7 +222,9 @@ impl<T: 'static> LocalEvent<T> {
     /// # async fn main() {
     /// let mut place = Box::pin(EmbeddedLocalEvent::<String>::new());
     ///
-    /// // SAFETY: We promise that `place` lives longer than the endpoints.
+    /// // SAFETY: `place` is a freshly created container that no other event is using, it stays
+    /// // alive and writable until both endpoints below are consumed, and `Box::pin` keeps the
+    /// // event at a stable address for that entire time.
     /// let (sender, receiver) = unsafe { LocalEvent::placed(place.as_mut()) };
     ///
     /// sender.send("Hello from embedded event!".to_string());
@@ -210,25 +249,76 @@ impl<T: 'static> LocalEvent<T> {
         )
     }
 
-    /// Uses the provided closure to inspect the backtrace of the current awaiter,
-    /// if there is an awaiter and if backtrace capturing is enabled.
+    /// Returns the address of this event's type-independent diagnostic cell.
     ///
-    /// This method is only available in debug builds (`cfg(debug_assertions)`).
-    /// For any data to be present, `RUST_BACKTRACE=1` or `RUST_LIB_BACKTRACE=1` must be set.
+    /// # Safety
     ///
-    /// The closure receives `None` if no one is awaiting the event.
+    /// `event` must point to an initialized event at a stable address. Until the returned pointer
+    /// is discarded, the event must remain alive at that address and no exclusive reference to it
+    /// may exist.
     #[cfg(debug_assertions)]
-    pub(crate) fn inspect_awaiter(&self, f: impl FnOnce(Option<&Backtrace>)) {
+    pub(crate) unsafe fn awaiter_backtrace_cell(
+        event: NonNull<UnsafeCell<Self>>,
+    ) -> NonNull<RefCell<Option<BacktraceType>>> {
+        // SAFETY: The caller guarantees validity, initialization and shared-only aliasing for the
+        // event. `UnsafeCell` permits this shared access to its initialized contents.
+        let event_cell = unsafe { event.as_ref() };
+
+        // SAFETY: The same caller guarantee excludes an exclusive reference while this shared
+        // reference exists, and the event outlives this function call.
+        let event = unsafe { &*event_cell.get() };
+
+        NonNull::from(&event.backtrace)
+    }
+
+    /// Returns a snapshot of the most recent awaiter backtrace.
+    #[cfg(all(test, debug_assertions))]
+    pub(crate) fn awaiter_backtrace(&self) -> Option<Arc<Backtrace>> {
         let backtrace = self.backtrace.borrow();
-        f(backtrace.as_ref());
+
+        backtrace.as_ref().map(Arc::clone)
+    }
+
+    /// Releases the backtrace of the most recent awaiter of this event.
+    ///
+    /// The storage an event occupies may be reused or freed without dropping the event, so
+    /// whoever releases an event calls this first, to release the memory that the backtrace
+    /// occupies. Snapshots taken earlier remain valid because they are shared owners of the
+    /// backtrace.
+    #[cfg(debug_assertions)]
+    pub(crate) fn clear_awaiter_backtrace(event_cell: &UnsafeCell<Self>) {
+        // SAFETY: The cell's pointer is always valid and points to an initialized event because
+        // the caller is still an endpoint of it. We only ever create shared references to the
+        // event through this cell, so no exclusive reference can alias this one.
+        let event = unsafe { &*event_cell.get() };
+
+        let mut backtrace = event.backtrace.borrow_mut();
+
+        *backtrace = None;
     }
 
     /// Sets the value of the event and notifies the awaiter, if there is one.
     ///
-    /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
+    /// Returns `Err` if the receiver has already disconnected and the caller must clean up the
+    /// event now.
+    ///
+    /// The event arrives as an `&UnsafeCell<Self>` rather than as `&self` because the wake
+    /// callback performed here is free to release the event storage. A `&self` argument stays
+    /// strongly protected by the aliasing model for the whole call, which makes such a release
+    /// undefined behavior, whereas references derived from an `UnsafeCell` carry no protector and
+    /// may dangle. The event is therefore not touched after the callback runs.
+    ///
+    /// Returns the payload to the caller if the receiver has already disconnected. The caller
+    /// owns cleanup in that case and must release the event before dropping the payload.
+    /// Ref: docs/callback-safety.md.
     #[inline]
-    pub(crate) fn set(&self, result: T) -> Result<(), Disconnected> {
-        let value_cell = self.value.get();
+    pub(crate) fn set(event_cell: &UnsafeCell<Self>, value: T) -> Result<(), T> {
+        // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
+        // The event lives until both sender and receiver are dropped or inert, so we know it must
+        // still exist because something was able to call this method.
+        let event = unsafe { &*event_cell.get() };
+
+        let value_cell = event.value.get();
 
         // We can start by setting the value - this has to happen no matter what.
         // Everything else we do here is just to get the awaiter to come pick it up.
@@ -239,21 +329,15 @@ impl<T: 'static> LocalEvent<T> {
         // * The receiver will only access this field in the "Set" state, which can only be entered
         //   from later on in this method.
         unsafe {
-            value_cell.write(MaybeUninit::new(result));
+            value_cell.write(MaybeUninit::new(value));
         }
 
-        // We transition directly to EVENT_SET. The sync variant uses a `+= 1`
-        // trick that exits the BOUND path in a single atomic fetch_add and uses
-        // an intermediate EVENT_SIGNALING state to act as a mutex against the
-        // concurrent receiver. LocalEvent is single-threaded, so the SIGNALING
-        // intermediate has no purpose, and the non-atomic equivalent of `+= 1`
-        // (load + add + store) is one instruction wider than a direct store.
-        // `Cell::replace` emits a single load + store sequence and collapses
-        // the AWAITING branch's two state writes (SIGNALING then SET) into
-        // one. In the DISCONNECTED branch the SET we just stored is a
-        // don't-care because the event is about to be deallocated, and no
-        // external observer can witness the transient state.
-        let previous_state = self.state.replace(EVENT_SET);
+        // We publish the terminal state with a single store, which also collapses the two state
+        // writes that the thread-safe variant needs on the awaiting branch (`EVENT_SIGNALING`
+        // then `EVENT_SET`). Only the thread-safe variant needs that intermediate; see
+        // `state.rs`. In the disconnected branch the state we store here is a don't-care because
+        // the event is about to be released, and no external observer can witness it.
+        let previous_state = event.state.replace(EVENT_SET);
 
         match previous_state {
             EVENT_BOUND => {
@@ -277,7 +361,7 @@ impl<T: 'static> LocalEvent<T> {
                     // short-lived references in this type, which cannot exist at the moment
                     // because the type is single-threaded and does not let any references
                     // escape.
-                    let awaiter_cell_maybe = unsafe { self.awaiter.get().as_mut() };
+                    let awaiter_cell_maybe = unsafe { event.awaiter.get().as_mut() };
                     // SAFETY: UnsafeCell pointer is never null.
                     let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
 
@@ -287,7 +371,9 @@ impl<T: 'static> LocalEvent<T> {
                     unsafe { awaiter_cell.assume_init_read() }
                 };
 
-                // Come and get it.
+                // Come and get it. The event is in a terminal state, so the woken receiver may
+                // reentrantly complete and release the event storage. We touch nothing in the
+                // event after this point.
                 waker.wake();
 
                 // The receiver is still connected, so it will clean up.
@@ -295,66 +381,13 @@ impl<T: 'static> LocalEvent<T> {
             }
             EVENT_DISCONNECTED => {
                 // The receiver has already disconnected, so we can clean up the event now.
-                // We have to first drop the value that we inserted into the event, though.
+                // Move the value back to the sender core so it can release the event before the
+                // payload destructor invokes user code.
 
                 // SAFETY: The only other potential references to the field are other short-lived
                 // references in this type, which cannot exist at the moment because
                 // the type is single-threaded and does not let any references escape.
-                let value_cell_maybe = unsafe { self.value.get().as_mut() };
-                // SAFETY: UnsafeCell pointer is never null.
-                let value_cell = unsafe { value_cell_maybe.unwrap_unchecked() };
-
-                // We drop the value and consider the cell uninitialized.
-                //
-                // SAFETY: We were in EVENT_SET which guarantees there is a value in there.
-                unsafe {
-                    value_cell.assume_init_drop();
-                }
-
-                Err(Disconnected)
-            }
-            // Defensive: state machine guarantees this is unreachable.
-            _ => {
-                unreachable!("unreachable LocalEvent state on set: {previous_state}");
-            }
-        }
-    }
-
-    /// We are intended to be polled via `Future::poll`, so we have a similar signature here,
-    /// with `None` equating to `Poll::Pending`.
-    ///
-    /// If `Some` result is returned, the caller is the last remaining endpoint and responsible
-    /// for cleaning up the event.
-    #[inline]
-    #[must_use]
-    pub(crate) fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
-        #[cfg(debug_assertions)]
-        self.backtrace.replace(Some(capture_backtrace()));
-
-        match self.state.get() {
-            EVENT_BOUND => {
-                // The sender has not yet set any value, so we will have to wait.
-
-                // SAFETY: The only other potential references to the field are other short-lived
-                // references in this type, which cannot exist at the moment because
-                // the type is single-threaded and does not let any references escape.
-                let awaiter_cell_maybe = unsafe { self.awaiter.get().as_mut() };
-                // SAFETY: UnsafeCell pointer is never null.
-                let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
-
-                awaiter_cell.write(waker.clone());
-
-                // The sender will wake us up when it has set the value.
-                self.state.set(EVENT_AWAITING);
-                None
-            }
-            EVENT_SET => {
-                // The sender has delivered a value and we can complete the event.
-
-                // SAFETY: The only other potential references to the field are other short-lived
-                // references in this type, which cannot exist at the moment because
-                // the type is single-threaded and does not let any references escape.
-                let value_cell_maybe = unsafe { self.value.get().as_ref() };
+                let value_cell_maybe = unsafe { event.value.get().as_mut() };
                 // SAFETY: UnsafeCell pointer is never null.
                 let value_cell = unsafe { value_cell_maybe.unwrap_unchecked() };
 
@@ -363,13 +396,61 @@ impl<T: 'static> LocalEvent<T> {
                 // SAFETY: We were in EVENT_SET which guarantees there is a value in there.
                 let value = unsafe { value_cell.assume_init_read() };
 
-                Some(Ok(value))
+                Err(value)
             }
-            EVENT_AWAITING => {
-                // We are re-polling after previously starting a wait. This is fine
-                // and we just need to clean up the previous waker, replacing it with
-                // a new one.
+            // Defensive: state machine guarantees this is unreachable.
+            _ => {
+                unreachable!(
+                    "unreachable {} state on set: {previous_state}",
+                    type_name::<Self>()
+                );
+            }
+        }
+    }
 
+    /// We are intended to be polled via `Future::poll`, so we have a similar signature here,
+    /// with `None` equating to `Poll::Pending`.
+    ///
+    /// If `Some` result is returned, the caller is the last remaining endpoint and responsible
+    /// for cleaning up the event. It must do so immediately, without running any user-controlled
+    /// code in between and without any further state-based cleanup, because the event may be in
+    /// the transient state described on [`poll_set()`][Self::poll_set].
+    #[inline]
+    #[must_use]
+    pub(crate) fn poll(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
+        #[cfg(debug_assertions)]
+        self.backtrace.replace(Some(capture_backtrace()));
+
+        match self.state.get() {
+            EVENT_BOUND => self.poll_bound(waker),
+            EVENT_SET => Some(Ok(self.poll_set())),
+            EVENT_AWAITING => self.poll_awaiting(waker),
+            EVENT_DISCONNECTED => {
+                // There is no result coming, ever! This is the end.
+                Some(Err(Disconnected))
+            }
+            // Defensive: state machine guarantees this is unreachable.
+            state => {
+                unreachable!("unreachable {} state on poll: {state}", type_name::<Self>());
+            }
+        }
+    }
+
+    /// `poll()` impl for the `EVENT_BOUND` state.
+    #[must_use]
+    fn poll_bound(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
+        // The sender has not yet set any value, so we will have to wait.
+
+        // `Waker::clone` runs arbitrary user code, which is free to operate on the sender endpoint
+        // of this same event and thereby move the event into a terminal state. We therefore clone
+        // before touching the event and consult the state again afterwards. This mirrors the
+        // compare-exchange in the sync `Event::poll_bound`: reentrancy hands the single-threaded
+        // variant the same interleavings that concurrency hands the thread-safe one.
+        // Ref: docs/callback-safety.md.
+        let new_waker = waker.clone();
+
+        match self.state.get() {
+            EVENT_BOUND => {
                 // SAFETY: The only other potential references to the field are other short-lived
                 // references in this type, which cannot exist at the moment because
                 // the type is single-threaded and does not let any references escape.
@@ -377,16 +458,140 @@ impl<T: 'static> LocalEvent<T> {
                 // SAFETY: UnsafeCell pointer is never null.
                 let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
 
-                awaiter_cell.write(waker.clone());
+                awaiter_cell.write(new_waker);
+
+                // The sender will wake us up when it has set the value.
+                self.state.set(EVENT_AWAITING);
                 None
             }
+            EVENT_SET => {
+                // A reentrant sender delivered the value while we were cloning the waker. Nobody
+                // would ever consume a registration made now, so we release the clone instead.
+                // Releasing it runs user code, which must not see the event mid-extraction: the
+                // value comes out only once no callback can run, so an unwinding destructor leaves
+                // `EVENT_SET` still backed by an initialized value for the receiver to clean up.
+                // Ref: docs/callback-safety.md.
+                drop(new_waker);
+
+                Some(Ok(self.poll_set()))
+            }
             EVENT_DISCONNECTED => {
-                // There is no result coming, ever! This is the end.
+                // A reentrant sender drop disconnected while we were cloning the waker, so there
+                // is no result coming, ever. We release the clone that nobody would consume.
+                drop(new_waker);
+
                 Some(Err(Disconnected))
             }
-            // Defensive: state machine guarantees this is unreachable.
+            // Defensive: only the receiver enters EVENT_AWAITING and it is right here, so the
+            // state machine guarantees this is unreachable.
             state => {
-                unreachable!("unreachable LocalEvent state on poll: {state}");
+                unreachable!(
+                    "unreachable {} state on poll of bound event: {state}",
+                    type_name::<Self>()
+                );
+            }
+        }
+    }
+
+    /// `poll()` impl for the `EVENT_SET` state.
+    ///
+    /// Extracts the payload and leaves the value cell uninitialized while `state` still says
+    /// `EVENT_SET`. That is the window which `state.rs` ("Field initialization") requires the
+    /// caller to close, so two obligations follow: every user-controlled callback (waker clone,
+    /// drop or wake) must have finished before entry, and the caller must release the event on
+    /// return without any further state-driven cleanup. Otherwise a callback that unwinds into
+    /// receiver cancellation reaches `cancel()`, which trusts `EVENT_SET` and would read the
+    /// moved-out payload a second time. Ref: docs/callback-safety.md.
+    #[must_use]
+    fn poll_set(&self) -> T {
+        // The sender has delivered a value and we can complete the event.
+
+        // SAFETY: The only other potential references to the field are other short-lived
+        // references in this type, which cannot exist at the moment because
+        // the type is single-threaded and does not let any references escape.
+        let value_cell_maybe = unsafe { self.value.get().as_ref() };
+        // SAFETY: UnsafeCell pointer is never null.
+        let value_cell = unsafe { value_cell_maybe.unwrap_unchecked() };
+
+        // We extract the value and consider the cell uninitialized.
+        //
+        // SAFETY: We were in EVENT_SET which guarantees there is a value in there.
+        unsafe { value_cell.assume_init_read() }
+    }
+
+    /// `poll()` impl for the `EVENT_AWAITING` state.
+    #[must_use]
+    fn poll_awaiting(&self, waker: &Waker) -> Option<Result<T, Disconnected>> {
+        // We are re-polling after previously starting a wait. This is fine
+        // and we just need to clean up the previous waker, replacing it with
+        // a new one. The previous registration must be released exactly once;
+        // overwriting it without dropping would leak a `Waker` reference.
+
+        // Clone the incoming waker before touching the cell. `Waker::clone` runs arbitrary user
+        // code, so it must not observe the cell in the transiently-uninitialized window between
+        // the read and the write below. That code is also free to operate on the sender endpoint
+        // of this same event, which moves the event into a terminal state and takes the
+        // previously registered waker along the way, so we consult the state again afterwards.
+        // Ref: docs/callback-safety.md.
+        let new_waker = waker.clone();
+
+        match self.state.get() {
+            EVENT_AWAITING => {
+                // Extract the previous waker in a tight scope so the
+                // `&mut MaybeUninit<Waker>` borrow is released before we drop it below:
+                // a waker's drop runs arbitrary vtable code that must not observe an
+                // active borrow of shared state.
+                // Ref: docs/callback-safety.md, "No callbacks under borrows of shared state".
+                let previous_waker = {
+                    // SAFETY: The only other potential references to the field are other
+                    // short-lived references in this type, which cannot exist at the moment
+                    // because the type is single-threaded and does not let any references
+                    // escape.
+                    let awaiter_cell_maybe = unsafe { self.awaiter.get().as_mut() };
+                    // SAFETY: UnsafeCell pointer is never null.
+                    let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
+
+                    // We extract the previous waker and immediately overwrite the cell with
+                    // the new one, keeping the field initialized and the state consistent for
+                    // any reentrant poll triggered while the previous waker is dropped below.
+                    // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker
+                    // in there.
+                    let previous_waker = unsafe { awaiter_cell.assume_init_read() };
+                    awaiter_cell.write(new_waker);
+                    previous_waker
+                };
+
+                // Release the previous registration exactly once, now that the borrow is gone.
+                // A reentrant sender that completes the event from this destructor takes the
+                // registration we just made and wakes it, so the caller is still told to come
+                // back even though we report being pending. We touch nothing in the event after
+                // this point.
+                drop(previous_waker);
+
+                None
+            }
+            EVENT_SET => {
+                // A reentrant sender delivered the value while we were cloning the waker, taking
+                // the previous registration with it. See the equivalent arm of `poll_bound()` for
+                // why the unused clone is released before the value comes out.
+                drop(new_waker);
+
+                Some(Ok(self.poll_set()))
+            }
+            EVENT_DISCONNECTED => {
+                // A reentrant sender drop disconnected while we were cloning the waker, taking
+                // the previous registration with it. There is no result coming, ever.
+                drop(new_waker);
+
+                Some(Err(Disconnected))
+            }
+            // Defensive: only the receiver leaves EVENT_AWAITING for a non-terminal state and it
+            // is right here, so the state machine guarantees this is unreachable.
+            state => {
+                unreachable!(
+                    "unreachable {} state on poll of awaited event: {state}",
+                    type_name::<Self>()
+                );
             }
         }
     }
@@ -394,13 +599,22 @@ impl<T: 'static> LocalEvent<T> {
     /// Marks the event as having been disconnected early from the sender side.
     ///
     /// Returns `Err` if the receiver has already disconnected and we must clean up the event now.
+    ///
+    /// See [`set()`][Self::set] for why the event arrives as an `&UnsafeCell<Self>`.
     #[inline]
-    pub(crate) fn sender_dropped_without_set(&self) -> Result<(), Disconnected> {
-        let previous_state = self.state.get();
+    pub(crate) fn sender_dropped_without_set(
+        event_cell: &UnsafeCell<Self>,
+    ) -> Result<(), Disconnected> {
+        // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
+        // The event lives until both sender and receiver are dropped or inert, so we know it must
+        // still exist because something was able to call this method.
+        let event = unsafe { &*event_cell.get() };
+
+        let previous_state = event.state.get();
 
         // We can immediately set this because this is a single-threaded event, so there cannot
         // be any race condition causing us issues with the receiver seeing this too early.
-        self.state.set(EVENT_DISCONNECTED);
+        event.state.set(EVENT_DISCONNECTED);
 
         match previous_state {
             EVENT_BOUND => {
@@ -415,7 +629,7 @@ impl<T: 'static> LocalEvent<T> {
                 // SAFETY: The only other potential references to the field are other short-lived
                 // references in this type, which cannot exist at the moment because
                 // the type is single-threaded and does not let any references escape.
-                let awaiter_cell_maybe = unsafe { self.awaiter.get().as_mut() };
+                let awaiter_cell_maybe = unsafe { event.awaiter.get().as_mut() };
                 // SAFETY: UnsafeCell pointer is never null.
                 let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
 
@@ -423,7 +637,9 @@ impl<T: 'static> LocalEvent<T> {
                 // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker in there.
                 let waker = unsafe { awaiter_cell.assume_init_read() };
 
-                // Come and get it.
+                // Come and get it. The event is in a terminal state, so the woken receiver may
+                // reentrantly complete and release the event storage. We touch nothing in the
+                // event after this point.
                 waker.wake();
 
                 // The receiver is the last endpoint remaining, so it will clean up.
@@ -435,19 +651,59 @@ impl<T: 'static> LocalEvent<T> {
             }
             // Defensive: state machine guarantees this is unreachable.
             _ => {
-                unreachable!("unreachable LocalEvent state on sender disconnect: {previous_state}");
+                unreachable!(
+                    "unreachable {} state on sender disconnect: {previous_state}",
+                    type_name::<Self>()
+                );
             }
         }
     }
 
-    /// Checks whether the event has been set (either with a value or with a disconnect signal).
+    /// Whether the event has reached a terminal state, meaning `EVENT_SET` or
+    /// `EVENT_DISCONNECTED` (see `state.rs`). A terminal state is what makes an outcome - a value
+    /// or a disconnect - immediately retrievable.
     #[must_use]
     pub(crate) fn is_set(&self) -> bool {
         matches!(self.state.get(), EVENT_SET | EVENT_DISCONNECTED)
     }
 
-    /// Attempts to obtain the value from the event, if one has been sent, while indicating
-    /// that no further polls will be performed by the receiver.
+    /// Extracts the terminal result after the receiver has observed a completed event.
+    ///
+    /// The receiver owns event cleanup after either result.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the event is not in a terminal state.
+    // Callgrind and disassembly show that terminal extraction must remain inline with
+    // `into_value()` to keep cancellation machinery off that hot path.
+    #[inline]
+    pub(crate) fn take_result(event_cell: &UnsafeCell<Self>) -> Result<T, Disconnected> {
+        // SAFETY: The event reference contract guarantees shared access through this outer
+        // UnsafeCell for as long as the receiver still owns its endpoint reference.
+        let event = unsafe { &*event_cell.get() };
+
+        let previous_state = event.state.replace(EVENT_DISCONNECTED);
+
+        match previous_state {
+            EVENT_SET => {
+                // SAFETY: EVENT_SET guarantees that the payload cell is initialized, and this
+                // terminal transition gives the receiver exclusive extraction rights.
+                let value_cell_maybe = unsafe { event.value.get().as_mut() };
+                // SAFETY: UnsafeCell pointer is never null.
+                let value_cell = unsafe { value_cell_maybe.unwrap_unchecked() };
+
+                // SAFETY: The state guarantee above proves the cell is initialized.
+                Ok(unsafe { value_cell.assume_init_read() })
+            }
+            EVENT_DISCONNECTED => Err(Disconnected),
+            // Defensive: the caller must have observed a terminal state.
+            _ => {
+                unreachable!("invalid {} state: {previous_state}", type_name::<Self>());
+            }
+        }
+    }
+
+    /// Cancels the receiver, returning the final event observation and any deferred callback.
     ///
     /// Returns `Ok(None)` if the sender has not yet sent a value. In this case, the sender will
     /// eventually clean up the event.
@@ -455,15 +711,46 @@ impl<T: 'static> LocalEvent<T> {
     /// Returns `Ok(Some(value))` if the sender sender has already sent a value.
     /// Returns `Err` if the sender has already disconnected without sending a value.
     /// In both of these cases, the receiver must clean up the event now.
+    ///
+    /// See [`set()`][Self::set] for why the event arrives as an `&UnsafeCell<Self>`; here it is
+    /// the waker's destructor rather than `wake()` that may release the event storage.
     #[inline]
-    pub(crate) fn final_poll(&self) -> Result<Option<T>, Disconnected> {
-        let previous_state = self.state.get();
+    pub(crate) fn cancel(event_cell: &UnsafeCell<Self>) -> Cancellation<T> {
+        // SAFETY: We only ever create shared references to the event, so no aliasing conflicts.
+        // The event lives until both sender and receiver are dropped or inert, so we know it must
+        // still exist because something was able to call this method.
+        let event = unsafe { &*event_cell.get() };
+
+        // If we are still awaiting, the receiver owns the stored waker. Move it out before
+        // disconnecting, but defer its destruction to the receiver core so no user code runs until
+        // the state transition and any storage release have completed.
+        //
+        // This mirrors the sync `Event::cancel`, which also reverts AWAITING -> BOUND before
+        // extracting the awaiter. Ref: docs/callback-safety.md.
+        let awaiter = if event.state.get() == EVENT_AWAITING {
+            event.state.set(EVENT_BOUND);
+
+            // SAFETY: The only other potential references to the field are other short-lived
+            // references in this type, which cannot exist at the moment because
+            // the type is single-threaded and does not let any references escape.
+            let awaiter_cell_maybe = unsafe { event.awaiter.get().as_mut() };
+            // SAFETY: UnsafeCell pointer is never null.
+            let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
+
+            // We extract the waker and consider the field uninitialized again.
+            // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker in there.
+            Some(unsafe { awaiter_cell.assume_init_read() })
+        } else {
+            None
+        };
+
+        let previous_state = event.state.get();
 
         // We can immediately set this because this is a single-threaded event, so there cannot
         // be any race condition causing us issues with the receiver seeing this too early.
-        self.state.set(EVENT_DISCONNECTED);
+        event.state.set(EVENT_DISCONNECTED);
 
-        match previous_state {
+        let result = match previous_state {
             EVENT_BOUND => {
                 // The sender had not yet set any value. It will clean up the event later.
                 Ok(None)
@@ -475,7 +762,7 @@ impl<T: 'static> LocalEvent<T> {
                 // SAFETY: The only other potential references to the field are other short-lived
                 // references in this type, which cannot exist at the moment because
                 // the type is single-threaded and does not let any references escape.
-                let value_cell_maybe = unsafe { self.value.get().as_mut() };
+                let value_cell_maybe = unsafe { event.value.get().as_mut() };
                 // SAFETY: UnsafeCell pointer is never null.
                 let value_cell = unsafe { value_cell_maybe.unwrap_unchecked() };
 
@@ -487,38 +774,23 @@ impl<T: 'static> LocalEvent<T> {
                 // The receiver will clean up.
                 Ok(Some(value))
             }
-            EVENT_AWAITING => {
-                // We had previously started listening for the value but have not received one,
-                // so the sender is the last endpoint remaining. We need to make sure we clean
-                // up our old waker first, though, as the sender knows nothing about the waker
-                // being present.
-
-                // SAFETY: The only other potential references to the field are other short-lived
-                // references in this type, which cannot exist at the moment because
-                // the type is single-threaded and does not let any references escape.
-                let awaiter_cell_maybe = unsafe { self.awaiter.get().as_mut() };
-                // SAFETY: UnsafeCell pointer is never null.
-                let awaiter_cell = unsafe { awaiter_cell_maybe.unwrap_unchecked() };
-
-                // We drop the waker and consider the field uninitialized again.
-                // SAFETY: We were in EVENT_AWAITING which guarantees there is a waker in there.
-                unsafe {
-                    awaiter_cell.assume_init_drop();
-                }
-
-                // The sender will clean up the event later.
-                Ok(None)
-            }
             EVENT_DISCONNECTED => {
                 // The receiver is the last endpoint remaining, so it will clean up.
                 Err(Disconnected)
             }
-            // Defensive: state machine guarantees this is unreachable.
+            // Defensive: state machine guarantees this is unreachable, since we already handled
+            // and cleared EVENT_AWAITING above.
             _ => {
                 unreachable!(
-                    "unreachable LocalEvent state on receiver disconnect: {previous_state}"
+                    "unreachable {} state on receiver disconnect: {previous_state}",
+                    type_name::<Self>()
                 );
             }
+        };
+
+        Cancellation {
+            result,
+            _awaiter: awaiter,
         }
     }
 }
@@ -543,674 +815,5 @@ impl<T: 'static> fmt::Debug for LocalEvent<T> {
 }
 
 #[cfg(test)]
-#[expect(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
 #[cfg_attr(coverage_nightly, coverage(off))]
-mod tests {
-    use std::cell::RefCell;
-    use std::panic::{RefUnwindSafe, UnwindSafe};
-    use std::pin::Pin;
-    use std::rc::Rc;
-    use std::task::{self, Poll};
-
-    use static_assertions::{assert_impl_all, assert_not_impl_any};
-    use testing::{ReentrantWakerData, with_watchdog};
-
-    use super::*;
-    use crate::IntoValueError;
-
-    assert_not_impl_any!(LocalEvent<i32>: Send, Sync);
-
-    assert_impl_all!(LocalEvent<u32>: UnwindSafe, RefUnwindSafe);
-
-    #[test]
-    fn boxed_send_receive() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
-        let mut receiver = Box::pin(receiver);
-
-        sender.send(42);
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
-    }
-
-    #[test]
-    fn boxed_send_receive_unit() {
-        let (sender, receiver) = LocalEvent::<()>::boxed();
-        let mut receiver = Box::pin(receiver);
-
-        sender.send(());
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Ready(Ok(()))));
-    }
-
-    #[test]
-    fn boxed_send_receive_u128() {
-        let (sender, receiver) = LocalEvent::<u128>::boxed();
-        let mut receiver = Box::pin(receiver);
-
-        sender.send(42);
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
-    }
-
-    #[test]
-    fn boxed_send_receive_array() {
-        let (sender, receiver) = LocalEvent::<[u128; 4]>::boxed();
-        let mut receiver = Box::pin(receiver);
-
-        sender.send([42, 43, 44, 45]);
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Ready(Ok([42, 43, 44, 45]))));
-    }
-
-    #[test]
-    fn boxed_receive_send_receive() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
-        let mut receiver = Box::pin(receiver);
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Pending));
-
-        sender.send(42);
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
-    }
-
-    #[test]
-    fn boxed_drop_send() {
-        let (sender, _) = LocalEvent::<i32>::boxed();
-
-        sender.send(42);
-    }
-
-    #[test]
-    fn boxed_drop_receive() {
-        let (_, receiver) = LocalEvent::<i32>::boxed();
-        let mut receiver = Box::pin(receiver);
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
-    }
-
-    #[test]
-    fn boxed_receive_drop_receive() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
-        let mut receiver = Box::pin(receiver);
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Pending));
-
-        drop(sender);
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
-    }
-
-    #[test]
-    fn boxed_receive_drop_send() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
-        let mut receiver = Box::pin(receiver);
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Pending));
-
-        drop(receiver);
-
-        sender.send(42);
-    }
-
-    #[test]
-    fn boxed_receive_drop_drop_receiver_first() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
-        let mut receiver = Box::pin(receiver);
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Pending));
-
-        drop(receiver);
-        drop(sender);
-    }
-
-    #[test]
-    fn boxed_receive_drop_drop_sender_first() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
-        let mut receiver = Box::pin(receiver);
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Pending));
-
-        drop(sender);
-        drop(receiver);
-    }
-
-    #[test]
-    fn boxed_drop_drop_receiver_first() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
-
-        drop(receiver);
-        drop(sender);
-    }
-
-    #[test]
-    fn boxed_drop_drop_sender_first() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
-
-        drop(sender);
-        drop(receiver);
-    }
-
-    #[test]
-    fn boxed_is_ready() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
-        let mut receiver = Box::pin(receiver);
-
-        assert!(!receiver.is_ready());
-
-        sender.send(42);
-
-        assert!(receiver.is_ready());
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
-    }
-
-    #[test]
-    fn boxed_drop_is_ready() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
-        let mut receiver = Box::pin(receiver);
-
-        assert!(!receiver.is_ready());
-
-        drop(sender);
-
-        assert!(receiver.is_ready());
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
-    }
-
-    #[test]
-    fn boxed_into_value() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
-
-        let Err(IntoValueError::Pending(receiver)) = receiver.into_value() else {
-            panic!("expected no value yet");
-        };
-
-        sender.send(42);
-
-        assert!(matches!(receiver.into_value(), Ok(42)));
-    }
-
-    #[test]
-    fn boxed_drop_into_value() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
-
-        drop(sender);
-
-        assert!(matches!(
-            receiver.into_value(),
-            Err(IntoValueError::Disconnected)
-        ));
-    }
-
-    #[test]
-    #[should_panic]
-    fn boxed_panic_poll_after_completion() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
-        let mut receiver = Box::pin(receiver);
-
-        sender.send(42);
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        assert!(matches!(
-            receiver.as_mut().poll(&mut cx),
-            Poll::Ready(Ok(42))
-        ));
-
-        // Should panic - invalid to access receiver after it completes.
-        _ = receiver.as_mut().poll(&mut cx);
-    }
-
-    #[test]
-    #[should_panic]
-    fn boxed_panic_is_ready_after_completion() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
-        let mut receiver = Box::pin(receiver);
-
-        sender.send(42);
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        assert!(matches!(
-            receiver.as_mut().poll(&mut cx),
-            Poll::Ready(Ok(42))
-        ));
-
-        // Should panic - invalid to access receiver after it completes.
-        _ = receiver.is_ready();
-    }
-
-    #[test]
-    fn placed_send_receive() {
-        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-        let mut receiver = Box::pin(receiver);
-
-        sender.send(42);
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
-    }
-
-    #[test]
-    fn placed_receive_send_receive() {
-        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-        let mut receiver = Box::pin(receiver);
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Pending));
-
-        sender.send(42);
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
-    }
-
-    #[test]
-    fn placed_drop_send() {
-        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
-        let (sender, _) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-
-        sender.send(42);
-    }
-
-    #[test]
-    fn placed_drop_receive() {
-        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
-        let (_, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-        let mut receiver = Box::pin(receiver);
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
-    }
-
-    #[test]
-    fn placed_receive_drop_receive() {
-        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-        let mut receiver = Box::pin(receiver);
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Pending));
-
-        drop(sender);
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
-    }
-
-    #[test]
-    fn placed_receive_drop_send() {
-        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-        let mut receiver = Box::pin(receiver);
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Pending));
-
-        drop(receiver);
-
-        sender.send(42);
-    }
-
-    #[test]
-    fn placed_receive_drop_drop_receiver_first() {
-        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-        let mut receiver = Box::pin(receiver);
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Pending));
-
-        drop(receiver);
-        drop(sender);
-    }
-
-    #[test]
-    fn placed_receive_drop_drop_sender_first() {
-        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-        let mut receiver = Box::pin(receiver);
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Pending));
-
-        drop(sender);
-        drop(receiver);
-    }
-
-    #[test]
-    fn placed_drop_drop_receiver_first() {
-        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-
-        drop(receiver);
-        drop(sender);
-    }
-
-    #[test]
-    fn placed_drop_drop_sender_first() {
-        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-
-        drop(sender);
-        drop(receiver);
-    }
-
-    #[test]
-    fn placed_is_ready() {
-        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-        let mut receiver = Box::pin(receiver);
-
-        assert!(!receiver.is_ready());
-
-        sender.send(42);
-
-        assert!(receiver.is_ready());
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
-    }
-
-    #[test]
-    fn placed_drop_is_ready() {
-        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-        let mut receiver = Box::pin(receiver);
-
-        assert!(!receiver.is_ready());
-
-        drop(sender);
-
-        assert!(receiver.is_ready());
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Ready(Err(Disconnected))));
-    }
-
-    #[test]
-    fn placed_into_value() {
-        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-
-        let Err(IntoValueError::Pending(receiver)) = receiver.into_value() else {
-            panic!("expected no value yet");
-        };
-
-        sender.send(42);
-
-        assert!(matches!(receiver.into_value(), Ok(42)));
-    }
-
-    #[test]
-    fn placed_drop_into_value() {
-        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-
-        drop(sender);
-
-        assert!(matches!(
-            receiver.into_value(),
-            Err(IntoValueError::Disconnected)
-        ));
-    }
-
-    #[test]
-    #[should_panic]
-    fn placed_panic_poll_after_completion() {
-        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-        let mut receiver = Box::pin(receiver);
-
-        sender.send(42);
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        assert!(matches!(
-            receiver.as_mut().poll(&mut cx),
-            Poll::Ready(Ok(42))
-        ));
-
-        // Should panic - invalid to access receiver after it completes.
-        _ = receiver.as_mut().poll(&mut cx);
-    }
-
-    #[test]
-    #[should_panic]
-    fn placed_panic_is_ready_after_completion() {
-        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-        let mut receiver = Box::pin(receiver);
-
-        sender.send(42);
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        assert!(matches!(
-            receiver.as_mut().poll(&mut cx),
-            Poll::Ready(Ok(42))
-        ));
-
-        // Should panic - invalid to access receiver after it completes.
-        _ = receiver.is_ready();
-    }
-
-    #[test]
-    fn boxed_double_poll_replaces_waker() {
-        let (sender, receiver) = LocalEvent::<i32>::boxed();
-        let mut receiver = Box::pin(receiver);
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-
-        // First poll transitions BOUND → AWAITING.
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Pending));
-
-        // Second poll enters the EVENT_AWAITING branch (replaces waker).
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Pending));
-
-        sender.send(42);
-
-        // Third poll picks up the value.
-        let poll_result = receiver.as_mut().poll(&mut cx);
-        assert!(matches!(poll_result, Poll::Ready(Ok(42))));
-    }
-
-    #[cfg(debug_assertions)]
-    #[test]
-    fn inspect_awaiter_no_awaiter() {
-        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
-        let _endpoints = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-
-        let mut called = false;
-        unsafe { place.inner.assume_init_ref() }.inspect_awaiter(|backtrace| {
-            called = true;
-            assert!(backtrace.is_none());
-        });
-
-        assert!(called);
-    }
-
-    #[cfg(debug_assertions)]
-    #[test]
-    fn inspect_awaiter_with_awaiter() {
-        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
-        let (_sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-        let mut receiver = Box::pin(receiver);
-        _ = receiver.as_mut().poll(&mut cx);
-
-        let mut called = false;
-        unsafe { place.inner.assume_init_ref() }.inspect_awaiter(|backtrace| {
-            called = true;
-            assert!(backtrace.is_some());
-        });
-
-        assert!(called);
-    }
-
-    #[cfg(debug_assertions)]
-    #[test]
-    fn inspect_awaiter_after_sender_drop() {
-        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
-        let (sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-        let mut receiver = Box::pin(receiver);
-        _ = receiver.as_mut().poll(&mut cx);
-
-        drop(sender);
-
-        let mut called = false;
-        unsafe { place.inner.assume_init_ref() }.inspect_awaiter(|backtrace| {
-            called = true;
-            assert!(backtrace.is_some());
-        });
-
-        assert!(called);
-    }
-
-    #[cfg(debug_assertions)]
-    #[test]
-    fn inspect_awaiter_after_receiver_drop() {
-        let mut place = Box::pin(EmbeddedLocalEvent::<i32>::new());
-        let (_sender, receiver) = unsafe { LocalEvent::<i32>::placed(place.as_mut()) };
-
-        let mut cx = task::Context::from_waker(Waker::noop());
-        let mut receiver = Box::pin(receiver);
-        _ = receiver.as_mut().poll(&mut cx);
-
-        drop(receiver);
-
-        let mut called = false;
-        unsafe { place.inner.assume_init_ref() }.inspect_awaiter(|backtrace| {
-            called = true;
-            assert!(backtrace.is_some());
-        });
-
-        assert!(called);
-    }
-
-    // Regression test for the synchronous reentrancy hazard in `set`. A waker
-    // fired by the sender's `send` that synchronously polls the receiver must
-    // observe a terminal state (SET) and read out the value, not see the
-    // intermediate state from the +1 collapse. This also exercises the
-    // callback-safety contract that the awaiter cell is drained before the
-    // wake callback runs.
-    #[test]
-    #[cfg_attr(miri, ignore)] // Custom raw waker is not Miri-compatible.
-    fn boxed_send_with_reentrant_waker_observes_set() {
-        type ObservedResult = Poll<Result<i32, Disconnected>>;
-
-        with_watchdog(|| {
-            let (sender, receiver) = LocalEvent::<i32>::boxed();
-            let receiver_holder: Rc<RefCell<Option<Pin<Box<_>>>>> =
-                Rc::new(RefCell::new(Some(Box::pin(receiver))));
-            let receiver_for_waker = Rc::clone(&receiver_holder);
-
-            let reentrant_observed: Rc<RefCell<Option<ObservedResult>>> =
-                Rc::new(RefCell::new(None));
-            let observed_for_waker = Rc::clone(&reentrant_observed);
-
-            let waker_data = ReentrantWakerData::new(move || {
-                // Synchronously poll the receiver from inside the waker.
-                // The receiver should observe EVENT_SET and return Ready(Ok(42)).
-                let mut holder = receiver_for_waker.borrow_mut();
-                let receiver = holder.as_mut().expect("receiver still held");
-                let noop = Waker::noop();
-                let mut cx = task::Context::from_waker(noop);
-                let result = receiver.as_mut().poll(&mut cx);
-                *observed_for_waker.borrow_mut() = Some(result);
-            });
-            // SAFETY: `waker_data` outlives the waker and the test is single-threaded.
-            let waker = unsafe { waker_data.waker() };
-
-            // First poll transitions BOUND -> AWAITING and stores the
-            // reentrant waker.
-            {
-                let mut holder = receiver_holder.borrow_mut();
-                let receiver = holder.as_mut().expect("receiver still held");
-                let mut cx = task::Context::from_waker(&waker);
-                assert!(matches!(receiver.as_mut().poll(&mut cx), Poll::Pending));
-            }
-
-            // Send a value. This calls `set` which transitions AWAITING -> SET
-            // and then invokes the waker, which must observe the SET state
-            // and consume the value reentrantly.
-            sender.send(42);
-
-            assert!(waker_data.was_woken());
-            let observed = reentrant_observed.borrow_mut().take();
-            assert!(
-                matches!(observed, Some(Poll::Ready(Ok(42)))),
-                "reentrant poll should observe SET and read the value",
-            );
-
-            // The receiver was consumed reentrantly; the receiver_holder still
-            // owns the Pin<Box> shell, drop it to release.
-            drop(receiver_holder.borrow_mut().take());
-        });
-    }
-}
+mod tests;

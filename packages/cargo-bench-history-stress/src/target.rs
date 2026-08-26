@@ -510,6 +510,18 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "std::path::absolute reads the process working directory"
+    )]
+    fn absolute_resolves_a_relative_path() {
+        let path = absolute(Path::new("store")).expect("a relative path can be resolved");
+
+        assert!(path.is_absolute(), "got: {}", path.display());
+        assert!(path.ends_with("store"), "got: {}", path.display());
+    }
+
+    #[test]
     fn wildcard_source_targets_directory_contents() {
         let source = wildcard_source(Path::new("seedroot"));
         // The contents are copied via a trailing `*`, not the directory itself.

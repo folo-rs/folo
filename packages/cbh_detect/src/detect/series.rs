@@ -13,6 +13,7 @@
 //! a large history, so the storage key is reduced to a 4-byte ordinal and the
 //! per-point commit string is interned to a shared `Arc<str>` rather than cloned.
 
+use std::cmp::Ordering;
 use std::collections::hash_map::Entry as MapEntry;
 use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasher;
@@ -21,6 +22,7 @@ use std::sync::Arc;
 use cbh_model::{
     BenchmarkId, BenchmarkIdPrefix, BlessingRecord, DiscriminantSet, MetricKind, Run, StorageKey,
 };
+use cbh_stats as stats;
 use foldhash::fast::RandomState;
 use foldhash::{HashMap as FoldHashMap, HashMapExt};
 use hashbrown::HashTable;
@@ -84,6 +86,25 @@ pub struct Blessing {
 /// did not report one), and the blessing record itself.
 pub type BlessingPlacement = (usize, Option<Timestamp>, BlessingRecord);
 
+/// One clean base-ref commit level used by branch-mode comparison.
+///
+/// Branch mode builds its baseline from the base ref's first-parent history rather
+/// than the analyzed context line. Each value is already collapsed to one
+/// per-commit level, but it keeps the commit coordinate and any representative
+/// engine confidence interval so the branch detector can apply the same
+/// interval-overlap veto history mode applies to raw regimes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BaseLevel {
+    /// First-parent topological index of the base-ref commit.
+    pub topo_index: usize,
+    /// Commit the base level was measured against, when known.
+    pub commit: Option<Arc<str>>,
+    /// Median value of this series' clean runs at the commit.
+    pub value: f64,
+    /// Representative confidence interval for the commit's runs, when available.
+    pub interval: Option<(f64, f64)>,
+}
+
 /// A per-`(set, benchmark, metric kind)` time series ordered by git topology.
 #[derive(Clone, Debug)]
 pub struct Series {
@@ -95,6 +116,20 @@ pub struct Series {
     pub kind: MetricKind,
     /// Observations ordered by `(topo_index, dirty, object_ordinal)`.
     pub points: Vec<SeriesPoint>,
+    /// Branch mode's base-ref comparison levels, oldest first.
+    ///
+    /// These levels are reconstructed from the base ref's own first-parent history,
+    /// not from the context ref's ancestry. Each entry is one clean base commit's
+    /// median level for this series. It retains each commit's coordinate and
+    /// representative interval so branch-mode lag reporting and interval vetoes use
+    /// the same base state as the observed current-regime range. Regime selection may
+    /// limit analysis to a supported recent suffix without deleting observations inside it.
+    pub base_window: Vec<BaseLevel>,
+    /// Base-ref levels available before the branch window cap and blessings.
+    ///
+    /// Branch diagnostics disclose both the available history and the bounded history
+    /// the detector actually used.
+    pub base_history_count: usize,
     /// Index into `points` where the active (post-blessing) window begins; `0`
     /// when the series is unblessed (every point is active). History-mode
     /// detection considers only `points[active_start..]`; the full `points` are
@@ -434,6 +469,8 @@ impl SeriesBuilder {
                         id: id.clone(),
                         kind,
                         points,
+                        base_window: Vec::new(),
+                        base_history_count: 0,
                         active_start: 0,
                         blessing: None,
                     });
@@ -466,6 +503,143 @@ impl SeriesBuilder {
         }
 
         series
+    }
+}
+
+/// Attaches base-ref comparison windows to matching context series.
+///
+/// `base_series` is reconstructed from clean runs on the base ref's own
+/// first-parent history, while `series` is reconstructed from the context ref's
+/// first-parent history. Both slices are in `(set, id, kind)` order, so matching is a
+/// linear merge. Each attached window is the newest `compare_window` per-commit
+/// levels of the base series, with repeated runs for one commit collapsed to their
+/// median just like branch detection's in-series commit-level logic.
+pub fn attach_base_windows(series: &mut [Series], base_series: &[Series], compare_window: usize) {
+    let mut base = base_series.iter().peekable();
+    for one in series {
+        while base
+            .peek()
+            .is_some_and(|candidate| series_cmp(candidate, one).is_lt())
+        {
+            _ = base.next();
+        }
+        let Some(candidate) = base.peek() else {
+            break;
+        };
+        if series_cmp(candidate, one).is_eq() {
+            let levels = commit_levels(&candidate.points);
+            one.base_history_count = levels.len();
+            let start = levels.len().saturating_sub(compare_window);
+            one.base_window = levels.get(start..).unwrap_or_default().to_vec();
+        }
+    }
+}
+
+fn series_cmp(left: &Series, right: &Series) -> Ordering {
+    left.set
+        .cmp(&right.set)
+        .then_with(|| left.id.cmp(&right.id))
+        .then_with(|| left.kind.cmp(&right.kind))
+}
+
+fn commit_levels(points: &[SeriesPoint]) -> Vec<BaseLevel> {
+    let mut levels = Vec::new();
+    let mut values: Vec<f64> = Vec::new();
+    let mut lows: Vec<f64> = Vec::new();
+    let mut highs: Vec<f64> = Vec::new();
+    let mut current: Option<(usize, bool, Option<Arc<str>>)> = None;
+    for point in points {
+        let key = (point.topo_index, point.dirty);
+        if current
+            .as_ref()
+            .is_none_or(|(topo_index, dirty, _)| (*topo_index, *dirty) != key)
+        {
+            if let Some((topo_index, _, commit)) = current {
+                push_base_level(
+                    &mut levels,
+                    topo_index,
+                    commit,
+                    &mut values,
+                    &mut lows,
+                    &mut highs,
+                );
+            }
+            values.clear();
+            lows.clear();
+            highs.clear();
+            current = Some((point.topo_index, point.dirty, point.commit.clone()));
+        }
+        values.push(point.value);
+        if let Some(low) = point.interval_low {
+            lows.push(low);
+        }
+        if let Some(high) = point.interval_high {
+            highs.push(high);
+        }
+    }
+    if let Some((topo_index, _, commit)) = current {
+        push_base_level(
+            &mut levels,
+            topo_index,
+            commit,
+            &mut values,
+            &mut lows,
+            &mut highs,
+        );
+    }
+    levels
+}
+
+fn push_base_level(
+    levels: &mut Vec<BaseLevel>,
+    topo_index: usize,
+    commit: Option<Arc<str>>,
+    values: &mut [f64],
+    lows: &mut [f64],
+    highs: &mut [f64],
+) {
+    let Some(value) = stats::median_in_place(values) else {
+        return;
+    };
+    let interval = stats::median_in_place(lows).zip(stats::median_in_place(highs));
+    levels.push(BaseLevel {
+        topo_index,
+        commit,
+        value,
+        interval,
+    });
+}
+
+/// Applies each series' latest matching blessing to its branch base window.
+///
+/// Branch mode positions blessings on the base ref's first-parent history. A matching
+/// blessing is a hard evidence boundary: levels before its commit position are removed,
+/// and the retained baseline begins with the first measured level at or after that
+/// position. The branch context points are not re-indexed because they live on a
+/// different first-parent line.
+pub fn apply_base_blessings<S: BuildHasher>(
+    series: &mut [Series],
+    blessings: &HashMap<DiscriminantSet, Vec<BlessingPlacement>, S>,
+) {
+    for one in series.iter_mut() {
+        let Some(set_blessings) = blessings.get(&one.set) else {
+            continue;
+        };
+        let latest = set_blessings
+            .iter()
+            .filter(|(_, _, record)| record.matches(&one.id))
+            .max_by_key(|(topo_index, _, _)| *topo_index);
+        let Some((topo_index, commit_time, record)) = latest else {
+            continue;
+        };
+        let keep_from = one
+            .base_window
+            .partition_point(|level| level.topo_index < *topo_index);
+        one.base_window.drain(..keep_from);
+        one.blessing = Some(Blessing {
+            commit: record.commit.clone(),
+            commit_time: *commit_time,
+        });
     }
 }
 
@@ -525,13 +699,15 @@ pub fn apply_blessings<S: BuildHasher>(
 /// itself never measured, every benchmark is a ghost and the whole list is emptied
 /// — the caller distinguishes that empty outcome for the user.
 ///
-/// Returns the removed ghost benchmark identities, deduplicated across metric kinds
-/// and ordered by `(set, id)`, so a caller can report exactly what it excluded.
+/// Returns one entry per removed metric series, ordered by `(set, id, kind)`. That
+/// is the unit the series census counts, so a caller's diagnostics and its census
+/// reconcile against each other; deduplicating on `(set, id)` recovers the ghost
+/// benchmarks behind them.
 #[must_use]
 pub fn retain_present_at_context(
     series: &mut Vec<Series>,
     context_commit: &str,
-) -> Vec<(DiscriminantSet, BenchmarkId)> {
+) -> Vec<(DiscriminantSet, BenchmarkId, MetricKind)> {
     // The benchmarks the context commit measured: a single series carrying a point
     // on that commit marks its whole benchmark present, across every metric kind.
     // Keyed by `(set, id)` so a benchmark present in one discriminant set does not
@@ -547,23 +723,24 @@ pub fn retain_present_at_context(
         }
     }
 
-    // Retain the present benchmarks and record each dropped ghost once (a benchmark
-    // spans several metric-kind series, so dedupe by identity).
-    let mut removed: HashSet<(DiscriminantSet, BenchmarkId)> = HashSet::new();
+    // Retain the present benchmarks and record every dropped series, so the report is
+    // in the same unit the census counts rather than a coarser benchmark identity.
+    let mut removed: Vec<(DiscriminantSet, BenchmarkId, MetricKind)> = Vec::new();
     series.retain(|one| {
         // Clone the identity key once per series and reuse it for both the presence
-        // test and the removed-set insert, avoiding a second clone per ghost.
+        // test and the removal record, avoiding a second clone per ghost.
         let key = (one.set.clone(), one.id.clone());
         if present.contains(&key) {
             true
         } else {
-            removed.insert(key);
+            let (set, id) = key;
+            removed.push((set, id, one.kind));
             false
         }
     });
 
-    // A stable, deterministic order for the diagnostics the caller emits.
-    let mut removed: Vec<(DiscriminantSet, BenchmarkId)> = removed.into_iter().collect();
+    // A stable, deterministic order for the diagnostics the caller emits. The triple
+    // is unique per series, so the unstable sort has no ties to reorder.
     removed.sort_unstable();
     removed
 }
@@ -937,6 +1114,47 @@ mod tests {
     }
 
     #[test]
+    fn apply_base_blessings_removes_only_pre_blessing_levels() {
+        let mut series = four_commit_series();
+        series[0].base_window = series[0]
+            .points
+            .iter()
+            .map(|point| BaseLevel {
+                topo_index: point.topo_index,
+                commit: point.commit.clone(),
+                value: point.value,
+                interval: point.interval_low.zip(point.interval_high),
+            })
+            .collect();
+        series[0].base_history_count = series[0].base_window.len();
+        let set = series[0].set.clone();
+        let mut map = HashMap::new();
+        map.insert(
+            set,
+            vec![(2_usize, Some(ts(300)), blessing(&["group"], "c2full", 301))],
+        );
+
+        apply_base_blessings(&mut series, &map);
+
+        assert_eq!(
+            series[0]
+                .base_window
+                .iter()
+                .map(|level| level.topo_index)
+                .collect::<Vec<_>>(),
+            vec![2, 3],
+            "the blessed commit remains and all earlier evidence is excluded"
+        );
+        assert_eq!(series[0].base_history_count, 4);
+        assert_eq!(
+            series[0].points.len(),
+            4,
+            "branch-side topology is unchanged"
+        );
+        assert_eq!(series[0].blessing.as_ref().unwrap().commit, "c2full");
+    }
+
+    #[test]
     fn apply_blessings_ignores_a_non_matching_blessing() {
         let mut series = four_commit_series();
         let set = series[0].set.clone();
@@ -1148,6 +1366,38 @@ mod tests {
             object_key,
             result: Run::new(context, vec![record]),
         }
+    }
+
+    #[test]
+    fn retain_present_at_context_reports_a_ghost_once_per_metric_series() {
+        // `pkgb` carries two metric kinds and disappears before the context commit.
+        // The account is in metric series, so both of its series are named rather
+        // than the benchmark once — a caller that reported per benchmark could not
+        // reconcile its diagnostics against the series census.
+        let objects = vec![
+            clean_metrics(
+                "c0",
+                100,
+                "pkgb",
+                &[
+                    (MetricKind::InstructionCount, 10.0),
+                    (MetricKind::ConditionalBranches, 100.0),
+                ],
+            ),
+            clean_metrics("c1", 200, "pkga", &[(MetricKind::InstructionCount, 11.0)]),
+        ];
+        let mut series = build_series(&objects, &order(&["c0", "c1"]), &SeriesFilter::default());
+
+        let removed = retain_present_at_context(&mut series, "c1");
+
+        assert_eq!(series.len(), 1, "only the present benchmark survives");
+        assert_eq!(removed.len(), 2);
+        assert_eq!(removed[0].1.qualified(), "pkgb/group/case");
+        assert_eq!(removed[1].1.qualified(), "pkgb/group/case");
+        assert_ne!(
+            removed[0].2, removed[1].2,
+            "each of the ghost's metric series is named"
+        );
     }
 
     #[test]

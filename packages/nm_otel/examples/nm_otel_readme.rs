@@ -3,24 +3,28 @@
 //! This example demonstrates the basic usage pattern for exporting nm metrics
 //! to OpenTelemetry.
 
-use std::time::Duration;
-
+use nm::Event;
+use nm_otel::Publisher;
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
+use opentelemetry_stdout::MetricExporter;
 use tick::Clock;
+
+thread_local! {
+    static REQUESTS: Event = Event::builder().name("requests").build();
+}
 
 #[tokio::main]
 async fn main() {
-    // Set up an OpenTelemetry meter provider with your exporter of choice.
-    let exporter = opentelemetry_stdout::MetricExporter::default();
+    let exporter = MetricExporter::default();
     let reader = PeriodicReader::builder(exporter).build();
-    let my_meter_provider = SdkMeterProvider::builder().with_reader(reader).build();
+    let meter_provider = SdkMeterProvider::builder().with_reader(reader).build();
 
-    // Create and run the nm-to-OpenTelemetry publisher.
-    let mut nm_publisher = nm_otel::Publisher::builder()
-        .provider(my_meter_provider)
+    REQUESTS.with(Event::observe_once);
+
+    let mut publisher = Publisher::builder()
+        .provider(meter_provider)
         .clock(Clock::new_tokio())
-        .interval(Duration::from_mins(1))
         .build();
 
-    nm_publisher.publish_forever().await;
+    publisher.publish_forever().await;
 }

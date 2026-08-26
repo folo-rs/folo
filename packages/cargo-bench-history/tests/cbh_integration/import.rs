@@ -37,11 +37,8 @@ fn run_faker_binary(target_dir: &Path, args: &[&str]) {
 /// through the production entry, keying the run to `commit` via `--commit` so no
 /// checkout is needed to attribute the imported data to a historical commit.
 ///
-/// The run is keyed under [`HARNESS_AUTO_TRIPLE`]/[`HARNESS_AUTO_MACHINE_KEY`] via
-/// `--target-triple`/`--machine-key` so the imported callgrind set matches the
-/// target-triple and machine-key facets a reporting drive injects. That makes the
-/// round-trip host-independent (the real host triple and fingerprint would only
-/// match on the collecting host), rather than relying on the probed toolchain host.
+/// The run is keyed under [`HARNESS_AUTO_TRIPLE`] via `--target-triple`. Reporting
+/// drives use `--machine-key all` because imports use the real host fingerprint.
 async fn import_for_commit(workspace: &Workspace, target_dir: &Path, commit: &str) -> String {
     let outcome = workspace
         .drive(&[
@@ -52,8 +49,6 @@ async fn import_for_commit(workspace: &Workspace, target_dir: &Path, commit: &st
             commit,
             "--target-triple",
             HARNESS_AUTO_TRIPLE,
-            "--machine-key",
-            HARNESS_AUTO_MACHINE_KEY,
         ])
         .await
         .unwrap();
@@ -108,6 +103,8 @@ async fn importing_faker_library_output_per_commit_round_trips_through_examine()
             "nm/nm::observe/pull",
             "--metric",
             "instruction_count",
+            "--machine-key",
+            "all",
         ])
         .await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
@@ -154,9 +151,8 @@ async fn importing_real_faker_binary_output_surfaces_in_list_under_the_overridde
 
     // Import an overridden triple so the discriminant is deterministic regardless of
     // the host this test runs on, proving `--target-triple` reaches the storage key
-    // through the real command line. Every engine is machine-keyed now, so pin the
-    // machine key too (to the one the harness's reporting drives auto-detect) so the
-    // imported runs land in the partition `list runs` queries.
+    // through the real command line. The query uses `--machine-key all` because
+    // import stores the real host fingerprint.
     for (index, commit) in commits.iter().enumerate() {
         let tree = workspace
             .root()
@@ -171,8 +167,6 @@ async fn importing_real_faker_binary_output_surfaces_in_list_under_the_overridde
                 tree.to_str().unwrap(),
                 "--target-triple",
                 "x86_64-unknown-linux-gnu",
-                "--machine-key",
-                HARNESS_AUTO_MACHINE_KEY,
                 "--commit",
                 commit,
             ])
@@ -184,7 +178,16 @@ async fn importing_real_faker_binary_output_surfaces_in_list_under_the_overridde
         assert!(message.contains("Stored 1"), "{message}");
     }
 
-    let runs = workspace.drive_json(&["list", "runs"]).await;
+    let runs = workspace
+        .drive_json(&[
+            "list",
+            "runs",
+            "--target-triple",
+            "x86_64-unknown-linux-gnu",
+            "--machine-key",
+            "all",
+        ])
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&runs).unwrap();
     assert_eq!(parsed["totals"]["runs"], 2, "{runs}");
     // The single callgrind benchmark contributes three metric series (Ir, Bc, Bi).
@@ -192,7 +195,16 @@ async fn importing_real_faker_binary_output_surfaces_in_list_under_the_overridde
     assert_eq!(parsed["totals"]["discriminant_sets"], 1, "{runs}");
     assert_eq!(parsed["sets"][0]["engine"], "callgrind", "{runs}");
 
-    let discriminants = workspace.drive_json(&["list", "discriminants"]).await;
+    let discriminants = workspace
+        .drive_json(&[
+            "list",
+            "discriminants",
+            "--target-triple",
+            "x86_64-unknown-linux-gnu",
+            "--machine-key",
+            "all",
+        ])
+        .await;
     let sets: serde_json::Value = serde_json::from_str(&discriminants).unwrap();
     let sets = sets.as_array().unwrap();
     assert_eq!(sets.len(), 1, "{discriminants}");
@@ -200,11 +212,15 @@ async fn importing_real_faker_binary_output_surfaces_in_list_under_the_overridde
         sets[0]["target_triple"], "x86_64-unknown-linux-gnu",
         "the --target-triple override should key the partition: {discriminants}"
     );
-    // Callgrind is machine-keyed like every other engine, so the `--machine-key`
-    // override reaches its partition key through the real command line.
-    assert_eq!(
-        sets[0]["machine_key"], HARNESS_AUTO_MACHINE_KEY,
-        "the --machine-key override should key the partition: {discriminants}"
+    // Callgrind is machine-keyed like every other engine, using the real host
+    // fingerprint because import no longer accepts a manual key.
+    let machine_key = sets[0]["machine_key"].as_str().unwrap();
+    assert_eq!(machine_key.len(), 16, "{discriminants}");
+    assert!(
+        machine_key
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()),
+        "{discriminants}"
     );
 }
 

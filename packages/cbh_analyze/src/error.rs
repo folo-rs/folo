@@ -251,7 +251,7 @@ impl RefUnwindSafe for BlessBaseRequiredError {}
 #[ohno::error]
 #[display(
     "bless cannot target a discriminant set: no stored result exists at the context commit \
-     {commit}, and the target-triple or machine-key facet is unconstrained; pass --target-triple \
+     {commit}, and the target-triple or machine-key filter is unconstrained; pass --target-triple \
      and --machine-key (or record a run at the commit first)"
 )]
 pub(crate) struct BlessDiscriminantsRequiredError {
@@ -448,20 +448,25 @@ mod tests {
     #[test]
     fn config_error_passes_through_unchanged() {
         let source = parse_config("invalid = [").unwrap_err();
-        let source_message = source.message();
+        // The source's `Display`, not its `message()`: `message()` omits an error's own
+        // backtrace but renders its source through `Display`, so a transparent wrapper
+        // reproduces the wrapped error's full rendering rather than its `message()`.
+        // Comparing against that rendering is exact whether or not `RUST_BACKTRACE`
+        // makes these errors capture a backtrace.
+        let source_rendering = source.to_string();
         let error = AnalyzeError::from(source);
 
-        assert_eq!(error.message(), source_message);
+        assert_eq!(error.message(), source_rendering);
         assert!(error.find_source::<ConfigError>().is_some());
     }
 
     #[test]
     fn storage_error_passes_through_unchanged() {
         let source = block_on(MemoryStorage::new().get("missing")).unwrap_err();
-        let source_message = source.message();
+        let source_rendering = source.to_string();
         let error = AnalyzeError::from(source);
 
-        assert_eq!(error.message(), source_message);
+        assert_eq!(error.message(), source_rendering);
         assert!(error.find_source::<StorageError>().is_some());
     }
 

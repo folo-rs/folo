@@ -6,19 +6,22 @@ use std::sync::Arc;
 
 use crate::{EventName, LOCAL_REGISTRY, ObservationBag, ObservationBagSync, Observations};
 
-/// Facilitates the push-style publishing of metrics.
+/// Publishes the metrics of events that use the push model.
 ///
-/// When creating a push-mode event, you must provide an instance of `MetricsPusher` to the event
-/// builder. This instance is typically stored in a thread-local static variable.
+/// When creating an event that uses the push model, you must provide an instance of
+/// `MetricsPusher` to the event builder. This instance is typically stored in a thread-local
+/// static variable.
 ///
 /// On a regular basis, you must then call the `push` method on this instance to publish the metrics
 /// to a storage location where they can be included in reports.
 #[derive(Debug)]
 pub struct MetricsPusher {
-    /// When we are asked to push data, we publish everything from the local bag to the global bag.
+    /// The events that publish through this pusher, each represented by the pair of observation
+    /// bags between which a push copies data.
     push_registry: Rc<RefCell<Vec<LocalGlobalPair>>>,
 
-    _single_threaded: PhantomData<*const ()>,
+    // The pusher publishes thread-local observation bags and must not move between threads.
+    _single_threaded: PhantomData<Rc<()>>,
 }
 
 // MetricsPusher is single-threaded (!Send, !Sync) and uses interior mutability only for
@@ -48,11 +51,9 @@ impl MetricsPusher {
 
     /// Pushes the metrics to a storage location where they can be included in reports.
     ///
-    /// This method should be called periodically to ensure that push-model metrics are published.
-    ///
-    /// Pairs whose local observation bag has not received new observations since the
-    /// last push are skipped entirely, avoiding unnecessary work and cache invalidation
-    /// for unchanged pairs.
+    /// This method should be called periodically to ensure that the metrics of events using the
+    /// push model are published. Observations recorded since the previous push appear in reports
+    /// only once this method has published them.
     ///
     /// # Example
     ///
@@ -68,10 +69,10 @@ impl MetricsPusher {
     ///         .build();
     /// }
     ///
-    /// // Observe some events first
-    /// PUSH_EVENT.with(|e| e.observe_once());
+    /// // Observe some events first.
+    /// PUSH_EVENT.with(Event::observe_once);
     ///
-    /// // Periodically push the accumulated metrics
+    /// // Periodically push the accumulated metrics.
     /// PUSHER.with(MetricsPusher::push);
     /// ```
     pub fn push(&self) {
@@ -81,7 +82,9 @@ impl MetricsPusher {
             // The local count is monotonically incremented by every data-changing
             // observation. If it has not advanced since the previous push, the local
             // bag's contents are identical to what we already published to the global
-            // bag, so we can safely skip the copy.
+            // bag, so we can safely skip the copy. Events that are registered but rarely
+            // observed are a common shape, so this skip is worth its comparison: see the
+            // `push` benchmarks in `benches/nm_performance.rs`.
             //
             // Edge case (accepted under the crate's mathematics policy): if the local
             // count wraps back to the previously pushed value within a single push
@@ -105,6 +108,7 @@ impl MetricsPusher {
 
     /// The number of events currently registered for pushing.
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn event_count(&self) -> usize {
         self.push_registry.borrow().len()
     }
@@ -114,20 +118,6 @@ impl Default for MetricsPusher {
     fn default() -> Self {
         Self::new()
     }
-}
-
-#[derive(Debug)]
-struct LocalGlobalPair {
-    local: Rc<ObservationBag>,
-    global: Arc<ObservationBagSync>,
-
-    /// The local bag's `count` at the time of the most recent push for this pair.
-    ///
-    /// On every push, we compare this to `local.count()`; if they match, no new
-    /// observations have arrived since the last push and we can skip the copy.
-    /// Initialized to 0, which matches the bag's initial count and correctly
-    /// causes the first push of a never-observed pair to be a no-op.
-    last_pushed_count: Cell<u64>,
 }
 
 /// The pusher hands out pre-registrations to the builder because the builder may not yet
@@ -149,12 +139,7 @@ impl PusherPreRegistration {
     pub(crate) fn register(self, name: EventName, source: Rc<ObservationBag>) {
         let global = Arc::new(ObservationBagSync::new(source.bucket_magnitudes()));
 
-        // Register the global half of the pair. This essentially makes the pusher act
-        // like a regular `Event<Pull>` as far as the global reporting logic is concerned.
-
-        // This will panic if it is already registered. This is not strictly required and
-        // we may relax this constraint in the future but for now we keep it here to help
-        // uncover problematic patterns and learn when/where relaxed constraints may be useful.
+        // Duplicate names are rejected to expose invalid duplicate-registration patterns.
         LOCAL_REGISTRY.with_borrow(|r| r.register(name, Arc::clone(&global)));
 
         self.push_registry.borrow_mut().push(LocalGlobalPair {
@@ -165,6 +150,26 @@ impl PusherPreRegistration {
     }
 }
 
+/// One event's pair of observation bags: the thread-local bag that observations are recorded
+/// into and the shared bag that reports read from.
+///
+/// A push copies the local bag into the global one, which is what makes observations of events
+/// using the push model visible to reports. Keeping the two halves together lets a push walk
+/// the pusher's registry without consulting any other data structure.
+#[derive(Debug)]
+struct LocalGlobalPair {
+    local: Rc<ObservationBag>,
+    global: Arc<ObservationBagSync>,
+
+    /// The local bag's `count` at the time of the most recent push for this pair.
+    ///
+    /// On every push, we compare this to `local.count()`; if they match, no new
+    /// observations have arrived since the last push and we can skip the copy.
+    /// Initialized to the bag's initial count, which correctly causes the first push of a
+    /// never-observed pair to be a no-op.
+    last_pushed_count: Cell<u64>,
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -173,6 +178,28 @@ mod tests {
     use static_assertions::assert_impl_all;
 
     use super::*;
+    use crate::Magnitude;
+
+    /// A single observation, used where a test only needs the local bag to become dirty.
+    const ONE_OBSERVATION: usize = 1;
+
+    /// An arbitrary magnitude for observations whose value is irrelevant to the assertion.
+    const ANY_MAGNITUDE: Magnitude = 1;
+
+    /// Observations written straight into a global bag to stand in for state that a push must
+    /// not disturb. The count differs from `ONE_OBSERVATION` so an unwanted overwrite by a push
+    /// is visible in the assertions.
+    const EXTERNAL_OBSERVATION_COUNT: usize = 5;
+
+    /// Expected count of a global bag that holds both a pushed local observation and the
+    /// externally written observations.
+    const LOCAL_PLUS_EXTERNAL_COUNT: u64 = (ONE_OBSERVATION + EXTERNAL_OBSERVATION_COUNT) as u64;
+
+    /// The number of observations a test records when it needs more than one of them.
+    const TWO_OBSERVATIONS: u64 = 2 * ONE_OBSERVATION as u64;
+
+    /// Expected sum of a bag that received `TWO_OBSERVATIONS` observations of `ANY_MAGNITUDE`.
+    const TWO_OBSERVATIONS_SUM: Magnitude = 2 * ANY_MAGNITUDE;
 
     assert_impl_all!(MetricsPusher: UnwindSafe, RefUnwindSafe);
 
@@ -195,7 +222,7 @@ mod tests {
         let local = Rc::new(ObservationBag::new(&[]));
 
         // Observe one occurrence right away. We do NOT expect this to be published until a push.
-        local.insert(1, 1);
+        local.insert(ANY_MAGNITUDE, ONE_OBSERVATION);
 
         let pusher = MetricsPusher::new();
         let pre_registration = pusher.pre_register();
@@ -206,33 +233,27 @@ mod tests {
 
         let global_snapshot = global.snapshot();
 
-        // The first occurrence was measured before a push, so it should not be published yet.
+        // Observations remain local until the first push.
         assert_eq!(0, global_snapshot.count);
 
         pusher.push();
 
         let global_snapshot = global.snapshot();
-        // Now it should show up.
-        assert_eq!(1, global_snapshot.count);
+        assert_eq!(ONE_OBSERVATION as u64, global_snapshot.count);
 
-        // This one shows up with the next push.
-        local.insert(1, 1);
+        local.insert(ANY_MAGNITUDE, ONE_OBSERVATION);
 
         let global_snapshot = global.snapshot();
-        // Still 1, because we did not push yet.
-        assert_eq!(1, global_snapshot.count);
+        assert_eq!(ONE_OBSERVATION as u64, global_snapshot.count);
 
         pusher.push();
 
         let global_snapshot = global.snapshot();
-        // Now it should be 2.
-        assert_eq!(2, global_snapshot.count);
+        assert_eq!(TWO_OBSERVATIONS, global_snapshot.count);
 
-        // This should not change anything.
         pusher.push();
         let global_snapshot = global.snapshot();
-        // Still 2, because we did not observe anything new.
-        assert_eq!(2, global_snapshot.count);
+        assert_eq!(TWO_OBSERVATIONS, global_snapshot.count);
     }
 
     #[test]
@@ -242,7 +263,7 @@ mod tests {
         // (no new observations on local) must not overwrite the manipulated global,
         // proving that the skip path took effect.
         let local = Rc::new(ObservationBag::new(&[]));
-        local.insert(7, 1);
+        local.insert(ANY_MAGNITUDE, ONE_OBSERVATION);
 
         let pusher = MetricsPusher::new();
         let pre_registration = pusher.pre_register();
@@ -252,21 +273,16 @@ mod tests {
 
         // First push synchronizes global with local.
         pusher.push();
-        assert_eq!(global.snapshot().count, 1);
+        assert_eq!(global.snapshot().count, ONE_OBSERVATION as u64);
 
-        // Mutate the global bag directly. A normal (non-skipping) push would
-        // overwrite this; an optimized push that detects "local unchanged" leaves
-        // the global bag alone.
-        global.insert(99, 5);
-        assert_eq!(global.snapshot().count, 6);
+        // Mutate the global bag directly. A push that copies unconditionally would
+        // overwrite this; a push that detects "local unchanged" leaves the global bag alone.
+        global.insert(ANY_MAGNITUDE, EXTERNAL_OBSERVATION_COUNT);
+        assert_eq!(global.snapshot().count, LOCAL_PLUS_EXTERNAL_COUNT);
 
         // No observations on `local` since the previous push.
         pusher.push();
-        assert_eq!(
-            global.snapshot().count,
-            6,
-            "idle push must not overwrite global state",
-        );
+        assert_eq!(global.snapshot().count, LOCAL_PLUS_EXTERNAL_COUNT);
     }
 
     #[test]
@@ -280,23 +296,23 @@ mod tests {
         let global = Arc::clone(&pusher.push_registry.borrow().first().unwrap().global);
 
         // Observe, push, then push again (idle): both pushes are exercised.
-        local.insert(1, 1);
+        local.insert(ANY_MAGNITUDE, ONE_OBSERVATION);
         pusher.push();
-        assert_eq!(global.snapshot().count, 1);
+        assert_eq!(global.snapshot().count, ONE_OBSERVATION as u64);
 
         pusher.push();
-        assert_eq!(global.snapshot().count, 1);
+        assert_eq!(global.snapshot().count, ONE_OBSERVATION as u64);
 
         // A subsequent observation must still be published by the next push.
-        local.insert(1, 1);
+        local.insert(ANY_MAGNITUDE, ONE_OBSERVATION);
         pusher.push();
-        assert_eq!(global.snapshot().count, 2);
+        assert_eq!(global.snapshot().count, TWO_OBSERVATIONS);
     }
 
     #[test]
     fn never_observed_event_first_push_is_skipped() {
-        // A freshly registered event has local count == 0, which equals the initial
-        // `last_pushed_count == 0`, so the very first push should be a no-op for it.
+        // A freshly registered event has a local count equal to the initial
+        // `last_pushed_count`, so the very first push is a no-op for it.
         let local = Rc::new(ObservationBag::new(&[]));
 
         let pusher = MetricsPusher::new();
@@ -306,26 +322,22 @@ mod tests {
         let global = Arc::clone(&pusher.push_registry.borrow().first().unwrap().global);
 
         // Directly populate global to detect any unexpected overwrite by push().
-        global.insert(42, 3);
-        assert_eq!(global.snapshot().count, 3);
+        global.insert(ANY_MAGNITUDE, EXTERNAL_OBSERVATION_COUNT);
+        assert_eq!(global.snapshot().count, EXTERNAL_OBSERVATION_COUNT as u64);
 
         pusher.push();
 
-        assert_eq!(
-            global.snapshot().count,
-            3,
-            "first push of a never-observed event must not overwrite global",
-        );
+        assert_eq!(global.snapshot().count, EXTERNAL_OBSERVATION_COUNT as u64);
     }
 
     #[test]
     fn pre_existing_local_data_is_published_on_first_push() {
         // The bag may already contain observations at registration time. Ensure
-        // they are published by the first push (count went from 0 to >0, so the
-        // pair is considered dirty).
+        // they are published by the first push (the count advanced past the initial
+        // value, so the pair is considered dirty).
         let local = Rc::new(ObservationBag::new(&[]));
-        local.insert(1, 1);
-        local.insert(2, 1);
+        local.insert(ANY_MAGNITUDE, ONE_OBSERVATION);
+        local.insert(ANY_MAGNITUDE, ONE_OBSERVATION);
 
         let pusher = MetricsPusher::new();
         let pre_registration = pusher.pre_register();
@@ -337,7 +349,7 @@ mod tests {
         pusher.push();
 
         let snapshot = global.snapshot();
-        assert_eq!(snapshot.count, 2);
-        assert_eq!(snapshot.sum, 3);
+        assert_eq!(snapshot.count, TWO_OBSERVATIONS);
+        assert_eq!(snapshot.sum, TWO_OBSERVATIONS_SUM);
     }
 }

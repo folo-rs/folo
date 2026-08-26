@@ -41,7 +41,7 @@ fn machine_key_outcome(profile: &HardwareProfile, reporter: &dyn Reporter) -> Ru
         )
     });
     RunOutcome::Completed {
-        message: resolve_machine_key(None, profile),
+        message: resolve_machine_key(profile),
     }
 }
 
@@ -71,7 +71,7 @@ mod tests {
         let RunOutcome::Completed { message } = outcome else {
             panic!("machine-key should complete: {outcome:?}");
         };
-        assert_eq!(message, resolve_machine_key(None, &hardware));
+        assert_eq!(message, resolve_machine_key(&hardware));
     }
 
     #[test]

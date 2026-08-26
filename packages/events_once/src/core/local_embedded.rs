@@ -1,4 +1,5 @@
 use std::any::type_name;
+use std::cell::UnsafeCell;
 use std::fmt;
 use std::mem::MaybeUninit;
 use std::panic::RefUnwindSafe;
@@ -31,7 +32,9 @@ use crate::LocalEvent;
 ///     ready: EmbeddedLocalEvent::new(),
 /// });
 ///
-/// // SAFETY: We promise that `task` lives longer than the endpoints.
+/// // SAFETY: The container was created right here as part of `task`, so no other event is using
+/// // it, `task` stays alive and writable until both endpoints below are consumed, and `Box::pin`
+/// // keeps the event at a stable address for that entire time.
 /// let (ready_tx, ready_rx) = unsafe { LocalEvent::placed(task.as_mut().project().ready) };
 ///
 /// ready_tx.send(());
@@ -43,12 +46,13 @@ use crate::LocalEvent;
 ///
 /// [1]: crate::LocalEvent::placed
 pub struct EmbeddedLocalEvent<T> {
-    pub(crate) inner: MaybeUninit<LocalEvent<T>>,
+    pub(crate) inner: UnsafeCell<MaybeUninit<LocalEvent<T>>>,
 }
 
-// MaybeUninit<LocalEvent<T>> inherits LocalEvent's !RefUnwindSafe
-// (from Cell and UnsafeCell). The same state-machine reasoning that
-// applies to LocalEvent applies here.
+// The `UnsafeCell` makes auto-trait inference mark the container as !RefUnwindSafe. The container
+// only ever hands its storage to one event at a time, and the event it holds is unwind-safe
+// regardless of the payload (see `LocalEvent`), so a caught panic cannot leave anything here that
+// a later observer could see in an inconsistent state.
 impl<T: 'static> RefUnwindSafe for EmbeddedLocalEvent<T> {}
 
 impl<T: 'static> EmbeddedLocalEvent<T> {
@@ -56,7 +60,7 @@ impl<T: 'static> EmbeddedLocalEvent<T> {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            inner: MaybeUninit::uninit(),
+            inner: UnsafeCell::new(MaybeUninit::uninit()),
         }
     }
 }
@@ -78,9 +82,10 @@ impl<T: 'static> fmt::Debug for EmbeddedLocalEvent<T> {
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
-#[expect(clippy::undocumented_unsafe_blocks, reason = "test code, be concise")]
 mod tests {
+    use std::cell::RefCell;
     use std::panic::{RefUnwindSafe, UnwindSafe};
+    use std::rc::Rc;
 
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
@@ -89,14 +94,19 @@ mod tests {
 
     assert_not_impl_any!(EmbeddedLocalEvent<u32>: Send, Sync);
 
+    // The payload is one that is itself neither `UnwindSafe` nor `RefUnwindSafe`, so the
+    // assertion can only pass if the container supplies both regardless of what it carries.
     assert_impl_all!(
-        EmbeddedLocalEvent<u32>: UnwindSafe, RefUnwindSafe
+        EmbeddedLocalEvent<Rc<RefCell<u32>>>: UnwindSafe, RefUnwindSafe
     );
 
     #[test]
     fn default_creates_usable_container() {
         let mut place = Box::pin(EmbeddedLocalEvent::<i32>::default());
 
+        // SAFETY: The container was created right here, so no other event is using it, it stays
+        // alive and writable until the endpoints below are gone, and `Box::pin` keeps the event
+        // at a stable address for that entire time.
         let (sender, receiver) = unsafe { LocalEvent::placed(place.as_mut()) };
         let mut receiver = Box::pin(receiver);
 

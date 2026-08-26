@@ -1,12 +1,14 @@
 //! The run context: the metadata that situates a [`Run`](crate::Run) in
-//! history (git) and in its execution environment (automation provider,
-//! toolchain, host).
+//! history (git), in its execution environment (automation provider, toolchain,
+//! host), and in the measurement protocol that produced its numbers.
 //!
 //! A run is positioned on its series timeline purely by git topology — the
 //! first-parent index of its commit, resolved live during analysis from the
 //! stored commit ID. The object records no commit timestamp of its own; the
 //! observation timestamp it does carry is provenance and is never used for
 //! ordering or windowing.
+
+use std::num::NonZero;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -32,21 +34,38 @@ pub struct RunContext {
     pub toolchain: ToolchainInfo,
     /// Version of the cargo-bench-history tool that produced this run.
     pub tool_version: String,
-    /// Host hardware provenance: the machine fingerprint and the factors it
-    /// derives from. Write-only — nothing reads it back today; it is recorded so
-    /// that a later change in a machine key can be traced to the specific factor
-    /// that changed. `None` on runs written before this field existed (and on the
-    /// many non-collect construction sites that do not probe hardware).
+    /// Host hardware provenance: the machine fingerprint and the hardware facts
+    /// recorded beside it. Write-only — nothing reads it back; it is recorded so
+    /// that a later change in a machine key can be traced to the specific fact that
+    /// changed. Recorded only where the storing path probed the host, so it is
+    /// `None` on runs written before this field existed and on the many non-collect
+    /// construction sites that do not probe hardware.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<MachineInfo>,
+    /// How many repetitions of the whole benchmark suite the stored numbers were
+    /// reduced from (`--best-of N`): every metric here is the minimum of this many
+    /// samples of that metric.
+    ///
+    /// Write-only measurement-protocol provenance: nothing reads it back. It
+    /// is recorded because the minimum of N samples is an order statistic whose
+    /// expected value falls as N rises, so the count is part of what was measured —
+    /// a history spanning two counts is not measuring the same quantity throughout,
+    /// and without the count stored, such a protocol change is indistinguishable
+    /// from a code change. Every run the tool stores carries it, `1` meaning a lone
+    /// sample no reduction chose between. `None` on runs written before this field
+    /// existed, and on the construction sites that store nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub best_of: Option<NonZero<usize>>,
 }
 
 impl RunContext {
     /// Creates a run context from its components.
     ///
-    /// The host [`machine`](Self::machine) provenance is left absent; `collect`
-    /// sets it after construction (it is the only site that probes hardware), so
-    /// the many other callers need not thread a value they cannot supply.
+    /// The host [`machine`](Self::machine) provenance and the
+    /// [`best_of`](Self::best_of) repetition count are left absent; the path that
+    /// stores a run fills them in after construction (it alone probes hardware and
+    /// reduces repetitions), so the many other callers need not thread values they
+    /// cannot supply.
     #[must_use]
     pub fn new(
         observation: Timestamp,
@@ -62,36 +81,44 @@ impl RunContext {
             toolchain,
             tool_version,
             machine: None,
+            best_of: None,
         }
     }
 }
 
-/// Host hardware provenance recorded with a run: the machine fingerprint and the
-/// factors it hashes.
+/// Host hardware provenance recorded with a run.
 ///
-/// Write-only metadata. Nothing reads it back today; it exists so that a later
-/// change in a machine key can be traced to the specific hardware factor that
-/// changed (for example, a runner pool swapping CPU models). It records the host's
-/// auto-detected fingerprint and is independent of any `--machine-key` override
-/// used to partition storage.
+/// It carries the current fingerprint factors the host reported, the fingerprint they
+/// produced, and further hardware facts that do not participate in that fingerprint —
+/// so it is neither a subset nor a superset of what authenticates the key, and cannot
+/// stand in for the factor set of some other key version. Write-only metadata: nothing
+/// reads it back; it exists so that a later change in a machine key can be traced to
+/// the specific hardware detail that changed (for example, a runner pool swapping CPU
+/// models). It records the host's auto-detected fingerprint used to partition storage.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MachineInfo {
-    /// Number of logical processors the host reported.
+    /// Number of logical processors the run could use.
     pub processors: usize,
-    /// Number of NUMA memory regions the host reported.
+    /// Number of NUMA memory regions holding processors the run could use.
     pub memory_regions: usize,
     /// Distinct processor model strings the host reported, sorted ascending.
     /// Defaults to empty when reading older records that predate this factor.
     #[serde(default)]
     pub processor_models: Vec<String>,
     /// Histogram of the per-processor relative speeds the host reported, as
-    /// `(speed, count)` pairs sorted ascending by speed. Defaults to empty when
-    /// reading older records that predate this factor.
+    /// `(speed, count)` pairs sorted ascending by speed.
+    ///
+    /// Provenance only: it is **not** a fingerprint factor, because the reading
+    /// behind it is a boot-time calibration figure that one machine can report
+    /// differently after a reboot. It is recorded so that a hardware question about
+    /// a stored run ("did this pool change CPUs?") can be answered from the run
+    /// itself. Defaults to empty when reading records that predate it.
     #[serde(default)]
     pub processor_speeds: Vec<(u64, usize)>,
-    /// The hardware fingerprint these factors hash to: the host's auto-detected
+    /// The hardware fingerprint the factors above hash to: the host's auto-detected
     /// identity, recorded regardless of the machine key the run was partitioned
-    /// under (see the type-level note).
+    /// under (see the type-level note). The speed histogram is not among those
+    /// factors and does not enter it.
     pub fingerprint: String,
 }
 
@@ -247,9 +274,39 @@ mod tests {
     }
 
     #[test]
-    fn run_context_without_machine_field_deserializes_to_none() {
-        // A record written before the host-provenance field existed omits it
-        // entirely; it must still parse, leaving `machine` absent.
+    fn best_of_is_omitted_when_absent_and_restored_when_present() {
+        let epoch = "2024-01-01T00:00:00Z".parse().unwrap();
+        let context = RunContext::new(
+            epoch,
+            GitInfo::default(),
+            EnvironmentInfo::default(),
+            ToolchainInfo::default(),
+            "0.0.1".to_owned(),
+        );
+
+        // An absent repetition count must not appear on the wire, so old readers
+        // and records stay byte-compatible.
+        let json = serde_json::to_string(&context).unwrap();
+        assert!(!json.contains("best_of"), "{json}");
+        assert_eq!(serde_json::from_str::<RunContext>(&json).unwrap(), context);
+
+        // A recorded count round-trips intact, as a plain JSON number.
+        let mut with_best_of = context;
+        with_best_of.best_of = NonZero::new(3);
+        let json = serde_json::to_string(&with_best_of).unwrap();
+        assert!(json.contains("\"best_of\":3"), "{json}");
+        assert_eq!(
+            serde_json::from_str::<RunContext>(&json).unwrap(),
+            with_best_of
+        );
+    }
+
+    #[test]
+    fn run_context_without_optional_provenance_deserializes_to_none() {
+        // A record written before the optional provenance fields existed omits them
+        // entirely; it must still parse, leaving each of them absent. This pins the
+        // backward-compatibility contract for every optional context field: adding
+        // one must never invalidate the objects already in storage.
         let json = r#"{
             "observation": "2024-01-01T00:00:00Z",
             "git": {"commit": null, "branch": null, "dirty": false},
@@ -259,6 +316,7 @@ mod tests {
         }"#;
         let context: RunContext = serde_json::from_str(json).unwrap();
         assert_eq!(context.machine, None);
+        assert_eq!(context.best_of, None);
     }
 
     #[test]

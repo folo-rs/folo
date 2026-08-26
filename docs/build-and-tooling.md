@@ -22,8 +22,11 @@ The `package` argument must be the first argument to any `just` command, if used
 Avoid running `just bench` (wall-clock Criterion benchmarks) without explicit
 confirmation: they take a lot of time, and the numbers are also noisy and
 machine-dependent - running them on a shared machine produces results that should
-not be acted on. `just test` already runs a single iteration of every Criterion
-benchmark to validate that they still execute.
+not be acted on. `just validate-local` runs `just test-benches-criterion`
+instead, giving every Criterion target one smoke iteration without collecting
+measurements. The combined `just test-benches` recipe used by CI also runs
+Gungraun targets, which means a normal one-shot Valgrind run on Linux and a no-op
+stub elsewhere.
 
 `just bench-cg` (Callgrind / Gungraun) is different: it runs each scenario once
 under Valgrind's CPU simulator, so the instruction counts and simulated cache
@@ -44,7 +47,9 @@ commands.
 
 Validate changes via `just validate-local`. This runs a number of different checks
 and will uncover most issues. If you only touched a few packages, scope it to them
-via `package="foo bar"`.
+via `package="foo bar"`. It also smoke-runs the selected packages' Criterion
+targets through `just test-benches-criterion`; see Standard commands for the
+distinction between local and combined CI benchmark smoke passes.
 
 `just validate-local` includes package-scoped **mutation testing** as its final
 step. Uncaught mutations are a very common cause of CI failures, so we run them

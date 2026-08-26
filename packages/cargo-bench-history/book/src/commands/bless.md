@@ -27,10 +27,11 @@ cargo bench-history unbless --local=./bench-history <benchmark-prefix>...
   the base branch's first-parent history (for example after a fast-forward), so a fast-forward
   merge workflow can bless a commit already on a feature branch. Blessing a commit with **no
   recorded run also warns** (double-check the commit id) and synthesizes the target discriminant
-  sets from the resolved facets — all four engines when `--engine` is omitted, under the resolved
-  target triple and machine key — so a change can be accepted *before* its data is captured.
+  sets from the resolved discriminant filters — all four engines when `--engine` is omitted,
+  under the resolved target triple and machine key — so a change can be accepted *before* its
+  data is captured.
   A no-data blessing needs a concrete target triple and machine key, so one whose triple or
-  machine-key facet is unconstrained (`all`) is an error. An unresolvable context ref, an
+  machine-key filter is unconstrained (`all`) is an error. An unresolvable context ref, an
   undeterminable base branch, or no prefixes without `--all` remain hard errors.
 - A dirty working tree is allowed (the blessing targets the committed run) but warns.
 
@@ -38,8 +39,13 @@ cargo bench-history unbless --local=./bench-history <benchmark-prefix>...
 
 A blessing is an append-only sidecar in each targeted set's commit directory (which need not
 yet hold a run), so narrowing one means unbless-then-re-bless the subset to keep. Capturing or
-overwriting a run never removes a blessing. `unbless` deletes only the blessings recorded at the context commit; blessings at
-later commits stay in effect. Blessings are honored **only in history mode** — branch mode
-judges the latest state against the base, which is treated as fully blessed by construction.
+overwriting a run never removes a blessing. `unbless` deletes only the blessings recorded at the
+context commit; blessings at later commits stay in effect.
+
+History mode starts detection at the blessed commit while retaining earlier points for chart
+context. Branch mode applies the blessing to the base ref's own first-parent evidence: the blessed
+commit remains eligible and every earlier base observation is excluded from regime selection,
+observed ranges, and historical report comparison. A recent blessing can therefore leave a branch
+series unjudged until enough new base measurements accumulate.
 
 Use [`list blessings`](list.md) to audit which blessings are in effect.

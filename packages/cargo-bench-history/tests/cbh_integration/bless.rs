@@ -90,9 +90,15 @@ async fn list_blessings_reports_the_blessing_recorded_at_head() {
     assert_eq!(blessings.len(), 1, "{message}");
     assert_eq!(blessings[0]["commit"], short_head, "{message}");
     // The blessed commit's committer date is read from git topology (HEAD is the
-    // seeded c6, dated 2024-01-06), not from a denormalized copy on the sidecar.
+    // seeded tip), not from a denormalized copy on the sidecar. The tip's date is
+    // derived from the fixture's own timeline so it follows the fixture's length.
+    let dates = sequential_dates(RISING_HISTORY_FIRST_DATE, MIN_SERIES_POINTS);
+    let tip_date = dates
+        .last()
+        .expect("the rising fixture seeds at least one commit");
     assert_eq!(
-        blessings[0]["commit_time"], "2024-01-06T00:00:00Z",
+        blessings[0]["commit_time"],
+        format!("{tip_date}T00:00:00Z"),
         "{message}"
     );
     assert!(
@@ -216,20 +222,16 @@ async fn bless_on_a_merged_in_side_commit_warns_off_first_parent() {
 #[cfg_attr(miri, ignore)]
 async fn bless_before_capture_applies_once_the_data_lands() {
     let workspace = Workspace::clean_repo(&storage_only_config());
-    // Build the full commit history first, capturing no data yet.
-    for (date, label) in [
-        ("2024-01-01", "c1"),
-        ("2024-01-02", "c2"),
-        ("2024-01-03", "c3"),
-        ("2024-01-04", "c4"),
-        ("2024-01-05", "c5"),
-        ("2024-01-06", "c6"),
-    ] {
-        workspace.commit_dated(date, label);
+    // Build the full commit history first, capturing no data yet. The chain is
+    // `MIN_SERIES_POINTS` long so the later-landing step is a real regression the
+    // blessing must suppress (not one too short to flag regardless).
+    let dates = sequential_dates("2024-01-01", MIN_SERIES_POINTS);
+    for (index, date) in dates.iter().enumerate() {
+        workspace.commit_dated(date, &format!("c{}", index + 1));
     }
 
     // Pre-emptively accept the tip before any run exists there. With no data to
-    // anchor to, the target sets are synthesized from the resolved facets (every
+    // anchor to, the target sets are synthesized from the resolved discriminant filters (every
     // engine on this host).
     let RunOutcome::Completed { message } = workspace.drive(&["bless", "--all"]).await.unwrap()
     else {
@@ -239,12 +241,10 @@ async fn bless_before_capture_applies_once_the_data_lands() {
     assert!(message.contains("Blessed"), "{message}");
 
     // Now capture the rising Callgrind history over those same commits.
-    workspace.seed_callgrind("c1", 100.0);
-    workspace.seed_callgrind("c2", 100.0);
-    workspace.seed_callgrind("c3", 100.0);
-    workspace.seed_callgrind("c4", 130.0);
-    workspace.seed_callgrind("c5", 130.0);
-    workspace.seed_callgrind("c6", 130.0);
+    for (index, _) in dates.iter().enumerate() {
+        let value = if index < MIN_REGIME { 100.0 } else { 130.0 };
+        workspace.seed_callgrind(&format!("c{}", index + 1), value);
+    }
 
     // The pre-emptive blessing occupies the exact Callgrind set the run landed in,
     // so the regression is suppressed with no re-bless.
@@ -253,52 +253,5 @@ async fn bless_before_capture_applies_once_the_data_lands() {
     assert_eq!(
         parsed["regressions"], 0,
         "a pre-emptive blessing must apply once the data lands: {report}"
-    );
-}
-
-/// A spike that rose and then recovered is suppressed by default (its current
-/// level matches the baseline), but `--include-inactive` surfaces it as an
-/// inactive finding so a reviewer can audit history that already self-corrected.
-#[tokio::test]
-#[cfg_attr(miri, ignore)]
-async fn analyze_include_inactive_surfaces_a_recovered_spike() {
-    let workspace = Workspace::clean_repo(&storage_only_config());
-    // An eight-point baseline, a two-point spike, then an eight-point return to the
-    // baseline level. No engine is exact, so the spike's rise and recovery must each
-    // be long enough to clear a Mann-Whitney gate before it registers at all.
-    for (day, value) in std::iter::repeat_n(10.0, 8)
-        .chain([20.0, 20.0])
-        .chain(std::iter::repeat_n(10.0, 8))
-        .enumerate()
-    {
-        let day = day + 1;
-        let label = format!("c{day}");
-        workspace.commit_dated(&format!("2024-01-{day:02}"), &label);
-        workspace.seed_callgrind(&label, value);
-    }
-
-    // By default, a fully recovered spike is not reported.
-    let report = workspace.drive_json(&["analyze"]).await;
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-    assert_eq!(parsed["mode"], "history", "{report}");
-    assert!(
-        parsed["findings"].as_array().is_some_and(Vec::is_empty),
-        "a recovered spike is suppressed by default: {report}"
-    );
-
-    // Opting in surfaces it as an inactive finding.
-    let report = workspace
-        .drive_json(&["analyze", "--include-inactive"])
-        .await;
-    let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
-    let finding = &parsed["findings"][0];
-    assert_eq!(finding["direction"], "regression", "{report}");
-    assert_eq!(
-        finding["active"], false,
-        "a recovered spike is an inactive finding: {report}"
-    );
-    assert!(
-        finding["flipped_at"].is_string(),
-        "an inactive finding names the commit it recovered at: {report}"
     );
 }

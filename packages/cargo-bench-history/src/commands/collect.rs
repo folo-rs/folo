@@ -5,6 +5,7 @@
 //! [`tick::Clock`], so the whole flow is exercised in-process with fakes. The
 //! public [`execute`] wires the real adapters and is what the binary runs.
 
+use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -235,7 +236,8 @@ pub(crate) struct SharedContext {
     /// host triple `rustc` reports for `collect`, or an `import --target-triple`
     /// override. It feeds both the partition key and `ToolchainInfo.target_triple`.
     pub(crate) target_triple: TargetTriple,
-    /// Host hardware profile, fingerprinted into the machine key.
+    /// Host hardware profile: the factors fingerprinted into the machine key, plus
+    /// the provenance recorded beside them.
     pub(crate) hardware: HardwareProfile,
 }
 
@@ -268,8 +270,8 @@ where
 ///
 /// A stored object's discriminant set is `engine / target_triple / machine_key`.
 /// The engine varies across the engines of a single run, while the other two are
-/// fixed by the host and the `--machine-key` override — so they are derived once,
-/// here. This is the one place that derivation lives, so `backfill`'s pre-check
+/// fixed by the host — so they are derived once, here. This is the one place
+/// that derivation lives, so `backfill`'s pre-check
 /// and the store path share it rather than reimplementing it.
 ///
 /// The target triple is whatever `rustc -vV` reports in the checkout being
@@ -288,8 +290,7 @@ where
 pub(crate) struct Partition {
     /// Effective target triple: the toolchain host, or an `import` override.
     pub(crate) target_triple: TargetTriple,
-    /// Effective machine key: an explicit `--machine-key` or the auto-detected
-    /// hardware fingerprint.
+    /// Effective machine key: the auto-detected hardware fingerprint.
     pub(crate) machine_key: MachineKey,
 }
 
@@ -301,16 +302,10 @@ impl Partition {
 }
 
 /// Derives the storage partition from an already-probed host context.
-///
-/// `machine_key_override` is the `--machine-key` value, which wins over the
-/// hardware fingerprint; `None` uses the fingerprint.
-pub(crate) fn partition_of(
-    shared: &SharedContext,
-    machine_key_override: Option<&str>,
-) -> Partition {
+pub(crate) fn partition_of(shared: &SharedContext) -> Partition {
     Partition {
         target_triple: shared.target_triple.clone(),
-        machine_key: MachineKey::from(resolve_machine_key(machine_key_override, &shared.hardware)),
+        machine_key: MachineKey::from(resolve_machine_key(&shared.hardware)),
     }
 }
 
@@ -322,13 +317,12 @@ pub(crate) fn partition_of(
 pub(crate) async fn probe_partition<P>(
     probe: &P,
     env: &dyn Fn(&str) -> Option<String>,
-    machine_key_override: Option<&str>,
 ) -> Result<Partition, AppError>
 where
     P: EnvironmentProbe,
 {
     let shared = probe_context(probe, env).await?;
-    Ok(partition_of(&shared, machine_key_override))
+    Ok(partition_of(&shared))
 }
 
 /// The injected collaborators the store back half operates against, shared by
@@ -358,16 +352,28 @@ pub(crate) struct FinalizeDeps<'a, S> {
 /// rides on [`SharedContext::git`]'s `dirty` flag (probed by `collect`, set from
 /// `--dirty` by `import`), keeping the stored body and its key coherent by
 /// construction.
-pub(crate) struct StoreParams<'a> {
-    /// Explicit machine-key override applied to every engine; `None` uses the
-    /// auto-detected fingerprint.
-    pub(crate) machine_key: Option<&'a str>,
+pub(crate) struct StoreParams {
     /// Replace an existing object in place instead of failing on a collision.
     pub(crate) overwrite: bool,
     /// Treat an existing object as a success that writes nothing (append-only).
     pub(crate) skip_existing: bool,
     /// Skip storage entirely (`collect --no-store`). `import` never sets this.
     pub(crate) no_store: bool,
+}
+
+/// One engine's best-of reduction: the records to store and how many repetitions
+/// of the benchmark suite their per-metric minima were taken over.
+///
+/// The two travel together because the count is only meaningful as a description
+/// of how those records were produced, and it is recorded on the stored run as
+/// measurement-protocol provenance.
+struct Reduction {
+    /// The records to store, each metric the minimum across the repetitions.
+    records: Vec<BenchmarkResult>,
+    /// How many repetitions the reduction actually consumed. Derived from the
+    /// harvested runs rather than the requested `--best-of`, so the recorded value
+    /// can never claim a repetition that did not happen.
+    runs: usize,
 }
 
 /// The result of harvesting one engine's output.
@@ -536,7 +542,6 @@ where
         reporter: deps.reporter,
     };
     let params = StoreParams {
-        machine_key: options.machine_key.as_deref(),
         overwrite: options.overwrite,
         skip_existing: options.skip_existing,
         no_store: options.no_store,
@@ -565,7 +570,7 @@ where
 pub(crate) async fn finalize_and_store<S>(
     store: &FinalizeDeps<'_, S>,
     shared: &SharedContext,
-    params: &StoreParams<'_>,
+    params: &StoreParams,
     operation: &str,
     triple_note: &str,
     per_engine: &[Vec<Vec<BenchmarkResult>>],
@@ -576,22 +581,20 @@ where
 {
     // The always-on effective-partition announcement: one line, printed regardless
     // of `--verbose`, naming the storage partition this run's results land in (the
-    // target triple, always the toolchain host, and the machine key every engine
-    // uses — an explicit `--machine-key` or the auto-detected fingerprint). It
-    // mirrors the query commands' effective-selection summary so the partition a
-    // run writes and an `analyze` reads is stated the same way.
-    let partition = partition_of(shared, params.machine_key);
+    // target triple, always the toolchain host, and the auto-detected machine key
+    // every engine uses). It mirrors the query commands' effective-selection
+    // summary so the partition a run writes and an `analyze` reads is stated the
+    // same way.
+    let partition = partition_of(shared);
     store.reporter.announce(&partition_selection_summary(
         operation,
         shared.target_triple.as_str(),
         triple_note,
         partition.machine_key.as_str(),
-        params.machine_key.is_some(),
     ));
     // Under --verbose, spell out the individual hardware factors behind the
     // auto-detected fingerprint so that if the machine key changes between runs
-    // the responsible factor can be identified from the log (even when an
-    // explicit --machine-key override is currently masking the fingerprint).
+    // the responsible factor can be identified from the log.
     store.reporter.note_with(|| {
         format!(
             "hardware fingerprint components: {}",
@@ -615,7 +618,10 @@ where
             params,
             &partition,
             engine,
-            combined.results,
+            Reduction {
+                records: combined.results,
+                runs,
+            },
             run_start,
         )
         .await?;
@@ -636,9 +642,8 @@ where
 }
 
 /// Builds the always-on, one-line summary of a run's effective storage partition:
-/// the target triple its results are keyed under and the machine key every engine
-/// uses — an explicit `--machine-key` override or the auto-detected hardware
-/// fingerprint.
+/// the target triple its results are keyed under and the auto-detected machine key
+/// every engine uses.
 ///
 /// `operation` is the gerund naming the action ("collecting"/"importing").
 /// `triple_note` qualifies the triple in parentheses ("toolchain host" for a
@@ -652,7 +657,6 @@ pub(crate) fn partition_selection_summary(
     target_triple: &str,
     triple_note: &str,
     machine_key: &str,
-    machine_key_explicit: bool,
 ) -> String {
     let triple = if target_triple.is_empty() {
         "unknown"
@@ -664,30 +668,27 @@ pub(crate) fn partition_selection_summary(
     } else {
         format!(" ({triple_note})")
     };
-    let machine_source = if machine_key_explicit {
-        "from --machine-key"
-    } else {
-        "auto-detected"
-    };
     format!(
         "{operation}: target-triple={triple}{triple_suffix}; \
-         machine-key={machine_key} ({machine_source})"
+         machine-key={machine_key} (auto-detected)"
     )
 }
 
-/// Builds the write-only host-hardware provenance recorded on every stored run:
-/// the fingerprint factors and the key they hash to.
+/// Builds the write-only host-hardware provenance recorded on the runs this
+/// command stores: the hardware facts the probe observed and the key the
+/// fingerprint factors among them hash to.
 ///
-/// It always records the auto-detected fingerprint (independent of any
-/// `--machine-key` override used to partition storage), so that a later change in
-/// a partition key can be traced back to the specific hardware factor that moved.
+/// It records the auto-detected fingerprint so that a later change in a partition
+/// key can be traced back to the specific hardware factor that moved.
+/// The per-processor speed histogram is recorded alongside as provenance even
+/// though it does not take part in the key.
 fn machine_info(hardware: &HardwareProfile) -> MachineInfo {
     MachineInfo {
         processors: hardware.processors,
         memory_regions: hardware.memory_regions,
         processor_models: hardware.processor_models.clone(),
         processor_speeds: hardware.processor_speeds.clone(),
-        fingerprint: resolve_machine_key(None, hardware),
+        fingerprint: resolve_machine_key(hardware),
     }
 }
 
@@ -821,23 +822,24 @@ where
 
 /// Stores one engine's reduced result set (unless suppressed).
 ///
-/// The back half of collecting an engine: given the records to persist (already
-/// reduced across the `--best-of` runs) and the [`Partition`] the run writes to,
-/// it builds the run context and storage key and writes the object. `run_start` is
-/// the first run's start, which stamps the observation time and any dirty-snapshot
-/// second.
+/// The back half of collecting an engine: given the [`Reduction`] to persist
+/// (already reduced across the `--best-of` runs) and the [`Partition`] the run
+/// writes to, it builds the run context and storage key and writes the object.
+/// `run_start` is the first run's start, which stamps the observation time and any
+/// dirty-snapshot second.
 async fn store_engine<S>(
     store: &FinalizeDeps<'_, S>,
     shared: &SharedContext,
-    params: &StoreParams<'_>,
+    params: &StoreParams,
     partition: &Partition,
     engine: Engine,
-    records: Vec<BenchmarkResult>,
+    reduction: Reduction,
     run_start: SystemTime,
 ) -> Result<EngineSummary, AppError>
 where
     S: Storage,
 {
+    let Reduction { records, runs } = reduction;
     let count = records.len();
 
     // An engine that produced no fresh output contributes nothing. Off Linux the
@@ -885,16 +887,30 @@ where
         },
         store.tool_version.to_owned(),
     );
-    // Record the host hardware provenance on every stored run (write-only): the
-    // fingerprint factors and the key they hash to, so a later change in a
-    // machine key can be traced to the specific factor that moved.
+    // Record the host hardware provenance on the runs this command stores
+    // (write-only): the hardware facts and the key their fingerprint factors hash
+    // to, so a later change in a machine key can be traced to the specific factor
+    // that moved.
     let mut context = context;
     context.machine = Some(machine_info(&shared.hardware));
+    // Record the measurement protocol alongside it: how many repetitions of the
+    // suite the stored minima were taken over. `NonZero::new` yields `None` only for
+    // an empty reduction, which cannot reach here — no repetitions means no records,
+    // and the zero-case early return above already took that path.
+    context.best_of = NonZero::new(runs);
+    store.reporter.note_with(|| {
+        format!(
+            "{engine}: recording best-of={runs} on the stored run; each value is the minimum \
+             of {}, and because that minimum falls as the count rises, a later reader needs \
+             the count to tell a protocol change from a code change",
+            count_noun(runs, "sample")
+        )
+    });
     let run = Run::new(context, records);
 
     // Every engine partitions its history by a machine key so only equivalent
-    // machines share a series; the run's partition supplies that key (an explicit
-    // `--machine-key` or the computed hardware fingerprint) for every engine.
+    // machines share a series; the run's partition supplies the computed hardware
+    // fingerprint for every engine.
     let machine_key = &partition.machine_key;
     let key = partition.discriminant_set(engine);
     // History is organized by commit, so the full commit ID names the directory
@@ -1354,7 +1370,6 @@ mod tests {
             "x86_64-pc-windows-msvc",
             "toolchain host",
             "abcd1234",
-            false,
         );
         assert!(auto.starts_with("collecting: "), "{auto}");
         assert!(
@@ -1366,23 +1381,8 @@ mod tests {
             "{auto}"
         );
 
-        // An explicit `--machine-key` is attributed to the option, not auto-detection.
-        let explicit = partition_selection_summary(
-            "collecting",
-            "aarch64-apple-darwin",
-            "toolchain host",
-            "ci-pool",
-            true,
-        );
-        assert!(
-            explicit.contains("machine-key=ci-pool (from --machine-key)"),
-            "{explicit}"
-        );
-        assert!(!explicit.contains("auto-detected"), "{explicit}");
-
         // A missing host triple degrades to a readable placeholder rather than blank.
-        let unknown =
-            partition_selection_summary("collecting", "", "toolchain host", "abcd1234", false);
+        let unknown = partition_selection_summary("collecting", "", "toolchain host", "abcd1234");
         assert!(unknown.contains("target-triple=unknown"), "{unknown}");
 
         // `import` reuses the formatter with its own verb and triple note, and an
@@ -1392,15 +1392,13 @@ mod tests {
             "wasm32-unknown-unknown",
             "from --target-triple",
             "abcd1234",
-            false,
         );
         assert!(imported.starts_with("importing: "), "{imported}");
         assert!(
             imported.contains("target-triple=wasm32-unknown-unknown (from --target-triple)"),
             "{imported}"
         );
-        let no_note =
-            partition_selection_summary("importing", "wasm32-unknown-unknown", "", "k", false);
+        let no_note = partition_selection_summary("importing", "wasm32-unknown-unknown", "", "k");
         assert!(
             no_note.contains("target-triple=wasm32-unknown-unknown;"),
             "{no_note}"
@@ -1600,9 +1598,9 @@ mod tests {
 
     /// The auto-detected machine key every engine partitions under for the
     /// [`FakeProbe`] hardware profile. Every engine is machine-keyed, so a probed
-    /// run with no `--machine-key` override lands under this fingerprint.
+    /// run lands under this fingerprint.
     fn probe_machine_key() -> String {
-        resolve_machine_key(None, &FakeProbe::new().hardware)
+        resolve_machine_key(&FakeProbe::new().hardware)
     }
 
     #[derive(Clone, Default)]
@@ -1884,36 +1882,6 @@ mod tests {
     }
 
     #[test]
-    fn collect_announcement_attributes_an_explicit_machine_key() {
-        let runner = FakeRunner::succeeding();
-        let probe = FakeProbe::new();
-        let output = FakeOutput::with_two_callgrind_summaries();
-        let storage = MemoryStorage::new();
-        let reporter = RecordingReporter::new();
-        let options = CollectOptions {
-            machine_key: Some("ci-pool-a".to_owned()),
-            ..CollectOptions::default()
-        };
-
-        drive_at_with(
-            FROZEN_UNIX,
-            &options,
-            &runner,
-            &probe,
-            &output,
-            &storage,
-            &reporter,
-        )
-        .unwrap();
-
-        assert!(
-            reporter.announced("machine-key=ci-pool-a (from --machine-key)"),
-            "explicit key should be attributed to the option, got {:?}",
-            reporter.announcements()
-        );
-    }
-
-    #[test]
     fn verbose_collect_notes_an_empty_harvest() {
         let runner = FakeRunner::succeeding();
         let probe = FakeProbe::new();
@@ -1986,45 +1954,30 @@ mod tests {
         // The backfill pre-check asks `probe_partition` which partition a run here
         // would occupy and then scans exactly that. If the two ever diverged, a
         // backfill would scan one partition and write to another, so every commit
-        // would look unrecorded and be benchmarked again. Both the auto-detected
-        // fingerprint and an explicit `--machine-key` must line up.
-        for machine_key in [None, Some("ci-pool-a".to_owned())] {
-            let options = CollectOptions {
-                machine_key: machine_key.clone(),
-                ..CollectOptions::default()
-            };
-            let storage = MemoryStorage::new();
+        // would look unrecorded and be benchmarked again.
+        let storage = MemoryStorage::new();
 
-            drive(
-                &options,
-                &FakeRunner::succeeding(),
-                &FakeProbe::new(),
-                &FakeOutput::with_two_callgrind_summaries(),
-                &storage,
-            )
-            .unwrap();
+        drive(
+            &CollectOptions::default(),
+            &FakeRunner::succeeding(),
+            &FakeProbe::new(),
+            &FakeOutput::with_two_callgrind_summaries(),
+            &storage,
+        )
+        .unwrap();
 
-            let env = |_name: &str| None::<String>;
-            let partition = block_on(probe_partition(
-                &FakeProbe::new(),
-                &env,
-                options.machine_key.as_deref(),
-            ))
-            .unwrap();
-            let prefix = partition
-                .discriminant_set(Engine::Callgrind)
-                .partition_prefix("folo");
+        let env = |_name: &str| None::<String>;
+        let partition = block_on(probe_partition(&FakeProbe::new(), &env)).unwrap();
+        let prefix = partition
+            .discriminant_set(Engine::Callgrind)
+            .partition_prefix("folo");
 
-            let keys = storage.keys();
-            assert!(
-                keys.iter().all(|key| key.starts_with(&prefix)),
-                "machine key {machine_key:?} scanned {prefix} but wrote {keys:?}"
-            );
-            assert!(
-                !keys.is_empty(),
-                "machine key {machine_key:?} stored nothing"
-            );
-        }
+        let keys = storage.keys();
+        assert!(
+            keys.iter().all(|key| key.starts_with(&prefix)),
+            "scanned {prefix} but wrote {keys:?}"
+        );
+        assert!(!keys.is_empty(), "stored nothing");
     }
 
     #[test]
@@ -2601,30 +2554,6 @@ mod tests {
     }
 
     #[test]
-    fn criterion_partition_uses_the_machine_key_override() {
-        let storage = MemoryStorage::new();
-        let options = CollectOptions {
-            machine_key: Some("ci-pool-a".to_owned()),
-            ..CollectOptions::default()
-        };
-        drive(
-            &options,
-            &FakeRunner::succeeding(),
-            &FakeProbe::new(),
-            &FakeOutput::with_criterion_case(),
-            &storage,
-        )
-        .unwrap();
-
-        let keys = storage.keys();
-        assert_eq!(keys.len(), 1, "{keys:?}");
-        assert!(
-            keys[0].contains("/criterion/x86_64-pc-windows-msvc/ci-pool-a/"),
-            "{keys:?}"
-        );
-    }
-
-    #[test]
     fn malformed_criterion_case_is_a_parse_error() {
         let storage = MemoryStorage::new();
         let error = drive(
@@ -2761,12 +2690,8 @@ mod tests {
     #[test]
     fn all_the_time_output_is_partitioned_by_machine_key() {
         let storage = MemoryStorage::new();
-        let options = CollectOptions {
-            machine_key: Some("ci-pool-a".to_owned()),
-            ..CollectOptions::default()
-        };
         let outcome = drive(
-            &options,
+            &CollectOptions::default(),
             &FakeRunner::succeeding(),
             &FakeProbe::new(),
             &FakeOutput::with_all_the_time_operation(),
@@ -2780,10 +2705,11 @@ mod tests {
         assert!(message.contains("Stored 1"), "{message}");
 
         // Processor time depends on the host, so it is partitioned by machine key.
+        let machine = probe_machine_key();
         let keys = storage.keys();
         assert_eq!(keys.len(), 1, "{keys:?}");
         assert!(
-            keys[0].contains("/all_the_time/x86_64-pc-windows-msvc/ci-pool-a/"),
+            keys[0].contains(&format!("/all_the_time/x86_64-pc-windows-msvc/{machine}/")),
             "{keys:?}"
         );
 
@@ -3463,5 +3389,70 @@ mod tests {
         assert_eq!(runner.calls.lock().unwrap().len(), 1);
         let run = only_stored_run(&storage);
         assert_eq!(run.results[0].metrics[0].value, 20.0);
+    }
+
+    #[test]
+    fn the_stored_run_records_the_repetition_count_it_was_reduced_from() {
+        // The stored value is the minimum of the repetitions, and that minimum falls
+        // as the count rises, so the count is part of the measurement protocol and
+        // must travel with the run. Recorded from the repetitions that actually
+        // produced the harvests, so it can never claim a run that did not happen.
+        for count in [1_usize, 3] {
+            let runner = FakeRunner::succeeding();
+            let probe = FakeProbe::new();
+            let output = SequencedOutput::new(
+                [30.0, 10.0, 20.0]
+                    .into_iter()
+                    .take(count)
+                    .map(all_the_time_output)
+                    .collect(),
+            );
+            let storage = MemoryStorage::new();
+            let reporter = StderrReporter::new(false);
+            let options = CollectOptions {
+                best_of: best_of(count),
+                ..CollectOptions::default()
+            };
+
+            drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap();
+
+            let run = only_stored_run(&storage);
+            assert_eq!(run.context.best_of, NonZero::new(count));
+
+            // The count survives the stored representation, which is what a later
+            // reader actually parses.
+            let restored = Run::from_json(&run.to_json().unwrap()).unwrap();
+            assert_eq!(restored.context.best_of, NonZero::new(count));
+        }
+    }
+
+    #[test]
+    fn the_recorded_repetition_count_is_explained_in_the_verbose_log() {
+        // The verbose trail must state the count recorded with the run and why it is
+        // recorded, so the stored measurement protocol is reconstructable from the
+        // log rather than only from the object.
+        let runner = FakeRunner::succeeding();
+        let probe = FakeProbe::new();
+        let output =
+            SequencedOutput::new(vec![all_the_time_output(30.0), all_the_time_output(10.0)]);
+        let storage = MemoryStorage::new();
+        let reporter = RecordingReporter::new();
+        let options = CollectOptions {
+            best_of: best_of(2),
+            ..CollectOptions::default()
+        };
+
+        drive_best_of(&options, &runner, &probe, &output, &storage, &reporter).unwrap();
+
+        assert!(
+            reporter.contains("recording best-of=2 on the stored run"),
+            "expected a note naming the recorded count, got {:?}",
+            reporter.notes()
+        );
+        assert!(
+            reporter.contains("minimum of 2 samples"),
+            "expected the note to explain what the count means, got {:?}",
+            reporter.notes()
+        );
     }
 }

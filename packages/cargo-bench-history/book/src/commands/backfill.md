@@ -34,8 +34,8 @@ before their benches run, making backfill resumable and cheap to re-issue;
 summary. Infrastructure failures always abort.
 
 That skip check looks only at the **storage partition this run writes to** — the target triple
-and machine key this run stores under, `--machine-key` override included — so a commit measured
-on other hardware, or for another target, never counts as already done here. Across engines it
+and auto-detected machine key this run stores under — so a commit measured on other hardware,
+or for another target, never counts as already done here. Across engines it
 takes the union: a commit that has a clean result for only some engines still counts as recorded
 and is skipped, because nothing requires a run to produce every engine (off Linux, Callgrind
 produces nothing at all). Use `--overwrite` to re-measure such a commit — for example after
@@ -62,4 +62,8 @@ unexplained step at the boundary of a backfilled span with suspicion.
 ## Noise reduction
 
 `--best-of N` carries through to each commit's `collect`, applying the same min-of-N noise
-reduction uniformly across the range.
+reduction uniformly across the range. Use the same `N` the range's neighbors were collected
+with: the reduction keeps a minimum, whose expected value falls as `N` rises, so a span
+backfilled with a different count sits at a different level for every metric noisy enough to
+be affected, and meets its neighbors as a step.
+Each backfilled run records the count it was reduced from, like any other run.

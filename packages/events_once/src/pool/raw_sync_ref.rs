@@ -1,57 +1,92 @@
 use std::any::type_name;
 use std::cell::UnsafeCell;
-use std::mem::MaybeUninit;
+use std::fmt;
 use std::ops::Deref;
 use std::ptr::NonNull;
-use std::{fmt, mem};
 
-use infinity_pool::RawPooled;
+#[cfg(debug_assertions)]
+use crate::EventRegistry;
+use crate::{Event, EventRef, destroy_event};
 
-use crate::{Event, EventRef, NEVER_POISONED, RawEventPoolCore};
-
+/// References a thread-safe event rented from a raw pool or lake.
+///
+/// [`RawEventPool`][crate::RawEventPool] and [`RawEventLake`][crate::RawEventLake] use the same
+/// detached plurality-slot release path. The pointer owns the slot, so release needs neither
+/// allocation owner nor lock (see `state.rs`). In debug builds, the raw owner-outlives-endpoints
+/// contract keeps the registry pointer valid until the event is unregistered.
 pub(crate) struct RawPooledRef<T: 'static> {
-    core: NonNull<UnsafeCell<RawEventPoolCore<T>>>,
-    event: RawPooled<UnsafeCell<MaybeUninit<Event<T>>>>,
+    // Only debug builds need the registry for awaiter inspection.
+    #[cfg(debug_assertions)]
+    registry: NonNull<EventRegistry>,
+
+    event: NonNull<UnsafeCell<Event<T>>>,
 }
 
 impl<T: Send + 'static> RawPooledRef<T> {
+    /// Creates a reference to an event rented from a raw pool or lake.
+    ///
+    /// # Safety
+    ///
+    /// The event must be one that `initialize_event()` returned and that has not yet been released.
+    /// In debug builds, it must be registered in `registry`, whose owner must outlive every
+    /// endpoint. Nothing may create an exclusive reference to the event while any endpoint can
+    /// access it.
     #[must_use]
-    pub(crate) fn new(
-        core: NonNull<UnsafeCell<RawEventPoolCore<T>>>,
-        event: RawPooled<UnsafeCell<MaybeUninit<Event<T>>>>,
+    pub(crate) unsafe fn new(
+        #[cfg(debug_assertions)] registry: NonNull<EventRegistry>,
+        event: NonNull<UnsafeCell<Event<T>>>,
     ) -> Self {
-        Self { core, event }
+        Self {
+            #[cfg(debug_assertions)]
+            registry,
+            event,
+        }
+    }
+
+    /// Returns a shared reference to the diagnostic registry.
+    #[cfg(debug_assertions)]
+    fn registry(&self) -> &EventRegistry {
+        // SAFETY: Validity follows from `new()` requiring the registry owner to outlive every
+        // endpoint. Only shared references to the registry exist, and it synchronizes mutation
+        // through its internal mutex.
+        unsafe { self.registry.as_ref() }
     }
 }
 
 impl<T: Send + 'static> Clone for RawPooledRef<T> {
     fn clone(&self) -> Self {
         Self {
-            core: self.core,
+            #[cfg(debug_assertions)]
+            registry: self.registry,
             event: self.event,
         }
     }
 }
 
-impl<T: Send + 'static> EventRef<T> for RawPooledRef<T> {
-    fn release_event(&self) {
-        // SAFETY: Our owner promised the pool that the pool (the owner of the core) stays alive
-        // longer than the event endpoints, so we know it remains valid. We only ever
-        // create shared references to it, so no conflicting exclusive references can exist.
-        let core_cell = unsafe { self.core.as_ref() };
+// SAFETY: The caller of `new()` guaranteed that the event occupies an initialized, detached
+// plurality slot and has not been released. The slot stays at a fixed address, and plurality keeps
+// its backing storage alive while it is detached. Everything that reaches the event - the
+// endpoints holding this reference and its clones, plus the diagnostic registry in debug builds -
+// creates only shared references, and the caller guaranteed that nothing creates an exclusive one.
+// `release_event()` returns the slot through `destroy_event()`, the release operation of this
+// storage strategy, and the reference does not touch the event afterwards.
+unsafe impl<T: Send + 'static> EventRef<T> for RawPooledRef<T> {
+    unsafe fn release_event(&self) {
+        #[cfg(debug_assertions)]
+        {
+            // SAFETY: The `new()` contract requires this registered event to remain in its stable
+            // plurality slot with shared-only access. The caller owns its sole cleanup right, so
+            // those conditions hold until this unregistration returns.
+            unsafe {
+                self.registry().unregister(self.event);
+            }
+        }
 
-        // SAFETY: See above.
-        let core_maybe = unsafe { core_cell.get().as_ref() };
-
-        // SAFETY: UnsafeCell pointer is never null.
-        let core = unsafe { core_maybe.unwrap_unchecked() };
-
-        let mut pool = core.pool.lock().expect(NEVER_POISONED);
-
-        // SAFETY: The event state machine guarantees that nothing references the event
-        // once it signals the "you need to clean me up now". We hold the last reference.
+        // SAFETY: The pointer came from `initialize_event()`, as the `new()` contract requires.
+        // The caller was granted sole cleanup ownership of the event by the state machine, so
+        // this is the only release of this event and nothing accesses it afterwards.
         unsafe {
-            pool.remove(self.event);
+            destroy_event(self.event);
         }
     }
 }
@@ -60,30 +95,37 @@ impl<T: Send + 'static> Deref for RawPooledRef<T> {
     type Target = UnsafeCell<Event<T>>;
 
     fn deref(&self) -> &Self::Target {
-        // SAFETY: The event state machine guarantees that the event remains in the pool.
-        let event_cell = unsafe { self.event.as_ref() };
-
-        // SAFETY: We assert that the event has been initialized. This is always the case
-        // by the time the RawPooledRef is created - the MaybeUninit wrapper is just there because
-        // the items are delay-initialized after renting to avoid spurious memory copies.
-        unsafe {
-            mem::transmute::<&UnsafeCell<MaybeUninit<Event<T>>>, &UnsafeCell<Event<T>>>(event_cell)
-        }
+        // SAFETY: Validity: the `new()` contract gives us a rented, initialized event that keeps
+        // its address in plurality storage that outlives it, and cleanup ownership is granted to a
+        // single endpoint, so the event is not yet released while any endpoint can call this.
+        // Aliasing: the event is reached only through shared references, whether from an
+        // endpoint or from the debug-only registry; the event synchronizes access to its
+        // own interior fields.
+        unsafe { self.event.as_ref() }
     }
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))] // No API contract to test.
 impl<T: Send + 'static> fmt::Debug for RawPooledRef<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct(type_name::<Self>())
-            .field("core", &self.core)
-            .field("event", &self.event)
-            .finish()
+        let mut f = f.debug_struct(type_name::<Self>());
+
+        #[cfg(debug_assertions)]
+        f.field("registry", &self.registry);
+
+        f.field("event", &self.event).finish()
     }
 }
 
-// SAFETY: The events are synchronization primitives and can be referenced from any thread.
-// The reference itself is not synchronized, so is not Sync, but it can move between threads.
+// SAFETY: Both stored pointers remain usable after the reference moves to another thread. The
+// event is a synchronization primitive that synchronizes access to itself, and moving the
+// reference can carry a value of `T` to the destination thread, which is why `T: Send` is
+// required. Releasing the event from the destination thread hands the slot back through
+// `plurality::Box`, whose slot bookkeeping is atomic, so it needs no further synchronization.
+// The debug-only registry pointer stays valid under the raw owner's outlives contract, and the
+// registry synchronizes unregistration from any thread.
+// The reference is not synchronized as a whole, so it is not `Sync`: only moving it between
+// threads is permitted, not sharing it between them.
 // The `'static` bound is already on the struct, so it is not repeated here. Repeating it
 // would trigger a rustc bug (rust-lang/rust#110338) in async generator Send inference
 unsafe impl<T: Send> Send for RawPooledRef<T> {}
@@ -91,7 +133,7 @@ unsafe impl<T: Send> Send for RawPooledRef<T> {}
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use static_assertions::{assert_impl_all, assert_not_impl_any};
+    use static_assertions::{assert_eq_size, assert_impl_all, assert_not_impl_any};
 
     use super::*;
 
@@ -100,4 +142,11 @@ mod tests {
 
     // Trait object payloads must preserve Send (regression test for #142).
     assert_impl_all!(RawPooledRef<Box<dyn Send>>: Send);
+
+    // Cloning a reference is on the hot path (there is one per endpoint), so in release builds
+    // the reference is a bare pointer to the event and nothing else.
+    #[cfg(debug_assertions)]
+    assert_eq_size!(RawPooledRef<u32>, (NonNull<()>, NonNull<()>));
+    #[cfg(not(debug_assertions))]
+    assert_eq_size!(RawPooledRef<u32>, NonNull<()>);
 }

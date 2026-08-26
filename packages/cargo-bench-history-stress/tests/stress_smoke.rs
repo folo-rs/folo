@@ -1,131 +1,376 @@
 //! End-to-end smoke tests for the stress harness binary.
 //!
-//! Each test runs the compiled binary against local-filesystem storage at a tiny
-//! scenario size, so the full pipeline (git fast-import, write the synthetic object
+//! Each test runs the compiled binary against local-filesystem storage at a small
+//! scenario, so the full pipeline (git fast-import, write the synthetic object
 //! tree, then analyze every requested mode through the real public entry point) is
-//! exercised quickly. They spawn real processes (the harness and `git`), so they are
-//! `#[cfg_attr(miri, ignore)]`.
+//! exercised quickly. They spawn real processes (the harness and `git`), so they
+//! are `#[cfg_attr(miri, ignore)]`.
+//!
+//! The scenario is sized from the detectors' evidence gates rather than picked for
+//! speed alone, and the assertions pin the exact set of findings the synthetic
+//! dataset is built to produce. Both matter: a scenario below the gates, or a
+//! defect that stopped the pipeline short of detection, would report zero findings
+//! while every "the binary ran" check still passed. Pinning the ground truth makes
+//! this suite a liveness canary for the whole harness.
 
 #![allow(
-    clippy::indexing_slicing,
-    reason = "parsing fixed-shape report tables in test code"
+    clippy::arithmetic_side_effects,
+    reason = "expected counts composed from the fixed, tiny scenario sizes cannot overflow"
 )]
 
 use std::collections::BTreeMap;
+use std::fs;
+use std::path::Path;
 use std::process::{Command, Output};
 
-/// Runs the stress binary with the given arguments plus a tiny default scenario,
+use cbh_detect::{DRIFT_MIN_POINTS, MAX_BRANCH_BASE_COMMITS, MIN_REGIME, MIN_SERIES_POINTS};
+
+/// Benchmark cases the scenario seeds per discriminant set: one per timeline-shape
+/// family, so every seeded shape — including the stable one, which must raise
+/// nothing — is represented exactly once in every set.
+const BENCHMARKS: usize = 5;
+
+/// Points each side of a seeded step must hold for the detectors to trust it: the
+/// production `min_regime` gate.
+const REGIME_POINTS: usize = 5;
+
+/// First-parent `main` commits the scenario seeds.
+///
+/// Roughly half of them carry a stored run, so this has to be at least twice the
+/// detectors' minimum series length before anything is judged at all, and
+/// comfortably more than that before every seeded step keeps a whole regime behind
+/// it. Eight regimes' worth of history clears both with margin.
+const COMMITS: usize = 8 * REGIME_POINTS;
+
+/// Feature-branch commits the scenario seeds. Branch mode judges only the tip
+/// commit's state, so the branch itself stays short.
+const BRANCH_COMMITS: usize = 2;
+
+// The scenario sizes above are derived from the gates rather than picked for
+// speed. Bind them to the gates here, so moving a gate fails the build instead
+// of silently leaving this suite judging a history the detectors abstain on.
+const _: () = assert!(
+    REGIME_POINTS == MIN_REGIME,
+    "each side of a seeded step must hold a full regime"
+);
+const _: () = assert!(
+    COMMITS >= 4 * MIN_SERIES_POINTS,
+    "half the seeded commits carry a run, and the fixture keeps twice the points a \
+     judged series needs"
+);
+const _: () = assert!(
+    COMMITS >= 4 * DRIFT_MIN_POINTS,
+    "the fixture keeps twice the run-carrying commits the seeded drift needs to be seen"
+);
+const _: () = assert!(
+    MAX_BRANCH_BASE_COMMITS >= MIN_SERIES_POINTS,
+    "branch mode's base window must be able to hold the levels its test demands"
+);
+
+/// Dirty (uncommitted-tree) snapshots the scenario seeds on the feature tip.
+const DIRTY_RUNS: usize = 1;
+
+/// Discriminant sets the scenario seeds: every supported engine crossed with the
+/// target triples it can run on.
+const DISCRIMINANT_SETS: usize = 20;
+
+/// Discriminant sets whose blessing re-baselines the blessable family, so that
+/// family's seeded step raises no finding there.
+const BLESSED_SETS: usize = 3;
+
+/// Series every mode compares: one per benchmark per discriminant set.
+const SERIES: usize = BENCHMARKS * DISCRIMINANT_SETS;
+
+/// History-mode regressions the seeded shapes produce: the drifting family and the
+/// mid-history step family in every set, plus the blessable step family in every
+/// set no blessing re-baselined.
+const HISTORY_REGRESSIONS: usize = 2 * DISCRIMINANT_SETS + (DISCRIMINANT_SETS - BLESSED_SETS);
+
+/// Branch-mode regressions explicitly seeded by elevating two benchmarks in every set.
+const SEEDED_BRANCH_REGRESSIONS: usize = 2 * DISCRIMINANT_SETS;
+
+/// Branch-mode regressions the default scenario can judge.
+///
+/// The recent-step family has too few selector-lane observations in its new regime,
+/// so the detector honestly leaves it unjudged. The smooth-drift family remains
+/// judgeable because the branch exceeds the complete observed base range.
+const DEFAULT_BRANCH_REGRESSIONS: usize = DISCRIMINANT_SETS;
+
+/// Branch-mode improvements: the feature branch only ever raises values, so there
+/// are none.
+const BRANCH_IMPROVEMENTS: usize = 0;
+
+/// The mode keywords the report can carry, in the order a [`BTreeMap`] holds them.
+const MODES: [&str; 2] = ["branch", "history"];
+
+/// The deterministic columns of one mode's row in the report table.
+///
+/// The timing columns (duration, cpu, cpu%) are deliberately absent: they measure
+/// real elapsed time and so reproduce nowhere, while these counts are a pure
+/// function of the seed and the scenario sizes.
+#[derive(Debug, Eq, PartialEq)]
+struct ModeRow {
+    /// Stored objects the mode loaded.
+    objects: usize,
+    /// Distinct series the mode compared.
+    series: usize,
+    /// Regressions the mode flagged.
+    regressions: usize,
+    /// Improvements the mode flagged, or `None` for a mode that does not report them.
+    improvements: Option<usize>,
+    /// Whether any finding survived.
+    notable: bool,
+}
+
+/// Runs the stress binary with the given arguments plus the default scenario,
 /// returning the captured output.
 fn run_stress(extra: &[&str]) -> Output {
+    let benchmarks = BENCHMARKS.to_string();
+    let commits = COMMITS.to_string();
+    let branch_commits = BRANCH_COMMITS.to_string();
+    let dirty_runs = DIRTY_RUNS.to_string();
+
     let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-bench-history-stress"));
-    command.args([
-        "--storage",
-        "local",
-        "--benchmarks",
-        "4",
-        "--commits",
-        "5",
-        "--branch-commits",
-        "2",
-        "--dirty-runs",
-        "1",
-    ]);
+    command.args(["--storage", "local"]);
+    for (flag, value) in [
+        ("--benchmarks", benchmarks.as_str()),
+        ("--commits", commits.as_str()),
+        ("--branch-commits", branch_commits.as_str()),
+        ("--dirty-runs", dirty_runs.as_str()),
+    ] {
+        if !extra.contains(&flag) {
+            command.args([flag, value]);
+        }
+    }
     command.args(extra);
     command
         .output()
         .expect("the stress binary should be runnable")
 }
 
-/// Extracts the per-mode report rows, keyed by mode, with the non-deterministic
-/// timing columns (duration, cpu, cpu%) dropped so the deterministic columns
-/// (objects, series, regressions, improvements, notable) can be compared across
-/// runs.
-fn deterministic_columns(stdout: &str) -> BTreeMap<String, Vec<String>> {
-    stdout
-        .lines()
-        .filter_map(|line| {
-            let columns: Vec<&str> = line.split_whitespace().collect();
-            if columns.len() == 9 && ["history", "branch"].contains(&columns[0]) {
-                // Skip columns 1-3 (duration, cpu, cpu%); keep the rest.
-                let kept = columns[4..].iter().map(|c| (*c).to_owned()).collect();
-                Some((columns[0].to_owned(), kept))
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-#[test]
-#[cfg_attr(miri, ignore)]
-fn runs_all_modes_and_reports_a_table() {
-    let output = run_stress(&[]);
+/// Runs the stress binary and returns its stdout, failing the test if it did not
+/// exit cleanly.
+fn successful_stress(extra: &[&str]) -> String {
+    let output = run_stress(extra);
     assert!(
         output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// Extracts the per-mode report rows, keyed by mode.
+fn mode_rows(stdout: &str) -> BTreeMap<String, ModeRow> {
+    stdout.lines().filter_map(parse_mode_row).collect()
+}
+
+/// Parses one row of the per-mode report table, or `None` when `line` is anything
+/// else (a summary line, a table header, or a rule).
+fn parse_mode_row(line: &str) -> Option<(String, ModeRow)> {
+    let columns: Vec<&str> = line.split_whitespace().collect();
+    let [
+        mode,
+        _duration,
+        _cpu,
+        _cpu_percent,
+        objects,
+        series,
+        regressions,
+        improvements,
+        notable,
+    ] = columns.as_slice()
+    else {
+        return None;
+    };
+    if !MODES.contains(mode) {
+        return None;
+    }
+    let notable = match *notable {
+        "yes" => true,
+        "no" => false,
+        _ => return None,
+    };
+    let improvements = match *improvements {
+        "n/a" => None,
+        count => Some(count.parse().ok()?),
+    };
+    Some((
+        (*mode).to_owned(),
+        ModeRow {
+            objects: objects.parse().ok()?,
+            series: series.parse().ok()?,
+            regressions: regressions.parse().ok()?,
+            improvements,
+            notable,
+        },
+    ))
+}
+
+/// A count from the report's summary block, named by the `label` that introduces it
+/// (including the trailing colon).
+fn summary_count(stdout: &str, label: &str) -> usize {
+    stdout
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(label))
+        .and_then(|count| count.trim().parse().ok())
+        .unwrap_or_else(|| panic!("the summary states `{label}`: {stdout}"))
+}
+
+/// The number of files anywhere beneath `dir`.
+fn stored_files(dir: &Path) -> usize {
+    fs::read_dir(dir)
+        .expect("the seeded partition is a readable directory")
+        .map(|entry| {
+            let path = entry.expect("a seeded directory entry is readable").path();
+            if path.is_dir() {
+                stored_files(&path)
+            } else {
+                1
+            }
+        })
+        .sum()
+}
+
+/// The row the seeded dataset must produce for `mode`, given the `main` commits
+/// that carry a run.
+///
+/// Every mode loads one object per run-carrying `main` commit in every discriminant
+/// set; branch mode additionally loads the feature branch's commits and the dirty
+/// snapshots on its tip.
+fn expected_row(mode: &str, with_runs: usize) -> ModeRow {
+    match mode {
+        "history" => ModeRow {
+            objects: with_runs * DISCRIMINANT_SETS,
+            series: SERIES,
+            regressions: HISTORY_REGRESSIONS,
+            improvements: None,
+            notable: true,
+        },
+        "branch" => ModeRow {
+            objects: (with_runs + BRANCH_COMMITS + DIRTY_RUNS) * DISCRIMINANT_SETS,
+            series: SERIES,
+            regressions: DEFAULT_BRANCH_REGRESSIONS,
+            improvements: Some(BRANCH_IMPROVEMENTS),
+            notable: true,
+        },
+        other => panic!("the report only ever carries the seeded modes, not {other}"),
+    }
+}
+
+/// Asserts that `stdout` reports exactly `modes`, each carrying exactly the
+/// findings the seeded dataset is built to produce, over a history that clears the
+/// detectors' evidence gates.
+fn assert_seeded_ground_truth(stdout: &str, modes: &[&str]) {
+    // Read the harness's own account of how much evidence it seeded, rather than
+    // restating the seeding rule here, so the gate assertions are made against what
+    // actually landed in storage.
+    let with_runs = summary_count(stdout, "with a run:");
+
+    // The sizing rests on roughly half the commits carrying a run; if the seeding
+    // rule ever populated a smaller share, the derivation behind `COMMITS` would no
+    // longer hold even though the count below might still clear the floor.
     assert!(
-        stdout.contains("cargo-bench-history stress results"),
-        "{stdout}"
+        with_runs * 2 >= COMMITS,
+        "roughly half the seeded commits must carry a run: {stdout}"
     );
 
-    let rows = deterministic_columns(&stdout);
-    assert!(rows.contains_key("history"), "{stdout}");
-    assert!(rows.contains_key("branch"), "{stdout}");
+    // Everything else here is downstream of the history being long enough to judge
+    // at all: below this floor every detector abstains and every count is a
+    // vacuous zero.
+    assert!(
+        with_runs >= MIN_SERIES_POINTS,
+        "the seeded history must clear the detectors' evidence floor: {stdout}"
+    );
 
-    // Every mode loaded a non-zero number of objects and series, proving the
-    // replicated key layout is what analyze actually reads.
-    for (mode, columns) in &rows {
-        let objects: u64 = columns[0].parse().expect("objects column is numeric");
-        let series: u64 = columns[1].parse().expect("series column is numeric");
-        assert!(objects > 0, "mode {mode} loaded no objects: {stdout}");
-        assert!(series > 0, "mode {mode} compared no series: {stdout}");
+    let rows = mode_rows(stdout);
+    assert_eq!(
+        rows.keys().map(String::as_str).collect::<Vec<_>>(),
+        modes,
+        "{stdout}"
+    );
+    for mode in modes {
+        let row = rows
+            .get(*mode)
+            .unwrap_or_else(|| panic!("the {mode} row was just matched: {stdout}"));
+        assert_eq!(*row, expected_row(mode, with_runs), "mode {mode}: {stdout}");
     }
 }
 
 #[test]
 #[cfg_attr(miri, ignore)]
-fn measures_only_the_requested_modes() {
-    let output = run_stress(&["--modes", "history"]);
+fn runs_all_modes_and_reports_a_table() {
+    let stdout = successful_stress(&[]);
     assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
+        stdout.contains("cargo-bench-history stress results"),
+        "{stdout}"
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let rows = deterministic_columns(&stdout);
-    assert_eq!(rows.keys().cloned().collect::<Vec<_>>(), vec!["history"]);
+
+    // Every mode loaded the objects the replicated key layout put on disk, compared
+    // every seeded series, and reached exactly the findings the dataset encodes.
+    assert_seeded_ground_truth(&stdout, &MODES);
 }
 
 #[test]
 #[cfg_attr(miri, ignore)]
-fn finds_a_branch_regression() {
-    // The synthetic dataset is shaped to elevate a subset of benchmarks on the
-    // feature branch, so branch mode must surface regressions.
-    let output = run_stress(&["--modes", "branch"]);
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let rows = deterministic_columns(&stdout);
-    let branch = &rows["branch"];
-    let regressions: u64 = branch[2].parse().expect("regressions column is numeric");
-    assert!(regressions > 0, "expected branch regressions: {stdout}");
+fn measures_only_the_requested_modes() {
+    let stdout = successful_stress(&["--modes", "history"]);
+    assert_seeded_ground_truth(&stdout, &["history"]);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn finds_the_seeded_branch_regressions() {
+    // The synthetic dataset elevates a subset of benchmarks on the feature branch
+    // and nothing else, so branch mode must surface exactly those as regressions
+    // and no improvements at all.
+    let stdout = successful_stress(&["--modes", "branch"]);
+    assert_seeded_ground_truth(&stdout, &["branch"]);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn branch_mode_handles_more_base_evidence_than_its_window_cap() {
+    let commits = MAX_BRANCH_BASE_COMMITS.saturating_mul(2).to_string();
+    let stdout = successful_stress(&["--commits", &commits, "--modes", "branch"]);
+    let with_runs = summary_count(&stdout, "with a run:");
+
+    assert!(
+        with_runs >= MAX_BRANCH_BASE_COMMITS,
+        "the scenario must reach the production branch window cap: {stdout}"
+    );
+    let rows = mode_rows(&stdout);
+    let branch = rows
+        .get("branch")
+        .expect("the requested branch analysis must be reported");
+    assert_eq!(
+        branch.objects,
+        (with_runs + BRANCH_COMMITS + DIRTY_RUNS) * DISCRIMINANT_SETS,
+        "{stdout}"
+    );
+    assert_eq!(branch.series, SERIES, "{stdout}");
+    assert_eq!(branch.regressions, SEEDED_BRANCH_REGRESSIONS, "{stdout}");
+    assert_eq!(branch.improvements, Some(BRANCH_IMPROVEMENTS), "{stdout}");
+    assert!(branch.notable, "{stdout}");
 }
 
 #[test]
 #[cfg_attr(miri, ignore)]
 fn is_deterministic_across_runs() {
-    let first = run_stress(&["--repeat", "2", "--seed", "424242"]);
-    let second = run_stress(&["--repeat", "2", "--seed", "424242"]);
-    assert!(first.status.success() && second.status.success());
+    let first = successful_stress(&["--repeat", "2", "--seed", "424242"]);
+    let second = successful_stress(&["--repeat", "2", "--seed", "424242"]);
 
-    let first_rows = deterministic_columns(&String::from_utf8_lossy(&first.stdout));
-    let second_rows = deterministic_columns(&String::from_utf8_lossy(&second.stdout));
     assert_eq!(
-        first_rows, second_rows,
+        mode_rows(&first),
+        mode_rows(&second),
         "identical seed and sizing must reproduce identical findings"
     );
+
+    // The seeded shapes are relative to each series' own base value, so a different
+    // seed moves every value but changes no finding: the same ground truth must
+    // hold here as under the default seed. Without this the comparison above would
+    // be satisfied by two equally empty reports.
+    assert_seeded_ground_truth(&first, &MODES);
 }
 
 #[test]
@@ -134,19 +379,17 @@ fn keeps_seeded_data_under_the_versioned_prefix_when_asked() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let path = dir.path().to_str().expect("temp path is valid UTF-8");
 
-    let output = run_stress(&["--keep", "--dir", path, "--modes", "history"]);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let stdout = successful_stress(&["--keep", "--dir", path, "--modes", "history"]);
 
-    // Local storage writes the same versioned key layout the backends use; the
-    // project partition must exist on disk after a --keep run.
+    // Local storage writes the same versioned key layout the backends use, so every
+    // object the run reports having seeded must be a file under the project
+    // partition — a partition that merely exists would leave the measured analysis
+    // reading nothing.
     let project_dir = dir.path().join("v1").join("stress");
-    assert!(
-        project_dir.is_dir(),
-        "expected seeded data under {}",
+    assert_eq!(
+        stored_files(&project_dir),
+        summary_count(&stdout, "objects seeded:"),
+        "expected every seeded object under {}",
         project_dir.display()
     );
 }

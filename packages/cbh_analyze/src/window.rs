@@ -21,7 +21,12 @@ use crate::{AnalyzeError, InvalidWindowValueError, WindowOutOfRangeError};
 /// checkout with no admitted dirty run still analyzes as history. The merge-base
 /// is always known here: an undeterminable one is a hard error in `resolve_history`,
 /// never a silent fallback to this mode.
-pub(crate) fn auto_mode(tip_is_merge_base: bool, dirty_tip_run_present: bool) -> AnalysisMode {
+///
+/// Public so the book's generated mode table is derived from this rule rather than
+/// transcribed beside it: the appendix documents mode selection, and a table nothing
+/// checks would drift the first time the rule changed.
+#[must_use]
+pub fn auto_mode(tip_is_merge_base: bool, dirty_tip_run_present: bool) -> AnalysisMode {
     if tip_is_merge_base && !dirty_tip_run_present {
         AnalysisMode::History
     } else {

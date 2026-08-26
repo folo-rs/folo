@@ -84,14 +84,25 @@ Consequences worth planning for:
   [`bless`](../commands/bless.md) the affected series at it —
   `cargo bench-history bless --all --context <commit>` accepts the whole workspace in one step — so
   history-mode analysis reads the step as an accepted baseline change rather than a regression.
-- **Pull-request comparisons re-baseline on their own.** Blessing re-baselines history-mode
-  analysis only; a pull request is judged directly against the recent base-branch points, which
-  blessing does not adjust. Until enough aligned points accumulate on the base branch, a pull
-  request that touches an affected wall-clock benchmark can show a one-time-shift-sized move in its
-  performance comment. Those findings are advisory rather than merge gates and clear themselves
-  once the aligned baseline fills in.
+  The step *will* be reported until you do: noticing that the measured level moved is the
+  detector's job, and recognizing that a build-flag change caused it is yours.
+- **Pull-request comparisons honor the same boundary.** Branch mode keeps the blessed commit and
+  excludes every earlier base observation. Until enough aligned points accumulate at or after the
+  blessing, an affected wall-clock series is reported as unjudged rather than compared across the
+  configuration change.
 - **Backfilling across the change mixes the two configurations.** `RUSTFLAGS` reaches
   [`backfill`](../commands/backfill.md) from the invocation, not from the commit being measured,
   so backfilling commits that predate the alignment change measures them *with* alignment while
-  their originally-collected neighbours lack it. Keep backfilled ranges recent enough to stay
+  their originally-collected neighbors lack it. Keep backfilled ranges recent enough to stay
   inside one configuration, or expect an extra step where the two meet.
+
+## The repetition count is part of the protocol
+
+[`collect --best-of N`](../commands/collect.md) is a second source of movement with no source
+change, and this one is self-inflicted. It runs the suite `N` times and stores the per-metric
+**minimum**, and the expected value of a minimum falls as the sample count rises — so raising
+or lowering `N` can shift the recorded level of the whole suite at once. The shift reaches a
+metric only in proportion to that metric's noise: a deterministic one does not move, and any
+single observation may come out unchanged. Pick a value per machine
+and project and keep it fixed. Every stored run records the count it was reduced from, so the
+protocol behind a value stays recoverable from the stored data.

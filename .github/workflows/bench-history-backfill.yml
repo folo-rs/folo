@@ -84,12 +84,15 @@ jobs:
         # Full history: the tool benchmarks each historical commit in a throwaway `git worktree`,
         # and the range selection walks `main`'s first-parent history by date. Neither works on the
         # default shallow clone.
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Setup environment
+        # Backfill runs the Callgrind measurement engine, which drives Valgrind.
         uses: ./.github/actions/setup-environment
+        with:
+          install-valgrind: "true"
 
       # cargo-bench-history self-federates with GitHub OIDC: given the managed identity's client id
       # and tenant - plus the ACTIONS_ID_TOKEN_* values GitHub injects because of id-token: write -
@@ -112,10 +115,11 @@ jobs:
           Import-Module ./scripts/bench-history/AzureFederation.psm1 -Force
           Set-AzureFederationEnv -ConstantsPath constants.env -EnvFilePath $env:GITHUB_ENV | Out-Null
 
-      # The recipe resolves the commit range, measures only the commits this runner's own machine
-      # partition is missing, and appends them under the runner's real hardware fingerprint (no fixed
-      # machine key). BACKFILL_TO_COMMIT is empty on a scheduled run; it is passed through the
-      # environment so an untrusted dispatch input is never spliced into a shell command line here.
+      # The recipe resolves the commit range, measures all Cargo features for only the commits this
+      # runner's own machine partition is missing, and appends them under the runner's real hardware
+      # fingerprint (no fixed machine key). BACKFILL_TO_COMMIT is empty on a scheduled run; it is
+      # passed through the environment so an untrusted dispatch input is never spliced into a shell
+      # command line here.
       - name: Backfill benchmark history
         shell: pwsh
         env:

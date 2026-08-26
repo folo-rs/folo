@@ -151,8 +151,8 @@ packages/<pkg>/benches/<crate>_<name>_cg.rs
 ```
 
 The `_cg.rs` filename suffix is required for `just bench-cg` discovery. Use
-a crate-name prefix on the file name (e.g. `nm_observe_cg.rs`,
-`fast_time_clock_cg.rs`) so the resulting bench binary does not collide
+a crate-name prefix on the file name (e.g. `nm_performance_cg.rs`,
+`fast_time_timestamp_performance_cg.rs`) so the resulting bench binary does not collide
 with binaries from other crates in the shared `target/.../deps/` directory.
 
 ### Cargo.toml
@@ -176,13 +176,36 @@ Windows and macOS resolution entirely — without it, `cargo-machete` and
 do not support `cfg` attributes. Instead, the bench file gates its own
 contents (see next section).
 
+### Callgrind configuration contract
+
+Every `_cg.rs` target uses the same baseline Callgrind configuration:
+
+* Pass `--branch-sim=yes` to enable the branch predictor simulation. Callgrind
+  disables this simulation by default.
+* Pass `--collect-bus=yes` to count global bus events (`Ge`), which represent
+  atomic instructions. Callgrind disables this counter by default.
+* Format both `CallgrindMetrics::Default` and `CallgrindMetrics::BranchSim`.
+  The default metrics provide instruction, cache, and estimated-cycle data;
+  the branch metrics make changes in control-flow behavior visible. The default
+  metrics include `Ge` when bus-event collection is enabled.
+
+Keep this baseline identical across packages so benchmark output remains
+comparable and repository tooling can treat every target uniformly. Additional
+Callgrind arguments are permitted only when a package has a documented
+measurement requirement that the baseline does not satisfy. Document each
+exception both here and beside the benchmark configuration.
+
+Global bus events are instruction counts, not measurements of contention or
+memory-ordering cost.
+
 ### Bench file template
 
 The Linux-only Gungraun code lives in a single `mod linux { ... }` block so
 the file does not need a per-line `#[cfg(target_os = "linux")]` annotation.
-A top-level `gungraun::main!(...)` invocation references the groups via the
+A top-level `main!(...)` invocation references the groups via the
 `pub use linux::*;` re-export so the macro's simple-identifier requirement
-on group names is satisfied.
+on group names is satisfied. Keep the inline module after all direct
+root-level items, including imports, re-exports, and the `main!` invocation.
 
 ```rust
 //! Callgrind benchmarks for <operation> in the `<pkg>` package.
@@ -192,7 +215,7 @@ on group names is satisfied.
 
 #![allow(
     missing_docs,
-    reason = "no need for API documentation on benchmark code"
+    reason = "No need for API documentation in benchmark code"
 )]
 #![cfg_attr(
     target_os = "linux",
@@ -200,8 +223,8 @@ on group names is satisfied.
         clippy::exit,
         clippy::missing_docs_in_private_items,
         unused_qualifications,
-        reason = "Triggered by Gungraun macro expansion. Tracking issue drafts live at \
-          c:/Source/gungraun-lint-issues/ pending upstream filing."
+        reason = "These lints originate in Gungraun macro expansion and cannot be addressed in \
+          this benchmark."
     )
 )]
 
@@ -211,6 +234,22 @@ fn main() {
 }
 
 #[cfg(target_os = "linux")]
+pub use linux::*;
+
+#[cfg(target_os = "linux")]
+use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig, main};
+
+#[cfg(target_os = "linux")]
+main!(
+    config = LibraryBenchmarkConfig::default().tool(
+        Callgrind::default()
+            .args(["--branch-sim=yes", "--collect-bus=yes"])
+            .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
+    ),
+    library_benchmark_groups = my_group
+);
+
+#[cfg(target_os = "linux")]
 mod linux {
     use std::hint::black_box;
 
@@ -218,22 +257,6 @@ mod linux {
 
     // ... benchmark fns and library_benchmark_group! calls ...
 }
-
-#[cfg(target_os = "linux")]
-pub use linux::{my_group};
-
-#[cfg(target_os = "linux")]
-use gungraun::{Callgrind, CallgrindMetrics, LibraryBenchmarkConfig};
-
-#[cfg(target_os = "linux")]
-gungraun::main!(
-    config = LibraryBenchmarkConfig::default().tool(
-        Callgrind::default()
-            .args(["--branch-sim=yes"])
-            .format([CallgrindMetrics::Default, CallgrindMetrics::BranchSim]),
-    );
-    library_benchmark_groups = my_group
-);
 ```
 
 A complete worked example lives in
@@ -245,20 +268,23 @@ The three lints in the `expect` block are spuriously triggered by Gungraun's
 macro expansions and cannot be fixed in our code. We use `expect` rather
 than `allow` so that when an upstream fix lands (in either Gungraun or
 Clippy), our build immediately surfaces the now-unfulfilled expectation and
-we can remove the suppression. Draft GitHub issues for each suppressed lint
-live in `c:/Source/gungraun-lint-issues/<lint>/{gungraun.md, clippy.md}`,
-to be filed upstream once they have been polished.
+we can remove the suppression. This chapter is the repository source for that
+rationale, and the worked example above is the reference implementation.
 
 ### Gungraun syntax gotchas
 
 These are easy to get wrong on the first attempt:
 
-* `gungraun::main!()` generates its own `fn main()`. Invoke it at file
+* `main!()` generates its own `fn main()`. Invoke it at file
   scope, **not** inside `mod linux`. Inside the module the generated
   function would not become the binary entry point.
-* `gungraun::main!(library_benchmark_groups = ...)` accepts simple
+* Import Gungraun's `main` macro at file scope with the other configuration
+  types.
+* `main!(library_benchmark_groups = ...)` accepts simple
   identifiers only, not paths. Re-export the groups at file scope with
-  `pub use linux::{group_a, group_b};` so the identifiers resolve.
+  `pub use linux::*;` so the identifiers resolve. Separate
+  top-level `main!` arguments with commas. A single group is one identifier;
+  multiple groups use a bracketed list.
 * `library_benchmark_group!` requires `benchmarks = [a, b, c]` square
   brackets around the list of benchmark function names.
 * `#[bench::id(...)]` and `#[benches::sizes(args = [...], setup = ...)]`
@@ -325,10 +351,10 @@ Then:
 just bench-cg
 
 # Scope to a single package.
-just package=nm bench-cg
+just package=nm_impl bench-cg
 
 # Run a specific bench file by name.
-just bench-cg nm_observe_cg
+just bench-cg nm_performance_cg
 ```
 
 On Windows, run the recipe via WSL from the repo root (WSL inherits the
@@ -461,6 +487,10 @@ or a genuine bug. The pattern is:
 
 We deliberately do **not** treat the trip wire as a CI gate today, because
 performance trade-offs require human evaluation, not automated rejection.
+
+Do not define some manual in-repo regression gates. Any regression detection
+and evaluation is custom judgement to be applied in a specific situation.
+There is no standard way to know if a regression is real.
 
 ## Baselines
 

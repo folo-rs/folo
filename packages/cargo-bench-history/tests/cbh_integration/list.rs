@@ -48,17 +48,22 @@ async fn list_previews_the_analyzed_data_set() {
 
     let message = workspace.drive_json(&["list", "runs"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&message).unwrap();
-    assert_eq!(parsed["totals"]["runs"], 6, "{message}");
+    let expected_runs = u64::try_from(MIN_SERIES_POINTS).unwrap();
+    assert_eq!(parsed["totals"]["runs"], expected_runs, "{message}");
     assert_eq!(parsed["totals"]["series"], 1, "{message}");
     assert_eq!(parsed["totals"]["discriminant_sets"], 1, "{message}");
 
     let sets = parsed["sets"].as_array().unwrap();
     assert_eq!(sets.len(), 1, "{message}");
     assert_eq!(sets[0]["engine"], "callgrind", "{message}");
-    assert_eq!(sets[0]["runs"], 6, "{message}");
+    assert_eq!(sets[0]["runs"], expected_runs, "{message}");
 
     let commits = sets[0]["commits"].as_array().unwrap();
-    assert_eq!(commits.len(), 6, "one run per commit: {message}");
+    assert_eq!(
+        commits.len(),
+        MIN_SERIES_POINTS,
+        "one run per commit: {message}"
+    );
     // The seeded commits, oldest first by topology, each one clean run.
     assert!(
         commits
@@ -68,12 +73,12 @@ async fn list_previews_the_analyzed_data_set() {
     );
 }
 
-/// `list` mirrors `analyze`'s facet selection: with two comparable sets present, a
+/// `list` mirrors `analyze`'s discriminant selection: with two comparable sets present, a
 /// `--target-triple` filter previews only the matching set, exactly as `analyze`
 /// would scope it.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
-async fn list_facet_selection_mirrors_analyze() {
+async fn list_discriminant_selection_mirrors_analyze() {
     let workspace = Workspace::repo(&storage_only_config());
     workspace.commit_dated("2024-01-01", "c1");
     workspace.seed_callgrind_in(

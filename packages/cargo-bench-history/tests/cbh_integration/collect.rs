@@ -22,9 +22,9 @@ async fn collect_callgrind_end_to_end_stores_results() {
     // git repository, so the commit resolves to the `unknown` fallback and the clean
     // tree yields `clean.json`.
     //
-    // The host-hardware provenance is recorded on every stored run (write-only); its
-    // fingerprint is the machine key the run partitions under, a 16-char lowercase
-    // hex digest of the probed factors.
+    // The host-hardware provenance is recorded on the runs `collect` stores
+    // (write-only); its fingerprint is the machine key the run partitions under, a
+    // 16-char lowercase hex digest of the probed factors.
     let triple = &set.context.toolchain.target_triple;
     let machine = set
         .context
@@ -41,6 +41,9 @@ async fn collect_callgrind_end_to_end_stores_results() {
 
     assert_eq!(set.schema_version, SCHEMA_VERSION);
     assert_eq!(set.context.tool_version, TOOL_VERSION);
+    // The measurement protocol travels with the run: a default collection runs the
+    // suite once, so the stored values are the minimum of a single sample.
+    assert_eq!(set.context.best_of.unwrap().get(), 1);
 
     assert!(machine.processors >= 1, "{machine:?}");
     assert!(machine.memory_regions >= 1, "{machine:?}");
@@ -374,23 +377,25 @@ async fn collect_alloc_tracker_stores_results() {
     assert_eq!(count.kind.as_unit(), "count");
 }
 
-/// An `all_the_time` run stores processor time in a machine-fingerprinted
-/// partition, and `--machine-key` overrides the fingerprint.
+/// An `all_the_time` run stores processor time in a machine-fingerprinted partition.
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn collect_all_the_time_is_partitioned_by_machine_key() {
     let workspace =
         Workspace::new(&storage_only_config()).with_bench(&["--all-the-time", "read_cell=20"]);
 
-    workspace
-        .drive(&["collect", "--machine-key", "ci-pool-b"])
-        .await
-        .unwrap();
+    workspace.drive(&["collect"]).await.unwrap();
 
     let (key, set) = workspace.single_object();
     let triple = &set.context.toolchain.target_triple;
+    let machine = &set
+        .context
+        .machine
+        .as_ref()
+        .expect("collect records host-hardware provenance")
+        .fingerprint;
     assert!(
-        key.contains(&format!("/all_the_time/{triple}/ci-pool-b/")),
+        key.contains(&format!("/all_the_time/{triple}/{machine}/")),
         "{key}"
     );
     assert_eq!(set.results.len(), 1);
@@ -454,28 +459,6 @@ async fn collect_alloc_tracker_records_dispersion() {
     assert_eq!(count.std_dev, None);
 }
 
-/// `--machine-key` overrides the machine fingerprint in a Criterion partition.
-#[tokio::test]
-#[cfg_attr(miri, ignore)]
-async fn collect_criterion_honors_machine_key_override() {
-    let workspace =
-        Workspace::new(&storage_only_config()).with_bench(&["--criterion", "grp|capture|now=9"]);
-
-    // `collect` auto-detects the triple; this test asserts the machine-key override
-    // segment, so derive the triple from the stored context for a portable key.
-    workspace
-        .drive(&["collect", "--machine-key", "ci-pool-a"])
-        .await
-        .unwrap();
-
-    let (key, set) = workspace.single_object();
-    let triple = &set.context.toolchain.target_triple;
-    assert!(
-        key.contains(&format!("/criterion/{triple}/ci-pool-a/")),
-        "{key}"
-    );
-}
-
 /// A Criterion run collects every harvested case into one result set, keeping
 /// distinct group/function/value identities as separate records.
 #[tokio::test]
@@ -525,7 +508,7 @@ async fn collect_then_analyze_round_trips_a_sanitizing_project_id() {
     let bench = callgrind_arg("grp", CALLGRIND_SINGLE);
     let workspace = Workspace::clean_repo(&storage_only_config_with_id("my proj/sub"))
         .with_bench(&["--callgrind", &bench])
-        .with_real_auto_facets();
+        .with_real_auto_discriminants();
 
     workspace.drive(&["collect"]).await.unwrap();
 
@@ -560,12 +543,9 @@ async fn collect_then_analyze_round_trips_a_sanitizing_project_id() {
 async fn collect_then_analyze_preserves_unusual_identity_characters() {
     let workspace = Workspace::clean_repo(&storage_only_config())
         .with_bench(&["--criterion", "time.capture|mide tiempo|tamaño 4=18.5"])
-        .with_real_auto_facets();
+        .with_real_auto_discriminants();
 
-    workspace
-        .drive(&["collect", "--machine-key", "pool"])
-        .await
-        .unwrap();
+    workspace.drive(&["collect"]).await.unwrap();
 
     let objects = workspace.stored_objects();
     assert_eq!(objects.len(), 1, "{objects:?}");
@@ -574,8 +554,16 @@ async fn collect_then_analyze_preserves_unusual_identity_characters() {
     // identity's spaces or non-ASCII letters leak into it. `collect` auto-detects the
     // triple, so derive it from the stored context for a portable prefix.
     let triple = &set.context.toolchain.target_triple;
+    let machine = &set
+        .context
+        .machine
+        .as_ref()
+        .expect("collect records host-hardware provenance")
+        .fingerprint;
     assert!(
-        key.starts_with(&format!("v1/testproj/objects/criterion/{triple}/pool/")),
+        key.starts_with(&format!(
+            "v1/testproj/objects/criterion/{triple}/{machine}/"
+        )),
         "{key}"
     );
     assert!(
@@ -590,9 +578,7 @@ async fn collect_then_analyze_preserves_unusual_identity_characters() {
 
     // The reader reconstructs the series, proving the unusual identity is a stable
     // series key end to end.
-    let report = workspace
-        .drive_json(&["analyze", "--machine-key", "pool"])
-        .await;
+    let report = workspace.drive_json(&["analyze"]).await;
     let parsed: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(parsed["runs"], 1, "{report}");
     assert_eq!(parsed["series"], 1, "{report}");

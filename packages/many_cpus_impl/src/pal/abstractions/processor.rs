@@ -8,6 +8,8 @@ pub(crate) trait AbstractProcessor: Clone + Debug + Display + Send {
     fn efficiency_class(&self) -> EfficiencyClass;
     fn relative_speed(&self) -> RelativeSpeed;
 
-    /// The model name of the processor, or `None` when the platform does not report one.
+    /// Best-effort model of the processor, or `None` when the platform identifies it in no way
+    /// we recognize. Implementations may assemble this from whatever identifying information the
+    /// platform offers, so it carries no guaranteed format.
     fn model(&self) -> Option<&str>;
 }

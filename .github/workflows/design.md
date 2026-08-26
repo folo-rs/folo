@@ -63,6 +63,30 @@ and Miri passes, `clippy-release`, `careful`) carries a whole-job `github.event_
 Ubuntu-dropping `miri-x64`) selects its platform list with a `fromJSON` conditional matrix
 keyed on the same event. Both reduce to "the full set on push, the pruned set on a PR".
 
+## External type surface
+
+A dedicated job fails validation when a library exposes an external type — one that is
+neither a standard-library type nor defined by the crate itself (a type from another crate,
+first-party or not) — in its public API without that type being listed in the crate's
+allow-list. The intent is to catch *accidental* additions to the external surface (a leaked
+dependency type, a forgotten `pub`), not to prohibit external types outright; an intentional
+exposure is admitted by adding it to the crate's
+`[package.metadata.cargo_check_external_types]`. The user-facing principle and the allow-list
+mechanics live in `docs/external-types.md`.
+
+The check drives nightly rustdoc's unstable JSON output, which pins an exact schema version,
+so it runs on its own pinned nightly (`RUST_NIGHTLY_EXTERNAL_TYPES`) held separate from the
+general nightly and bumped only in lockstep with the tool. Like the other package jobs it is
+delta-scoped, iterating the affected crates one manifest at a time and leaving the tool's
+`--skip-unsupported` flag to pass over crates it cannot document (proc-macro and binary-only).
+Because a public API can differ by platform through cfg-gated items, the surface is verified
+on both a Unix and a Windows target, so a Windows-only or Unix-only leak cannot slip through.
+Two targets suffice because platform-variant public surface here is gated only on
+`cfg(windows)`/`cfg(unix)` (Linux stands in for macOS) or hidden behind a platform abstraction
+layer with an identical public facade, and nothing public is `target_arch`-gated;
+`docs/external-types.md` records the assumption and when the matrix must grow.
+
+
 ## Concurrency
 
 Commit-driven and PR-driven workflows cancel superseded runs, keyed on the ref, so pushing
@@ -200,6 +224,12 @@ ARM and macOS are only nominally supported — they must pass tests (see the Pla
 section) but their performance is not tracked — so benchmarking them would spend runner
 minutes producing series no one reads.
 
+Every selected package is benchmarked with all Cargo features enabled. This makes Cargo include
+benchmark targets guarded by `required-features` and builds each selected package in its
+all-features configuration. The push, PR, re-collection and nightly-backfill paths all obtain this
+feature selection from the same command builder, so a stored point is never made incomparable by
+one path using narrower feature coverage.
+
 Even with those defences, a single day of a badly degraded runner can still leave one commit's
 data point corrupted. Collection is therefore also manually re-runnable against a specific
 historical commit: a `workflow_dispatch` with a `recollect_commit_id` re-measures just that
@@ -301,6 +331,13 @@ result is never mistaken for the whole suite being clean when only the impacted 
 measured. A run *failure* surfaces only as the red check, with no issue and no failure comment,
 because a PR failure is a transient condition, not the persistent one the issue lifecycle
 tracks.
+
+An all-clear is claimed only when the analysis actually reached a verdict. The detector judges
+a series only when it carries enough evidence to tell a change from noise, so "no findings" and
+"nothing was assessed" are different states that would otherwise render identically. The comment
+resolves them from the **series census** the report carries: a run that judged nothing, and a
+placeholder report from a total collect failure, both say so plainly instead of showing a
+checkmark. Silence is only reassuring when it is silence *about something*.
 
 Because a full benchmark run takes hours and a new push *cancels* the in-flight one (see
 Concurrency), on a PR's first push there is nothing on display yet, and on later pushes the comment
@@ -407,6 +444,18 @@ deviating from it to hand-pick a minimal per-job toolchain costs more in mainten
 the mostly-cached setup time it would save. Toolchain versions are defined once in
 `constants.env` and `rust-toolchain.toml` and reach the workflows through the `just`
 commands they call, so no version is ever duplicated into a workflow file.
+
+The one deliberate deviation from "one identical environment everywhere" is Valgrind. It is
+installed only where a job actually executes Callgrind measurements — the benchmark
+collection jobs, the test jobs that smoke-run every bench target, and the cache warmup that
+primes their caches — because Valgrind pulls in glibc debug symbols that are pinned to the
+exact glibc build on the runner image. Installing it in every job would put every Ubuntu job
+in the repository at the mercy of routine Ubuntu security updates, so the opt-in confines
+that exposure to the jobs that cannot work without it. For the same reason the APT package
+cache is scoped to the runner image version, so it rolls forward with the image instead of
+serving debug symbols that no longer match — and because that scoping makes every image roll
+resolve packages afresh, the APT index is refreshed on every Linux job rather than trusted as
+the image left it.
 
 ## Transient-fault handling
 

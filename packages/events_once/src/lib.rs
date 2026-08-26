@@ -33,21 +33,21 @@
 //! ```rust
 //! use events_once::Event;
 //!
-//! #[tokio::main]
-//! async fn main() {
-//!     let (sender, receiver) = Event::<String>::boxed();
+//! # #[tokio::main]
+//! # async fn main() {
+//! let (sender, receiver) = Event::<String>::boxed();
 //!
-//!     sender.send("Hello, world!".to_string());
+//! sender.send("Hello, world!".to_string());
 //!
-//!     // Events are thread-safe by default and their endpoints
-//!     // may be freely moved to other threads or tasks.
-//!     tokio::spawn(async move {
-//!         let message = receiver.await.unwrap();
-//!         println!("{message}");
-//!     })
-//!     .await
-//!     .unwrap();
-//! }
+//! // Events are thread-safe by default and their endpoints
+//! // may be freely moved to other threads or tasks.
+//! tokio::spawn(async move {
+//!     let message = receiver.await.unwrap();
+//!     println!("{message}");
+//! })
+//! .await
+//! .unwrap();
+//! # }
 //! ```
 //!
 //! # Reusing event resources
@@ -64,31 +64,32 @@
 //! ```rust
 //! use events_once::EventPool;
 //!
-//! #[tokio::main]
-//! async fn main() {
-//!     const CUSTOMER_COUNT: usize = 5;
+//! # #[tokio::main]
+//! # async fn main() {
+//! const CUSTOMER_COUNT: usize = 5;
 //!
-//!     let pool = EventPool::<String>::new();
+//! let pool = EventPool::<String>::new();
 //!
-//!     for customer_index in 0..CUSTOMER_COUNT {
-//!         let (tx, rx) = pool.rent();
+//! for customer_index in 0..CUSTOMER_COUNT {
+//!     let (tx, rx) = pool.rent();
 //!
-//!         tx.send(format!(
-//!             "Customer {customer_index} has entered the building"
-//!         ));
+//!     tx.send(format!(
+//!         "Customer {customer_index} has entered the building"
+//!     ));
 //!
-//!         let message = rx.await.unwrap();
-//!         println!("{message}");
+//!     let message = rx.await.unwrap();
+//!     println!("{message}");
 //!
-//!         // Both endpoints are dropped now and the event is returned to the pool.
-//!         // The next iteration will reuse the resources associated with the first event.
-//!     }
+//!     // Both endpoints are dropped now and the event is returned to the pool.
+//!     // The next iteration will reuse the resources associated with the first event.
 //! }
+//! # }
 //! ```
 //!
-//! The `EventPool<T>` itself acts as a handle to a resource pool. You can cheaply clone it;
-//! each clone from the same family will share the same pool of resources. It does not need
-//! to outlive the rented events.
+//! The `EventPool<T>` itself acts as a handle to a resource pool. You can cheaply clone it; the
+//! original value and every clone descended from it share the same pool of resources, while an
+//! independently constructed `EventPool<T>` owns a separate pool. It does not need to outlive
+//! the rented events.
 //!
 //! # Reusing events with unknown payload types
 //!
@@ -104,13 +105,13 @@
 //!
 //! use events_once::EventLake;
 //!
-//! #[tokio::main]
-//! async fn main() {
-//!     let lake = EventLake::new();
+//! # #[tokio::main]
+//! # async fn main() {
+//! let lake = EventLake::new();
 //!
-//!     deliver_payload("Hello from the lake!", &lake).await;
-//!     deliver_payload(42, &lake).await;
-//! }
+//! deliver_payload("Hello from the lake!", &lake).await;
+//! deliver_payload(42, &lake).await;
+//! # }
 //!
 //! async fn deliver_payload<T>(payload: T, lake: &EventLake)
 //! where
@@ -124,45 +125,47 @@
 //! }
 //! ```
 //!
-//! The `EventLake` itself acts as a handle to a resource pool. You can cheaply clone it;
-//! each clone from the same family will share the same pool of resources. It does not need
-//! to outlive the rented events.
+//! The `EventLake` itself acts as a handle to a resource pool. You can cheaply clone it; the
+//! original value and every clone descended from it share the same pool of resources, while an
+//! independently constructed `EventLake` owns a separate pool. It does not need to outlive the
+//! rented events.
 //!
 //! # Manual event or lake lifetime management
 //!
-//! In high-performance scenarios, it can be beneficial to reduce the lifetime management overhead
-//! associated with [`EventPool<T>`] and [`EventLake`] by providing guarantees about their lifetime
-//! via unsafe code.
-//!
-//! If you are willing to guarantee that the pool/lake outlives all rented events, you can use the
-//! [`RawEventPool<T>`] and [`RawEventLake`] types instead. These types offer an equivalent API as
-//! their safe counterparts but come with lower overhead, as well as requiring unsafe code to rent
-//! events.
+//! [`EventPool<T>`] and [`EventLake`] keep their backing resources alive with reference
+//! counting, so they may be freely cloned and never need to outlive the events rented from
+//! them. If you can independently guarantee that the pool/lake outlives every event rented
+//! from it, you can use the [`RawEventPool<T>`] and [`RawEventLake`] types instead. These types
+//! offer an equivalent API to their safe counterparts, but trade the reference-counted lifetime
+//! guarantee for a caller-provided unsafe promise: renting an event requires unsafe code, and
+//! the pool/lake must not be dropped while any event rented from it still exists.
 //!
 //! ```rust
 //! use events_once::RawEventPool;
 //!
-//! #[tokio::main]
-//! async fn main() {
-//!     const CUSTOMER_COUNT: usize = 5;
+//! # #[tokio::main]
+//! # async fn main() {
+//! const CUSTOMER_COUNT: usize = 5;
 //!
-//!     let pool = Box::pin(RawEventPool::<String>::new());
+//! let pool = Box::pin(RawEventPool::<String>::new());
 //!
-//!     for customer_index in 0..CUSTOMER_COUNT {
-//!         // SAFETY: We promise the pool outlives both the returned endpoints.
-//!         let (tx, rx) = unsafe { pool.as_ref().rent() };
+//! for customer_index in 0..CUSTOMER_COUNT {
+//!     // SAFETY: `pool` is pinned once before the loop and stays alive for every iteration.
+//!     // Each iteration consumes `tx` via `send` and drives `rx` via `await` to completion
+//!     // before the next `rent()` call, so no endpoint can outlive the pool.
+//!     let (tx, rx) = unsafe { pool.as_ref().rent() };
 //!
-//!         tx.send(format!(
-//!             "Customer {customer_index} has entered the building"
-//!         ));
+//!     tx.send(format!(
+//!         "Customer {customer_index} has entered the building"
+//!     ));
 //!
-//!         let message = rx.await.unwrap();
-//!         println!("{message}");
+//!     let message = rx.await.unwrap();
+//!     println!("{message}");
 //!
-//!         // Both endpoints are dropped now and the event is returned to the pool.
-//!         // The next iteration will reuse the resources associated with the first event.
-//!     }
+//!     // Both endpoints are dropped now and the event is returned to the pool.
+//!     // The next iteration will reuse the resources associated with the first event.
 //! }
+//! # }
 //! ```
 //!
 //! Unlike the regular [`EventPool`] and [`EventLake`], the raw variants do not implement `Clone`
@@ -177,15 +180,15 @@
 //! ```rust
 //! use events_once::LocalEvent;
 //!
-//! #[tokio::main(flavor = "current_thread")]
-//! async fn main() {
-//!     let (sender, receiver) = LocalEvent::<String>::boxed();
+//! # #[tokio::main(flavor = "current_thread")]
+//! # async fn main() {
+//! let (sender, receiver) = LocalEvent::<String>::boxed();
 //!
-//!     sender.send("Hello, world!".to_string());
+//! sender.send("Hello, world!".to_string());
 //!
-//!     let message = receiver.await.unwrap();
-//!     println!("{message}");
-//! }
+//! let message = receiver.await.unwrap();
+//! println!("{message}");
+//! # }
 //! ```
 //!
 //! # Embedding events in objects
@@ -204,8 +207,6 @@
 //! for the lifetime of the endpoints.
 //!
 //! ```
-//! use std::time::Duration;
-//!
 //! use events_once::{EmbeddedEvent, Event};
 //! use pin_project::pin_project;
 //!
@@ -219,41 +220,45 @@
 //!     ready_to_use: EmbeddedEvent<()>,
 //! }
 //!
-//! #[tokio::main]
-//! async fn main() {
-//!     let mut account = Box::pin(Account {
-//!         id: 42,
-//!         ready_to_use: EmbeddedEvent::new(),
-//!     });
+//! # use tokio::task::JoinError;
+//! #
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), JoinError> {
+//! let mut account = Box::pin(Account {
+//!     id: 42,
+//!     ready_to_use: EmbeddedEvent::new(),
+//! });
 //!
-//!     // SAFETY: We promise that `account` lives longer than any of the endpoints returned.
-//!     let (ready_tx, ready_rx) =
-//!         unsafe { Event::placed(account.as_mut().project().ready_to_use) };
+//! let ready_to_use = account.as_mut().project().ready_to_use;
 //!
-//!     let prepare_account_task = tokio::spawn(async move {
-//!         // Simulate some asynchronous work to prepare the account.
-//!         tokio::time::sleep(Duration::from_millis(10)).await;
+//! // SAFETY: `Box::pin` gives `account` stable, exclusive heap storage that outlives this
+//! // scope. `ready_to_use` is freshly initialized above and passed to `Event::placed` only
+//! // once here. The task that owns `account` awaits `ready_rx` to completion before dropping
+//! // `account`, and `ready_tx` is consumed by `send` in the other task before that receive can
+//! // complete, so both endpoints finish before `account` is dropped.
+//! let (ready_tx, ready_rx) = unsafe { Event::placed(ready_to_use) };
 //!
-//!         // Signal that the account is ready to use.
-//!         ready_tx.send(());
-//!     });
+//! let prepare_account_task = tokio::spawn(async move {
+//!     // Signal that the account is ready to use.
+//!     ready_tx.send(());
+//! });
 //!
-//!     let use_account_task = tokio::spawn(async move {
-//!         // Wait until the account is ready to use.
-//!         ready_rx.await.unwrap();
+//! let use_account_task = tokio::spawn(async move {
+//!     // Wait until the account is ready to use.
+//!     ready_rx.await.unwrap();
 //!
-//!         println!("Account {} is ready to use!", account.id);
-//!     });
+//!     println!("Account {} is ready to use!", account.id);
+//! });
 //!
-//!     // The safety promise we made requires that we keep the account alive for
-//!     // at least as long as the events endpoints are alive. As we are now dropping
-//!     // the account, we must also ensure that the two tasks using the endpoints
-//!     // have completed first. We do not care about the result here, we just want
-//!     // to ensure that they are done, so they could not possibly be referencing the
-//!     // embedded event once we drop the account.
-//!     drop(prepare_account_task.await);
-//!     drop(use_account_task.await);
-//! }
+//! // The safety promise we made requires that we keep the account alive for at least as long
+//! // as the event endpoints are alive. Joining both tasks together ensures they have both
+//! // completed before `account` is dropped, and propagating each result turns a task panic or
+//! // cancellation into a failure of this example instead of silently discarding it.
+//! let (prepare_result, use_result) = tokio::join!(prepare_account_task, use_account_task);
+//! prepare_result?;
+//! use_result?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! # Synchronous polling
@@ -268,8 +273,7 @@
 //! ```rust
 //! use events_once::{Event, IntoValueError};
 //!
-//! #[tokio::main]
-//! async fn main() {
+//! fn main() {
 //!     let (sender, receiver) = Event::<String>::boxed();
 //!
 //!     // into_value() is designed for synchronous scenarios where you do not want to wait but
@@ -290,18 +294,23 @@
 //!
 //! [1]: https://crates.io/crates/oneshot
 
+#[cfg(debug_assertions)]
 mod backtrace;
 mod constants;
 mod core;
 mod disconnected;
 mod lake;
 mod pool;
+#[cfg(test)]
+mod reentrancy;
 
 pub use core::*;
 
 #[cfg(debug_assertions)]
 pub(crate) use backtrace::*;
-pub(crate) use constants::NEVER_POISONED;
+pub(crate) use constants::{EVENT_COUNT_FITS_IN_USIZE, NEVER_POISONED};
 pub use disconnected::*;
 pub use lake::*;
 pub use pool::*;
+#[cfg(test)]
+pub(crate) use reentrancy::*;

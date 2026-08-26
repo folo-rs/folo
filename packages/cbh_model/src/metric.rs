@@ -21,9 +21,10 @@ pub struct Metric {
     /// few percent from run to run, so this is always a point estimate rather than
     /// an exact truth.
     pub value: f64,
-    /// Estimated standard deviation of the measurement, when the engine reports
-    /// one (Criterion, `all_the_time`, `alloc_tracker`). Absent for engines that
-    /// report no dispersion (Callgrind).
+    /// Estimated standard deviation of the measurement, when the engine reports one.
+    ///
+    /// Stored runs keep this value for schema fidelity, but analysis uses
+    /// confidence intervals and between-run scatter instead of this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub std_dev: Option<f64>,
     /// Lower bound of the value's confidence interval, when reported.
@@ -150,26 +151,6 @@ impl MetricKind {
             | Self::AllocationCount => "count",
         }
     }
-
-    /// Whether this kind moves in discrete integer steps with no dispersion.
-    ///
-    /// The Callgrind counts (instructions and branches) are exact integers for a
-    /// fixed binary and input, reported without a confidence interval, so they can
-    /// only move by whole units. At a small baseline a single-unit run-to-run
-    /// difference is therefore a large *percentage* move that a purely relative gate
-    /// would misread as a regression, so the analysis holds these kinds to an
-    /// absolute-magnitude floor in addition to the relative one. The time and
-    /// `alloc_tracker` metrics are continuous slopes carrying dispersion, so they are
-    /// not quantized and only the relative gate applies.
-    #[must_use]
-    pub fn is_quantized(self) -> bool {
-        match self {
-            Self::InstructionCount | Self::ConditionalBranches | Self::IndirectBranches => true,
-            Self::WallTime | Self::ProcessorTime | Self::AllocatedBytes | Self::AllocationCount => {
-                false
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -214,20 +195,8 @@ mod tests {
         assert_eq!(MetricKind::AllocatedBytes.as_unit(), "bytes");
         assert_eq!(MetricKind::InstructionCount.as_unit(), "count");
         assert_eq!(MetricKind::ConditionalBranches.as_unit(), "count");
-    }
-
-    #[test]
-    fn only_the_callgrind_counts_are_quantized() {
-        // The Callgrind integer counts move in whole units with no dispersion, so
-        // they earn the absolute-magnitude floor; the continuous, dispersion-bearing
-        // metrics do not.
-        assert!(MetricKind::InstructionCount.is_quantized());
-        assert!(MetricKind::ConditionalBranches.is_quantized());
-        assert!(MetricKind::IndirectBranches.is_quantized());
-        assert!(!MetricKind::WallTime.is_quantized());
-        assert!(!MetricKind::ProcessorTime.is_quantized());
-        assert!(!MetricKind::AllocatedBytes.is_quantized());
-        assert!(!MetricKind::AllocationCount.is_quantized());
+        assert_eq!(MetricKind::IndirectBranches.as_unit(), "count");
+        assert_eq!(MetricKind::AllocationCount.as_unit(), "count");
     }
 
     #[test]

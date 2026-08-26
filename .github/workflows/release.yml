@@ -50,7 +50,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         # Full history so release-plz can resolve tags/commits; default persist-credentials
         # (true) leaves the token in git config so release-plz can push the release tags.
         with:
@@ -58,6 +58,15 @@ jobs:
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
+
+      - name: Verify checked-in lockfile is consistent
+        shell: pwsh
+        # Fail the release BEFORE any crate is published or tag is created if the committed
+        # Cargo.lock disagrees with the manifests. The workspace shares one lockfile, so a single
+        # stale entry (e.g. a manifest bumped without its lock entry) would otherwise sail through
+        # publish and then fail every `build-binaries` job under `--locked`. Verify-only: it reads
+        # the checked-in lockfile and aborts, it never regenerates it. See docs/release-automation.md.
+        run: just verify-lockfile
 
       - name: Compose CI release-plz config (enable git releases for binary crates)
         shell: pwsh
@@ -97,7 +106,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -131,7 +140,7 @@ jobs:
 
     steps:
       - name: Checkout released tag
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         # Build the exact released code, not the branch tip.
         with:
           ref: refs/tags/${{ matrix.tag }}

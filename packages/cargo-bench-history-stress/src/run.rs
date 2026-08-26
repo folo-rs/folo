@@ -145,17 +145,20 @@ async fn run_harness() -> Result<(), Error> {
             results.push(result);
         }
 
-        report::print(
-            &target.label(),
-            scenario,
-            sets.len(),
-            stats,
-            Phases {
-                repo: repo_elapsed,
-                seed: seed_elapsed,
-                upload: upload_elapsed,
-            },
-            &results,
+        println!(
+            "{}",
+            report::render(
+                &target.label(),
+                scenario,
+                sets.len(),
+                stats,
+                Phases {
+                    repo: repo_elapsed,
+                    seed: seed_elapsed,
+                    upload: upload_elapsed,
+                },
+                &results,
+            )
         );
         Ok::<(), Error>(())
     }

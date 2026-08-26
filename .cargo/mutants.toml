@@ -21,4 +21,23 @@ exclude_re = [
     "impl Debug",
     "impl fmt::Debug",
     "impl std::fmt::Debug",
+
+    # Equivalent mutants: significance gates compare a p-value against a fixed alpha
+    # with strict `<`. Turning `<` into `<=` only changes behaviour when the p-value
+    # equals alpha exactly, which never occurs for the statistics that feed these gates
+    # (Mann-Whitney U and Mann-Kendall). No
+    # production series lands a p-value bit-for-bit on 0.05, so the boundary direction is
+    # unobservable. Catching it would require a fixture engineered to sit exactly on alpha - a
+    # non-production scenario the deleted AnalysisConfig used to fabricate by setting alpha to the
+    # fixture's own p-value. Only the `<=` variant is excluded; the `==` and `>` mutants at the
+    # same sites remain caught. Ref: docs/testing.md, "Mutation testing coverage and skipping
+    # mutations".
+    'packages/cbh_detect/src/detect/(findings|branch)\.rs:\d+:\d+: replace < with <= in (evaluate_change_point|evaluate_drift|regime_is_stable)',
+
+    # Equivalent mutants: these short-circuits only avoid redundant family work.
+    # An empty member bitset reaches the immediately following empty-iterator return;
+    # a smaller family is rejected by `family_is_better`; and a repeated member bitset
+    # reconstructs the same family and is rejected there too. Replacing either `||`
+    # with `&&` changes the amount of work but not the selected family.
+    'packages/cbh_detect/src/detect/branch\.rs:\d+:\d+: replace \|\| with && in consider_family_seed',
 ]

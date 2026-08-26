@@ -2,13 +2,13 @@ name: PR Benchmark history
 
 # Per-push benchmark feedback on pull requests: the PR counterpart of bench-history.yml. Where that
 # workflow collects on every push to `main` and files a rolling ISSUE about long-range trends, this
-# one runs on every push to a PR branch, benchmarks only the packages the PR impacts (the changed
-# packages plus their dependents, cargo-delta scoped), compares the PR head's benchmark level
-# against `main` in BRANCH mode, and posts/updates a rolling PR COMMENT with the findings. PR-head
-# points are written into the SAME prod Azure store as the `main` baseline (branch-mode comparison
-# reads a single backend); PR commits are
-# topologically branch-unique, so they never enter `main`'s history analysis. Findings are advisory:
-# they never gate the merge, only inform. See .github/workflows/design.md (Benchmark history).
+# one runs on every push to a PR branch, benchmarks all Cargo features of only the packages the PR
+# impacts (the changed packages plus their dependents, cargo-delta scoped), compares the PR head's
+# benchmark level against `main` in BRANCH mode, and posts/updates a rolling PR COMMENT with the
+# findings. PR-head points are written into the SAME prod Azure store as the `main` baseline
+# (branch-mode comparison reads a single backend); PR commits are topologically branch-unique, so
+# they never enter `main`'s history analysis. Findings are advisory: they never gate the merge, only
+# inform. See .github/workflows/design.md (Benchmark history).
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -56,7 +56,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         # Full history so cargo-delta can diff against origin/main in a throwaway worktree (the
         # merge ref the pull_request event checks out is fine for the diff; only collect/analyze
         # need the real head SHA for branch-mode topology).
@@ -140,7 +140,7 @@ jobs:
       - name: Checkout repository
         # Default shallow checkout is enough: the commits-behind count is computed server-side by the
         # compare API, so no local history is walked here - only the module needs to be on disk.
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Signal the new run on the rolling PR comment
         shell: pwsh
@@ -226,7 +226,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         # Check out the REAL PR head commit with FULL history, NOT the default pull_request merge ref
         # (refs/pull/N/merge): that merge commit's first parent is `main`, which would corrupt
         # branch-mode topology. A full clone is required (not shallow) because cargo-bench-history
@@ -237,7 +237,10 @@ jobs:
           fetch-depth: 0
 
       - name: Setup environment
+        # Collection runs the Callgrind measurement engine, which drives Valgrind.
         uses: ./.github/actions/setup-environment
+        with:
+          install-valgrind: "true"
 
       # Reused unchanged from bench-history.yml: export the prod identity's client id and tenant
       # under the standard names cargo-bench-history reads, then let the tool mint OIDC assertions on
@@ -277,7 +280,7 @@ jobs:
       # leg's key together (one file per platform). if-no-files-found: error catches a broken
       # key-write step loudly rather than silently dropping a key from the analysis.
       - name: Upload runner machine key
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pr-bench-history-machine-key-${{ matrix.platform }}
           path: ${{ runner.temp }}/machine-key.txt
@@ -315,7 +318,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         # Same real-head-SHA + full-history checkout as collect: branch mode walks the head's
         # first-parent ancestry and needs origin/main (from fetch-depth 0) for the merge-base.
         with:
@@ -357,7 +360,7 @@ jobs:
       # store keeps a slightly-stale mirror harmless. The path MUST match the `--cache` directory the
       # gh-analyze-pr-bench-history recipe passes (`<scratch>/cache`).
       - name: Restore benchmark-history read-through cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ steps.scratch.outputs.dir }}/cache
           key: bench-history-cache-pr-${{ github.run_id }}
@@ -379,7 +382,7 @@ jobs:
       # artifact to the current attempt and 404s ("workflow run not found") on any older-attempt
       # artifact, leaving `analyze` impossible to green without re-running the whole matrix.
       - name: Download collected machine keys
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: pr-bench-history-machine-key-*
           path: ${{ steps.scratch.outputs.dir }}/machine-keys
@@ -420,7 +423,7 @@ jobs:
       - name: Upload full benchmark reports
         id: full_reports
         if: steps.notable.outputs.value == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pr-bench-history-full-report
           path: |
@@ -429,95 +432,22 @@ jobs:
           if-no-files-found: error
 
       # Compose the rolling comment body (always, into comment-body.md): when notable, the condensed
-      # summary + a link to the full-report artifact + a "how to read" footer; otherwise a compact
-      # "no regressions" state. The hidden marker is embedded so the module finds this same comment
-      # on the next push. The comment is advisory - it explicitly is NOT a merge gate.
+      # summary + a link to the full-report artifact + a "how to read" footer; otherwise the verdict the
+      # report's own coverage state warrants, so an all-clear is claimed only when series were actually
+      # judged. The hidden marker is embedded so the module finds this same comment on the next push. The
+      # comment is advisory - it explicitly is NOT a merge gate. The composition lives in
+      # BenchHistoryComment.psm1 behind the gh-compose-pr-bench-comment recipe, so it is Pester-tested and
+      # runnable locally rather than being inline YAML no test can reach.
       - name: Compose PR benchmark comment
         shell: pwsh
         env:
           MARKER: ${{ env.PR_COMMENT_MARKER }}
           COMMIT_MARKER_PREFIX: ${{ env.PR_COMMIT_MARKER_PREFIX }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          NOTABLE: ${{ steps.notable.outputs.value }}
           REPORT_ARTIFACT_URL: ${{ steps.full_reports.outputs.artifact-url }}
           SCRATCH_DIR: ${{ steps.scratch.outputs.dir }}
           PACKAGES: ${{ needs.delta.outputs.packages }}
-        run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-
-          $header = "### Performance impact (vs ``main``)"
-
-          # Record which commit these numbers describe: a human-visible line and, embedded once in the
-          # body via the shared prefix, a hidden full-SHA marker the mark-stale job parses on the next
-          # push to measure how far behind HEAD the results have fallen. Both derive from the same head
-          # SHA in this one step, so they cannot drift. The visible line prints the FULL 40-char SHA
-          # bare (no backticks): GitHub autolinks a bare commit SHA to the commit and renders it
-          # abbreviated, so we get a click-through link and short display for free - manually truncating
-          # into a code span would only throw both away.
-          $analyzedLine = "**Analyzed commit:** $env:HEAD_SHA"
-
-          # Disclose the collection scope so a reader never mistakes a clean result for the whole
-          # suite: PR runs benchmark ONLY the packages this PR impacts - the changed packages plus
-          # their dependents (cargo-delta scoped) - and the analyze ghost filter narrows the report
-          # to exactly that set. List them explicitly.
-          $packages = @(($env:PACKAGES -split '\s+') | Where-Object { $_ } | Sort-Object -Unique)
-          $renderedPackages = ($packages | ForEach-Object { '`' + $_ + '`' }) -join ', '
-          $packageNoun = if ($packages.Count -eq 1) { 'package' } else { 'packages' }
-          $scope = "**Collection scope:** benchmarked the $($packages.Count) $packageNoun impacted by this PR ($renderedPackages)."
-          if ($env:NOTABLE -eq 'true') {
-            $summary = (Get-Content (Join-Path $env:SCRATCH_DIR 'summary.md') -Raw).TrimEnd()
-            $fullReport = "**Full report:** the complete Markdown and JSON reports are attached to this workflow run. [Download the full report bundle]($env:REPORT_ARTIFACT_URL)."
-            # Literal Markdown: the single-quoted here-string keeps the inline-code backticks verbatim.
-            $footer = @'
-          **How to read this**
-
-          This compares this PR's benchmark level against `main` (branch mode). It is **advisory** - it never blocks the merge; the workflow's check status reflects run success, not whether there are findings. Shared runners are noisy, so treat small movements with suspicion (`--best-of 3` and the false-discovery filter already suppress most noise).
-
-          To investigate a finding, copy its benchmark id and metric and run:
-
-          `cargo bench-history examine --benchmark <id> --metric <name>`
-
-          If a regression is an intentional tradeoff, bless it on the base commit; if it is a defect, fix it. Improvements are shown for information only.
-          '@
-            $parts = @(
-              $header
-              ''
-              $scope
-              ''
-              $analyzedLine
-              ''
-              $summary
-              ''
-              '---'
-              ''
-              $fullReport
-              ''
-              '---'
-              ''
-              $footer
-            )
-          } else {
-            $parts = @(
-              $header
-              ''
-              $scope
-              ''
-              $analyzedLine
-              ''
-              '✅ No benchmark regressions detected against `main`.'
-              ''
-              'This check is advisory and never blocks the merge. It refreshes on every push.'
-            )
-          }
-
-          # Prepend the hidden dedup marker (so the comment module finds and updates this same comment
-          # on the next push instead of posting a duplicate) and the hidden analyzed-commit marker (so
-          # mark-stale can recover the measured SHA); both are HTML comments, invisible when rendered.
-          $commitMarker = "$env:COMMIT_MARKER_PREFIX$env:HEAD_SHA -->"
-          $body = @($env:MARKER, $commitMarker, '') + $parts
-          Set-Content -Path (Join-Path $env:SCRATCH_DIR 'comment-body.md') -Value ($body -join "`n") -Encoding utf8
+        run: just gh-compose-pr-bench-comment "$env:SCRATCH_DIR" "$env:MARKER" "$env:COMMIT_MARKER_PREFIX" "$env:HEAD_SHA" "$env:PACKAGES" "$env:REPORT_ARTIFACT_URL"
 
       # Defense-in-depth against publishing already-stale results. The comment composed above describes
       # the head SHA frozen when this run was triggered, but a benchmark run takes hours. A newer push
@@ -573,7 +503,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Remove stale rolling comment if present
         shell: pwsh

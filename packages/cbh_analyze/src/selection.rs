@@ -6,15 +6,15 @@ use cbh_command::{
 };
 
 /// The data-set selection parameters shared by the query commands: which stored
-/// objects to consider (facets + `--since`) and how to resolve the git timeline
+/// objects to consider (discriminant filters + `--since`) and how to resolve the git timeline
 /// (`--repo` is resolved by the caller into the [`GitHistory`] adapter;
 /// `--context` / `--base` / `--no-dirty` steer the topology query). Analyze's
 /// benchmark-prefix scope is deliberately *not* here: it filters which series are
 /// built, not which runs load.
 ///
-/// Each facet (`engine` / `target_triple` / `machine_key`) carries the raw,
-/// repeatable command-line values; [`resolve_facets`] turns them into
-/// [`FacetFilter`]s, applying the current-machine auto-detect default and the
+/// Each discriminant filter (`engine` / `target_triple` / `machine_key`) carries the raw,
+/// repeatable command-line values; [`resolve_discriminants`] turns them into
+/// [`DiscriminantFilter`]s, applying the current-machine auto-detect default and the
 /// `all` keyword.
 pub(crate) struct Selection<'a> {
     pub(crate) context: Option<&'a str>,
@@ -79,9 +79,10 @@ impl<'a> Selection<'a> {
         }
     }
 
-    /// Selection facets for `bless`. Only the discriminant facets (and `base`)
-    /// matter: a blessing always acts at the current commit, so it has no
-    /// `context` / `since` / topology selectors.
+    /// Discriminant filters for `bless`.
+    ///
+    /// Only the filters and `base` matter: a blessing always acts at the current
+    /// commit, so it has no `context` / `since` / topology selectors.
     pub(crate) fn from_bless(options: &'a BlessOptions) -> Self {
         Self {
             context: None,
@@ -94,7 +95,7 @@ impl<'a> Selection<'a> {
         }
     }
 
-    /// Selection facets for `unbless`. Mirrors [`from_bless`](Self::from_bless).
+    /// Discriminant filters for `unbless`. Mirrors [`from_bless`](Self::from_bless).
     pub(crate) fn from_unbless(options: &'a UnblessOptions) -> Self {
         Self {
             context: None,

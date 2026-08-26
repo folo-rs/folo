@@ -15,6 +15,11 @@ full design.
     * `just prepare-release` also warns if a crate has never been published — such a
       crate's first release must be done manually (see "First publish" below).
     * Verify pending changes manually and adjust as necessary.
+    * If you hand-edit any version number, run `cargo update --workspace` (or `cargo build`) so
+      the checked-in `Cargo.lock` matches, then `just verify-lockfile` to confirm. The workspace
+      shares one lockfile, so a version bumped without its lock entry updated breaks every
+      `--locked` build — the release `publish` job runs the same `verify-lockfile` gate and
+      aborts before publishing or tagging if the lock is stale.
     * Commit as "chore: prepare for release" when satisfied with the changes.
     * `git push`
 1. On push to `main`, `release.yml` publishes the bumped crates to crates.io (via

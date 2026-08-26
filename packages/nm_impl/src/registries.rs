@@ -1,29 +1,43 @@
 use std::cell::RefCell;
 use std::marker::PhantomData;
-use std::sync::{Arc, LazyLock, RwLock};
+use std::rc::Rc;
+use std::sync::{Arc, LazyLock, PoisonError, RwLock};
 use std::thread::{self, ThreadId};
 
-use crate::{ERR_POISONED_LOCK, EventName, HashMap, ObservationBagSync, Observations};
+use crate::{EventName, HashMap, ObservationBagSync};
 
+// Registry code validates every expected failure before mutation and never invokes caller code
+// while holding a write guard, so a poisoned registry lock indicates an internal invariant failure.
+const ERR_POISONED_REGISTRY_LOCK: &str = concat!(
+    "registry write paths release their locks before propagating expected panics, so the lock ",
+    "cannot be poisoned during supported operation"
+);
+
+/// Maps each event name to the shared observation storage that records that event within one
+/// scope. A scope is either a single thread's live registrations or one compatible slice of the
+/// process-wide archive.
 type ObservationBagMap = HashMap<EventName, Arc<ObservationBagSync>>;
 
 /// Keeps track of the events registered on a single thread, for local access only.
 ///
 /// Facilitates event registration and unregistration from the global registry. An
 /// event is automatically registered globally for as long as it is registered locally.
+///
+/// The global registry is the sole owner of the per-thread observation bags. This type holds
+/// no observation storage of its own; it only forwards registrations to the global registry
+/// and, on drop, unregisters this thread from it.
 #[derive(Debug)]
 pub(crate) struct LocalEventRegistry<'g> {
-    observation_bags: RefCell<ObservationBagMap>,
     thread_id: ThreadId,
     global_registry: &'g GlobalEventRegistry,
 
-    _single_threaded: PhantomData<*const ()>,
+    // Registration lifetime is tied to the thread identified above.
+    _single_threaded: PhantomData<Rc<()>>,
 }
 
 impl<'g> LocalEventRegistry<'g> {
     pub(crate) fn new(global_registry: &'g GlobalEventRegistry) -> Self {
         Self {
-            observation_bags: RefCell::new(HashMap::default()),
             thread_id: thread::current().id(),
             global_registry,
             _single_threaded: PhantomData,
@@ -31,35 +45,27 @@ impl<'g> LocalEventRegistry<'g> {
     }
 
     pub(crate) fn register(&self, name: EventName, observation_bag: Arc<ObservationBagSync>) {
-        let previous = self
-            .observation_bags
-            .borrow_mut()
-            .insert(name.clone(), Arc::clone(&observation_bag));
-
-        assert!(
-            previous.is_none(),
-            "duplicate registration of event {name} in local registry for thread {:?}",
-            self.thread_id
-        );
-
         self.global_registry
             .register(self.thread_id, name, observation_bag);
     }
 
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn event_count(&self) -> usize {
-        self.observation_bags.borrow().len()
+        // The global registry is authoritative for this thread's registrations.
+        self.global_registry.thread_event_count(self.thread_id)
     }
 }
 
 impl Drop for LocalEventRegistry<'_> {
     fn drop(&mut self) {
-        self.global_registry
-            .unregister_thread(thread::current().id());
+        // Use the stored thread id rather than the dropping thread's id: the registry is owned
+        // by the thread that created it, and the stored id is the one it registered under.
+        self.global_registry.unregister_thread(self.thread_id);
     }
 }
 
-/// Keeps track fo the events registered on all threads.
+/// Keeps track of the events registered on all threads.
 ///
 /// This is typically used for collecting and reporting on metrics data from the entire process.
 #[derive(Debug)]
@@ -67,17 +73,22 @@ pub(crate) struct GlobalEventRegistry {
     state: RwLock<GlobalObservationBagsState>,
 }
 
+/// The mutable state of the global registry, guarded as a unit by the registry's lock.
+///
+/// It holds the live observation bags of every currently registered thread, keyed by thread,
+/// plus archives of observation bags inherited from threads that have terminated. Each archive
+/// contains at most one configuration for an event name, allowing incompatible configurations to
+/// remain visible to report collection without making thread-local destruction panic.
 #[derive(Debug)]
 struct GlobalObservationBagsState {
-    // We essentially add a thread level to the hierarchy maintained by each local registry.
-    // The data in here is duplicated - it is not merely a list of existing registries, since
-    // those are single-threaded data types and we want to minimize any locking we perform.
+    // Each thread has a separate map so registration and teardown can locate its entries without
+    // placing synchronization on the observation hot path.
     thread_observation_bags: HashMap<ThreadId, RwLock<ObservationBagMap>>,
 
-    // If a thread is unregistered, its observations are merged into this map. It is normal
-    // for thread to go away but this should not cause data loss - observations made on
-    // past threads remain valid until end of the process.
-    archived_observation_bags: ObservationBagMap,
+    // If a thread is unregistered, its observations are merged into a compatible archive.
+    // It is normal for threads to go away, but this must not cause data loss: observations
+    // made on past threads remain valid until the end of the process.
+    archived_observation_bags: Vec<ObservationBagMap>,
 }
 
 impl GlobalEventRegistry {
@@ -85,7 +96,7 @@ impl GlobalEventRegistry {
         Self {
             state: RwLock::new(GlobalObservationBagsState {
                 thread_observation_bags: HashMap::default(),
-                archived_observation_bags: HashMap::default(),
+                archived_observation_bags: Vec::new(),
             }),
         }
     }
@@ -96,46 +107,71 @@ impl GlobalEventRegistry {
         name: EventName,
         observation_bag: Arc<ObservationBagSync>,
     ) {
-        // Most likely the thread is already registered, so we try being optimistic.
-        {
-            let state = self.state.read().expect(ERR_POISONED_LOCK);
+        // A duplicate registration must panic, but the panic must happen after every lock guard
+        // has been released: a panic unwinding through a held guard would poison the global lock
+        // and, worse, could strike while another thread's teardown is already unwinding. The
+        // registration itself is transactional: `register_core` leaves the map untouched when it
+        // reports a duplicate, so no partial state escapes.
+        let outcome = 'register: {
+            // Most likely the thread is already registered, so we try being optimistic.
+            {
+                let state = self.state.read().expect(ERR_POISONED_REGISTRY_LOCK);
 
-            if let Some(thread_bags) = state.thread_observation_bags.get(&thread_id) {
-                register_core(thread_id, name, observation_bag, thread_bags);
-                return;
+                if let Some(thread_bags) = state.thread_observation_bags.get(&thread_id) {
+                    break 'register register_core(name, observation_bag, thread_bags);
+                }
             }
+
+            // The thread was not registered. Let us register it now.
+            let mut state = self.state.write().expect(ERR_POISONED_REGISTRY_LOCK);
+
+            let thread_bags = state
+                .thread_observation_bags
+                .entry(thread_id)
+                .or_insert_with(|| RwLock::new(HashMap::default()));
+
+            register_core(name, observation_bag, thread_bags)
+        };
+
+        if let Err(name) = outcome {
+            panic!("duplicate registration of event {name} for thread {thread_id:?}");
         }
-
-        // The thread was not registered. Let us register it now.
-        let mut state = self.state.write().expect(ERR_POISONED_LOCK);
-
-        let thread_bags = state
-            .thread_observation_bags
-            .entry(thread_id)
-            .or_insert_with(|| RwLock::new(HashMap::default()));
-
-        register_core(thread_id, name, observation_bag, thread_bags);
     }
 
     fn unregister_thread(&self, thread_id: ThreadId) {
-        let mut state = self.state.write().expect(ERR_POISONED_LOCK);
+        // This runs from `LocalEventRegistry::drop`, which may itself be unwinding from a panic.
+        // It must therefore neither panic nor poison the global lock. A poisoned lock still holds
+        // structurally valid data here (writers only ever complete whole map operations), so we
+        // recover the guard rather than propagate. The compatibility check below keeps `merge_from`
+        // off its panicking path, so no store here can panic.
+        let mut state = self.state.write().unwrap_or_else(PoisonError::into_inner);
 
-        // After removing the data of the unregistered thread, we need to
-        // merge its observations into the archived observation bags.
-        if let Some(removed_bags) = state.thread_observation_bags.remove(&thread_id) {
-            let bags = removed_bags.read().expect(ERR_POISONED_LOCK);
+        let Some(removed_bags) = state.thread_observation_bags.remove(&thread_id) else {
+            return;
+        };
 
-            for (name, observation_bag) in bags.iter() {
-                let archived_bag = state
-                    .archived_observation_bags
-                    .entry(name.clone())
-                    .or_insert_with(|| {
-                        Arc::new(ObservationBagSync::new(observation_bag.bucket_magnitudes()))
-                    });
+        // Take ownership of the removed map so we no longer hold the inner lock while updating the
+        // archive. It is normal for a thread to go away, but this must not cause data loss:
+        // observations made on past threads remain valid until the end of the process.
+        let removed = removed_bags
+            .into_inner()
+            .unwrap_or_else(PoisonError::into_inner);
 
-                archived_bag.merge_from(observation_bag);
-            }
+        for (name, observation_bag) in removed {
+            Self::archive_observation_bag(&mut state, name, observation_bag);
         }
+    }
+
+    /// Returns the number of events currently registered for the given thread.
+    #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    fn thread_event_count(&self, thread_id: ThreadId) -> usize {
+        let state = self.state.read().unwrap();
+
+        state
+            .thread_observation_bags
+            .get(&thread_id)
+            .map_or(0, |thread_bags| thread_bags.read().unwrap().len())
     }
 
     /// Inspects all known observation bags via callback, including those
@@ -148,36 +184,76 @@ impl GlobalEventRegistry {
     /// This takes read locks, so the callback must not attempt to perform any operations
     /// that may want to register new events, under threat of deadlock.
     pub(crate) fn inspect(&self, mut f: impl FnMut(&ObservationBagMap)) {
-        let state = self.state.read().expect(ERR_POISONED_LOCK);
+        let state = self.state.read().expect(ERR_POISONED_REGISTRY_LOCK);
 
         for thread_bags in state.thread_observation_bags.values() {
-            let bags = thread_bags.read().expect(ERR_POISONED_LOCK);
+            let bags = thread_bags.read().expect(ERR_POISONED_REGISTRY_LOCK);
 
             // We do not want to make a useless callback for an empty map but we know that these
             // maps are lazy-registered, so we know that if it exists, it is non-empty.
             f(&bags);
         }
 
-        if !state.archived_observation_bags.is_empty() {
-            f(&state.archived_observation_bags);
+        for archived_bags in &state.archived_observation_bags {
+            f(archived_bags);
         }
+    }
+
+    /// Archives one observation bag without panicking on incompatible event configurations.
+    ///
+    /// Compatible observations are merged to keep the archive compact. An incompatible bag is
+    /// retained in a separate map, so report collection can enforce its documented configuration
+    /// contract after all destructor-held locks have been released.
+    fn archive_observation_bag(
+        state: &mut GlobalObservationBagsState,
+        name: EventName,
+        observation_bag: Arc<ObservationBagSync>,
+    ) {
+        let compatible_bag = state
+            .archived_observation_bags
+            .iter()
+            .filter_map(|archive| archive.get(name.as_ref()))
+            .find(|archived_bag| archived_bag.is_compatible_with(&observation_bag));
+
+        if let Some(archived_bag) = compatible_bag {
+            archived_bag.merge_from(&observation_bag);
+            return;
+        }
+
+        if let Some(archive) = state
+            .archived_observation_bags
+            .iter_mut()
+            .find(|archive| !archive.contains_key(name.as_ref()))
+        {
+            archive.insert(name, observation_bag);
+            return;
+        }
+
+        let mut archive = HashMap::default();
+        archive.insert(name, observation_bag);
+        state.archived_observation_bags.push(archive);
     }
 }
 
+/// Inserts one event registration into a thread's observation bag map.
+///
+/// Returns `Err(name)` when `name` is already registered, handing the name back and leaving the
+/// map unchanged so the caller can decide how to react without any partial mutation having
+/// occurred. The caller is responsible for raising any duplicate-registration panic, and must do
+/// so only after releasing every lock guard.
 fn register_core(
-    thread_id: ThreadId,
     name: EventName,
     observation_bag: Arc<ObservationBagSync>,
     thread_bags: &RwLock<ObservationBagMap>,
-) {
-    let mut bags = thread_bags.write().expect(ERR_POISONED_LOCK);
+) -> Result<(), EventName> {
+    let mut bags = thread_bags.write().expect(ERR_POISONED_REGISTRY_LOCK);
 
-    let previous = bags.insert(name, observation_bag);
+    if bags.contains_key(&name) {
+        return Err(name);
+    }
 
-    assert!(
-        previous.is_none(),
-        "duplicate event registration in local registry for thread {thread_id:?}",
-    );
+    bags.insert(name, observation_bag);
+    Ok(())
 }
 
 thread_local! {
@@ -195,7 +271,12 @@ pub(crate) static GLOBAL_REGISTRY: LazyLock<GlobalEventRegistry> =
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::sync::Barrier;
+
+    use testing::{assert_panics, with_watchdog};
+
     use super::*;
+    use crate::{Magnitude, Observations};
 
     const TEST_EVENT_NAME: &str = "test_event";
 
@@ -206,11 +287,9 @@ mod tests {
         // Get a thread ID that was never registered.
         let unregistered_thread_id = thread::current().id();
 
-        // This should complete without panic - the if let Some(...) branch is skipped.
         global_registry.unregister_thread(unregistered_thread_id);
 
-        // Verify that no archived data was created (since there was nothing to archive).
-        let state = global_registry.state.read().expect(ERR_POISONED_LOCK);
+        let state = global_registry.state.read().unwrap();
         assert!(state.archived_observation_bags.is_empty());
         assert!(state.thread_observation_bags.is_empty());
     }
@@ -224,12 +303,13 @@ mod tests {
 
         local_registry.register(TEST_EVENT_NAME.into(), Arc::clone(&observations));
 
-        assert_eq!(local_registry.observation_bags.borrow().len(), 1);
+        // The global registry is the authoritative owner of the registration.
+        assert_eq!(local_registry.event_count(), 1);
         assert!(
             global_registry
                 .state
                 .read()
-                .expect(ERR_POISONED_LOCK)
+                .unwrap()
                 .thread_observation_bags
                 .contains_key(&local_registry.thread_id)
         );
@@ -237,12 +317,12 @@ mod tests {
             global_registry
                 .state
                 .read()
-                .expect(ERR_POISONED_LOCK)
+                .unwrap()
                 .thread_observation_bags
                 .get(&local_registry.thread_id)
                 .unwrap()
                 .read()
-                .expect(ERR_POISONED_LOCK)
+                .unwrap()
                 .contains_key(TEST_EVENT_NAME)
         );
 
@@ -255,88 +335,191 @@ mod tests {
             !global_registry
                 .state
                 .read()
-                .expect(ERR_POISONED_LOCK)
+                .unwrap()
                 .thread_observation_bags
                 .contains_key(&thread_id)
         );
     }
 
     #[test]
-    #[should_panic]
-    fn duplicate_registration_panics() {
+    fn duplicate_registration_panics_without_poisoning_registry() {
         let observations = Arc::new(ObservationBagSync::new(&[]));
 
         let global_registry = GlobalEventRegistry::new();
         let local_registry = LocalEventRegistry::new(&global_registry);
 
         local_registry.register(TEST_EVENT_NAME.into(), Arc::clone(&observations));
-        local_registry.register(TEST_EVENT_NAME.into(), Arc::clone(&observations));
+        assert_panics(|| {
+            local_registry.register(TEST_EVENT_NAME.into(), Arc::clone(&observations));
+        });
+
+        local_registry.register("event_after_duplicate".into(), observations);
+        assert_eq!(local_registry.event_count(), 2);
     }
 
     #[test]
     fn inspect_global_inspects_all() {
-        let thread1_observations = Arc::new(ObservationBagSync::new(&[]));
+        with_watchdog(|| {
+            let thread1_observations = Arc::new(ObservationBagSync::new(&[]));
 
-        let global_registry = GlobalEventRegistry::new();
+            let global_registry = GlobalEventRegistry::new();
 
-        let thread1_local_registry = LocalEventRegistry::new(&global_registry);
-        thread1_local_registry.register(TEST_EVENT_NAME.into(), Arc::clone(&thread1_observations));
+            let thread1_local_registry = LocalEventRegistry::new(&global_registry);
+            thread1_local_registry
+                .register(TEST_EVENT_NAME.into(), Arc::clone(&thread1_observations));
 
-        thread::scope(|s| {
-            // Now let us switch to a new thread, register the event there, and inspect.
-            // We expect to see the observation bags of both threads when inspecting.
-            s.spawn(|| {
-                let thread2_observations = Arc::new(ObservationBagSync::new(&[]));
+            thread::scope(|scope| {
+                // Registering on another thread creates a distinct live bag for the same event.
+                scope
+                    .spawn(|| {
+                        let thread2_observations = Arc::new(ObservationBagSync::new(&[]));
 
-                let thread2_local_registry = LocalEventRegistry::new(&global_registry);
-                thread2_local_registry
-                    .register(TEST_EVENT_NAME.into(), Arc::clone(&thread2_observations));
+                        let thread2_local_registry = LocalEventRegistry::new(&global_registry);
+                        thread2_local_registry
+                            .register(TEST_EVENT_NAME.into(), Arc::clone(&thread2_observations));
 
-                let mut seen_bags: usize = 0;
+                        let mut seen_bags: usize = 0;
 
-                global_registry.inspect(|observation_bags| {
-                    seen_bags += observation_bags.len();
+                        global_registry.inspect(|observation_bags| {
+                            seen_bags += observation_bags.len();
 
-                    assert!(observation_bags.contains_key(TEST_EVENT_NAME));
-                    assert_eq!(observation_bags.len(), 1);
-                });
+                            assert!(observation_bags.contains_key(TEST_EVENT_NAME));
+                            assert_eq!(observation_bags.len(), 1);
+                        });
 
-                assert_eq!(seen_bags, 2);
-            })
-            .join()
-            .unwrap();
+                        assert_eq!(seen_bags, 2);
+                    })
+                    .join()
+                    .unwrap();
+            });
         });
     }
 
     #[test]
     fn data_remains_after_thread_terminates() {
-        let global_registry = GlobalEventRegistry::new();
+        with_watchdog(|| {
+            let global_registry = GlobalEventRegistry::new();
 
-        // We observe some data on another thread, then verify that we still see it on the
-        // entrypoint thread once the other thread terminates.
-        thread::scope(|s| {
-            s.spawn(|| {
-                let observations = Arc::new(ObservationBagSync::new(&[]));
+            // Register on another thread, then verify that the event remains visible after that
+            // thread terminates.
+            thread::scope(|scope| {
+                scope
+                    .spawn(|| {
+                        let observations = Arc::new(ObservationBagSync::new(&[]));
 
-                let local_registry = LocalEventRegistry::new(&global_registry);
-                local_registry.register(TEST_EVENT_NAME.into(), Arc::clone(&observations));
+                        let local_registry = LocalEventRegistry::new(&global_registry);
+                        local_registry.register(TEST_EVENT_NAME.into(), Arc::clone(&observations));
+                    })
+                    .join()
+                    .unwrap();
+            });
 
-                // We do not actually need to observe any data, as soon as the event
-                // is registered, it becomes visible in the records with a count of 0.
-            })
-            .join()
-            .unwrap();
+            let mut seen_bags: usize = 0;
+
+            global_registry.inspect(|observation_bags| {
+                seen_bags += observation_bags.len();
+
+                assert!(observation_bags.contains_key(TEST_EVENT_NAME));
+                assert_eq!(observation_bags.len(), 1);
+            });
+
+            assert_eq!(seen_bags, 1);
         });
+    }
 
-        let mut seen_bags: usize = 0;
+    #[test]
+    fn concurrent_registration_is_visible_and_survives_teardown() {
+        with_watchdog(|| {
+            // The barrier keeps every registration live until the inspection is complete and
+            // releases all workers together, exercising contended registration and teardown.
+            const THREADS: usize = 4;
 
-        global_registry.inspect(|observation_bags| {
-            seen_bags += observation_bags.len();
+            let global_registry = GlobalEventRegistry::new();
+            let checkpoint = Barrier::new(THREADS + 1);
 
-            assert!(observation_bags.contains_key(TEST_EVENT_NAME));
-            assert_eq!(observation_bags.len(), 1);
+            thread::scope(|scope| {
+                for index in 0..THREADS {
+                    let global_registry = &global_registry;
+                    let checkpoint = &checkpoint;
+                    scope.spawn(move || {
+                        let observations = Arc::new(ObservationBagSync::new(&[]));
+                        let local_registry = LocalEventRegistry::new(global_registry);
+
+                        local_registry
+                            .register(format!("concurrent_event_{index}").into(), observations);
+
+                        checkpoint.wait();
+                        checkpoint.wait();
+                    });
+                }
+
+                checkpoint.wait();
+
+                let mut live_events: usize = 0;
+                global_registry.inspect(|observation_bags| {
+                    live_events += observation_bags.len();
+                });
+
+                checkpoint.wait();
+                assert_eq!(live_events, THREADS);
+            });
+
+            let mut archived_events: usize = 0;
+            global_registry.inspect(|observation_bags| {
+                archived_events += observation_bags.len();
+            });
+            assert_eq!(archived_events, THREADS);
         });
+    }
 
-        assert_eq!(seen_bags, 1);
+    #[test]
+    fn incompatible_registrations_do_not_merge_on_teardown() {
+        with_watchdog(|| {
+            // Incompatible configurations remain distinct in the archive so report collection can
+            // enforce its contract without risking a panic in a destructor.
+            const EVENT_NAME: &str = "shared_event";
+            const FIRST_BUCKETS: &[Magnitude] = &[10];
+            const SECOND_BUCKETS: &[Magnitude] = &[10, 20, 30];
+
+            let global_registry = GlobalEventRegistry::new();
+
+            thread::scope(|scope| {
+                scope
+                    .spawn(|| {
+                        let observations = Arc::new(ObservationBagSync::new(FIRST_BUCKETS));
+                        observations.insert(5, 1);
+
+                        let local_registry = LocalEventRegistry::new(&global_registry);
+                        local_registry.register(EVENT_NAME.into(), observations);
+                    })
+                    .join()
+                    .unwrap();
+
+                scope
+                    .spawn(|| {
+                        let observations = Arc::new(ObservationBagSync::new(SECOND_BUCKETS));
+                        observations.insert(5, 1);
+
+                        let local_registry = LocalEventRegistry::new(&global_registry);
+                        local_registry.register(EVENT_NAME.into(), observations);
+                    })
+                    .join()
+                    .unwrap();
+            });
+
+            let mut archived = Vec::new();
+            global_registry.inspect(|observation_bags| {
+                if let Some(observations) = observation_bags.get(EVENT_NAME) {
+                    let snapshot = observations.snapshot();
+                    archived.push((snapshot.bucket_magnitudes.to_vec(), snapshot.count));
+                }
+            });
+            archived.sort();
+
+            assert_eq!(
+                archived,
+                [(FIRST_BUCKETS.to_vec(), 1), (SECOND_BUCKETS.to_vec(), 1)]
+            );
+        });
     }
 }

@@ -19,6 +19,7 @@ BeforeAll {
     $script:Scope = @(
         '--workspace',
         '--exclude', 'benchmarks',
+        '--all-features',
         '--best-of', '3',
         '--verbose'
     )
@@ -109,6 +110,7 @@ Describe 'Get-BenchHistoryCollectCommand' {
                 'collect',
                 '--package', 'nm',
                 '--package', 'many_cpus',
+                '--all-features',
                 '--best-of', '3',
                 '--verbose',
                 '--skip-existing'
@@ -126,6 +128,7 @@ Describe 'Get-BenchHistoryCollectCommand' {
             $result | Should -Be @(
                 'collect',
                 '--package', 'nm',
+                '--all-features',
                 '--best-of', '3',
                 '--verbose',
                 '--skip-existing'
@@ -135,6 +138,11 @@ Describe 'Get-BenchHistoryCollectCommand' {
         It 'treats an all-blank package list as no scope (whole workspace)' {
             $result = Get-BenchHistoryCollectCommand -RecollectCommitId '' -Package @('', '  ')
             $result | Should -Be (@('collect') + $script:Scope + @('--skip-existing'))
+        }
+
+        It 'enables all features so Cargo runs required-feature benchmark targets' {
+            $result = Get-BenchHistoryCollectCommand -Package 'nm_otel_impl'
+            $result | Should -Contain '--all-features'
         }
     }
 }
@@ -164,11 +172,6 @@ Describe 'Get-BenchHistoryBackfillCommand' {
         It 'never overwrites an already-stored point' {
             $result = Get-BenchHistoryBackfillCommand
             $result | Should -Not -Contain '--overwrite'
-        }
-
-        It 'never pins a machine key, so each runner fills its own partition' {
-            $result = Get-BenchHistoryBackfillCommand
-            $result | Should -Not -Contain '--machine-key'
         }
 
         It 'measures with exactly the scope the push-to-main collect uses' {
@@ -329,5 +332,3 @@ Describe 'Select-BenchmarkablePackage' {
             Should -Be @('Benchmarks', 'nm')
     }
 }
-
-

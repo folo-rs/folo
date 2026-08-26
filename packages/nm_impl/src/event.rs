@@ -1,12 +1,18 @@
 use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::panic::{RefUnwindSafe, UnwindSafe};
+use std::rc::Rc;
 use std::time::Duration;
 
 use fast_time::Clock;
 use num_traits::AsPrimitive;
 
-use crate::{EventBuilder, Magnitude, Observe, PublishModel, Pull};
+#[cfg(test)]
+use crate::ObservationBagSnapshot;
+use crate::{
+    EventBuilder, IMPLICIT_OCCURRENCE_MAGNITUDE, Magnitude, ONE_ITEM_BATCH, Observe, PublishModel,
+    Pull,
+};
 
 /// Allows you to observe the occurrences of an event in your code.
 ///
@@ -15,11 +21,11 @@ use crate::{EventBuilder, Magnitude, Observe, PublishModel, Pull};
 /// # Publishing models
 ///
 /// The ultimate goal of the metrics collected by an [`Event`] is to end up in a [`Report`][1].
-/// There are two models by which this can happen:
+/// The available publishing models are:
 ///
-/// - **Pull** model - the reporting system queries each event in the process for its latest data
+/// - **Pull model:** The reporting system queries each event in the process for its latest data
 ///   set when generating a report. This is the default and requires no action from you.
-/// - **Push** model - data from an event only flows to a thread-local [`MetricsPusher`][2], which
+/// - **Push model:** Data from an event only flows to a thread-local [`MetricsPusher`][2], which
 ///   publishes the data into the reporting system on demand. This requires you to periodically
 ///   trigger the publishing via [`MetricsPusher::push()`][3].
 ///
@@ -40,15 +46,11 @@ use crate::{EventBuilder, Magnitude, Observe, PublishModel, Pull};
 ///         .build();
 /// }
 ///
-/// pub fn http_connect() {
-///     CONNECT_TIME_MS.with(|e| {
-///         e.observe_duration_millis(|| {
-///             do_http_connect();
-///         })
-///     });
+/// pub fn http_connect() -> bool {
+///     CONNECT_TIME_MS.with(|event| event.observe_duration_millis(do_http_connect))
 /// }
-/// # http_connect();
-/// # fn do_http_connect() {}
+/// assert!(http_connect());
+/// # fn do_http_connect() -> bool { true }
 /// ```
 ///
 /// # Example (push model)
@@ -65,16 +67,12 @@ use crate::{EventBuilder, Magnitude, Observe, PublishModel, Pull};
 ///         .build();
 /// }
 ///
-/// pub fn http_connect() {
-///     CONNECT_TIME_MS.with(|e| {
-///         e.observe_duration_millis(|| {
-///             do_http_connect();
-///         })
-///     });
+/// pub fn http_connect() -> bool {
+///     CONNECT_TIME_MS.with(|event| event.observe_duration_millis(do_http_connect))
 /// }
 ///
 /// loop {
-///     http_connect();
+///     assert!(http_connect());
 ///
 ///     // Periodically push the data to the reporting system.
 ///     if is_time_to_push() {
@@ -82,7 +80,7 @@ use crate::{EventBuilder, Magnitude, Observe, PublishModel, Pull};
 ///     }
 ///     # break; // Avoid infinite loop when running example.
 /// }
-/// # fn do_http_connect() {}
+/// # fn do_http_connect() -> bool { true }
 /// # fn is_time_to_push() -> bool { true }
 /// ```
 ///
@@ -105,7 +103,8 @@ where
     /// cache efficiency of the underlying platform time source.
     clock: RefCell<Clock>,
 
-    _single_threaded: PhantomData<*const ()>,
+    // Event registration and local observation storage belong to the creating thread.
+    _single_threaded: PhantomData<Rc<()>>,
 }
 
 // Event is single-threaded (!Send, !Sync) and uses interior mutability only for metrics
@@ -116,12 +115,15 @@ impl<P: PublishModel> RefUnwindSafe for Event<P> {}
 impl Event<Pull> {
     /// Creates a new event builder with the default builder configuration.
     #[must_use]
-    #[cfg_attr(test, mutants::skip)] // Gets replaced with itself by different name, bad mutation.
+    // The mutation only renames the function and leaves behavior unchanged.
+    #[cfg_attr(test, mutants::skip)]
     pub fn builder() -> EventBuilder<Pull> {
         EventBuilder::new()
     }
 }
 
+// Callgrind and disassembly showed that the default cross-CGU decision left the complete
+// insertion chain out of line. Inlining its forwarders removes a call from every observation.
 impl<P> Event<P>
 where
     P: PublishModel,
@@ -141,22 +143,23 @@ where
     /// method for this to make it clear that the magnitude has no inherent meaning.
     #[inline]
     pub fn observe_once(&self) {
-        self.batch(1).observe(1);
+        self.batch(ONE_ITEM_BATCH)
+            .observe(IMPLICIT_OCCURRENCE_MAGNITUDE);
     }
 
     /// Observes an event with a specific magnitude.
     #[inline]
     pub fn observe(&self, magnitude: impl AsPrimitive<Magnitude>) {
-        self.batch(1).observe(magnitude);
+        self.batch(ONE_ITEM_BATCH).observe(magnitude);
     }
 
     /// Observes an event with the magnitude being the indicated duration in milliseconds.
     ///
-    /// Only the whole number part of the duration is used - fractional milliseconds are ignored.
+    /// Only the whole number part of the duration is used; fractional milliseconds are ignored.
     /// Values outside the i64 range are not guaranteed to be correctly represented.
     #[inline]
     pub fn observe_millis(&self, duration: Duration) {
-        self.batch(1).observe_millis(duration);
+        self.batch(ONE_ITEM_BATCH).observe_millis(duration);
     }
 
     /// Observes the duration of a function call, in milliseconds.
@@ -164,12 +167,16 @@ where
     /// Uses a low-precision clock optimized for high-frequency capture. The measurement
     /// has a granularity of roughly 1-20 ms. Durations shorter than the granularity may
     /// appear as zero.
+    ///
+    /// # Reentrancy
+    ///
+    /// The measured function may observe this event or any other event.
     #[inline]
     pub fn observe_duration_millis<F, R>(&self, f: F) -> R
     where
         F: FnOnce() -> R,
     {
-        self.batch(1).observe_duration_millis(f)
+        self.batch(ONE_ITEM_BATCH).observe_duration_millis(f)
     }
 
     /// Prepares to observe a batch of events with the same magnitude.
@@ -188,12 +195,12 @@ where
     ///         .build();
     /// }
     ///
-    /// // Record 100 HTTP responses, each taking 50ms
+    /// // Record a batch of HTTP response durations.
     /// HTTP_RESPONSE_TIME_MS.with(|event| {
     ///     event.batch(100).observe(50);
     /// });
     ///
-    /// // Record 50 simple count events
+    /// // Record a batch of count events.
     /// REQUESTS_PROCESSED.with(|event| {
     ///     event.batch(50).observe_once();
     /// });
@@ -205,7 +212,8 @@ where
     }
 
     #[cfg(test)]
-    pub(crate) fn snapshot(&self) -> crate::ObservationBagSnapshot {
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    pub(crate) fn snapshot(&self) -> ObservationBagSnapshot {
         self.publish_model.snapshot()
     }
 }
@@ -220,6 +228,8 @@ where
     count: usize,
 }
 
+// Callgrind and disassembly showed that the default cross-CGU decision left the complete
+// insertion chain out of line. Inlining its forwarders removes a call from every observation.
 impl<P> ObservationBatch<'_, P>
 where
     P: PublishModel,
@@ -230,7 +240,9 @@ where
     /// method for this to make it clear that the magnitude has no inherent meaning.
     #[inline]
     pub fn observe_once(&self) {
-        self.event.publish_model.insert(1, self.count);
+        self.event
+            .publish_model
+            .insert(IMPLICIT_OCCURRENCE_MAGNITUDE, self.count);
     }
 
     /// Observes a batch of events with a specific magnitude.
@@ -241,13 +253,12 @@ where
 
     /// Observes an event with the magnitude being the indicated duration in milliseconds.
     ///
-    /// Only the whole number part of the duration is used - fractional milliseconds are ignored.
+    /// Only the whole number part of the duration is used; fractional milliseconds are ignored.
     /// Values outside the i64 range are not guaranteed to be correctly represented.
-    #[inline]
     pub fn observe_millis(&self, duration: Duration) {
         #[expect(
             clippy::cast_possible_truncation,
-            reason = "intentional - nothing we can do about it; typical values are in safe range"
+            reason = "The truncation is intentional because typical duration values are in range."
         )]
         let millis = duration.as_millis() as i64;
 
@@ -259,18 +270,25 @@ where
     /// Uses a low-precision clock optimized for high-frequency capture. The measurement
     /// has a granularity of roughly 1-20 ms. Durations shorter than the granularity may
     /// appear as zero.
-    #[inline]
+    ///
+    /// # Reentrancy
+    ///
+    /// The measured function may observe this event or any other event.
     pub fn observe_duration_millis<F, R>(&self, f: F) -> R
     where
         F: FnOnce() -> R,
     {
-        let mut clock = self.event.clock.borrow_mut();
-        let start = clock.now();
+        let start = {
+            let mut clock = self.event.clock.borrow_mut();
+            clock.now()
+        };
 
         let result = f();
 
-        let elapsed = start.elapsed(&mut clock);
-        drop(clock);
+        let elapsed = {
+            let mut clock = self.event.clock.borrow_mut();
+            start.elapsed(&mut clock)
+        };
 
         self.observe_millis(elapsed);
 
@@ -278,30 +296,31 @@ where
     }
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarders.
+// Callgrind and disassembly showed that the default cross-CGU decision left the complete
+// insertion chain out of line. Inlining its forwarders removes a call from every observation.
 impl<P> Observe for Event<P>
 where
     P: PublishModel,
 {
-    #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    #[cfg_attr(test, mutants::skip)] // Mutation testing does not benefit from trivial forwarding.
     #[inline]
     fn observe_once(&self) {
         self.observe_once();
     }
 
-    #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    #[cfg_attr(test, mutants::skip)] // Mutation testing does not benefit from trivial forwarding.
     #[inline]
     fn observe(&self, magnitude: impl AsPrimitive<Magnitude>) {
         self.observe(magnitude);
     }
 
-    #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    #[cfg_attr(test, mutants::skip)] // Mutation testing does not benefit from trivial forwarding.
     #[inline]
     fn observe_millis(&self, duration: Duration) {
         self.observe_millis(duration);
     }
 
-    #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    #[cfg_attr(test, mutants::skip)] // Mutation testing does not benefit from trivial forwarding.
     #[inline]
     fn observe_duration_millis<F, R>(&self, f: F) -> R
     where
@@ -311,30 +330,31 @@ where
     }
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))] // Trivial forwarders.
+// Callgrind and disassembly showed that the default cross-CGU decision left the complete
+// insertion chain out of line. Inlining its forwarders removes a call from every observation.
 impl<P> Observe for ObservationBatch<'_, P>
 where
     P: PublishModel,
 {
-    #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    #[cfg_attr(test, mutants::skip)] // Mutation testing does not benefit from trivial forwarding.
     #[inline]
     fn observe_once(&self) {
         self.observe_once();
     }
 
-    #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    #[cfg_attr(test, mutants::skip)] // Mutation testing does not benefit from trivial forwarding.
     #[inline]
     fn observe(&self, magnitude: impl AsPrimitive<Magnitude>) {
         self.observe(magnitude);
     }
 
-    #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    #[cfg_attr(test, mutants::skip)] // Mutation testing does not benefit from trivial forwarding.
     #[inline]
     fn observe_millis(&self, duration: Duration) {
         self.observe_millis(duration);
     }
 
-    #[cfg_attr(test, mutants::skip)] // Trivial forwarder.
+    #[cfg_attr(test, mutants::skip)] // Mutation testing does not benefit from trivial forwarding.
     #[inline]
     fn observe_duration_millis<F, R>(&self, f: F) -> R
     where
@@ -361,8 +381,8 @@ mod tests {
 
     #[test]
     fn pull_event_observations_are_recorded() {
-        // Histogram logic is tested as part of ObservationBag tests, so we do not bother
-        // with it here - we assume that if data is correctly recorded, it will reach the histogram.
+        // ObservationBag tests cover histogram bucketing, so this test verifies count and
+        // sum recording only.
         let observations = Arc::new(ObservationBagSync::new(&[]));
 
         let event = Event {
@@ -410,8 +430,8 @@ mod tests {
 
     #[test]
     fn push_event_observations_are_recorded() {
-        // Histogram logic is tested as part of ObservationBag tests, so we do not bother
-        // with it here - we assume that if data is correctly recorded, it will reach the histogram.
+        // ObservationBag tests cover histogram bucketing, so this test verifies count and
+        // sum recording only.
         let observations = Rc::new(ObservationBag::new(&[]));
 
         let event = Event {
@@ -469,6 +489,21 @@ mod tests {
         event.observe(6.66);
         event.observe(7_i32);
         event.observe(8_i128);
+    }
+
+    #[test]
+    fn duration_callback_can_reenter_the_same_event() {
+        let observations = Arc::new(ObservationBagSync::new(&[]));
+        let event = Event {
+            publish_model: Pull { observations },
+            clock: RefCell::new(Clock::new()),
+            _single_threaded: PhantomData,
+        };
+
+        let result = event.observe_duration_millis(|| event.observe_duration_millis(|| true));
+
+        assert!(result);
+        assert_eq!(event.snapshot().count, 2);
     }
 
     #[test]

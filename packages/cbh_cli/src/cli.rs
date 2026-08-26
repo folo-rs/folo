@@ -25,7 +25,6 @@ const HEADING_COMMIT: &str = "Commit selection";
 const HEADING_FILTER: &str = "Data filtering";
 const HEADING_SCOPE: &str = "Benchmark scope";
 const HEADING_FEATURES: &str = "Feature selection";
-const HEADING_ANALYSIS: &str = "Analysis";
 
 /// Maintain a history of benchmark results over time and analyze it for trends.
 #[derive(Debug, Parser)]
@@ -252,14 +251,14 @@ struct CacheArg {
     cache: Option<Option<PathBuf>>,
 }
 
-/// The repeatable, `all`-aware discriminant facets used by every query command.
+/// The repeatable, `all`-aware discriminant filters used by every query command.
 ///
-/// Each facet auto-detects the current machine when omitted (`--engine` has no
-/// machine-derived value, so it auto-detects to every engine); repeating a facet
+/// Each filter auto-detects the current machine when omitted (`--engine` has no
+/// machine-derived value, so it auto-detects to every engine); repeating a filter
 /// unions its values; the literal `all` removes the filter for that dimension.
 #[derive(Args, Debug)]
 #[command(next_help_heading = HEADING_DISCRIMINANT)]
-struct QueryFacetArgs {
+struct QueryDiscriminantArgs {
     /// Restrict to these engines, e.g. `criterion`/`callgrind` (repeatable; `all`
     /// matches every engine; default: every engine).
     #[arg(long, value_name = "NAME")]
@@ -324,11 +323,6 @@ struct OutputArgs {
 struct CollectCommand {
     #[command(flatten)]
     env: EnvArgs,
-
-    /// Override the machine key used to partition every engine's results (for
-    /// example, a CI machine-pool name).
-    #[arg(long, value_name = "KEY", help_heading = HEADING_DISCRIMINANT)]
-    machine_key: Option<String>,
 
     /// Benchmark the entire workspace (the default when no `--package` is given);
     /// conflicts with `--package`.
@@ -402,7 +396,6 @@ impl CollectCommand {
             features: self.features,
             all_features: self.all_features,
             no_default_features: self.no_default_features,
-            machine_key: self.machine_key,
             no_store: self.no_store,
             overwrite: self.overwrite,
             skip_existing: self.skip_existing,
@@ -418,8 +411,8 @@ impl CollectCommand {
 ///
 /// It keeps collect's environment/storage flags and adds the required scan
 /// directory plus the metadata overrides that let one host synthesize data for
-/// another target triple, machine, or commit. It has no benchmark-scope or feature
-/// flags because it never runs a build.
+/// another target triple or commit. It has no benchmark-scope or feature flags
+/// because it never runs a build.
 #[derive(Args, Debug)]
 struct ImportCommand {
     #[command(flatten)]
@@ -431,11 +424,6 @@ struct ImportCommand {
     /// must name the tree it curated.
     #[arg(long, value_name = "PATH", help_heading = HEADING_ENV)]
     target_dir: PathBuf,
-
-    /// Override the machine key used to partition every engine's results (for
-    /// example, a CI machine-pool name).
-    #[arg(long, value_name = "KEY", help_heading = HEADING_DISCRIMINANT)]
-    machine_key: Option<String>,
 
     /// Override the target triple the results are partitioned under (and recorded
     /// against), so a single host can synthesize data for another target.
@@ -472,7 +460,6 @@ impl ImportCommand {
             repo: self.env.repo,
             local: local_selection(self.env.local),
             target_dir: self.target_dir,
-            machine_key: self.machine_key,
             target_triple: self.target_triple,
             commit: self.commit,
             dirty: self.dirty,
@@ -508,11 +495,12 @@ impl InstallCommand {
 /// Print this machine's hardware fingerprint (the machine key).
 #[derive(Args, Debug)]
 struct MachineKeyCommand {
-    /// Also emit the individual hardware components that make up the fingerprint
-    /// to standard error (processor count, memory-region count, processor models,
-    /// per-processor speed histogram, and the fingerprint version), so a change in
-    /// the key can be traced to which factor changed. The key itself always goes to
-    /// standard output.
+    /// Also emit the individual hardware factors that make up the fingerprint to
+    /// standard error (the fingerprint version, processor count, memory-region
+    /// count and processor models), so a change in the key can be traced to which
+    /// factor changed. Per-processor speeds are recorded with collected runs as
+    /// hardware provenance, but they are not factors and so are not reported here.
+    /// The key itself always goes to standard output.
     #[arg(long, help_heading = HEADING_ENV)]
     verbose: bool,
 }
@@ -544,7 +532,7 @@ struct AnalyzeCommand {
     output: OutputArgs,
 
     #[command(flatten)]
-    facets: QueryFacetArgs,
+    discriminants: QueryDiscriminantArgs,
 
     #[command(flatten)]
     timeline: TimelineArgs,
@@ -552,19 +540,6 @@ struct AnalyzeCommand {
     /// Exclude dirty (uncommitted-tree) snapshots from the analysis.
     #[arg(long, help_heading = HEADING_FILTER)]
     no_dirty: bool,
-
-    /// In history mode, also report sustained improvements (by default only
-    /// regressions are reported, since improvement over time is expected). Branch
-    /// mode always reports all findings, so this flag has no effect there.
-    #[arg(long, help_heading = HEADING_ANALYSIS)]
-    include_improvements: bool,
-
-    /// In history mode, also report inactive findings: a change the current state
-    /// no longer reflects (a regression that has since recovered). Hidden by
-    /// default since they need no action. Branch mode always reports all
-    /// findings, so this flag has no effect there.
-    #[arg(long, help_heading = HEADING_ANALYSIS)]
-    include_inactive: bool,
 
     /// Also write a condensed Markdown summary — only the most significant findings
     /// — to this path (a relative path resolves against the working directory). The
@@ -585,16 +560,14 @@ impl AnalyzeCommand {
             base: self.timeline.base,
             no_dirty: self.no_dirty,
             since: self.timeline.since,
-            engine: self.facets.engine,
-            target_triple: self.facets.target_triple,
-            machine_key: self.facets.machine_key,
+            engine: self.discriminants.engine,
+            target_triple: self.discriminants.target_triple,
+            machine_key: self.discriminants.machine_key,
             prefixes: self.prefixes,
             no_text: self.output.no_text,
             markdown: self.output.markdown,
             json: self.output.json,
             markdown_summary: self.markdown_summary,
-            include_improvements: self.include_improvements,
-            include_inactive: self.include_inactive,
             verbose: self.env.verbose,
             timing: false,
         }
@@ -608,7 +581,7 @@ enum ListSubjectArg {
     Runs,
     /// Every discriminant set present in storage (no repository required); a
     /// discovery catalog that lists all partitions regardless of the current
-    /// machine. Pass a facet to narrow it.
+    /// machine. Pass a discriminant filter to narrow it.
     Discriminants,
     /// The blessings recorded at the current commit (or, with `--all`, across the
     /// whole analysis window).
@@ -642,7 +615,7 @@ struct ListCommand {
     output: OutputArgs,
 
     #[command(flatten)]
-    facets: QueryFacetArgs,
+    discriminants: QueryDiscriminantArgs,
 
     #[command(flatten)]
     timeline: TimelineArgs,
@@ -670,9 +643,9 @@ impl ListCommand {
             base: self.timeline.base,
             no_dirty: self.no_dirty,
             since: self.timeline.since,
-            engine: self.facets.engine,
-            target_triple: self.facets.target_triple,
-            machine_key: self.facets.machine_key,
+            engine: self.discriminants.engine,
+            target_triple: self.discriminants.target_triple,
+            machine_key: self.discriminants.machine_key,
             no_text: self.output.no_text,
             markdown: self.output.markdown,
             json: self.output.json,
@@ -703,7 +676,7 @@ struct ExamineCommand {
     output: OutputArgs,
 
     #[command(flatten)]
-    facets: QueryFacetArgs,
+    discriminants: QueryDiscriminantArgs,
 
     #[command(flatten)]
     timeline: TimelineArgs,
@@ -734,9 +707,9 @@ impl ExamineCommand {
             base: self.timeline.base,
             no_dirty: self.no_dirty,
             since: self.timeline.since,
-            engine: self.facets.engine,
-            target_triple: self.facets.target_triple,
-            machine_key: self.facets.machine_key,
+            engine: self.discriminants.engine,
+            target_triple: self.discriminants.target_triple,
+            machine_key: self.discriminants.machine_key,
             benchmark: self.benchmark,
             metric: self.metric,
             no_text: self.output.no_text,
@@ -793,7 +766,7 @@ struct PruneCommand {
     output: OutputArgs,
 
     #[command(flatten)]
-    facets: QueryFacetArgs,
+    discriminants: QueryDiscriminantArgs,
 
     #[command(flatten)]
     commit_selection: PruneCommitArgs,
@@ -850,9 +823,9 @@ impl PruneCommand {
             base: self.commit_selection.base,
             commit: self.commit,
             since: self.commit_selection.since,
-            engine: self.facets.engine,
-            target_triple: self.facets.target_triple,
-            machine_key: self.facets.machine_key,
+            engine: self.discriminants.engine,
+            target_triple: self.discriminants.target_triple,
+            machine_key: self.discriminants.machine_key,
             clean,
             dirty,
             include_blessings: self.include_blessings,
@@ -884,11 +857,6 @@ struct BackfillCommand {
 
     #[command(flatten)]
     env: EnvArgs,
-
-    /// Override the machine key used to partition every engine's results (for
-    /// example, a CI machine-pool name).
-    #[arg(long, value_name = "KEY", help_heading = HEADING_DISCRIMINANT)]
-    machine_key: Option<String>,
 
     /// Benchmark the entire workspace (the default when no `--package` is given);
     /// conflicts with `--package`.
@@ -959,7 +927,6 @@ impl BackfillCommand {
             features: self.features,
             all_features: self.all_features,
             no_default_features: self.no_default_features,
-            machine_key: self.machine_key,
             overwrite: self.overwrite,
             ignore_errors: self.ignore_errors,
             passthrough: self.passthrough,
@@ -995,7 +962,7 @@ struct BlessCommand {
     base: Option<String>,
 
     #[command(flatten)]
-    facets: QueryFacetArgs,
+    discriminants: QueryDiscriminantArgs,
 }
 
 impl BlessCommand {
@@ -1006,9 +973,9 @@ impl BlessCommand {
             local: local_selection(self.env.local),
             context: self.context,
             base: self.base,
-            engine: self.facets.engine,
-            target_triple: self.facets.target_triple,
-            machine_key: self.facets.machine_key,
+            engine: self.discriminants.engine,
+            target_triple: self.discriminants.target_triple,
+            machine_key: self.discriminants.machine_key,
             prefixes: self.prefixes,
             all: self.all,
             verbose: self.env.verbose,
@@ -1036,7 +1003,7 @@ struct UnblessCommand {
     base: Option<String>,
 
     #[command(flatten)]
-    facets: QueryFacetArgs,
+    discriminants: QueryDiscriminantArgs,
 }
 
 impl UnblessCommand {
@@ -1047,9 +1014,9 @@ impl UnblessCommand {
             local: local_selection(self.env.local),
             context: self.context,
             base: self.base,
-            engine: self.facets.engine,
-            target_triple: self.facets.target_triple,
-            machine_key: self.facets.machine_key,
+            engine: self.discriminants.engine,
+            target_triple: self.discriminants.target_triple,
+            machine_key: self.discriminants.machine_key,
             verbose: self.env.verbose,
         }
     }
@@ -1113,8 +1080,6 @@ mod tests {
             "curated/target",
             "--target-triple",
             "aarch64-apple-darwin",
-            "--machine-key",
-            "lab-runner-7",
             "--commit",
             "release-1.0",
             "--dirty",
@@ -1128,7 +1093,6 @@ mod tests {
             options.target_triple.as_deref(),
             Some("aarch64-apple-darwin")
         );
-        assert_eq!(options.machine_key.as_deref(), Some("lab-runner-7"));
         assert_eq!(options.commit.as_deref(), Some("release-1.0"));
         assert!(options.dirty);
         assert!(options.overwrite);
@@ -1530,15 +1494,6 @@ mod tests {
     }
 
     #[test]
-    fn collect_parses_machine_key_override() {
-        let command = parse(&["collect", "--machine-key", "ci-pool-a"]);
-        let Command::Collect(options) = command else {
-            panic!("expected collect command");
-        };
-        assert_eq!(options.machine_key.as_deref(), Some("ci-pool-a"));
-    }
-
-    #[test]
     fn collect_parses_verbose_switch() {
         let Command::Collect(options) = parse(&["collect", "--verbose"]) else {
             panic!("expected collect command");
@@ -1615,16 +1570,7 @@ mod tests {
     }
 
     #[test]
-    fn analyze_collects_switches() {
-        let command = parse(&["analyze", "--include-improvements"]);
-        let Command::Analyze(options) = command else {
-            panic!("expected analyze command");
-        };
-        assert!(options.include_improvements);
-    }
-
-    #[test]
-    fn analyze_collects_topology_and_repeatable_facets() {
+    fn analyze_collects_topology_and_repeatable_discriminants() {
         let command = parse(&[
             "analyze",
             "--repo",
@@ -1662,7 +1608,7 @@ mod tests {
     }
 
     #[test]
-    fn analyze_facets_default_to_empty() {
+    fn analyze_discriminants_default_to_empty() {
         let Command::Analyze(options) = parse(&["analyze"]) else {
             panic!("expected analyze command");
         };
@@ -1730,19 +1676,6 @@ mod tests {
         assert!(options.no_text);
         assert_eq!(options.markdown, Some(PathBuf::from("out/report.md")));
         assert_eq!(options.json, Some(PathBuf::from("out/report.json")));
-    }
-
-    #[test]
-    fn analyze_parses_include_inactive_switch() {
-        let Command::Analyze(options) = parse(&["analyze", "--include-inactive"]) else {
-            panic!("expected analyze command");
-        };
-        assert!(options.include_inactive);
-
-        let Command::Analyze(options) = parse(&["analyze"]) else {
-            panic!("expected analyze command");
-        };
-        assert!(!options.include_inactive);
     }
 
     #[test]
@@ -1904,7 +1837,7 @@ mod tests {
     }
 
     #[test]
-    fn bless_collects_prefixes_facets_and_context() {
+    fn bless_collects_prefixes_discriminants_and_context() {
         let command = parse(&[
             "bless",
             "--engine",
@@ -1962,7 +1895,7 @@ mod tests {
     }
 
     #[test]
-    fn unbless_parses_facets() {
+    fn unbless_parses_discriminants() {
         let command = parse(&[
             "unbless",
             "--context",
@@ -2103,8 +2036,6 @@ mod tests {
             "nm",
             "--bench",
             "nm_observe",
-            "--machine-key",
-            "ci-pool",
             "--overwrite",
             "--ignore-errors",
             "--",
@@ -2117,7 +2048,6 @@ mod tests {
         assert_eq!(options.to, "def456");
         assert_eq!(options.packages, vec!["nm".to_owned()]);
         assert_eq!(options.benches, vec!["nm_observe".to_owned()]);
-        assert_eq!(options.machine_key.as_deref(), Some("ci-pool"));
         assert!(options.overwrite);
         assert!(options.ignore_errors);
         assert_eq!(options.passthrough, vec!["--noplot".to_owned()]);

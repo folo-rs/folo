@@ -28,8 +28,8 @@ flowchart TD
   EXEC["analyze"] --> SD["select data set (the load)"]
   SD --> DS[("series + run tallies + blessings")]
   DS --> GF["drop ghost benchmarks\n(absent at context commit)"]
-  GF --> AB["apply blessings (history re-baseline)"]
-  AB --> FC["detect changes (per series)"]
+  GF --> AB["apply blessings\n(history active segment / branch base floor)"]
+  AB --> FC["run mode-specific analysis"]
   FC --> SUM["per-set summaries"]
   SUM --> RENDER["render reports"]
 ```
@@ -54,7 +54,7 @@ in [`DESIGN.md`](DESIGN.md).
 ```mermaid
 flowchart TD
   subgraph P1["Phase 1 — key-only filtering (no payload fetched)"]
-    L["list keys (one round-trip)"] --> KF["parse key + facet match"]
+    L["list keys (one round-trip)"] --> KF["parse key + discriminant match"]
     KF --> WF["history / dirty / since filter\n(commit time + topology)"]
     WF --> SK["sort survivors by storage key\n→ assign each a global ordinal"]
   end
@@ -117,25 +117,62 @@ without re-measuring the parallel load.
 flowchart TD
   FIN["finalize"] --> FLAT["flatten to a series list"]
   FLAT --> SS["sort series, then sort each series' points by topology\n— serial —"]
-  SS --> DALL["detect: one chunk of series per worker\n(spawned)"]
-  DALL --> CANDS["candidate findings"]
-  CANDS --> BH["false-discovery filter — serial —"]
-  BH --> MAT["materialize surviving findings' chart points"]
+  SS --> MODE{"analysis mode"}
+  MODE -->|history| CENSUS["classify testability + size family\n— serial shared verdict prepass —"]
+  CENSUS --> HD["detect + bounded calibration\n— one series chunk per worker —"]
+  HD --> BH["Benjamini-Hochberg filter\n— serial —"]
+  MODE -->|branch| BP["select regimes + evaluate tip ranges\n— one series chunk per worker —"]
+  BP --> BC["build rectangular families + score\nhistorical report turns — serial —"]
+  BH --> MAT["materialize findings' chart points"]
+  BC --> MAT
   MAT --> SF["sort findings by magnitude, method, identity — serial —"]
-  SF --> FINDINGS[("findings")]
+  SF --> FINDINGS[("findings + census + branch comparisons")]
 ```
 
-Detection has no cross-series state, so the series split into one balanced chunk per worker
-— the same split-once, spawn, await-and-recombine pattern as the load — and the output is
-identical to a sequential pass. A single available CPU (as Miri reports) yields a single
-worker over the whole input. Per series the mode selects the detector: history runs both a
-change-point and a drift detector and keeps the better fit (plus an optional recovered-spike
-pass); branch compares the branch tip's level against its base.
+The per-series preparation work splits into one balanced chunk per worker — the same split-once,
+spawn, await-and-recombine pattern as the load — and is identical to a sequential pass. A single
+available CPU (as Miri reports) yields one worker over the whole input. History runs both a
+change-point and a drift detector and keeps the better fit. Branch collapses each base commit to
+one level, selects the latest supported regime on a selector lane, and tests whether the tip lies
+strictly outside that regime's observed range.
+
+History's false-discovery family is every series that was **testable**, including those that raised
+no candidate (DESIGN.md, “Multiple-comparison discipline”). A cheap serial prepass evaluates the
+shared testability verdict, builds the **series census**, and makes the family size available before
+statistical work starts. In branch mode, that same verdict also decides whether the current base
+regime is resolved enough to compare the tip at all. This ordering is required because history
+change-point calibration uses that size to choose bounded permutation precision and its analytic
+acceptance boundary.
+
+Branch mode does not produce per-series p-values and does not enter the history-mode
+Benjamini–Hochberg pass. Its workers return prepared range evaluations and regime provenance. A
+serial finalization pass then chooses, per discriminant set, a deterministic rectangular family
+whose stable series share enough reference-lane base commits, preferring more series and then more
+shared commits among the bounded candidates it examines. It scores the real branch report and each
+leave-one-base-commit-out historical turn with identical range and practical gates. This is
+cross-series state by design: the output tells the reader how often an existing base commit
+produced at least as much report-wide movement, without filtering away factual per-series
+excursions.
+
+Both modes build a census from the same execution decision their workers use. The census outlives
+detection: the pipeline records ghost-filtered series into it too and hands it to the renderers,
+which is how a report states what it judged (DESIGN.md, “Accounting for what was judged”).
+
+History change points pass permutation-independent magnitude, residual, population-separation, and
+interval gates before calibration. The step is calibrated only when it fits at least as well as the
+already-evaluated drift; a qualified drift remains the fallback if significance then rejects the
+step. Clear steps can finish through the analytic split-union certificate. Remaining candidates use
+a complete conditional permutation orbit with an absolute per-candidate ceiling. Enumeration stops
+early only after a lower bound proves the final answer is already forced. Every series remains
+independent of the others, preserving the dependence assumptions of the final Benjamini–Hochberg
+pass.
 
 The statistical kernels are chosen to keep the tens-of-millions-of-points path affordable —
 an in-place unstable sort for the median (no scratch buffer, and ties are bit-identical so
 reordering cannot change the result), pre-sized buffers for the pairwise Theil–Sen slope,
-and a single sort for the false-discovery filter across all noisy candidates.
+and a single sort for the history false-discovery filter across all noisy candidates. Branch
+report work is bounded independently by the 128-commit base window and keeps range preparation
+parallel; only the bounded family intersection and candidate scoring are serial.
 
 ## Comparison-base lag (branch mode)
 
@@ -144,11 +181,11 @@ After detection, branch mode discloses when a finding's comparison base lags the
 second listing:
 
 * **Phase 1 already retained the candidates.** The single project listing splits its keys into
-  the facet-selected candidates *and* the machine-relaxed clean-run siblings — exact `clean.json`
-  objects sharing the engine and triple under a machine key the selection does not cover. The
-  sibling keys pass the same on-history, base-side, and `--since` admission as the selection, so
-  classification starts from a compact, already-vetted key list without a second `list`
-  round-trip.
+  the candidates selected by discriminant filters *and* the machine-relaxed clean-run siblings —
+  exact `clean.json` objects sharing the engine and triple under a machine key the selection does
+  not cover. The sibling keys pass the same on-history, base-side, and `--since` admission as the
+  selection, so classification starts from a compact, already-vetted key list without a second
+  `list` round-trip.
 * **Evidence comes from loaded data first.** A lagging finding is a machine-key mismatch if a
   newer base-side clean point for its benchmark and metric exists under a sibling key. Under
   `--machine-key all` every key is already resident, so this is answered from the loaded series
@@ -170,9 +207,11 @@ second listing:
 | **Fetch + parse + fold (runs)** | **CPU-parallel (spawned)** | one chunk of survivors per worker |
 | Merge per-worker builders | serial | per worker partial |
 | Series sort + point sort | serial | the series list / per series |
-| **Detect** | **CPU-parallel (spawned)** | one chunk of series per worker |
+| Testability census | serial | per series metadata |
+| **Per-series detect / branch preparation** | **CPU-parallel (spawned)** | one chunk of series per worker |
+| Branch historical report comparison | serial | each discriminant set's bounded rectangular family |
 | Blessing-sidecar fetch | I/O-concurrent (one task) | per object, bounded in flight |
-| False-discovery filter + finding sort + render | serial | the candidate / finding list |
+| History false-discovery filter + finding sort + render | serial | the candidate list + the merged census |
 
 ## Where the bottlenecks live
 
@@ -229,9 +268,9 @@ keeping its own measurement clean.
 ## Seeing what was searched, always
 
 A third reporter channel runs **regardless of `--verbose`**: a single **effective-selection**
-line to standard error naming the facets actually queried — engine, target triple, and
-machine key, each tagged when it was auto-detected rather than typed — plus the resolved base
-branch and the `--since` cutoff. Auto-detection is convenient but invisible, and
+line to standard error naming the discriminant filters actually applied — engine, target
+triple, and machine key, each tagged when it was auto-detected rather than typed — plus the
+resolved base branch and the `--since` cutoff. Auto-detection is convenient but invisible, and
 this line makes it legible so a surprising result can be traced to *what* was searched before
 suspecting the data. It is one line by construction, so it neither buries the verbose notes
 nor perturbs the timing channel, and like both of them it stays on stderr to keep stdout a
@@ -240,9 +279,10 @@ clean stream of reports.
 The line is most valuable when a query comes back empty. When the effective — possibly
 auto-detected — partition holds no stored runs at all, the stdout report's hint names that
 partition and suggests widening it (for instance `--target-triple all`), so an
-auto-detected facet that quietly missed is distinguished from a genuinely empty project. The
+auto-detected filter that quietly missed is distinguished from a genuinely empty project. The
 other selection-driven commands emit the same line through one shared announcement builder:
-`list`, `prune`, and `examine` name the same facets, base branch, and `--since` cutoff, while
-the `bless` / `unbless` mutation commands name the facets and the context commit they act at
+`list`, `prune`, and `examine` name the same discriminant filters, base branch, and `--since`
+cutoff, while the `bless` / `unbless` mutation commands name the discriminant filters and the
+context commit they act at
 (`bless` also names its base branch), so the wording is identical wherever auto-detection can
 surprise you.

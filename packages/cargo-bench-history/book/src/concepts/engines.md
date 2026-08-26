@@ -12,8 +12,14 @@ different microarchitectures — so every engine is partitioned by machine key.
 |---|---|---|
 | **Criterion** | Wall-clock time | Yes |
 | **Callgrind** (via Gungraun) | Simulated instruction / branch counts | No (single value) |
-| **`alloc_tracker`** | Heap allocations (bytes and counts) | Yes |
-| **`all_the_time`** | Processor (CPU) time | Yes |
+| **`alloc_tracker`** | Heap allocations (bytes and counts) | Only when the operation was measured over several spans |
+| **`all_the_time`** | Processor (CPU) time | Only when the operation was measured over several spans |
+
+An interval needs something to vary across, so the two operation engines report one only
+where an operation was measured more than once. A single-span operation records its value
+alone, and analysis then judges it the same way it judges Callgrind's counts — by comparing
+across commits rather than by reading a per-measurement interval. Nothing is lost: an
+interval can only ever *suppress* a finding, never create one.
 
 ## Why no engine is deterministic
 

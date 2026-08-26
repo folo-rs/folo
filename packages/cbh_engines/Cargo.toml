@@ -4,13 +4,25 @@
 name = "cbh_engines"
 description = "Implementation crate for cargo-bench-history - do not reference directly"
 publish = true
-version = "0.0.9"
+version = "0.2.2"
 
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+# Baseline of external types intentionally exposed in the public API. Any new
+# external type must be reviewed and added explicitly.
+# Ref: docs/external-types.md.
+[package.metadata.cargo_check_external_types]
+allowed_external_types = [
+    "cbh_diag::report::Reporter",
+    "cbh_model::comparability::Engine",
+    "cbh_model::run::BenchmarkResult",
+    "ohno::enrichable::Enrichable",
+    "ohno::error_ext::ErrorExt",
+]
 
 [lib]
 # This is an implementation crate whose surface is documented on `cargo-bench-history`.

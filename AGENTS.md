@@ -40,6 +40,11 @@ directly:
   ownership boundaries, and implementation tenets belong in the package's
   `docs/implementation.md`. If a fact is trivia that does not change how an agent
   works, leave it out. Point at the appropriate document instead of repeating it.
+  The private `cbh_*` crates are implementation partitions of
+  `cargo-bench-history`: their user-visible behavioral contracts belong in the
+  parent application's design and API documentation, while partition-local
+  documentation covers only implementation ownership and boundaries and links to
+  the parent.
 
 ## Chapters
 
@@ -133,6 +138,20 @@ for intra-doc links to feature-gated items.
 `README.md`; adding a diagram; rustdoc fails with `unresolved link` because a
 linked item exists only under a non-default feature; the
 `docs-default-features` validation step flags a broken link.
+
+### [docs/external-types.md](docs/external-types.md)
+
+The external-types check: a validation gate (`just check-external-types`, backed
+by `cargo-check-external-types` on a dedicated pinned nightly) that fails when a
+library's public API exposes an external type absent from that crate's
+`[package.metadata.cargo_check_external_types]` allow-list. Covers the
+catch-accidents intent, the glob-the-internal/list-the-external convention,
+canonical partition paths, and the separate `RUST_NIGHTLY_EXTERNAL_TYPES` pin.
+
+**Open this when**: a PR fails the external-types check; intentionally exposing an
+external or cross-crate first-party type in a public API; adding a dependency
+whose types appear in public signatures; adding a new library crate; bumping the
+tool or its nightly pin.
 
 ### [docs/examples.md](docs/examples.md)
 

@@ -1,0 +1,94 @@
+# Data pipeline
+
+This appendix follows a single number all the way through the tool: from the moment a
+benchmark engine writes it to a file, to the sentence in a report that says it moved.
+
+The rest of this guide teaches the mental model. This part is the mechanism, in full, with
+the numbers. It exists for two readers:
+
+- **You have a finding that does not make sense**, and the concept chapters have not
+  settled it. Chapter [Insights](insights.md) is the triage entry point; it links back into
+  whichever stage you need.
+- **You maintain this tool, or you have to trust it**, and you want to check that what it
+  does matches what it claims. Every stage below states what it computes and against which
+  threshold, so you can reproduce a verdict by hand.
+
+## The stages
+
+<!-- The stage names used here are the ones every chapter title repeats, so a reader who
+     remembers this diagram can navigate the rest of the appendix without the sidebar. -->
+
+```mermaid
+flowchart TD
+    E["Benchmark engines<br/>criterion · callgrind · alloc_tracker · all_the_time"]
+    E -->|"one file per engine"| C
+
+    subgraph collection ["Collection"]
+        C["collect / backfill"] --> S[("Stored runs<br/>one object per engine per commit")]
+    end
+
+    S --> SEL
+
+    subgraph analysis ["Analysis"]
+        SEL["Selection<br/>which objects are eligible"]
+        SEL --> REC["Reconstruction<br/>runs become series"]
+        REC --> DET["Detection<br/>locate, fairly test, and size a move"]
+        DET --> GAT["Noise gates<br/>is the move real?"]
+        GAT --> FDR["Multiplicity control<br/>is it real given everything else tested?"]
+    end
+
+    FDR --> REP["Reporting<br/>findings, ranked, in three formats"]
+```
+
+Each stage preserves one thing, and naming those is the fastest way to understand the
+shape of the whole:
+
+| Stage | What it preserves |
+|---|---|
+| [Collection](collection.md) | Every stored run is a permanent, complete record of one engine's output at one commit. |
+| [Selection](selection.md) | Only runs that are *comparable to each other* reach the analysis, decided without reading any of them. |
+| [Reconstruction](reconstruction.md) | A series is ordered by git topology, never by when it was measured. |
+| [Detection](detection.md) | History candidates carry selection-adjusted chance levels; branch candidates name an excursion beyond the observed current-base range. |
+| [Noise gates](gates.md) | A reported move is larger than what the measurement itself manufactures. |
+| [Multiplicity control](coverage.md) | History: a reported move is unlikely to be an accident of how many things were tested. Branch: the complete report is compared with historical base turns. |
+| [Reporting](reporting.md) | What was *not* judged is disclosed as prominently as what was. |
+
+The correction for trying many possible history change points is part of **Detection**, not a
+separate pipeline stage. It makes the step detector's chance level fair before the significance
+gate weighs it. Multiplicity control later answers the report-wide question: history applies its
+false-discovery correction across series, while branch mode compares the complete report with
+historical base turns.
+
+## How to read this appendix
+
+The chapters are ordered along the pipeline, and each one assumes only the ones before it.
+Reading them in order builds the whole picture; stopping anywhere leaves you with a correct
+partial one.
+
+Two conventions run throughout.
+
+**Terms are defined before they are used.** Every chapter that introduces a term opens with a
+short table defining it in plain language, and the [Glossary](glossary.md) collects them all
+with the textbook name alongside, for when you want to read further. Where a plain description
+works as well as the technical name, this appendix uses the description.
+
+**Generated evidence is computed, not invented.** Every behavior-bearing table, figure,
+computed example, configured value, and serialized excerpt is produced by
+`cargo-bench-history-figures` from the production type, key builder, adapter fixture, or
+`private-test-util` inspection surface that owns the behavior. Completeness and derivation
+tests pin those links — enum `ALL` coverage, exhaustive matches, real key-builder assertions,
+and fixture-backed adapter checks — and freshness tests fail if the checked-in includes drift
+from regenerated output. Genuinely explanatory, non-behavioral prose stays ordinary Markdown.
+
+This is also why the examples are small: they are meant to be checkable by hand, not realistic.
+
+## Where this fits
+
+| If you want | Read |
+|---|---|
+| To get the tool running | [Getting started](../getting-started.md) |
+| To know what a command does | [Command reference](../commands/index.md) |
+| The mental model, briefly | [Analysis](../concepts/analysis.md) |
+| Why two results are or are not compared | [Comparability](../concepts/comparability.md) |
+| To make your benchmarks less noisy | [Measurement stability](../concepts/stability.md) |
+| The full mechanism, with numbers | this appendix |

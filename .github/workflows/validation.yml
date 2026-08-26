@@ -10,6 +10,16 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
+# Emit a backtrace whenever a test (or any Rust process) panics, so a rare flake — such as the
+# alloc_tracker panic-on-next-alloc global-state race — is diagnosable straight from the failing
+# run's log instead of the log only advising a re-run with RUST_BACKTRACE set. Panic messages are
+# unchanged, so `#[should_panic]` matching is unaffected. Rendered `ohno` error text is not: an
+# `ohno` error renders its captured backtrace as part of its `Display`, and `message()` renders an
+# error's source through `Display`. Assertions on rendered error text must therefore hold with
+# backtraces captured — see docs/error-handling.md.
+env:
+  RUST_BACKTRACE: "1"
+
 jobs:
   # Determines which packages are impacted by changes in a PR branch compared
   # to origin/main. On push to main (backstop), all packages are validated.
@@ -22,7 +32,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -86,7 +96,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -109,7 +119,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -125,7 +135,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -141,13 +151,37 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
 
       - name: Run default-features-check
         run: just default-features-check
+
+  # Fails when a library's public API exposes an external type that is not on its allow-list, so an
+  # accidental addition to the external surface is caught in review. Modelled on `machete`: a
+  # ubuntu + windows matrix, because the public surface is platform-dependent (cfg-gated items) and
+  # macOS (also cfg(unix)) is redundant with ubuntu here. Delta-scoped like the other package jobs.
+  check-external-types:
+    needs: [delta]
+    if: needs.delta.outputs.skip_all != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run check-external-types on ${{ matrix.platform }}
+        run: just package="${{ needs.delta.outputs.packages }}" check-external-types
 
   clippy-dev:
     needs: [delta]
@@ -161,7 +195,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -204,10 +238,14 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
+        # The benchmark smoke check below runs every bench target once, and on Linux the
+        # `*_cg` targets are real Gungraun harnesses that execute under Valgrind.
         uses: ./.github/actions/setup-environment
+        with:
+          install-valgrind: "true"
 
       - name: Run tests with coverage on ${{ matrix.platform }}
         id: coverage
@@ -257,7 +295,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -279,7 +317,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -304,7 +342,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -332,10 +370,14 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
+        # The benchmark smoke check below runs every bench target once, and on Linux the
+        # `*_cg` targets are real Gungraun harnesses that execute under Valgrind.
         uses: ./.github/actions/setup-environment
+        with:
+          install-valgrind: "true"
 
       - name: Run tests on ${{ matrix.platform }}
         run: just package="${{ needs.delta.outputs.packages }}" test
@@ -369,7 +411,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -397,36 +439,13 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
 
       - name: Run miri-harder for events_once on ubuntu-latest (shard ${{ matrix.shard }})
         run: just package=events_once miri-harder ${{ matrix.shard }}
-
-  miri-harder-infinity-pool:
-    needs: [delta, miri-x64]
-    if: >-
-      needs.delta.outputs.skip_all != 'true'
-      && (needs.delta.outputs.packages == '' || contains(fromJson(needs.delta.outputs.packages_json), 'infinity_pool'))
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1/8, 2/8, 3/8, 4/8, 5/8, 6/8, 7/8, 8/8]
-    # Many-seeds Miri work budget (~90 min) plus up to 90 min for a cold-cache setup-environment.
-    timeout-minutes: 180
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Setup environment
-        uses: ./.github/actions/setup-environment
-
-      - name: Run miri-harder for infinity_pool on ubuntu-latest (shard ${{ matrix.shard }})
-        run: just package=infinity_pool miri-harder ${{ matrix.shard }}
 
   miri-harder-events:
     needs: [delta, miri-x64]
@@ -443,7 +462,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -466,13 +485,47 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
 
       - name: Run miri-harder for awaiter_set on ubuntu-latest (shard ${{ matrix.shard }})
         run: just package=awaiter_set miri-harder ${{ matrix.shard }}
+
+  miri-harder-nm-impl:
+    needs: [delta, miri-x64]
+    if: >-
+      needs.delta.outputs.skip_all != 'true'
+      && (
+        needs.delta.outputs.packages == ''
+        || contains(fromJson(needs.delta.outputs.packages_json), 'nm_impl')
+      )
+    strategy:
+      fail-fast: false
+      matrix:
+        # The smallest existing many-seeds matrix shape is sufficient: a half-budget local
+        # Windows run takes only minutes, and Linux has lower interpreter overhead.
+        shard: [1/2, 2/2]
+    # Many-seeds Miri work budget (~90 min) plus up to 90 min for a cold-cache setup-environment.
+    timeout-minutes: 180
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+
+      - name: Run miri-harder for nm_impl on ubuntu-latest (shard ${{ matrix.shard }})
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          just package=nm_impl miri-harder ${{ matrix.shard }}
 
   machete:
     needs: [delta]
@@ -487,7 +540,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -508,7 +561,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -528,7 +581,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -554,7 +607,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -577,7 +630,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -599,7 +652,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -621,7 +674,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -642,7 +695,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -682,7 +735,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -743,7 +796,7 @@ jobs:
       && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     # `id-token: write` lets the job mint a short-lived GitHub OIDC token (a signed
-    # JWT proving "this run is repo folo-rs/folo on ref X"). `azure/login@v2` hands
+    # JWT proving "this run is repo folo-rs/folo on ref X"). `azure/login@v3` hands
     # that token to Azure, which matches it against the managed identity's federated
     # credentials (see infra/azure-bench-history-test/main.bicep) and issues an access
     # token - so CI authenticates with no stored secret. The default GITHUB_TOKEN
@@ -756,7 +809,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -770,7 +823,7 @@ jobs:
         run: grep -E '^(AZURE_TEST_CLIENT_ID|AZURE_TENANT_ID|AZURE_SUBSCRIPTION_ID|BENCH_HISTORY_TEST_AZURE_ACCOUNT)=' constants.env >> "$GITHUB_ENV"
 
       - name: Sign in to Azure (OIDC workload identity federation)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ env.AZURE_TEST_CLIENT_ID }}
           tenant-id: ${{ env.AZURE_TENANT_ID }}
@@ -822,7 +875,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup environment
         uses: ./.github/actions/setup-environment
@@ -841,7 +894,7 @@ jobs:
       # The tool self-mints regardless of this login; it exists only so the test
       # harness's `az`-based container cleanup has a session to use.
       - name: Sign in to Azure (for harness container cleanup only)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ env.AZURE_TEST_CLIENT_ID }}
           tenant-id: ${{ env.AZURE_TENANT_ID }}
@@ -902,7 +955,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Release Codecov coverage notifications
         uses: codecov/codecov-action@v7
@@ -929,6 +982,7 @@ jobs:
       - validate-workflows
       - format-check
       - default-features-check
+      - check-external-types
       - clippy-dev
       - test-x64
       - test-docs
@@ -937,9 +991,9 @@ jobs:
       - test-arm
       - miri-arm
       - miri-harder-events-once
-      - miri-harder-infinity-pool
       - miri-harder-events
       - miri-harder-awaiter-set
+      - miri-harder-nm-impl
       - machete
       - clippy-release
       - build-release
