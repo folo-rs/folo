@@ -297,16 +297,13 @@ tempted to edit a `Cargo.toml` version field on a feature branch.
 
 ### [docs/release-versioning.md](docs/release-versioning.md)
 
-How crate version numbers are decided and enforced on the pull request that
-causes them: the "increment is the release" invariant, anchor-based detection
-of unreleased content, version-group closure, the `cargo-release-plan` tool,
-the `increment-versions` skill, and the `validate-versions` check. The publish
-half is unchanged and lives in [`release-automation.md`](docs/release-automation.md).
+Agreed design for pull-request-time versioning. **Not the process in force** —
+until it is implemented, version bumps follow [`git-workflow.md`](docs/git-workflow.md)
+and [`RELEASING.md`](RELEASING.md). The publish half is unchanged and lives in
+[`release-automation.md`](docs/release-automation.md).
 
-**Open this when**: preparing a pull request that touches a published package;
-deciding what version a package should get; implementing or debugging the
-version check, `cargo-release-plan`, or the `increment-versions` skill; a pull
-request is blocked by `validate-versions`.
+**Open this when**: implementing that design; a pull request is about the
+versioning process itself.
 
 ### [docs/release-automation.md](docs/release-automation.md)
 

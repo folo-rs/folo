@@ -1,18 +1,17 @@
 # Release versioning
 
-This chapter describes how crate version numbers are decided and enforced. It covers the half
-of the release process that happens *before* a merge to `main`;
-[`release-automation.md`](release-automation.md) covers what happens after and is unchanged by
-this design.
+This chapter is the agreed design for how crate version numbers will be decided and enforced.
+It is **not the process in force**. Until implementation lands, version bumps follow
+[`git-workflow.md`](git-workflow.md) and [`RELEASING.md`](../RELEASING.md). The publish half
+([`release-automation.md`](release-automation.md)) is unchanged by this design.
 
 ## Meta
 
-* **Open this when**: preparing a pull request that touches a published package; deciding what
-  version a package should get; implementing or debugging the version check, the
-  `cargo-release-plan` tool, or the `increment-versions` skill; a pull request is blocked by the
-  `validate-versions` check.
+* **Open this when**: implementing this design; a pull request is about the versioning process
+  itself.
 * **Cross-links**: [`release-automation.md`](release-automation.md) (the publish half),
-  [`git-workflow.md`](git-workflow.md) (pull request mechanics),
+  [`git-workflow.md`](git-workflow.md) (current contributor rules, including no version bumps
+  on feature branches),
   [`impl-crate-split.md`](impl-crate-split.md) (why version groups exist),
   [`build-and-tooling.md`](build-and-tooling.md) (`just` recipes and script conventions).
 
@@ -134,11 +133,11 @@ alternative, comparing parsed manifests, is more machinery than the problem dese
 
 ### What ships
 
-The published crate is the consumer build: `src/` and `README.md` (crates.io renders it).
-Everything else — `tests/`, `benches/`, `examples/`, package-local `docs/`, `book/`,
-`AGENTS.md` — stays in git. Each publishable package declares that with `include` in
-`Cargo.toml`. Nothing is special-cased in the tool, and a reader of `Cargo.toml` can see
-exactly what is released.
+The published crate is the consumer build: `src/`, `README.md` (crates.io renders it), and
+package-local `doc/` / `docs/` (compile-time diagrams and similar files `src/` actually
+embeds). Everything else — `tests/`, `benches/`, `examples/`, `book/`, `AGENTS.md` — stays
+in git. Each publishable package declares that with `include` in `Cargo.toml`. Nothing is
+special-cased in the tool, and a reader of `Cargo.toml` can see exactly what is released.
 
 `include` is the allow-list, not `exclude`. A denylist grows every time a new non-source
 directory appears; an allow-list does not.
@@ -146,10 +145,10 @@ directory appears; an allow-list does not.
 An `include` edit is a change to `Cargo.toml`, which is always released content, so adding
 it requires an increment in the same change.
 
-`src/` must not `include_str!` (or `include_bytes!` / `include!`) a path outside `src/`.
-That is invalid layering regardless of packaging. Shared test inputs belong with the crate
-that owns the parser, and callers of that parser use it as a dependency rather than
-embedding a second copy.
+`src/` may compile-time-include files that themselves ship (`doc/`, `docs/`). It must not
+embed `tests/`, `benches/` or `examples/`. Shared test inputs belong with the crate that
+owns the parser, and callers of that parser use it as a dependency rather than embedding
+a second copy.
 
 ### Inherited workspace values
 
@@ -165,8 +164,11 @@ changed between the anchor and the work tree:
 
 Attribution is per package: the tool reads which keys each package inherits (`.workspace = true`
 in its manifest, resolved values from `cargo metadata --no-deps`) and marks only those packages.
-A root-manifest edit therefore does not blanket-mark the workspace, and the affected packages see
-it as an ordinary entry in their own change set.
+A root-manifest edit therefore does not blanket-mark the workspace. It *does* mark every
+package that inherits the changed value, and that is the desired outcome: a global change
+should republish the world. Group closure and `=`-pin rewrites then follow as usual. The
+rate-limit budget already sizes a full-workspace publish; that path is not an accident to
+narrow away.
 
 Everything else in the root manifest is out of scope, including **`[workspace.lints]`**. This is
 the answer to "how are lints excluded": they are not part of the inherited-value set, so they are
@@ -481,24 +483,33 @@ versioning.
 
 The check cannot be switched on until every publishable package is clean against its anchor.
 Batched versioning leaves packages with released content sitting past their last increment;
-restricting the crate to `src/` and `README.md` removes those whose only drift is tests,
-benches, examples or package-local documentation.
+restricting the crate to `src/`, `README.md` and `doc/`/`docs/` removes those whose only
+drift is tests, benches, examples or other git-only files.
 
-1. Stop `src/` from embedding files outside `src/`. Shared parser fixtures live in the
-   crate that owns the parser; dependents call that crate instead of carrying a second copy.
+Cutover assumes an **exclusive lock** on the repository: no other pull requests merge while
+the process is being switched. That lets the tool, the catch-up increments, the required
+check and the merge queue land as one window without other branches being asked to satisfy
+a rule that `main` itself does not yet meet. `just prepare-release` and the no-bumps-on-
+feature-branches rule stay in force until that window finishes.
+
+1. Stop `src/` from embedding `tests/` (and other git-only paths). Shared parser fixtures
+   live in the crate that owns the parser; dependents call that crate instead of carrying
+   a second copy.
 2. Land the `include` allow-lists and the reconciliation increments together, and let
    `release.yml` publish. They must land together because an `include` edit is itself a
    manifest change.
 3. Confirm `cargo release-plan check` is clean on `main`.
-4. Make `validate-versions` a required check, and put `main` behind a merge queue.
-
-Steps 1–3 must complete before step 4, or every pull request is immediately red.
+4. Make `validate-versions` a required check, put `main` behind a merge queue, and invert
+   [`git-workflow.md`](git-workflow.md) / [`RELEASING.md`](../RELEASING.md). Then release
+   the lock.
 
 ## Publish volume and rate limits
 
 Every merge that touches a published package now publishes it, and group closure multiplies that:
 a one-line change in any `cbh_*` crate publishes all sixteen members of the `cargo-bench-history`
-group. Long publish runs are therefore expected by design, not an anomaly to be engineered away.
+group. A change to an inherited workspace value publishes every inheriting package. Long
+publish runs — including a full-workspace republish — are therefore expected by design, not
+an anomaly to be engineered away.
 
 crates.io throttles publishing with a per-user token bucket, and the applicable limit is the one
 for **new versions of existing crates**: a burst of 30 with one token refilled per minute. (The
