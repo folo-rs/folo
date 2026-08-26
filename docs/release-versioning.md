@@ -73,11 +73,14 @@ textual diff of the manifest, so reformatting, key reordering and line moves do 
 increments. And a package's creation commit counts as a version change (absent → present), so a
 package added and released in one pull request needs no special handling.
 
-The base revision defaults to `origin/main` and CI passes the pull request's base SHA explicitly.
-A stale base is safe rather than unsound: it can only move the anchor further back, which reports
-more, never less. The check needs full history (`fetch-depth: 0`) and the base ref, and nothing
-else — no tags, no merge ref, no network. Tags are not consulted, because tagging is atomic with
-neither the merge nor the publish, so an absent tag proves nothing.
+The base revision defaults to `origin/main`. CI passes an explicit SHA: the pull request's
+base on a `pull_request` run, the commit the queue rebased onto (`merge_group.base_sha`) on a
+merge-queue run. Using the original pull-request base inside the queue would let two branches
+that both incremented `0.6.1 → 0.6.2` both look valid. A stale base is otherwise safe rather
+than unsound: it can only move the anchor further back, which reports more, never less. The
+check needs full history (`fetch-depth: 0`) and that base SHA, and nothing else — no tags, no
+merge ref, no network. Tags are not consulted, because tagging is atomic with neither the
+merge nor the publish, so an absent tag proves nothing.
 
 ### Concurrent pull requests
 
@@ -92,7 +95,14 @@ version has *not* increased relative to its anchor — while its content has. Th
 
 Requiring branches to be up to date *without* a queue would give the same guarantee and
 serialise the author: every competing merge is a manual rebase and a second skill run. The
-queue performs the rebase. It is the only GitHub merge requirement this design adds.
+queue performs the rebase. "Require branches to be up to date" is not used.
+
+The queue can also batch two pull requests that both increment the same package to the same
+version into one merge. That lands as one combined release of that version; the invariant
+holds. Sequential queue entries still force the second pull request to the next version.
+
+Merging is blocked by a single required status check named `required-checks` (below).
+`validate-versions` feeds that fan-in; it is not itself an entry in the GitHub ruleset.
 
 The residual window is a second pull request merging while the first one's publish is still in
 flight. Nothing is lost even then: because the rule covers every publishable package, the next
@@ -401,6 +411,16 @@ the lockfile fails `--locked` builds.
 
 ## The GitHub check
 
+Validation grows a `merge_group` trigger so the queue actually runs the workflow. A required
+check that never fires as `merge_group` is a failed check, and the queue never merges. Merge-queue
+runs use the same pruned job set as pull requests; `push` to `main` remains the full backstop.
+Delta analysis on a queue run uses `merge_group.base_sha` (the commit the queue rebased onto),
+not a freshly fetched `origin/main`, so scoping cannot drift from the version check's base.
+
+The existing Validation concurrency group (`github.head_ref || github.ref`) already distinguishes
+queue entries: `head_ref` is empty there and `github.ref` is the unique queue ref. The
+close-companion stays pull-request-only.
+
 ### `validate-versions`
 
 A new job in `validation.yml`. Its inputs are git history and manifests, not Cargo packages, so
@@ -420,20 +440,45 @@ validate-versions:
     - uses: ./.github/actions/setup-environment
     - id: check
       env:
-        RELEASE_PLAN_BASE: ${{ github.event.pull_request.base.sha }}
+        RELEASE_PLAN_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
       run: just validate-versions
       shell: pwsh
 ```
 
 The recipe is a thin wrapper over `cargo release-plan check --base <sha> --format github`, which
-also emits the set of packages this pull request releases, for the next job. Passing the base SHA
-from the event payload avoids inferring it from refs. On a merge-queue run the base SHA is the
-commit the queue rebased onto, which is what makes the concurrent-PR rule hold. No PowerShell
-module is introduced: the classification logic is the Rust tool's job and is tested there. The
-job joins `alert`'s `needs:` list.
+also emits the set of packages this pull request releases, for the next job. An empty
+`RELEASE_PLAN_BASE` (a push to `main`) falls through to the tool default of `origin/main`. No
+PowerShell module is introduced: the classification logic is the Rust tool's job and is tested
+there. The job joins `alert`'s `needs:` list and the `required-checks` fan-in.
 
 A failing check prints one actionable line per offence and names the skill. That is the entire
-recovery path — the author does not have to reconstruct a plan from this chapter.
+recovery path — the author does not have to reconstruct a plan from this chapter. Copilot is
+assumed available; there is no non-skill command that writes a plan.
+
+### `required-checks`
+
+`main` is protected. The merge queue's only required status check is `required-checks`.
+
+GitHub's required-checks field is a **string match on the check name**. That match cannot
+express "this matrix job, but only the legs that actually ran", and it cannot see a check that
+was skipped rather than posted. A job with both `strategy.matrix` and a job-level `if:` that
+evaluates false never expands the matrix, so contexts such as `test-x64 (ubuntu-latest)` stay
+on `Expected — Waiting for status to be reported` forever if they are listed as required.
+Dynamically generated names have the same problem.
+
+The ruleset therefore requires **only** `required-checks`. That job is a fan-in: `if: always()`,
+`needs:` every merge-blocking job in Validation (including `validate-versions` and the scoped
+semver-checks job), succeeds when every dependency succeeded or was skipped, and fails on
+failure, cancelled, or any other result. Advisory jobs stay off that list. `alert` stays off
+it — it files issues on a failed push to `main`, it is not a merge gate.
+
+The job's GitHub check name is the literal `required-checks`, so the ruleset string is stable.
+When a new merge-blocking job is added to Validation it is added to this `needs:` list; it is
+never added to the GitHub ruleset. Matrix jobs that can skip via a job-level `if:` can only be
+made required through this fan-in.
+
+[`.github/workflows/design.md`](../.github/workflows/design.md) and the workflow `AGENTS.md`
+carry the maintenance rule.
 
 ### `semver-checks`
 
@@ -462,8 +507,9 @@ flowchart TD
     D -- adjust --> C
     D -- yes --> E["apply: versions, pins, groups, lockfile"]
     E --> F["validate-versions + scoped semver-checks"]
-    F --> G["Merge queue rebases onto main"]
-    G --> H["release.yml publishes every unpublished version"]
+    F --> G["required-checks fan-in"]
+    G --> H["Merge queue rebases onto main"]
+    H --> I["release.yml publishes every unpublished version"]
 ```
 
 ## Relationship to release-plz
@@ -487,10 +533,14 @@ restricting the crate to `src/`, `README.md` and `doc/`/`docs/` removes those wh
 drift is tests, benches, examples or other git-only files.
 
 Cutover assumes an **exclusive lock** on the repository: no other pull requests merge while
-the process is being switched. That lets the tool, the catch-up increments, the required
-check and the merge queue land as one window without other branches being asked to satisfy
-a rule that `main` itself does not yet meet. `just prepare-release` and the no-bumps-on-
+the process is being switched. That lets the tool, the catch-up increments, the fan-in job,
+the ruleset and the merge queue land as one window without other branches being asked to
+satisfy a rule that `main` itself does not yet meet. `just prepare-release` and the no-bumps-on-
 feature-branches rule stay in force until that window finishes.
+
+The `cargo-release-plan` package is first-published by hand before the merge that introduces
+it with `publish = true`. Trusted Publishing cannot create a crate; once that first version
+exists, OIDC publishing takes over. There is no `publish = false` staging crate.
 
 1. Stop `src/` from embedding `tests/` (and other git-only paths). Shared parser fixtures
    live in the crate that owns the parser; dependents call that crate instead of carrying
@@ -499,7 +549,9 @@ feature-branches rule stay in force until that window finishes.
    `release.yml` publish. They must land together because an `include` edit is itself a
    manifest change.
 3. Confirm `cargo release-plan check` is clean on `main`.
-4. Make `validate-versions` a required check, put `main` behind a merge queue, and invert
+4. Land Validation's `merge_group` trigger and the `required-checks` fan-in (every
+   merge-blocking job, including `validate-versions`). Put `main` behind a merge queue
+   whose only required status check is `required-checks`. Invert
    [`git-workflow.md`](git-workflow.md) / [`RELEASING.md`](../RELEASING.md). Then release
    the lock.
 
