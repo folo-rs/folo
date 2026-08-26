@@ -4,13 +4,22 @@
 name = "cargo-bench-history-faker"
 description = "Unsupported synthetic benchmark-output generator for validating cargo-bench-history end to end; no stable API or CLI"
 publish = true
-version = "0.2.2"
+version = "0.2.3"
 
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+# Only the consumer build ships. Tests, benches, examples, and agent notes
+# stay in git.
+include = [
+    "src/**/*",
+    "README.md",
+    "doc/**/*",
+    "docs/**/*",
+]
 
 [package.metadata.binstall]
 # Prebuilt binaries are published by .github/workflows/release.yml (see

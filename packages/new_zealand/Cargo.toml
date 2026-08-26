@@ -2,13 +2,22 @@
 name = "new_zealand"
 description = "Utilities for working with non-zero integers"
 publish = true
-version = "1.0.7"
+version = "1.0.8"
 
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+# Only the consumer build ships. Tests, benches, examples, and agent notes
+# stay in git.
+include = [
+    "src/**/*",
+    "README.md",
+    "doc/**/*",
+    "docs/**/*",
+]
 
 [package.metadata.docs.rs]
 all-features = true

@@ -2,13 +2,22 @@
 name = "linked_macros_impl"
 description = "Internal dependency of the 'linked_macros' package - do not reference directly"
 publish = true
-version = "1.0.19"
+version = "1.0.20"
 
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+# Only the consumer build ships. Tests, benches, examples, and agent notes
+# stay in git.
+include = [
+    "src/**/*",
+    "README.md",
+    "doc/**/*",
+    "docs/**/*",
+]
 
 [package.metadata.docs.rs]
 all-features = true

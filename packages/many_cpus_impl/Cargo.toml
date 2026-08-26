@@ -2,13 +2,22 @@
 name = "many_cpus_impl"
 description = "Implementation crate for many_cpus - do not reference directly"
 publish = true
-version = "2.4.16"
+version = "2.4.17"
 
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+# Only the consumer build ships. Tests, benches, examples, and agent notes
+# stay in git.
+include = [
+    "src/**/*",
+    "README.md",
+    "doc/**/*",
+    "docs/**/*",
+]
 
 [package.metadata.docs.rs]
 all-features = true
