@@ -2,13 +2,22 @@
 name = "events_once"
 description = "Efficient oneshot events (channels) with support for single-threaded events, object embedding, event pools and event lakes"
 publish = true
-version = "0.5.35"
+version = "0.5.36"
 
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+# Only the consumer build ships. Tests, benches, examples, and agent notes
+# stay in git.
+include = [
+    "src/**/*",
+    "README.md",
+    "doc/**/*",
+    "docs/**/*",
+]
 
 [package.metadata.docs.rs]
 all-features = true

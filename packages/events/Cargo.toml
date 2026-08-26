@@ -2,13 +2,22 @@
 name = "events"
 description = "Async manual-reset and auto-reset event primitives"
 publish = true
-version = "0.7.14"
+version = "0.7.15"
 
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+# Only the consumer build ships. Tests, benches, examples, and agent notes
+# stay in git.
+include = [
+    "src/**/*",
+    "README.md",
+    "doc/**/*",
+    "docs/**/*",
+]
 
 [package.metadata.docs.rs]
 all-features = true

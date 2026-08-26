@@ -2,13 +2,22 @@
 name = "region_local"
 description = "Isolated variable storage per memory region, similar to `thread_local_rc!`"
 publish = true
-version = "1.0.32"
+version = "1.0.33"
 
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+# Only the consumer build ships. Tests, benches, examples, and agent notes
+# stay in git.
+include = [
+    "src/**/*",
+    "README.md",
+    "doc/**/*",
+    "docs/**/*",
+]
 
 [package.metadata.docs.rs]
 all-features = true

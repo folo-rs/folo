@@ -3,13 +3,22 @@
 name = "cargo-bench-history"
 description = "A Cargo tool that maintains a long-lived history of benchmark results and analyzes it for trends"
 publish = true
-version = "0.2.3"
+version = "0.2.4"
 
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+# Only the consumer build ships. Tests, benches, examples, and agent notes
+# stay in git.
+include = [
+    "src/**/*",
+    "README.md",
+    "doc/**/*",
+    "docs/**/*",
+]
 
 # Baseline of external types intentionally exposed in the public API.
 # `cargo-bench-history` is the public shell over its own `cbh_*` implementation

@@ -3,13 +3,22 @@
 name = "cargo-detect-package"
 description = "A Cargo tool to detect the package that a file belongs to, passing the package name to a subcommand"
 publish = true
-version = "1.0.29"
+version = "1.0.30"
 
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+# Only the consumer build ships. Tests, benches, examples, and agent notes
+# stay in git.
+include = [
+    "src/**/*",
+    "README.md",
+    "doc/**/*",
+    "docs/**/*",
+]
 
 [package.metadata.docs.rs]
 all-features = true

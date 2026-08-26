@@ -2,13 +2,22 @@
 name = "alloc_tracker"
 description = "Memory allocation tracking utilities for benchmarks and performance analysis"
 publish = true
-version = "0.7.2"
+version = "0.7.3"
 
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+# Only the consumer build ships. Tests, benches, examples, and agent notes
+# stay in git.
+include = [
+    "src/**/*",
+    "README.md",
+    "doc/**/*",
+    "docs/**/*",
+]
 
 [package.metadata.docs.rs]
 all-features = true
