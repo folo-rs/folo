@@ -19,6 +19,11 @@ commits never become anchors. Comparison uses the parsed version, so
 reformatting a manifest without changing the version is not an increment. A
 package's creation (absent to present) counts as a version change.
 
+A package that is absent from the base but present at some earlier commit on
+the base's first-parent line is being restored, not created. The version it
+declared at that earlier commit may already be published, so that commit is its
+anchor and the ordinary monotonicity and content comparisons apply.
+
 The base revision defaults to `origin/main`. CI should pass an explicit SHA of
 the merge-base or target-branch tip. A stale default can both add and hide
 differences, so it is not a conservative fallback.

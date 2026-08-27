@@ -12,7 +12,7 @@ use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use toml_edit::DocumentMut;
 
-use crate::anchor::{Anchor, TimelineEntry, resolve_anchor};
+use crate::anchor::{Anchor, TimelineEntry, reintroduction_anchor, resolve_anchor};
 use crate::diff::file_diff;
 use crate::git::{GitRepo, git_path, join_git_rel};
 use crate::groups::GroupVerdict;
@@ -130,6 +130,11 @@ pub(crate) fn classify(
             &package.manifest.directory,
         );
     }
+    // Nested-member filtering compares these against package directories, so
+    // they must live in the same coordinate system.
+    for dir in &mut work_tree.member_dirs {
+        *dir = join_git_rel(git.root(), &work_tree.workspace_root, dir);
+    }
     let head = git.head()?;
     let base_sha = git.rev_parse(base)?;
     verbose.note(format!(
@@ -213,33 +218,48 @@ fn classify_one(
     let group = work_tree.groups.group_of(name).map(ToOwned::to_owned);
     let dependents = dependents_of(&work_tree.packages, name);
 
-    if !base_snapshot.packages.contains_key(name) {
-        verbose.note(format!(
-            "{name}: absent from base {base_sha}, so creation on this branch counts as a \
-             version increase and the status is releasing"
-        ));
-        return Ok(PackageClass {
-            name: name.clone(),
-            declared_version: package.manifest.version.clone(),
-            group,
-            status: PackageStatus::Releasing,
-            anchor: None,
-            changed: Vec::new(),
-            stat: DiffStat {
-                files: 0,
-                insertions: 0,
-                deletions: 0,
-            },
-            patch: String::new(),
-            untracked: Vec::new(),
-            dependencies: package.dependencies.clone(),
-            dependents,
-            manifest_path: package.manifest_path.clone(),
-        });
-    }
-
     let timeline = build_timeline(git, name, commits, cache, &work_tree.workspace_root)?;
-    let anchor = resolve_anchor(name, &timeline)?;
+    let anchor = if base_snapshot.packages.contains_key(name) {
+        resolve_anchor(name, &timeline)?
+    } else {
+        match reintroduction_anchor(&timeline) {
+            Some(anchor) => {
+                verbose.note(format!(
+                    "{name}: absent from base {base_sha} but present at {} declaring {}, so this \
+                     branch reintroduces a package rather than creating one and that commit is \
+                     the anchor",
+                    short_commit(&anchor.commit),
+                    anchor.version
+                ));
+                anchor
+            }
+            None => {
+                verbose.note(format!(
+                    "{name}: absent from base {base_sha} and from every sampled commit on its \
+                     first-parent history, so creation on this branch counts as a version \
+                     increase and the status is releasing"
+                ));
+                return Ok(PackageClass {
+                    name: name.clone(),
+                    declared_version: package.manifest.version.clone(),
+                    group,
+                    status: PackageStatus::Releasing,
+                    anchor: None,
+                    changed: Vec::new(),
+                    stat: DiffStat {
+                        files: 0,
+                        insertions: 0,
+                        deletions: 0,
+                    },
+                    patch: String::new(),
+                    untracked: Vec::new(),
+                    dependencies: package.dependencies.clone(),
+                    dependents,
+                    manifest_path: package.manifest_path.clone(),
+                });
+            }
+        }
+    };
     let short_anchor = short_commit(&anchor.commit);
     verbose.note(format!(
         "{name}: anchor {short_anchor} declared {}; work tree declares {}; a status of releasing \
@@ -469,9 +489,8 @@ fn released_at_commit(
     side: &PackageSide<'_>,
 ) -> Result<HashMap<String, String>, AppError> {
     let mut map = HashMap::new();
-    let pathspec = if side.dir.is_empty() { "." } else { side.dir };
     let nested = nested_package_dirs(side.member_dirs, side.dir);
-    for full in git.ls_tree(commit, pathspec)? {
+    for full in git.ls_tree(commit, side.dir)? {
         let full = git_path(&full);
         if is_inside_any(&full, &nested) {
             continue;
@@ -491,9 +510,8 @@ fn released_in_work_tree(
     side: &PackageSide<'_>,
 ) -> Result<HashMap<String, String>, AppError> {
     let mut map = HashMap::new();
-    let pathspec = if side.dir.is_empty() { "." } else { side.dir };
     let nested = nested_package_dirs(side.member_dirs, side.dir);
-    for full in git.ls_files(pathspec)? {
+    for full in git.ls_files(side.dir)? {
         let full = git_path(&full);
         if is_inside_any(&full, &nested) {
             continue;

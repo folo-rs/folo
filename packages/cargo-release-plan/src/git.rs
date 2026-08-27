@@ -176,7 +176,7 @@ impl GitRepo {
     pub(crate) fn ls_files(&self, pathspec: &str) -> Result<Vec<String>, AppError> {
         let stdout = run_capture(
             "git",
-            &["ls-files", "-z", "--", &git_path(pathspec)],
+            &["ls-files", "-z", "--", &dir_pathspec(pathspec)],
             &self.root,
         )?;
         Ok(split_z(&stdout))
@@ -194,7 +194,7 @@ impl GitRepo {
                 "--others",
                 "--exclude-standard",
                 "--",
-                &git_path(pathspec),
+                &dir_pathspec(pathspec),
             ],
             &self.root,
         )?;
@@ -212,7 +212,7 @@ impl GitRepo {
                 "-z",
                 commit,
                 "--",
-                &git_path(pathspec),
+                &dir_pathspec(pathspec),
             ],
             &self.root,
         )?;
@@ -244,6 +244,15 @@ fn is_manifest_path(path: &str) -> bool {
 /// Git pathspecs use `/` even on Windows.
 pub(crate) fn git_path(path: &str) -> String {
     path.replace('\\', "/")
+}
+
+/// Turns a directory into a pathspec Git accepts.
+///
+/// The repository root is the empty string in every path this tool computes,
+/// but Git rejects an empty pathspec, so the root becomes `.`.
+fn dir_pathspec(dir: &str) -> String {
+    let dir = git_path(dir);
+    if dir.is_empty() { ".".to_string() } else { dir }
 }
 
 /// Joins a workspace-relative path onto the workspace's git prefix.
@@ -354,5 +363,11 @@ mod tests {
             split_z(" leading.rs\0trailing.rs \0mid\nline.rs\0"),
             vec![" leading.rs", "trailing.rs ", "mid\nline.rs"]
         );
+    }
+    #[test]
+    fn dir_pathspec_turns_the_repository_root_into_a_usable_pathspec() {
+        assert_eq!(dir_pathspec(""), ".");
+        assert_eq!(dir_pathspec("packages/foo"), "packages/foo");
+        assert_eq!(dir_pathspec(r"packages\foo"), "packages/foo");
     }
 }

@@ -67,6 +67,22 @@ probe yields case-sensitive matching, which never widens membership.
 A non-virtual root's own package is a member whatever `members` and `exclude`
 say, so that case is decided before the patterns are consulted.
 
+Package directories reported by `cargo metadata` are workspace-relative, but
+every pathspec handed to Git is repository-relative, so directories are rebased
+onto the repository root before use. The member list is rebased with them: the
+nested-package boundary is computed by comparing a package directory against the
+member directories, and a comparison across two coordinate systems would silently
+find no nested members. Git rejects an empty pathspec, so the repository root —
+which every one of these paths spells as the empty string — becomes `.` inside
+the Git wrapper rather than at each call site.
+
+A package that is absent from the base revision is only treated as newly created
+once the first-parent walk shows no sampled commit carried it. When some earlier
+commit did, the branch is restoring a package, so that commit and the version it
+declared become the anchor and the ordinary comparisons apply. Treating every
+absence as creation would let a restored package re-publish a version that is
+already on crates.io.
+
 ## Diagnostics
 
 `--format github` renders each diagnostic as a workflow command in addition to

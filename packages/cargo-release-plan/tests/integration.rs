@@ -6,6 +6,7 @@
 //! sources are arbitrary byte-change markers.
 
 use std::fs;
+use std::path::PathBuf;
 use std::process::Command;
 
 use cargo_release_plan::{CheckFormat, RunInput, RunOutcome, run};
@@ -540,10 +541,81 @@ fn seeded_package() -> Fixture {
     fixture
 }
 
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn reintroduced_package_is_anchored_to_the_version_it_carried_before_deletion() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "keeper", "0.1.0", "");
+    write_package(&fixture, "demo", "0.3.0", "");
+    fixture.commit("seed");
+
+    fs::remove_dir_all(fixture.path().join("packages/demo")).unwrap();
+    fixture.commit("delete demo");
+    let base = fixture.sha("HEAD");
+
+    write_package(&fixture, "demo", "0.3.0", "");
+    fixture.write("packages/demo/src/lib.rs", "pub fn f() { let _ = 5; }\n");
+    fixture.commit("reintroduce demo at an already-released version");
+
+    // Restoring a package is not creating it: 0.3.0 was already carried by the
+    // base line, so content that differs from it is unreleased.
+    let (passed, message) = check(&fixture, &base);
+    assert!(!passed, "{message}");
+    assert!(message.contains("demo: unreleased-changes"), "{message}");
+
+    write_package(&fixture, "demo", "0.4.0", "");
+    fixture.write("packages/demo/src/lib.rs", "pub fn f() { let _ = 5; }\n");
+    fixture.commit("increment past the released version");
+    let (passed, message) = check(&fixture, &base);
+    assert!(passed, "{message}");
+}
+
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn nested_package_boundary_holds_when_the_workspace_is_below_the_repository_root() {
+    let fixture = Fixture::new("");
+    fixture.write(
+        "sub/Cargo.toml",
+        "[workspace]\nmembers = [\"packages/*\"]\nresolver = \"2\"\n",
+    );
+    fixture.write(
+        "sub/packages/outer/Cargo.toml",
+        concat!(
+            "[package]\nname = \"outer\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n",
+            "[dependencies]\ninner = { path = \"inner\", version = \"0.1.0\" }\n"
+        ),
+    );
+    fixture.write("sub/packages/outer/src/lib.rs", "pub fn f() {}\n");
+    fixture.write(
+        "sub/packages/outer/inner/Cargo.toml",
+        "[package]\nname = \"inner\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    fixture.write("sub/packages/outer/inner/src/lib.rs", "pub fn g() {}\n");
+    fixture.commit("seed nested workspace");
+    let base = fixture.sha("HEAD");
+
+    fixture.write(
+        "sub/packages/outer/inner/src/lib.rs",
+        "pub fn g() { let _ = 6; }\n",
+    );
+    fixture.commit("change inner");
+
+    // The workspace root is below the repository root, so member directories and
+    // package directories both have to be expressed relative to the repository
+    // before the nested-package boundary is applied.
+    let (passed, message) = check_workspace(&base, fixture.path().join("sub").join("Cargo.toml"));
+    assert!(!passed, "{message}");
+    assert!(message.contains("inner: unreleased-changes"), "{message}");
+    assert!(!message.contains("outer: unreleased-changes"), "{message}");
+}
 fn check(fixture: &Fixture, base: &str) -> (bool, String) {
+    check_workspace(base, fixture.manifest())
+}
+
+fn check_workspace(base: &str, manifest_path: PathBuf) -> (bool, String) {
     match run(&RunInput::Check {
         base: base.to_string(),
-        manifest_path: fixture.manifest(),
+        manifest_path,
         format: CheckFormat::Text,
         verify_packaging: false,
         verbose: false,

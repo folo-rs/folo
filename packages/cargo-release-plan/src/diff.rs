@@ -22,8 +22,14 @@ pub(crate) fn file_diff(path: &str, old: Option<&[u8]>, new: Option<&[u8]>) -> F
         str::from_utf8(old.unwrap_or_default()),
         str::from_utf8(new.unwrap_or_default()),
     ) else {
+        // The same side labels as a text diff, so a consumer reads an added or
+        // deleted binary file as such rather than as a modification.
         return FileDiff {
-            text: format!("Binary files a/{path} and b/{path} differ\n"),
+            text: format!(
+                "Binary files {} and {} differ\n",
+                side_label(old_present, "a", path),
+                side_label(new_present, "b", path)
+            ),
             insertions: 0,
             deletions: 0,
         };
@@ -444,6 +450,23 @@ mod tests {
         assert_eq!(
             (diff.insertions, diff.deletions),
             (MAX_EDIT_SCRIPT_LENGTH, MAX_EDIT_SCRIPT_LENGTH)
+        );
+    }
+    #[test]
+    fn binary_changes_use_the_dev_null_placeholder_for_an_absent_side() {
+        let added = file_diff("logo.png", None, Some(&[0xFF, 0xFE, 0x00]));
+        assert_eq!(added.text, "Binary files /dev/null and b/logo.png differ\n");
+
+        let deleted = file_diff("logo.png", Some(&[0xFF, 0xFE, 0x00]), None);
+        assert_eq!(
+            deleted.text,
+            "Binary files a/logo.png and /dev/null differ\n"
+        );
+
+        let modified = file_diff("logo.png", Some(&[0xFF, 0x00]), Some(&[0xFF, 0x01]));
+        assert_eq!(
+            modified.text,
+            "Binary files a/logo.png and b/logo.png differ\n"
         );
     }
 }

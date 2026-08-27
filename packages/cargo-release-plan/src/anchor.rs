@@ -72,6 +72,25 @@ pub(crate) fn resolve_anchor(
     })
 }
 
+/// Finds the newest commit at which a package absent from the base still existed.
+///
+/// A branch that restores a package Git no longer carries on the base line is
+/// not creating it: the version the restored manifest declares may already be
+/// published, so the last version the base line carried remains the anchor and
+/// the ordinary monotonicity and content checks still apply. Ref:
+/// docs/design.md, "Classification".
+///
+/// Returns `None` when no sampled commit carried the package, which is the
+/// genuine creation case.
+pub(crate) fn reintroduction_anchor(timeline: &[TimelineEntry]) -> Option<Anchor> {
+    timeline.iter().find_map(|entry| {
+        entry.version.as_ref().map(|version| Anchor {
+            commit: entry.commit.clone(),
+            version: version.clone(),
+        })
+    })
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -145,5 +164,24 @@ mod tests {
         let anchor = resolve_anchor("foo", &timeline).unwrap();
         assert_eq!(anchor.commit, "m");
         assert_eq!(anchor.version, v("0.1.1"));
+    }
+
+    #[test]
+    fn reintroduction_anchor_finds_the_newest_commit_that_carried_the_package() {
+        let timeline = vec![
+            entry("c4", None, true),
+            entry("c3", None, true),
+            entry("c2", Some("0.3.0"), true),
+            entry("c1", Some("0.2.0"), false),
+        ];
+        let anchor = reintroduction_anchor(&timeline).unwrap();
+        assert_eq!(anchor.commit, "c2");
+        assert_eq!(anchor.version, v("0.3.0"));
+    }
+
+    #[test]
+    fn reintroduction_anchor_is_absent_for_a_genuinely_new_package() {
+        let timeline = vec![entry("c2", None, true), entry("c1", None, false)];
+        assert!(reintroduction_anchor(&timeline).is_none());
     }
 }
