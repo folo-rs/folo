@@ -1152,6 +1152,20 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 [[package]]
 name = "dure"
 version = "0.1.0"
+dependencies = [
+ "clap",
+ "mimalloc",
+ "mockall",
+ "mutants",
+ "ohno",
+ "rand 0.10.2",
+ "serde",
+ "serde_json",
+ "static_assertions",
+ "tempfile",
+ "testing",
+ "windows",
+]
 
 [[package]]
 name = "dyn-clone"
