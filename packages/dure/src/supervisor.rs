@@ -267,6 +267,10 @@ where
         .expect("client slot is only copied or replaced, never held across a panic")
         .take()
     {
+        // Deliver the exit status before tearing down the store or pipes.
+        // Attach treats a disconnect without `AppExited` as a relay failure
+        // when the input thread has already stopped, so the status must
+        // arrive first.
         _ = shared
             .transport
             .send(client, &Message::AppExited { status });
@@ -419,6 +423,7 @@ mod tests {
 
     use testing::with_watchdog;
 
+    use super::*;
     use crate::pal::ids::{AppId, JobId};
     use crate::pal::processes::MockProcesses;
     use crate::pal::pseudoconsole::MemoryPseudoconsole;
@@ -426,8 +431,6 @@ mod tests {
     use crate::pal::transport::MemoryTransport;
     use crate::protocol::Message;
     use crate::session_record::ProcessIdentity;
-
-    use super::*;
 
     fn mock_processes(exit: Arc<(Mutex<bool>, Condvar)>) -> MockProcesses {
         let mut processes = MockProcesses::new();

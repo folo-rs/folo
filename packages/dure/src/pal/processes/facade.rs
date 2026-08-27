@@ -7,13 +7,12 @@ use std::sync::Arc;
 
 use crate::pal::error::PalError;
 use crate::pal::ids::{AppId, JobId};
+#[cfg(test)]
+use crate::pal::processes::MockProcesses;
 use crate::pal::processes::{
     AppSpawn, BuildTargetProcesses, ProcessLiveness, Processes, SupervisorSpawn,
 };
 use crate::session_record::ProcessIdentity;
-
-#[cfg(test)]
-use crate::pal::processes::MockProcesses;
 
 /// Dispatches process operations to the real PAL or a test mock.
 #[derive(Clone)]

@@ -142,9 +142,8 @@ impl SessionStore for FsSessionStore {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
-    use std::iter;
     use std::path::Path;
-    use std::thread;
+    use std::{iter, thread};
 
     use tempfile::TempDir;
     use testing::with_watchdog;

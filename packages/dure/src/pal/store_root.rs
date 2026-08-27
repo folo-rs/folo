@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+#[cfg(windows)]
 use crate::constants::STORE_SUBDIR;
 use crate::pal::error::{PalError, PalErrorKind};
 

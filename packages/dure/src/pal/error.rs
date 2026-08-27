@@ -19,10 +19,22 @@ pub(crate) enum PalErrorKind {
     /// A bounded connect wait elapsed.
     Timeout,
     /// Job breakaway was denied.
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "produced by the Windows process PAL")
+    )]
     BreakawayDenied,
     /// Opening or querying a process handle failed.
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "produced by the Windows process PAL")
+    )]
     InspectFailed,
     /// The requested object does not exist.
+    #[cfg_attr(
+        not(any(windows, test)),
+        expect(dead_code, reason = "produced by the Windows PAL and tests")
+    )]
     NotFound,
     /// The peer closed the connection.
     Disconnected,

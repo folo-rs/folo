@@ -5,6 +5,13 @@ use crate::pal::pseudoconsole::WindowSize;
 
 /// One blocking read from the local console during attach.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(
+    not(windows),
+    expect(
+        dead_code,
+        reason = "variants are constructed by the Windows console PAL"
+    )
+)]
 pub(crate) enum ConsoleInput {
     /// VT or key bytes to forward as [`crate::protocol::Message::Input`].
     Bytes(Vec<u8>),

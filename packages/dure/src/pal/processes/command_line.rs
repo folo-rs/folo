@@ -4,6 +4,12 @@
 //! Each argv element is quoted so spaces and embedded quotes survive that split.
 //! See <https://learn.microsoft.com/windows/win32/api/shellapi/nf-shellapi-commandlinetoargvw>.
 
+// Used by the Windows process PAL. Unit tests cover quoting on every target.
+#![cfg_attr(
+    not(any(windows, test)),
+    expect(dead_code, reason = "CreateProcessW quoting is Windows PAL plus tests")
+)]
+
 /// Builds a Windows process command line from an executable and following argv.
 #[must_use]
 pub(crate) fn windows_command_line(exe: &str, args: &[String]) -> String {

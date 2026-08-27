@@ -11,8 +11,16 @@ use crate::session_record::ProcessIdentity;
 #[non_exhaustive]
 pub(crate) enum ProcessLiveness {
     /// The same process is still running.
+    #[cfg_attr(
+        not(any(windows, test)),
+        expect(dead_code, reason = "produced by the Windows process PAL and tests")
+    )]
     Live,
     /// Missing, exited, or pid reused by a different process.
+    #[cfg_attr(
+        not(any(windows, test)),
+        expect(dead_code, reason = "produced by the Windows process PAL and tests")
+    )]
     Dead,
     /// The process could not be inspected; the record must be kept.
     InspectFailed,
@@ -20,6 +28,10 @@ pub(crate) enum ProcessLiveness {
 
 /// Request to spawn a console-detached supervisor with job breakaway.
 #[derive(Clone, Debug)]
+#[cfg_attr(
+    not(windows),
+    expect(dead_code, reason = "fields are read by the Windows process PAL")
+)]
 pub(crate) struct SupervisorSpawn {
     /// Path of this `dure` binary.
     pub exe: PathBuf,
@@ -29,6 +41,10 @@ pub(crate) struct SupervisorSpawn {
 
 /// Request to spawn the app attached to a pseudoconsole and lifetime job.
 #[derive(Clone, Debug)]
+#[cfg_attr(
+    not(windows),
+    expect(dead_code, reason = "fields are read by the Windows process PAL")
+)]
 pub(crate) struct AppSpawn {
     /// Command argv.
     pub command: Vec<String>,
@@ -78,6 +94,10 @@ pub(crate) trait Processes: Send + Sync + std::fmt::Debug + 'static {
 
 /// Resolves `exe` relative to `launch_directory` when it contains a path separator.
 #[must_use]
+#[cfg_attr(
+    not(any(windows, test)),
+    expect(dead_code, reason = "used by the Windows process PAL and unit tests")
+)]
 pub(crate) fn resolve_command_path(command: &str, launch_directory: &Path) -> PathBuf {
     let path = Path::new(command);
     if path.is_absolute() {

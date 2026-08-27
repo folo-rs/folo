@@ -2,6 +2,16 @@
 //!
 //! The named pipe carries these messages (implementation.md, "Transport").
 
+// Framing is used by the Windows named-pipe transport. Unit tests cover it on
+// every target; the non-Windows lib build has no transport that serializes.
+#![cfg_attr(
+    not(any(windows, test)),
+    expect(
+        dead_code,
+        reason = "named-pipe framing is Windows transport plus tests"
+    )
+)]
+
 use std::mem::size_of;
 
 use crate::constants::MAX_FRAME_LEN;

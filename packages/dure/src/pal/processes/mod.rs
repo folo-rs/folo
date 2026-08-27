@@ -9,6 +9,7 @@ mod unsupported;
 mod windows;
 
 pub(crate) use abstractions::*;
+#[cfg(windows)]
 pub(crate) use command_line::*;
 pub(crate) use facade::*;
 #[cfg(not(windows))]

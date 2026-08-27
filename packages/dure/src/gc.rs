@@ -59,12 +59,11 @@ pub(crate) fn require_live_session(
 mod tests {
     use std::path::PathBuf;
 
+    use super::*;
     use crate::pal::processes::MockProcesses;
     use crate::pal::session_store::{FsSessionStore, SessionStore};
     use crate::session_id::SessionId;
     use crate::session_record::{ProcessIdentity, SessionRecord};
-
-    use super::*;
 
     fn record(id: u32, pid: u32, creation: u64) -> SessionRecord {
         SessionRecord {

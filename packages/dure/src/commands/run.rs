@@ -104,12 +104,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::pal::local_console::{LocalConsoleFacade, MockLocalConsole};
     use crate::pal::processes::MockProcesses;
     use crate::pal::session_store::FsSessionStore;
     use crate::pal::transport::MemoryTransport;
-
-    use super::*;
 
     #[test]
     fn empty_command_fails() {

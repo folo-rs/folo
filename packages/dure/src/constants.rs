@@ -22,6 +22,13 @@ pub(crate) const MAX_FRAME_LEN: u32 = 1024 * 1024;
 /// session records.
 ///
 /// Ref: docs/implementation.md, "Session store".
+#[cfg_attr(
+    not(windows),
+    expect(
+        dead_code,
+        reason = "joined onto LocalAppData by the Windows store root"
+    )
+)]
 pub(crate) const STORE_SUBDIR: &str = "dure";
 
 /// Hidden subcommand that `dure run` uses to spawn the supervisor process.

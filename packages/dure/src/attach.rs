@@ -174,12 +174,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::pal::local_console::{LocalConsoleFacade, MockLocalConsole};
     use crate::pal::pseudoconsole::WindowSize;
     use crate::pal::transport::MemoryTransport;
     use crate::session_id::SessionId;
-
-    use super::*;
 
     #[test]
     fn connect_timeout_is_resume_timeout() {

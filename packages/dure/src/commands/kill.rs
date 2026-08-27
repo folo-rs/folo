@@ -28,14 +28,12 @@ pub(crate) fn execute(
 mod tests {
     use std::path::PathBuf;
 
+    use super::*;
+    use crate::pal::error::{PalError, PalErrorKind};
     use crate::pal::processes::{MockProcesses, ProcessLiveness};
     use crate::pal::session_store::{FsSessionStore, SessionStore};
     use crate::session_id::SessionId;
     use crate::session_record::{ProcessIdentity, SessionRecord};
-
-    use crate::pal::error::{PalError, PalErrorKind};
-
-    use super::*;
 
     fn record(id: u32, pid: u32, creation: u64) -> SessionRecord {
         SessionRecord {

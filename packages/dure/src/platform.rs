@@ -35,7 +35,7 @@ mod tests {
     #[test]
     fn refuses_to_run_off_windows() {
         let err = ensure_supported_platform().unwrap_err();
-        assert!(ohno::ErrorExt::find_source::<UnsupportedPlatformError>(&err).is_some());
+        assert!(err.find_source::<UnsupportedPlatformError>().is_some());
     }
 
     #[cfg(windows)]

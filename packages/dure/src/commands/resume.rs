@@ -80,13 +80,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::pal::local_console::{LocalConsoleFacade, MockLocalConsole};
     use crate::pal::processes::MockProcesses;
     use crate::pal::session_store::FsSessionStore;
     use crate::pal::transport::MemoryTransport;
     use crate::session_id::SessionId;
-
-    use super::*;
 
     #[test]
     fn no_live_sessions_fails() {

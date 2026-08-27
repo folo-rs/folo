@@ -10,12 +10,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-include = [
-    "Cargo.toml",
-    "README.md",
-    "docs/**/*",
-    "src/**/*",
-]
+include = ["Cargo.toml", "README.md", "docs/**/*", "src/**/*"]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -29,26 +24,27 @@ allowed_external_types = [
     "clap_builder::derive::CommandFactory",
     "clap_builder::derive::FromArgMatches",
     "clap_builder::derive::Parser",
+    "ohno::app::error::AppError",
 ]
-
-[features]
-# Builds the helper child used by Windows integration tests. Not part of the product.
-private-test-util = []
 
 [[bin]]
 name = "dure-test-helper"
 path = "src/bin/dure_test_helper.rs"
 required-features = ["private-test-util"]
 
+[features]
+# Builds the helper child used by Windows integration tests. Not part of the product.
+private-test-util = []
+
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
 mimalloc = { workspace = true }
 ohno = { workspace = true, features = ["app-err"] }
-rand = { workspace = true, features = ["thread_rng"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
+rand = { workspace = true, features = ["thread_rng"] }
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",

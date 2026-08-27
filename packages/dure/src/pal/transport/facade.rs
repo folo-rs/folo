@@ -5,11 +5,10 @@ use std::time::Duration;
 
 use crate::pal::error::PalError;
 use crate::pal::ids::{ConnId, ListenerId};
-use crate::pal::transport::{BuildTargetTransport, Transport};
-use crate::protocol::Message;
-
 #[cfg(test)]
 use crate::pal::transport::MemoryTransport;
+use crate::pal::transport::{BuildTargetTransport, Transport};
+use crate::protocol::Message;
 
 /// Dispatches transport calls to the real PAL or an in-memory test transport.
 #[derive(Clone)]

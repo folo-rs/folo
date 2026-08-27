@@ -5,11 +5,10 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::pal::error::PalError;
-use crate::pal::local_console::{BuildTargetConsole, ConsoleInput, LocalConsole};
-use crate::pal::pseudoconsole::WindowSize;
-
 #[cfg(test)]
 use crate::pal::local_console::MockLocalConsole;
+use crate::pal::local_console::{BuildTargetConsole, ConsoleInput, LocalConsole};
+use crate::pal::pseudoconsole::WindowSize;
 
 /// Dispatches console operations to the real PAL or a test mock.
 #[derive(Clone)]
