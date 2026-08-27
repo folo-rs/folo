@@ -17,7 +17,7 @@ use crate::git::{GitRepo, git_path, join_git_rel};
 use crate::groups::GroupVerdict;
 use crate::inherited::{InheritedChange, inherited_changes, workspace_package_version};
 use crate::manifest::{
-    is_workspace_member, parse_document, parse_package_manifest, parse_workspace_members,
+    PathCase, is_workspace_member, parse_document, parse_package_manifest, parse_workspace_members,
 };
 use crate::metadata::{ReportedDep, WorkPackage, WorkTree, dependents_of, load_work_tree};
 use crate::packaging::{PackagingRules, relativize};
@@ -137,7 +137,7 @@ pub(crate) fn classify(
         plural(work_tree.packages.len(), "publishable package")
     ));
 
-    let mut cache = SnapshotCache::new();
+    let mut cache = SnapshotCache::new(&work_tree.workspace_root);
     let base_snapshot = cache.snapshot(&git, &base_sha, &work_tree.workspace_root)?;
     let work_root_path = work_tree.workspace_root.join("Cargo.toml");
     let work_root_doc = parse_document(
@@ -607,12 +607,15 @@ struct CommitSnapshot {
 /// Cache of [`CommitSnapshot`] values so a first-parent walk does not re-parse.
 struct SnapshotCache {
     inner: HashMap<String, Rc<CommitSnapshot>>,
+    case: PathCase,
 }
 
 impl SnapshotCache {
-    fn new() -> Self {
+    /// Probes the work tree once; every snapshot matches members the same way.
+    fn new(workspace_root: &Path) -> Self {
         Self {
             inner: HashMap::new(),
+            case: PathCase::probe(workspace_root),
         }
     }
 
@@ -625,7 +628,7 @@ impl SnapshotCache {
         if let Some(existing) = self.inner.get(commit) {
             return Ok(Rc::clone(existing));
         }
-        let built = Rc::new(load_snapshot(git, commit, workspace_root)?);
+        let built = Rc::new(load_snapshot(git, commit, workspace_root, self.case)?);
         self.inner.insert(commit.to_string(), Rc::clone(&built));
         Ok(built)
     }
@@ -635,13 +638,17 @@ fn load_snapshot(
     git: &GitRepo,
     commit: &str,
     workspace_root: &Path,
+    case: PathCase,
 ) -> Result<CommitSnapshot, AppError> {
     let root_rel = root_manifest_rel(git, workspace_root);
+    // History before the workspace existed has no root manifest. An empty
+    // `[workspace]` reproduces that state exactly: no members, so every current
+    // package is absent from the snapshot and classified as newly created.
     let root_content = git
         .show_file(commit, &root_rel)?
         .unwrap_or_else(|| "[workspace]\n".to_string());
     let root_doc = parse_document(Path::new(&root_rel), &root_content)?;
-    let members = parse_workspace_members(&root_content, Path::new(&root_rel))?;
+    let members = parse_workspace_members(&root_content, Path::new(&root_rel), case)?;
     // `members` globs are written relative to the workspace root, which need not be
     // the git root, while `ls_tree_manifests` yields git-root-relative paths. Rebase
     // before matching, or a nested workspace would find no members and silently

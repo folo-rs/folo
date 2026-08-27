@@ -1,7 +1,8 @@
 // Manifest parsing for versions, packaging rules, members, and pins.
 
-use std::fmt;
+use std::collections::HashSet;
 use std::path::Path;
+use std::{fmt, fs};
 
 use ignore::overrides::{Override, OverrideBuilder};
 use ohno::AppError;
@@ -34,6 +35,74 @@ pub(crate) struct WorkspaceMembers {
     exclude: Vec<MemberPattern>,
 }
 
+/// How the filesystem hosting a workspace resolves path case.
+///
+/// Cargo opens member directories through the filesystem while Git reports the
+/// spelling recorded in the tree, so member matching only agrees with Cargo when
+/// it applies the same case rules. Case sensitivity is a property of the volume
+/// and directory rather than of the operating system, so it is probed.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum PathCase {
+    /// Two spellings that differ in case name different paths.
+    #[default]
+    Sensitive,
+    /// Two spellings that differ only in case name the same path.
+    Insensitive,
+}
+
+impl PathCase {
+    /// Probes how the filesystem holding `dir` resolves path case.
+    ///
+    /// The probe re-opens an existing entry under a case-flipped spelling, so it
+    /// writes nothing and works on a read-only checkout. A directory that cannot
+    /// be read, or that holds no entry whose flipped spelling is unambiguous,
+    /// yields the stricter answer, which never widens member matching.
+    pub(crate) fn probe(dir: &Path) -> Self {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return Self::Sensitive;
+        };
+        let names: Vec<String> = entries
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        let present: HashSet<&str> = names.iter().map(String::as_str).collect();
+        for name in &names {
+            let flipped = flip_case(name);
+            // An entry that is already present under both spellings proves
+            // nothing, and a name without cased characters cannot be flipped.
+            if flipped == *name || present.contains(flipped.as_str()) {
+                continue;
+            }
+            return if dir.join(&flipped).exists() {
+                Self::Insensitive
+            } else {
+                Self::Sensitive
+            };
+        }
+        Self::Sensitive
+    }
+
+    /// Whether two path components name the same path under these case rules.
+    fn same_path(self, left: &str, right: &str) -> bool {
+        match self {
+            Self::Sensitive => left == right,
+            Self::Insensitive => left.to_lowercase() == right.to_lowercase(),
+        }
+    }
+}
+
+fn flip_case(name: &str) -> String {
+    name.chars()
+        .flat_map(|c| {
+            if c.is_uppercase() {
+                c.to_lowercase().collect::<Vec<_>>()
+            } else {
+                c.to_uppercase().collect()
+            }
+        })
+        .collect()
+}
+
 pub(crate) fn parse_document(path: &Path, content: &str) -> Result<DocumentMut, AppError> {
     content
         .parse()
@@ -47,6 +116,11 @@ pub(crate) fn parse_package_manifest(
 ) -> Result<Option<PackageManifest>, AppError> {
     let path = Path::new(manifest_path);
     let doc = parse_document(path, content)?;
+    // A manifest without a complete `[package]` identity is not something Cargo
+    // would publish: it is either a virtual workspace root or a member whose
+    // version is inherited from a root that does not declare one. Both are
+    // ordinary states of historical trees, so they yield "not a package" rather
+    // than an error. Malformed values that Cargo would reject still error below.
     let Some(package) = doc.get("package").and_then(Item::as_table_like) else {
         return Ok(None);
     };
@@ -84,14 +158,15 @@ pub(crate) fn parse_package_manifest(
 pub(crate) fn parse_workspace_members(
     content: &str,
     path: &Path,
+    case: PathCase,
 ) -> Result<WorkspaceMembers, AppError> {
     let doc = parse_document(path, content)?;
     let Some(workspace) = doc.get("workspace").and_then(Item::as_table_like) else {
         return Ok(WorkspaceMembers::default());
     };
     Ok(WorkspaceMembers {
-        members: compile_patterns(&string_array(workspace.get("members")))?,
-        exclude: compile_patterns(&string_array(workspace.get("exclude")))?,
+        members: compile_patterns(&string_array(workspace.get("members")), case)?,
+        exclude: compile_patterns(&string_array(workspace.get("exclude")), case)?,
     })
 }
 
@@ -112,39 +187,49 @@ pub(crate) fn is_workspace_member(dir: &str, members: &WorkspaceMembers) -> bool
     members.members.iter().any(|pattern| pattern.matches(dir))
 }
 
-fn compile_patterns(patterns: &[String]) -> Result<Vec<MemberPattern>, AppError> {
+fn compile_patterns(patterns: &[String], case: PathCase) -> Result<Vec<MemberPattern>, AppError> {
     patterns
         .iter()
-        .map(|pattern| MemberPattern::new(pattern))
+        .map(|pattern| MemberPattern::new(pattern, case))
         .collect()
 }
 
 /// One compiled `[workspace] members` / `exclude` pattern.
 struct MemberPattern {
     literal: String,
+    case: PathCase,
     matcher: Override,
 }
 
 impl MemberPattern {
-    fn new(pattern: &str) -> Result<Self, AppError> {
+    fn new(pattern: &str, case: PathCase) -> Result<Self, AppError> {
         let literal = pattern.replace('\\', "/");
         let mut matcher = OverrideBuilder::new("");
+        if case == PathCase::Insensitive {
+            matcher
+                .case_insensitive(true)
+                .map_err(|error| InvalidMemberPatternError::caused_by(&literal, error))?;
+        }
         matcher
             .add(&literal)
             .map_err(|error| InvalidMemberPatternError::caused_by(&literal, error))?;
         let matcher = matcher
             .build()
             .map_err(|error| InvalidMemberPatternError::caused_by(&literal, error))?;
-        Ok(Self { literal, matcher })
+        Ok(Self {
+            literal,
+            case,
+            matcher,
+        })
     }
 
     fn matches(&self, dir: &str) -> bool {
-        if self.literal == dir {
+        if self.case.same_path(&self.literal, dir) {
             return true;
         }
         // `foo/**` in Cargo member lists includes the `foo` directory itself.
         if let Some(prefix) = self.literal.strip_suffix("/**")
-            && dir == prefix
+            && self.case.same_path(prefix, dir)
         {
             return true;
         }
@@ -157,8 +242,9 @@ impl MemberPattern {
 // compiled once compile again, so the fallback is unreachable in practice.
 impl Clone for MemberPattern {
     fn clone(&self) -> Self {
-        Self::new(&self.literal).unwrap_or_else(|_| Self {
+        Self::new(&self.literal, self.case).unwrap_or_else(|_| Self {
             literal: self.literal.clone(),
+            case: self.case,
             matcher: Override::empty(),
         })
     }
@@ -184,6 +270,10 @@ fn publish_allowed(package: &dyn TableLike) -> bool {
         Some(item) => match item {
             Item::Value(Value::Boolean(b)) => *b.value(),
             Item::Value(Value::Array(array)) => !array.is_empty(),
+            // Cargo accepts only a boolean or a registry array here, so any other
+            // shape is a manifest Cargo itself rejects. Treating it as publishable
+            // keeps the package under the release gate; the opposite default would
+            // silently exempt a package from classification.
             _ => true,
         },
     }
@@ -229,12 +319,17 @@ mod tests {
     use super::*;
 
     fn members(patterns: &[&str]) -> WorkspaceMembers {
+        cased_members(patterns, PathCase::Sensitive)
+    }
+
+    fn cased_members(patterns: &[&str], case: PathCase) -> WorkspaceMembers {
         WorkspaceMembers {
             members: compile_patterns(
                 &patterns
                     .iter()
                     .map(|pattern| (*pattern).to_string())
                     .collect::<Vec<_>>(),
+                case,
             )
             .unwrap(),
             exclude: Vec::new(),
@@ -284,6 +379,7 @@ publish = false
         let error = parse_workspace_members(
             "[workspace]\nmembers = [\"foo.{js,ts\"]\n",
             Path::new("Cargo.toml"),
+            PathCase::Sensitive,
         )
         .unwrap_err();
         assert_eq!(
@@ -303,6 +399,7 @@ members = ["packages/*"]
 exclude = ["packages/skip"]
 "#,
             Path::new("Cargo.toml"),
+            PathCase::Sensitive,
         )
         .unwrap();
         assert!(is_workspace_member("packages/foo", &declared));
@@ -310,9 +407,61 @@ exclude = ["packages/skip"]
         assert!(!is_workspace_member("examples/foo", &declared));
         // Without a `members` list the only member is the root package, matching
         // Cargo rather than treating every manifest in the tree as a member.
-        let empty = parse_workspace_members("[workspace]\n", Path::new("Cargo.toml")).unwrap();
+        let empty = parse_workspace_members(
+            "[workspace]\n",
+            Path::new("Cargo.toml"),
+            PathCase::Sensitive,
+        )
+        .unwrap();
         assert!(is_workspace_member("", &empty));
         assert!(!is_workspace_member("anything", &empty));
+    }
+
+    #[test]
+    fn case_insensitive_matching_follows_the_probed_filesystem() {
+        let strict = cased_members(&["Packages/*"], PathCase::Sensitive);
+        assert!(!is_workspace_member("packages/foo", &strict));
+        assert!(is_workspace_member("Packages/foo", &strict));
+
+        let relaxed = cased_members(&["Packages/*"], PathCase::Insensitive);
+        assert!(is_workspace_member("packages/foo", &relaxed));
+        assert!(is_workspace_member("Packages/foo", &relaxed));
+
+        // The literal and `foo/**` prefix fast paths follow the same rules as
+        // the compiled matcher.
+        let prefix = cased_members(&["Packages/**"], PathCase::Insensitive);
+        assert!(is_workspace_member("packages", &prefix));
+    }
+
+    #[cfg_attr(miri, ignore)] // Reads a real directory, which Miri cannot emulate.
+    #[test]
+    fn path_case_probe_agrees_with_the_filesystem() {
+        let dir = tempfile::TempDir::new().unwrap();
+        fs::write(dir.path().join("Probe.txt"), "x").unwrap();
+        let probed = PathCase::probe(dir.path());
+        let observed = if dir.path().join("PROBE.TXT").exists() {
+            PathCase::Insensitive
+        } else {
+            PathCase::Sensitive
+        };
+        assert_eq!(probed, observed);
+    }
+
+    #[cfg_attr(miri, ignore)] // Reads the filesystem, which Miri cannot emulate.
+    #[test]
+    fn unreadable_directory_probes_as_case_sensitive() {
+        // The stricter answer never widens member matching, so an unreadable
+        // directory must not relax it.
+        assert_eq!(
+            PathCase::probe(Path::new("cargo-release-plan-no-such-directory")),
+            PathCase::Sensitive
+        );
+    }
+
+    #[test]
+    fn flip_case_inverts_cased_characters_only() {
+        assert_eq!(flip_case("Cargo.toml"), "cARGO.TOML");
+        assert_eq!(flip_case("123"), "123");
     }
 
     #[test]

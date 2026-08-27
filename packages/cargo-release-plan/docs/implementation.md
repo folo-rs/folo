@@ -46,6 +46,14 @@ Comparison is on canonically typed TOML values rather than rendered text, so a
 reformatted table is not mistaken for a changed value and two differently shaped
 values never collapse into the same representation.
 
+Historical workspace membership is reconstructed from the root manifest at each
+commit. Because Cargo opens member directories through the filesystem while Git
+reports the spelling recorded in the tree, member matching follows the case
+rules the workspace directory actually applies. Those rules are probed once per
+run by re-opening an existing entry under a case-flipped spelling; an
+inconclusive probe yields case-sensitive matching, which never widens
+membership.
+
 ## Plan application
 
 Plan application rewrites manifests structurally so comments and layout
