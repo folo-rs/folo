@@ -21,8 +21,9 @@ package's creation (absent to present) counts as a version change.
 
 A package that is absent from the base but present at some earlier commit on
 the base's first-parent line is being restored, not created. The version it
-declared at that earlier commit may already be published, so that commit is its
-anchor and the ordinary monotonicity and content comparisons apply.
+declared before the deletion may already be published, so its anchor is the last
+version change on that history and the ordinary monotonicity and content
+comparisons apply.
 
 The base revision defaults to `origin/main`. CI should pass an explicit SHA of
 the merge-base or target-branch tip. A stale default can both add and hide
@@ -48,9 +49,10 @@ Those keys are honoured whether the package declares them itself or inherits
 them from `[workspace.package]`, as is `publish`: an inherited `publish = false`
 excludes a package from classification exactly as a locally declared one does.
 `Cargo.lock` is never released content. Untracked
-files are reported as an advisory and never counted as changes. A package that
-contains another workspace member releases nothing from inside it, matching the
-package boundary Cargo itself stops at.
+files are reported as an advisory and never counted as changes. A package
+releases nothing from inside a directory that carries its own `Cargo.toml`,
+whether or not that crate belongs to the workspace, matching the package
+boundary Cargo itself stops at.
 
 The change set is a diff from the anchor to the work tree. The package
 directory is resolved independently at each end from that end's workspace

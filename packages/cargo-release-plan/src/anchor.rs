@@ -72,23 +72,33 @@ pub(crate) fn resolve_anchor(
     })
 }
 
-/// Finds the newest commit at which a package absent from the base still existed.
+/// Resolves the anchor of a package the base revision no longer carries.
 ///
 /// A branch that restores a package Git no longer carries on the base line is
 /// not creating it: the version the restored manifest declares may already be
-/// published, so the last version the base line carried remains the anchor and
-/// the ordinary monotonicity and content checks still apply. Ref:
-/// docs/design.md, "Classification".
+/// published, so the base line's own anchor still governs and the ordinary
+/// monotonicity and content checks still apply. Ref: docs/design.md,
+/// "Classification".
 ///
-/// Returns `None` when no sampled commit carried the package, which is the
+/// The walk resumes at the newest commit that carried the package and then
+/// follows the ordinary anchor rule, because that commit is not necessarily the
+/// one that last changed the version: content committed without an increment
+/// before the deletion must not be absorbed into the anchor and thereby become
+/// invisible when the package comes back at the same version.
+///
+/// Returns `Ok(None)` when no sampled commit carried the package, which is the
 /// genuine creation case.
-pub(crate) fn reintroduction_anchor(timeline: &[TimelineEntry]) -> Option<Anchor> {
-    timeline.iter().find_map(|entry| {
-        entry.version.as_ref().map(|version| Anchor {
-            commit: entry.commit.clone(),
-            version: version.clone(),
-        })
-    })
+pub(crate) fn reintroduction_anchor(
+    package: &str,
+    timeline: &[TimelineEntry],
+) -> Result<Option<Anchor>, AppError> {
+    let Some(present) = timeline.iter().position(|entry| entry.version.is_some()) else {
+        return Ok(None);
+    };
+    let Some(remainder) = timeline.get(present..) else {
+        return Ok(None);
+    };
+    resolve_anchor(package, remainder).map(Some)
 }
 
 #[cfg(test)]
@@ -167,6 +177,22 @@ mod tests {
     }
 
     #[test]
+    fn reintroduction_anchor_walks_on_to_the_last_version_change() {
+        // c2 changed content without an increment before the deletion, so the
+        // anchor is c1, where 0.3.0 first appeared, not c2.
+        let timeline = vec![
+            entry("c4", None, true),
+            entry("c3", None, true),
+            entry("c2", Some("0.3.0"), true),
+            entry("c1", Some("0.3.0"), true),
+            entry("c0", Some("0.2.0"), false),
+        ];
+        let anchor = reintroduction_anchor("foo", &timeline).unwrap().unwrap();
+        assert_eq!(anchor.commit, "c1");
+        assert_eq!(anchor.version, v("0.3.0"));
+    }
+
+    #[test]
     fn reintroduction_anchor_finds_the_newest_commit_that_carried_the_package() {
         let timeline = vec![
             entry("c4", None, true),
@@ -174,7 +200,7 @@ mod tests {
             entry("c2", Some("0.3.0"), true),
             entry("c1", Some("0.2.0"), false),
         ];
-        let anchor = reintroduction_anchor(&timeline).unwrap();
+        let anchor = reintroduction_anchor("foo", &timeline).unwrap().unwrap();
         assert_eq!(anchor.commit, "c2");
         assert_eq!(anchor.version, v("0.3.0"));
     }
@@ -182,6 +208,19 @@ mod tests {
     #[test]
     fn reintroduction_anchor_is_absent_for_a_genuinely_new_package() {
         let timeline = vec![entry("c2", None, true), entry("c1", None, false)];
-        assert!(reintroduction_anchor(&timeline).is_none());
+        assert!(reintroduction_anchor("foo", &timeline).unwrap().is_none());
+    }
+
+    #[test]
+    fn reintroduction_anchor_rejects_truncated_history() {
+        // Every sampled commit carried 0.3.0 and the oldest still has a parent,
+        // so the version change that would anchor it was never observed.
+        let timeline = vec![
+            entry("c3", None, true),
+            entry("c2", Some("0.3.0"), true),
+            entry("c1", Some("0.3.0"), true),
+        ];
+        let error = reintroduction_anchor("foo", &timeline).unwrap_err();
+        assert!(error.find_source::<ShallowHistoryError>().is_some());
     }
 }

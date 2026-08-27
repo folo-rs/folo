@@ -572,6 +572,36 @@ fn reintroduced_package_is_anchored_to_the_version_it_carried_before_deletion() 
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
+fn reintroduced_package_is_anchored_to_its_last_version_change() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "keeper", "0.1.0", "");
+    write_package(&fixture, "demo", "0.2.0", "");
+    fixture.commit("seed");
+
+    write_package(&fixture, "demo", "0.3.0", "");
+    fixture.commit("release 0.3.0");
+
+    fixture.write("packages/demo/src/lib.rs", "pub fn f() { let _ = 8; }\n");
+    fixture.commit("content without a version bump");
+
+    fs::remove_dir_all(fixture.path().join("packages/demo")).unwrap();
+    fixture.commit("delete demo");
+    let base = fixture.sha("HEAD");
+
+    write_package(&fixture, "demo", "0.3.0", "");
+    fixture.write("packages/demo/src/lib.rs", "pub fn f() { let _ = 8; }\n");
+    fixture.commit("restore demo at the same version");
+
+    // The anchor is the commit that introduced 0.3.0, not the newest commit that
+    // merely carried the package, so content committed afterwards without an
+    // increment is still unreleased after the round trip through deletion.
+    let (passed, message) = check(&fixture, &base);
+    assert!(!passed, "{message}");
+    assert!(message.contains("demo: unreleased-changes"), "{message}");
+}
+
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
 fn nested_package_boundary_holds_when_the_workspace_is_below_the_repository_root() {
     let fixture = Fixture::new("");
     fixture.write(
@@ -608,6 +638,32 @@ fn nested_package_boundary_holds_when_the_workspace_is_below_the_repository_root
     assert!(message.contains("inner: unreleased-changes"), "{message}");
     assert!(!message.contains("outer: unreleased-changes"), "{message}");
 }
+
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn nested_package_boundary_holds_for_a_crate_that_is_not_a_member() {
+    let fixture = Fixture::new("exclude = [\"packages/demo/fixture\"]");
+    write_package(&fixture, "demo", "0.1.0", "");
+    // Excluded from the workspace and depended on by nobody, so it appears in no
+    // member list, yet Cargo still stops packing `demo` at its manifest.
+    fixture.write(
+        "packages/demo/fixture/Cargo.toml",
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    fixture.write("packages/demo/fixture/src/lib.rs", "pub fn g() {}\n");
+    fixture.commit("seed");
+    let base = fixture.sha("HEAD");
+
+    fixture.write(
+        "packages/demo/fixture/src/lib.rs",
+        "pub fn g() { let _ = 7; }\n",
+    );
+    fixture.commit("change the excluded nested crate");
+
+    let (passed, message) = check(&fixture, &base);
+    assert!(passed, "{message}");
+}
+
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn apply_rewrites_pins_declared_by_a_non_publishable_member() {

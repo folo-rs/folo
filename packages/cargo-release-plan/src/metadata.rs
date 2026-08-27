@@ -81,11 +81,6 @@ pub(crate) struct ReportedDep {
 pub(crate) struct WorkTree {
     pub(crate) workspace_root: PathBuf,
     pub(crate) packages: Vec<WorkPackage>,
-    /// Repo-relative directories of every member, publishable or not.
-    ///
-    /// `cargo package` stops at a nested package boundary, so released-content
-    /// discovery needs the boundaries of members it will never classify.
-    pub(crate) member_dirs: Vec<String>,
     /// Manifest paths of every member, publishable or not.
     ///
     /// `apply` rewrites dependency requirements in all of them, because a
@@ -195,12 +190,6 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
 
     packages.sort_by(|a, b| a.manifest.name.cmp(&b.manifest.name));
 
-    let mut member_directories: Vec<String> = member_dirs
-        .iter()
-        .map(|dir| repo_relative_dir(&workspace_root, &dir.join("Cargo.toml")))
-        .collect();
-    member_directories.sort_unstable();
-
     let mut member_manifests: Vec<PathBuf> = member_dirs
         .iter()
         .map(|dir| dir.join("Cargo.toml"))
@@ -210,7 +199,6 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
     Ok(WorkTree {
         workspace_root,
         packages,
-        member_dirs: member_directories,
         member_manifests,
         groups,
     })

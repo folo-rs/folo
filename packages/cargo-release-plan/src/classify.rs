@@ -126,11 +126,6 @@ pub(crate) fn classify(
     for package in &mut work_tree.packages {
         package.manifest.directory = join_git_rel(git.prefix(), &package.manifest.directory);
     }
-    // Nested-member filtering compares these against package directories, so
-    // they must live in the same coordinate system.
-    for dir in &mut work_tree.member_dirs {
-        *dir = join_git_rel(git.prefix(), dir);
-    }
     let head = git.head()?;
     let base_sha = git.rev_parse(base)?;
     verbose.note(format!(
@@ -141,7 +136,7 @@ pub(crate) fn classify(
     ));
 
     let mut cache = SnapshotCache::new(&work_tree.workspace_root);
-    let base_snapshot = cache.snapshot(&git, &base_sha, &work_tree.workspace_root)?;
+    let base_snapshot = cache.snapshot(&git, &base_sha)?;
     let work_root_path = work_tree.workspace_root.join("Cargo.toml");
     let work_root_doc = parse_document(
         &work_root_path,
@@ -214,16 +209,16 @@ fn classify_one(
     let group = work_tree.groups.group_of(name).map(ToOwned::to_owned);
     let dependents = dependents_of(&work_tree.packages, name);
 
-    let timeline = build_timeline(git, name, commits, cache, &work_tree.workspace_root)?;
+    let timeline = build_timeline(git, name, commits, cache)?;
     let anchor = if base_snapshot.packages.contains_key(name) {
         resolve_anchor(name, &timeline)?
     } else {
-        match reintroduction_anchor(&timeline) {
+        match reintroduction_anchor(name, &timeline)? {
             Some(anchor) => {
                 verbose.note(format!(
-                    "{name}: absent from base {base_sha} but present at {} declaring {}, so this \
-                     branch reintroduces a package rather than creating one and that commit is \
-                     the anchor",
+                    "{name}: absent from base {base_sha} but carried earlier on its first-parent \
+                     history, so this branch reintroduces a package rather than creating one and \
+                     the last version change on that history ({} declaring {}) is the anchor",
                     short_commit(&anchor.commit),
                     anchor.version
                 ));
@@ -264,7 +259,7 @@ fn classify_one(
         package.manifest.version
     ));
 
-    let anchor_snapshot = cache.snapshot(git, &anchor.commit, &work_tree.workspace_root)?;
+    let anchor_snapshot = cache.snapshot(git, &anchor.commit)?;
     let Some(anchor_pkg) = anchor_snapshot.packages.get(name) else {
         verbose.note(format!(
             "{name}: package is missing at its own anchor {}; treating that as a version increase",
@@ -296,12 +291,10 @@ fn classify_one(
         &PackageSide {
             dir: &anchor_pkg.directory,
             rules: &anchor_pkg.packaging,
-            member_dirs: &anchor_snapshot.member_dirs,
         },
         &PackageSide {
             dir: &package.manifest.directory,
             rules: &package.manifest.packaging,
-            member_dirs: &work_tree.member_dirs,
         },
     )?;
 
@@ -375,11 +368,10 @@ fn build_timeline(
     name: &str,
     commits: &[String],
     cache: &mut SnapshotCache,
-    workspace_root: &Path,
 ) -> Result<Vec<TimelineEntry>, AppError> {
     let mut timeline = Vec::with_capacity(commits.len());
     for (index, commit) in commits.iter().enumerate() {
-        let snapshot = cache.snapshot(git, commit, workspace_root)?;
+        let snapshot = cache.snapshot(git, commit)?;
         let version = snapshot.packages.get(name).map(|pkg| pkg.version.clone());
         let is_last = index
             .checked_add(1)
@@ -408,11 +400,10 @@ fn build_timeline(
 /// One end of a released-content comparison.
 ///
 /// The anchor and the work tree are resolved independently, so each end carries
-/// its own package directory, packaging rules, and member boundaries.
+/// its own package directory and packaging rules.
 struct PackageSide<'a> {
     dir: &'a str,
     rules: &'a PackagingRules,
-    member_dirs: &'a [String],
 }
 
 fn diff_package(
@@ -484,31 +475,25 @@ fn released_at_commit(
     commit: &str,
     side: &PackageSide<'_>,
 ) -> Result<HashMap<String, String>, AppError> {
-    let mut map = HashMap::new();
-    let nested = nested_package_dirs(side.member_dirs, side.dir);
-    for full in git.ls_tree(commit, side.dir)? {
-        let full = git_path(&full);
-        if is_inside_any(&full, &nested) {
-            continue;
-        }
-        let Some(rel) = relativize(&full, side.dir) else {
-            continue;
-        };
-        if side.rules.is_released(rel) {
-            map.insert(rel.to_string(), full);
-        }
-    }
-    Ok(map)
+    Ok(released_from_paths(&git.ls_tree(commit, side.dir)?, side))
 }
 
 fn released_in_work_tree(
     git: &GitRepo,
     side: &PackageSide<'_>,
 ) -> Result<HashMap<String, String>, AppError> {
+    Ok(released_from_paths(&git.ls_files(side.dir)?, side))
+}
+
+/// Selects one package's released content from the tracked paths beneath it.
+///
+/// Keys are package-relative, values are the git-root-relative paths the caller
+/// reads the content back from.
+fn released_from_paths(paths: &[String], side: &PackageSide<'_>) -> HashMap<String, String> {
+    let paths: Vec<String> = paths.iter().map(|path| git_path(path)).collect();
+    let nested = nested_package_dirs(&paths, side.dir);
     let mut map = HashMap::new();
-    let nested = nested_package_dirs(side.member_dirs, side.dir);
-    for full in git.ls_files(side.dir)? {
-        let full = git_path(&full);
+    for full in paths {
         if is_inside_any(&full, &nested) {
             continue;
         }
@@ -516,28 +501,37 @@ fn released_in_work_tree(
             continue;
         };
         if side.rules.is_released(rel) {
-            map.insert(rel.to_string(), full);
+            let rel = rel.to_string();
+            map.insert(rel, full);
         }
     }
-    Ok(map)
+    map
 }
 
-/// Member directories nested strictly inside `dir`.
+/// Package directories nested strictly inside `dir`, read off the tracked paths.
 ///
-/// `cargo package` stops at a nested package boundary, so a package whose
-/// directory contains another member releases nothing from beneath it. Without
-/// this the contained package's files would count as released content of both
-/// packages and any change to the inner one would also mark the outer one.
-fn nested_package_dirs(member_dirs: &[String], dir: &str) -> Vec<String> {
+/// `cargo package` stops at a nested package boundary: a directory beneath the
+/// package that carries its own `Cargo.toml` contributes nothing to the outer
+/// package's released content, and Cargo applies that regardless of workspace
+/// membership or of an explicit `include`. Reading the boundaries off the
+/// manifests tracked on the side being examined therefore matches Cargo, where
+/// reading them off the member list would attribute the files of an excluded or
+/// otherwise non-member nested crate to the outer package and report changes it
+/// will never release.
+fn nested_package_dirs(paths: &[String], dir: &str) -> Vec<String> {
     let prefix = if dir.is_empty() {
         String::new()
     } else {
         format!("{dir}/")
     };
-    member_dirs
+    paths
         .iter()
-        .filter(|member| member.as_str() != dir && member.starts_with(&prefix))
-        .cloned()
+        .filter_map(|path| {
+            let (parent, file) = path.rsplit_once('/')?;
+            (file == "Cargo.toml").then_some(parent)
+        })
+        .filter(|parent| *parent != dir && parent.starts_with(&prefix))
+        .map(ToOwned::to_owned)
         .collect()
 }
 
@@ -560,11 +554,6 @@ struct HistoricalPackage {
 #[derive(Clone, Debug)]
 struct CommitSnapshot {
     packages: BTreeMap<String, HistoricalPackage>,
-    /// Repo-relative directories of every member, publishable or not.
-    ///
-    /// `cargo package` stops at a nested package boundary, so released-content
-    /// discovery needs the boundaries of members it will never classify.
-    member_dirs: Vec<String>,
     root_doc: DocumentMut,
 }
 
@@ -583,28 +572,18 @@ impl SnapshotCache {
         }
     }
 
-    fn snapshot(
-        &mut self,
-        git: &GitRepo,
-        commit: &str,
-        workspace_root: &Path,
-    ) -> Result<Rc<CommitSnapshot>, AppError> {
+    fn snapshot(&mut self, git: &GitRepo, commit: &str) -> Result<Rc<CommitSnapshot>, AppError> {
         if let Some(existing) = self.inner.get(commit) {
             return Ok(Rc::clone(existing));
         }
-        let built = Rc::new(load_snapshot(git, commit, workspace_root, self.case)?);
+        let built = Rc::new(load_snapshot(git, commit, self.case)?);
         self.inner.insert(commit.to_string(), Rc::clone(&built));
         Ok(built)
     }
 }
 
-fn load_snapshot(
-    git: &GitRepo,
-    commit: &str,
-    workspace_root: &Path,
-    case: PathCase,
-) -> Result<CommitSnapshot, AppError> {
-    let root_rel = root_manifest_rel(git, workspace_root);
+fn load_snapshot(git: &GitRepo, commit: &str, case: PathCase) -> Result<CommitSnapshot, AppError> {
+    let root_rel = root_manifest_rel(git);
     // History before the workspace existed has no root manifest. An empty
     // `[workspace]` reproduces that state exactly: no members, so every current
     // package is absent from the snapshot and classified as newly created.
@@ -654,16 +633,7 @@ fn load_snapshot(
             },
         );
     }
-    let member_dirs = member_dirs
-        .iter()
-        .filter_map(|member_dir| candidates.get(member_dir))
-        .map(|parsed| parsed.directory.clone())
-        .collect();
-    Ok(CommitSnapshot {
-        packages,
-        member_dirs,
-        root_doc,
-    })
+    Ok(CommitSnapshot { packages, root_doc })
 }
 
 /// Reconstructs the workspace-relative directories Cargo would treat as members.
@@ -753,12 +723,18 @@ fn log_untracked(verbose: Verbose, name: &str, count: usize) {
 // Early-exit is equivalent to walking the rest of first-parent history.
 #[cfg_attr(test, mutants::skip)]
 fn can_stop_timeline(timeline: &[TimelineEntry]) -> bool {
-    if timeline.len() <= 1 {
+    // The anchor walk starts at the newest commit that carried the package: the
+    // base itself when the base carries it, the reintroduction point otherwise.
+    // Until an older commit declares a different version the anchor is still
+    // undetermined, and a package no commit has carried yet needs the whole
+    // history to tell creation from truncation.
+    let Some(reference) = timeline.iter().find_map(|entry| entry.version.as_ref()) else {
         return false;
-    }
-    let first = timeline.first().and_then(|entry| entry.version.clone());
-    let last = timeline.last().and_then(|entry| entry.version.clone());
-    last != first
+    };
+    let Some(last) = timeline.last() else {
+        return false;
+    };
+    last.version.as_ref() != Some(reference)
 }
 
 fn read_optional_bytes(path: &Path) -> Result<Option<Vec<u8>>, AppError> {
@@ -773,17 +749,20 @@ fn is_not_found(error: &io::Error) -> bool {
     error.kind() == io::ErrorKind::NotFound
 }
 
-// Git-root-relative Cargo.toml path; only used to load historical root manifests.
-#[cfg_attr(test, mutants::skip)]
-fn root_manifest_rel(git: &GitRepo, workspace_root: &Path) -> String {
-    let rel = workspace_root
-        .strip_prefix(git.root())
-        .unwrap_or_else(|_| Path::new(""));
-    let path = rel.join("Cargo.toml");
-    path.to_string_lossy()
-        .replace('\\', "/")
-        .trim_start_matches("./")
-        .to_string()
+/// Git-root-relative path of the workspace root manifest.
+///
+/// The prefix comes from Git rather than from subtracting Cargo's
+/// `workspace_root` from the repository root, because the two tools can spell
+/// the same directory differently and a failed subtraction would silently pick
+/// the repository-root manifest for a nested workspace. Ref:
+/// docs/implementation.md, "Classification".
+fn root_manifest_rel(git: &GitRepo) -> String {
+    let prefix = git.prefix();
+    if prefix.is_empty() {
+        "Cargo.toml".to_string()
+    } else {
+        format!("{prefix}/Cargo.toml")
+    }
 }
 
 /// Rebases a git-root-relative directory onto the workspace root.
@@ -885,29 +864,102 @@ mod tests {
 
     #[test]
     fn nested_package_dirs_selects_strict_descendants() {
-        let members = vec![
-            String::new(),
-            "packages/a".to_string(),
-            "packages/a/inner".to_string(),
-            "packages/ab".to_string(),
+        let paths = vec![
+            "Cargo.toml".to_string(),
+            "packages/a/Cargo.toml".to_string(),
+            "packages/a/src/lib.rs".to_string(),
+            "packages/a/inner/Cargo.toml".to_string(),
+            "packages/ab/Cargo.toml".to_string(),
         ];
         assert_eq!(
-            nested_package_dirs(&members, "packages/a"),
+            nested_package_dirs(&paths, "packages/a"),
             vec!["packages/a/inner".to_string()]
         );
         assert_eq!(
-            nested_package_dirs(&members, "packages/a/inner"),
+            nested_package_dirs(&paths, "packages/a/inner"),
             Vec::<String>::new()
         );
-        // A root package contains every other member.
+        // A root package contains every other manifest.
         assert_eq!(
-            nested_package_dirs(&members, ""),
+            nested_package_dirs(&paths, ""),
             vec![
                 "packages/a".to_string(),
                 "packages/a/inner".to_string(),
                 "packages/ab".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn nested_package_dirs_ignores_files_that_merely_end_in_the_manifest_name() {
+        let paths = vec![
+            "packages/a/Cargo.toml".to_string(),
+            "packages/a/inner/NotCargo.toml".to_string(),
+            "packages/a/inner/Cargo.toml.bak".to_string(),
+        ];
+        assert_eq!(
+            nested_package_dirs(&paths, "packages/a"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn released_from_paths_stops_at_a_nested_manifest() {
+        let rules = PackagingRules::default();
+        let side = PackageSide {
+            dir: "packages/a",
+            rules: &rules,
+        };
+        // `fixture` is a crate of its own, so Cargo packs none of its files with
+        // `packages/a` even though the workspace never lists it as a member.
+        let paths = vec![
+            "packages/a/Cargo.toml".to_string(),
+            "packages/a/src/lib.rs".to_string(),
+            "packages/a/fixture/Cargo.toml".to_string(),
+            "packages/a/fixture/src/lib.rs".to_string(),
+        ];
+        let released = released_from_paths(&paths, &side);
+        assert_eq!(
+            released.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from(["Cargo.toml", "src/lib.rs"])
+        );
+        assert_eq!(released.get("Cargo.toml").unwrap(), "packages/a/Cargo.toml");
+    }
+
+    #[test]
+    fn can_stop_timeline_waits_for_a_change_from_the_newest_carried_version() {
+        fn entry(commit: &str, version: Option<&str>) -> TimelineEntry {
+            TimelineEntry {
+                commit: commit.to_string(),
+                version: version.map(|text| text.parse().unwrap()),
+                has_parent: true,
+            }
+        }
+
+        assert!(!can_stop_timeline(&[entry("c2", Some("0.1.0"))]));
+        assert!(can_stop_timeline(&[
+            entry("c2", Some("0.1.0")),
+            entry("c1", Some("0.0.9")),
+        ]));
+        // Absent at the base and never carried: creation cannot be told from
+        // truncation until the walk reaches a root.
+        assert!(!can_stop_timeline(&[entry("c2", None), entry("c1", None)]));
+        // Absent at the base but carried earlier: the reintroduction anchor is
+        // still undetermined while the carried version keeps repeating.
+        assert!(!can_stop_timeline(&[
+            entry("c3", None),
+            entry("c2", Some("0.3.0")),
+        ]));
+        assert!(!can_stop_timeline(&[
+            entry("c3", None),
+            entry("c2", Some("0.3.0")),
+            entry("c1", Some("0.3.0")),
+        ]));
+        assert!(can_stop_timeline(&[
+            entry("c3", None),
+            entry("c2", Some("0.3.0")),
+            entry("c1", Some("0.2.0")),
+        ]));
     }
 
     #[test]

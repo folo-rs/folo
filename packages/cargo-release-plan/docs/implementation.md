@@ -56,10 +56,17 @@ dependency of a member that lives inside the workspace a member as well, so that
 closure is followed to a fixed point and still honours `exclude`. A path
 dependency inherited through `[workspace.dependencies]` is followed too, resolved
 against the workspace root rather than the member directory, because that is
-where the root manifest declares it. Membership is tracked for non-publishable
-members too: `cargo package` stops at a nested package boundary, so a package
-that contains another member must not claim the inner member's files as its own
-released content.
+where the root manifest declares it.
+
+A package's released content stops at a nested package boundary, and those
+boundaries are read off the tracked manifests beneath the package rather than off
+the member list. Cargo stops packing at any directory that carries its own
+`Cargo.toml`, whether or not the workspace claims it, so a fixture crate the
+workspace excludes would otherwise have its files attributed to the enclosing
+package and produce unreleased-change verdicts for content that is never
+released. Each side of the comparison reads its own boundaries from its own file
+listing, so a crate that appears or disappears between the anchor and the work
+tree moves the boundary with it.
 
 Historical manifests are read without Cargo's help, so every `.workspace = true`
 key a member declares is resolved against the root manifest of the same commit.
@@ -83,19 +90,21 @@ Git, which reports it alongside the repository root in the same `rev-parse` that
 discovers the repository. Subtracting the root from the workspace path Cargo
 reported would instead compare two independent spellings of one directory, and
 those need not match: Windows hands out 8.3 short names for some paths, and both
-tools accept uncanonical spellings. The member list is rebased with the package
-directories: the nested-package boundary is computed by comparing a package
-directory against the member directories, and a comparison across two coordinate
-systems would silently find no nested members. Git rejects an empty pathspec, so
+tools accept uncanonical spellings. The workspace root manifest is located the
+same way, so a nested workspace's historical snapshots are never reconstructed
+from the repository-root manifest. Git rejects an empty pathspec, so
 the repository root — which every one of these paths spells as the empty string —
 becomes `.` inside the Git wrapper rather than at each call site.
 
 A package that is absent from the base revision is only treated as newly created
 once the first-parent walk shows no sampled commit carried it. When some earlier
-commit did, the branch is restoring a package, so that commit and the version it
-declared become the anchor and the ordinary comparisons apply. Treating every
-absence as creation would let a restored package re-publish a version that is
-already on crates.io.
+commit did, the branch is restoring a package, so the walk resumes at the newest
+commit that carried it and then applies the ordinary anchor rule. Anchoring on
+that commit directly would be wrong whenever content was committed without an
+increment before the deletion: the anchor would absorb the unreleased content and
+a package restored at the same version would look released. Treating every
+absence as creation would instead let a restored package re-publish a version
+that is already on crates.io.
 
 ## Diagnostics
 
