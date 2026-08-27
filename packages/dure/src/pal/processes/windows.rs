@@ -187,9 +187,11 @@ impl Processes for BuildTargetProcesses {
         };
         created.map_err(|_error| PalError::new(PalErrorKind::BreakawayDenied))?;
         close(pi.hThread);
-        let identity = identity_of(pi.hProcess)?;
+        // Closed on both paths: an early return here would leave the detached
+        // supervisor holding an unreferenced handle in this process.
+        let identity = identity_of(pi.hProcess);
         close(pi.hProcess);
-        Ok(identity)
+        identity
     }
 
     fn probe(&self, identity: &ProcessIdentity) -> ProcessLiveness {

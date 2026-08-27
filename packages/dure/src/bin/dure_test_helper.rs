@@ -27,12 +27,12 @@ fn stdin_is_console() -> bool {
     #[cfg(windows)]
     {
         use windows::Win32::System::Console::{
-            CONSOLE_MODE, GetConsoleMode, GetStdHandle, STD_OUTPUT_HANDLE,
+            CONSOLE_MODE, GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE,
         };
 
         // SAFETY: `GetStdHandle` returns a process-lifetime handle that this
         // process does not own or close.
-        let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+        let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
         let Ok(handle) = handle else {
             return false;
         };
