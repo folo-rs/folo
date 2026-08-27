@@ -94,6 +94,13 @@ released. Each side of the comparison reads its own boundaries from its own file
 listing, so a crate that appears or disappears between the anchor and the work
 tree moves the boundary with it.
 
+The work-tree side narrows that listing further. Git keeps reporting a tracked
+file the work tree has deleted, but Cargo packages what is on disk: a nested
+manifest that is gone no longer stops packing, and a deleted default README is
+no longer there to detect. Eligibility still comes from the tracked listing —
+released content is defined from git-tracked files — while these structural
+questions are answered from the paths that still exist.
+
 Released content also reaches past what the packaging rules describe, because
 Cargo packs the files named by `readme` and `license-file` regardless of
 `include` and `exclude`, and from outside the package directory if that is where

@@ -1,5 +1,7 @@
 //! Package boundaries when one package's directory contains another.
 
+use std::fs;
+
 use crate::fixture::{Fixture, write_package};
 use crate::harness::{check, check_workspace, nested_workspace};
 
@@ -60,6 +62,29 @@ fn nested_package_boundary_holds_when_the_workspace_is_below_the_repository_root
     assert!(!passed, "{message}");
     assert!(message.contains("inner: unreleased-changes"), "{message}");
     assert!(!message.contains("outer: unreleased-changes"), "{message}");
+}
+
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn a_nested_manifest_the_work_tree_deleted_no_longer_stops_packing() {
+    let fixture = Fixture::new("exclude = [\"packages/demo/fixture\"]");
+    write_package(&fixture, "demo", "0.1.0", "");
+    fixture.write(
+        "packages/demo/fixture/Cargo.toml",
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    fixture.write("packages/demo/fixture/src/lib.rs", "pub fn g() {}\n");
+    fixture.commit("seed");
+    let base = fixture.sha("HEAD");
+
+    // Git keeps listing a tracked file the work tree has deleted, but Cargo
+    // packages what is on disk: with the nested manifest gone, `demo` now packs
+    // the files beneath it and they are content it has never released.
+    fs::remove_file(fixture.path().join("packages/demo/fixture/Cargo.toml")).unwrap();
+
+    let (passed, message) = check(&fixture, &base);
+    assert!(!passed, "{message}");
+    assert!(message.contains("demo: unreleased-changes"), "{message}");
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.

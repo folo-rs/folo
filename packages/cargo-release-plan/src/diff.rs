@@ -109,11 +109,39 @@ fn unified_diff(
     }
     let old_label = side_label(old_present, "a", path);
     let new_label = side_label(new_present, "b", path);
+    // A patch reader takes the work to do from the hunks, so an added or
+    // deleted empty file — which has none — would read as a no-op and never be
+    // created or removed. Git's extended headers carry that case instead, and
+    // are emitted only for it: every other addition and deletion already
+    // carries hunks that describe it.
+    let extended = if hunks.is_empty() {
+        empty_file_header(path, old_present)
+    } else {
+        String::new()
+    };
     FileDiff {
-        text: format!("--- {old_label}\n+++ {new_label}\n{hunks}"),
+        text: format!("{extended}--- {old_label}\n+++ {new_label}\n{hunks}"),
         insertions,
         deletions,
     }
+}
+
+/// Mode the extended headers record for an added or deleted empty file.
+///
+/// The renderer does not carry file modes, so this is Git's ordinary-file mode
+/// rather than an observation. An empty blob cannot be a symbolic link, whose
+/// blob holds its target, and a `.patch` artifact is read for the content
+/// change rather than for permissions.
+const EMPTY_FILE_MODE: &str = "100644";
+
+/// Git's extended headers for an empty file's creation or deletion.
+fn empty_file_header(path: &str, old_present: bool) -> String {
+    let change = if old_present { "deleted" } else { "new" };
+    // Each side is quoted the way the `---` and `+++` labels quote theirs, with
+    // the prefix inside the quotes, so one reader handles every header here.
+    let old_name = quote_path(&format!("a/{path}"));
+    let new_name = quote_path(&format!("b/{path}"));
+    format!("diff --git {old_name} {new_name}\n{change} file mode {EMPTY_FILE_MODE}\n")
 }
 
 /// A contiguous run of deleted and inserted lines, as zero-based line indexes.
@@ -441,15 +469,35 @@ mod tests {
 
     #[test]
     fn an_empty_file_addition_still_renders_headers() {
+        // A reader takes its work from the hunks, and an empty file has none,
+        // so the creation is carried by Git's extended headers instead.
         let diff = render(None, Some(""));
-        assert_eq!(diff.text, "--- /dev/null\n+++ b/src/lib.rs\n");
+        assert_eq!(
+            diff.text,
+            "diff --git a/src/lib.rs b/src/lib.rs\nnew file mode 100644\n--- /dev/null\n+++ \
+             b/src/lib.rs\n"
+        );
         assert_eq!((diff.insertions, diff.deletions), (0, 0));
     }
 
     #[test]
     fn an_empty_file_deletion_still_renders_headers() {
         let diff = render(Some(""), None);
-        assert_eq!(diff.text, "--- a/src/lib.rs\n+++ /dev/null\n");
+        assert_eq!(
+            diff.text,
+            "diff --git a/src/lib.rs b/src/lib.rs\ndeleted file mode 100644\n--- a/src/lib.rs\n+++ \
+             /dev/null\n"
+        );
+    }
+
+    #[test]
+    fn a_non_empty_addition_carries_no_extended_headers() {
+        // Its hunk already tells a reader to create the file.
+        let diff = render(None, Some("a\n"));
+        assert_eq!(
+            diff.text,
+            "--- /dev/null\n+++ b/src/lib.rs\n@@ -0,0 +1,1 @@\n+a\n"
+        );
     }
 
     #[test]

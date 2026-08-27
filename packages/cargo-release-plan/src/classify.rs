@@ -14,7 +14,7 @@ use toml_edit::DocumentMut;
 
 use crate::anchor::{Anchor, TimelineEntry, reintroduction_anchor, resolve_anchor};
 use crate::diff::file_diff;
-use crate::git::{GitRepo, join_git_rel};
+use crate::git::{GitRepo, join_git_rel, os_path};
 use crate::groups::GroupVerdict;
 use crate::inherited::{InheritedChange, inherited_changes};
 use crate::manifest::{
@@ -526,7 +526,8 @@ fn released_at_commit(
     commit: &str,
     side: &PackageSide<'_>,
 ) -> Result<HashMap<String, String>, AppError> {
-    let mut released = released_from_paths(&git.ls_tree(commit, side.dir)?, side);
+    let paths = git.ls_tree(commit, side.dir)?;
+    let mut released = released_from_paths(&paths, &paths, side);
     // Reading a resource back from the commit yields nothing when the commit
     // did not track it, so the tree itself performs the tracked-only filter the
     // work tree needs `tracked_paths` for.
@@ -564,8 +565,10 @@ fn untracked_released(
     // The same nested-package boundary the tracked listing observes applies
     // here, or a file under a nested crate would be advertised as content
     // Cargo would pack for the outer one. The manifest drawing that boundary
-    // may itself still be untracked, so both listings feed the scan.
-    let tracked: Vec<String> = git.ls_files(side.dir)?;
+    // may itself still be untracked, so both listings feed the scan, and the
+    // tracked one is narrowed to what the work tree still holds for the same
+    // reason `released_in_work_tree` narrows it.
+    let tracked: Vec<String> = present_in_work_tree(git, &git.ls_files(side.dir)?);
     let mut boundary_paths = listed.clone();
     boundary_paths.extend_from_slice(&tracked);
     let nested = nested_package_dirs(&boundary_paths, side.dir);
@@ -637,7 +640,9 @@ fn released_in_work_tree(
     side: &PackageSide<'_>,
     tracked_resources: &HashSet<String>,
 ) -> Result<HashMap<String, String>, AppError> {
-    let mut released = released_from_paths(&git.ls_files(side.dir)?, side);
+    let tracked = git.ls_files(side.dir)?;
+    let present = present_in_work_tree(git, &tracked);
+    let mut released = released_from_paths(&tracked, &present, side);
     add_resources(
         &mut released,
         side.resources
@@ -647,14 +652,40 @@ fn released_in_work_tree(
     Ok(released)
 }
 
+/// The subset of `paths` the work tree still holds on disk.
+///
+/// Git lists a tracked file whose work-tree copy has been deleted, but Cargo
+/// packages what is on disk: a nested manifest that is gone no longer stops
+/// packing, and a deleted default README is no longer there to be found. The
+/// tracked listing still decides eligibility — released content is defined from
+/// git-tracked files — so this narrower listing is used only for structure.
+/// A dangling symbolic link counts as present, because Git tracks the link
+/// itself rather than what it points at.
+fn present_in_work_tree(git: &GitRepo, paths: &[String]) -> Vec<String> {
+    paths
+        .iter()
+        .filter(|path| fs::symlink_metadata(git.root().join(path)).is_ok())
+        .cloned()
+        .collect()
+}
+
 /// Selects one package's released content from the tracked paths beneath it.
+///
+/// `tracked` decides eligibility and `present` decides structure: which
+/// directories draw a nested package boundary, and whether a default README is
+/// there to detect. The two coincide at a commit and differ in a work tree that
+/// has deleted a tracked file.
 ///
 /// Keys are package-relative, values are the git-root-relative paths the caller
 /// reads the content back from.
-fn released_from_paths(paths: &[String], side: &PackageSide<'_>) -> HashMap<String, String> {
-    let nested = nested_package_dirs(paths, side.dir);
+fn released_from_paths(
+    tracked: &[String],
+    present: &[String],
+    side: &PackageSide<'_>,
+) -> HashMap<String, String> {
+    let nested = nested_package_dirs(present, side.dir);
     let mut map = HashMap::new();
-    for full in paths {
+    for full in tracked {
         if is_inside_any(full, &nested) {
             continue;
         }
@@ -666,7 +697,7 @@ fn released_from_paths(paths: &[String], side: &PackageSide<'_>) -> HashMap<Stri
         }
     }
     if side.auto_readme {
-        let present: HashSet<&str> = paths.iter().map(String::as_str).collect();
+        let present: HashSet<&str> = present.iter().map(String::as_str).collect();
         if let Some((name, full)) = detected_readme(side.dir, &present) {
             map.entry(name).or_insert(full);
         }
@@ -996,10 +1027,11 @@ fn read_optional_bytes(path: &Path) -> Result<Option<Vec<u8>>, AppError> {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             let target =
                 fs::read_link(path).map_err(|error| ReadFileError::caused_by(path, error))?;
-            // Git spells link targets with forward slashes regardless of platform.
-            return Ok(Some(
-                target.to_string_lossy().replace('\\', "/").into_bytes(),
-            ));
+            // Git records a target verbatim, so only the platform's own
+            // separator is rewritten: a backslash is an ordinary target byte on
+            // Unix, and rewriting one would make an unchanged link differ from
+            // its anchor blob.
+            return Ok(Some(os_path(&target).into_bytes()));
         }
         Ok(_) => {}
         Err(error) if is_not_found(&error) => return Ok(None),
@@ -1189,7 +1221,7 @@ mod tests {
             "packages/a/fixture/Cargo.toml".to_string(),
             "packages/a/fixture/src/lib.rs".to_string(),
         ];
-        let released = released_from_paths(&paths, &side);
+        let released = released_from_paths(&paths, &paths, &side);
         assert_eq!(
             released.keys().map(String::as_str).collect::<BTreeSet<_>>(),
             BTreeSet::from(["Cargo.toml", "src/lib.rs"])
@@ -1215,7 +1247,7 @@ mod tests {
             "packages/a/Cargo.toml".to_string(),
             r"packages/a/src/odd\name.rs".to_string(),
         ];
-        let released = released_from_paths(&paths, &side);
+        let released = released_from_paths(&paths, &paths, &side);
         assert_eq!(
             released.keys().map(String::as_str).collect::<BTreeSet<_>>(),
             BTreeSet::from(["Cargo.toml", r"src/odd\name.rs"])
@@ -1244,7 +1276,7 @@ mod tests {
             auto_readme: true,
         };
 
-        let released = released_from_paths(&paths, &side);
+        let released = released_from_paths(&paths, &paths, &side);
         assert_eq!(
             released.keys().map(String::as_str).collect::<BTreeSet<_>>(),
             BTreeSet::from(["src/lib.rs", "README.md"])
@@ -1256,11 +1288,63 @@ mod tests {
             ..side
         };
         assert_eq!(
-            released_from_paths(&paths, &declared)
+            released_from_paths(&paths, &paths, &declared)
                 .keys()
                 .map(String::as_str)
                 .collect::<BTreeSet<_>>(),
             BTreeSet::from(["src/lib.rs"])
+        );
+    }
+
+    /// Git still lists a tracked file the work tree has deleted, but Cargo
+    /// packages what is on disk: a nested manifest that is gone no longer stops
+    /// packing, and a deleted default README is no longer detected.
+    #[test]
+    fn a_deleted_path_no_longer_shapes_the_released_content() {
+        let resources = BTreeMap::new();
+        // `include` omits the README, so only detection can bring it in.
+        let rules = PackagingRules::new(Some(&["src/**".to_string()]), None).unwrap();
+        let side = PackageSide {
+            dir: "packages/a",
+            rules: &rules,
+            resources: &resources,
+            auto_readme: true,
+        };
+        let tracked = vec![
+            "packages/a/src/lib.rs".to_string(),
+            "packages/a/README.md".to_string(),
+        ];
+        assert!(
+            released_from_paths(&tracked, &tracked, &side).contains_key("README.md"),
+            "a README on disk is detected"
+        );
+        let present = vec!["packages/a/src/lib.rs".to_string()];
+        assert!(
+            !released_from_paths(&tracked, &present, &side).contains_key("README.md"),
+            "a README the work tree deleted is not"
+        );
+
+        let rules = PackagingRules::default();
+        let side = PackageSide {
+            dir: "packages/a",
+            rules: &rules,
+            resources: &resources,
+            auto_readme: false,
+        };
+        let tracked = vec![
+            "packages/a/Cargo.toml".to_string(),
+            "packages/a/fixture/Cargo.toml".to_string(),
+            "packages/a/fixture/src/lib.rs".to_string(),
+        ];
+        let present = vec!["packages/a/Cargo.toml".to_string()];
+        // Without the nested manifest on disk the boundary is gone and the
+        // files beneath it become the outer package's released content.
+        assert_eq!(
+            released_from_paths(&tracked, &present, &side)
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["Cargo.toml", "fixture/Cargo.toml", "fixture/src/lib.rs"])
         );
     }
 

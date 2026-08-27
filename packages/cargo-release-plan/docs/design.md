@@ -170,9 +170,10 @@ diff.
 The per-package `.patch` files are zero-context unified diffs in the shape
 `diff -U0` produces, so consumers can pipe them into standard tooling: one hunk
 per changed region, `/dev/null` labelling the absent side of an addition or
-deletion, and binary content reported as differing rather than rendered. A file
-whose presence changed but whose content is empty is recorded by its headers
-alone, because there are no lines to show.
+deletion, and binary content reported as differing rather than rendered. An
+added or deleted file whose content is empty has no hunk to carry it, so it is
+recorded with Git's extended `new file` / `deleted file` headers, which a patch
+reader applies.
 
 ## Offline and deterministic
 
