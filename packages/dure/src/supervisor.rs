@@ -321,19 +321,9 @@ fn accept_loop<T, C>(
         let Ok(conn) = transport.accept(listener) else {
             break;
         };
-        let previous = {
-            let mut slot = shared
-                .client
-                .lock()
-                .expect("client slot is only copied or replaced, never held across a panic");
-            slot.replace(conn)
-        };
-        if let Some(old) = previous {
-            // The displaced client may already have disconnected. Steal still
-            // proceeds; last-connect-wins does not depend on this notice.
-            _ = transport.send(old, &Message::Displaced);
-            transport.disconnect(old);
-        }
+        // Steal happens after a valid Attach in `client_loop`. Installing the
+        // slot on accept would let a stalled connection displace a live client
+        // and inject Output before Attached.
         thread::spawn({
             let shared = Arc::clone(shared);
             let set_attached = set_attached.clone();
@@ -367,15 +357,30 @@ where
                 )
                 .is_err()
             {
+                shared.transport.disconnect(conn);
                 return;
             }
-            set_attached(true);
         }
         _ => {
             shared.transport.disconnect(conn);
             return;
         }
     }
+
+    let previous = {
+        let mut slot = shared
+            .client
+            .lock()
+            .expect("client slot is only copied or replaced, never held across a panic");
+        slot.replace(conn)
+    };
+    if let Some(old) = previous {
+        // The displaced client may already have disconnected. Steal still
+        // proceeds; last-connect-wins does not depend on this notice.
+        _ = shared.transport.send(old, &Message::Displaced);
+        shared.transport.disconnect(old);
+    }
+    set_attached(true);
 
     loop {
         match shared.transport.recv(conn) {

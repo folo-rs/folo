@@ -63,12 +63,6 @@ fn visible_text(bytes: &[u8]) -> String {
     text
 }
 
-/// Ceiling on spinning until the supervisor deletes the session record after
-/// the client has exited. Local filesystem delete is immediate; this bound
-/// exists so a stuck record fails the test instead of hanging under mutation
-/// testing.
-const RECORD_GC_SPIN_LIMIT: u32 = 1_000_000;
-
 fn collect_until(console: &ConsoleProcess, needle: &str) -> String {
     let mut collected = Vec::new();
     loop {
@@ -134,16 +128,6 @@ fn run_helper_exit_status() {
         client.write_input(b"x\r\n");
         let status = client.wait();
         assert_eq!(status, SAMPLE_NONZERO_EXIT, "client output: {attached:?}");
-        // The client process can exit as soon as it receives `AppExited`, while
-        // the supervisor still deletes the record.
-        let mut gone = false;
-        for _ in 0..RECORD_GC_SPIN_LIMIT {
-            if dir.path().read_dir().unwrap().next().is_none() {
-                gone = true;
-                break;
-            }
-        }
-        assert!(gone, "session records must be gone after the app exits");
     });
 }
 

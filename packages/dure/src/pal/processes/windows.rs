@@ -11,7 +11,8 @@ use std::sync::{Mutex, OnceLock};
 
 use rand::RngExt;
 use windows::Win32::Foundation::{
-    CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE, STILL_ACTIVE, WAIT_OBJECT_0,
+    CloseHandle, ERROR_INVALID_PARAMETER, FILETIME, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
+    STILL_ACTIVE, WAIT_OBJECT_0,
 };
 use windows::Win32::System::Console::HPCON;
 use windows::Win32::System::JobObjects::{
@@ -24,8 +25,8 @@ use windows::Win32::System::Threading::{
     DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
     GetCurrentProcessId, GetExitCodeProcess, GetProcessId, GetProcessTimes, INFINITE,
     InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST, OpenProcess,
-    PROC_THREAD_ATTRIBUTE_JOB_LIST, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    PROC_THREAD_ATTRIBUTE_JOB_LIST, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_ACCESS_RIGHTS,
+    PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
     STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW, TerminateProcess,
     UpdateProcThreadAttribute, WaitForSingleObject,
 };
@@ -105,12 +106,23 @@ fn identity_of(handle: HANDLE) -> Result<ProcessIdentity, PalError> {
     })
 }
 
-fn open_verified(identity: &ProcessIdentity) -> Result<HANDLE, PalError> {
-    let desired = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_SYNCHRONIZE;
+fn open_verified(
+    identity: &ProcessIdentity,
+    access: PROCESS_ACCESS_RIGHTS,
+) -> Result<HANDLE, PalError> {
     // SAFETY: pid is a numeric process id; OpenProcess does not retain aliasing
     // of Rust references.
-    let handle = unsafe { OpenProcess(desired, false, identity.pid) }
-        .map_err(|_error| PalError::new(PalErrorKind::NotFound))?;
+    let opened = unsafe { OpenProcess(access, false, identity.pid) };
+    let Ok(handle) = opened else {
+        // SAFETY: immediately after the failed OpenProcess.
+        let err = unsafe { GetLastError() };
+        // A missing pid is NotFound (stale record). Access-denied and other
+        // failures are InspectFailed so GC does not drop a live supervisor.
+        if err == ERROR_INVALID_PARAMETER {
+            return Err(PalError::new(PalErrorKind::NotFound));
+        }
+        return Err(PalError::new(PalErrorKind::InspectFailed));
+    };
     match identity_of(handle) {
         Ok(actual) if actual.creation_time == identity.creation_time => Ok(handle),
         Ok(_) => {
@@ -180,7 +192,8 @@ impl Processes for BuildTargetProcesses {
     }
 
     fn probe(&self, identity: &ProcessIdentity) -> ProcessLiveness {
-        let handle = match open_verified(identity) {
+        let access = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE;
+        let handle = match open_verified(identity, access) {
             Ok(handle) => handle,
             Err(error) if error.kind() == PalErrorKind::NotFound => return ProcessLiveness::Dead,
             Err(_) => return ProcessLiveness::InspectFailed,
@@ -197,7 +210,8 @@ impl Processes for BuildTargetProcesses {
     }
 
     fn terminate(&self, identity: &ProcessIdentity) -> Result<(), PalError> {
-        let handle = open_verified(identity).map_err(|error| {
+        let access = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE | PROCESS_TERMINATE;
+        let handle = open_verified(identity, access).map_err(|error| {
             if error.kind() == PalErrorKind::NotFound {
                 PalError::new(PalErrorKind::NotFound)
             } else {

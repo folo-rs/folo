@@ -1,14 +1,22 @@
 //! Windows named-pipe transport.
 
 use std::collections::HashMap;
+use std::mem::size_of;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use windows::Win32::Foundation::{
     CloseHandle, ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_NO_DATA, ERROR_PIPE_BUSY,
-    ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, GetLastError, HANDLE, WAIT_OBJECT_0,
-    WAIT_TIMEOUT, WIN32_ERROR,
+    ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, GetLastError, HANDLE, HLOCAL, LocalFree,
+    WAIT_OBJECT_0, WAIT_TIMEOUT, WIN32_ERROR,
+};
+use windows::Win32::Security::Authorization::{
+    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+};
+use windows::Win32::Security::{
+    GetTokenInformation, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
+    TokenUser,
 };
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, FILE_FLAGS_AND_ATTRIBUTES,
@@ -20,8 +28,10 @@ use windows::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
     PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT, WaitNamedPipeW,
 };
-use windows::Win32::System::Threading::{CreateEventW, INFINITE, WaitForSingleObject};
-use windows::core::PCWSTR;
+use windows::Win32::System::Threading::{
+    CreateEventW, GetCurrentProcess, INFINITE, OpenProcessToken, WaitForSingleObject,
+};
+use windows::core::{PCWSTR, PWSTR};
 
 use crate::pal::error::{PalError, PalErrorKind};
 use crate::pal::ids::{ConnId, ListenerId};
@@ -31,12 +41,21 @@ use crate::protocol::{Message, decode_payload, encode, payload_len_ok};
 
 struct PipeTable {
     listeners: HashMap<u64, Listener>,
-    conns: HashMap<u64, RawHandle>,
+    conns: HashMap<u64, Conn>,
 }
 
 struct Listener {
     name: Vec<u16>,
     pending: RawHandle,
+}
+
+/// One accepted or connected pipe end.
+///
+/// `write` serializes complete frames so output, displacement, and app-exit
+/// cannot interleave length prefixes on this byte-mode pipe.
+struct Conn {
+    handle: RawHandle,
+    write: Arc<Mutex<()>>,
 }
 
 fn table() -> &'static Mutex<PipeTable> {
@@ -78,13 +97,108 @@ fn wide_z(s: &str) -> Vec<u16> {
 // slow client does not immediately stall ConPTY output. Not a protocol bound.
 const PIPE_BUFFER: u32 = 65_536;
 
+/// Process-lifetime DACL used for every session pipe.
+///
+/// Permits only the creating user (implementation.md, "Transport").
+struct UserPipeSecurity {
+    descriptor: PSECURITY_DESCRIPTOR,
+    attrs: SECURITY_ATTRIBUTES,
+}
+
+impl UserPipeSecurity {
+    fn new() -> Result<Self, PalError> {
+        let sid = current_user_sid_string()?;
+        let sddl = format!("D:P(A;;GA;;;{sid})");
+        let wide = wide_z(&sddl);
+        let mut descriptor = PSECURITY_DESCRIPTOR::default();
+        // SAFETY: `wide` is a NUL-terminated SDDL string. On success `descriptor`
+        // is a LocalAlloc security descriptor we own and must LocalFree.
+        let converted = unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                PCWSTR(wide.as_ptr()),
+                SDDL_REVISION_1,
+                &raw mut descriptor,
+                None,
+            )
+        };
+        converted.map_err(|_error| PalError::new(PalErrorKind::Other))?;
+        let attrs = SECURITY_ATTRIBUTES {
+            nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>())
+                .expect("SECURITY_ATTRIBUTES fits in u32"),
+            lpSecurityDescriptor: descriptor.0,
+            bInheritHandle: false.into(),
+        };
+        Ok(Self { descriptor, attrs })
+    }
+}
+
+impl Drop for UserPipeSecurity {
+    fn drop(&mut self) {
+        if !self.descriptor.0.is_null() {
+            // SAFETY: `descriptor` is the unique LocalAlloc pointer from
+            // ConvertStringSecurityDescriptorToSecurityDescriptorW.
+            _ = unsafe { LocalFree(Some(HLOCAL(self.descriptor.0))) };
+            self.descriptor = PSECURITY_DESCRIPTOR::default();
+        }
+    }
+}
+
+fn current_user_sid_string() -> Result<String, PalError> {
+    let mut token = HANDLE::default();
+    // SAFETY: a pseudo-handle to this process; it is not closed.
+    let process = unsafe { GetCurrentProcess() };
+    // SAFETY: `token` is an out-handle on the stack. `process` is the
+    // current-process pseudo-handle.
+    unsafe { OpenProcessToken(process, TOKEN_QUERY, &raw mut token) }
+        .map_err(|_error| PalError::new(PalErrorKind::Other))?;
+    let mut len = 0_u32;
+    // SAFETY: size query; a null information buffer is allowed.
+    _ = unsafe { GetTokenInformation(token, TokenUser, None, 0, &raw mut len) };
+    let words = usize::try_from(len)
+        .expect("token info size fits in usize")
+        .div_ceil(size_of::<u64>());
+    let mut buf = vec![0_u64; words];
+    let byte_len = u32::try_from(buf.len().saturating_mul(size_of::<u64>()))
+        .expect("token info buffer fits in u32");
+    // SAFETY: `buf` is exclusive, 8-byte aligned, and large enough for `len`.
+    let queried = unsafe {
+        GetTokenInformation(
+            token,
+            TokenUser,
+            Some(buf.as_mut_ptr().cast()),
+            byte_len,
+            &raw mut len,
+        )
+    };
+    close(token);
+    queried.map_err(|_error| PalError::new(PalErrorKind::Other))?;
+    let mut sid_str = PWSTR::null();
+    {
+        // SAFETY: `buf` holds a TOKEN_USER written by GetTokenInformation. No
+        // other exclusive borrow of `buf` exists. `User.Sid` points into `buf`.
+        let user = unsafe { &*buf.as_ptr().cast::<TOKEN_USER>() };
+        // SAFETY: `user.User.Sid` is a valid SID inside `buf`. On success
+        // `sid_str` is a LocalAlloc string we own.
+        unsafe { ConvertSidToStringSidW(user.User.Sid, &raw mut sid_str) }
+            .map_err(|_error| PalError::new(PalErrorKind::Other))?;
+    }
+    // SAFETY: `sid_str` is the unique owner of a NUL-terminated SID string.
+    // Copy before LocalFree so conversion errors cannot leak the allocation.
+    let wide = unsafe { sid_str.as_wide() }.to_vec();
+    // SAFETY: `sid_str` is the ConvertSidToStringSidW allocation we copied.
+    _ = unsafe { LocalFree(Some(HLOCAL(sid_str.0.cast()))) };
+    String::from_utf16(&wide).map_err(|_error| PalError::new(PalErrorKind::Other))
+}
+
 fn create_instance(name: &[u16], first: bool) -> Result<HANDLE, PalError> {
     let mut open_mode = PIPE_ACCESS_DUPLEX.0 | FILE_FLAG_OVERLAPPED.0;
     if first {
         open_mode |= FILE_FLAG_FIRST_PIPE_INSTANCE.0;
     }
-    // SAFETY: `name` is a NUL-terminated pipe path. The created handle is owned
-    // by the caller. Remote clients are rejected.
+    let security = UserPipeSecurity::new()?;
+    // SAFETY: `name` is a NUL-terminated pipe path. `security.attrs` is a valid
+    // SECURITY_ATTRIBUTES whose descriptor lives until after this call. The
+    // created handle is owned by the caller. Remote clients are rejected.
     let handle = unsafe {
         CreateNamedPipeW(
             PCWSTR(name.as_ptr()),
@@ -94,7 +208,7 @@ fn create_instance(name: &[u16], first: bool) -> Result<HANDLE, PalError> {
             PIPE_BUFFER,
             PIPE_BUFFER,
             0,
-            None,
+            Some(&raw const security.attrs),
         )
     };
     if handle.is_invalid() {
@@ -269,8 +383,17 @@ fn conn_handle(conn: ConnId) -> Result<HANDLE, PalError> {
         .expect("pipe table")
         .conns
         .get(&conn.0)
-        .copied()
-        .map(RawHandle::as_handle)
+        .map(|conn| conn.handle.as_handle())
+        .ok_or_else(|| PalError::new(PalErrorKind::NotFound))
+}
+
+fn conn_write(conn: ConnId) -> Result<(HANDLE, Arc<Mutex<()>>), PalError> {
+    table()
+        .lock()
+        .expect("pipe table")
+        .conns
+        .get(&conn.0)
+        .map(|conn| (conn.handle.as_handle(), Arc::clone(&conn.write)))
         .ok_or_else(|| PalError::new(PalErrorKind::NotFound))
 }
 
@@ -317,7 +440,13 @@ impl Transport for BuildTargetTransport {
             close(next);
         }
         let id = next_id();
-        table.conns.insert(id, pending);
+        table.conns.insert(
+            id,
+            Conn {
+                handle: pending,
+                write: Arc::new(Mutex::new(())),
+            },
+        );
         Ok(ConnId(id))
     }
 
@@ -355,17 +484,21 @@ impl Transport for BuildTargetTransport {
             return Err(PalError::new(PalErrorKind::NotFound));
         };
         let id = next_id();
-        table()
-            .lock()
-            .expect("pipe table")
-            .conns
-            .insert(id, RawHandle::from_handle(handle));
+        table().lock().expect("pipe table").conns.insert(
+            id,
+            Conn {
+                handle: RawHandle::from_handle(handle),
+                write: Arc::new(Mutex::new(())),
+            },
+        );
         Ok(ConnId(id))
     }
 
     fn send(&self, conn: ConnId, message: &Message) -> Result<(), PalError> {
-        let handle = conn_handle(conn)?;
-        write_all(handle, &encode(message))
+        let frame = encode(message);
+        let (handle, write) = conn_write(conn)?;
+        let _guard = write.lock().expect("pipe write lock");
+        write_all(handle, &frame)
     }
 
     fn recv(&self, conn: ConnId) -> Result<Message, PalError> {
@@ -382,8 +515,8 @@ impl Transport for BuildTargetTransport {
     }
 
     fn disconnect(&self, conn: ConnId) {
-        if let Some(handle) = table().lock().expect("pipe table").conns.remove(&conn.0) {
-            close(handle.as_handle());
+        if let Some(conn) = table().lock().expect("pipe table").conns.remove(&conn.0) {
+            close(conn.handle.as_handle());
         }
     }
 
