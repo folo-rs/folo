@@ -719,15 +719,17 @@ mod tests {
     /// A manifest can name a package or a pattern with a newline in it, and the
     /// message would otherwise carry that newline into a log where the tail
     /// reads as a fresh line of the tool's own output.
+    ///
+    /// The condition renders on the first line, followed by its cause and, when
+    /// backtraces are enabled, a captured backtrace. Escaping is therefore
+    /// asserted on that first line: an unescaped value would push the tail of
+    /// the pattern off it.
     #[test]
     fn a_repository_controlled_value_is_escaped_in_the_message() {
         let error = InvalidMemberPatternError::new("a\nb");
         let message = error.to_string();
-        assert!(
-            !message.contains('\n'),
-            "the pattern must not break the message across lines: {message}"
-        );
-        assert!(message.contains(r"a\nb"), "{message}");
+        let first_line = message.lines().next().unwrap();
+        assert!(first_line.contains(r"a\nb"), "{message}");
     }
 
     /// The same protection applies to the paths the file-access errors name.
@@ -735,8 +737,6 @@ mod tests {
     fn a_repository_controlled_path_is_escaped_in_the_message() {
         let error = ReadFileError::caused_by(Path::new("a\nb"), io::Error::other("x"));
         let message = error.to_string();
-        // The error renders its cause on following lines, so only the condition's
-        // own line is inspected for the path it names.
         let first_line = message.lines().next().unwrap();
         assert!(first_line.contains(r"a\nb"), "{message}");
     }
