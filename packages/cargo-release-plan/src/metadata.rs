@@ -22,8 +22,8 @@ use crate::manifest::{
 #[cfg(test)]
 use crate::packaging::PackagingRules;
 use crate::{
-    GroupNameCollisionError, InvalidVersionError, MalformedVersionGroupError, ParseMetadataError,
-    ReadFileError, UnknownGroupMemberError,
+    GroupNameCollisionError, InvalidVersionError, MalformedVersionGroupError,
+    NonPublishableGroupMemberError, ParseMetadataError, ReadFileError, UnknownGroupMemberError,
 };
 
 /// Raw `cargo metadata` document before conversion to [`WorkTree`].
@@ -150,7 +150,6 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
                 .map(|dir| (dir.to_path_buf(), package.name.clone()))
         })
         .collect();
-    let groups = groups_from_metadata(&metadata.metadata, &workspace_names)?;
     let root_manifest_path = workspace_root.join("Cargo.toml");
     let root_content = fs::read_to_string(&root_manifest_path)
         .map_err(|error| ReadFileError::caused_by(&root_manifest_path, error))?;
@@ -209,6 +208,14 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
         .collect();
     member_manifests.sort();
 
+    // Group configuration is validated once the publishable set is known,
+    // because a group may only name packages that are actually released.
+    let publishable_names: HashSet<&str> = packages
+        .iter()
+        .map(|package| package.manifest.name.as_str())
+        .collect();
+    let groups = groups_from_metadata(&metadata.metadata, &workspace_names, &publishable_names)?;
+
     Ok(WorkTree {
         workspace_root,
         packages,
@@ -221,6 +228,7 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
 fn groups_from_metadata(
     metadata: &Value,
     workspace_names: &HashSet<String>,
+    publishable_names: &HashSet<&str>,
 ) -> Result<Groups, AppError> {
     let Some(groups) = metadata
         .get("release-plan")
@@ -241,6 +249,9 @@ fn groups_from_metadata(
             };
             if !workspace_names.contains(package) {
                 return Err(UnknownGroupMemberError::new(name, package).into());
+            }
+            if !publishable_names.contains(package) {
+                return Err(NonPublishableGroupMemberError::new(name, package).into());
             }
             parsed.push(package.to_owned());
         }
@@ -292,6 +303,12 @@ mod tests {
 
     use super::*;
 
+    /// Group configuration is checked against the publishable set, which for
+    /// most cases is simply every workspace member.
+    fn all_publishable(names: &HashSet<String>) -> HashSet<&str> {
+        names.iter().map(String::as_str).collect()
+    }
+
     #[test]
     fn groups_from_metadata_reads_release_plan_table() {
         let json = json!({
@@ -302,8 +319,28 @@ mod tests {
             }
         });
         let names = HashSet::from(["nm".to_string(), "nm_impl".to_string()]);
-        let groups = groups_from_metadata(&json, &names).unwrap();
+        let groups = groups_from_metadata(&json, &names, &all_publishable(&names)).unwrap();
         assert_eq!(groups.group_of("nm_impl"), Some("nm"));
+    }
+
+    /// A version group keeps released versions in lockstep, so a member that is
+    /// never published has no version to keep in step and would otherwise be
+    /// dropped from every decision without a word.
+    #[test]
+    fn groups_from_metadata_rejects_a_non_publishable_member() {
+        let json = json!({
+            "release-plan": { "groups": { "nm": ["nm", "nm_impl"] } }
+        });
+        let names = HashSet::from(["nm".to_string(), "nm_impl".to_string()]);
+        let publishable = HashSet::from(["nm"]);
+
+        let error = groups_from_metadata(&json, &names, &publishable).unwrap_err();
+
+        let reported = error
+            .find_source::<NonPublishableGroupMemberError>()
+            .expect("a non-publishable member is refused")
+            .to_string();
+        assert!(reported.contains("nm_impl"), "{reported}");
     }
 
     #[test]
@@ -312,7 +349,7 @@ mod tests {
         let malformed = json!({
             "release-plan": { "groups": { "nm": "nm" } }
         });
-        let error = groups_from_metadata(&malformed, &names).unwrap_err();
+        let error = groups_from_metadata(&malformed, &names, &all_publishable(&names)).unwrap_err();
         let source = error
             .find_source::<MalformedVersionGroupError>()
             .expect("malformed group");
@@ -320,7 +357,8 @@ mod tests {
         let non_string = json!({
             "release-plan": { "groups": { "nm": [1] } }
         });
-        let error = groups_from_metadata(&non_string, &names).unwrap_err();
+        let error =
+            groups_from_metadata(&non_string, &names, &all_publishable(&names)).unwrap_err();
         let source = error
             .find_source::<MalformedVersionGroupError>()
             .expect("malformed group member");
@@ -328,7 +366,7 @@ mod tests {
         let unknown = json!({
             "release-plan": { "groups": { "nm": ["ghost"] } }
         });
-        let error = groups_from_metadata(&unknown, &names).unwrap_err();
+        let error = groups_from_metadata(&unknown, &names, &all_publishable(&names)).unwrap_err();
         let source = error
             .find_source::<UnknownGroupMemberError>()
             .expect("unknown member");
@@ -342,7 +380,7 @@ mod tests {
         let collision = json!({
             "release-plan": { "groups": { "nm": ["nm_impl"] } }
         });
-        let error = groups_from_metadata(&collision, &names).unwrap_err();
+        let error = groups_from_metadata(&collision, &names, &all_publishable(&names)).unwrap_err();
         let source = error
             .find_source::<GroupNameCollisionError>()
             .expect("group name collision");
@@ -353,11 +391,11 @@ mod tests {
         let free_name = json!({
             "release-plan": { "groups": { "nm-family": ["nm_impl"] } }
         });
-        groups_from_metadata(&free_name, &names).unwrap();
+        groups_from_metadata(&free_name, &names, &all_publishable(&names)).unwrap();
         let contains_itself = json!({
             "release-plan": { "groups": { "nm": ["nm", "nm_impl"] } }
         });
-        groups_from_metadata(&contains_itself, &names).unwrap();
+        groups_from_metadata(&contains_itself, &names, &all_publishable(&names)).unwrap();
     }
 
     #[test]

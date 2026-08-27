@@ -446,6 +446,26 @@ impl UnknownGroupMemberError {
     }
 }
 
+/// A version group lists a workspace package that is never published.
+///
+/// A version group keeps the versions crates are released under in lockstep, so
+/// a package that is never released has no such version to keep in step. Naming
+/// one is a configuration mistake rather than a member the tool can quietly
+/// leave behind.
+#[ohno::error]
+#[display(
+    "Version group '{}' lists '{}', which is not a publishable package",
+    group.quoted(),
+    package.quoted()
+)]
+pub(crate) struct NonPublishableGroupMemberError {
+    group: String,
+    package: String,
+}
+
+impl UnwindSafe for NonPublishableGroupMemberError {}
+impl RefUnwindSafe for NonPublishableGroupMemberError {}
+
 /// A version group is named after a workspace package that is not one of its members.
 #[ohno::error]
 #[display(
@@ -673,6 +693,14 @@ mod tests {
     );
     assert_impl_all!(
         UnknownGroupMemberError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        NonPublishableGroupMemberError: Send,
         Sync,
         Debug,
         error::Error,

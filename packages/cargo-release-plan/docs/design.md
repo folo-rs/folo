@@ -134,7 +134,10 @@ package can join a group before it has been published.
 Group membership is `[workspace.metadata.release-plan.groups]` in the workspace
 root manifest. A plan entry names either a package or a group, so a group named
 after a workspace package must contain that package; naming it after a package
-it does not contain is rejected as ambiguous configuration.
+it does not contain is rejected as ambiguous configuration. A group may only
+name publishable packages: a group keeps released versions in lockstep, so a
+`publish = false` member has no released version to keep in step and is rejected
+rather than quietly left out of every decision.
 
 ## Commands
 
