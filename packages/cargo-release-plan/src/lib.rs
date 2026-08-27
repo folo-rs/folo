@@ -14,6 +14,7 @@ mod check;
 mod classify;
 mod cli;
 mod command;
+mod diff;
 mod errors;
 mod git;
 mod groups;

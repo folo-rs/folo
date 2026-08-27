@@ -79,20 +79,20 @@ pub(crate) struct ReportedDep {
 pub(crate) struct WorkTree {
     pub(crate) workspace_root: PathBuf,
     pub(crate) packages: Vec<WorkPackage>,
+    /// Repo-relative directories of every member, publishable or not.
+    ///
+    /// `cargo package` stops at a nested package boundary, so released-content
+    /// discovery needs the boundaries of members it will never classify.
+    pub(crate) member_dirs: Vec<String>,
     pub(crate) groups: Groups,
 }
 
 pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError> {
-    // A relative manifest path such as the default `Cargo.toml` has an empty
-    // parent, which is not a directory a child process can be started in, so the
-    // process's own directory stands in. Cargo resolves the manifest path
-    // against the same directory, so both ends agree.
-    let parent = manifest_path.parent().unwrap_or(manifest_path);
-    let cwd = if parent.as_os_str().is_empty() {
-        Path::new(".")
-    } else {
-        parent
-    };
+    // Cargo resolves a relative `--manifest-path` against the child's working
+    // directory, so the child inherits this process's directory and the path is
+    // passed through unchanged. Deriving the directory from the path instead
+    // would resolve any leading directory component twice.
+    let cwd = Path::new(".");
     // `--no-deps` is the classification Cargo invocation: no graph resolve and
     // no crates.io. `--offline` is omitted so a workspace without a lockfile
     // can still be classified; no registry packages are consulted.
@@ -169,7 +169,7 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
         let dependencies = package
             .dependencies
             .iter()
-            .filter(|dep| is_intra_workspace_normal(dep, &member_dirs))
+            .filter(|dep| is_intra_workspace_released(dep, &member_dirs))
             .map(|dep| ReportedDep {
                 name: dep.name.clone(),
                 req: dep.req.clone(),
@@ -186,9 +186,16 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
 
     packages.sort_by(|a, b| a.manifest.name.cmp(&b.manifest.name));
 
+    let mut member_directories: Vec<String> = member_dirs
+        .iter()
+        .map(|dir| repo_relative_dir(&workspace_root, &dir.join("Cargo.toml")))
+        .collect();
+    member_directories.sort_unstable();
+
     Ok(WorkTree {
         workspace_root,
         packages,
+        member_dirs: member_directories,
         groups,
     })
 }
@@ -224,9 +231,14 @@ fn groups_from_metadata(
     Groups::from_members(map)
 }
 
-fn is_intra_workspace_normal(dep: &MetadataDep, member_dirs: &HashSet<PathBuf>) -> bool {
+/// Reports whether a dependency edge is published and points at a workspace member.
+///
+/// Normal and build dependencies are recorded in the published manifest, so a
+/// version decision on the target cascades to this package. Dev dependencies are
+/// stripped from the published manifest and cannot cascade.
+fn is_intra_workspace_released(dep: &MetadataDep, member_dirs: &HashSet<PathBuf>) -> bool {
     let kind = dep.kind.as_deref().unwrap_or("normal");
-    if kind != "normal" {
+    if kind == "dev" {
         return false;
     }
     let Some(path) = &dep.path else {
@@ -287,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn intra_workspace_normal_deps_require_a_member_directory() {
+    fn released_intra_workspace_deps_require_a_member_directory() {
         let dirs = HashSet::from([PathBuf::from("/ws/packages/bar")]);
         let path_dep = MetadataDep {
             name: "bar".to_string(),
@@ -295,35 +307,42 @@ mod tests {
             path: Some("/ws/packages/bar".to_string()),
             kind: None,
         };
-        assert!(is_intra_workspace_normal(&path_dep, &dirs));
+        assert!(is_intra_workspace_released(&path_dep, &dirs));
         let named = MetadataDep {
             name: "bar".to_string(),
             req: "0.1.0".to_string(),
             path: None,
             kind: Some("normal".to_string()),
         };
-        assert!(!is_intra_workspace_normal(&named, &dirs));
+        assert!(!is_intra_workspace_released(&named, &dirs));
         let colliding = MetadataDep {
             name: "bar".to_string(),
             req: "0.1.0".to_string(),
             path: Some("/other/bar".to_string()),
             kind: None,
         };
-        assert!(!is_intra_workspace_normal(&colliding, &dirs));
+        assert!(!is_intra_workspace_released(&colliding, &dirs));
+        let build = MetadataDep {
+            name: "bar".to_string(),
+            req: "0.1.0".to_string(),
+            path: Some("/ws/packages/bar".to_string()),
+            kind: Some("build".to_string()),
+        };
+        assert!(is_intra_workspace_released(&build, &dirs));
         let dev = MetadataDep {
             name: "bar".to_string(),
             req: "0.1.0".to_string(),
             path: Some("/ws/packages/bar".to_string()),
             kind: Some("dev".to_string()),
         };
-        assert!(!is_intra_workspace_normal(&dev, &dirs));
+        assert!(!is_intra_workspace_released(&dev, &dirs));
         let foreign = MetadataDep {
             name: "serde".to_string(),
             req: "1.0.0".to_string(),
             path: None,
             kind: None,
         };
-        assert!(!is_intra_workspace_normal(&foreign, &dirs));
+        assert!(!is_intra_workspace_released(&foreign, &dirs));
     }
 
     #[test]
@@ -336,6 +355,7 @@ mod tests {
                 packaging: PackagingRules::default(),
                 inherited: InheritedKeys::default(),
                 publish: true,
+                path_dependencies: Vec::new(),
             },
             manifest_path: PathBuf::from("packages/bar/Cargo.toml"),
             dependencies: vec![ReportedDep {
@@ -352,6 +372,7 @@ mod tests {
                 packaging: PackagingRules::default(),
                 inherited: InheritedKeys::default(),
                 publish: true,
+                path_dependencies: Vec::new(),
             },
             manifest_path: PathBuf::from("packages/foo/Cargo.toml"),
             dependencies: vec![],

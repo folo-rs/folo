@@ -132,8 +132,9 @@ fn render_diagnostics(classification: &Classification, format: CheckFormat) -> S
 /// any tooling beyond this binary; the skill is named as the assisted route.
 fn remedy() -> String {
     format!(
-        "Run `cargo release-plan report` to inspect the changes, then `cargo release-plan apply` \
-         with an increment plan, or run the {INCREMENT_VERSIONS_SKILL} skill to do both."
+        "Run `cargo release-plan report --out-dir <dir>` to inspect the changes, then \
+         `cargo release-plan apply --plan <plan.json>` with an increment plan, or run the \
+         {INCREMENT_VERSIONS_SKILL} skill to do both."
     )
 }
 

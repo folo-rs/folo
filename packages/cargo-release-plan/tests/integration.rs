@@ -492,6 +492,47 @@ fn declared_version_below_the_anchor_is_an_error() {
     );
 }
 
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn nested_package_content_belongs_only_to_the_nested_package() {
+    let fixture = nested_workspace();
+    let base = fixture.sha("HEAD");
+    fixture.write(
+        "packages/outer/inner/src/lib.rs",
+        "pub fn g() { let _ = 1; }\n",
+    );
+    fixture.commit("change inner");
+
+    let (passed, message) = check(&fixture, &base);
+    assert!(!passed, "{message}");
+    // `inner` is a member only because `outer` depends on it by path, so it must
+    // be reconstructed at the anchor too, or the change would look like a brand
+    // new package. Its files belong to `inner` alone, so `outer` stays released.
+    assert!(message.contains("inner: unreleased-changes"), "{message}");
+    assert!(!message.contains("outer: unreleased-changes"), "{message}");
+}
+
+/// Workspace whose declared member contains a second package reached by path.
+///
+/// `packages/*` matches `packages/outer` only, so `inner` is a member solely
+/// through the path dependency, and it sits inside the outer package directory.
+fn nested_workspace() -> Fixture {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "outer",
+        "0.1.0",
+        "\n[dependencies]\ninner = { path = \"inner\", version = \"0.1.0\" }",
+    );
+    fixture.write(
+        "packages/outer/inner/Cargo.toml",
+        "[package]\nname = \"inner\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    fixture.write("packages/outer/inner/src/lib.rs", "pub fn g() {}\n");
+    fixture.commit("seed");
+    fixture
+}
+
 fn seeded_package() -> Fixture {
     let fixture = Fixture::new("");
     write_package(&fixture, "demo", "0.1.0", "");

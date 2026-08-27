@@ -53,9 +53,8 @@ pub(crate) fn run_apply(
         .collect();
     let expanded = expand_plan(&plan, &work_tree.groups, &current, &current)?;
     verbose.note(format!(
-        "plan expands to {} {}; group members are included even when the plan named only one of \
+        "plan expands to {}; group members are included even when the plan named only one of \
          them, and never-published members on this branch are included in apply",
-        expanded.packages.len(),
         plural(expanded.packages.len(), "package version")
     ));
 
@@ -78,10 +77,15 @@ pub(crate) fn run_apply(
         ));
     }
 
-    refresh_lockfile(&work_tree, &expanded, verbose)?;
+    let refreshed = refresh_lockfile(&work_tree, &expanded, verbose)?;
 
+    let lockfile = if refreshed {
+        "refreshed the workspace lockfile"
+    } else {
+        "left the workspace lockfile untouched"
+    };
     Ok(format!(
-        "Updated {changed} {} and refreshed the workspace lockfile",
+        "Updated {} and {lockfile}",
         plural(changed, "manifest")
     ))
 }
@@ -115,10 +119,7 @@ fn compute_edits(
 
 fn dry_run_summary(edits: &[ManifestEdit], package_count: usize) -> String {
     let changed = changed_edit_count(edits);
-    let mut message = format!(
-        "Dry run: {changed} {} would change",
-        plural(changed, "manifest")
-    );
+    let mut message = format!("Dry run: {} would change", plural(changed, "manifest"));
     for edit in edits {
         if edit.original != edit.updated {
             write!(message, "\n  {}", edit.path.display()).expect("writing to String");
@@ -126,7 +127,7 @@ fn dry_run_summary(edits: &[ManifestEdit], package_count: usize) -> String {
     }
     write!(
         message,
-        "; lockfile would be refreshed for {package_count} {}",
+        "; lockfile would be refreshed for {}",
         plural(package_count, "package")
     )
     .expect("writing to String");
@@ -349,21 +350,21 @@ fn refresh_lockfile(
     work_tree: &WorkTree,
     expanded: &ExpandedPlan,
     verbose: Verbose,
-) -> Result<(), AppError> {
+) -> Result<bool, AppError> {
     let lockfile = work_tree.workspace_root.join("Cargo.lock");
     if expanded.packages.is_empty() {
         verbose.note(
             "plan expands to no packages, so apply skips the lockfile refresh rather than \
              running a workspace-wide cargo update",
         );
-        return Ok(());
+        return Ok(false);
     }
     if !lockfile.exists() {
         verbose.note(
             "no Cargo.lock present, so apply skips the lockfile refresh; the lockfile is not \
              released content",
         );
-        return Ok(());
+        return Ok(false);
     }
     let mut args = vec![
         "update".to_string(),
@@ -386,7 +387,7 @@ fn refresh_lockfile(
         args_ref.join(" ")
     ));
     _ = run_capture("cargo", &args_ref, &work_tree.workspace_root)?;
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]

@@ -13,11 +13,13 @@ use serde::{Serialize, Serializer};
 use toml_edit::DocumentMut;
 
 use crate::anchor::{Anchor, TimelineEntry, resolve_anchor};
+use crate::diff::file_diff;
 use crate::git::{GitRepo, git_path, join_git_rel};
 use crate::groups::GroupVerdict;
 use crate::inherited::{InheritedChange, inherited_changes, workspace_package_version};
 use crate::manifest::{
-    PathCase, is_workspace_member, parse_document, parse_package_manifest, parse_workspace_members,
+    PackageManifest, PathCase, WorkspaceMembers, is_workspace_excluded, is_workspace_member,
+    parse_document, parse_package_manifest, parse_workspace_members,
 };
 use crate::metadata::{ReportedDep, WorkPackage, WorkTree, dependents_of, load_work_tree};
 use crate::packaging::{PackagingRules, relativize};
@@ -275,10 +277,16 @@ fn classify_one(
     let (changed_files, mut patch, stat, untracked) = diff_package(
         git,
         &anchor.commit,
-        &anchor_pkg.directory,
-        &anchor_pkg.packaging,
-        &package.manifest.directory,
-        &package.manifest.packaging,
+        &PackageSide {
+            dir: &anchor_pkg.directory,
+            rules: &anchor_pkg.packaging,
+            member_dirs: &anchor_snapshot.member_dirs,
+        },
+        &PackageSide {
+            dir: &package.manifest.directory,
+            rules: &package.manifest.packaging,
+            member_dirs: &work_tree.member_dirs,
+        },
     )?;
 
     let mut changed = changed_files;
@@ -381,16 +389,24 @@ fn build_timeline(
     Ok(timeline)
 }
 
+/// One end of a released-content comparison.
+///
+/// The anchor and the work tree are resolved independently, so each end carries
+/// its own package directory, packaging rules, and member boundaries.
+struct PackageSide<'a> {
+    dir: &'a str,
+    rules: &'a PackagingRules,
+    member_dirs: &'a [String],
+}
+
 fn diff_package(
     git: &GitRepo,
-    anchor: &str,
-    anchor_dir: &str,
-    anchor_rules: &PackagingRules,
-    work_dir: &str,
-    work_rules: &PackagingRules,
+    anchor_commit: &str,
+    anchor: &PackageSide<'_>,
+    work: &PackageSide<'_>,
 ) -> Result<(Vec<ChangedItem>, String, DiffStat, Vec<String>), AppError> {
-    let anchor_files = released_at_commit(git, anchor, anchor_dir, anchor_rules)?;
-    let work_files = released_in_work_tree(git, work_dir, work_rules)?;
+    let anchor_files = released_at_commit(git, anchor_commit, anchor)?;
+    let work_files = released_in_work_tree(git, work)?;
 
     let rels: BTreeSet<&str> = anchor_files
         .keys()
@@ -405,7 +421,7 @@ fn diff_package(
 
     for rel in rels {
         let old = match anchor_files.get(rel) {
-            Some(path) => git.show_file_bytes(anchor, path)?,
+            Some(path) => git.show_file_bytes(anchor_commit, path)?,
             None => None,
         };
         let new = match work_files.get(rel) {
@@ -424,18 +440,18 @@ fn diff_package(
             path: rel.to_string(),
             change: kind.to_string(),
         });
-        let (file_patch, ins, del) = file_diff(rel, old.as_deref(), new.as_deref());
-        insertions = insertions.saturating_add(ins);
-        deletions = deletions.saturating_add(del);
-        patch.push_str(&file_patch);
+        let file_diff = file_diff(rel, old.as_deref(), new.as_deref());
+        insertions = insertions.saturating_add(file_diff.insertions);
+        deletions = deletions.saturating_add(file_diff.deletions);
+        patch.push_str(&file_diff.text);
     }
 
     let untracked = git
-        .ls_untracked(work_dir)?
+        .ls_untracked(work.dir)?
         .into_iter()
         .filter_map(|full| {
-            let rel = relativize(&git_path(&full), work_dir)?.to_string();
-            work_rules.is_released(&rel).then_some(rel)
+            let rel = relativize(&git_path(&full), work.dir)?.to_string();
+            work.rules.is_released(&rel).then_some(rel)
         })
         .collect();
 
@@ -447,123 +463,23 @@ fn diff_package(
     Ok((changed, patch, stat, untracked))
 }
 
-fn file_diff(path: &str, old: Option<&[u8]>, new: Option<&[u8]>) -> (String, usize, usize) {
-    let (old_present, new_present) = (old.is_some(), new.is_some());
-    // A unified diff can only describe text, and validating here lets both sides
-    // be borrowed rather than copied out of a lossy conversion.
-    let (Ok(old), Ok(new)) = (
-        str::from_utf8(old.unwrap_or_default()),
-        str::from_utf8(new.unwrap_or_default()),
-    ) else {
-        return (format!("Binary files a/{path} and b/{path} differ\n"), 0, 0);
-    };
-    unified_diff(path, old, old_present, new, new_present)
-}
-
-/// Renders one file's change as a zero-context unified diff hunk.
-///
-/// Consumers pipe `.patch` artifacts into standard tooling, so the output
-/// follows the unified format that `diff -U0` produces: `/dev/null` for the
-/// absent side of an addition or deletion, and a hunk header whose line numbers
-/// use the preceding line when a side contributes no lines.
-fn unified_diff(
-    path: &str,
-    old: &str,
-    old_present: bool,
-    new: &str,
-    new_present: bool,
-) -> (String, usize, usize) {
-    // `split_inclusive` keeps line terminators, so a change that only adds or
-    // removes a trailing newline is still visible as a differing line.
-    let old_lines: Vec<&str> = old.split_inclusive('\n').collect();
-    let new_lines: Vec<&str> = new.split_inclusive('\n').collect();
-    let mut prefix = 0_usize;
-    while let (Some(old_line), Some(new_line)) = (old_lines.get(prefix), new_lines.get(prefix)) {
-        if old_line != new_line {
-            break;
-        }
-        prefix = prefix.saturating_add(1);
-    }
-    let mut old_end = old_lines.len();
-    let mut new_end = new_lines.len();
-    while old_end > prefix && new_end > prefix {
-        let Some(old_line) = old_lines.get(old_end.saturating_sub(1)) else {
-            break;
-        };
-        let Some(new_line) = new_lines.get(new_end.saturating_sub(1)) else {
-            break;
-        };
-        if old_line != new_line {
-            break;
-        }
-        old_end = old_end.saturating_sub(1);
-        new_end = new_end.saturating_sub(1);
-    }
-    let old_mid = old_lines.get(prefix..old_end).unwrap_or(&[]);
-    let new_mid = new_lines.get(prefix..new_end).unwrap_or(&[]);
-    let deletions = old_mid.len();
-    let insertions = new_mid.len();
-    if deletions == 0 && insertions == 0 {
-        return (String::new(), 0, 0);
-    }
-    // A side that contributes no lines anchors on the preceding line, which is
-    // what `diff -U0` emits and what patch readers expect.
-    let old_start = if deletions == 0 {
-        prefix
-    } else {
-        prefix.saturating_add(1)
-    };
-    let new_start = if insertions == 0 {
-        prefix
-    } else {
-        prefix.saturating_add(1)
-    };
-    let old_label = side_label(old_present, "a", path);
-    let new_label = side_label(new_present, "b", path);
-    let mut out = format!(
-        "--- {old_label}\n+++ {new_label}\n\
-         @@ -{old_start},{deletions} +{new_start},{insertions} @@\n"
-    );
-    for line in old_mid {
-        push_diff_line(&mut out, '-', line);
-    }
-    for line in new_mid {
-        push_diff_line(&mut out, '+', line);
-    }
-    (out, insertions, deletions)
-}
-
-fn side_label(present: bool, prefix: &str, path: &str) -> String {
-    if present {
-        format!("{prefix}/{path}")
-    } else {
-        // The unified-diff placeholder for the absent side of an add or delete.
-        "/dev/null".to_string()
-    }
-}
-
-fn push_diff_line(out: &mut String, marker: char, line: &str) {
-    out.push(marker);
-    out.push_str(line);
-    if !line.ends_with('\n') {
-        out.push_str("\n\\ No newline at end of file\n");
-    }
-}
-
 fn released_at_commit(
     git: &GitRepo,
     commit: &str,
-    dir: &str,
-    rules: &PackagingRules,
+    side: &PackageSide<'_>,
 ) -> Result<HashMap<String, String>, AppError> {
     let mut map = HashMap::new();
-    let pathspec = if dir.is_empty() { "." } else { dir };
+    let pathspec = if side.dir.is_empty() { "." } else { side.dir };
+    let nested = nested_package_dirs(side.member_dirs, side.dir);
     for full in git.ls_tree(commit, pathspec)? {
         let full = git_path(&full);
-        let Some(rel) = relativize(&full, dir) else {
+        if is_inside_any(&full, &nested) {
+            continue;
+        }
+        let Some(rel) = relativize(&full, side.dir) else {
             continue;
         };
-        if rules.is_released(rel) {
+        if side.rules.is_released(rel) {
             map.insert(rel.to_string(), full);
         }
     }
@@ -572,21 +488,50 @@ fn released_at_commit(
 
 fn released_in_work_tree(
     git: &GitRepo,
-    dir: &str,
-    rules: &PackagingRules,
+    side: &PackageSide<'_>,
 ) -> Result<HashMap<String, String>, AppError> {
     let mut map = HashMap::new();
-    let pathspec = if dir.is_empty() { "." } else { dir };
+    let pathspec = if side.dir.is_empty() { "." } else { side.dir };
+    let nested = nested_package_dirs(side.member_dirs, side.dir);
     for full in git.ls_files(pathspec)? {
         let full = git_path(&full);
-        let Some(rel) = relativize(&full, dir) else {
+        if is_inside_any(&full, &nested) {
+            continue;
+        }
+        let Some(rel) = relativize(&full, side.dir) else {
             continue;
         };
-        if rules.is_released(rel) {
+        if side.rules.is_released(rel) {
             map.insert(rel.to_string(), full);
         }
     }
     Ok(map)
+}
+
+/// Member directories nested strictly inside `dir`.
+///
+/// `cargo package` stops at a nested package boundary, so a package whose
+/// directory contains another member releases nothing from beneath it. Without
+/// this the contained package's files would count as released content of both
+/// packages and any change to the inner one would also mark the outer one.
+fn nested_package_dirs(member_dirs: &[String], dir: &str) -> Vec<String> {
+    let prefix = if dir.is_empty() {
+        String::new()
+    } else {
+        format!("{dir}/")
+    };
+    member_dirs
+        .iter()
+        .filter(|member| member.as_str() != dir && member.starts_with(&prefix))
+        .cloned()
+        .collect()
+}
+
+fn is_inside_any(path: &str, dirs: &[String]) -> bool {
+    dirs.iter().any(|dir| {
+        path.strip_prefix(dir.as_str())
+            .is_some_and(|rest| rest.starts_with('/'))
+    })
 }
 
 /// Package facts reconstructed from a historical tree, keyed by package name.
@@ -601,6 +546,11 @@ struct HistoricalPackage {
 #[derive(Clone, Debug)]
 struct CommitSnapshot {
     packages: BTreeMap<String, HistoricalPackage>,
+    /// Repo-relative directories of every member, publishable or not.
+    ///
+    /// `cargo package` stops at a nested package boundary, so released-content
+    /// discovery needs the boundaries of members it will never classify.
+    member_dirs: Vec<String>,
     root_doc: DocumentMut,
 }
 
@@ -655,20 +605,27 @@ fn load_snapshot(
     // classify every package as absent from the base revision.
     let workspace_prefix = root_rel.strip_suffix("Cargo.toml").unwrap_or("");
     let workspace_version = workspace_package_version(&root_doc);
-    let mut packages = BTreeMap::new();
+
+    let mut candidates: BTreeMap<String, PackageManifest> = BTreeMap::new();
     for path in git.ls_tree_manifests(commit)? {
         let path = git_path(&path);
         let dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);
         let Some(member_dir) = workspace_relative_dir(dir, workspace_prefix) else {
             continue;
         };
-        if !is_workspace_member(member_dir, &members) {
-            continue;
-        }
         let Some(content) = git.show_file(commit, &path)? else {
             continue;
         };
         let Some(parsed) = parse_package_manifest(&content, &path, workspace_version)? else {
+            continue;
+        };
+        candidates.insert(member_dir.to_string(), parsed);
+    }
+
+    let member_dirs = resolve_members(&candidates, &members);
+    let mut packages = BTreeMap::new();
+    for member_dir in &member_dirs {
+        let Some(parsed) = candidates.get(member_dir) else {
             continue;
         };
         if !parsed.publish {
@@ -677,13 +634,80 @@ fn load_snapshot(
         packages.insert(
             parsed.name.clone(),
             HistoricalPackage {
-                directory: parsed.directory,
-                version: parsed.version,
-                packaging: parsed.packaging,
+                directory: parsed.directory.clone(),
+                version: parsed.version.clone(),
+                packaging: parsed.packaging.clone(),
             },
         );
     }
-    Ok(CommitSnapshot { packages, root_doc })
+    let member_dirs = member_dirs
+        .iter()
+        .filter_map(|member_dir| candidates.get(member_dir))
+        .map(|parsed| parsed.directory.clone())
+        .collect();
+    Ok(CommitSnapshot {
+        packages,
+        member_dirs,
+        root_doc,
+    })
+}
+
+/// Reconstructs the workspace-relative directories Cargo would treat as members.
+///
+/// Beyond the declared `members` patterns, Cargo makes every path dependency of
+/// a member that lives inside the workspace a member too, so the closure is
+/// followed until it stops growing. Membership derived this way still honours
+/// `exclude`.
+fn resolve_members(
+    candidates: &BTreeMap<String, PackageManifest>,
+    members: &WorkspaceMembers,
+) -> BTreeSet<String> {
+    let mut resolved: BTreeSet<String> = candidates
+        .keys()
+        .filter(|dir| is_workspace_member(dir, members))
+        .cloned()
+        .collect();
+    let mut pending: Vec<String> = resolved.iter().cloned().collect();
+    while let Some(dir) = pending.pop() {
+        let Some(parsed) = candidates.get(&dir) else {
+            continue;
+        };
+        for relative in &parsed.path_dependencies {
+            let Some(target) = join_relative(&dir, relative) else {
+                continue;
+            };
+            if !candidates.contains_key(&target) || is_workspace_excluded(&target, members) {
+                continue;
+            }
+            if resolved.insert(target.clone()) {
+                pending.push(target);
+            }
+        }
+    }
+    resolved
+}
+
+/// Resolves a manifest-relative path against a workspace-relative directory.
+///
+/// Returns `None` when the path climbs above the workspace root, because such a
+/// dependency is outside the workspace and therefore not an implicit member.
+fn join_relative(base: &str, relative: &str) -> Option<String> {
+    let relative = relative.replace('\\', "/");
+    let mut segments: Vec<&str> = if base.is_empty() {
+        Vec::new()
+    } else {
+        base.split('/').collect()
+    };
+    for segment in relative.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                segments.pop()?;
+            }
+            other => segments.push(other),
+        }
+    }
+    Some(segments.join("/"))
 }
 
 // Untracked paths are advisory-only; tests cannot observe that a log line was skipped.
@@ -756,35 +780,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn added_file_diff_uses_the_dev_null_placeholder() {
-        let (patch, insertions, deletions) = file_diff("src/new.rs", None, Some(b"one\ntwo\n"));
-        assert!(patch.starts_with("--- /dev/null\n+++ b/src/new.rs\n@@ -0,0 +1,2 @@\n"));
-        assert_eq!((insertions, deletions), (2, 0));
-    }
-
-    #[test]
-    fn deleted_file_diff_uses_the_dev_null_placeholder() {
-        let (patch, insertions, deletions) = file_diff("src/old.rs", Some(b"one\n"), None);
-        assert!(patch.starts_with("--- a/src/old.rs\n+++ /dev/null\n@@ -1,1 +0,0 @@\n"));
-        assert_eq!((insertions, deletions), (0, 1));
-    }
-
-    #[test]
-    fn a_missing_trailing_newline_is_a_visible_change() {
-        let (patch, insertions, deletions) = file_diff("src/lib.rs", Some(b"one\n"), Some(b"one"));
-        assert!(patch.contains("\\ No newline at end of file"));
-        assert_eq!((insertions, deletions), (1, 1));
-    }
-
-    #[test]
-    fn non_utf8_content_is_reported_as_binary() {
-        let (patch, insertions, deletions) =
-            file_diff("logo.png", Some(&[0x00, 0xff]), Some(&[0x00, 0xfe]));
-        assert_eq!(patch, "Binary files a/logo.png and b/logo.png differ\n");
-        assert_eq!((insertions, deletions), (0, 0));
-    }
-
-    #[test]
     fn workspace_relative_dir_rebases_onto_the_workspace_root() {
         // Workspace root is the git root: paths pass through unchanged.
         assert_eq!(workspace_relative_dir("packages/a", ""), Some("packages/a"));
@@ -842,55 +837,106 @@ mod tests {
     }
 
     #[test]
-    fn unified_diff_hunks_changed_middle_only() {
-        let (patch, insertions, deletions) = unified_diff(
-            "src/lib.rs",
-            "keep\nold\nend\n",
-            true,
-            "keep\nnew\nend\n",
-            true,
+    fn join_relative_resolves_against_the_member_directory() {
+        assert_eq!(
+            join_relative("packages/a", "../b"),
+            Some("packages/b".to_string())
         );
-        assert!(patch.contains("@@ -2,1 +2,1 @@"));
-        assert!(patch.contains("-old"));
-        assert!(patch.contains("+new"));
-        assert!(!patch.contains("-keep"));
-        assert_eq!((insertions, deletions), (1, 1));
+        assert_eq!(
+            join_relative("packages/a", "./nested/"),
+            Some("packages/a/nested".to_string())
+        );
+        assert_eq!(join_relative("", "vendored"), Some("vendored".to_string()));
+        // Windows-style separators appear in manifests authored on Windows.
+        assert_eq!(
+            join_relative("packages/a", r"..\b"),
+            Some("packages/b".to_string())
+        );
+        // Climbing above the workspace root leaves the workspace entirely.
+        assert_eq!(join_relative("packages", "../../outside"), None);
     }
 
     #[test]
-    fn unified_diff_anchors_an_empty_side_on_the_preceding_line() {
-        let (patch, insertions, deletions) = unified_diff("f.rs", "z\nz\n", true, "z\n", true);
-        assert_eq!((insertions, deletions), (0, 1));
-        assert!(patch.contains("@@ -2,1 +1,0 @@"));
-        assert!(patch.contains("-z"));
-        let (patch, insertions, deletions) = unified_diff("f.rs", "z\n", true, "z\nz\n", true);
-        assert_eq!((insertions, deletions), (1, 0));
-        assert!(patch.contains("@@ -1,0 +2,1 @@"));
-        assert!(patch.contains("+z"));
+    fn nested_package_dirs_selects_strict_descendants() {
+        let members = vec![
+            String::new(),
+            "packages/a".to_string(),
+            "packages/a/inner".to_string(),
+            "packages/ab".to_string(),
+        ];
+        assert_eq!(
+            nested_package_dirs(&members, "packages/a"),
+            vec!["packages/a/inner".to_string()]
+        );
+        assert_eq!(
+            nested_package_dirs(&members, "packages/a/inner"),
+            Vec::<String>::new()
+        );
+        // A root package contains every other member.
+        assert_eq!(
+            nested_package_dirs(&members, ""),
+            vec![
+                "packages/a".to_string(),
+                "packages/a/inner".to_string(),
+                "packages/ab".to_string(),
+            ]
+        );
     }
 
     #[test]
-    fn file_diff_text_is_not_binary() {
-        let (patch, insertions, deletions) =
-            file_diff("src/lib.rs", Some(b"old\n"), Some(b"new\n"));
-        assert!(!patch.contains("Binary files"));
-        assert!(patch.contains("-old"));
-        assert_eq!((insertions, deletions), (1, 1));
+    fn is_inside_any_requires_a_directory_boundary() {
+        let dirs = vec!["packages/a".to_string()];
+        assert!(is_inside_any("packages/a/src/lib.rs", &dirs));
+        assert!(!is_inside_any("packages/a", &dirs));
+        assert!(!is_inside_any("packages/ab/src/lib.rs", &dirs));
     }
 
     #[test]
-    fn file_diff_one_sided_binary_is_binary() {
-        let (patch, _, _) = file_diff("x.bin", Some(&[0xff]), Some(b"hello"));
-        assert!(patch.contains("Binary files"));
-        let (patch, _, _) = file_diff("x.bin", Some(b"hello"), Some(&[0xff]));
-        assert!(patch.contains("Binary files"));
-    }
-
-    #[test]
-    fn file_diff_reports_binary_without_utf8_replacement() {
-        let (patch, insertions, deletions) =
-            file_diff("icon.bin", Some(&[0xff, 0x00]), Some(&[0xfe, 0x00]));
-        assert!(patch.contains("Binary files"));
-        assert_eq!((insertions, deletions), (0, 0));
+    fn resolve_members_follows_path_dependencies() {
+        let root = Path::new("Cargo.toml");
+        let members = parse_workspace_members(
+            "[workspace]\nmembers = [\"packages/a\"]\nexclude = [\"packages/c\"]\n",
+            root,
+            PathCase::Sensitive,
+        )
+        .unwrap();
+        let mut candidates = BTreeMap::new();
+        candidates.insert(
+            "packages/a".to_string(),
+            parse_package_manifest(
+                "[package]\nname = \"a\"\nversion = \"0.1.0\"\n\n[dependencies]\nb = { path = \"../b\" }\n\n[dev-dependencies]\nc = { path = \"../c\" }\n",
+                "packages/a/Cargo.toml",
+                None,
+            )
+            .unwrap()
+            .unwrap(),
+        );
+        candidates.insert(
+            "packages/b".to_string(),
+            parse_package_manifest(
+                "[package]\nname = \"b\"\nversion = \"0.1.0\"\n",
+                "packages/b/Cargo.toml",
+                None,
+            )
+            .unwrap()
+            .unwrap(),
+        );
+        candidates.insert(
+            "packages/c".to_string(),
+            parse_package_manifest(
+                "[package]\nname = \"c\"\nversion = \"0.1.0\"\n",
+                "packages/c/Cargo.toml",
+                None,
+            )
+            .unwrap()
+            .unwrap(),
+        );
+        let resolved = resolve_members(&candidates, &members);
+        // `b` is reachable only as a path dependency; `c` is excluded even though
+        // a member depends on it.
+        assert_eq!(
+            resolved.into_iter().collect::<Vec<_>>(),
+            vec!["packages/a".to_string(), "packages/b".to_string()]
+        );
     }
 }

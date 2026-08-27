@@ -39,7 +39,9 @@ target already declares is rejected.
 Released content is the git-tracked files Cargo would put in the `.crate`: the
 `git ls-files` set filtered by the package's `include` / `exclude` using
 gitignore-style matching. `Cargo.lock` is never released content. Untracked
-files are reported as an advisory and never counted as changes.
+files are reported as an advisory and never counted as changes. A package that
+contains another workspace member releases nothing from inside it, matching the
+package boundary Cargo itself stops at.
 
 The change set is a diff from the anchor to the work tree. The package
 directory is resolved independently at each end from that end's workspace
@@ -95,7 +97,9 @@ root manifest.
 
 `report` writes `report.json` and per-package unified diffs for unreleased
 changes. The report includes intra-workspace dependencies and dependents so
-version decisions can cascade.
+version decisions can cascade. Only edges that survive into the published
+manifest are reported: normal and build dependencies cascade, dev dependencies
+do not.
 
 `check` exits non-zero on unreleased changes or an inconsistent group, with one
 actionable diagnostic line that names the `increment-versions` skill.
@@ -126,9 +130,11 @@ of the change, so an inherited-value change is recorded there rather than in a
 diff.
 
 The per-package `.patch` files are zero-context unified diffs in the shape
-`diff -U0` produces, so consumers can pipe them into standard tooling: `/dev/null`
-labels the absent side of an addition or deletion, and binary content is reported
-as differing rather than rendered.
+`diff -U0` produces, so consumers can pipe them into standard tooling: one hunk
+per changed region, `/dev/null` labelling the absent side of an addition or
+deletion, and binary content reported as differing rather than rendered. A file
+whose presence changed but whose content is empty is recorded by its headers
+alone, because there are no lines to show.
 
 ## Offline and deterministic
 

@@ -23,9 +23,13 @@ misinterpretation here.
 
 The trade-off accepted in exchange is real: process spawning costs more than an
 in-process call, output must be parsed from text (NUL-delimited wherever Git
-offers it), and `git` must be on `PATH`. Those costs are bounded because
-classification runs a small number of commands per invocation, and the tool
-already depends on `cargo` being present for the same kind of reason.
+offers it), and `git` must be on `PATH`. The cost is proportional to the work
+rather than fixed — reading historical content spawns one `git show` per file,
+so it grows with the size of the released content and the length of the walked
+history. Batching those reads through a single long-lived `git cat-file --batch`
+process would remove that growth and is the optimization to reach for first if
+invocation time becomes a problem; it is not taken today because the per-file
+form is the one whose failure modes map directly onto Git's own diagnostics.
 
 Package discovery for the work tree is reached only by spawning
 `cargo metadata --no-deps`. `check --verify-packaging` may spawn
@@ -47,12 +51,18 @@ reformatted table is not mistaken for a changed value and two differently shaped
 values never collapse into the same representation.
 
 Historical workspace membership is reconstructed from the root manifest at each
-commit. Because Cargo opens member directories through the filesystem while Git
-reports the spelling recorded in the tree, member matching follows the case
-rules the workspace directory actually applies. Those rules are probed once per
-run by re-opening an existing entry under a case-flipped spelling; an
-inconclusive probe yields case-sensitive matching, which never widens
-membership.
+commit. Beyond the declared `members` patterns, Cargo makes every path
+dependency of a member that lives inside the workspace a member as well, so that
+closure is followed to a fixed point and still honours `exclude`. Membership is
+tracked for non-publishable members too: `cargo package` stops at a nested
+package boundary, so a package that contains another member must not claim the
+inner member's files as its own released content.
+
+Because Cargo opens member directories through the filesystem while Git reports
+the spelling recorded in the tree, member matching follows the case rules the
+workspace directory actually applies. Those rules are probed once per run by
+re-opening an existing entry under a case-flipped spelling; an inconclusive
+probe yields case-sensitive matching, which never widens membership.
 
 ## Plan application
 

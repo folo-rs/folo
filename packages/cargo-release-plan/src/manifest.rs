@@ -22,6 +22,7 @@ pub(crate) struct PackageManifest {
     pub(crate) packaging: PackagingRules,
     pub(crate) inherited: InheritedKeys,
     pub(crate) publish: bool,
+    pub(crate) path_dependencies: Vec<String>,
 }
 
 /// Workspace member patterns from the root manifest, compiled for repeated queries.
@@ -152,7 +153,55 @@ pub(crate) fn parse_package_manifest(
         packaging: packaging_from_package(package)?,
         inherited: collect_inherited_keys(&doc),
         publish: publish_allowed(package),
+        path_dependencies: path_dependencies(&doc),
     }))
+}
+
+/// Collects every `path` value declared by a dependency of this package.
+///
+/// Cargo makes a path dependency that lives inside the workspace directory a
+/// member even when the `members` list does not name it, so historical
+/// membership can only match Cargo once these edges are known.
+fn path_dependencies(doc: &DocumentMut) -> Vec<String> {
+    let mut paths = Vec::new();
+    collect_path_dependencies(doc.as_table(), &mut paths, 0);
+    paths
+}
+
+/// Recursion depth that reaches every dependency table Cargo supports.
+///
+/// Dependency tables appear at the manifest root, one level down under
+/// `[target.<cfg>]`, and one further level for the table itself, so this is the
+/// deepest nesting that can hold a `path` key.
+const MAX_DEPENDENCY_TABLE_DEPTH: usize = 3;
+
+fn collect_path_dependencies(table: &dyn TableLike, paths: &mut Vec<String>, depth: usize) {
+    for (key, item) in table.iter() {
+        let Some(child) = item.as_table_like() else {
+            continue;
+        };
+        if is_dependency_table(key) {
+            for (_, dependency) in child.iter() {
+                let Some(dependency) = dependency.as_table_like() else {
+                    continue;
+                };
+                if let Some(path) = dependency.get("path").and_then(Item::as_str) {
+                    paths.push(path.to_string());
+                }
+            }
+            continue;
+        }
+        if depth < MAX_DEPENDENCY_TABLE_DEPTH {
+            collect_path_dependencies(child, paths, depth.saturating_add(1));
+        }
+    }
+}
+
+fn is_dependency_table(key: &str) -> bool {
+    matches!(
+        key,
+        "dependencies" | "dev-dependencies" | "build-dependencies"
+    )
 }
 
 pub(crate) fn parse_workspace_members(
@@ -185,6 +234,16 @@ pub(crate) fn is_workspace_member(dir: &str, members: &WorkspaceMembers) -> bool
         return dir.is_empty();
     }
     members.members.iter().any(|pattern| pattern.matches(dir))
+}
+
+/// Whether `dir` (repo-relative, `/` separators) is excluded from the workspace.
+///
+/// Membership that Cargo derives from a path dependency still honours
+/// `exclude`, so that list is queried separately from the `members` patterns.
+pub(crate) fn is_workspace_excluded(dir: &str, members: &WorkspaceMembers) -> bool {
+    let dir = dir.replace('\\', "/");
+    let dir = dir.trim_end_matches('/');
+    members.exclude.iter().any(|pattern| pattern.matches(dir))
 }
 
 fn compile_patterns(patterns: &[String], case: PathCase) -> Result<Vec<MemberPattern>, AppError> {
@@ -415,6 +474,50 @@ exclude = ["packages/skip"]
         .unwrap();
         assert!(is_workspace_member("", &empty));
         assert!(!is_workspace_member("anything", &empty));
+    }
+
+    #[test]
+    fn workspace_exclusion_is_queried_independently_of_membership() {
+        let declared = parse_workspace_members(
+            "[workspace]\nmembers = [\"packages/*\"]\nexclude = [\"packages/skip\"]\n",
+            Path::new("Cargo.toml"),
+            PathCase::Sensitive,
+        )
+        .unwrap();
+        assert!(is_workspace_excluded("packages/skip", &declared));
+        // Not named by either list: outside the workspace, but not excluded.
+        assert!(!is_workspace_excluded("examples/foo", &declared));
+    }
+
+    #[test]
+    fn path_dependencies_are_collected_from_every_dependency_table() {
+        let parsed = parse_package_manifest(
+            r#"
+[package]
+name = "a"
+version = "0.1.0"
+
+[dependencies]
+b = { path = "../b" }
+registry = "1"
+
+[build-dependencies]
+c = { path = "../c" }
+
+[dev-dependencies]
+d = { path = "../d" }
+
+[target.'cfg(windows)'.dependencies]
+e = { path = "../e" }
+"#,
+            "packages/a/Cargo.toml",
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        let mut paths = parsed.path_dependencies;
+        paths.sort();
+        assert_eq!(paths, vec!["../b", "../c", "../d", "../e"]);
     }
 
     #[test]
