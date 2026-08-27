@@ -6,7 +6,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use toml_edit::{DocumentMut, Item, TableLike, Value};
+use toml_edit::{DocumentMut, Item, Value};
+
+use crate::manifest::for_each_dependency_table;
 
 /// One inherited field that changed between the package's anchor and the work tree.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -74,35 +76,18 @@ pub(crate) fn collect_inherited_keys(doc: &DocumentMut) -> InheritedKeys {
             }
         }
     }
-    for table_name in ["dependencies", "dev-dependencies", "build-dependencies"] {
-        if let Some(table) = doc.get(table_name).and_then(Item::as_table_like) {
-            collect_inherited_deps(table, &mut keys.dependencies);
-        }
-    }
-    if let Some(target) = doc.get("target").and_then(Item::as_table_like) {
-        for (_, spec) in target.iter() {
-            if let Some(spec) = spec.as_table_like() {
-                for table_name in ["dependencies", "dev-dependencies", "build-dependencies"] {
-                    if let Some(table) = spec.get(table_name).and_then(Item::as_table_like) {
-                        collect_inherited_deps(table, &mut keys.dependencies);
-                    }
-                }
+    for_each_dependency_table(doc.as_table(), &mut |dependencies| {
+        for (name, item) in dependencies.iter() {
+            if is_workspace_inherit(item) {
+                keys.dependencies.push(name.to_string());
             }
         }
-    }
+    });
     keys.package.sort();
     keys.package.dedup();
     keys.dependencies.sort();
     keys.dependencies.dedup();
     keys
-}
-
-fn collect_inherited_deps(table: &dyn TableLike, out: &mut Vec<String>) {
-    for (name, item) in table.iter() {
-        if is_workspace_inherit(item) {
-            out.push(name.to_string());
-        }
-    }
 }
 
 pub(crate) fn is_workspace_inherit(item: &Item) -> bool {

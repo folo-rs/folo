@@ -694,8 +694,9 @@ fn log_untracked(verbose: Verbose, name: &str, count: usize) {
         return;
     }
     verbose.note(format!(
-        "{name}: {} match packaging rules and are advisory only; \
-         Cargo would not put them in the .crate so they are not counted as changes",
+        "{name}: {} match packaging rules and are advisory only; released content is defined as \
+         the git-tracked files under the package, so untracked paths are never counted as changes \
+         even where Cargo would pack them",
         plural(count, "untracked path")
     ));
 }

@@ -270,13 +270,12 @@ fn difference_text(left: &BTreeSet<String>, right: &BTreeSet<String>) -> String 
 /// `Cargo.toml.orig`. None of those exist in the work tree, so comparing them
 /// against the tool's released-content set would report a mismatch on every
 /// package. The lockfile in particular is excluded by design because it is
-/// derived at pack time rather than being a function of the package source.
+/// derived at pack time rather than being a function of the package source; only
+/// the package-root path is synthesized, so a lockfile nested deeper stays in
+/// the comparison as the ordinary source file it is.
 /// Ref: docs/design.md, "Released content".
 fn is_packaging_artifact(path: &str) -> bool {
-    path == "Cargo.lock"
-        || path.ends_with("/Cargo.lock")
-        || path == ".cargo_vcs_info.json"
-        || path == "Cargo.toml.orig"
+    path == "Cargo.lock" || path == ".cargo_vcs_info.json" || path == "Cargo.toml.orig"
 }
 
 // Spawns `cargo package --list`; catching mutations would compile every fixture.
@@ -525,7 +524,8 @@ mod tests {
     #[test]
     fn packaging_artifacts_are_ignored_in_verify() {
         assert!(is_packaging_artifact("Cargo.lock"));
-        assert!(is_packaging_artifact("nested/Cargo.lock"));
+        // Only the package-root lockfile is synthesized at pack time.
+        assert!(!is_packaging_artifact("fixtures/Cargo.lock"));
         assert!(is_packaging_artifact(".cargo_vcs_info.json"));
         assert!(is_packaging_artifact("Cargo.toml.orig"));
         assert!(!is_packaging_artifact("src/lib.rs"));

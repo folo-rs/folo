@@ -48,7 +48,9 @@ gitignore-style matching, so a directory pattern covers everything beneath it.
 Those keys are honoured whether the package declares them itself or inherits
 them from `[workspace.package]`, as is `publish`: an inherited `publish = false`
 excludes a package from classification exactly as a locally declared one does.
-`Cargo.lock` is never released content. Untracked
+The package's own `Cargo.lock` is never released content, because Cargo derives
+the published lockfile at pack time; a lockfile nested deeper in the package is
+ordinary source. Untracked
 files are reported as an advisory and never counted as changes. A package
 releases nothing from inside a directory that carries its own `Cargo.toml`,
 whether or not that crate belongs to the workspace, matching the package

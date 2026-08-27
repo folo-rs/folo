@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use ohno::AppError;
 use semver::{Version, VersionReq};
@@ -11,22 +11,58 @@ use toml_edit::{DocumentMut, Formatted, Item, TableLike, Value};
 
 use crate::command::run_capture;
 use crate::inherited::is_workspace_inherit;
-use crate::manifest::parse_document;
+use crate::manifest::{DEPENDENCY_TABLES, parse_document};
 use crate::metadata::{WorkTree, load_work_tree};
 use crate::plan::{ExpandedPlan, PlanFile, expand_plan};
 use crate::text::plural;
 use crate::verbose::Verbose;
 use crate::{ParsePlanError, ReadFileError, WriteFileError};
 
-// Cargo's package-level dependency tables, plus the same names under
-// `[target.<spec>]`. These are the only places intra-workspace requirements live.
-const PACKAGE_DEP_TABLES: &[&str] = &["dependencies", "dev-dependencies", "build-dependencies"];
-
 /// One on-disk manifest after an in-memory rewrite, waiting to be written.
 struct ManifestEdit {
     path: PathBuf,
     original: String,
     updated: String,
+}
+
+/// What a `path` dependency has to resolve to before `apply` rewrites it.
+///
+/// A `path` key plus a matching crate name is not enough: a member may depend on
+/// a package outside the workspace, or on an excluded one, that happens to carry
+/// the same package name. Rewriting such a requirement would corrupt an
+/// unrelated dependency, so the declared path is resolved against the manifest
+/// that declares it and checked against the workspace's member directories.
+struct DepTargets<'a> {
+    manifest_dir: PathBuf,
+    members_by_dir: &'a BTreeMap<PathBuf, String>,
+}
+
+impl DepTargets<'_> {
+    fn declares(&self, dep_path: &str, crate_name: &str) -> bool {
+        let resolved = normalize_lexically(&self.manifest_dir.join(dep_path));
+        self.members_by_dir
+            .get(&resolved)
+            .is_some_and(|declared| declared == crate_name)
+    }
+}
+
+/// Resolves `.` and `..` without touching the filesystem.
+///
+/// Both sides of the comparison come from the same `cargo metadata` document and
+/// so already agree on casing and path prefix; only the relative `path` read out
+/// of a manifest needs folding before the two can be compared.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other),
+        }
+    }
+    normalized
 }
 
 pub(crate) fn run_apply(
@@ -97,10 +133,14 @@ fn compute_edits(
 ) -> Result<Vec<ManifestEdit>, AppError> {
     let mut edits = Vec::new();
     let root = work_tree.workspace_root.join("Cargo.toml");
+    let root_targets = DepTargets {
+        manifest_dir: work_tree.workspace_root.clone(),
+        members_by_dir: &work_tree.members_by_dir,
+    };
     edits.push(edit_path(&root, |doc| {
-        rewrite_workspace_dependencies(doc, expanded, verbose);
+        rewrite_workspace_dependencies(doc, &root_targets, expanded, verbose);
         rewrite_package_version(doc, expanded, verbose);
-        rewrite_dependency_tables(doc, expanded, verbose);
+        rewrite_dependency_tables(doc, &root_targets, expanded, verbose);
     })?);
 
     let mut seen = HashSet::new();
@@ -112,9 +152,16 @@ fn compute_edits(
         if !seen.insert(manifest_path.clone()) {
             continue;
         }
+        let targets = DepTargets {
+            manifest_dir: manifest_path
+                .parent()
+                .unwrap_or(&work_tree.workspace_root)
+                .to_path_buf(),
+            members_by_dir: &work_tree.members_by_dir,
+        };
         edits.push(edit_path(manifest_path, |doc| {
             rewrite_package_version(doc, expanded, verbose);
-            rewrite_dependency_tables(doc, expanded, verbose);
+            rewrite_dependency_tables(doc, &targets, expanded, verbose);
         })?);
     }
     Ok(edits)
@@ -183,6 +230,7 @@ fn rewrite_package_version(doc: &mut DocumentMut, expanded: &ExpandedPlan, verbo
 
 fn rewrite_workspace_dependencies(
     doc: &mut DocumentMut,
+    targets: &DepTargets<'_>,
     expanded: &ExpandedPlan,
     verbose: Verbose,
 ) {
@@ -195,15 +243,20 @@ fn rewrite_workspace_dependencies(
     else {
         return;
     };
-    rewrite_dep_table(deps, expanded, verbose, "workspace.dependencies");
+    rewrite_dep_table(deps, targets, expanded, verbose, "workspace.dependencies");
 }
 
 // Walks every dependency table; entry-level rewrite is tested separately.
 #[cfg_attr(test, mutants::skip)]
-fn rewrite_dependency_tables(doc: &mut DocumentMut, expanded: &ExpandedPlan, verbose: Verbose) {
-    for table_name in PACKAGE_DEP_TABLES {
+fn rewrite_dependency_tables(
+    doc: &mut DocumentMut,
+    targets: &DepTargets<'_>,
+    expanded: &ExpandedPlan,
+    verbose: Verbose,
+) {
+    for table_name in DEPENDENCY_TABLES {
         if let Some(table) = doc.get_mut(table_name).and_then(Item::as_table_like_mut) {
-            rewrite_dep_table(table, expanded, verbose, table_name);
+            rewrite_dep_table(table, targets, expanded, verbose, table_name);
         }
     }
 
@@ -212,7 +265,7 @@ fn rewrite_dependency_tables(doc: &mut DocumentMut, expanded: &ExpandedPlan, ver
         None => Vec::new(),
     };
     for spec in specs {
-        for table_name in PACKAGE_DEP_TABLES {
+        for table_name in DEPENDENCY_TABLES {
             let Some(table) = doc
                 .get_mut("target")
                 .and_then(Item::as_table_like_mut)
@@ -225,6 +278,7 @@ fn rewrite_dependency_tables(doc: &mut DocumentMut, expanded: &ExpandedPlan, ver
             };
             rewrite_dep_table(
                 table,
+                targets,
                 expanded,
                 verbose,
                 &format!("target.{spec}.{table_name}"),
@@ -235,34 +289,39 @@ fn rewrite_dependency_tables(doc: &mut DocumentMut, expanded: &ExpandedPlan, ver
 
 fn rewrite_dep_table(
     table: &mut dyn TableLike,
+    targets: &DepTargets<'_>,
     expanded: &ExpandedPlan,
     verbose: Verbose,
     where_: &str,
 ) {
     for (key, entry) in table.iter_mut() {
         let name = key.get().to_string();
-        if !dep_has_path(entry) {
+        let Some(dep_path) = dep_path(entry).map(ToOwned::to_owned) else {
             continue;
-        }
+        };
         let crate_name = dep_crate_name(entry, &name);
         let Some(new_version) = expanded.packages.get(&crate_name).cloned() else {
             continue;
         };
+        if !targets.declares(&dep_path, &crate_name) {
+            continue;
+        }
         if rewrite_dep_entry(entry, &new_version) {
             verbose.note(format!(
                 "{where_}.{name}: rewrote the version requirement to follow {crate_name} {new_version} \
                  (exact `=` pins keep the equals sign; requirements that already match the new \
-                 version are left unchanged; only path dependencies are rewritten)"
+                 version are left unchanged; only path dependencies resolving to that workspace \
+                 member are rewritten)"
             ));
         }
     }
 }
 
-fn dep_has_path(entry: &Item) -> bool {
+fn dep_path(entry: &Item) -> Option<&str> {
     match entry {
-        Item::Value(Value::InlineTable(table)) => table.contains_key("path"),
-        Item::Table(table) => table.contains_key("path"),
-        _ => false,
+        Item::Value(Value::InlineTable(table)) => table.get("path").and_then(Value::as_str),
+        Item::Table(table) => table.get("path").and_then(Item::as_str),
+        _ => None,
     }
 }
 
@@ -462,28 +521,28 @@ version.workspace = true
     }
 
     #[test]
-    fn dep_has_path_detects_path_tables() {
+    fn dep_path_reads_inline_and_full_dependency_tables() {
         let doc = dep_item("[dependencies]\nfoo = { version = \"0.1.0\", path = \"../foo\" }\n");
         let entry = doc
             .get("dependencies")
             .and_then(Item::as_table_like)
             .and_then(|table| table.get("foo"))
             .unwrap();
-        assert!(dep_has_path(entry));
+        assert_eq!(dep_path(entry), Some("../foo"));
         let doc = dep_item("[dependencies.foo]\nversion = \"0.1.0\"\npath = \"../foo\"\n");
         let entry = doc
             .get("dependencies")
             .and_then(Item::as_table_like)
             .and_then(|table| table.get("foo"))
             .unwrap();
-        assert!(dep_has_path(entry));
+        assert_eq!(dep_path(entry), Some("../foo"));
         let doc = dep_item("[dependencies]\nfoo = \"0.1.0\"\n");
         let entry = doc
             .get("dependencies")
             .and_then(Item::as_table_like)
             .and_then(|table| table.get("foo"))
             .unwrap();
-        assert!(!dep_has_path(entry));
+        assert_eq!(dep_path(entry), None);
     }
 
     #[test]
@@ -592,10 +651,12 @@ version = \"0.1.0\"
         let expanded = ExpandedPlan {
             packages: BTreeMap::from([("demo".to_string(), v("0.2.0"))]),
         };
+        let members = demo_members();
+        let targets = targets_for("/ws/packages/demo", &members);
         let verbose = Verbose::new(false);
         let unchanged = |text: &str| {
             let mut doc = dep_item(text);
-            rewrite_workspace_dependencies(&mut doc, &expanded, verbose);
+            rewrite_workspace_dependencies(&mut doc, &targets, &expanded, verbose);
             rewrite_package_version(&mut doc, &expanded, verbose);
             assert_eq!(doc.to_string(), text);
         };
@@ -613,12 +674,53 @@ version = \"0.1.0\"
         let expanded = ExpandedPlan {
             packages: BTreeMap::from([("demo".to_string(), v("0.2.0"))]),
         };
+        let members = demo_members();
+        let targets = targets_for("/ws/packages/caller", &members);
         let text = "[dependencies]\ndemo = \"0.1.0\"\nother = { version = \"0.1.0\", path = \"../other\" }\n";
         let mut doc = dep_item(text);
 
-        rewrite_dependency_tables(&mut doc, &expanded, Verbose::new(false));
+        rewrite_dependency_tables(&mut doc, &targets, &expanded, Verbose::new(false));
 
         assert_eq!(doc.to_string(), text);
+    }
+
+    /// A path dependency is rewritten only when its path resolves to the member
+    /// directory that declares that package, so a same-named crate living
+    /// outside the workspace keeps its own requirement.
+    #[test]
+    fn only_a_path_resolving_to_the_declaring_member_is_rewritten() {
+        let expanded = ExpandedPlan {
+            packages: BTreeMap::from([("demo".to_string(), v("0.2.0"))]),
+        };
+        let members = demo_members();
+        let targets = targets_for("/ws/packages/caller", &members);
+
+        let mut inside =
+            dep_item("[dependencies]\ndemo = { version = \"0.1.0\", path = \"../demo\" }\n");
+        rewrite_dependency_tables(&mut inside, &targets, &expanded, Verbose::new(false));
+        assert!(inside.to_string().contains("version = \"0.2.0\""));
+
+        let outside_text =
+            "[dependencies]\ndemo = { version = \"0.1.0\", path = \"../../vendor/demo\" }\n";
+        let mut outside = dep_item(outside_text);
+        rewrite_dependency_tables(&mut outside, &targets, &expanded, Verbose::new(false));
+        assert_eq!(outside.to_string(), outside_text);
+    }
+
+    /// A workspace whose only member is `demo`, laid out under a shared root so
+    /// the rewrite tests can express both in-workspace and outside paths.
+    fn demo_members() -> BTreeMap<PathBuf, String> {
+        BTreeMap::from([(PathBuf::from("/ws/packages/demo"), "demo".to_string())])
+    }
+
+    fn targets_for<'a>(
+        manifest_dir: &str,
+        members: &'a BTreeMap<PathBuf, String>,
+    ) -> DepTargets<'a> {
+        DepTargets {
+            manifest_dir: PathBuf::from(manifest_dir),
+            members_by_dir: members,
+        }
     }
 
     #[test]
@@ -637,7 +739,7 @@ version = \"0.1.0\"
         let mut absent = Item::None;
 
         assert!(!rewrite_dep_entry(&mut absent, &v("0.2.0")));
-        assert!(!dep_has_path(&absent));
+        assert_eq!(dep_path(&absent), None);
         assert_eq!(dep_crate_name(&absent, "demo"), "demo");
     }
 

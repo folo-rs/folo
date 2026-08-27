@@ -105,8 +105,9 @@ change increments it.
 | `unreleased-changes` | version unchanged, released content changed since anchor | fail     |
 | `released`           | version unchanged, released content unchanged            | pass     |
 
-Packages with `publish = false` are ignored. `Cargo.lock` is never released
-content. Untracked files are advisory only. Versions only move forwards: a
+Packages with `publish = false` are ignored. A package's own `Cargo.lock` is
+never released content. Untracked files are advisory only. Versions only move
+forwards: a
 declared version below the anchor's version is an error rather than a status.
 
 Version groups are declared in the workspace root as

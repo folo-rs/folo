@@ -2,8 +2,9 @@
 //
 // A package's released files are git-tracked paths under its directory, filtered
 // by the manifest `include` / `exclude` using gitignore-style matching (the
-// `ignore` crate). `Cargo.lock` is never released content: the published lockfile
-// is derived per-crate at pack time and is not a function of the package source.
+// `ignore` crate). The package's own `Cargo.lock` is never released content: the
+// published lockfile is derived per-crate at pack time and is not a function of
+// the package source. A lockfile nested deeper in the package is ordinary source.
 
 use std::borrow::Cow;
 
@@ -36,7 +37,8 @@ impl PackagingRules {
     /// Whether `package_relative_path` would be put in the `.crate`.
     ///
     /// `include` is an allow-list (and `exclude` is then ignored, matching Cargo).
-    /// `Cargo.toml` is always released. `Cargo.lock` is never released.
+    /// `Cargo.toml` is always released. The package's own `Cargo.lock` is never
+    /// released; a lockfile in a subdirectory is ordinary package source.
     ///
     /// Matching consults each parent directory as well as the path itself, so a
     /// directory pattern such as `src/` covers everything beneath it the way it
@@ -44,7 +46,7 @@ impl PackagingRules {
     pub(crate) fn is_released(&self, package_relative_path: &str) -> bool {
         let path = normalize_rel(package_relative_path);
         let path = path.as_ref();
-        if is_cargo_lock(path) {
+        if path == "Cargo.lock" {
             return false;
         }
         if path == "Cargo.toml" {
@@ -58,10 +60,6 @@ impl PackagingRules {
         }
         true
     }
-}
-
-fn is_cargo_lock(path: &str) -> bool {
-    path == "Cargo.lock" || path.ends_with("/Cargo.lock")
 }
 
 /// Rewrites a path into the `/`-separated form the matchers expect.
@@ -161,10 +159,12 @@ mod tests {
     }
 
     #[test]
-    fn cargo_lock_is_never_released() {
+    fn only_the_package_lockfile_is_never_released() {
         let rules = PackagingRules::default();
         assert!(!rules.is_released("Cargo.lock"));
-        assert!(!rules.is_released("nested/Cargo.lock"));
+        // A lockfile below the package root belongs to something the package
+        // ships, such as a test fixture workspace, so it is ordinary source.
+        assert!(rules.is_released("fixtures/Cargo.lock"));
     }
 
     #[test]

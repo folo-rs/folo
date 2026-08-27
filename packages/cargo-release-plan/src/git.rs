@@ -114,7 +114,13 @@ impl GitRepo {
         // was not fetched (shallow boundary). `rev-list --parents` omits that
         // parent when it cannot be resolved.
         let stdout = run_capture("git", &["cat-file", "-p", commit], &self.root)?;
-        Ok(stdout.lines().any(|line| line.starts_with("parent ")))
+        // A blank line terminates the header block and the message follows, so
+        // only the headers are inspected: a message body line that happens to
+        // start with `parent ` must not make a root commit look parented.
+        Ok(stdout
+            .lines()
+            .take_while(|line| !line.is_empty())
+            .any(|line| line.starts_with("parent ")))
     }
 
     /// First-parent commits reachable from `rev` that touch a `Cargo.toml`.
@@ -450,6 +456,38 @@ mod tests {
 
         assert!(repo.has_parent_or_is_shallow_boundary(&head).unwrap());
         assert!(!repo.has_parent_or_is_shallow_boundary(&root).unwrap());
+    }
+
+    /// The commit message follows the headers in `cat-file -p` output, so a
+    /// message body that mentions a parent must not be read as a header.
+    #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
+    #[test]
+    fn a_root_commit_whose_message_mentions_a_parent_is_still_a_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        run_capture("git", &["init", "-q"], root).unwrap();
+        run_capture("git", &["config", "user.name", "test"], root).unwrap();
+        run_capture("git", &["config", "user.email", "test@example.com"], root).unwrap();
+        run_capture("git", &["config", "commit.gpgsign", "false"], root).unwrap();
+        std::fs::write(root.join("first.txt"), "one\n").unwrap();
+        run_capture("git", &["add", "-A"], root).unwrap();
+        run_capture(
+            "git",
+            &[
+                "commit",
+                "-q",
+                "-m",
+                "subject",
+                "-m",
+                "parent 0123456789012345678901234567890123456789",
+            ],
+            root,
+        )
+        .unwrap();
+        let repo = GitRepo::discover(root).unwrap();
+        let head = repo.rev_parse("HEAD").unwrap();
+
+        assert!(!repo.has_parent_or_is_shallow_boundary(&head).unwrap());
     }
 
     /// A path absent at a commit is an ordinary answer, while any other `git

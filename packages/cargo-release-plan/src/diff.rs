@@ -22,19 +22,29 @@ pub(crate) fn file_diff(path: &str, old: Option<&[u8]>, new: Option<&[u8]>) -> F
         str::from_utf8(old.unwrap_or_default()),
         str::from_utf8(new.unwrap_or_default()),
     ) else {
+        return binary_diff(path, old_present, new_present);
+    };
+    // A NUL byte is valid UTF-8 but not something a patch reader can consume, so
+    // it is the same signal Git uses to call a file binary.
+    if old.contains('\0') || new.contains('\0') {
+        return binary_diff(path, old_present, new_present);
+    }
+    unified_diff(path, old, old_present, new, new_present)
+}
+
+/// Reports a change the unified format cannot describe.
+fn binary_diff(path: &str, old_present: bool, new_present: bool) -> FileDiff {
+    FileDiff {
         // The same side labels as a text diff, so a consumer reads an added or
         // deleted binary file as such rather than as a modification.
-        return FileDiff {
-            text: format!(
-                "Binary files {} and {} differ\n",
-                side_label(old_present, "a", path),
-                side_label(new_present, "b", path)
-            ),
-            insertions: 0,
-            deletions: 0,
-        };
-    };
-    unified_diff(path, old, old_present, new, new_present)
+        text: format!(
+            "Binary files {} and {} differ\n",
+            side_label(old_present, "a", path),
+            side_label(new_present, "b", path)
+        ),
+        insertions: 0,
+        deletions: 0,
+    }
 }
 
 /// Renders one file's change as a zero-context unified diff.
@@ -162,28 +172,29 @@ enum Edit {
     Insert,
 }
 
-/// Longest-common-subsequence budget before the renderer stops refining.
+/// Edit-distance budget before the renderer stops refining.
 ///
-/// Myers' algorithm stores one trace row per edit, so an adversarial pair of
-/// large unrelated files would cost quadratic memory. Released source files
-/// differ by far less than this within a single release cycle, and exceeding it
-/// only coarsens the rendering into one whole-file hunk.
-const MAX_EDIT_SCRIPT_LENGTH: usize = 4096;
+/// Myers' algorithm records one trace row per edit step, and each row holds one
+/// entry per reachable diagonal, so its cost grows with the number of differing
+/// lines rather than with file size. Bounding the distance keeps a pair of large
+/// unrelated files from costing quadratic memory while still rendering ordinary
+/// hunks for a large file that differs in only a few lines. A single released
+/// file changes by far less than this within a release cycle.
+const MAX_EDIT_DISTANCE: usize = 1024;
 
 /// Computes a minimal line-level edit script with Myers' algorithm.
 ///
-/// Falls back to replacing the whole file when the script would exceed
-/// `MAX_EDIT_SCRIPT_LENGTH`; the result is still a valid unified diff, just a
+/// Falls back to replacing the whole file when the sides differ by more than
+/// `MAX_EDIT_DISTANCE` edits; the result is still a valid unified diff, just a
 /// coarser one.
 fn edit_script(old: &[&str], new: &[&str]) -> Vec<Edit> {
-    let max = old.len().saturating_add(new.len());
-    if max > MAX_EDIT_SCRIPT_LENGTH {
-        return whole_file_script(old.len(), new.len());
-    }
-    let Some(trace) = myers_trace(old, new, max) else {
+    // Deleting every old line and inserting every new one is always an edit
+    // script, so the distance never exceeds that; searching further is wasted.
+    let budget = old.len().saturating_add(new.len()).min(MAX_EDIT_DISTANCE);
+    let Some(trace) = myers_trace(old, new, budget) else {
         return whole_file_script(old.len(), new.len());
     };
-    backtrack(&trace, max, old.len(), new.len())
+    backtrack(&trace, budget, old.len(), new.len())
 }
 
 fn whole_file_script(old_len: usize, new_len: usize) -> Vec<Edit> {
@@ -196,15 +207,16 @@ fn whole_file_script(old_len: usize, new_len: usize) -> Vec<Edit> {
 /// Records the furthest-reaching path on each diagonal after every edit.
 ///
 /// Positions are held as signed values because a diagonal index is the signed
-/// difference between the two sides' line indexes.
-fn myers_trace(old: &[&str], new: &[&str], max: usize) -> Option<Vec<Vec<isize>>> {
-    let offset = isize::try_from(max).ok()?;
+/// difference between the two sides' line indexes. Reports nothing when the two
+/// sides are still not aligned after `budget` edits.
+fn myers_trace(old: &[&str], new: &[&str], budget: usize) -> Option<Vec<Vec<isize>>> {
+    let offset = isize::try_from(budget).ok()?;
     let old_len = isize::try_from(old.len()).ok()?;
     let new_len = isize::try_from(new.len()).ok()?;
-    let width = max.checked_mul(2)?.checked_add(1)?;
+    let width = budget.checked_mul(2)?.checked_add(1)?;
     let mut reach = vec![0_isize; width];
     let mut trace = Vec::new();
-    for edits in 0..=max {
+    for edits in 0..=budget {
         trace.push(reach.clone());
         let edits = isize::try_from(edits).ok()?;
         let mut diagonal = edits.checked_neg()?;
@@ -273,8 +285,8 @@ fn takes_insertion(reach: &[isize], index: usize, diagonal: isize, edits: isize)
 }
 
 /// Walks the recorded trace backwards to recover the edit script.
-fn backtrack(trace: &[Vec<isize>], max: usize, old_len: usize, new_len: usize) -> Vec<Edit> {
-    let offset = isize::try_from(max).unwrap_or(0);
+fn backtrack(trace: &[Vec<isize>], budget: usize, old_len: usize, new_len: usize) -> Vec<Edit> {
+    let offset = isize::try_from(budget).unwrap_or(0);
     let mut script = Vec::new();
     let mut old_index = isize::try_from(old_len).unwrap_or(0);
     let mut new_index = isize::try_from(new_len).unwrap_or(0);
@@ -442,16 +454,38 @@ mod tests {
         assert_eq!(common_prefix(&old, -1, &new, 0), 0);
     }
 
+    /// Two entirely unrelated files exceed the edit-distance budget, so the
+    /// renderer stops refining and replaces one side with the other.
     #[test]
-    fn oversized_inputs_fall_back_to_a_whole_file_replacement() {
-        let old = "a\n".repeat(MAX_EDIT_SCRIPT_LENGTH);
-        let new = "b\n".repeat(MAX_EDIT_SCRIPT_LENGTH);
+    fn exceeding_the_edit_distance_budget_falls_back_to_a_whole_file_replacement() {
+        let lines = MAX_EDIT_DISTANCE;
+        let old = "a\n".repeat(lines);
+        let new = "b\n".repeat(lines);
         let diff = render(Some(&old), Some(&new));
-        assert_eq!(
-            (diff.insertions, diff.deletions),
-            (MAX_EDIT_SCRIPT_LENGTH, MAX_EDIT_SCRIPT_LENGTH)
-        );
+        assert_eq!((diff.insertions, diff.deletions), (lines, lines));
     }
+
+    /// A large file with a single changed line has a tiny edit distance, so it
+    /// is rendered as one small hunk rather than as a whole-file replacement.
+    #[test]
+    fn a_large_file_with_one_changed_line_stays_a_small_hunk() {
+        // Well past the budget in line count while staying far below it in
+        // edit distance, which is what the budget actually bounds.
+        let lines = MAX_EDIT_DISTANCE * 3;
+        let old = "a\n".repeat(lines);
+        let mut new = old.clone();
+        new.push_str("tail\n");
+        let diff = render(Some(&old), Some(&new));
+        assert_eq!((diff.insertions, diff.deletions), (1, 0));
+    }
+
+    #[test]
+    fn nul_bytes_are_reported_as_binary_even_though_they_are_valid_utf8() {
+        let diff = file_diff("data.dat", Some(b"one\n"), Some(b"one\0two\n"));
+        assert_eq!(diff.text, "Binary files a/data.dat and b/data.dat differ\n");
+        assert_eq!((diff.insertions, diff.deletions), (0, 0));
+    }
+
     #[test]
     fn binary_changes_use_the_dev_null_placeholder_for_an_absent_side() {
         let added = file_diff("logo.png", None, Some(&[0xFF, 0xFE, 0x00]));

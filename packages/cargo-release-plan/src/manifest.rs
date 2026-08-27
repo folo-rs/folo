@@ -212,7 +212,13 @@ impl<'a> WorkspaceInherit<'a> {
 /// edges are followed as well.
 fn inherited_path_dependencies(doc: &DocumentMut, workspace: &WorkspaceInherit<'_>) -> Vec<String> {
     let mut names = Vec::new();
-    collect_inherited_dependency_names(doc.as_table(), &mut names, 0);
+    for_each_dependency_table(doc.as_table(), &mut |dependencies: &dyn TableLike| {
+        for (name, dependency) in dependencies.iter() {
+            if is_workspace_inherit(dependency) {
+                names.push(name.to_string());
+            }
+        }
+    });
     names
         .iter()
         .filter_map(|name| {
@@ -225,29 +231,6 @@ fn inherited_path_dependencies(doc: &DocumentMut, workspace: &WorkspaceInherit<'
         .collect()
 }
 
-fn collect_inherited_dependency_names(
-    table: &dyn TableLike,
-    names: &mut Vec<String>,
-    depth: usize,
-) {
-    for (key, item) in table.iter() {
-        let Some(child) = item.as_table_like() else {
-            continue;
-        };
-        if is_dependency_table(key) {
-            for (name, dependency) in child.iter() {
-                if is_workspace_inherit(dependency) {
-                    names.push(name.to_string());
-                }
-            }
-            continue;
-        }
-        if depth < MAX_DEPENDENCY_TABLE_DEPTH {
-            collect_inherited_dependency_names(child, names, depth.saturating_add(1));
-        }
-    }
-}
-
 /// Collects every `path` value declared by a dependency of this package.
 ///
 /// Cargo makes a path dependency that lives inside the workspace directory a
@@ -255,45 +238,52 @@ fn collect_inherited_dependency_names(
 /// membership can only match Cargo once these edges are known.
 fn path_dependencies(doc: &DocumentMut) -> Vec<String> {
     let mut paths = Vec::new();
-    collect_path_dependencies(doc.as_table(), &mut paths, 0);
+    for_each_dependency_table(doc.as_table(), &mut |dependencies: &dyn TableLike| {
+        for (_, dependency) in dependencies.iter() {
+            let Some(dependency) = dependency.as_table_like() else {
+                continue;
+            };
+            if let Some(path) = dependency.get("path").and_then(Item::as_str) {
+                paths.push(path.to_string());
+            }
+        }
+    });
     paths
 }
 
-/// Recursion depth that reaches every dependency table Cargo supports.
+/// Visits every table in `manifest` that Cargo reads dependencies from.
 ///
-/// Dependency tables appear at the manifest root, one level down under
-/// `[target.<cfg>]`, and one further level for the table itself, so this is the
-/// deepest nesting that can hold a `path` key.
-const MAX_DEPENDENCY_TABLE_DEPTH: usize = 3;
-
-fn collect_path_dependencies(table: &dyn TableLike, paths: &mut Vec<String>, depth: usize) {
-    for (key, item) in table.iter() {
-        let Some(child) = item.as_table_like() else {
-            continue;
-        };
-        if is_dependency_table(key) {
-            for (_, dependency) in child.iter() {
-                let Some(dependency) = dependency.as_table_like() else {
-                    continue;
-                };
-                if let Some(path) = dependency.get("path").and_then(Item::as_str) {
-                    paths.push(path.to_string());
-                }
-            }
-            continue;
-        }
-        if depth < MAX_DEPENDENCY_TABLE_DEPTH {
-            collect_path_dependencies(child, paths, depth.saturating_add(1));
+/// Cargo recognises dependency tables at the manifest root and one level below
+/// `[target.<spec>]`, and nowhere else. Matching on the table name at any depth
+/// would also collect look-alikes such as `[package.metadata.dependencies]`,
+/// which carry no dependency semantics, and would then attribute workspace
+/// membership and inherited keys to entries that are not dependencies at all.
+pub(crate) fn for_each_dependency_table(
+    manifest: &dyn TableLike,
+    visit: &mut dyn FnMut(&dyn TableLike),
+) {
+    visit_dependency_tables(manifest, visit);
+    let Some(target) = manifest.get("target").and_then(Item::as_table_like) else {
+        return;
+    };
+    for (_, spec) in target.iter() {
+        if let Some(spec) = spec.as_table_like() {
+            visit_dependency_tables(spec, visit);
         }
     }
 }
 
-fn is_dependency_table(key: &str) -> bool {
-    matches!(
-        key,
-        "dependencies" | "dev-dependencies" | "build-dependencies"
-    )
+fn visit_dependency_tables(table: &dyn TableLike, visit: &mut dyn FnMut(&dyn TableLike)) {
+    for name in DEPENDENCY_TABLES {
+        if let Some(dependencies) = table.get(name).and_then(Item::as_table_like) {
+            visit(dependencies);
+        }
+    }
 }
+
+/// The dependency table names Cargo recognises, at the root and under `[target]`.
+pub(crate) const DEPENDENCY_TABLES: &[&str] =
+    &["dependencies", "dev-dependencies", "build-dependencies"];
 
 pub(crate) fn parse_workspace_members(
     content: &str,
@@ -746,6 +736,34 @@ e = { path = "../e" }
         assert_eq!(paths, vec!["../b", "../c", "../d", "../e"]);
     }
 
+    /// Cargo reads dependency tables at the manifest root and under
+    /// `[target.<spec>]` only, so a look-alike table elsewhere carries no
+    /// dependency semantics and must not contribute membership edges.
+    #[test]
+    fn a_dependency_look_alike_table_is_not_a_dependency_table() {
+        let parsed = parse_package_manifest(
+            r#"
+[package]
+name = "a"
+version = "0.1.0"
+
+[package.metadata.dependencies]
+ghost = { path = "../ghost" }
+
+[package.metadata.some-tool]
+dev-dependencies = { phantom = { path = "../phantom" } }
+
+[dependencies]
+b = { path = "../b" }
+"#,
+            "packages/a/Cargo.toml",
+            &WorkspaceInherit::default(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(parsed.path_dependencies, vec!["../b"]);
+    }
+
     #[test]
     fn case_insensitive_matching_follows_the_probed_filesystem() {
         let strict = cased_members(&["Packages/*"], PathCase::Sensitive);
@@ -918,6 +936,30 @@ c = { path = "../c" }
         .unwrap();
         assert_eq!(parsed.inherited_path_dependencies, vec!["packages/b"]);
         assert_eq!(parsed.path_dependencies, vec!["../c"]);
+    }
+
+    /// Inherited-key attribution reads the same dependency tables as membership,
+    /// so a look-alike table must not add an inherited edge either.
+    #[test]
+    fn a_dependency_look_alike_table_declares_no_inherited_dependency() {
+        let root = root_doc(
+            "[workspace.dependencies]\nb = { path = \"packages/b\", version = \"0.1.0\" }\n",
+        );
+        let parsed = parse_package_manifest(
+            r#"
+[package]
+name = "a"
+version = "0.1.0"
+
+[package.metadata.dependencies]
+b.workspace = true
+"#,
+            "packages/a/Cargo.toml",
+            &WorkspaceInherit::from_root(&root),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(parsed.inherited_path_dependencies.is_empty());
     }
 
     fn root_doc(content: &str) -> DocumentMut {

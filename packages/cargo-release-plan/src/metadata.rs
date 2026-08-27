@@ -86,6 +86,12 @@ pub(crate) struct WorkTree {
     /// `apply` rewrites dependency requirements in all of them, because a
     /// non-publishable member can still pin a package the plan increments.
     pub(crate) member_manifests: Vec<PathBuf>,
+    /// Declared package name of every member, keyed by its manifest directory.
+    ///
+    /// `apply` rewrites a `path` dependency only after resolving that path to a
+    /// member directory declaring the same package, so a same-named package
+    /// living outside the workspace is left alone.
+    pub(crate) members_by_dir: BTreeMap<PathBuf, String>,
     pub(crate) groups: Groups,
 }
 
@@ -128,14 +134,14 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
         .filter(|package| member_ids.contains(package.id.as_str()))
         .map(|package| package.name.clone())
         .collect();
-    let member_dirs: HashSet<PathBuf> = metadata
+    let members_by_dir: BTreeMap<PathBuf, String> = metadata
         .packages
         .iter()
         .filter(|package| member_ids.contains(package.id.as_str()))
         .filter_map(|package| {
             Path::new(&package.manifest_path)
                 .parent()
-                .map(Path::to_path_buf)
+                .map(|dir| (dir.to_path_buf(), package.name.clone()))
         })
         .collect();
     let groups = groups_from_metadata(&metadata.metadata, &workspace_names)?;
@@ -173,7 +179,7 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
         let dependencies = package
             .dependencies
             .iter()
-            .filter(|dep| is_intra_workspace_released(dep, &member_dirs))
+            .filter(|dep| is_intra_workspace_released(dep, &members_by_dir))
             .map(|dep| ReportedDep {
                 name: dep.name.clone(),
                 req: dep.req.clone(),
@@ -190,8 +196,8 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
 
     packages.sort_by(|a, b| a.manifest.name.cmp(&b.manifest.name));
 
-    let mut member_manifests: Vec<PathBuf> = member_dirs
-        .iter()
+    let mut member_manifests: Vec<PathBuf> = members_by_dir
+        .keys()
         .map(|dir| dir.join("Cargo.toml"))
         .collect();
     member_manifests.sort();
@@ -200,6 +206,7 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
         workspace_root,
         packages,
         member_manifests,
+        members_by_dir,
         groups,
     })
 }
@@ -240,7 +247,10 @@ fn groups_from_metadata(
 /// Normal and build dependencies are recorded in the published manifest, so a
 /// version decision on the target cascades to this package. Dev dependencies are
 /// stripped from the published manifest and cannot cascade.
-fn is_intra_workspace_released(dep: &MetadataDep, member_dirs: &HashSet<PathBuf>) -> bool {
+fn is_intra_workspace_released(
+    dep: &MetadataDep,
+    members_by_dir: &BTreeMap<PathBuf, String>,
+) -> bool {
     let kind = dep.kind.as_deref().unwrap_or("normal");
     if kind == "dev" {
         return false;
@@ -248,7 +258,7 @@ fn is_intra_workspace_released(dep: &MetadataDep, member_dirs: &HashSet<PathBuf>
     let Some(path) = &dep.path else {
         return false;
     };
-    member_dirs.contains(Path::new(path))
+    members_by_dir.contains_key(Path::new(path))
 }
 
 pub(crate) fn dependents_of(packages: &[WorkPackage], name: &str) -> Vec<String> {
@@ -312,7 +322,7 @@ mod tests {
 
     #[test]
     fn released_intra_workspace_deps_require_a_member_directory() {
-        let dirs = HashSet::from([PathBuf::from("/ws/packages/bar")]);
+        let dirs = BTreeMap::from([(PathBuf::from("/ws/packages/bar"), "bar".to_string())]);
         let path_dep = MetadataDep {
             name: "bar".to_string(),
             req: "0.1.0".to_string(),
