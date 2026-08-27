@@ -18,7 +18,11 @@ every `git` invocation rather than relying on the user or host config:
 * `commit.gpgsign=false`
 * `gc.auto=0`
 
-Use the helper in `tests/common/fixture.rs`. Do not add real-time delays.
+Use the helper in `tests/integration/fixture.rs`. Do not add real-time delays.
+
+The integration suite is one test binary, `tests/integration/`, split into a
+topic module per area of behavior over the shared `harness`. Add a new case to
+the module that matches its subject rather than growing a single file.
 
 ## Miri
 

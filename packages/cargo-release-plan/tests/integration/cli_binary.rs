@@ -2,12 +2,12 @@
 //!
 //! These cases cover only what is unique to the executable: which stream each
 //! outcome is written to and which exit status it produces. Classification and
-//! plan semantics are covered in-process by `integration.rs`.
+//! plan semantics are covered in-process by the other modules of this suite.
 
 use std::fs;
 use std::process::{Command, Output};
 
-use crate::common::{Fixture, write_package};
+use crate::fixture::{Fixture, write_package};
 
 #[cfg_attr(miri, ignore)] // Spawns the compiled binary; Miri cannot emulate that.
 #[test]
@@ -134,5 +134,3 @@ fn stdout(output: &Output) -> String {
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
-
-mod common;

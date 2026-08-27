@@ -1,0 +1,101 @@
+//! Scaffolding shared by the integration modules: fixture workspaces that
+//! are already seeded, and thin wrappers that drive one run and reduce its
+//! outcome to what a test asserts on.
+
+use std::fs;
+use std::path::PathBuf;
+
+use cargo_release_plan::{CheckFormat, RunInput, RunOutcome, run};
+
+use crate::fixture::{Fixture, write_package};
+
+pub(crate) fn seeded_package() -> Fixture {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "demo", "0.1.0", "");
+    fixture.commit("seed");
+    fixture
+}
+
+/// Workspace whose declared member contains a second package reached by path.
+///
+/// `packages/*` matches `packages/outer` only, so `inner` is a member solely
+/// through the path dependency, and it sits inside the outer package directory.
+pub(crate) fn nested_workspace() -> Fixture {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "outer",
+        "0.1.0",
+        "\n[dependencies]\ninner = { path = \"inner\", version = \"0.1.0\" }",
+    );
+    fixture.write(
+        "packages/outer/inner/Cargo.toml",
+        "[package]\nname = \"inner\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    fixture.write("packages/outer/inner/src/lib.rs", "pub fn g() {}\n");
+    fixture.commit("seed");
+    fixture
+}
+
+pub(crate) fn check(fixture: &Fixture, base: &str) -> (bool, String) {
+    check_workspace(base, fixture.manifest())
+}
+
+pub(crate) fn check_workspace(base: &str, manifest_path: PathBuf) -> (bool, String) {
+    match run(&RunInput::Check {
+        base: base.to_string(),
+        manifest_path,
+        format: CheckFormat::Text,
+        verify_packaging: false,
+        verbose: false,
+    }) {
+        Ok(RunOutcome::Check { passed, message }) => (passed, message),
+        Ok(other) => panic!("expected check, got {other:?}"),
+        Err(error) => panic!("{error}"),
+    }
+}
+
+pub(crate) fn check_verifying_packaging(fixture: &Fixture, base: &str) -> (bool, String) {
+    match run(&RunInput::Check {
+        base: base.to_string(),
+        manifest_path: fixture.manifest(),
+        format: CheckFormat::Text,
+        verify_packaging: true,
+        verbose: false,
+    }) {
+        Ok(RunOutcome::Check { passed, message }) => (passed, message),
+        Ok(other) => panic!("expected check, got {other:?}"),
+        Err(error) => panic!("{error}"),
+    }
+}
+
+pub(crate) fn report_json(fixture: &Fixture, base: &str) -> String {
+    let out_dir = fixture.path().join("out");
+    run(&RunInput::Report {
+        out_dir: out_dir.clone(),
+        base: base.to_string(),
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+    fs::read_to_string(out_dir.join("report.json")).unwrap()
+}
+
+pub(crate) fn apply_increment(fixture: &Fixture, name: &str, level: &str) {
+    let plan_path = fixture.path().join("plan.json");
+    fs::write(
+        &plan_path,
+        format!(
+            r#"{{ "schema_version": 1, "increments": [{{ "name": "{name}", "level": "{level}" }}] }}"#
+        ),
+    )
+    .unwrap();
+
+    run(&RunInput::Apply {
+        plan: plan_path,
+        dry_run: false,
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+}
