@@ -62,16 +62,17 @@ that live session and skips auto-detect.
 
 `dure list` prints live sessions: id, launch directory, command, whether a
 client is currently attached, supervisor pid. A record is discarded only when
-the supervisor process is gone. Attached means the supervisor still has a
-client connection; a hung SSH client may still appear attached. Resume steals
-anyway.
+the same supervisor process is gone; reuse of its numeric process id by another
+process does not keep the record live. Attached means the supervisor still has
+a client connection; a hung SSH client may still appear attached. Resume
+steals anyway.
 
 `dure kill --id <id>` abruptly terminates the supervisor process for that
-session. The app is a child of the supervisor and dies with it. `--id` is
-required; kill does not auto-detect. Kill targets the supervisor by process id,
-so it still works when the session connection is wedged. An attached client, if
-any, sees the relay end. Killing a missing or already-dead id is a failure after
-stale-record cleanup.
+session. The app and its ordinary descendants die with it. `--id` is required;
+kill does not auto-detect. Kill targets the recorded supervisor process directly
+instead of using the session connection, so it still works when that connection
+is wedged. An attached client, if any, sees the relay end. Killing a missing or
+already-dead id is a failure after stale-record cleanup.
 
 ## Auto-detect
 
@@ -116,10 +117,10 @@ window size to the app console. Many TUIs redraw on resize. It does not restore
 scrollback, and an app that does not redraw will show an empty or stale screen
 until it paints on its own.
 
-A session is live while its supervisor process is still present. A record is
-dropped only when that process is gone. If the supervisor is present but does
-not accept a connection within a bounded wait, resume fails and the session
-stays listed; `dure kill --id` still reaches it.
+A session is live while the same supervisor process is still running. A record
+is dropped only when that process is gone. If the supervisor is running but
+does not accept a connection within a bounded wait, resume fails and the
+session stays listed; `dure kill --id` still reaches it.
 
 While detached, the app's console stays open. Input is not closed (end of stdin
 would terminate many apps). Output is drained and discarded so the app cannot
@@ -172,8 +173,8 @@ without `--id` fails.
 | `dure kill` | dies with supervisor | abruptly terminated | relay ends if attached |
 | Supervisor dies | dead | dead | relay ends / resume fails |
 
-The app is a child of its supervisor. If the supervisor dies, the app dies with
-it. Supervisors do not orphan apps.
+The supervisor owns the app and its ordinary descendants. If the supervisor
+dies, they die with it. Supervisors do not orphan apps.
 
 Sessions are a flat list. A `dure run` issued from inside an attached session
 (for example the app is a shell) starts another ordinary session. Killing or
