@@ -137,11 +137,10 @@ mod tests {
         RefUnwindSafe
     );
 
-    const READ_CELL_FIXTURE: &str =
-        include_str!("../../tests/fixtures/all_the_time/read_cell.json");
-
-    const READ_CELL_DISPERSION_FIXTURE: &str =
-        include_str!("../../tests/fixtures/all_the_time/read_cell_dispersion.json");
+    use crate::testing::{
+        ALL_THE_TIME_READ_CELL as READ_CELL_FIXTURE,
+        ALL_THE_TIME_READ_CELL_DISPERSION as READ_CELL_DISPERSION_FIXTURE,
+    };
 
     #[test]
     fn parses_identity_from_operation_name() {

@@ -1173,6 +1173,14 @@ mod tests {
 
     use cbh_config::parse_config;
     use cbh_diag::RecordingReporter;
+    use cbh_engines::testing::{
+        ALL_THE_TIME_READ_CELL as ALL_THE_TIME_FIXTURE,
+        ALLOC_TRACKER_ALLOCATE_VEC as ALLOC_TRACKER_FIXTURE,
+        CALLGRIND_PARAMETRIZED as PARAMETRIZED_FIXTURE,
+        CALLGRIND_SINGLE_UNPARAMETRIZED as SINGLE_FIXTURE,
+        CRITERION_STD_INSTANT_BENCHMARK as CRITERION_BENCHMARK_FIXTURE,
+        CRITERION_STD_INSTANT_ESTIMATES as CRITERION_ESTIMATES_FIXTURE,
+    };
     use cbh_engines::{Harvest, RawCriterionCase, RawOperationFile, RawSummary};
     use cbh_git::{EngineStatus, parse_git_info};
     use cbh_storage::{MemoryStorage, StorageError, TestStorageError};
@@ -1180,19 +1188,6 @@ mod tests {
 
     use super::*;
     use crate::model::{AggregateError, BenchmarkIdPrefix, BlessingRecord};
-
-    const SINGLE_FIXTURE: &str =
-        include_str!("../../tests/fixtures/callgrind/single_unparametrized.summary.json");
-    const PARAMETRIZED_FIXTURE: &str =
-        include_str!("../../tests/fixtures/callgrind/parametrized.summary.json");
-    const CRITERION_BENCHMARK_FIXTURE: &str =
-        include_str!("../../tests/fixtures/criterion/std_instant/benchmark.json");
-    const CRITERION_ESTIMATES_FIXTURE: &str =
-        include_str!("../../tests/fixtures/criterion/std_instant/estimates.json");
-    const ALLOC_TRACKER_FIXTURE: &str =
-        include_str!("../../tests/fixtures/alloc_tracker/allocate_vec.json");
-    const ALL_THE_TIME_FIXTURE: &str =
-        include_str!("../../tests/fixtures/all_the_time/read_cell.json");
 
     /// A zero-iteration `alloc_tracker` operation the workload could not run: the
     /// producer emits null slopes (a NaN per-iteration rate), which the adapter

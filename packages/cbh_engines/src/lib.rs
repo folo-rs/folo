@@ -36,3 +36,7 @@ pub use bench::{
 pub use bench_output::{
     BenchOutputSource, FsBenchOutputSource, Harvest, RawCriterionCase, RawOperationFile, RawSummary,
 };
+
+#[cfg(any(test, feature = "private-test-util"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "private-test-util")))]
+pub mod testing;

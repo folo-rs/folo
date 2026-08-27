@@ -157,11 +157,10 @@ mod tests {
         RefUnwindSafe
     );
 
-    const ALLOCATE_VEC_FIXTURE: &str =
-        include_str!("../../tests/fixtures/alloc_tracker/allocate_vec.json");
-
-    const ALLOCATE_VEC_DISPERSION_FIXTURE: &str =
-        include_str!("../../tests/fixtures/alloc_tracker/allocate_vec_dispersion.json");
+    use crate::testing::{
+        ALLOC_TRACKER_ALLOCATE_VEC as ALLOCATE_VEC_FIXTURE,
+        ALLOC_TRACKER_ALLOCATE_VEC_DISPERSION as ALLOCATE_VEC_DISPERSION_FIXTURE,
+    };
 
     #[test]
     fn parses_identity_from_operation_name() {

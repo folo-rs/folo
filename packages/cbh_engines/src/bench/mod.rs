@@ -32,21 +32,15 @@ mod tests {
         parse_all_the_time_operation, parse_alloc_tracker_operation, parse_callgrind_summary,
         parse_criterion_case,
     };
-
-    const CRITERION_BENCHMARK: &str =
-        include_str!("../../tests/fixtures/criterion/std_instant/benchmark.json");
-    const CRITERION_ESTIMATES: &str =
-        include_str!("../../tests/fixtures/criterion/std_instant/estimates.json");
-    const CALLGRIND_SUMMARY: &str =
-        include_str!("../../tests/fixtures/callgrind/single_unparametrized.summary.json");
-    const ALLOC_TRACKER_SINGLE_SPAN: &str =
-        include_str!("../../tests/fixtures/alloc_tracker/allocate_vec.json");
-    const ALLOC_TRACKER_MULTI_SPAN: &str =
-        include_str!("../../tests/fixtures/alloc_tracker/allocate_vec_dispersion.json");
-    const ALL_THE_TIME_SINGLE_SPAN: &str =
-        include_str!("../../tests/fixtures/all_the_time/read_cell.json");
-    const ALL_THE_TIME_MULTI_SPAN: &str =
-        include_str!("../../tests/fixtures/all_the_time/read_cell_dispersion.json");
+    use crate::testing::{
+        ALL_THE_TIME_READ_CELL as ALL_THE_TIME_SINGLE_SPAN,
+        ALL_THE_TIME_READ_CELL_DISPERSION as ALL_THE_TIME_MULTI_SPAN,
+        ALLOC_TRACKER_ALLOCATE_VEC as ALLOC_TRACKER_SINGLE_SPAN,
+        ALLOC_TRACKER_ALLOCATE_VEC_DISPERSION as ALLOC_TRACKER_MULTI_SPAN,
+        CALLGRIND_SINGLE_UNPARAMETRIZED as CALLGRIND_SUMMARY,
+        CRITERION_STD_INSTANT_BENCHMARK as CRITERION_BENCHMARK,
+        CRITERION_STD_INSTANT_ESTIMATES as CRITERION_ESTIMATES,
+    };
 
     #[test]
     fn engine_interval_support_matches_adapter_output() {
