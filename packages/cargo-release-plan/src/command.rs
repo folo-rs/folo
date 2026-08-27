@@ -22,6 +22,10 @@ pub(crate) fn run_capture(program: &str, args: &[&str], cwd: &Path) -> Result<St
 }
 
 /// Runs `program` with OS-str arguments (needed for git pathspecs on Windows).
+///
+/// Stdout is decoded lossily, so this is for output that is not a file name:
+/// path listings go through [`run_capture_os_bytes`] and are decoded strictly,
+/// because replacing a byte in a name would silently name a different file.
 pub(crate) fn run_capture_os(
     program: &str,
     args: impl IntoIterator<Item = impl AsRef<OsStr>>,
@@ -64,7 +68,16 @@ pub(crate) fn run_capture_bytes(
     args: &[&str],
     cwd: &Path,
 ) -> Result<Vec<u8>, AppError> {
-    let output = spawn(program, args.iter().map(OsStr::new), cwd)?;
+    run_capture_os_bytes(program, args.iter().map(OsStr::new), cwd)
+}
+
+/// Runs `program` with OS-str arguments and returns raw stdout on success.
+pub(crate) fn run_capture_os_bytes(
+    program: &str,
+    args: impl IntoIterator<Item = impl AsRef<OsStr>>,
+    cwd: &Path,
+) -> Result<Vec<u8>, AppError> {
+    let output = spawn(program, args, cwd)?;
     if output.status.success() {
         Ok(output.stdout)
     } else {

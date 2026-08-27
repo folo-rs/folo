@@ -8,8 +8,8 @@ use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 
 use ohno::AppError;
 
-use crate::command::{run_capture, run_capture_bytes, run_capture_ok, run_capture_os};
-use crate::{CommandFailedError, UnresolvedBaseError};
+use crate::command::{run_capture, run_capture_bytes, run_capture_ok, run_capture_os_bytes};
+use crate::{CommandFailedError, NonUtf8PathError, UnresolvedBaseError};
 
 /// Name Cargo requires for a manifest.
 const MANIFEST_FILE_NAME: &str = "Cargo.toml";
@@ -203,12 +203,12 @@ impl GitRepo {
 
     /// Git-tracked paths under `pathspec` in the work tree / index.
     pub(crate) fn ls_files(&self, pathspec: &str) -> Result<Vec<String>, AppError> {
-        let stdout = run_capture(
+        let stdout = run_capture_bytes(
             "git",
             &["ls-files", "-z", "--", &dir_pathspec(pathspec)],
             &self.root,
         )?;
-        Ok(split_z(&stdout))
+        split_z(&stdout)
     }
 
     /// Which of `paths` Git tracks, as a subset of the input.
@@ -223,15 +223,15 @@ impl GitRepo {
         }
         let mut args = vec!["ls-files".to_string(), "-z".to_string(), "--".to_string()];
         args.extend(paths.iter().map(|path| dir_pathspec(path)));
-        let stdout = run_capture_os("git", &args, &self.root)?;
-        Ok(split_z(&stdout).into_iter().collect())
+        let stdout = run_capture_os_bytes("git", &args, &self.root)?;
+        Ok(split_z(&stdout)?.into_iter().collect())
     }
 
     /// Untracked, non-ignored paths under `pathspec`.
     // Advisory-only listing; classification does not fail on untracked files.
     #[cfg_attr(test, mutants::skip)]
     pub(crate) fn ls_untracked(&self, pathspec: &str) -> Result<Vec<String>, AppError> {
-        let stdout = run_capture(
+        let stdout = run_capture_bytes(
             "git",
             &[
                 "ls-files",
@@ -243,12 +243,12 @@ impl GitRepo {
             ],
             &self.root,
         )?;
-        Ok(split_z(&stdout))
+        split_z(&stdout)
     }
 
     /// Tree paths under `pathspec` at `commit`.
     pub(crate) fn ls_tree(&self, commit: &str, pathspec: &str) -> Result<Vec<String>, AppError> {
-        let stdout = run_capture(
+        let stdout = run_capture_bytes(
             "git",
             &[
                 "ls-tree",
@@ -261,7 +261,7 @@ impl GitRepo {
             ],
             &self.root,
         )?;
-        Ok(split_z(&stdout))
+        split_z(&stdout)
     }
 
     /// Manifest paths at `commit`, used to reconstruct historical workspace members.
@@ -269,12 +269,12 @@ impl GitRepo {
     /// `git ls-tree` matches its path arguments literally, so it cannot select
     /// manifests by pattern: the tree is listed once and filtered here.
     pub(crate) fn ls_tree_manifests(&self, commit: &str) -> Result<Vec<String>, AppError> {
-        let stdout = run_capture(
+        let stdout = run_capture_bytes(
             "git",
             &["ls-tree", "-r", "--name-only", "-z", commit],
             &self.root,
         )?;
-        Ok(split_z(&stdout)
+        Ok(split_z(&stdout)?
             .into_iter()
             .filter(|path| is_manifest_path(path))
             .collect())
@@ -344,11 +344,21 @@ fn is_absent_git_path(stderr: &str) -> bool {
 /// With `-z` the NUL already delimits every record, so whitespace inside a field
 /// is filename data and must survive. Only the empty field after the final
 /// terminator is dropped.
-fn split_z(stdout: &str) -> Vec<String> {
+///
+/// # Errors
+///
+/// Returns [`NonUtf8PathError`] if any field is not valid UTF-8.
+fn split_z(stdout: &[u8]) -> Result<Vec<String>, AppError> {
     stdout
-        .split('\0')
+        .split(|byte| *byte == 0)
         .filter(|part| !part.is_empty())
-        .map(ToOwned::to_owned)
+        .map(|part| {
+            str::from_utf8(part)
+                .map(ToOwned::to_owned)
+                .map_err(|_ignored| {
+                    NonUtf8PathError::new(String::from_utf8_lossy(part).into_owned()).into()
+                })
+        })
         .collect()
 }
 
@@ -563,17 +573,25 @@ mod tests {
 
     #[test]
     fn split_z_drops_empty_trailing_field() {
-        assert_eq!(split_z("a\0b\0"), vec!["a", "b"]);
-        assert!(split_z("").is_empty());
+        assert_eq!(split_z(b"a\0b\0").unwrap(), vec!["a", "b"]);
+        assert!(split_z(b"").unwrap().is_empty());
     }
 
     #[test]
     fn split_z_preserves_whitespace_inside_paths() {
         // With `-z` these characters are filename data, not record separators.
         assert_eq!(
-            split_z(" leading.rs\0trailing.rs \0mid\nline.rs\0"),
+            split_z(b" leading.rs\0trailing.rs \0mid\nline.rs\0").unwrap(),
             vec![" leading.rs", "trailing.rs ", "mid\nline.rs"]
         );
+    }
+
+    #[test]
+    fn split_z_rejects_a_path_that_is_not_utf8() {
+        // A Unix file name is an arbitrary byte string. Substituting the invalid
+        // byte would name a file that is not the one Git reported.
+        let error = split_z(b"ok.rs\0bad\xffname.rs\0").unwrap_err();
+        assert!(error.find_source::<NonUtf8PathError>().is_some());
     }
 
     #[test]

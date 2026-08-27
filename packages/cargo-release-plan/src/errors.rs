@@ -53,6 +53,23 @@ impl CommandFailedError {
     }
 }
 
+/// Git reported a path that is not valid UTF-8.
+///
+/// A file name on Unix is an arbitrary byte string, so this is reachable for a
+/// tracked file rather than only for a corrupt repository. Decoding such a name
+/// lossily would replace the offending bytes, which can collapse two distinct
+/// paths into one entry and makes every later `git show` of that path address a
+/// different file, so the run stops instead. The name is rendered lossily for
+/// the operator's benefit only.
+#[ohno::error]
+#[display("Git reported a path that is not valid UTF-8: '{}'", path.quoted())]
+pub(crate) struct NonUtf8PathError {
+    path: String,
+}
+
+impl UnwindSafe for NonUtf8PathError {}
+impl RefUnwindSafe for NonUtf8PathError {}
+
 /// A file could not be read.
 #[ohno::error]
 #[display("Failed to read '{}'", path.quoted())]
@@ -449,6 +466,14 @@ mod tests {
     );
     assert_impl_all!(
         CommandFailedError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        NonUtf8PathError: Send,
         Sync,
         Debug,
         error::Error,

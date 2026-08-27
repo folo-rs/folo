@@ -54,6 +54,14 @@ space by rewriting only the platform's own separator. Everything downstream of
 that conversion — packaging rules, diffs, plans, diagnostics — is in Git's
 space.
 
+Path listings are decoded from Git's raw bytes and any name that is not valid
+UTF-8 stops the run. A file name on Unix is an arbitrary byte string, so this is
+reachable for an ordinary tracked file; decoding lossily would substitute the
+offending bytes, which can collapse two distinct paths onto one entry and makes
+every subsequent read of that path address a different file. A wrong release
+verdict is worse than a refusal to give one. Output that is not a file name is
+still decoded lossily, because there a substituted byte only affects a message.
+
 ## Classification
 
 Classification walks the base revision's first-parent commits that touch a
