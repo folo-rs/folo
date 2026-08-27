@@ -206,8 +206,8 @@ any registry), `[]` (never publish), or a non-empty registry list, so a crate is
 release candidate when it is publishable (`publish` is `null` or a non-empty list)
 **and** owns a `bin` target.
 
-Against the current workspace this yields exactly `cargo-bench-history`,
-`cargo-detect-package`, `cargo-freeze-deps`. On a normal push that just published,
+Against the current workspace this yields exactly the crates listed in the binary
+inventory table above. On a normal push that just published,
 every target archive is missing → the whole matrix builds. On an ordinary push
 that changed nothing, all archives already exist → the matrix is empty and
 `build-binaries` is skipped. On a re-run after a partial failure, only the still-

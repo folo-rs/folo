@@ -10,8 +10,11 @@ use semver::{Version, VersionReq};
 use toml_edit::{DocumentMut, Formatted, Item, TableLike, Value};
 
 use crate::command::run_capture;
+use crate::inherited::is_workspace_inherit;
+use crate::manifest::parse_document;
 use crate::metadata::{WorkTree, load_work_tree};
 use crate::plan::{ExpandedPlan, PlanFile, expand_plan};
+use crate::text::plural;
 use crate::verbose::Verbose;
 use crate::{ParsePlanError, ReadFileError, WriteFileError};
 
@@ -50,9 +53,10 @@ pub(crate) fn run_apply(
         .collect();
     let expanded = expand_plan(&plan, &work_tree.groups, &current, &current)?;
     verbose.note(format!(
-        "plan expands to {} package version(s); group members are included even when the plan \
-         named only one of them, and never-published members on this branch are included in apply",
-        expanded.packages.len()
+        "plan expands to {} {}; group members are included even when the plan named only one of \
+         them, and never-published members on this branch are included in apply",
+        expanded.packages.len(),
+        plural(expanded.packages.len(), "package version")
     ));
 
     let edits = compute_edits(&work_tree, &expanded, verbose)?;
@@ -77,7 +81,8 @@ pub(crate) fn run_apply(
     refresh_lockfile(&work_tree, &expanded, verbose)?;
 
     Ok(format!(
-        "Updated {changed} manifest(s) and refreshed the workspace lockfile"
+        "Updated {changed} {} and refreshed the workspace lockfile",
+        plural(changed, "manifest")
     ))
 }
 
@@ -110,7 +115,10 @@ fn compute_edits(
 
 fn dry_run_summary(edits: &[ManifestEdit], package_count: usize) -> String {
     let changed = changed_edit_count(edits);
-    let mut message = format!("Dry run: {changed} manifest(s) would change");
+    let mut message = format!(
+        "Dry run: {changed} {} would change",
+        plural(changed, "manifest")
+    );
     for edit in edits {
         if edit.original != edit.updated {
             write!(message, "\n  {}", edit.path.display()).expect("writing to String");
@@ -118,7 +126,8 @@ fn dry_run_summary(edits: &[ManifestEdit], package_count: usize) -> String {
     }
     write!(
         message,
-        "; lockfile would be refreshed for {package_count} package(s)"
+        "; lockfile would be refreshed for {package_count} {}",
+        plural(package_count, "package")
     )
     .expect("writing to String");
     message
@@ -137,7 +146,7 @@ fn edit_path(
 ) -> Result<ManifestEdit, AppError> {
     let original =
         fs::read_to_string(path).map_err(|error| ReadFileError::caused_by(path, error))?;
-    let mut doc: DocumentMut = crate::manifest::parse_document(path, &original)?;
+    let mut doc: DocumentMut = parse_document(path, &original)?;
     rewrite(&mut doc);
     Ok(ManifestEdit {
         path: path.to_path_buf(),
@@ -163,7 +172,7 @@ fn rewrite_package_version(doc: &mut DocumentMut, expanded: &ExpandedPlan, verbo
     if set_package_version_item(package, new_version) {
         verbose.note(format!(
             "{name}: set package.version to {new_version} because the expanded plan assigns that \
-             version to this crate"
+             version to this package"
         ));
     }
 }
@@ -292,7 +301,7 @@ fn set_package_version_item(table: &mut dyn TableLike, new_version: &Version) ->
         Some(Item::Value(Value::String(formatted))) => {
             set_formatted(formatted, new_version.to_string())
         }
-        Some(item) if crate::inherited::is_workspace_inherit(item) => {
+        Some(item) if is_workspace_inherit(item) => {
             *item = Item::Value(Value::from(new_version.to_string()));
             true
         }

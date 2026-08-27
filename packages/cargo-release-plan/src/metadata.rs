@@ -4,13 +4,14 @@
 // only Cargo invocation used for classification.
 
 use std::collections::{BTreeMap, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use ohno::AppError;
 use semver::Version;
 use serde::Deserialize;
+use serde_json::Value;
 
-use crate::ParseMetadataError;
 use crate::command::run_capture;
 use crate::groups::Groups;
 #[cfg(test)]
@@ -18,15 +19,19 @@ use crate::inherited::InheritedKeys;
 use crate::manifest::{PackageManifest, parse_package_manifest, repo_relative_dir};
 #[cfg(test)]
 use crate::packaging::PackagingRules;
+use crate::{
+    InvalidVersionError, MalformedVersionGroupError, ParseMetadataError, ReadFileError,
+    UnknownGroupMemberError,
+};
 
-/// Raw `cargo metadata --format-version 1` document before conversion to [`WorkTree`].
+/// Raw `cargo metadata` document before conversion to [`WorkTree`].
 #[derive(Debug, Deserialize)]
 struct MetadataJson {
     packages: Vec<MetadataPackage>,
     workspace_members: Vec<String>,
     workspace_root: String,
     #[serde(default)]
-    metadata: serde_json::Value,
+    metadata: Value,
 }
 
 /// One package object from the metadata document.
@@ -78,13 +83,22 @@ pub(crate) struct WorkTree {
 }
 
 pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError> {
-    let cwd = manifest_path.parent().unwrap_or(manifest_path);
+    // A relative manifest path such as the default `Cargo.toml` has an empty
+    // parent, which is not a directory a child process can be started in, so the
+    // process's own directory stands in. Cargo resolves the manifest path
+    // against the same directory, so both ends agree.
+    let parent = manifest_path.parent().unwrap_or(manifest_path);
+    let cwd = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
     // `--no-deps` is the classification Cargo invocation: no graph resolve and
     // no crates.io. `--offline` is omitted so a workspace without a lockfile
     // can still be classified; no registry packages are consulted.
     // `--format-version 1` is Cargo's only documented metadata schema; the
     // `MetadataJson` projections in this module deserialize that contract.
-    let stdout = run_capture(
+    let metadata = run_capture(
         "cargo",
         &[
             "metadata",
@@ -96,19 +110,23 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
         ],
         cwd,
     )?;
-    let json: MetadataJson =
-        serde_json::from_str(&stdout).map_err(ParseMetadataError::caused_by)?;
+    let metadata: MetadataJson =
+        serde_json::from_str(&metadata).map_err(ParseMetadataError::caused_by)?;
 
-    let workspace_root = PathBuf::from(&json.workspace_root);
-    let member_ids: HashSet<&str> = json.workspace_members.iter().map(String::as_str).collect();
+    let workspace_root = PathBuf::from(&metadata.workspace_root);
+    let member_ids: HashSet<&str> = metadata
+        .workspace_members
+        .iter()
+        .map(String::as_str)
+        .collect();
 
-    let workspace_names: HashSet<String> = json
+    let workspace_names: HashSet<String> = metadata
         .packages
         .iter()
         .filter(|package| member_ids.contains(package.id.as_str()))
         .map(|package| package.name.clone())
         .collect();
-    let member_dirs: HashSet<PathBuf> = json
+    let member_dirs: HashSet<PathBuf> = metadata
         .packages
         .iter()
         .filter(|package| member_ids.contains(package.id.as_str()))
@@ -118,10 +136,10 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
                 .map(Path::to_path_buf)
         })
         .collect();
-    let groups = groups_from_metadata(&json.metadata, &workspace_names)?;
+    let groups = groups_from_metadata(&metadata.metadata, &workspace_names)?;
     let mut packages = Vec::new();
 
-    for package in &json.packages {
+    for package in &metadata.packages {
         if !member_ids.contains(package.id.as_str()) {
             continue;
         }
@@ -129,24 +147,24 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
             continue;
         }
         let path = PathBuf::from(&package.manifest_path);
-        let content = std::fs::read_to_string(&path)
-            .map_err(|error| crate::ReadFileError::caused_by(&path, error))?;
-        let Some(mut parsed) = parse_package_manifest(
-            &content,
+        let manifest =
+            fs::read_to_string(&path).map_err(|error| ReadFileError::caused_by(&path, error))?;
+        let Some(mut manifest) = parse_package_manifest(
+            &manifest,
             &path.to_string_lossy(),
             Some(package.version.as_str()),
         )?
         else {
             continue;
         };
-        if !parsed.publish {
+        if !manifest.publish {
             continue;
         }
-        parsed.directory = repo_relative_dir(&workspace_root, &path);
-        parsed.version = package.version.parse::<Version>().map_err(|error| {
-            crate::InvalidVersionError::caused_by(&package.name, &package.version, error)
+        manifest.directory = repo_relative_dir(&workspace_root, &path);
+        manifest.version = package.version.parse::<Version>().map_err(|error| {
+            InvalidVersionError::caused_by(&package.name, &package.version, error)
         })?;
-        parsed.name.clone_from(&package.name);
+        manifest.name.clone_from(&package.name);
 
         let dependencies = package
             .dependencies
@@ -160,7 +178,7 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
             .collect();
 
         packages.push(WorkPackage {
-            manifest: parsed,
+            manifest,
             manifest_path: path,
             dependencies,
         });
@@ -176,28 +194,28 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
 }
 
 fn groups_from_metadata(
-    metadata: &serde_json::Value,
+    metadata: &Value,
     workspace_names: &HashSet<String>,
 ) -> Result<Groups, AppError> {
     let Some(groups) = metadata
         .get("release-plan")
         .and_then(|plan| plan.get("groups"))
-        .and_then(serde_json::Value::as_object)
+        .and_then(Value::as_object)
     else {
         return Ok(Groups::default());
     };
     let mut map = BTreeMap::new();
     for (name, members) in groups {
         let Some(array) = members.as_array() else {
-            return Err(crate::MalformedVersionGroupError::new(name).into());
+            return Err(MalformedVersionGroupError::new(name).into());
         };
         let mut parsed = Vec::new();
         for item in array {
             let Some(package) = item.as_str() else {
-                return Err(crate::MalformedVersionGroupError::new(name).into());
+                return Err(MalformedVersionGroupError::new(name).into());
             };
             if !workspace_names.contains(package) {
-                return Err(crate::UnknownGroupMemberError::new(name, package).into());
+                return Err(UnknownGroupMemberError::new(name, package).into());
             }
             parsed.push(package.to_owned());
         }
@@ -228,11 +246,13 @@ pub(crate) fn dependents_of(packages: &[WorkPackage], name: &str) -> Vec<String>
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     #[test]
     fn groups_from_metadata_reads_release_plan_table() {
-        let json = serde_json::json!({
+        let json = json!({
             "release-plan": {
                 "groups": {
                     "nm": ["nm", "nm_impl"]
@@ -247,20 +267,20 @@ mod tests {
     #[test]
     fn groups_from_metadata_rejects_malformed_and_unknown_members() {
         let names = HashSet::from(["nm".to_string()]);
-        let malformed = serde_json::json!({
+        let malformed = json!({
             "release-plan": { "groups": { "nm": "nm" } }
         });
         let error = groups_from_metadata(&malformed, &names).unwrap_err();
         let source = error
-            .find_source::<crate::MalformedVersionGroupError>()
+            .find_source::<MalformedVersionGroupError>()
             .expect("malformed group");
         assert_eq!(source.group(), "nm");
-        let unknown = serde_json::json!({
+        let unknown = json!({
             "release-plan": { "groups": { "nm": ["ghost"] } }
         });
         let error = groups_from_metadata(&unknown, &names).unwrap_err();
         let source = error
-            .find_source::<crate::UnknownGroupMemberError>()
+            .find_source::<UnknownGroupMemberError>()
             .expect("unknown member");
         assert_eq!(source.group(), "nm");
         assert_eq!(source.package(), "ghost");

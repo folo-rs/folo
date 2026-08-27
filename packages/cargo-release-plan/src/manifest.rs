@@ -1,15 +1,16 @@
 // Manifest parsing for versions, packaging rules, members, and pins.
 
+use std::fmt;
 use std::path::Path;
 
-use ignore::overrides::OverrideBuilder;
+use ignore::overrides::{Override, OverrideBuilder};
 use ohno::AppError;
 use semver::Version;
 use toml_edit::{DocumentMut, Item, TableLike, Value};
 
-use crate::inherited::{InheritedKeys, collect_inherited_keys};
+use crate::inherited::{InheritedKeys, collect_inherited_keys, is_workspace_inherit};
 use crate::packaging::PackagingRules;
-use crate::{InvalidVersionError, ParseTomlError};
+use crate::{InvalidMemberPatternError, InvalidVersionError, ParseTomlError};
 
 /// Parsed facts about one package manifest.
 #[derive(Clone, Debug)]
@@ -22,11 +23,15 @@ pub(crate) struct PackageManifest {
     pub(crate) publish: bool,
 }
 
-/// Workspace member glob patterns from the root manifest.
+/// Workspace member patterns from the root manifest, compiled for repeated queries.
+///
+/// A historical snapshot tests every discovered manifest against the same
+/// patterns, so the matchers are built once when the root manifest is parsed
+/// rather than per candidate directory.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct WorkspaceMembers {
-    pub(crate) members: Vec<String>,
-    pub(crate) exclude: Vec<String>,
+    members: Vec<MemberPattern>,
+    exclude: Vec<MemberPattern>,
 }
 
 pub(crate) fn parse_document(path: &Path, content: &str) -> Result<DocumentMut, AppError> {
@@ -51,20 +56,20 @@ pub(crate) fn parse_package_manifest(
     let Some(version_item) = package.get("version") else {
         return Ok(None);
     };
-    let version_str = if crate::inherited::is_workspace_inherit(version_item) {
-        let Some(version_str) = workspace_version else {
+    let version = if is_workspace_inherit(version_item) {
+        let Some(version) = workspace_version else {
             return Ok(None);
         };
-        version_str
+        version
     } else {
-        let Some(version_str) = version_item.as_str() else {
+        let Some(version) = version_item.as_str() else {
             return Ok(None);
         };
-        version_str
+        version
     };
-    let version = version_str
+    let version = version
         .parse::<Version>()
-        .map_err(|error| InvalidVersionError::caused_by(name, version_str, error))?;
+        .map_err(|error| InvalidVersionError::caused_by(name, version, error))?;
     let directory = directory_of(manifest_path);
     Ok(Some(PackageManifest {
         name: name.to_string(),
@@ -85,51 +90,86 @@ pub(crate) fn parse_workspace_members(
         return Ok(WorkspaceMembers::default());
     };
     Ok(WorkspaceMembers {
-        members: string_array(workspace.get("members")),
-        exclude: string_array(workspace.get("exclude")),
+        members: compile_patterns(&string_array(workspace.get("members")))?,
+        exclude: compile_patterns(&string_array(workspace.get("exclude")))?,
     })
 }
 
-/// Whether `dir` (repo-relative, `/` separators) matches a workspace member glob.
+/// Whether `dir` (repo-relative, `/` separators) matches a workspace member pattern.
 pub(crate) fn is_workspace_member(dir: &str, members: &WorkspaceMembers) -> bool {
     let dir = dir.replace('\\', "/");
     let dir = dir.trim_end_matches('/');
-    if members
-        .exclude
-        .iter()
-        .any(|pattern| glob_member(pattern, dir))
-    {
+    if members.exclude.iter().any(|pattern| pattern.matches(dir)) {
         return false;
     }
     if members.members.is_empty() {
-        return true;
+        // A manifest without a `members` list defines a workspace whose only
+        // member is the root package itself. Treating an absent list as "every
+        // manifest in the repository" would pull unrelated packages into a
+        // historical snapshot.
+        return dir.is_empty();
     }
-    members
-        .members
-        .iter()
-        .any(|pattern| glob_member(pattern, dir))
+    members.members.iter().any(|pattern| pattern.matches(dir))
 }
 
-fn glob_member(pattern: &str, dir: &str) -> bool {
-    let pattern = pattern.replace('\\', "/");
-    let dir = dir.replace('\\', "/");
-    if pattern == dir {
-        return true;
+fn compile_patterns(patterns: &[String]) -> Result<Vec<MemberPattern>, AppError> {
+    patterns
+        .iter()
+        .map(|pattern| MemberPattern::new(pattern))
+        .collect()
+}
+
+/// One compiled `[workspace] members` / `exclude` pattern.
+struct MemberPattern {
+    literal: String,
+    matcher: Override,
+}
+
+impl MemberPattern {
+    fn new(pattern: &str) -> Result<Self, AppError> {
+        let literal = pattern.replace('\\', "/");
+        let mut matcher = OverrideBuilder::new("");
+        matcher
+            .add(&literal)
+            .map_err(|error| InvalidMemberPatternError::caused_by(&literal, error))?;
+        let matcher = matcher
+            .build()
+            .map_err(|error| InvalidMemberPatternError::caused_by(&literal, error))?;
+        Ok(Self { literal, matcher })
     }
-    // `foo/**` in Cargo member lists includes the `foo` directory itself.
-    if let Some(prefix) = pattern.strip_suffix("/**")
-        && dir == prefix
-    {
-        return true;
+
+    fn matches(&self, dir: &str) -> bool {
+        if self.literal == dir {
+            return true;
+        }
+        // `foo/**` in Cargo member lists includes the `foo` directory itself.
+        if let Some(prefix) = self.literal.strip_suffix("/**")
+            && dir == prefix
+        {
+            return true;
+        }
+        self.matcher.matched(dir, true).is_whitelist()
     }
-    let mut builder = OverrideBuilder::new("");
-    if builder.add(&pattern).is_err() {
-        return false;
+}
+
+// `Override` has no `Clone`, and the compiled matchers are immutable after
+// construction, so cloning a member set recompiles its patterns. Patterns that
+// compiled once compile again, so the fallback is unreachable in practice.
+impl Clone for MemberPattern {
+    fn clone(&self) -> Self {
+        Self::new(&self.literal).unwrap_or_else(|_| Self {
+            literal: self.literal.clone(),
+            matcher: Override::empty(),
+        })
     }
-    let Ok(over) = builder.build() else {
-        return false;
-    };
-    over.matched(dir, true).is_whitelist()
+}
+
+impl fmt::Debug for MemberPattern {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MemberPattern")
+            .field("literal", &self.literal)
+            .finish_non_exhaustive()
+    }
 }
 
 fn packaging_from_package(package: &dyn TableLike) -> Result<PackagingRules, AppError> {
@@ -188,13 +228,28 @@ pub(crate) fn repo_relative_dir(workspace_root: &Path, manifest_path: &Path) -> 
 mod tests {
     use super::*;
 
+    fn members(patterns: &[&str]) -> WorkspaceMembers {
+        WorkspaceMembers {
+            members: compile_patterns(
+                &patterns
+                    .iter()
+                    .map(|pattern| (*pattern).to_string())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap(),
+            exclude: Vec::new(),
+        }
+    }
+
     #[test]
-    fn glob_member_matches_one_segment_star() {
-        assert!(glob_member("packages/*", "packages/foo"));
-        assert!(!glob_member("packages/*", "packages/foo/bar"));
-        assert!(!glob_member("packages/*", "other/foo"));
-        assert!(glob_member("crates/foo-*", "crates/foo-bar"));
-        assert!(!glob_member("crates/foo-*", "crates/foo-bar/nested"));
+    fn member_pattern_matches_one_segment_star() {
+        let packages = members(&["packages/*"]);
+        assert!(is_workspace_member("packages/foo", &packages));
+        assert!(!is_workspace_member("packages/foo/bar", &packages));
+        assert!(!is_workspace_member("other/foo", &packages));
+        let crates = members(&["crates/foo-*"]);
+        assert!(is_workspace_member("crates/foo-bar", &crates));
+        assert!(!is_workspace_member("crates/foo-bar/nested", &crates));
     }
 
     #[test]
@@ -215,15 +270,33 @@ publish = false
     }
 
     #[test]
-    fn glob_member_double_star_matches_the_prefix_directory() {
-        assert!(glob_member("packages/**", "packages"));
-        assert!(glob_member("packages/**", "packages/foo"));
-        assert!(!glob_member("packages/**", "other"));
+    fn member_pattern_double_star_matches_the_prefix_directory() {
+        let packages = members(&["packages/**"]);
+        assert!(is_workspace_member("packages", &packages));
+        assert!(is_workspace_member("packages/foo", &packages));
+        assert!(!is_workspace_member("other", &packages));
+    }
+
+    #[test]
+    fn invalid_member_pattern_is_rejected() {
+        // An unclosed brace is not a valid path pattern; a silently non-matching
+        // pattern would drop real members from a historical snapshot.
+        let error = parse_workspace_members(
+            "[workspace]\nmembers = [\"foo.{js,ts\"]\n",
+            Path::new("Cargo.toml"),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error
+                .find_source::<InvalidMemberPatternError>()
+                .map(InvalidMemberPatternError::pattern),
+            Some("foo.{js,ts")
+        );
     }
 
     #[test]
     fn workspace_members_exclude_and_empty_members() {
-        let members = parse_workspace_members(
+        let declared = parse_workspace_members(
             r#"
 [workspace]
 members = ["packages/*"]
@@ -232,12 +305,14 @@ exclude = ["packages/skip"]
             Path::new("Cargo.toml"),
         )
         .unwrap();
-        assert!(is_workspace_member("packages/foo", &members));
-        assert!(!is_workspace_member("packages/skip", &members));
-        assert!(!is_workspace_member("examples/foo", &members));
+        assert!(is_workspace_member("packages/foo", &declared));
+        assert!(!is_workspace_member("packages/skip", &declared));
+        assert!(!is_workspace_member("examples/foo", &declared));
+        // Without a `members` list the only member is the root package, matching
+        // Cargo rather than treating every manifest in the tree as a member.
         let empty = parse_workspace_members("[workspace]\n", Path::new("Cargo.toml")).unwrap();
-        assert!(empty.members.is_empty());
-        assert!(is_workspace_member("anything", &empty));
+        assert!(is_workspace_member("", &empty));
+        assert!(!is_workspace_member("anything", &empty));
     }
 
     #[test]

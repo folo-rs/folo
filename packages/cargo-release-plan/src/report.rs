@@ -99,11 +99,12 @@ pub(crate) fn write_report(
         packages,
         groups,
     };
-    // Consumer-facing layout: README "report" (`report.json` and `diffs/`).
-    let json = serde_json::to_string_pretty(&report)
+    // These emitted names are part of the consumer-facing layout documented in
+    // the README, so they are compatibility-sensitive rather than incidental.
+    let report = serde_json::to_string_pretty(&report)
         .expect("the report body contains only JSON-serializable fields");
     let report_path = out_dir.join("report.json");
-    fs::write(&report_path, json.as_bytes())
+    fs::write(&report_path, report.as_bytes())
         .map_err(|error| WriteFileError::caused_by(&report_path, error))?;
 
     let unreleased = classification

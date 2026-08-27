@@ -33,7 +33,7 @@ pub enum RunInput {
         out_dir: PathBuf,
         /// Base revision whose first-parent line supplies anchors.
         base: String,
-        /// Workspace manifest to classify. Defaults to `Cargo.toml` in the current directory.
+        /// Workspace manifest to classify. Used verbatim.
         manifest_path: PathBuf,
         /// When set, print explanatory decision notes to stderr.
         verbose: bool,
@@ -42,7 +42,7 @@ pub enum RunInput {
     Check {
         /// Base revision whose first-parent line supplies anchors.
         base: String,
-        /// Workspace manifest to classify. Defaults to `Cargo.toml` in the current directory.
+        /// Workspace manifest to classify. Used verbatim.
         manifest_path: PathBuf,
         /// How to render diagnostics.
         format: CheckFormat,
@@ -57,7 +57,7 @@ pub enum RunInput {
         plan: PathBuf,
         /// When set, compute edits without writing files or refreshing the lockfile.
         dry_run: bool,
-        /// Workspace manifest to edit. Defaults to `Cargo.toml` in the current directory.
+        /// Workspace manifest to edit. Used verbatim.
         manifest_path: PathBuf,
         /// When set, print explanatory decision notes to stderr.
         verbose: bool,
@@ -109,6 +109,7 @@ pub(crate) const SCHEMA_VERSION: u32 = 1;
 pub(crate) const INCREMENT_VERSIONS_SKILL: &str = "increment-versions";
 
 /// Matches the user-facing short-commit convention in `cbh_detect`.
+///
 /// Ref: `packages/cbh_detect/src/detect/findings.rs`, `short_commit`.
 pub(crate) const SHORT_COMMIT_LEN: usize = 12;
 

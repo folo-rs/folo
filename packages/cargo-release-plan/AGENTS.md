@@ -3,10 +3,11 @@
 ## Git is a subprocess
 
 Do not add `git2`, `gix`, or any other Git library. All Git access is
-`std::process::Command` spawning `git`. Classification may also spawn
-`cargo metadata --no-deps` (and `cargo package --list` / `cargo update` for
-verify-packaging and apply). Do not contact crates.io and do not compile as
-part of classification.
+`std::process::Command` spawning `git`; the rationale and its trade-off are in
+[docs/implementation.md](docs/implementation.md), "Subprocess boundaries".
+Classification may also spawn `cargo metadata --no-deps` (and
+`cargo package --list` / `cargo update` for verify-packaging and apply). Do not
+contact crates.io and do not compile as part of classification.
 
 ## Integration tests must be hermetic Git
 

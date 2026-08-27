@@ -81,8 +81,9 @@ pub(crate) fn run_capture_bytes(
     }
 }
 
-/// Like [`run_capture_ok`], keeping stdout as raw bytes so binary files can be
-/// compared without UTF-8 replacement.
+/// Like [`run_capture_ok`], keeping stdout as raw bytes.
+///
+/// Binary files can then be compared without UTF-8 replacement.
 pub(crate) fn run_capture_ok_bytes(
     program: &str,
     args: &[&str],
@@ -108,6 +109,12 @@ fn spawn(
     args: impl IntoIterator<Item = impl AsRef<OsStr>>,
     cwd: &Path,
 ) -> Result<Output, AppError> {
+    // Every child here is captured through pipes and its output is parsed or
+    // surfaced verbatim in diagnostics, so it must be free of ANSI escapes. The
+    // override belongs on the shared boundary rather than at each call site
+    // because Cargo's automatic detection depends on the ambient environment,
+    // which would otherwise make captured output differ between a terminal, a
+    // CI runner and a test harness.
     Command::new(program)
         .args(args)
         .current_dir(cwd)

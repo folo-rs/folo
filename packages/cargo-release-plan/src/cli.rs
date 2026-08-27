@@ -1,17 +1,16 @@
 //! Command-line argument parsing for `cargo-release-plan`, built on `clap`.
 //!
-//! The parser lives in the library rather than the binary so its behavior —
-//! argument defaults, help text, and parse errors — can be exercised directly by
-//! integration tests without spawning a subprocess.
+//! Parsing accepts the argument vector Cargo passes to a subcommand, including
+//! the injected `release-plan` token, and yields either a typed [`RunInput`] or
+//! an [`EarlyExit`] carrying the message and exit code to surface.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
 
 use clap::error::ErrorKind;
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Error as ClapError, Parser, Subcommand, ValueEnum};
 
-use crate::types::DEFAULT_BASE;
-use crate::{CheckFormat, RunInput};
+use crate::{CheckFormat, DEFAULT_BASE, RunInput};
 
 /// Classifies publishable packages against version anchors and applies plans.
 #[derive(Debug, Parser)]
@@ -51,6 +50,9 @@ impl Cli {
     }
 
     /// Translates the parsed arguments into the [`RunInput`] the core logic consumes.
+    ///
+    /// Optional arguments are resolved here, so the returned value is fully
+    /// determined and carries no further defaults.
     #[must_use]
     pub fn into_input(self) -> RunInput {
         match self.command {
@@ -83,7 +85,7 @@ impl Cli {
     }
 }
 
-/// Clap grammar for the three subcommands.
+/// Clap grammar for the subcommands.
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Write report.json and per-package diffs for unreleased changes.
@@ -179,8 +181,7 @@ impl From<CliCheckFormat> for CheckFormat {
 /// A parse outcome that should terminate the program before execution.
 ///
 /// This is either a help/usage request (success, printed to stdout) or a parse
-/// error (failure, printed to stderr), mirroring the shape the binary entry point
-/// consumes.
+/// error (failure, printed to stderr).
 #[derive(Debug)]
 #[expect(
     clippy::exhaustive_structs,
@@ -195,7 +196,7 @@ pub struct EarlyExit {
 
 impl EarlyExit {
     /// Classifies a `clap` parse error into the success/failure early-exit shape.
-    fn from_clap(error: &clap::Error) -> Self {
+    fn from_clap(error: &ClapError) -> Self {
         let success = matches!(
             error.kind(),
             ErrorKind::DisplayHelp
@@ -217,6 +218,7 @@ mod tests {
     use static_assertions::assert_impl_all;
 
     use super::{Cli, EarlyExit};
+    use crate::RunInput;
 
     assert_impl_all!(Cli: UnwindSafe, RefUnwindSafe);
     assert_impl_all!(EarlyExit: UnwindSafe, RefUnwindSafe);
@@ -225,7 +227,7 @@ mod tests {
     fn from_args_os_strips_cargo_injected_subcommand() {
         let cli = Cli::from_args_os(["cargo-release-plan", "release-plan", "check"]).unwrap();
         match cli.into_input() {
-            crate::RunInput::Check { .. } => {}
+            RunInput::Check { .. } => {}
             other => panic!("expected check, got {other:?}"),
         }
     }

@@ -1,10 +1,10 @@
 // Classification of publishable packages against their anchors.
 
+use std::any::type_name;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::fmt::Write as _;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::{fs, io, str};
 
 use ohno::AppError;
 use semver::Version;
@@ -13,15 +13,46 @@ use serde::{Serialize, Serializer};
 use toml_edit::DocumentMut;
 
 use crate::anchor::{Anchor, TimelineEntry, resolve_anchor};
-use crate::git::{GitRepo, git_path};
+use crate::git::{GitRepo, git_path, join_git_rel};
 use crate::groups::GroupVerdict;
-use crate::inherited::{InheritedChange, inherited_changes};
+use crate::inherited::{InheritedChange, inherited_changes, workspace_package_version};
 use crate::manifest::{
     is_workspace_member, parse_document, parse_package_manifest, parse_workspace_members,
 };
-use crate::metadata::{WorkPackage, WorkTree, dependents_of};
+use crate::metadata::{ReportedDep, WorkPackage, WorkTree, dependents_of, load_work_tree};
 use crate::packaging::{PackagingRules, relativize};
+use crate::text::plural;
 use crate::verbose::Verbose;
+use crate::{ReadFileError, VersionRegressionError, short_commit};
+
+/// Workspace classification: every publishable package plus its group verdicts.
+///
+/// This is the result the `report` and `check` commands render.
+#[derive(Debug)]
+pub(crate) struct Classification {
+    pub(crate) head: String,
+    pub(crate) packages: Vec<PackageClass>,
+    pub(crate) groups: BTreeMap<String, GroupVerdict>,
+    pub(crate) work_tree: WorkTree,
+    pub(crate) git: GitRepo,
+}
+
+/// Per-package classification: its status and the evidence behind it.
+#[derive(Clone, Debug)]
+pub(crate) struct PackageClass {
+    pub(crate) name: String,
+    pub(crate) declared_version: Version,
+    pub(crate) group: Option<String>,
+    pub(crate) status: PackageStatus,
+    pub(crate) anchor: Option<Anchor>,
+    pub(crate) changed: Vec<ChangedItem>,
+    pub(crate) stat: DiffStat,
+    pub(crate) patch: String,
+    pub(crate) untracked: Vec<String>,
+    pub(crate) dependencies: Vec<ReportedDep>,
+    pub(crate) dependents: Vec<String>,
+    pub(crate) manifest_path: PathBuf,
+}
 
 /// Classification status of one publishable package.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
@@ -44,16 +75,22 @@ pub(crate) enum ChangedItem {
 
 impl Serialize for ChangedItem {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // The struct name reaches self-describing formats, so derive it from the
+        // type rather than repeating its spelling in a literal.
+        let name = type_name::<Self>()
+            .rsplit("::")
+            .next()
+            .unwrap_or("ChangedItem");
         match self {
             Self::Package { path, change } => {
-                let mut state = serializer.serialize_struct("ChangedItem", 3)?;
+                let mut state = serializer.serialize_struct(name, 3)?;
                 state.serialize_field("path", path)?;
                 state.serialize_field("change", change)?;
                 state.serialize_field("source", "package")?;
                 state.end()
             }
             Self::Inherited { field } => {
-                let mut state = serializer.serialize_struct("ChangedItem", 2)?;
+                let mut state = serializer.serialize_struct(name, 2)?;
                 state.serialize_field("field", field)?;
                 state.serialize_field("source", "inherited")?;
                 state.end()
@@ -77,42 +114,15 @@ pub(crate) struct AnchorJson {
     pub(crate) version: String,
 }
 
-/// Per-package classification used by `report` and `check`.
-#[derive(Clone, Debug)]
-pub(crate) struct PackageClass {
-    pub(crate) name: String,
-    pub(crate) declared_version: Version,
-    pub(crate) group: Option<String>,
-    pub(crate) status: PackageStatus,
-    pub(crate) anchor: Option<Anchor>,
-    pub(crate) changed: Vec<ChangedItem>,
-    pub(crate) stat: DiffStat,
-    pub(crate) patch: String,
-    pub(crate) untracked: Vec<String>,
-    pub(crate) dependencies: Vec<crate::metadata::ReportedDep>,
-    pub(crate) dependents: Vec<String>,
-    pub(crate) manifest_path: PathBuf,
-}
-
-/// Workspace classification.
-#[derive(Debug)]
-pub(crate) struct Classification {
-    pub(crate) head: String,
-    pub(crate) packages: Vec<PackageClass>,
-    pub(crate) groups: BTreeMap<String, GroupVerdict>,
-    pub(crate) work_tree: WorkTree,
-    pub(crate) git: GitRepo,
-}
-
 pub(crate) fn classify(
     manifest_path: &Path,
     base: &str,
     verbose: Verbose,
 ) -> Result<Classification, AppError> {
-    let mut work_tree = crate::metadata::load_work_tree(manifest_path)?;
+    let mut work_tree = load_work_tree(manifest_path)?;
     let git = GitRepo::discover(&work_tree.workspace_root)?;
     for package in &mut work_tree.packages {
-        package.manifest.directory = crate::git::join_git_rel(
+        package.manifest.directory = join_git_rel(
             git.root(),
             &work_tree.workspace_root,
             &package.manifest.directory,
@@ -121,10 +131,10 @@ pub(crate) fn classify(
     let head = git.head()?;
     let base_sha = git.rev_parse(base)?;
     verbose.note(format!(
-        "classifying {} publishable package(s) against base {base} ({base_sha}); \
+        "classifying {} against base {base} ({base_sha}); \
          anchors are the last parsed version change on that revision's first-parent line, \
-         not on the working branch",
-        work_tree.packages.len()
+         not on the work tree's branch",
+        plural(work_tree.packages.len(), "publishable package")
     ));
 
     let mut cache = SnapshotCache::new();
@@ -133,7 +143,7 @@ pub(crate) fn classify(
     let work_root_doc = parse_document(
         &work_root_path,
         &fs::read_to_string(&work_root_path)
-            .map_err(|error| crate::ReadFileError::caused_by(&work_root_path, error))?,
+            .map_err(|error| ReadFileError::caused_by(&work_root_path, error))?,
     )?;
 
     let commits = git.first_parent_manifest_commits(&base_sha)?;
@@ -228,7 +238,7 @@ fn classify_one(
 
     let timeline = build_timeline(git, name, commits, cache, &work_tree.workspace_root)?;
     let anchor = resolve_anchor(name, &timeline)?;
-    let short_anchor = crate::short_commit(&anchor.commit);
+    let short_anchor = short_commit(&anchor.commit);
     verbose.note(format!(
         "{name}: anchor {short_anchor} declared {}; work tree declares {}; a status of releasing \
          requires the work-tree version to be greater than the anchor version (parsed, not textual)",
@@ -271,14 +281,12 @@ fn classify_one(
         &package.manifest.packaging,
     )?;
 
+    let mut changed = changed_files;
     let inherited: Vec<InheritedChange> = inherited_changes(
         &package.manifest.inherited,
         &anchor_snapshot.root_doc,
         work_root_doc,
     );
-
-    let mut changed = changed_files;
-    patch.push_str(&inherited_patch(&inherited));
     for item in inherited {
         verbose.note(format!(
             "{name}: inherited {} changed between the anchor and the work tree, so the root \
@@ -289,6 +297,20 @@ fn classify_one(
     }
 
     log_untracked(verbose, name, untracked.len());
+
+    // A declared version below the anchor cannot describe a release: the anchor
+    // version is already on the base line, so the work tree would re-publish an
+    // existing version with different content. Ref: docs/design.md,
+    // "Version monotonicity".
+    if package.manifest.version < anchor.version {
+        return Err(VersionRegressionError::new(
+            name,
+            package.manifest.version.clone(),
+            anchor.version.clone(),
+            &anchor.commit,
+        )
+        .into());
+    }
 
     let version_increased = package.manifest.version > anchor.version;
     let status = if version_increased {
@@ -338,15 +360,15 @@ fn build_timeline(
         let is_last = index
             .checked_add(1)
             .is_some_and(|next| next == commits.len());
-        let parent_available = if is_last {
-            git.has_resolvable_parent(commit)?
+        let has_parent = if is_last {
+            git.has_parent_or_is_shallow_boundary(commit)?
         } else {
             true
         };
         timeline.push(TimelineEntry {
             commit: commit.clone(),
             version,
-            parent_available,
+            has_parent,
         });
         // Stop once we have observed a version different from the base (the
         // resolver only needs the first change plus whether the last entry is
@@ -425,37 +447,36 @@ fn diff_package(
     Ok((changed, patch, stat, untracked))
 }
 
-fn inherited_patch(changes: &[InheritedChange]) -> String {
-    if changes.is_empty() {
-        return String::new();
-    }
-    let mut out = String::from("Inherited workspace values changed:\n");
-    for change in changes {
-        writeln!(out, "- {}", change.field).expect("writing to String");
-    }
-    out
-}
-
 fn file_diff(path: &str, old: Option<&[u8]>, new: Option<&[u8]>) -> (String, usize, usize) {
-    if old.is_some_and(is_non_text) || new.is_some_and(is_non_text) {
+    let (old_present, new_present) = (old.is_some(), new.is_some());
+    // A unified diff can only describe text, and validating here lets both sides
+    // be borrowed rather than copied out of a lossy conversion.
+    let (Ok(old), Ok(new)) = (
+        str::from_utf8(old.unwrap_or_default()),
+        str::from_utf8(new.unwrap_or_default()),
+    ) else {
         return (format!("Binary files a/{path} and b/{path} differ\n"), 0, 0);
-    }
-    let old_text = old.map_or(String::new(), |bytes| {
-        String::from_utf8_lossy(bytes).into_owned()
-    });
-    let new_text = new.map_or(String::new(), |bytes| {
-        String::from_utf8_lossy(bytes).into_owned()
-    });
-    unified_diff(path, &old_text, &new_text)
+    };
+    unified_diff(path, old, old_present, new, new_present)
 }
 
-fn is_non_text(bytes: &[u8]) -> bool {
-    std::str::from_utf8(bytes).is_err()
-}
-
-fn unified_diff(path: &str, old: &str, new: &str) -> (String, usize, usize) {
-    let old_lines: Vec<&str> = old.lines().collect();
-    let new_lines: Vec<&str> = new.lines().collect();
+/// Renders one file's change as a zero-context unified diff hunk.
+///
+/// Consumers pipe `.patch` artifacts into standard tooling, so the output
+/// follows the unified format that `diff -U0` produces: `/dev/null` for the
+/// absent side of an addition or deletion, and a hunk header whose line numbers
+/// use the preceding line when a side contributes no lines.
+fn unified_diff(
+    path: &str,
+    old: &str,
+    old_present: bool,
+    new: &str,
+    new_present: bool,
+) -> (String, usize, usize) {
+    // `split_inclusive` keeps line terminators, so a change that only adds or
+    // removes a trailing newline is still visible as a differing line.
+    let old_lines: Vec<&str> = old.split_inclusive('\n').collect();
+    let new_lines: Vec<&str> = new.split_inclusive('\n').collect();
     let mut prefix = 0_usize;
     while let (Some(old_line), Some(new_line)) = (old_lines.get(prefix), new_lines.get(prefix)) {
         if old_line != new_line {
@@ -485,30 +506,48 @@ fn unified_diff(path: &str, old: &str, new: &str) -> (String, usize, usize) {
     if deletions == 0 && insertions == 0 {
         return (String::new(), 0, 0);
     }
+    // A side that contributes no lines anchors on the preceding line, which is
+    // what `diff -U0` emits and what patch readers expect.
     let old_start = if deletions == 0 {
-        0
+        prefix
     } else {
         prefix.saturating_add(1)
     };
     let new_start = if insertions == 0 {
-        0
+        prefix
     } else {
         prefix.saturating_add(1)
     };
+    let old_label = side_label(old_present, "a", path);
+    let new_label = side_label(new_present, "b", path);
     let mut out = format!(
-        "--- a/{path}\n+++ b/{path}\n@@ -{old_start},{deletions} +{new_start},{insertions} @@\n"
+        "--- {old_label}\n+++ {new_label}\n\
+         @@ -{old_start},{deletions} +{new_start},{insertions} @@\n"
     );
     for line in old_mid {
-        out.push('-');
-        out.push_str(line);
-        out.push('\n');
+        push_diff_line(&mut out, '-', line);
     }
     for line in new_mid {
-        out.push('+');
-        out.push_str(line);
-        out.push('\n');
+        push_diff_line(&mut out, '+', line);
     }
     (out, insertions, deletions)
+}
+
+fn side_label(present: bool, prefix: &str, path: &str) -> String {
+    if present {
+        format!("{prefix}/{path}")
+    } else {
+        // The unified-diff placeholder for the absent side of an add or delete.
+        "/dev/null".to_string()
+    }
+}
+
+fn push_diff_line(out: &mut String, marker: char, line: &str) {
+    out.push(marker);
+    out.push_str(line);
+    if !line.ends_with('\n') {
+        out.push_str("\n\\ No newline at end of file\n");
+    }
 }
 
 fn released_at_commit(
@@ -604,18 +643,15 @@ fn load_snapshot(
     let root_doc = parse_document(Path::new(&root_rel), &root_content)?;
     let members = parse_workspace_members(&root_content, Path::new(&root_rel))?;
     // `members` globs are written relative to the workspace root, which need not be
-    // the git root, while `ls_tree_all` yields git-root-relative paths. Rebase before
-    // matching, or a nested workspace would find no members and silently classify
-    // every package as absent from the base revision.
+    // the git root, while `ls_tree_manifests` yields git-root-relative paths. Rebase
+    // before matching, or a nested workspace would find no members and silently
+    // classify every package as absent from the base revision.
     let workspace_prefix = root_rel.strip_suffix("Cargo.toml").unwrap_or("");
-    let workspace_version = crate::inherited::workspace_package_version(&root_doc);
+    let workspace_version = workspace_package_version(&root_doc);
     let mut packages = BTreeMap::new();
-    for path in git.ls_tree_all(commit)? {
+    for path in git.ls_tree_manifests(commit)? {
         let path = git_path(&path);
-        if !path.ends_with("Cargo.toml") {
-            continue;
-        }
-        let dir = path.rsplit_once('/').map_or("", |(d, _)| d);
+        let dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);
         let Some(member_dir) = workspace_relative_dir(dir, workspace_prefix) else {
             continue;
         };
@@ -650,8 +686,9 @@ fn log_untracked(verbose: Verbose, name: &str, count: usize) {
         return;
     }
     verbose.note(format!(
-        "{name}: {count} untracked path(s) match packaging rules and are advisory only; \
-         Cargo would not put them in the .crate so they are not counted as changes"
+        "{name}: {} match packaging rules and are advisory only; \
+         Cargo would not put them in the .crate so they are not counted as changes",
+        plural(count, "untracked path")
     ));
 }
 
@@ -670,12 +707,12 @@ fn read_optional_bytes(path: &Path) -> Result<Option<Vec<u8>>, AppError> {
     match fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(error) if is_not_found(&error) => Ok(None),
-        Err(error) => Err(crate::ReadFileError::caused_by(path, error).into()),
+        Err(error) => Err(ReadFileError::caused_by(path, error).into()),
     }
 }
 
-fn is_not_found(error: &std::io::Error) -> bool {
-    error.kind() == std::io::ErrorKind::NotFound
+fn is_not_found(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::NotFound
 }
 
 // Git-root-relative Cargo.toml path; only used to load historical root manifests.
@@ -712,12 +749,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn inherited_patch_lists_fields() {
-        let patch = inherited_patch(&[InheritedChange {
-            field: "workspace.package.license".to_string(),
-        }]);
-        assert!(patch.contains("workspace.package.license"));
-        assert!(inherited_patch(&[]).is_empty());
+    fn added_file_diff_uses_the_dev_null_placeholder() {
+        let (patch, insertions, deletions) = file_diff("src/new.rs", None, Some(b"one\ntwo\n"));
+        assert!(patch.starts_with("--- /dev/null\n+++ b/src/new.rs\n@@ -0,0 +1,2 @@\n"));
+        assert_eq!((insertions, deletions), (2, 0));
+    }
+
+    #[test]
+    fn deleted_file_diff_uses_the_dev_null_placeholder() {
+        let (patch, insertions, deletions) = file_diff("src/old.rs", Some(b"one\n"), None);
+        assert!(patch.starts_with("--- a/src/old.rs\n+++ /dev/null\n@@ -1,1 +0,0 @@\n"));
+        assert_eq!((insertions, deletions), (0, 1));
+    }
+
+    #[test]
+    fn a_missing_trailing_newline_is_a_visible_change() {
+        let (patch, insertions, deletions) = file_diff("src/lib.rs", Some(b"one\n"), Some(b"one"));
+        assert!(patch.contains("\\ No newline at end of file"));
+        assert_eq!((insertions, deletions), (1, 1));
+    }
+
+    #[test]
+    fn non_utf8_content_is_reported_as_binary() {
+        let (patch, insertions, deletions) =
+            file_diff("logo.png", Some(&[0x00, 0xff]), Some(&[0x00, 0xfe]));
+        assert_eq!(patch, "Binary files a/logo.png and b/logo.png differ\n");
+        assert_eq!((insertions, deletions), (0, 0));
     }
 
     #[test]
@@ -740,12 +797,12 @@ mod tests {
 
     #[test]
     fn is_not_found_matches_not_found_kind() {
-        assert!(is_not_found(&std::io::Error::new(
-            std::io::ErrorKind::NotFound,
+        assert!(is_not_found(&io::Error::new(
+            io::ErrorKind::NotFound,
             "missing",
         )));
-        assert!(!is_not_found(&std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
+        assert!(!is_not_found(&io::Error::new(
+            io::ErrorKind::PermissionDenied,
             "denied",
         )));
     }
@@ -779,8 +836,13 @@ mod tests {
 
     #[test]
     fn unified_diff_hunks_changed_middle_only() {
-        let (patch, insertions, deletions) =
-            unified_diff("src/lib.rs", "keep\nold\nend\n", "keep\nnew\nend\n");
+        let (patch, insertions, deletions) = unified_diff(
+            "src/lib.rs",
+            "keep\nold\nend\n",
+            true,
+            "keep\nnew\nend\n",
+            true,
+        );
         assert!(patch.contains("@@ -2,1 +2,1 @@"));
         assert!(patch.contains("-old"));
         assert!(patch.contains("+new"));
@@ -789,12 +851,14 @@ mod tests {
     }
 
     #[test]
-    fn unified_diff_delete_only_keeps_the_shared_prefix_line() {
-        let (patch, insertions, deletions) = unified_diff("f.rs", "z\nz\n", "z\n");
+    fn unified_diff_anchors_an_empty_side_on_the_preceding_line() {
+        let (patch, insertions, deletions) = unified_diff("f.rs", "z\nz\n", true, "z\n", true);
         assert_eq!((insertions, deletions), (0, 1));
+        assert!(patch.contains("@@ -2,1 +1,0 @@"));
         assert!(patch.contains("-z"));
-        let (patch, insertions, deletions) = unified_diff("f.rs", "z\n", "z\nz\n");
+        let (patch, insertions, deletions) = unified_diff("f.rs", "z\n", true, "z\nz\n", true);
         assert_eq!((insertions, deletions), (1, 0));
+        assert!(patch.contains("@@ -1,0 +2,1 @@"));
         assert!(patch.contains("+z"));
     }
 

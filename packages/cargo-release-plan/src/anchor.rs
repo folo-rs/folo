@@ -23,8 +23,11 @@ pub(crate) struct TimelineEntry {
     pub(crate) commit: String,
     /// Parsed version at this commit, or `None` if the package was absent.
     pub(crate) version: Option<Version>,
-    /// Whether this commit has a first parent that is available to the walk.
-    pub(crate) parent_available: bool,
+    /// Whether this commit has a parent, so reaching it does not prove a root.
+    ///
+    /// A shallow-boundary commit sets this even though its parent is not
+    /// fetched, which is what distinguishes truncated history from a true root.
+    pub(crate) has_parent: bool,
 }
 
 /// Resolves the version-change anchor from a newest-first first-parent timeline.
@@ -60,7 +63,7 @@ pub(crate) fn resolve_anchor(
     }
 
     let last = timeline.last().unwrap_or(first);
-    if last.parent_available {
+    if last.has_parent {
         return Err(ShallowHistoryError::new(package).into());
     }
     Ok(Anchor {
@@ -78,11 +81,11 @@ mod tests {
         text.parse().unwrap()
     }
 
-    fn entry(commit: &str, version: Option<&str>, parent_available: bool) -> TimelineEntry {
+    fn entry(commit: &str, version: Option<&str>, has_parent: bool) -> TimelineEntry {
         TimelineEntry {
             commit: commit.to_string(),
             version: version.map(v),
-            parent_available,
+            has_parent,
         }
     }
 

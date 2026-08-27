@@ -149,7 +149,7 @@ windows = { version = "0.62.0", default-features = false, features = ["std"] }
 cargo-bench-history = [
     "cargo-bench-history",
     # Test-support package that is not an implementation dependency of the CLI.
-    # It rides this group so a faker-only change may increment the whole family.
+    # It belongs to this group so a faker-only change may increment the whole family.
     "cargo-bench-history-faker",
     "cbh_analyze",
     "cbh_cli",

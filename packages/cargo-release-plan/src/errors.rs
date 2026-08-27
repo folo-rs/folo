@@ -12,6 +12,8 @@
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::PathBuf;
 
+use semver::Version;
+
 /// A helper process could not be started.
 #[ohno::error]
 #[display("Failed to spawn `{program}`")]
@@ -231,7 +233,7 @@ impl DuplicateGroupMemberError {
 #[ohno::error]
 #[display("Incrementing version '{version}' overflows a SemVer component")]
 pub(crate) struct VersionOverflowError {
-    version: semver::Version,
+    version: Version,
 }
 
 impl UnwindSafe for VersionOverflowError {}
@@ -239,8 +241,50 @@ impl RefUnwindSafe for VersionOverflowError {}
 
 #[cfg(test)]
 impl VersionOverflowError {
-    pub(crate) fn version(&self) -> &semver::Version {
+    pub(crate) fn version(&self) -> &Version {
         &self.version
+    }
+}
+
+/// A declared version is lower than the version already released at the anchor.
+#[ohno::error]
+#[display(
+    "Package '{package}' declares version {declared}, which is lower than {anchor_version} \
+     released at anchor {anchor_commit}"
+)]
+pub(crate) struct VersionRegressionError {
+    package: String,
+    declared: Version,
+    anchor_version: Version,
+    anchor_commit: String,
+}
+
+impl UnwindSafe for VersionRegressionError {}
+impl RefUnwindSafe for VersionRegressionError {}
+
+#[cfg(test)]
+impl VersionRegressionError {
+    pub(crate) fn package(&self) -> &str {
+        &self.package
+    }
+}
+
+/// A plan asks for a version lower than one a target already declares.
+#[ohno::error]
+#[display("Plan sets '{target}' to {requested}, which is lower than the declared {declared}")]
+pub(crate) struct PlanVersionRegressionError {
+    target: String,
+    requested: Version,
+    declared: Version,
+}
+
+impl UnwindSafe for PlanVersionRegressionError {}
+impl RefUnwindSafe for PlanVersionRegressionError {}
+
+#[cfg(test)]
+impl PlanVersionRegressionError {
+    pub(crate) fn target(&self) -> &str {
+        &self.target
     }
 }
 
@@ -256,6 +300,23 @@ impl RefUnwindSafe for InvalidPackagingPatternError {}
 
 #[cfg(test)]
 impl InvalidPackagingPatternError {
+    pub(crate) fn pattern(&self) -> &str {
+        &self.pattern
+    }
+}
+
+/// A `[workspace] members` / `exclude` entry is not a valid path pattern.
+#[ohno::error]
+#[display("Invalid workspace member pattern '{pattern}'")]
+pub(crate) struct InvalidMemberPatternError {
+    pattern: String,
+}
+
+impl UnwindSafe for InvalidMemberPatternError {}
+impl RefUnwindSafe for InvalidMemberPatternError {}
+
+#[cfg(test)]
+impl InvalidMemberPatternError {
     pub(crate) fn pattern(&self) -> &str {
         &self.pattern
     }
@@ -457,6 +518,30 @@ mod tests {
         RefUnwindSafe
     );
     assert_impl_all!(
+        InvalidMemberPatternError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        VersionRegressionError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        PlanVersionRegressionError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
         MalformedVersionGroupError: Send,
         Sync,
         Debug,
@@ -488,6 +573,8 @@ mod tests {
 
     #[test]
     fn unsupported_plan_schema_error_carries_version() {
+        // An arbitrary unsupported schema revision; the test covers round-tripping
+        // through the error, not revision-compatibility semantics.
         let error = UnsupportedPlanSchemaError::new(9_u32);
         assert_eq!(error.version(), 9);
     }
@@ -514,8 +601,19 @@ mod tests {
 
     #[test]
     fn version_overflow_error_carries_version() {
-        let version: semver::Version = "1.2.3".parse().unwrap();
+        // An arbitrary ordinary semantic version; the test covers retained
+        // context, not the overflow arithmetic that produces the error.
+        let version: Version = "1.2.3".parse().unwrap();
         let error = VersionOverflowError::new(version.clone());
         assert_eq!(error.version(), &version);
+    }
+
+    #[test]
+    fn version_regression_error_names_package() {
+        // Arbitrary ordering-valid versions; the test covers retained context.
+        let declared: Version = "0.1.0".parse().unwrap();
+        let anchor: Version = "0.2.0".parse().unwrap();
+        let error = VersionRegressionError::new("nm", declared, anchor, "abc123");
+        assert_eq!(error.package(), "nm");
     }
 }

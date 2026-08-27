@@ -1,7 +1,7 @@
 //! Hermetic Git helpers for cargo-release-plan integration tests.
 //!
-//! Every `git` invocation pins identity and throughput config so tests do not
-//! depend on the host or user configuration.
+//! Git configuration is pinned by `Fixture` so tests do not depend on host or
+//! user settings.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,11 +15,32 @@ pub(crate) struct Fixture {
 }
 
 impl Fixture {
-    pub(crate) fn new() -> Self {
+    /// Creates the repository and writes the workspace manifest.
+    ///
+    /// `extra` is appended to the root manifest, so a caller can add tables such
+    /// as `[workspace.metadata.release-plan.groups]` or `[workspace.package]`.
+    pub(crate) fn new(extra: &str) -> Self {
         let dir = TempDir::new().unwrap();
         let fixture = Self { dir };
         fixture.git(&["init", "-b", "main"]);
+        fixture.write_workspace(extra);
         fixture
+    }
+
+    /// Rewrites the root manifest, replacing the tables `new` appended.
+    pub(crate) fn write_workspace(&self, extra: &str) {
+        // Ordinary supported manifest revisions so `cargo metadata` accepts the
+        // generated workspace. Tests do not cover resolver or edition behavior.
+        self.write(
+            "Cargo.toml",
+            &format!(
+                r#"[workspace]
+members = ["packages/*"]
+resolver = "2"
+{extra}
+"#
+            ),
+        );
     }
 
     pub(crate) fn path(&self) -> &Path {
@@ -72,21 +93,6 @@ impl Fixture {
     pub(crate) fn sha(&self, rev: &str) -> String {
         self.git(&["rev-parse", rev]).trim().to_string()
     }
-}
-
-pub(crate) fn write_workspace(fixture: &Fixture, extra: &str) {
-    // Ordinary supported manifest revisions so `cargo metadata` accepts the
-    // generated workspace. Tests do not cover resolver or edition behavior.
-    fixture.write(
-        "Cargo.toml",
-        &format!(
-            r#"[workspace]
-members = ["packages/*"]
-resolver = "2"
-{extra}
-"#
-        ),
-    );
 }
 
 pub(crate) fn write_package(fixture: &Fixture, name: &str, version: &str, extra: &str) {

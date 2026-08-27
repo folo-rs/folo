@@ -1,16 +1,17 @@
 //! End-to-end classification and apply tests against hermetic Git fixtures.
 //!
-//! Each test drives [`cargo_release_plan::run`] directly. Git identity, signing,
-//! and autogc are pinned by [`common::Fixture`]. Integer literals assigned to
-//! unused locals in generated Rust sources are arbitrary byte-change markers.
-
-mod common;
+//! Each test drives [`cargo_release_plan::run`] directly. Git configuration is
+//! pinned by [`common::Fixture`] so tests do not depend on host or user
+//! settings. Integer literals assigned to unused locals in generated Rust
+//! sources are arbitrary byte-change markers.
 
 use std::fs;
+use std::process::Command;
 
 use cargo_release_plan::{CheckFormat, RunInput, RunOutcome, run};
+use tempfile::TempDir;
 
-use crate::common::{Fixture, write_package, write_workspace};
+use crate::common::{Fixture, write_package};
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
@@ -30,7 +31,7 @@ fn increment_early_in_a_branch_with_later_changes_is_releasing() {
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn unreleased_content_already_on_base_fails_check() {
+fn content_already_on_base_has_unreleased_changes() {
     let fixture = seeded_package();
     fixture.write("packages/demo/src/lib.rs", "pub fn f() { let _ = 2; }\n");
     fixture.commit("content without version bump");
@@ -59,10 +60,8 @@ fn unreleased_content_already_on_base_fails_check() {
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn group_closure_with_unpublished_member_is_consistent() {
-    let fixture = Fixture::new();
-    write_workspace(
-        &fixture,
+fn group_closure_with_member_absent_from_base_is_consistent() {
+    let fixture = Fixture::new(
         r#"
 [workspace.metadata.release-plan.groups]
 g = ["alpha", "beta"]
@@ -72,7 +71,7 @@ g = ["alpha", "beta"]
     fixture.commit("alpha only");
     let base = fixture.sha("HEAD");
     write_package(&fixture, "beta", "0.1.0", "");
-    fixture.commit("add unpublished group member");
+    fixture.commit("add group member absent from base");
 
     let (passed, message) = check(&fixture, &base);
     assert!(passed, "{message}");
@@ -81,9 +80,7 @@ g = ["alpha", "beta"]
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn apply_rewrites_exact_pins_and_expands_groups() {
-    let fixture = Fixture::new();
-    write_workspace(
-        &fixture,
+    let fixture = Fixture::new(
         r#"
 [workspace.metadata.release-plan.groups]
 g = ["shell", "shell_impl"]
@@ -163,9 +160,8 @@ fn apply_dry_run_does_not_write() {
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn deleted_packaged_file_is_unreleased() {
-    let fixture = Fixture::new();
-    write_workspace(&fixture, "");
+fn deleted_packaged_file_has_unreleased_changes() {
+    let fixture = Fixture::new("");
     write_package(
         &fixture,
         "demo",
@@ -186,9 +182,8 @@ fn deleted_packaged_file_is_unreleased() {
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn path_dropped_from_include_is_unreleased() {
-    let fixture = Fixture::new();
-    write_workspace(&fixture, "");
+fn path_dropped_from_include_has_unreleased_changes() {
+    let fixture = Fixture::new("");
     write_package(
         &fixture,
         "demo",
@@ -209,8 +204,7 @@ fn path_dropped_from_include_is_unreleased() {
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn moved_package_directory_is_compared_by_name() {
-    let fixture = Fixture::new();
-    write_workspace(&fixture, "");
+    let fixture = Fixture::new("");
     write_package(&fixture, "demo", "0.1.0", "");
     fixture.commit("original dir");
     let base = fixture.sha("HEAD");
@@ -236,9 +230,7 @@ fn moved_package_directory_is_compared_by_name() {
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn workspace_inherited_field_change_marks_inheriting_package() {
-    let fixture = Fixture::new();
-    write_workspace(
-        &fixture,
+    let fixture = Fixture::new(
         r#"
 [workspace.package]
 license = "MIT"
@@ -247,8 +239,7 @@ license = "MIT"
     write_package(&fixture, "demo", "0.1.0", "license.workspace = true\n");
     fixture.commit("inherit license");
     let base = fixture.sha("HEAD");
-    write_workspace(
-        &fixture,
+    fixture.write_workspace(
         r#"
 [workspace.package]
 license = "Apache-2.0"
@@ -260,14 +251,15 @@ license = "Apache-2.0"
     assert!(!passed, "{message}");
     let report = report_json(&fixture, &base);
     assert!(report.contains("workspace.package.license"));
-    let patch = fs::read_to_string(fixture.path().join("out/diffs/demo.patch")).unwrap();
-    assert!(patch.contains("Inherited workspace values changed"));
-    assert!(patch.contains("workspace.package.license"));
+    assert!(report.contains("\"source\": \"inherited\""));
+    // Inherited values are not released content, so they carry no file diff and
+    // the package gets no patch artifact.
+    assert!(!fixture.path().join("out/diffs/demo.patch").exists());
 }
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn manifest_reformat_without_version_change_is_unreleased() {
+fn manifest_reformat_without_version_change_has_unreleased_changes() {
     let fixture = seeded_package();
     let base = fixture.sha("HEAD");
     fixture.write(
@@ -312,12 +304,16 @@ fn shallow_history_without_a_version_change_is_an_error() {
     // Same declared version, second commit. A clone that contains only HEAD
     // cannot see the creation commit, so classification must error rather than
     // pass.
-    let clone = tempfile::TempDir::new().unwrap();
-    let mut command = std::process::Command::new("git");
+    let clone = TempDir::new().unwrap();
+    let mut command = Command::new("git");
     command.args([
         "-c",
         "gc.auto=0",
         "clone",
+        // The source is a local path, for which Git's default local-clone
+        // optimization copies the whole object store and ignores the requested
+        // depth. Forcing the regular transport is what makes `--depth` produce
+        // an actual shallow boundary here.
         "--no-local",
         "--depth",
         "1",
@@ -349,9 +345,7 @@ fn shallow_history_without_a_version_change_is_an_error() {
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn inconsistent_group_fails_check_even_when_content_is_unchanged() {
-    let fixture = Fixture::new();
-    write_workspace(
-        &fixture,
+    let fixture = Fixture::new(
         r#"
 [workspace.metadata.release-plan.groups]
 g = ["alpha", "beta"]
@@ -386,7 +380,7 @@ g = ["alpha", "beta"]
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
-fn added_packaged_file_is_unreleased() {
+fn added_packaged_file_has_unreleased_changes() {
     let fixture = seeded_package();
     let base = fixture.sha("HEAD");
     fixture.write("packages/demo/README.md", "hello\n");
@@ -439,9 +433,7 @@ fn new_package_on_the_branch_is_releasing() {
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn apply_replaces_workspace_inherited_version() {
-    let fixture = Fixture::new();
-    write_workspace(
-        &fixture,
+    let fixture = Fixture::new(
         r#"
 [workspace.package]
 version = "0.1.0"
@@ -477,9 +469,31 @@ edition = "2021"
     assert!(!manifest.contains("version.workspace"));
 }
 
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn declared_version_below_the_anchor_is_an_error() {
+    let fixture = seeded_package();
+    write_package(&fixture, "demo", "0.2.0", "");
+    fixture.commit("release 0.2.0");
+    let base = fixture.sha("HEAD");
+    write_package(&fixture, "demo", "0.1.5", "");
+    fixture.commit("downgrade");
+
+    let result = run(&RunInput::Check {
+        base,
+        manifest_path: fixture.manifest(),
+        format: CheckFormat::Text,
+        verify_packaging: false,
+        verbose: false,
+    });
+    assert!(
+        result.is_err(),
+        "a version below the anchor must not classify, got {result:?}"
+    );
+}
+
 fn seeded_package() -> Fixture {
-    let fixture = Fixture::new();
-    write_workspace(&fixture, "");
+    let fixture = Fixture::new("");
     write_package(&fixture, "demo", "0.1.0", "");
     fixture.commit("seed");
     fixture
@@ -510,3 +524,5 @@ fn report_json(fixture: &Fixture, base: &str) -> String {
     .unwrap();
     fs::read_to_string(out_dir.join("report.json")).unwrap()
 }
+
+mod common;

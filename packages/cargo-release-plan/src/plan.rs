@@ -13,9 +13,9 @@ use serde::Deserialize;
 
 use crate::groups::Groups;
 use crate::{
-    ConflictingPlanVersionError, InvalidVersionError, PlanIncrementSpecError, SCHEMA_VERSION,
-    UnknownIncrementLevelError, UnknownPlanTargetError, UnsupportedPlanSchemaError,
-    VersionOverflowError,
+    ConflictingPlanVersionError, InvalidVersionError, PlanIncrementSpecError,
+    PlanVersionRegressionError, SCHEMA_VERSION, UnknownIncrementLevelError, UnknownPlanTargetError,
+    UnsupportedPlanSchemaError, VersionOverflowError,
 };
 
 /// Requested version increment relative to the highest declared member version.
@@ -49,19 +49,13 @@ pub(crate) struct PlanIncrement {
     pub(crate) version: Option<String>,
 }
 
-/// Parsed form of exactly one of `level` or `version`.
-enum IncrementSpec {
-    Level(IncrementLevel),
-    Version(Version),
-}
-
 impl PlanIncrement {
     fn spec(&self) -> Result<IncrementSpec, AppError> {
         match (&self.level, &self.version) {
             (Some(level), None) => {
-                let parsed = IncrementLevel::from_str(level)
+                let level = IncrementLevel::from_str(level)
                     .map_err(|()| UnknownIncrementLevelError::new(&self.name, level))?;
-                Ok(IncrementSpec::Level(parsed))
+                Ok(IncrementSpec::Level(level))
             }
             (None, Some(version)) => {
                 let parsed = version
@@ -74,6 +68,12 @@ impl PlanIncrement {
             }
         }
     }
+}
+
+/// Parsed form of exactly one of `level` or `version`.
+enum IncrementSpec {
+    Level(IncrementLevel),
+    Version(Version),
 }
 
 /// On-disk plan file.
@@ -114,31 +114,28 @@ pub(crate) fn expand_plan(
         let targets = resolve_targets(&increment.name, groups, publishable)?;
         let keys = decision_keys(&targets, groups);
         match increment.spec()? {
-            IncrementSpec::Level(parsed) => {
+            IncrementSpec::Level(level) => {
                 for key in keys {
                     let decision = decisions.entry(key).or_insert(Decision {
                         level: None,
                         version: None,
                     });
-                    decision.level = Some(
-                        decision
-                            .level
-                            .map_or(parsed, |existing| existing.max(parsed)),
-                    );
+                    decision.level =
+                        Some(decision.level.map_or(level, |existing| existing.max(level)));
                 }
             }
-            IncrementSpec::Version(parsed) => {
+            IncrementSpec::Version(version) => {
                 for key in keys {
                     let decision = decisions.entry(key.clone()).or_insert(Decision {
                         level: None,
                         version: None,
                     });
                     if let Some(existing) = &decision.version
-                        && existing != &parsed
+                        && existing != &version
                     {
                         return Err(ConflictingPlanVersionError::new(key).into());
                     }
-                    decision.version = Some(parsed.clone());
+                    decision.version = Some(version.clone());
                 }
             }
         }
@@ -147,18 +144,26 @@ pub(crate) fn expand_plan(
     let mut packages = BTreeMap::new();
     for (key, decision) in decisions {
         let members = members_for_key(&key, groups, publishable);
+        let highest = members
+            .iter()
+            .filter_map(|member| current.get(member))
+            .max()
+            .cloned();
         let new_version = if let Some(version) = decision.version {
+            // An explicit version still has to move forwards: a lower one would
+            // re-publish a released version with different content.
+            // Ref: docs/design.md, "Version monotonicity".
+            if let Some(highest) = &highest
+                && &version < highest
+            {
+                return Err(PlanVersionRegressionError::new(&key, version, highest.clone()).into());
+            }
             version
         } else if let Some(level) = decision.level {
-            let Some(max) = members
-                .iter()
-                .filter_map(|member| current.get(member))
-                .max()
-                .cloned()
-            else {
+            let Some(highest) = highest else {
                 continue;
             };
-            increment_version(&max, level)?
+            increment_version(&highest, level)?
         } else {
             continue;
         };
@@ -177,11 +182,17 @@ fn resolve_targets(
 ) -> Result<Vec<String>, AppError> {
     let group_members = groups.members(name);
     if !group_members.is_empty() {
-        return Ok(group_members
+        let targets: Vec<String> = group_members
             .iter()
             .filter(|member| publishable.contains_key(*member))
             .cloned()
-            .collect());
+            .collect();
+        if targets.is_empty() {
+            // Silently dropping the entry would report success while applying
+            // nothing, which reads as an accepted plan that had no effect.
+            return Err(UnknownPlanTargetError::new(name).into());
+        }
+        return Ok(targets);
     }
     if publishable.contains_key(name) {
         return Ok(groups
@@ -280,7 +291,7 @@ mod tests {
     #[test]
     fn expands_group_when_one_member_is_listed() {
         let plan = PlanFile {
-            schema_version: 1,
+            schema_version: SCHEMA_VERSION,
             increments: vec![PlanIncrement {
                 name: "nm_impl".to_string(),
                 level: Some("patch".to_string()),
@@ -296,7 +307,7 @@ mod tests {
     #[test]
     fn highest_level_wins_inside_a_group() {
         let plan = PlanFile {
-            schema_version: 1,
+            schema_version: SCHEMA_VERSION,
             increments: vec![
                 PlanIncrement {
                     name: "nm".to_string(),
@@ -318,7 +329,7 @@ mod tests {
     #[test]
     fn explicit_version_is_applied_to_the_group() {
         let plan = PlanFile {
-            schema_version: 1,
+            schema_version: SCHEMA_VERSION,
             increments: vec![PlanIncrement {
                 name: "nm".to_string(),
                 level: None,
@@ -344,7 +355,7 @@ mod tests {
     #[test]
     fn rejects_unknown_target() {
         let plan = PlanFile {
-            schema_version: 1,
+            schema_version: SCHEMA_VERSION,
             increments: vec![PlanIncrement {
                 name: "ghost".to_string(),
                 level: Some("patch".to_string()),
@@ -358,7 +369,7 @@ mod tests {
     #[test]
     fn rejects_missing_level_and_version() {
         let plan = PlanFile {
-            schema_version: 1,
+            schema_version: SCHEMA_VERSION,
             increments: vec![PlanIncrement {
                 name: "events".to_string(),
                 level: None,
@@ -374,7 +385,7 @@ mod tests {
         let mut versions = current();
         versions.insert("nm_impl".to_string(), v("0.1.50"));
         let plan = PlanFile {
-            schema_version: 1,
+            schema_version: SCHEMA_VERSION,
             increments: vec![PlanIncrement {
                 name: "nm".to_string(),
                 level: Some("patch".to_string()),
@@ -389,7 +400,7 @@ mod tests {
     #[test]
     fn rejects_conflicting_explicit_versions() {
         let plan = PlanFile {
-            schema_version: 1,
+            schema_version: SCHEMA_VERSION,
             increments: vec![
                 PlanIncrement {
                     name: "nm".to_string(),
@@ -410,7 +421,7 @@ mod tests {
     #[test]
     fn ungrouped_package_is_incremented_alone() {
         let plan = PlanFile {
-            schema_version: 1,
+            schema_version: SCHEMA_VERSION,
             increments: vec![PlanIncrement {
                 name: "events".to_string(),
                 level: Some("patch".to_string()),
@@ -425,7 +436,7 @@ mod tests {
     #[test]
     fn major_level_increments_the_major_component() {
         let plan = PlanFile {
-            schema_version: 1,
+            schema_version: SCHEMA_VERSION,
             increments: vec![PlanIncrement {
                 name: "events".to_string(),
                 level: Some("major".to_string()),
@@ -441,5 +452,52 @@ mod tests {
         let max = Version::new(0, 0, u64::MAX);
         let error = increment_version(&max, IncrementLevel::Patch).unwrap_err();
         assert!(error.find_source::<VersionOverflowError>().is_some());
+    }
+
+    #[test]
+    fn explicit_version_below_the_declared_version_is_rejected() {
+        let plan = PlanFile {
+            schema_version: SCHEMA_VERSION,
+            increments: vec![PlanIncrement {
+                name: "events".to_string(),
+                level: None,
+                version: Some("0.1.0".to_string()),
+            }],
+        };
+        let error = expand_plan(&plan, &nm_groups(), &current(), &current()).unwrap_err();
+        let regression = error.find_source::<PlanVersionRegressionError>().unwrap();
+        assert_eq!(regression.target(), "events");
+    }
+
+    #[test]
+    fn explicit_version_equal_to_the_declared_version_is_accepted() {
+        // Equality is how a lagging group member is raised into alignment.
+        let mut current = current();
+        current.insert("nm_impl".to_string(), v("0.0.9"));
+        let plan = PlanFile {
+            schema_version: SCHEMA_VERSION,
+            increments: vec![PlanIncrement {
+                name: "nm".to_string(),
+                level: None,
+                version: Some("0.1.0".to_string()),
+            }],
+        };
+        let expanded = expand_plan(&plan, &nm_groups(), &current, &current).unwrap();
+        assert_eq!(expanded.packages.get("nm_impl"), Some(&v("0.1.0")));
+    }
+
+    #[test]
+    fn group_without_publishable_members_is_rejected() {
+        let publishable = BTreeMap::from([("events".to_string(), v("0.2.0"))]);
+        let plan = PlanFile {
+            schema_version: SCHEMA_VERSION,
+            increments: vec![PlanIncrement {
+                name: "nm".to_string(),
+                level: Some("patch".to_string()),
+                version: None,
+            }],
+        };
+        let error = expand_plan(&plan, &nm_groups(), &current(), &publishable).unwrap_err();
+        assert!(error.find_source::<UnknownPlanTargetError>().is_some());
     }
 }

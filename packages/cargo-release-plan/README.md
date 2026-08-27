@@ -4,9 +4,10 @@ A Cargo subcommand that classifies every publishable workspace package against i
 version **anchor**, reports changes to **released content**, and applies an
 approved increment plan (group expansion, `=`-pin rewrites, lockfile refresh).
 
-The version increment is the release event. A package fails the check when its
-released content differs from the last parsed `version` change on the base
-revision's first-parent line, and the declared version has not increased.
+A package has unreleased changes when its released content differs between its
+version anchor and the work tree without an increase in its declared version.
+The anchor is the most recent commit on the base revision's first-parent line in
+which the package's parsed `version` changed.
 
 ## Usage
 
@@ -31,17 +32,27 @@ with unreleased changes. The JSON names each package's status, anchor, changed
 paths, inherited workspace fields, intra-workspace dependencies, and version
 groups.
 
+Each `.patch` is a zero-context unified diff in the shape `diff -U0` produces,
+so it can be piped into standard tooling. Inherited workspace value changes are
+not diffs and appear only as `changed` entries with `source: "inherited"` in
+`report.json`.
+
 ### `check`
 
 Exits non-zero when any publishable package has unreleased changes or any
-version group declares inconsistent versions. Failure text names the
-`increment-versions` skill.
+version group declares inconsistent versions. Failure text describes the
+self-contained recovery workflow: run `report`, prepare a plan, and run `apply`.
+In this repository it additionally names the `increment-versions` agent skill,
+which automates that workflow.
 
 `--format github` also emits GitHub Actions workflow annotations.
 
 `--verify-packaging` cross-checks this tool's released-content rules against
 `cargo package --list`. Divergences are printed as warnings and do not fail the
-check.
+check: `cargo package` requires a clean work tree, a resolvable dependency
+graph, and a full pack, so gating on it would trade the tool's offline,
+no-resolve guarantee for false failures. A divergence is evidence that the rules
+need fixing, not a condition to tolerate.
 
 ### `apply`
 
@@ -70,7 +81,8 @@ The plan schema is:
 ```
 
 `name` is a package name or a version-group name. `level` is `major`, `minor`,
-or `patch`. An explicit `version` is used as-is for that target (and its group).
+or `patch`. An explicit `version` is used as-is for that target (and its group),
+and is rejected when it is lower than a version the target already declares.
 Each increment must supply exactly one of `level` or `version`.
 
 ### Plan and report schema
@@ -94,7 +106,8 @@ change increments it.
 | `released`           | version unchanged, released content unchanged            | pass     |
 
 Packages with `publish = false` are ignored. `Cargo.lock` is never released
-content. Untracked files are advisory only.
+content. Untracked files are advisory only. Versions only move forwards: a
+declared version below the anchor's version is an error rather than a status.
 
 Version groups are declared in the workspace root as
 `[workspace.metadata.release-plan.groups]`. Members share a declared version; if

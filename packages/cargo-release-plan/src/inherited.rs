@@ -133,16 +133,16 @@ pub(crate) fn is_workspace_inherit(item: &Item) -> bool {
     }
 }
 
-fn workspace_package_value(doc: &DocumentMut, key: &str) -> Option<String> {
+fn workspace_package_value(doc: &DocumentMut, key: &str) -> Option<CanonicalValue> {
     let package = doc
         .get("workspace")?
         .as_table_like()?
         .get("package")?
         .as_table_like()?;
-    Some(fingerprint(package.get(key)?))
+    Some(canonical_item(package.get(key)?))
 }
 
-fn workspace_dependency_fields(doc: &DocumentMut, name: &str) -> BTreeMap<String, String> {
+fn workspace_dependency_fields(doc: &DocumentMut, name: &str) -> BTreeMap<String, CanonicalValue> {
     let mut fields = BTreeMap::new();
     let Some(deps) = doc
         .get("workspace")
@@ -156,66 +156,90 @@ fn workspace_dependency_fields(doc: &DocumentMut, name: &str) -> BTreeMap<String
         return fields;
     };
     match item {
-        Item::Value(Value::String(s)) => {
-            fields.insert("version".to_string(), s.value().clone());
+        Item::Value(Value::String(text)) => {
+            fields.insert(
+                "version".to_string(),
+                CanonicalValue::Text(text.value().clone()),
+            );
         }
         Item::Value(Value::InlineTable(table)) => {
             for (key, value) in table {
-                fields.insert(key.to_string(), value_fingerprint(value));
+                fields.insert(key.to_string(), canonical_value(value));
             }
         }
         Item::Table(table) => {
             for (key, value) in table {
-                fields.insert(key.to_string(), fingerprint(value));
+                fields.insert(key.to_string(), canonical_item(value));
             }
         }
         other => {
-            fields.insert("value".to_string(), fingerprint(other));
+            fields.insert("value".to_string(), canonical_item(other));
         }
     }
     fields
 }
 
-fn fingerprint(item: &Item) -> String {
+/// A TOML value reduced to the structure that matters for change detection.
+///
+/// Comparison drives whether an inherited value changed, so the representation
+/// must keep values of different shapes distinguishable: a flattened text
+/// rendering would make `["a,b"]` and `["a", "b"]` compare equal and hide a real
+/// root-manifest edit. Formatting, comments, and key order are deliberately
+/// discarded because they do not alter what a package inherits.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum CanonicalValue {
+    Text(String),
+    Integer(i64),
+    /// Raw bits, so that equal values compare equal without float ordering rules.
+    Float(u64),
+    Boolean(bool),
+    Datetime(String),
+    Array(Vec<Self>),
+    Table(BTreeMap<String, Self>),
+    ArrayOfTables(Vec<Self>),
+    Absent,
+}
+
+fn canonical_item(item: &Item) -> CanonicalValue {
     match item {
-        Item::Value(value) => value_fingerprint(value),
-        Item::Table(table) => {
-            let mut parts: Vec<String> = table
+        Item::Value(value) => canonical_value(value),
+        Item::Table(table) => CanonicalValue::Table(
+            table
                 .iter()
-                .map(|(k, v)| format!("{k}={}", fingerprint(v)))
-                .collect();
-            parts.sort();
-            parts.join(",")
-        }
-        Item::ArrayOfTables(array) => array
-            .iter()
-            .map(|table| fingerprint(&Item::Table(table.clone())))
-            .collect::<Vec<_>>()
-            .join(";"),
-        Item::None => String::new(),
+                .map(|(key, value)| (key.to_string(), canonical_item(value)))
+                .collect(),
+        ),
+        Item::ArrayOfTables(array) => CanonicalValue::ArrayOfTables(
+            array
+                .iter()
+                .map(|table| {
+                    CanonicalValue::Table(
+                        table
+                            .iter()
+                            .map(|(key, value)| (key.to_string(), canonical_item(value)))
+                            .collect(),
+                    )
+                })
+                .collect(),
+        ),
+        Item::None => CanonicalValue::Absent,
     }
 }
 
-fn value_fingerprint(value: &Value) -> String {
+fn canonical_value(value: &Value) -> CanonicalValue {
     match value {
-        Value::String(s) => s.value().clone(),
-        Value::Integer(i) => i.to_string(),
-        Value::Float(f) => f.to_string(),
-        Value::Boolean(b) => b.to_string(),
-        Value::Datetime(d) => d.to_string(),
-        Value::Array(array) => array
-            .iter()
-            .map(value_fingerprint)
-            .collect::<Vec<_>>()
-            .join(","),
-        Value::InlineTable(table) => {
-            let mut parts: Vec<String> = table
+        Value::String(text) => CanonicalValue::Text(text.value().clone()),
+        Value::Integer(number) => CanonicalValue::Integer(*number.value()),
+        Value::Float(number) => CanonicalValue::Float(number.value().to_bits()),
+        Value::Boolean(flag) => CanonicalValue::Boolean(*flag.value()),
+        Value::Datetime(stamp) => CanonicalValue::Datetime(stamp.value().to_string()),
+        Value::Array(array) => CanonicalValue::Array(array.iter().map(canonical_value).collect()),
+        Value::InlineTable(table) => CanonicalValue::Table(
+            table
                 .iter()
-                .map(|(k, v)| format!("{k}={}", value_fingerprint(v)))
-                .collect();
-            parts.sort();
-            parts.join(",")
-        }
+                .map(|(key, value)| (key.to_string(), canonical_value(value)))
+                .collect(),
+        ),
     }
 }
 
@@ -266,6 +290,27 @@ semver = { version = "1.0.0" }
 "#);
         let keys = collect_inherited_keys(&package);
         assert_eq!(keys.dependencies, vec!["bar"]);
+    }
+
+    #[test]
+    fn distinct_array_shapes_are_not_conflated() {
+        // A flattened text rendering would make these compare equal and hide a
+        // real change to an inherited dependency's feature list.
+        let keys = InheritedKeys {
+            package: vec![],
+            dependencies: vec!["bar".to_string()],
+        };
+        let old =
+            doc("[workspace.dependencies]\nbar = { version = \"1\", features = [\"a,b\"] }\n");
+        let new =
+            doc("[workspace.dependencies]\nbar = { version = \"1\", features = [\"a\", \"b\"] }\n");
+        let changes = inherited_changes(&keys, &old, &new);
+        assert_eq!(
+            changes,
+            vec![InheritedChange {
+                field: "workspace.dependencies.bar.features".to_string(),
+            }]
+        );
     }
 
     #[test]

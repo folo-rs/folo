@@ -24,5 +24,6 @@ mod packaging;
 mod plan;
 mod report;
 mod run;
+mod text;
 mod types;
 mod verbose;

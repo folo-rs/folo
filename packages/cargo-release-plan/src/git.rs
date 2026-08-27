@@ -1,14 +1,24 @@
 // Git access via `git` subprocesses.
 //
 // The design forbids git2/gix; every read of history, trees, and diffs goes
-// through this type.
+// through this type. Ref: docs/implementation.md, "Subprocess boundaries".
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use ohno::AppError;
 
-use crate::UnresolvedBaseError;
-use crate::command::{run_capture, run_capture_ok};
+use crate::command::{run_capture, run_capture_bytes, run_capture_ok};
+use crate::{CommandFailedError, UnresolvedBaseError};
+
+/// Name Cargo requires for a manifest.
+const MANIFEST_FILE_NAME: &str = "Cargo.toml";
+
+/// Pathspec matching manifests below the repository root.
+///
+/// The `glob` magic makes `**` cross directory boundaries, which the default
+/// pathspec syntax does not do.
+const MANIFEST_GLOB_PATHSPEC: &str = ":(glob)**/Cargo.toml";
 
 /// A Git repository rooted at `root`.
 #[derive(Clone, Debug)]
@@ -60,11 +70,12 @@ impl GitRepo {
             .collect())
     }
 
-    /// Whether `commit` has a first parent that Git can resolve.
+    /// Whether `commit` has a parent that the walk must not treat as a true root.
     ///
-    /// A true root has no `parent` header. A shallow-boundary commit still has
-    /// that header even when Git cannot resolve `commit^`.
-    pub(crate) fn has_resolvable_parent(&self, commit: &str) -> Result<bool, AppError> {
+    /// A true root commit has no `parent` header. A shallow-boundary commit has
+    /// one even though Git cannot resolve `commit^`, and reports `true` here so
+    /// the caller reports truncated history instead of a root.
+    pub(crate) fn has_parent_or_is_shallow_boundary(&self, commit: &str) -> Result<bool, AppError> {
         if !self.commit_has_parent_header(commit)? {
             return Ok(false);
         }
@@ -97,12 +108,12 @@ impl GitRepo {
                 "--first-parent",
                 rev,
                 "--",
-                "Cargo.toml",
-                ":(glob)**/Cargo.toml",
+                MANIFEST_FILE_NAME,
+                MANIFEST_GLOB_PATHSPEC,
             ],
             &self.root,
         )?;
-        let touching: std::collections::HashSet<&str> = stdout
+        let touching: HashSet<&str> = stdout
             .lines()
             .map(str::trim)
             .filter(|line| !line.is_empty())
@@ -146,11 +157,11 @@ impl GitRepo {
         rel_path: &str,
     ) -> Result<Option<Vec<u8>>, AppError> {
         let spec = format!("{}:{}", commit, git_path(rel_path));
-        match crate::command::run_capture_bytes("git", &["show", &spec], &self.root) {
+        match run_capture_bytes("git", &["show", &spec], &self.root) {
             Ok(bytes) => Ok(Some(bytes)),
             Err(error) => {
                 if error
-                    .find_source::<crate::CommandFailedError>()
+                    .find_source::<CommandFailedError>()
                     .is_some_and(|failed| is_absent_git_path(failed.stderr()))
                 {
                     Ok(None)
@@ -208,15 +219,26 @@ impl GitRepo {
         Ok(split_z(&stdout))
     }
 
-    /// Every path at `commit` (used to find `Cargo.toml` files when listing members).
-    pub(crate) fn ls_tree_all(&self, commit: &str) -> Result<Vec<String>, AppError> {
+    /// Manifest paths at `commit`, used to reconstruct historical workspace members.
+    ///
+    /// `git ls-tree` takes literal path prefixes and rejects pathspec magic, so
+    /// the tree is listed once and the manifests are selected here.
+    pub(crate) fn ls_tree_manifests(&self, commit: &str) -> Result<Vec<String>, AppError> {
         let stdout = run_capture(
             "git",
             &["ls-tree", "-r", "--name-only", "-z", commit],
             &self.root,
         )?;
-        Ok(split_z(&stdout))
+        Ok(split_z(&stdout)
+            .into_iter()
+            .filter(|path| is_manifest_path(path))
+            .collect())
     }
+}
+
+/// Whether a repository-relative tree path names a Cargo manifest.
+fn is_manifest_path(path: &str) -> bool {
+    path.rsplit('/').next() == Some(MANIFEST_FILE_NAME)
 }
 
 /// Git pathspecs use `/` even on Windows.
@@ -224,8 +246,10 @@ pub(crate) fn git_path(path: &str) -> String {
     path.replace('\\', "/")
 }
 
-/// Joins a workspace-root-relative path onto the git-root-relative workspace
-/// prefix so `git ls-files` / `git show` pathspecs match the repository.
+/// Joins a workspace-relative path onto the workspace's git prefix.
+///
+/// The result is a pathspec that `git ls-files` and `git show` resolve against
+/// the repository root.
 pub(crate) fn join_git_rel(git_root: &Path, workspace_root: &Path, workspace_rel: &str) -> String {
     let prefix = git_path(
         &workspace_root
@@ -252,10 +276,14 @@ fn is_absent_git_path(stderr: &str) -> bool {
         || stderr.contains("did not match")
 }
 
+/// Splits NUL-terminated `git` path output into paths.
+///
+/// With `-z` the NUL already delimits every record, so whitespace inside a field
+/// is filename data and must survive. Only the empty field after the final
+/// terminator is dropped.
 fn split_z(stdout: &str) -> Vec<String> {
     stdout
         .split('\0')
-        .map(str::trim)
         .filter(|part| !part.is_empty())
         .map(ToOwned::to_owned)
         .collect()
@@ -278,6 +306,15 @@ mod tests {
             "fatal: Path 'x' did not match any files"
         ));
         assert!(!is_absent_git_path("fatal: bad object abc"));
+    }
+
+    #[test]
+    fn manifest_paths_are_selected_by_file_name() {
+        assert!(is_manifest_path("Cargo.toml"));
+        assert!(is_manifest_path("packages/foo/Cargo.toml"));
+        assert!(!is_manifest_path("packages/foo/Cargo.toml.bak"));
+        assert!(!is_manifest_path("packages/foo/src/lib.rs"));
+        assert!(!is_manifest_path("packages/Cargo.toml/inner.rs"));
     }
 
     #[test]
@@ -308,5 +345,14 @@ mod tests {
     fn split_z_drops_empty_trailing_field() {
         assert_eq!(split_z("a\0b\0"), vec!["a", "b"]);
         assert!(split_z("").is_empty());
+    }
+
+    #[test]
+    fn split_z_preserves_whitespace_inside_paths() {
+        // With `-z` these characters are filename data, not record separators.
+        assert_eq!(
+            split_z(" leading.rs\0trailing.rs \0mid\nline.rs\0"),
+            vec![" leading.rs", "trailing.rs ", "mid\nline.rs"]
+        );
     }
 }

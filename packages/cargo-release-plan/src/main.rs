@@ -6,13 +6,15 @@ use std::env::args_os;
 use std::process::ExitCode;
 
 use cargo_release_plan::{Cli, RunOutcome, run};
+#[cfg(not(miri))]
+use mimalloc::MiMalloc;
 
 // Same allocator as the other workspace Cargo subcommands (`cargo-detect-package`,
 // `cargo-freeze-deps`). Miri cannot call mimalloc's FFI, so under Miri the
 // default allocator stands in.
 #[cfg(not(miri))]
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: MiMalloc = MiMalloc;
 
 fn main() -> ExitCode {
     let cli = match Cli::from_args_os(args_os()) {

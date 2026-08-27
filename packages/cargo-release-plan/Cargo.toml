@@ -15,6 +15,8 @@ rust-version.workspace = true
 # manifests stay in git. Ref: docs/design.md "Released content".
 include = ["src/**", "README.md"]
 
+# Required so feature-gated public items appear in generated documentation.
+# Ref: docs/api-documentation.md, "Feature-gated documentation".
 [package.metadata.docs.rs]
 all-features = true
 
@@ -27,8 +29,6 @@ allowed_external_types = [
     "clap_builder::derive::CommandFactory",
     "clap_builder::derive::FromArgMatches",
     "clap_builder::derive::Parser",
-    "clap_builder::derive::Subcommand",
-    "clap_builder::derive::ValueEnum",
 ]
 
 [package.metadata.binstall]

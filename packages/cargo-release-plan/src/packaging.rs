@@ -5,6 +5,8 @@
 // `ignore` crate). `Cargo.lock` is never released content: the published lockfile
 // is derived per-crate at pack time and is not a function of the package source.
 
+use std::borrow::Cow;
+
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use ohno::AppError;
 
@@ -37,17 +39,18 @@ impl PackagingRules {
     /// `Cargo.toml` is always released. `Cargo.lock` is never released.
     pub(crate) fn is_released(&self, package_relative_path: &str) -> bool {
         let path = normalize_rel(package_relative_path);
-        if is_cargo_lock(&path) {
+        let path = path.as_ref();
+        if is_cargo_lock(path) {
             return false;
         }
         if path == "Cargo.toml" {
             return true;
         }
         if let Some(include) = &self.include {
-            return include.matched(&path, false).is_ignore();
+            return include.matched(path, false).is_ignore();
         }
         if let Some(exclude) = &self.exclude {
-            return !exclude.matched(&path, false).is_ignore();
+            return !exclude.matched(path, false).is_ignore();
         }
         true
     }
@@ -57,8 +60,18 @@ fn is_cargo_lock(path: &str) -> bool {
     path == "Cargo.lock" || path.ends_with("/Cargo.lock")
 }
 
-fn normalize_rel(path: &str) -> String {
-    path.replace('\\', "/").trim_start_matches("./").to_string()
+/// Rewrites a path into the `/`-separated form the matchers expect.
+///
+/// Classification queries every tracked path of every package, and paths that
+/// already use `/` are the common case, so the already-normalized input borrows
+/// instead of allocating.
+fn normalize_rel(path: &str) -> Cow<'_, str> {
+    let trimmed = path.trim_start_matches("./");
+    if trimmed.contains('\\') {
+        Cow::Owned(trimmed.replace('\\', "/"))
+    } else {
+        Cow::Borrowed(trimmed)
+    }
 }
 
 fn compile_gitignore(patterns: &[String]) -> Result<Gitignore, AppError> {

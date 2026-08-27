@@ -2,7 +2,7 @@
 //
 // Groups are declared in `[workspace.metadata.release-plan.groups]`. Members
 // share a declared version; members absent from the base revision are exempt
-// from that consistency rule so a new crate can join a group before it is
+// from that consistency rule so a new package can join a group before it is
 // published.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -82,22 +82,15 @@ impl Groups {
                 .filter_map(|member| versions.get(*member))
                 .collect();
             let consistent = compared_versions.len() <= 1;
-            // The group version is the highest declared by any member, matching
-            // the increment base `expand_plan` uses. An inconsistent group has
-            // more than one candidate, and the highest is the only one every
-            // member can be raised to without moving a version backwards.
-            let version = compared_versions
+            // Exemption governs consistency only. The group version is the
+            // highest declared by any present member, including exempt ones, so
+            // that it matches the increment base `expand_plan` computes and no
+            // member is ever moved backwards.
+            let version = present
                 .iter()
-                .copied()
+                .filter_map(|member| versions.get(*member))
                 .max()
-                .cloned()
-                .or_else(|| {
-                    present
-                        .iter()
-                        .filter_map(|member| versions.get(*member))
-                        .max()
-                        .cloned()
-                });
+                .cloned();
             out.insert(
                 name.clone(),
                 GroupVerdict {
@@ -176,7 +169,7 @@ mod tests {
         ]);
         let verdicts = groups().verdicts(&versions, &HashSet::new());
         assert!(!verdicts.get("nm").unwrap().consistent);
-        // The reported version is the highest declared by any compared member,
+        // The reported version is the highest declared by any present member,
         // so it can serve as the increment base for the whole group.
         assert_eq!(
             verdicts.get("nm").unwrap().version.as_ref().unwrap(),
@@ -195,6 +188,21 @@ mod tests {
         let nm = verdicts.get("nm").unwrap();
         assert!(nm.consistent);
         assert_eq!(nm.version.as_ref().unwrap(), &v("0.2.0"));
+    }
+
+    #[test]
+    fn exempt_member_still_raises_the_group_version() {
+        // Exemption suppresses the consistency failure but must not lower the
+        // increment base, or `expand_plan` would move the exempt member back.
+        let versions = BTreeMap::from([
+            ("nm".to_string(), v("0.1.0")),
+            ("nm_impl".to_string(), v("0.3.0")),
+        ]);
+        let exempt = HashSet::from(["nm_impl".to_string()]);
+        let verdicts = groups().verdicts(&versions, &exempt);
+        let nm = verdicts.get("nm").unwrap();
+        assert!(nm.consistent);
+        assert_eq!(nm.version.as_ref().unwrap(), &v("0.3.0"));
     }
 
     #[test]
