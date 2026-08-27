@@ -445,7 +445,7 @@ impl MemberPattern {
                 .map_err(|error| InvalidMemberPatternError::caused_by(&literal, error))?;
         }
         matcher
-            .add(&literal)
+            .add(&anchored(&literal))
             .map_err(|error| InvalidMemberPatternError::caused_by(&literal, error))?;
         let matcher = matcher
             .build()
@@ -468,6 +468,20 @@ impl MemberPattern {
             return true;
         }
         self.matcher.matched(dir, true).is_whitelist()
+    }
+}
+
+/// Root-anchors a member pattern for gitignore-style matching.
+///
+/// Cargo resolves `members` and `exclude` globs against the workspace root, but
+/// a gitignore pattern with no separator matches a basename at any depth, so
+/// `foo*` would otherwise pull in `packages/foo` and attribute a nested crate's
+/// files to a workspace that never declared it. A leading `/` restores Cargo's
+/// meaning; a pattern that already carries a separator is anchored either way.
+fn anchored(literal: &str) -> String {
+    match literal.strip_prefix('/') {
+        Some(_) => literal.to_string(),
+        None => format!("/{literal}"),
     }
 }
 
@@ -604,6 +618,25 @@ mod tests {
         let crates = members(&["crates/foo-*"]);
         assert!(is_workspace_member("crates/foo-bar", &crates));
         assert!(!is_workspace_member("crates/foo-bar/nested", &crates));
+    }
+
+    /// Cargo resolves `members` and `exclude` globs against the workspace root,
+    /// where the gitignore matcher backing them would otherwise let a pattern
+    /// with no separator match a directory at any depth — pulling a nested crate
+    /// into a workspace that never declared it and anchoring the wrong package
+    /// directory at that end of the comparison.
+    #[test]
+    fn a_member_pattern_matches_only_at_the_workspace_root() {
+        let bare = members(&["foo*"]);
+        assert!(is_workspace_member("foo-bar", &bare));
+        assert!(!is_workspace_member("packages/foo-bar", &bare));
+
+        let excluded = WorkspaceMembers {
+            members: Vec::new(),
+            exclude: compile_patterns(&["skip".to_string()], PathCase::Sensitive).unwrap(),
+        };
+        assert!(is_workspace_excluded("skip", &excluded));
+        assert!(!is_workspace_excluded("packages/skip", &excluded));
     }
 
     /// A manifest Cargo would not publish is not a package for classification,

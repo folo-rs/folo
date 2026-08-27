@@ -8,11 +8,22 @@
 // are immutable after construction — no `&self` method mutates internal state —
 // so observing them through a shared reference during unwind is harmless.
 // Ref: docs/unwind-safety.md.
+//
+// Every field a repository, a plan file, or a command line supplies is rendered
+// through `Quotable::quoted`, which escapes the newlines and terminal escapes
+// that would otherwise let a crafted name forge a second diagnostic line or
+// repaint the terminal. The surrounding `'…'` stay for readability; the escaping
+// form supplies its own quotes only when the value needs them. A subprocess's
+// stderr is the one exception: `git` and `cargo` quote the names they report,
+// and escaping their whole diagnostic would fold it onto one unreadable line.
+// Ref: docs/implementation.md, "Diagnostics".
 
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::path::PathBuf;
 
 use semver::Version;
+
+use crate::text::Quotable as _;
 
 /// A helper process could not be started.
 #[ohno::error]
@@ -44,7 +55,7 @@ impl CommandFailedError {
 
 /// A file could not be read.
 #[ohno::error]
-#[display("Failed to read '{}'", path.display())]
+#[display("Failed to read '{}'", path.quoted())]
 pub(crate) struct ReadFileError {
     path: PathBuf,
 }
@@ -54,7 +65,7 @@ impl RefUnwindSafe for ReadFileError {}
 
 /// A file could not be written.
 #[ohno::error]
-#[display("Failed to write '{}'", path.display())]
+#[display("Failed to write '{}'", path.quoted())]
 pub(crate) struct WriteFileError {
     path: PathBuf,
 }
@@ -64,7 +75,7 @@ impl RefUnwindSafe for WriteFileError {}
 
 /// A TOML document is not valid.
 #[ohno::error]
-#[display("Failed to parse '{}'", path.display())]
+#[display("Failed to parse '{}'", path.quoted())]
 pub(crate) struct ParseTomlError {
     path: PathBuf,
 }
@@ -82,7 +93,7 @@ impl RefUnwindSafe for ParseMetadataError {}
 
 /// A plan file is not valid JSON.
 #[ohno::error]
-#[display("Failed to parse plan '{}'", path.display())]
+#[display("Failed to parse plan '{}'", path.quoted())]
 pub(crate) struct ParsePlanError {
     path: PathBuf,
 }
@@ -109,7 +120,10 @@ impl UnsupportedPlanSchemaError {
 
 /// An increment entry is missing `level` and `version`, or supplies both.
 #[ohno::error]
-#[display("Plan increment '{name}' must supply exactly one of `level` or `version`")]
+#[display(
+    "Plan increment '{}' must supply exactly one of `level` or `version`",
+    name.quoted()
+)]
 pub(crate) struct PlanIncrementSpecError {
     name: String,
 }
@@ -126,7 +140,10 @@ impl PlanIncrementSpecError {
 
 /// A plan names a package or group that is not in the workspace.
 #[ohno::error]
-#[display("Plan increment '{name}' is not a publishable package or version group")]
+#[display(
+    "Plan increment '{}' is not a publishable package or version group",
+    name.quoted()
+)]
 pub(crate) struct UnknownPlanTargetError {
     name: String,
 }
@@ -143,7 +160,11 @@ impl UnknownPlanTargetError {
 
 /// An increment level is not `major`, `minor`, or `patch`.
 #[ohno::error]
-#[display("Unknown increment level '{level}' for '{name}'")]
+#[display(
+    "Unknown increment level '{}' for '{}'",
+    level.quoted(),
+    name.quoted()
+)]
 pub(crate) struct UnknownIncrementLevelError {
     name: String,
     level: String,
@@ -154,7 +175,11 @@ impl RefUnwindSafe for UnknownIncrementLevelError {}
 
 /// A version string is not valid `SemVer`.
 #[ohno::error]
-#[display("Invalid version '{version}' for '{name}'")]
+#[display(
+    "Invalid version '{}' for '{}'",
+    version.quoted(),
+    name.quoted()
+)]
 pub(crate) struct InvalidVersionError {
     name: String,
     version: String,
@@ -166,7 +191,8 @@ impl RefUnwindSafe for InvalidVersionError {}
 /// History ended before a version change (including creation) was observed.
 #[ohno::error]
 #[display(
-    "Shallow or truncated history: no version change found for package '{package}' on the base first-parent line"
+    "Shallow or truncated history: no version change found for package '{}' on the base first-parent line",
+    package.quoted()
 )]
 pub(crate) struct ShallowHistoryError {
     package: String,
@@ -184,7 +210,7 @@ impl ShallowHistoryError {
 
 /// The base revision could not be resolved.
 #[ohno::error]
-#[display("Failed to resolve base revision '{rev}'")]
+#[display("Failed to resolve base revision '{}'", rev.quoted())]
 pub(crate) struct UnresolvedBaseError {
     rev: String,
 }
@@ -194,7 +220,10 @@ impl RefUnwindSafe for UnresolvedBaseError {}
 
 /// Two increments demand different explicit versions for the same group.
 #[ohno::error]
-#[display("Conflicting explicit versions for version group '{group}'")]
+#[display(
+    "Conflicting explicit versions for version group '{}'",
+    group.quoted()
+)]
 pub(crate) struct ConflictingPlanVersionError {
     group: String,
 }
@@ -204,7 +233,12 @@ impl RefUnwindSafe for ConflictingPlanVersionError {}
 
 /// A package is listed in more than one version group, or twice in one group.
 #[ohno::error]
-#[display("Package '{package}' is listed in version groups '{first_group}' and '{second_group}'")]
+#[display(
+    "Package '{}' is listed in version groups '{}' and '{}'",
+    package.quoted(),
+    first_group.quoted(),
+    second_group.quoted()
+)]
 pub(crate) struct DuplicateGroupMemberError {
     package: String,
     first_group: String,
@@ -249,8 +283,9 @@ impl VersionOverflowError {
 /// A declared version is lower than the version already released at the anchor.
 #[ohno::error]
 #[display(
-    "Package '{package}' declares version {declared}, which is lower than {anchor_version} \
-     released at anchor {anchor_commit}"
+    "Package '{}' declares version {declared}, which is lower than {anchor_version} \
+     released at anchor {anchor_commit}",
+    package.quoted()
 )]
 pub(crate) struct VersionRegressionError {
     package: String,
@@ -271,7 +306,10 @@ impl VersionRegressionError {
 
 /// A plan asks for a version lower than one a target already declares.
 #[ohno::error]
-#[display("Plan sets '{target}' to {requested}, which is lower than the declared {declared}")]
+#[display(
+    "Plan sets '{}' to {requested}, which is lower than the declared {declared}",
+    target.quoted()
+)]
 pub(crate) struct PlanVersionRegressionError {
     target: String,
     requested: Version,
@@ -290,7 +328,7 @@ impl PlanVersionRegressionError {
 
 /// An `include` / `exclude` pattern is not a valid gitignore rule.
 #[ohno::error]
-#[display("Invalid packaging pattern '{pattern}'")]
+#[display("Invalid packaging pattern '{}'", pattern.quoted())]
 pub(crate) struct InvalidPackagingPatternError {
     pattern: String,
 }
@@ -307,7 +345,7 @@ impl InvalidPackagingPatternError {
 
 /// A `[workspace] members` / `exclude` entry is not a valid path pattern.
 #[ohno::error]
-#[display("Invalid workspace member pattern '{pattern}'")]
+#[display("Invalid workspace member pattern '{}'", pattern.quoted())]
 pub(crate) struct InvalidMemberPatternError {
     pattern: String,
 }
@@ -324,7 +362,10 @@ impl InvalidMemberPatternError {
 
 /// A version-group entry is present but is not an array of package names.
 #[ohno::error]
-#[display("Version group '{group}' must be an array of package names")]
+#[display(
+    "Version group '{}' must be an array of package names",
+    group.quoted()
+)]
 pub(crate) struct MalformedVersionGroupError {
     group: String,
 }
@@ -341,7 +382,11 @@ impl MalformedVersionGroupError {
 
 /// A version group lists a name that is not a workspace package.
 #[ohno::error]
-#[display("Version group '{group}' lists unknown workspace package '{package}'")]
+#[display(
+    "Version group '{}' lists unknown workspace package '{}'",
+    group.quoted(),
+    package.quoted()
+)]
 pub(crate) struct UnknownGroupMemberError {
     group: String,
     package: String,
@@ -364,7 +409,8 @@ impl UnknownGroupMemberError {
 /// A version group is named after a workspace package that is not one of its members.
 #[ohno::error]
 #[display(
-    "Version group '{group}' shares its name with a workspace package that is not one of its members"
+    "Version group '{}' shares its name with a workspace package that is not one of its members",
+    group.quoted()
 )]
 pub(crate) struct GroupNameCollisionError {
     group: String,
@@ -385,6 +431,7 @@ impl GroupNameCollisionError {
 mod tests {
     use std::fmt::Debug;
     use std::panic::{RefUnwindSafe, UnwindSafe};
+    use std::path::Path;
     use std::{error, io};
 
     use ohno::ErrorExt as _;
@@ -642,5 +689,37 @@ mod tests {
         let anchor: Version = "0.2.0".parse().unwrap();
         let error = VersionRegressionError::new("nm", declared, anchor, "abc123");
         assert_eq!(error.package(), "nm");
+    }
+
+    /// A manifest can name a package or a pattern with a newline in it, and the
+    /// message would otherwise carry that newline into a log where the tail
+    /// reads as a fresh line of the tool's own output.
+    #[test]
+    fn a_repository_controlled_value_is_escaped_in_the_message() {
+        let error = InvalidMemberPatternError::new("a\nb");
+        let message = error.to_string();
+        assert!(
+            !message.contains('\n'),
+            "the pattern must not break the message across lines: {message}"
+        );
+        assert!(message.contains(r"a\nb"), "{message}");
+    }
+
+    /// The same protection applies to the paths the file-access errors name.
+    #[test]
+    fn a_repository_controlled_path_is_escaped_in_the_message() {
+        let error = ReadFileError::caused_by(Path::new("a\nb"), io::Error::other("x"));
+        let message = error.to_string();
+        // The error renders its cause on following lines, so only the condition's
+        // own line is inspected for the path it names.
+        let first_line = message.lines().next().unwrap();
+        assert!(first_line.contains(r"a\nb"), "{message}");
+    }
+
+    /// An ordinary value gains no escaping, so the common message stays plain.
+    #[test]
+    fn an_ordinary_value_is_left_alone_in_the_message() {
+        let error = InvalidMemberPatternError::new("packages/*");
+        assert!(error.to_string().contains("'packages/*'"));
     }
 }

@@ -7,10 +7,12 @@ use std::path::Path;
 use ohno::AppError;
 use semver::Version;
 
-use crate::classify::{ChangedItem, Classification, PackageClass, PackageStatus, classify};
+use crate::classify::{
+    ChangedItem, Classification, PackageClass, PackageStatus, classify, released_work_tree_paths,
+};
 use crate::command::run_capture;
+use crate::git::os_path;
 use crate::groups::GroupVerdict;
-use crate::packaging::relativize;
 use crate::verbose::Verbose;
 use crate::{quote_path, short_commit};
 
@@ -110,11 +112,11 @@ fn render_diagnostics(
         };
         let text = format!(
             "{}: unreleased-changes since {anchor}; {changed}.{group_text} {}",
-            package.name,
+            quote_path(&package.name),
             remedy()
         );
         if format == CheckFormat::Github {
-            let file = package.manifest_path.to_string_lossy().replace('\\', "/");
+            let file = os_path(&package.manifest_path);
             lines.push(format!(
                 "::error file={},title=unreleased-changes::{}",
                 escape_property(&file),
@@ -134,8 +136,8 @@ fn render_diagnostics(
             .members
             .iter()
             .map(|member| match declared.get(member.as_str()) {
-                Some(version) => format!("{member}@{version}"),
-                None => member.clone(),
+                Some(version) => format!("{}@{version}", quote_path(member)),
+                None => quote_path(member),
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -215,55 +217,23 @@ fn verify_packaging_rules(classification: &Classification) -> String {
                 writeln!(
                     warnings,
                     "warning: packaging probe failed for {}: {error}",
-                    package.manifest.name
+                    quote_path(&package.manifest.name)
                 )
                 .expect("writing to String");
                 continue;
             }
         };
-        let dir = &package.manifest.directory;
-        let tracked = match classification.git.ls_files(dir) {
-            Ok(files) => files,
+        // The released-content selection has to come from classification itself:
+        // rebuilding it from `include` and `exclude` would miss a README Cargo
+        // detects for itself and take in a nested crate's files, warning about a
+        // package whose rules are right.
+        let tool = match released_work_tree_paths(&classification.git, package) {
+            Ok(paths) => paths,
             Err(error) => {
                 writeln!(
                     warnings,
-                    "warning: listing tracked files failed for {}: {error}",
-                    package.manifest.name
-                )
-                .expect("writing to String");
-                continue;
-            }
-        };
-        let tool: BTreeSet<String> = tracked
-            .iter()
-            .filter_map(|full| {
-                let rel = relativize(full, dir)?;
-                package
-                    .manifest
-                    .packaging
-                    .is_released(rel)
-                    .then(|| rel.to_string())
-            })
-            .collect();
-        // The listing above stops at the package directory, but Cargo also
-        // copies in the files the manifest names from outside it, so leaving
-        // them out would report a mismatch for every package with an inherited
-        // README. Only the tracked ones are released content.
-        let resource_paths: Vec<&str> = package.resources.values().map(String::as_str).collect();
-        let tool = match classification.git.tracked_paths(&resource_paths) {
-            Ok(tracked_resources) => {
-                let resources = package
-                    .resources
-                    .iter()
-                    .filter(|(_, path)| tracked_resources.contains(*path))
-                    .map(|(name, _)| name.clone());
-                tool.into_iter().chain(resources).collect::<BTreeSet<_>>()
-            }
-            Err(error) => {
-                writeln!(
-                    warnings,
-                    "warning: listing manifest resources failed for {}: {error}",
-                    package.manifest.name
+                    "warning: listing released content failed for {}: {error}",
+                    quote_path(&package.manifest.name)
                 )
                 .expect("writing to String");
                 continue;
@@ -285,7 +255,7 @@ fn verify_packaging_rules(classification: &Classification) -> String {
             warnings,
             "warning: packaging rule mismatch for {}: only in tool: {only_in_tool}; \
              only in `cargo package --list`: {only_in_cargo} (Cargo.lock ignored)",
-            package.manifest.name
+            quote_path(&package.manifest.name)
         )
         .expect("writing to String");
     }

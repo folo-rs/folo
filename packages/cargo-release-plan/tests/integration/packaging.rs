@@ -195,9 +195,29 @@ fn a_readme_cargo_detects_itself_is_released_content() {
     assert!(message.contains("demo"), "{message}");
 }
 
-/// `cargo package` stops at a nested package boundary, so nothing beneath a
-/// directory carrying its own manifest belongs to the outer package — including
-/// the untracked files the report advertises.
+/// The cross-check has to select released content by the same rules
+/// classification uses, or a package with a README Cargo detects for itself and
+/// a crate nested beneath it reports a mismatch it cannot act on.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn verify_packaging_accepts_a_detected_readme_beside_a_nested_crate() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "demo", "0.1.0", "");
+    fixture.write("packages/demo/README.md", "docs\n");
+    fixture.write(
+        "packages/demo/inner/Cargo.toml",
+        "[package]\nname = \"inner\"\nversion = \"0.1.0\"\nedition = \"2021\"\npublish = false\n",
+    );
+    fixture.write("packages/demo/inner/src/lib.rs", "pub fn g() {}\n");
+    fixture.commit("seed");
+    let base = fixture.sha("HEAD");
+
+    let (passed, message) = check_verifying_packaging(&fixture, &base);
+
+    assert!(passed, "{message}");
+    assert!(!message.contains("packaging rule mismatch"), "{message}");
+}
+
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
 fn an_untracked_file_under_a_nested_package_is_not_advertised_for_the_outer_one() {

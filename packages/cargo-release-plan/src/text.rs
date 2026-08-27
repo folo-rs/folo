@@ -2,6 +2,7 @@
 
 use std::fmt;
 use std::fmt::Write as _;
+use std::path::PathBuf;
 
 /// Renders a repository-controlled path the way Git does.
 ///
@@ -42,6 +43,27 @@ pub(crate) fn quote_path(label: &str) -> String {
 /// them would only make an ordinary accented file name unreadable.
 fn needs_quoting(character: char) -> bool {
     character == '"' || character == '\\' || character.is_ascii_control()
+}
+
+/// Applies [`quote_path`] to a value an error message names.
+///
+/// `#[ohno::error]` scopes each positional `#[display(...)]` argument to `self`,
+/// so an error message can only reach the escaping through a method on the field
+/// it renders.
+pub(crate) trait Quotable {
+    fn quoted(&self) -> String;
+}
+
+impl Quotable for String {
+    fn quoted(&self) -> String {
+        quote_path(self)
+    }
+}
+
+impl Quotable for PathBuf {
+    fn quoted(&self) -> String {
+        quote_path(&self.to_string_lossy())
+    }
 }
 
 /// Renders a count with a noun that agrees with it.

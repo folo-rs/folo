@@ -237,12 +237,7 @@ fn classify_one(
                      first-parent history, so creation on this branch counts as a version \
                      increase and the status is releasing"
                 ));
-                let side = PackageSide {
-                    dir: &package.manifest.directory,
-                    rules: &package.manifest.packaging,
-                    resources: &package.resources,
-                    auto_readme: package.manifest.auto_readme,
-                };
+                let side = work_tree_side(package);
                 let resource_paths: Vec<&str> =
                     side.resources.values().map(String::as_str).collect();
                 let tracked_resources = git.tracked_paths(&resource_paths)?;
@@ -292,12 +287,7 @@ fn classify_one(
             resources: &anchor_pkg.resources,
             auto_readme: anchor_pkg.auto_readme,
         },
-        &PackageSide {
-            dir: &package.manifest.directory,
-            rules: &package.manifest.packaging,
-            resources: &package.resources,
-            auto_readme: package.manifest.auto_readme,
-        },
+        &work_tree_side(package),
     )?;
 
     let mut changed = changed_files;
@@ -612,6 +602,34 @@ fn untracked_released(
     untracked.sort_unstable();
     untracked.dedup();
     Ok(untracked)
+}
+
+/// The package-relative paths of one work-tree package's released content.
+///
+/// The packaging verifier compares Cargo's own listing against this, so it has
+/// to be the very selection classification compares — reconstructing the set
+/// from `include` and `exclude` alone would drop a README Cargo detects for
+/// itself and take in the files of a nested crate, reporting a mismatch on a
+/// package whose rules are in fact right.
+pub(crate) fn released_work_tree_paths(
+    git: &GitRepo,
+    package: &WorkPackage,
+) -> Result<BTreeSet<String>, AppError> {
+    let side = work_tree_side(package);
+    let resource_paths: Vec<&str> = side.resources.values().map(String::as_str).collect();
+    let tracked_resources = git.tracked_paths(&resource_paths)?;
+    let released = released_in_work_tree(git, &side, &tracked_resources)?;
+    Ok(released.into_keys().collect())
+}
+
+/// The work-tree end of `package`'s released-content comparison.
+fn work_tree_side(package: &WorkPackage) -> PackageSide<'_> {
+    PackageSide {
+        dir: &package.manifest.directory,
+        rules: &package.manifest.packaging,
+        resources: &package.resources,
+        auto_readme: package.manifest.auto_readme,
+    }
 }
 
 fn released_in_work_tree(

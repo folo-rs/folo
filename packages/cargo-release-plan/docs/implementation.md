@@ -68,12 +68,13 @@ reformatted table is not mistaken for a changed value and two differently shaped
 values never collapse into the same representation.
 
 Historical workspace membership is reconstructed from the root manifest at each
-commit. Beyond the declared `members` patterns, Cargo makes every path
-dependency of a member that lives inside the workspace a member as well, so that
-closure is followed to a fixed point and still honours `exclude`. A path
-dependency inherited through `[workspace.dependencies]` is followed too, resolved
-against the workspace root rather than the member directory, because that is
-where the root manifest declares it.
+commit. `members` and `exclude` globs are matched root-anchored, as Cargo
+resolves them against the workspace root. Beyond the declared `members` patterns,
+Cargo makes every path dependency of a member that lives inside the workspace a
+member as well, so that closure is followed to a fixed point and still honours
+`exclude`. A path dependency inherited through `[workspace.dependencies]` is
+followed too, resolved against the workspace root rather than the member
+directory, because that is where the root manifest declares it.
 
 A package's released content stops at a nested package boundary, and those
 boundaries are read off the tracked manifests beneath the package rather than off
@@ -143,15 +144,25 @@ a package restored at the same version would look released. Treating every
 absence as creation would instead let a restored package re-publish a version
 that is already on crates.io.
 
+The non-gating packaging cross-check compares Cargo's own `cargo package --list`
+against exactly the released-content selection classification uses, rather than
+against a set rebuilt from `include` and `exclude`. A second implementation of
+the same rules would drift from the first and warn about packages whose rules are
+right — a README Cargo detects for itself, or a crate nested inside the package —
+which is the opposite of what the cross-check exists to surface.
+
 ## Diagnostics
 
-Every repository-controlled name a diagnostic prints — a path, an inherited
-field, a group name, a manifest a plan writes — goes through one shared quoting
-helper that borrows Git's `core.quotePath` rendering: a name carrying a quote,
-backslash, or control character is wrapped in quotes with those bytes escaped.
-Plain lines are read from a CI log or a terminal, so an unescaped newline could
-let the tail of a name pose as a fresh workflow command and an unescaped escape
-sequence could rewrite what a reader sees.
+Every repository-controlled name a diagnostic prints — a path, a package or group
+name, an inherited field, a manifest a plan writes, a value an error condition
+names — goes through one shared quoting helper that borrows Git's
+`core.quotePath` rendering: a name carrying a quote, backslash, or control
+character is wrapped in quotes with those bytes escaped. Plain lines are read
+from a CI log or a terminal, so an unescaped newline could let the tail of a name
+pose as a fresh workflow command and an unescaped escape sequence could rewrite
+what a reader sees. A subprocess's own stderr is the single exception: `git` and
+`cargo` already quote the names they report, and escaping their whole diagnostic
+would fold a multi-line explanation onto one unreadable line.
 
 `--format github` renders each diagnostic as a workflow command in addition to
 the plain line. The message body is additionally escaped for `%` and line breaks
