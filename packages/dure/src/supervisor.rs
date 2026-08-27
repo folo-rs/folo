@@ -221,7 +221,10 @@ struct Shared<T, C> {
     /// Holding this across a pseudoconsole write keeps a displaced client from
     /// reaching the app between its ownership check and the write itself.
     /// Writes here land in the console host's input buffer, which the host
-    /// drains independently of the app, so the hold is bounded.
+    /// drains independently of the app, so the hold is bounded. Attach also
+    /// acknowledges under it, which orders `Attached` ahead of any `Output` on
+    /// the same connection and closes the window in which output would be
+    /// discarded for want of an installed client.
     client: Mutex<Option<ConnId>>,
     /// Serializes an entire attach: acknowledgement, ownership transfer, and
     /// displacement of the previous client. Without it two attaches can
@@ -396,24 +399,31 @@ where
             _ = shared
                 .pty_host
                 .resize(shared.pty, WindowSize { cols, rows });
-            if shared
-                .transport
-                .send(
-                    conn,
-                    &Message::Attached {
-                        session_id: shared.session_id,
-                    },
-                )
-                .is_err()
-            {
-                shared.transport.disconnect(conn);
-                return;
-            }
             let previous = {
                 let mut slot = shared
                     .client
                     .lock()
                     .expect("client slot is only copied or replaced, never held across a panic");
+                // Acknowledging under the client slot keeps `Attached` ahead of
+                // any `Output` on this connection, and installing in the same
+                // critical section means output the app produces right after the
+                // acknowledgement is not discarded for want of an installed
+                // client. The peer is waiting on this frame, so the write is
+                // bounded.
+                if shared
+                    .transport
+                    .send(
+                        conn,
+                        &Message::Attached {
+                            session_id: shared.session_id,
+                        },
+                    )
+                    .is_err()
+                {
+                    drop(slot);
+                    shared.transport.disconnect(conn);
+                    return;
+                }
                 slot.replace(conn)
             };
             if let Some(old) = previous {
