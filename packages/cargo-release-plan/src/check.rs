@@ -246,6 +246,30 @@ fn verify_packaging_rules(classification: &Classification) -> String {
                     .then(|| rel.to_string())
             })
             .collect();
+        // The listing above stops at the package directory, but Cargo also
+        // copies in the files the manifest names from outside it, so leaving
+        // them out would report a mismatch for every package with an inherited
+        // README. Only the tracked ones are released content.
+        let resource_paths: Vec<&str> = package.resources.values().map(String::as_str).collect();
+        let tool = match classification.git.tracked_paths(&resource_paths) {
+            Ok(tracked_resources) => {
+                let resources = package
+                    .resources
+                    .iter()
+                    .filter(|(_, path)| tracked_resources.contains(*path))
+                    .map(|(name, _)| name.clone());
+                tool.into_iter().chain(resources).collect::<BTreeSet<_>>()
+            }
+            Err(error) => {
+                writeln!(
+                    warnings,
+                    "warning: listing manifest resources failed for {}: {error}",
+                    package.manifest.name
+                )
+                .expect("writing to String");
+                continue;
+            }
+        };
         let cargo: BTreeSet<String> = listed
             .into_iter()
             .filter(|path| !is_packaging_artifact(path))

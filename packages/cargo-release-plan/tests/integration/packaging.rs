@@ -2,7 +2,7 @@
 //! manifest resources Cargo packs from outside the package directory.
 
 use crate::fixture::{Fixture, write_package};
-use crate::harness::{check, check_verifying_packaging, seeded_package};
+use crate::harness::{check, check_verifying_packaging, report_json, seeded_package};
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
@@ -105,4 +105,42 @@ fn a_license_file_outside_the_package_directory_is_released_content() {
 
     assert!(!passed, "{message}");
     assert!(message.contains("demo"), "{message}");
+}
+
+/// Released content is defined from git-tracked files wherever they live, so a
+/// manifest resource that is not tracked is advisory in the same way as an
+/// untracked file inside the package directory.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn an_untracked_manifest_resource_is_advisory_only() {
+    let fixture = Fixture::new("[workspace.package]\nreadme = \"README.md\"\n");
+    write_package(&fixture, "demo", "0.1.0", "readme.workspace = true");
+    fixture.commit("seed");
+    let base = fixture.sha("HEAD");
+    fixture.write("README.md", "shared\n");
+
+    let (passed, message) = check(&fixture, &base);
+
+    assert!(passed, "{message}");
+    // Advisory, but still worth naming: it is content Cargo would pack.
+    let report = report_json(&fixture, &base);
+    assert!(report.contains("README.md"), "{report}");
+}
+
+/// The cross-check compares the tool's released-content set against Cargo's own
+/// list, so it has to account for the resources Cargo copies in from outside the
+/// package directory or every inheriting package looks like a mismatch.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn verify_packaging_accepts_a_package_whose_readme_is_inherited() {
+    let fixture = Fixture::new("[workspace.package]\nreadme = \"README.md\"\n");
+    fixture.write("README.md", "shared\n");
+    write_package(&fixture, "demo", "0.1.0", "readme.workspace = true");
+    fixture.commit("seed");
+    let base = fixture.sha("HEAD");
+
+    let (passed, message) = check_verifying_packaging(&fixture, &base);
+
+    assert!(passed, "{message}");
+    assert!(!message.contains("packaging rule mismatch"), "{message}");
 }

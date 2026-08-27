@@ -236,14 +236,15 @@ fn classify_one(
                      first-parent history, so creation on this branch counts as a version \
                      increase and the status is releasing"
                 ));
-                let untracked = untracked_released(
-                    git,
-                    &PackageSide {
-                        dir: &package.manifest.directory,
-                        rules: &package.manifest.packaging,
-                        resources: &package.resources,
-                    },
-                )?;
+                let side = PackageSide {
+                    dir: &package.manifest.directory,
+                    rules: &package.manifest.packaging,
+                    resources: &package.resources,
+                };
+                let resource_paths: Vec<&str> =
+                    side.resources.values().map(String::as_str).collect();
+                let tracked_resources = git.tracked_paths(&resource_paths)?;
+                let untracked = untracked_released(git, &side, &tracked_resources)?;
                 log_untracked(verbose, name, untracked.len());
                 return Ok(PackageClass {
                     name: name.clone(),
@@ -455,8 +456,16 @@ fn diff_package(
     anchor: &PackageSide<'_>,
     work: &PackageSide<'_>,
 ) -> Result<(Vec<ChangedItem>, String, DiffStat, Vec<String>), AppError> {
+    // Released content is defined from git-tracked files, and a manifest
+    // resource sits outside the package directory where the directory listing
+    // cannot vouch for it. Asking Git directly keeps an untracked README from
+    // being read off disk and reported as a content change. Ref: docs/design.md,
+    // "Released content".
+    let resource_paths: Vec<&str> = work.resources.values().map(String::as_str).collect();
+    let tracked_resources = git.tracked_paths(&resource_paths)?;
+
     let anchor_files = released_at_commit(git, anchor_commit, anchor)?;
-    let work_files = released_in_work_tree(git, work)?;
+    let work_files = released_in_work_tree(git, work, &tracked_resources)?;
 
     let rels: BTreeSet<&str> = anchor_files
         .keys()
@@ -496,7 +505,7 @@ fn diff_package(
         patch.push_str(&file_diff.text);
     }
 
-    let untracked = untracked_released(git, work)?;
+    let untracked = untracked_released(git, work, &tracked_resources)?;
 
     let stat = DiffStat {
         files: changed.len(),
@@ -512,7 +521,10 @@ fn released_at_commit(
     side: &PackageSide<'_>,
 ) -> Result<HashMap<String, String>, AppError> {
     let mut released = released_from_paths(&git.ls_tree(commit, side.dir)?, side);
-    add_resources(&mut released, side);
+    // Reading a resource back from the commit yields nothing when the commit
+    // did not track it, so the tree itself performs the tracked-only filter the
+    // work tree needs `tracked_paths` for.
+    add_resources(&mut released, side.resources.iter());
     Ok(released)
 }
 
@@ -521,8 +533,11 @@ fn released_at_commit(
 /// The packaging rules are not consulted: Cargo copies these regardless of
 /// `include` and `exclude`. An entry never displaces a real package file of the
 /// same name, because that file is what a reader would see at that path.
-fn add_resources(released: &mut HashMap<String, String>, side: &PackageSide<'_>) {
-    for (name, path) in side.resources {
+fn add_resources<'a>(
+    released: &mut HashMap<String, String>,
+    resources: impl Iterator<Item = (&'a String, &'a String)>,
+) {
+    for (name, path) in resources {
         released.entry(name.clone()).or_insert_with(|| path.clone());
     }
 }
@@ -533,23 +548,43 @@ fn add_resources(released: &mut HashMap<String, String>, side: &PackageSide<'_>)
 /// These are advisory only: released content is defined from git-tracked files,
 /// so an untracked path is never a change. Ref: docs/design.md, "Released
 /// content".
-fn untracked_released(git: &GitRepo, side: &PackageSide<'_>) -> Result<Vec<String>, AppError> {
-    Ok(git
+fn untracked_released(
+    git: &GitRepo,
+    side: &PackageSide<'_>,
+    tracked_resources: &HashSet<String>,
+) -> Result<Vec<String>, AppError> {
+    let mut untracked: Vec<String> = git
         .ls_untracked(side.dir)?
         .into_iter()
         .filter_map(|full| {
             let rel = relativize(&git_path(&full), side.dir)?.to_string();
             side.rules.is_released(&rel).then_some(rel)
         })
-        .collect())
+        .collect();
+    // The listing above stops at the package directory, so an untracked
+    // resource declared from outside it would go unmentioned even though Cargo
+    // would copy it into the `.crate`. It is advisory in exactly the same way,
+    // and it is named by the path it takes at the crate root.
+    untracked.extend(side.resources.iter().filter_map(|(name, path)| {
+        let present = git.root().join(path).symlink_metadata().is_ok();
+        (present && !tracked_resources.contains(path)).then(|| name.clone())
+    }));
+    untracked.sort_unstable();
+    Ok(untracked)
 }
 
 fn released_in_work_tree(
     git: &GitRepo,
     side: &PackageSide<'_>,
+    tracked_resources: &HashSet<String>,
 ) -> Result<HashMap<String, String>, AppError> {
     let mut released = released_from_paths(&git.ls_files(side.dir)?, side);
-    add_resources(&mut released, side);
+    add_resources(
+        &mut released,
+        side.resources
+            .iter()
+            .filter(|(_, path)| tracked_resources.contains(*path)),
+    );
     Ok(released)
 }
 

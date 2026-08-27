@@ -361,6 +361,25 @@ impl UnknownGroupMemberError {
     }
 }
 
+/// A version group is named after a workspace package that is not one of its members.
+#[ohno::error]
+#[display(
+    "Version group '{group}' shares its name with a workspace package that is not one of its members"
+)]
+pub(crate) struct GroupNameCollisionError {
+    group: String,
+}
+
+impl UnwindSafe for GroupNameCollisionError {}
+impl RefUnwindSafe for GroupNameCollisionError {}
+
+#[cfg(test)]
+impl GroupNameCollisionError {
+    pub(crate) fn group(&self) -> &str {
+        &self.group
+    }
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -551,6 +570,14 @@ mod tests {
     );
     assert_impl_all!(
         UnknownGroupMemberError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        GroupNameCollisionError: Send,
         Sync,
         Debug,
         error::Error,

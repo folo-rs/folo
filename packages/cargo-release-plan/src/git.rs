@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use ohno::AppError;
 
-use crate::command::{run_capture, run_capture_bytes, run_capture_ok};
+use crate::command::{run_capture, run_capture_bytes, run_capture_ok, run_capture_os};
 use crate::{CommandFailedError, UnresolvedBaseError};
 
 /// Name Cargo requires for a manifest.
@@ -209,6 +209,25 @@ impl GitRepo {
             &self.root,
         )?;
         Ok(split_z(&stdout))
+    }
+
+    /// Which of `paths` Git tracks, as a subset of the input.
+    ///
+    /// Files a manifest names from outside its package directory are not
+    /// covered by any per-directory listing, so their tracked state is asked
+    /// for by exact path. An empty input answers without invoking Git, because
+    /// `git ls-files` with no pathspec lists the whole repository.
+    pub(crate) fn tracked_paths(&self, paths: &[&str]) -> Result<HashSet<String>, AppError> {
+        if paths.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let mut args = vec!["ls-files".to_string(), "-z".to_string(), "--".to_string()];
+        args.extend(paths.iter().map(|path| dir_pathspec(path)));
+        let stdout = run_capture_os("git", &args, &self.root)?;
+        Ok(split_z(&stdout)
+            .into_iter()
+            .map(|path| git_path(&path))
+            .collect())
     }
 
     /// Untracked, non-ignored paths under `pathspec`.

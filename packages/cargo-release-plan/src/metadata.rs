@@ -22,8 +22,8 @@ use crate::manifest::{
 #[cfg(test)]
 use crate::packaging::PackagingRules;
 use crate::{
-    InvalidVersionError, MalformedVersionGroupError, ParseMetadataError, ReadFileError,
-    UnknownGroupMemberError,
+    GroupNameCollisionError, InvalidVersionError, MalformedVersionGroupError, ParseMetadataError,
+    ReadFileError, UnknownGroupMemberError,
 };
 
 /// Raw `cargo metadata` document before conversion to [`WorkTree`].
@@ -244,6 +244,13 @@ fn groups_from_metadata(
             }
             parsed.push(package.to_owned());
         }
+        // A plan entry names either a package or a group, and a group wins the
+        // lookup. Naming a group after a package it does not contain would
+        // therefore make an entry increment a different set of packages than
+        // the one its author named, silently.
+        if workspace_names.contains(name) && !parsed.iter().any(|member| member == name) {
+            return Err(GroupNameCollisionError::new(name).into());
+        }
         map.insert(name.clone(), parsed);
     }
     Groups::from_members(map)
@@ -327,6 +334,30 @@ mod tests {
             .expect("unknown member");
         assert_eq!(source.group(), "nm");
         assert_eq!(source.package(), "ghost");
+    }
+
+    #[test]
+    fn a_group_named_after_a_package_must_contain_that_package() {
+        let names = HashSet::from(["nm".to_string(), "nm_impl".to_string()]);
+        let collision = json!({
+            "release-plan": { "groups": { "nm": ["nm_impl"] } }
+        });
+        let error = groups_from_metadata(&collision, &names).unwrap_err();
+        let source = error
+            .find_source::<GroupNameCollisionError>()
+            .expect("group name collision");
+        assert_eq!(source.group(), "nm");
+
+        // A group name that is not a package name is unambiguous, and so is one
+        // that names a package it does contain.
+        let free_name = json!({
+            "release-plan": { "groups": { "nm-family": ["nm_impl"] } }
+        });
+        groups_from_metadata(&free_name, &names).unwrap();
+        let contains_itself = json!({
+            "release-plan": { "groups": { "nm": ["nm", "nm_impl"] } }
+        });
+        groups_from_metadata(&contains_itself, &names).unwrap();
     }
 
     #[test]

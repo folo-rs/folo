@@ -86,6 +86,13 @@ inside the package directory adds nothing, since the ordinary file listing
 already covers it. Keying the resolved set by the file's name reproduces the flat
 crate root Cargo produces, and a real package file of that name always wins.
 
+Because a resource sits outside the package directory, the per-directory
+listing that establishes released content cannot vouch for it, so the work-tree
+side asks Git for its tracked state by exact path in one batched query. Reading
+it off disk instead would let an untracked file decide a release verdict, which
+the git-tracked rule forbids. The anchor side needs no such query: reading a
+resource back from a commit that did not track it yields nothing.
+
 Historical manifests are read without Cargo's help, so every `.workspace = true`
 key a member declares is resolved against the root manifest of the same commit.
 `version`, `include`, `exclude`, and `publish` all matter to classification: with

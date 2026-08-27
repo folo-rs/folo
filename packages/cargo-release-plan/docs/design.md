@@ -61,7 +61,9 @@ they live, because Cargo copies each into the crate root regardless of `include`
 and `exclude`. A workspace-level README that several packages inherit is
 therefore released content for every one of them, and editing it in place is a
 change to each. A resource that already lives inside the package directory is
-just an ordinary file there.
+just an ordinary file there. The git-tracked rule applies to a resource as it
+does to anything else: an untracked one is reported as an advisory, under the
+name it would take at the crate root, and never counted as a change.
 
 The change set is a diff from the anchor to the work tree. The package
 directory is resolved independently at each end from that end's workspace
@@ -111,7 +113,9 @@ not exist on the base revision are exempt from the consistency rule, so a new
 package can join a group before it has been published.
 
 Group membership is `[workspace.metadata.release-plan.groups]` in the workspace
-root manifest.
+root manifest. A plan entry names either a package or a group, so a group named
+after a workspace package must contain that package; naming it after a package
+it does not contain is rejected as ambiguous configuration.
 
 ## Commands
 
