@@ -7,6 +7,10 @@ mod facade;
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod memory;
+// The non-Windows build has no working PAL: this stub only exists so the crate
+// still compiles there, and the platform gate refuses to run before any of it is
+// reached. It carries no coverage expectations of its own.
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(not(windows))]
 mod unsupported;
 // The Windows PAL is the operating-system boundary: a thin binding layer over

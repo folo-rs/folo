@@ -182,9 +182,8 @@ where
 mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::AtomicUsize;
-    use std::thread;
     use std::time::Duration;
-    use std::vec;
+    use std::{thread, vec};
 
     use super::*;
     use crate::pal::error::{PalError, PalErrorKind};

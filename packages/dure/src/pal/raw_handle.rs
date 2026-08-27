@@ -20,3 +20,17 @@ impl RawHandle {
         HANDLE(self.0 as *mut core::ffi::c_void)
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn round_trips_a_handle_value() {
+        // Arbitrary non-null value. The type only carries the integer around and
+        // never dereferences it, so no real kernel object is needed here.
+        let handle = HANDLE(0x1234 as *mut core::ffi::c_void);
+        assert_eq!(RawHandle::from_handle(handle).as_handle(), handle);
+    }
+}

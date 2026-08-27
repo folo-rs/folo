@@ -116,6 +116,12 @@ function Get-MutantsExcludeArgument {
         $exclude += (protect '**/*windows.rs')
         $exclude += '-e'
         $exclude += 'windows'
+
+        # `raw_handle.rs` is a `#[cfg(windows)]` module that does not carry the `windows.rs`
+        # suffix, so it needs naming here. It is not compiled off Windows and its mutants can
+        # never be killed there; the Windows runners do exercise it.
+        $exclude += '-e'
+        $exclude += (protect 'packages/dure/src/pal/raw_handle.rs')
     }
 
     if (-not $IsLinuxPlatform) {
