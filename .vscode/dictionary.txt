@@ -2,7 +2,6 @@ affinitization
 affinitized
 affinitizing
 agnostically
-AppData
 argh
 binstall
 bytecount

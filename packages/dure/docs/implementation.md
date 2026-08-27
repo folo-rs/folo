@@ -28,9 +28,9 @@ The PAL is sliced by responsibility, at a grain that tests can drive, not as a
 1:1 wrap of each Win32 call:
 
 * **Session store** — create, read, list, and delete session records; allocate
-  ids; provide the registry root. The real implementation uses
-  `%LOCALAPPDATA%\dure\`. The root is supplied by the PAL so tests never touch
-  the user's real AppData.
+  ids; provide the store root. The real implementation uses the per-user
+  LocalAppData known folder, subdirectory `dure`. The root is supplied by the
+  PAL so tests never touch the user's real store.
 * **Processes** — spawn a console-detached supervisor with job breakaway and an
   explicit inherited-handle list; identify it by pid and process creation time;
   create an app-lifetime job; spawn the app attached to a pseudoconsole;
@@ -101,7 +101,7 @@ facade/mutants skip). A helper child process is not used here.
 
 Integration tests use the real PAL and a small helper executable that is not
 part of the published product. They run on Windows, are ignored under Miri, and
-use a temporary registry root. They wait on process and pipe events, never on
+use a temporary store root. They wait on process and pipe events, never on
 sleep. Any wait is wrapped in the workspace watchdog.
 
 The harness starts each `dure` client inside an outer test-owned pseudoconsole,
@@ -207,17 +207,17 @@ stays a waitable handle rather than an I/O completion source.
 
 [`CreatePseudoConsole`]: https://learn.microsoft.com/windows/console/createpseudoconsole
 
-## Session registry
+## Session store
 
-Per-session files under the PAL registry root (by default
-`%LOCALAPPDATA%\dure\`) record id, supervisor pid, supervisor process creation
-time, pipe name, launch directory, command, and session start time. Liveness and
-termination open the pid once and verify the process creation time on that
-handle, then confirm that it is still running. A missing, exited, or mismatched
-process makes the record stale; failure to inspect the process is an error and
-does not delete the record. A connect or pipe failure is not evidence of process
-death. Id allocation is filesystem-coordinated so two concurrent `run`
-invocations cannot take the same id.
+Per-session files under the PAL store root (by default the LocalAppData known
+folder, subdirectory `dure`) record id, supervisor pid, supervisor process
+creation time, pipe name, launch directory, command, and session start time.
+Liveness and termination open the pid once and verify the process creation time
+on that handle, then confirm that it is still running. A missing, exited, or
+mismatched process makes the record stale; failure to inspect the process is an
+error and does not delete the record. A connect or pipe failure is not evidence
+of process death. Id allocation is filesystem-coordinated so two concurrent
+`run` invocations cannot take the same id.
 
 ## Pseudoconsole
 
