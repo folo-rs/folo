@@ -24,6 +24,7 @@ const MANIFEST_GLOB_PATHSPEC: &str = ":(glob)**/Cargo.toml";
 #[derive(Clone, Debug)]
 pub(crate) struct GitRepo {
     root: PathBuf,
+    prefix: String,
 }
 
 impl GitRepo {
@@ -34,14 +35,36 @@ impl GitRepo {
         } else {
             start
         };
-        let root = run_capture("git", &["rev-parse", "--show-toplevel"], dir)?;
+        // Both answers come from one invocation so they describe the same
+        // directory. Deriving the prefix instead, by stripping the root from a
+        // path Cargo reported, compares two spellings of the same directory
+        // that need not match: Windows hands out 8.3 short names for some
+        // paths, and symlinked or substituted roots differ on every platform.
+        let stdout = run_capture(
+            "git",
+            &["rev-parse", "--show-toplevel", "--show-prefix"],
+            dir,
+        )?;
+        let mut lines = stdout.lines();
+        let root = lines.next().unwrap_or_default().trim();
+        // The prefix line is empty when the repository root is the directory
+        // itself, and Git may drop the trailing newline that would carry it.
+        let prefix = lines.next().unwrap_or_default().trim();
         Ok(Self {
-            root: PathBuf::from(root.trim()),
+            root: PathBuf::from(root),
+            prefix: git_path(prefix).trim_end_matches('/').to_string(),
         })
     }
 
     pub(crate) fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// The repository-relative directory the repository was discovered from.
+    ///
+    /// Empty when that directory is the repository root.
+    pub(crate) fn prefix(&self) -> &str {
+        &self.prefix
     }
 
     pub(crate) fn rev_parse(&self, rev: &str) -> Result<String, AppError> {
@@ -259,13 +282,7 @@ fn dir_pathspec(dir: &str) -> String {
 ///
 /// The result is a pathspec that `git ls-files` and `git show` resolve against
 /// the repository root.
-pub(crate) fn join_git_rel(git_root: &Path, workspace_root: &Path, workspace_rel: &str) -> String {
-    let prefix = git_path(
-        &workspace_root
-            .strip_prefix(git_root)
-            .unwrap_or_else(|_| Path::new(""))
-            .to_string_lossy(),
-    );
+pub(crate) fn join_git_rel(prefix: &str, workspace_rel: &str) -> String {
     let prefix = prefix.trim_end_matches('/');
     let rel = git_path(workspace_rel);
     let rel = rel.trim_end_matches('/');
@@ -336,18 +353,49 @@ mod tests {
 
     #[test]
     fn join_git_rel_prefixes_when_workspace_is_nested() {
-        let git_root = Path::new("/repo");
-        let workspace = Path::new("/repo/inner");
-        assert_eq!(
-            join_git_rel(git_root, workspace, "packages/foo"),
-            "inner/packages/foo"
+        assert_eq!(join_git_rel("inner", "packages/foo"), "inner/packages/foo");
+        assert_eq!(join_git_rel("", "packages/foo"), "packages/foo");
+        assert_eq!(join_git_rel("inner", ""), "inner");
+        assert_eq!(join_git_rel("inner", "."), "inner");
+        assert_eq!(join_git_rel("inner/", "packages/foo"), "inner/packages/foo");
+        assert_eq!(join_git_rel("", ""), "");
+        assert_eq!(join_git_rel(".", "packages/foo"), "packages/foo");
+        assert_eq!(join_git_rel("inner", r"packages\foo"), "inner/packages/foo");
+    }
+
+    /// Cargo and Git need not spell the same directory identically: Windows
+    /// hands out 8.3 short names for some paths and both tools accept
+    /// uncanonical spellings, so the prefix must come from Git rather than from
+    /// subtracting one reported path from the other.
+    #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
+    #[test]
+    fn discover_reports_a_prefix_for_an_uncanonical_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        run_capture("git", &["init", "-q"], temp.path()).unwrap();
+        let nested = temp.path().join("inner");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let repo = GitRepo::discover(&nested.join("..").join("inner")).unwrap();
+
+        assert_eq!(repo.prefix(), "inner");
+    }
+
+    #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
+    #[test]
+    fn discover_reports_an_empty_prefix_at_the_repository_root() {
+        let temp = tempfile::tempdir().unwrap();
+        run_capture("git", &["init", "-q"], temp.path()).unwrap();
+
+        let repo = GitRepo::discover(temp.path()).unwrap();
+
+        assert_eq!(repo.prefix(), "");
+        assert!(
+            repo.root().ends_with(
+                temp.path()
+                    .file_name()
+                    .expect("a temporary directory always has a final component")
+            )
         );
-        assert_eq!(
-            join_git_rel(git_root, git_root, "packages/foo"),
-            "packages/foo"
-        );
-        assert_eq!(join_git_rel(git_root, workspace, ""), "inner");
-        assert_eq!(join_git_rel(git_root, workspace, "."), "inner");
     }
 
     #[test]

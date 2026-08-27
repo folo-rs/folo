@@ -124,16 +124,12 @@ pub(crate) fn classify(
     let mut work_tree = load_work_tree(manifest_path)?;
     let git = GitRepo::discover(&work_tree.workspace_root)?;
     for package in &mut work_tree.packages {
-        package.manifest.directory = join_git_rel(
-            git.root(),
-            &work_tree.workspace_root,
-            &package.manifest.directory,
-        );
+        package.manifest.directory = join_git_rel(git.prefix(), &package.manifest.directory);
     }
     // Nested-member filtering compares these against package directories, so
     // they must live in the same coordinate system.
     for dir in &mut work_tree.member_dirs {
-        *dir = join_git_rel(git.root(), &work_tree.workspace_root, dir);
+        *dir = join_git_rel(git.prefix(), dir);
     }
     let head = git.head()?;
     let base_sha = git.rev_parse(base)?;

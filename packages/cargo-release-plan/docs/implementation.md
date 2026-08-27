@@ -78,12 +78,17 @@ say, so that case is decided before the patterns are consulted.
 
 Package directories reported by `cargo metadata` are workspace-relative, but
 every pathspec handed to Git is repository-relative, so directories are rebased
-onto the repository root before use. The member list is rebased with them: the
-nested-package boundary is computed by comparing a package directory against the
-member directories, and a comparison across two coordinate systems would silently
-find no nested members. Git rejects an empty pathspec, so the repository root —
-which every one of these paths spells as the empty string — becomes `.` inside
-the Git wrapper rather than at each call site.
+onto the repository root before use. The prefix they are rebased onto comes from
+Git, which reports it alongside the repository root in the same `rev-parse` that
+discovers the repository. Subtracting the root from the workspace path Cargo
+reported would instead compare two independent spellings of one directory, and
+those need not match: Windows hands out 8.3 short names for some paths, and both
+tools accept uncanonical spellings. The member list is rebased with the package
+directories: the nested-package boundary is computed by comparing a package
+directory against the member directories, and a comparison across two coordinate
+systems would silently find no nested members. Git rejects an empty pathspec, so
+the repository root — which every one of these paths spells as the empty string —
+becomes `.` inside the Git wrapper rather than at each call site.
 
 A package that is absent from the base revision is only treated as newly created
 once the first-parent walk shows no sampled commit carried it. When some earlier
