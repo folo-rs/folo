@@ -63,11 +63,12 @@ Covered here:
   ends; two concurrent allocations cannot receive the same id (the store's
   coordination is part of the PAL contract and is mocked as exclusive).
 * **Stale records** — a listed pid that the process PAL reports dead is deleted
-  and not shown; `resume` and `kill` of that id fail after cleanup.
+  and not shown; `resume` and `kill` of that id fail after cleanup. A live pid
+  whose connect times out is kept; list still shows it and kill still targets it.
 * **Supervisor loop** — first attach relays bytes both ways; a second attach
   disconnects the first; resize is applied on attach; app exit ends the
   supervisor and delivers the status to an attached client; a connect that never
-  completes within the injected clock is treated as a dead supervisor.
+  completes within the injected clock fails resume without deleting the record.
 * **Detach** — dropping the client does not close the app's input (no EOF);
   output from the app is still drained so a mock that keeps writing cannot block
   the session.
@@ -131,8 +132,8 @@ that would die on disconnect.
 
 The supervisor listens for a new client even while it is busy reading and
 writing the current one. Steal does not depend on the old connection still being
-healthy. Connect attempts time out; a supervisor that is alive as a pid but
-never accepts is treated as dead.
+healthy. Connect attempts time out. A supervisor that is alive as a pid but never
+accepts stays listed; resume fails and `kill --id` still targets that pid.
 
 `dure kill --id` terminates the supervisor by pid and does not need that
 connection to be healthy.
@@ -154,9 +155,10 @@ waitable handle (`WaitForSingleObject`), which is not an IOCP completion source.
 
 Per-session files under the PAL registry root (by default
 `%LOCALAPPDATA%\dure\`) record id, supervisor pid, pipe name, launch directory,
-command, and start time. `list` / `resume` probe liveness (pid plus pipe) and
-delete stale files. Id allocation is filesystem-coordinated so two concurrent
-`run` invocations cannot take the same id.
+command, and start time. `list` / `resume` / `kill` drop a record only when the
+recorded pid is gone. A connect or pipe failure is not enough. Id allocation is
+filesystem-coordinated so two concurrent `run` invocations cannot take the same
+id.
 
 ## Pseudoconsole
 

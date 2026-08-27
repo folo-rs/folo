@@ -61,10 +61,10 @@ instead of starting a session that would die on disconnect.
 that live session and skips auto-detect.
 
 `dure list` prints live sessions: id, launch directory, command, whether a
-client is currently attached, supervisor pid. Stale records of dead supervisors
-are discarded when observed and are not listed. Attached means the supervisor
-still has a client connection; a hung SSH client may still appear attached.
-Resume steals anyway.
+client is currently attached, supervisor pid. A record is discarded only when
+the supervisor process is gone. Attached means the supervisor still has a
+client connection; a hung SSH client may still appear attached. Resume steals
+anyway.
 
 `dure kill --id <id>` abruptly terminates the supervisor process for that
 session. The app is a child of the supervisor and dies with it. `--id` is
@@ -116,8 +116,10 @@ window size to the app console. Many TUIs redraw on resize. It does not restore
 scrollback, and an app that does not redraw will show an empty or stale screen
 until it paints on its own.
 
-If the supervisor does not accept a connection within a bounded wait, it is
-treated as dead. The record is dropped. Starting work again is `dure run`.
+A session is live while its supervisor process is still present. A record is
+dropped only when that process is gone. If the supervisor is present but does
+not accept a connection within a bounded wait, resume fails and the session
+stays listed; `dure kill --id` still reaches it.
 
 While detached, the app's console stays open. Input is not closed (end of stdin
 would terminate many apps). Output is drained and discarded so the app cannot
