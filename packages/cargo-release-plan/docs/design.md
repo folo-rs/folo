@@ -56,6 +56,13 @@ releases nothing from inside a directory that carries its own `Cargo.toml`,
 whether or not that crate belongs to the workspace, matching the package
 boundary Cargo itself stops at.
 
+A symbolic link among a package's released content stops the run. Cargo
+dereferences a link when it packs a `.crate`, so the published bytes are the
+target's content, while Git records only the target's path; comparing what Git
+stores would call a package unchanged after an edit to the file it points at.
+Replace the link with a regular file, or keep it out of the released content
+with `exclude`.
+
 The files named by `readme` and `license-file` are released content wherever
 they live and whatever the packaging rules say, because Cargo packs each
 regardless of `include` and `exclude`. One declared from outside the package

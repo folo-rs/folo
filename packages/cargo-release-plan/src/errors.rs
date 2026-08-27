@@ -370,6 +370,29 @@ pub(crate) struct InvalidMemberPatternError {
 impl UnwindSafe for InvalidMemberPatternError {}
 impl RefUnwindSafe for InvalidMemberPatternError {}
 
+/// Released content contains a symbolic link.
+///
+/// Cargo dereferences a link when it packs a `.crate`, so the released bytes are
+/// the target's content, while Git stores the link as a blob holding the target
+/// path. Comparing the blobs would call a package unchanged after an edit to the
+/// file it points at, and reconstructing the target's historical content is only
+/// possible when the link stays inside the repository at both ends. A refusal is
+/// preferred over a release verdict that can be silently wrong. Ref:
+/// docs/design.md, "Released content".
+#[ohno::error]
+#[display(
+    "Package '{}' releases '{}', which is a symbolic link",
+    package.quoted(),
+    path.quoted()
+)]
+pub(crate) struct SymlinkReleasedError {
+    package: String,
+    path: String,
+}
+
+impl UnwindSafe for SymlinkReleasedError {}
+impl RefUnwindSafe for SymlinkReleasedError {}
+
 #[cfg(test)]
 impl InvalidMemberPatternError {
     pub(crate) fn pattern(&self) -> &str {
@@ -610,6 +633,14 @@ mod tests {
     );
     assert_impl_all!(
         InvalidMemberPatternError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        SymlinkReleasedError: Send,
         Sync,
         Debug,
         error::Error,

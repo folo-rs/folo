@@ -1,6 +1,12 @@
 //! The non-gating packaging cross-check against what Cargo would pack, and the
 //! manifest resources Cargo packs from outside the package directory.
 
+#[cfg(unix)]
+use std::fs;
+
+#[cfg(unix)]
+use cargo_release_plan::{CheckFormat, RunInput, run};
+
 use crate::fixture::{Fixture, write_package};
 use crate::harness::{check, check_verifying_packaging, report_json, seeded_package};
 
@@ -125,6 +131,71 @@ fn an_untracked_manifest_resource_is_advisory_only() {
     // Advisory, but still worth naming: it is content Cargo would pack.
     let report = report_json(&fixture, &base);
     assert!(report.contains("README.md"), "{report}");
+}
+
+/// Cargo dereferences a symbolic link when it packs a `.crate`, so the released
+/// bytes are the target's content while Git stores only the target's path.
+/// Comparing the stored paths would call the package unchanged after an edit to
+/// the file the link points at, so the run stops instead of answering wrongly.
+///
+/// Windows cannot create a link without additional privileges, so the scenario
+/// is exercised on Unix only.
+#[cfg(unix)]
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn a_released_symbolic_link_stops_the_run() {
+    let fixture = seeded_package();
+    fixture.write("packages/demo/real.txt", "content\n");
+    std::os::unix::fs::symlink("real.txt", fixture.path().join("packages/demo/link.txt")).unwrap();
+    fixture.commit("add a link into released content");
+    let base = fixture.sha("HEAD");
+
+    let result = run(&RunInput::Check {
+        base: base.clone(),
+        manifest_path: fixture.manifest(),
+        format: CheckFormat::Text,
+        verify_packaging: false,
+        verbose: false,
+    });
+
+    let error = result.expect_err("a released link cannot be classified");
+    let message = error.to_string();
+    assert!(message.contains("link.txt"), "{message}");
+    assert!(message.contains("symbolic link"), "{message}");
+}
+
+/// The refusal has to hold when the link is only in history: it is the anchor
+/// side that Git answers from the object database, where a link's blob is
+/// indistinguishable from a small text file without consulting the tree's mode.
+#[cfg(unix)]
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn a_symbolic_link_released_only_at_the_anchor_stops_the_run() {
+    let fixture = seeded_package();
+    fixture.write("packages/demo/real.txt", "content\n");
+    let link = fixture.path().join("packages/demo/link.txt");
+    std::os::unix::fs::symlink("real.txt", &link).unwrap();
+    fixture.commit("add a link into released content");
+    let base = fixture.sha("HEAD");
+
+    // The work tree no longer holds a link, so only the anchor's tree records
+    // one.
+    fs::remove_file(&link).unwrap();
+    fixture.write("packages/demo/link.txt", "real.txt");
+    fixture.commit("replace the link with a regular file");
+
+    let result = run(&RunInput::Check {
+        base,
+        manifest_path: fixture.manifest(),
+        format: CheckFormat::Text,
+        verify_packaging: false,
+        verbose: false,
+    });
+
+    let error = result.expect_err("a link at the anchor cannot be classified");
+    let message = error.to_string();
+    assert!(message.contains("link.txt"), "{message}");
+    assert!(message.contains("symbolic link"), "{message}");
 }
 
 /// The cross-check compares the tool's released-content set against Cargo's own

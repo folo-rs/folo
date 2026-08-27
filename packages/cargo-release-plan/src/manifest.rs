@@ -392,8 +392,11 @@ pub(crate) fn parse_workspace_members(
 }
 
 /// Whether `dir` (repo-relative, `/` separators) matches a workspace member pattern.
+///
+/// The directory comes from Git, which separates with `/` on every platform, so
+/// a backslash in it is an ordinary character of a file name and is matched as
+/// one. Only the pattern, which a manifest author writes, is normalised.
 pub(crate) fn is_workspace_member(dir: &str, members: &WorkspaceMembers) -> bool {
-    let dir = dir.replace('\\', "/");
     let dir = dir.trim_end_matches('/');
     // A non-virtual root's own package is a member whatever the lists say, so it
     // is decided before them. This is only ever asked about a directory that
@@ -415,8 +418,8 @@ pub(crate) fn is_workspace_member(dir: &str, members: &WorkspaceMembers) -> bool
 ///
 /// Membership that Cargo derives from a path dependency still honours
 /// `exclude`, so that list is queried separately from the `members` patterns.
+/// The directory is in Git's path space, as it is for `is_workspace_member`.
 pub(crate) fn is_workspace_excluded(dir: &str, members: &WorkspaceMembers) -> bool {
-    let dir = dir.replace('\\', "/");
     let dir = dir.trim_end_matches('/');
     members.exclude.iter().any(|pattern| pattern.matches(dir))
 }
@@ -437,6 +440,10 @@ struct MemberPattern {
 
 impl MemberPattern {
     fn new(pattern: &str, case: PathCase) -> Result<Self, AppError> {
+        // A member list is authored by hand, and one written on Windows may
+        // separate with backslashes, which Cargo accepts. The directories this
+        // is matched against come from Git and are never rewritten, so the
+        // normalisation is confined to the pattern.
         let literal = pattern.replace('\\', "/");
         let mut matcher = OverrideBuilder::new("");
         if case == PathCase::Insensitive {
@@ -829,6 +836,32 @@ exclude = ["packages/skip"]
         assert!(is_workspace_excluded("packages/skip", &declared));
         // Not named by either list: outside the workspace, but not excluded.
         assert!(!is_workspace_excluded("examples/foo", &declared));
+    }
+
+    /// A backslash is an ordinary character in a directory name on Unix, and
+    /// Git reports such a name verbatim. Only the manifest-authored pattern is
+    /// normalised, so a directory literally named `a\b` is one path component
+    /// and neither joins nor splits at the backslash.
+    ///
+    /// Windows cannot hold such a name, and the glob matcher normalises
+    /// separators there, so the distinction is only observable on Unix.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_name_containing_a_backslash_is_one_component() {
+        let declared = parse_workspace_members(
+            "[workspace]\nmembers = [\"packages/*\"]\nexclude = [\"packages/a\\\\b\"]\n",
+            Path::new("Cargo.toml"),
+            PathCase::Sensitive,
+        )
+        .unwrap();
+        // The pattern names a nested directory, so the one-component name it
+        // was written as does not match.
+        assert!(!is_workspace_excluded(r"packages/a\b", &declared));
+        assert!(is_workspace_excluded("packages/a/b", &declared));
+        // `packages/*` does not cross a separator, so the literal name matches
+        // it while the nested directory does not.
+        assert!(is_workspace_member(r"packages/a\b", &declared));
+        assert!(!is_workspace_member("packages/a/b", &declared));
     }
 
     #[test]

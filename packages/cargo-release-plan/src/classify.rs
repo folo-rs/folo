@@ -14,7 +14,7 @@ use toml_edit::DocumentMut;
 
 use crate::anchor::{Anchor, TimelineEntry, reintroduction_anchor, resolve_anchor};
 use crate::diff::file_diff;
-use crate::git::{GitRepo, join_git_rel, os_path};
+use crate::git::{GitRepo, join_git_rel};
 use crate::groups::GroupVerdict;
 use crate::inherited::{InheritedChange, inherited_changes};
 use crate::manifest::{
@@ -26,7 +26,7 @@ use crate::metadata::{ReportedDep, WorkPackage, WorkTree, dependents_of, load_wo
 use crate::packaging::{PackagingRules, relativize};
 use crate::text::{plural, quote_path};
 use crate::verbose::Verbose;
-use crate::{ReadFileError, VersionRegressionError, short_commit};
+use crate::{ReadFileError, SymlinkReleasedError, VersionRegressionError, short_commit};
 
 /// Workspace classification: every publishable package plus its group verdicts.
 ///
@@ -286,6 +286,7 @@ fn classify_one(
 
     let (changed_files, mut patch, stat, untracked) = diff_package(
         git,
+        name,
         &anchor.commit,
         &PackageSide {
             dir: &anchor_pkg.directory,
@@ -464,6 +465,7 @@ fn resolve_resources(
 
 fn diff_package(
     git: &GitRepo,
+    name: &str,
     anchor_commit: &str,
     anchor: &PackageSide<'_>,
     work: &PackageSide<'_>,
@@ -478,6 +480,8 @@ fn diff_package(
 
     let anchor_files = released_at_commit(git, anchor_commit, anchor)?;
     let work_files = released_in_work_tree(git, work, &tracked_resources)?;
+
+    reject_anchor_symlinks(git, name, anchor_commit, anchor, &anchor_files)?;
 
     let rels: BTreeSet<&str> = anchor_files
         .keys()
@@ -496,7 +500,7 @@ fn diff_package(
             None => None,
         };
         let new = match work_files.get(rel) {
-            Some(path) => read_optional_bytes(&git.root().join(path))?,
+            Some(path) => read_optional_bytes(&git.root().join(path), name, path)?,
             None => None,
         };
         if old.as_deref() == new.as_deref() {
@@ -525,6 +529,38 @@ fn diff_package(
         deletions,
     };
     Ok((changed, patch, stat, untracked))
+}
+
+/// Stops when the anchor released a symbolic link.
+///
+/// The tree's modes are the only place the distinction survives, so the paths
+/// released at the anchor are matched against the links the tree records. The
+/// package directory alone does not cover a manifest resource that lives outside
+/// it, so those paths are asked for too, in the same listing.
+fn reject_anchor_symlinks(
+    git: &GitRepo,
+    name: &str,
+    commit: &str,
+    side: &PackageSide<'_>,
+    released: &HashMap<String, String>,
+) -> Result<(), AppError> {
+    let mut pathspecs: Vec<&str> = vec![side.dir];
+    pathspecs.extend(side.resources.values().map(String::as_str));
+    let links = git.symlink_paths(commit, &pathspecs)?;
+    if links.is_empty() {
+        return Ok(());
+    }
+    // The released paths are a hash map, so the lowest matching path is chosen
+    // to keep the reported one stable across runs.
+    let offender = released
+        .values()
+        .filter(|path| links.contains(*path))
+        .min()
+        .cloned();
+    match offender {
+        Some(path) => Err(SymlinkReleasedError::new(name, &path).into()),
+        None => Ok(()),
+    }
 }
 
 fn released_at_commit(
@@ -1029,23 +1065,17 @@ fn can_stop_timeline(timeline: &[TimelineEntry]) -> bool {
     last.version.as_ref() != Some(reference)
 }
 
-/// Reads a tracked work-tree path the way Git stores its blob.
+/// Reads a tracked work-tree path the way Cargo would pack it.
 ///
-/// A symbolic link yields its target path rather than the content it points at,
-/// because Git records a link as a blob holding the target. Dereferencing would
-/// disagree with the anchor side, which is read out of the object database, and
-/// would let a link committed under a package copy an arbitrary host file into
-/// the generated patch.
-fn read_optional_bytes(path: &Path) -> Result<Option<Vec<u8>>, AppError> {
+/// A symbolic link stops the run rather than being compared. Cargo dereferences
+/// a link when it packs a `.crate`, while Git stores the link as a blob holding
+/// the target path, so neither reading the target text nor following the link
+/// yields a comparison that is right at both ends. Ref: docs/design.md,
+/// "Released content".
+fn read_optional_bytes(path: &Path, name: &str, rel: &str) -> Result<Option<Vec<u8>>, AppError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
-            let target =
-                fs::read_link(path).map_err(|error| ReadFileError::caused_by(path, error))?;
-            // Git records a target verbatim, so only the platform's own
-            // separator is rewritten: a backslash is an ordinary target byte on
-            // Unix, and rewriting one would make an unchanged link differ from
-            // its anchor blob.
-            return Ok(Some(os_path(&target).into_bytes()));
+            return Err(SymlinkReleasedError::new(name, rel).into());
         }
         Ok(_) => {}
         Err(error) if is_not_found(&error) => return Ok(None),
@@ -1134,7 +1164,7 @@ mod tests {
     fn read_optional_bytes_missing_is_none() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gone.txt");
-        assert_eq!(read_optional_bytes(&path).unwrap(), None);
+        assert_eq!(read_optional_bytes(&path, "pkg", "gone.txt").unwrap(), None);
     }
 
     #[cfg_attr(miri, ignore)] // tempfile::tempdir is host filesystem, which Miri cannot emulate.
@@ -1144,7 +1174,9 @@ mod tests {
         let path = dir.path().join("here.txt");
         fs::write(&path, "hi").unwrap();
         assert_eq!(
-            read_optional_bytes(&path).unwrap().as_deref(),
+            read_optional_bytes(&path, "pkg", "here.txt")
+                .unwrap()
+                .as_deref(),
             Some(b"hi".as_slice())
         );
     }
@@ -1153,7 +1185,27 @@ mod tests {
     #[test]
     fn read_optional_bytes_rejects_non_not_found_errors() {
         let dir = tempfile::tempdir().unwrap();
-        let _ = read_optional_bytes(dir.path()).unwrap_err();
+        let _ = read_optional_bytes(dir.path(), "pkg", "dir").unwrap_err();
+    }
+
+    /// A link cannot be compared against history, because Cargo would pack the
+    /// target's bytes while Git stores the target's path.
+    #[cfg(unix)]
+    #[cfg_attr(miri, ignore)] // tempfile::tempdir is host filesystem, which Miri cannot emulate.
+    #[test]
+    fn read_optional_bytes_rejects_a_symbolic_link() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("real.txt"), "hi").unwrap();
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink("real.txt", &link).unwrap();
+
+        let error = read_optional_bytes(&link, "pkg", "a/link.txt").unwrap_err();
+        let reported = error
+            .find_source::<SymlinkReleasedError>()
+            .expect("a link is refused with the dedicated condition")
+            .to_string();
+        assert!(reported.contains("a/link.txt"), "{reported}");
+        assert!(reported.contains("pkg"), "{reported}");
     }
 
     #[test]

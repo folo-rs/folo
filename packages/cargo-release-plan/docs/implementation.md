@@ -131,6 +131,14 @@ verdict, which the git-tracked rule forbids. The anchor side needs no such
 query: reading a resource back from a commit that did not track it already
 yields nothing.
 
+A symbolic link is refused rather than compared, because neither reading is
+right at both ends: Cargo dereferences a link when it packs, while Git stores
+the target's path as the blob. The work-tree side detects one from the file
+type, and the anchor side from the tree's mode, which is the only place the
+distinction survives once a blob is read. Both look at the released paths only,
+and the anchor listing covers the manifest resources alongside the package
+directory, so a link that only history holds is caught as well as one on disk.
+
 Historical manifests are read without Cargo's help, so every `.workspace = true`
 key a member declares is resolved against the root manifest of the same commit.
 `version`, `include`, `exclude`, and `publish` all matter to classification: with

@@ -20,6 +20,12 @@ const MANIFEST_FILE_NAME: &str = "Cargo.toml";
 /// pathspec syntax does not do.
 const MANIFEST_GLOB_PATHSPEC: &str = ":(glob)**/Cargo.toml";
 
+/// Tree mode Git records for a symbolic link.
+///
+/// Ref: the `git ls-tree` documentation, which fixes the set of modes a tree
+/// entry may carry.
+const SYMLINK_TREE_MODE: &str = "120000";
+
 /// A Git repository rooted at `root`.
 #[derive(Clone, Debug)]
 pub(crate) struct GitRepo {
@@ -264,6 +270,31 @@ impl GitRepo {
         split_z(&stdout)
     }
 
+    /// Tree paths under `pathspecs` at `commit` that are symbolic links.
+    ///
+    /// A link's blob holds its target path, which is indistinguishable from a
+    /// regular file's content once read, so the tree's mode is the only place
+    /// the distinction survives.
+    pub(crate) fn symlink_paths(
+        &self,
+        commit: &str,
+        pathspecs: &[&str],
+    ) -> Result<HashSet<String>, AppError> {
+        let mut args = vec![
+            "ls-tree".to_string(),
+            "-r".to_string(),
+            "-z".to_string(),
+            commit.to_string(),
+            "--".to_string(),
+        ];
+        args.extend(pathspecs.iter().map(|pathspec| dir_pathspec(pathspec)));
+        let stdout = run_capture_os_bytes("git", &args, &self.root)?;
+        Ok(split_z(&stdout)?
+            .into_iter()
+            .filter_map(|record| symlink_record_path(&record).map(ToOwned::to_owned))
+            .collect())
+    }
+
     /// Manifest paths at `commit`, used to reconstruct historical workspace members.
     ///
     /// `git ls-tree` matches its path arguments literally, so it cannot select
@@ -284,6 +315,18 @@ impl GitRepo {
 /// Whether a repository-relative tree path names a Cargo manifest.
 fn is_manifest_path(path: &str) -> bool {
     path.rsplit('/').next() == Some(MANIFEST_FILE_NAME)
+}
+
+/// The path of a `git ls-tree` record, when the record describes a symbolic link.
+///
+/// A record is `<mode> <type> <object>\t<path>`, and the mode Git assigns a
+/// symbolic link is fixed by the index format rather than by file permissions.
+fn symlink_record_path(record: &str) -> Option<&str> {
+    let (metadata, path) = record.split_once('\t')?;
+    metadata
+        .starts_with(SYMLINK_TREE_MODE)
+        .then_some(path)
+        .filter(|_| metadata.as_bytes().get(SYMLINK_TREE_MODE.len()) == Some(&b' '))
 }
 
 /// Rewrites an operating-system path into the `/`-separated form Git reports.
@@ -395,6 +438,24 @@ mod tests {
         assert!(!is_manifest_path("packages/foo/Cargo.toml.bak"));
         assert!(!is_manifest_path("packages/foo/src/lib.rs"));
         assert!(!is_manifest_path("packages/Cargo.toml/inner.rs"));
+    }
+
+    /// The mode is the leading field of a tree record, and a path may itself
+    /// begin with the digits of a mode, so the field boundary is what decides.
+    #[test]
+    fn symlink_records_are_selected_by_tree_mode() {
+        assert_eq!(
+            symlink_record_path("120000 blob abc\tpackages/foo/link.txt"),
+            Some("packages/foo/link.txt")
+        );
+        assert_eq!(
+            symlink_record_path("100644 blob abc\tpackages/foo/real.txt"),
+            None
+        );
+        assert_eq!(symlink_record_path("040000 tree abc\tpackages/foo"), None);
+        // A regular file whose mode merely starts with the link mode's digits.
+        assert_eq!(symlink_record_path("1200001 blob abc\tx"), None);
+        assert_eq!(symlink_record_path("120000 blob abc packages/foo"), None);
     }
 
     /// A backslash is an ordinary character in a file name on Unix, so only the
