@@ -111,6 +111,30 @@ fn apply_writes_its_summary_to_stdout() {
     assert!(stdout(&output).contains("Dry run"));
 }
 
+#[cfg_attr(miri, ignore)] // Spawns the compiled binary and git; Miri cannot emulate that.
+#[test]
+fn a_repository_controlled_group_name_cannot_forge_a_verbose_note() {
+    // A version group is keyed by an arbitrary TOML key, so a repository can put
+    // a newline in one. Emitted raw it would end the note and let the tail read
+    // as another line of the tool's own output.
+    let fixture =
+        Fixture::new("\n[workspace.metadata.release-plan.groups]\n\"odd\\nname\" = [\"demo\"]\n");
+    write_package(&fixture, "demo", "0.1.0", "");
+    fixture.commit("seed");
+    let base = fixture.sha("HEAD");
+    let output = release_plan(&["check", "--base", &base, "--verbose"], Some(&fixture));
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let notes = stderr(&output);
+    assert!(notes.contains(r#""odd\nname""#), "{notes}");
+    for line in notes.lines() {
+        assert!(
+            line.is_empty() || line.starts_with("[release-plan] "),
+            "a note must not spill onto an unprefixed line: {notes}"
+        );
+    }
+}
+
 fn seeded_package() -> Fixture {
     let fixture = Fixture::new("");
     write_package(&fixture, "demo", "0.1.0", "");

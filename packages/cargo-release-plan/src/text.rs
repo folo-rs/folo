@@ -27,8 +27,14 @@ pub(crate) fn quote_path(label: &str) -> String {
             '\n' => quoted.push_str("\\n"),
             '\r' => quoted.push_str("\\r"),
             '\t' => quoted.push_str("\\t"),
-            control if control.is_ascii_control() => {
-                write!(quoted, "\\{:03o}", u32::from(control)).expect("writing to String");
+            control if control.is_control() => {
+                // Git escapes a control character as the octal value of each of
+                // its UTF-8 bytes, which for an ASCII control is the single
+                // familiar `\033` form.
+                let mut buffer = [0_u8; 4];
+                for byte in control.encode_utf8(&mut buffer).as_bytes() {
+                    write!(quoted, "\\{byte:03o}").expect("writing to String");
+                }
             }
             other => quoted.push(other),
         }
@@ -39,10 +45,13 @@ pub(crate) fn quote_path(label: &str) -> String {
 
 /// Whether a character forces the whole path into quoted form.
 ///
-/// Non-ASCII characters are left alone: the artifacts are UTF-8 and escaping
-/// them would only make an ordinary accented file name unreadable.
+/// Every Unicode control character qualifies, not just the ASCII ones: a C1
+/// control such as U+009B drives a terminal exactly as its ASCII counterpart
+/// does. Printable non-ASCII characters are left alone, because the artifacts
+/// are UTF-8 and escaping those would only make an ordinary accented file name
+/// unreadable.
 fn needs_quoting(character: char) -> bool {
-    character == '"' || character == '\\' || character.is_ascii_control()
+    character == '"' || character == '\\' || character.is_control()
 }
 
 /// Applies [`quote_path`] to a value an error message names.
@@ -137,5 +146,15 @@ mod tests {
         assert_eq!(quote_path("a/nl\nhere"), r#""a/nl\nhere""#);
         assert_eq!(quote_path("a/cr\rhere"), r#""a/cr\rhere""#);
         assert_eq!(quote_path("a/bell\u{7}"), r#""a/bell\007""#);
+    }
+
+    /// A C1 control drives a terminal just as its ASCII counterpart does, so it
+    /// is escaped too, one octal escape per UTF-8 byte the way Git renders it.
+    #[test]
+    fn a_non_ascii_control_is_escaped_byte_by_byte() {
+        // U+009B is the single-character form of the escape sequence that
+        // introduces a terminal control, and U+0085 breaks a line.
+        assert_eq!(quote_path("a/csi\u{9b}here"), r#""a/csi\302\233here""#);
+        assert_eq!(quote_path("a/nel\u{85}here"), r#""a/nel\302\205here""#);
     }
 }

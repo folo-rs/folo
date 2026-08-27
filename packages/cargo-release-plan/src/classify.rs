@@ -24,7 +24,7 @@ use crate::manifest::{
 };
 use crate::metadata::{ReportedDep, WorkPackage, WorkTree, dependents_of, load_work_tree};
 use crate::packaging::{PackagingRules, relativize};
-use crate::text::plural;
+use crate::text::{plural, quote_path};
 use crate::verbose::Verbose;
 use crate::{ReadFileError, VersionRegressionError, short_commit};
 
@@ -132,10 +132,11 @@ pub(crate) fn classify(
     let head = git.head()?;
     let base_sha = git.rev_parse(base)?;
     verbose.note(format!(
-        "classifying {} against base {base} ({base_sha}); \
+        "classifying {} against base {} ({base_sha}); \
          anchors are the last parsed version change on that revision's first-parent line, \
          not on the work tree's branch",
-        plural(work_tree.packages.len(), "publishable package")
+        plural(work_tree.packages.len(), "publishable package"),
+        quote_path(base)
     ));
 
     let mut cache = SnapshotCache::new(&work_tree.workspace_root);
@@ -180,10 +181,12 @@ pub(crate) fn classify(
 
     let group_verdicts = work_tree.groups.verdicts(&versions, &exempt);
     for (name, verdict) in &group_verdicts {
+        let members: Vec<String> = verdict.members.iter().map(|m| quote_path(m)).collect();
         verbose.note(format!(
-            "version group {name}: members [{}]; consistent={} (members that do not exist on \
+            "version group {}: members [{}]; consistent={} (members that do not exist on \
              the base revision are exempt from matching declared versions)",
-            verdict.members.join(", "),
+            quote_path(name),
+            members.join(", "),
             verdict.consistent
         ));
     }
@@ -213,6 +216,9 @@ fn classify_one(
     verbose: Verbose,
 ) -> Result<PackageClass, AppError> {
     let name = &package.manifest.name;
+    // Diagnostics never render a repository-controlled name raw.
+    // Ref: docs/implementation.md, "Diagnostics".
+    let shown = quote_path(name);
     let group = work_tree.groups.group_of(name).map(ToOwned::to_owned);
     let dependents = dependents_of(&work_tree.packages, name);
 
@@ -223,7 +229,7 @@ fn classify_one(
         match reintroduction_anchor(name, &timeline)? {
             Some(anchor) => {
                 verbose.note(format!(
-                    "{name}: absent from base {base_sha} but carried earlier on its first-parent \
+                    "{shown}: absent from base {base_sha} but carried earlier on its first-parent \
                      history, so this branch reintroduces a package rather than creating one and \
                      the last version change on that history ({} declaring {}) is the anchor",
                     short_commit(&anchor.commit),
@@ -233,7 +239,7 @@ fn classify_one(
             }
             None => {
                 verbose.note(format!(
-                    "{name}: absent from base {base_sha} and from every sampled commit on its \
+                    "{shown}: absent from base {base_sha} and from every sampled commit on its \
                      first-parent history, so creation on this branch counts as a version \
                      increase and the status is releasing"
                 ));
@@ -266,7 +272,7 @@ fn classify_one(
     };
     let short_anchor = short_commit(&anchor.commit);
     verbose.note(format!(
-        "{name}: anchor {short_anchor} declared {}; work tree declares {}; a status of releasing \
+        "{shown}: anchor {short_anchor} declared {}; work tree declares {}; a status of releasing \
          requires the work-tree version to be greater than the anchor version (parsed, not textual)",
         anchor.version,
         package.manifest.version
@@ -298,9 +304,9 @@ fn classify_one(
     );
     for item in inherited {
         verbose.note(format!(
-            "{name}: inherited {} changed between the anchor and the work tree, so the root \
+            "{shown}: inherited {} changed between the anchor and the work tree, so the root \
              manifest is in scope for this package",
-            item.field
+            quote_path(&item.field)
         ));
         changed.push(ChangedItem::Inherited { field: item.field });
     }
@@ -330,7 +336,7 @@ fn classify_one(
         PackageStatus::UnreleasedChanges
     };
     verbose.note(format!(
-        "{name}: status {status:?} because version_increased={version_increased} and \
+        "{shown}: status {status:?} because version_increased={version_increased} and \
          changed_items={}",
         changed.len()
     ));
@@ -661,6 +667,12 @@ fn released_in_work_tree(
 /// git-tracked files — so this narrower listing is used only for structure.
 /// A dangling symbolic link counts as present, because Git tracks the link
 /// itself rather than what it points at.
+///
+/// Narrowing only ever removes paths, so an untracked nested manifest still
+/// draws no boundary. That is deliberate: untracked paths never enter
+/// classification (docs/design.md, "Released content"), and `cargo package`
+/// refuses a dirty tree, so the artifact this models is always built from a tree
+/// where no untracked file exists.
 fn present_in_work_tree(git: &GitRepo, paths: &[String]) -> Vec<String> {
     paths
         .iter()
@@ -991,9 +1003,11 @@ fn log_untracked(verbose: Verbose, name: &str, count: usize) {
         return;
     }
     verbose.note(format!(
-        "{name}: {} match packaging rules and are advisory only; released content is defined as \
+        "{}: {} match packaging rules and are advisory only; released content is defined as \
          the git-tracked files under the package, so untracked paths are never counted as changes \
-         even where Cargo would pack them",
+         even where Cargo would pack them (an untracked nested manifest therefore does not draw a \
+         package boundary either, and `cargo package` refuses a dirty tree in any case)",
+        quote_path(name),
         plural(count, "untracked path")
     ));
 }

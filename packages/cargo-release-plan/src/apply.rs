@@ -237,8 +237,9 @@ fn rewrite_package_version(doc: &mut DocumentMut, expanded: &ExpandedPlan, verbo
     };
     if set_package_version_item(package, new_version) {
         verbose.note(format!(
-            "{name}: set package.version to {new_version} because the expanded plan assigns that \
-             version to this package"
+            "{}: set package.version to {new_version} because the expanded plan assigns that \
+             version to this package",
+            quote_path(&name)
         ));
     }
 }
@@ -323,10 +324,13 @@ fn rewrite_dep_table(
         }
         if rewrite_dep_entry(entry, &new_version) {
             verbose.note(format!(
-                "{where_}.{name}: rewrote the version requirement to follow {crate_name} {new_version} \
+                "{}.{}: rewrote the version requirement to follow {} {new_version} \
                  (exact `=` pins keep the equals sign; requirements that already match the new \
                  version are left unchanged; only path dependencies resolving to that workspace \
-                 member are rewritten)"
+                 member are rewritten)",
+                quote_path(where_),
+                quote_path(&name),
+                quote_path(&crate_name)
             ));
         }
     }

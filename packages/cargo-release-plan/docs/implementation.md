@@ -62,6 +62,16 @@ every subsequent read of that path address a different file. A wrong release
 verdict is worse than a refusal to give one. Output that is not a file name is
 still decoded lossily, because there a substituted byte only affects a message.
 
+Every child inherits a locale pinned to `C`. Git translates its diagnostics, and
+the one place where a Git failure is interpreted rather than surfaced — telling
+"this path is absent from that revision", a routine outcome for a package created
+or deleted on the branch, apart from an operational failure — has no
+machine-readable signal to read and must match Git's wording. Under a translated
+locale that match would fail and ordinary package creation would abort the run.
+Pinning the locale at the shared boundary also keeps captured output identical
+between a maintainer's terminal, a CI runner, and the test harness, which is the
+same reason colour is disabled there.
+
 ## Classification
 
 Classification walks the base revision's first-parent commits that touch a
@@ -169,13 +179,18 @@ which is the opposite of what the cross-check exists to surface.
 ## Diagnostics
 
 Every repository-controlled name a diagnostic prints — a path, a package or group
-name, an inherited field, a manifest a plan writes, a value an error condition
-names — goes through one shared quoting helper that borrows Git's
-`core.quotePath` rendering: a name carrying a quote, backslash, or control
-character is wrapped in quotes with those bytes escaped. Plain lines are read
-from a CI log or a terminal, so an unescaped newline could let the tail of a name
-pose as a fresh workflow command and an unescaped escape sequence could rewrite
-what a reader sees. A subprocess's own stderr is the single exception: `git` and
+name, an inherited field, a dependency table a plan rewrites, a manifest a plan
+writes, a value an error condition names — goes through one shared quoting helper
+that borrows Git's `core.quotePath` rendering: a name carrying a quote,
+backslash, or control character is wrapped in quotes with those bytes escaped.
+Control means every Unicode control, not only the ASCII ones, because a C1
+control such as U+009B drives a terminal exactly as its ASCII counterpart does;
+printable non-ASCII characters are left alone so an accented file name stays
+readable. Plain lines are read from a CI log or a terminal, so an unescaped
+newline could let the tail of a name pose as a fresh workflow command and an
+unescaped escape sequence could rewrite what a reader sees. The explanatory
+`--verbose` notes are held to the same rule as the verdict text, since both land
+on the same stderr. A subprocess's own stderr is the single exception: `git` and
 `cargo` already quote the names they report, and escaping their whole diagnostic
 would fold a multi-line explanation onto one unreadable line.
 

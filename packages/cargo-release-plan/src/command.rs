@@ -128,10 +128,18 @@ fn spawn(
     // because Cargo's automatic detection depends on the ambient environment,
     // which would otherwise make captured output differ between a terminal, a
     // CI runner and a test harness.
+    //
+    // The locale is pinned for the same reason: Git translates its diagnostics,
+    // and `git.rs` recognises a path that is absent from a revision by the
+    // wording Git uses. Under a translated locale that wording never matches and
+    // an ordinary package creation or deletion would surface as an operational
+    // error. GNU gettext ignores `LANGUAGE` once the locale is `C`, so this one
+    // variable settles it.
     Command::new(program)
         .args(args)
         .current_dir(cwd)
         .env("CARGO_TERM_COLOR", "never")
+        .env("LC_ALL", "C")
         .output()
         .map_err(|error| CommandSpawnError::caused_by(program, error).into())
 }

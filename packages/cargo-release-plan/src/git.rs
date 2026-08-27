@@ -332,6 +332,13 @@ pub(crate) fn join_git_rel(prefix: &str, workspace_rel: &str) -> String {
     }
 }
 
+/// Whether Git reported that a path is simply absent from the revision asked
+/// about, rather than failing for an operational reason.
+///
+/// Git has no machine-readable signal for this, so the wording is matched. That
+/// is only sound because [`crate::command`] pins the child locale to `C`; a
+/// translated Git would report a routine package creation or deletion as an
+/// operational error.
 fn is_absent_git_path(stderr: &str) -> bool {
     let stderr = stderr.to_ascii_lowercase();
     stderr.contains("does not exist")
