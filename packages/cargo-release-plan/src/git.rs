@@ -252,34 +252,19 @@ impl GitRepo {
         split_z(&stdout)
     }
 
-    /// Tree paths under `pathspec` at `commit`.
-    pub(crate) fn ls_tree(&self, commit: &str, pathspec: &str) -> Result<Vec<String>, AppError> {
-        let stdout = run_capture_bytes(
-            "git",
-            &[
-                "ls-tree",
-                "-r",
-                "--name-only",
-                "-z",
-                commit,
-                "--",
-                &dir_pathspec(pathspec),
-            ],
-            &self.root,
-        )?;
-        split_z(&stdout)
-    }
-
-    /// Tree paths under `pathspecs` at `commit` that are symbolic links.
+    /// Tree entries under `pathspecs` at `commit`.
     ///
-    /// A link's blob holds its target path, which is indistinguishable from a
-    /// regular file's content once read, so the tree's mode is the only place
-    /// the distinction survives.
-    pub(crate) fn symlink_paths(
+    /// The mode and object id are kept alongside the path because both answer
+    /// questions the path cannot. A link's blob holds its target path, which is
+    /// indistinguishable from a regular file's content once read, so the mode is
+    /// the only place that distinction survives; and the object id is the
+    /// content identity Git itself compares by, which is what a work-tree file
+    /// has to be compared against once a filter stands between the two.
+    pub(crate) fn ls_tree(
         &self,
         commit: &str,
         pathspecs: &[&str],
-    ) -> Result<HashSet<String>, AppError> {
+    ) -> Result<Vec<TreeEntry>, AppError> {
         let mut args = vec![
             "ls-tree".to_string(),
             "-r".to_string(),
@@ -290,9 +275,37 @@ impl GitRepo {
         args.extend(pathspecs.iter().map(|pathspec| dir_pathspec(pathspec)));
         let stdout = run_capture_os_bytes("git", &args, &self.root)?;
         Ok(split_z(&stdout)?
-            .into_iter()
-            .filter_map(|record| symlink_record_path(&record).map(ToOwned::to_owned))
+            .iter()
+            .filter_map(|record| TreeEntry::parse(record))
             .collect())
+    }
+
+    /// Object ids the work-tree files at `rel_paths` would be stored under.
+    ///
+    /// Git converts content on its way into the object database, so a file on
+    /// disk and the blob recording it need not hold the same bytes: an LFS
+    /// pointer and a line-ending rule both make the two diverge. Asking Git to
+    /// hash the work-tree file applies the same conversion the file would get if
+    /// it were staged, which puts both ends of a comparison in one
+    /// representation. Ids come back in the order the paths were given.
+    pub(crate) fn hash_objects(&self, rel_paths: &[&str]) -> Result<Vec<String>, AppError> {
+        let mut ids = Vec::with_capacity(rel_paths.len());
+        // A package can hold more paths than a command line accepts, so the
+        // request is split. The size is well under the smallest platform limit
+        // and large enough that ordinary packages take one round trip.
+        for chunk in rel_paths.chunks(256) {
+            let mut args = vec!["hash-object".to_string(), "--".to_string()];
+            args.extend(chunk.iter().map(|path| (*path).to_string()));
+            let stdout = run_capture_os_bytes("git", &args, &self.root)?;
+            ids.extend(
+                String::from_utf8_lossy(&stdout)
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(ToOwned::to_owned),
+            );
+        }
+        Ok(ids)
     }
 
     /// Manifest paths at `commit`, used to reconstruct historical workspace members.
@@ -317,16 +330,37 @@ fn is_manifest_path(path: &str) -> bool {
     path.rsplit('/').next() == Some(MANIFEST_FILE_NAME)
 }
 
-/// The path of a `git ls-tree` record, when the record describes a symbolic link.
+/// One file recorded in a commit's tree.
 ///
-/// A record is `<mode> <type> <object>\t<path>`, and the mode Git assigns a
-/// symbolic link is fixed by the index format rather than by file permissions.
-fn symlink_record_path(record: &str) -> Option<&str> {
-    let (metadata, path) = record.split_once('\t')?;
-    metadata
-        .starts_with(SYMLINK_TREE_MODE)
-        .then_some(path)
-        .filter(|_| metadata.as_bytes().get(SYMLINK_TREE_MODE.len()) == Some(&b' '))
+/// Classification needs more of a tree record than the path: the mode says
+/// whether the entry is a symbolic link, and the object id is the content
+/// identity a work-tree file is compared against.
+#[derive(Clone, Debug)]
+pub(crate) struct TreeEntry {
+    pub(crate) path: String,
+    pub(crate) id: String,
+    mode: String,
+}
+
+impl TreeEntry {
+    /// Reads a `<mode> <type> <object>\t<path>` record, skipping anything else.
+    fn parse(record: &str) -> Option<Self> {
+        let (metadata, path) = record.split_once('\t')?;
+        let mut fields = metadata.split(' ');
+        let mode = fields.next()?;
+        let _kind = fields.next()?;
+        let id = fields.next()?;
+        Some(Self {
+            path: path.to_string(),
+            id: id.to_string(),
+            mode: mode.to_string(),
+        })
+    }
+
+    /// Whether the entry is a symbolic link, which Git marks by a fixed mode.
+    pub(crate) fn is_symlink(&self) -> bool {
+        self.mode == SYMLINK_TREE_MODE
+    }
 }
 
 /// Rewrites an operating-system path into the `/`-separated form Git reports.
@@ -440,22 +474,28 @@ mod tests {
         assert!(!is_manifest_path("packages/Cargo.toml/inner.rs"));
     }
 
-    /// The mode is the leading field of a tree record, and a path may itself
-    /// begin with the digits of a mode, so the field boundary is what decides.
+    /// The mode and object id are read off the record's own fields, so a path
+    /// that itself looks like a mode cannot be mistaken for one.
     #[test]
-    fn symlink_records_are_selected_by_tree_mode() {
-        assert_eq!(
-            symlink_record_path("120000 blob abc\tpackages/foo/link.txt"),
-            Some("packages/foo/link.txt")
-        );
-        assert_eq!(
-            symlink_record_path("100644 blob abc\tpackages/foo/real.txt"),
-            None
-        );
-        assert_eq!(symlink_record_path("040000 tree abc\tpackages/foo"), None);
+    fn tree_records_are_parsed_into_mode_and_object() {
+        let link = TreeEntry::parse("120000 blob abc\tpackages/foo/link.txt").unwrap();
+        assert!(link.is_symlink());
+        assert_eq!(link.path, "packages/foo/link.txt");
+        assert_eq!(link.id, "abc");
+
+        let file = TreeEntry::parse("100644 blob def\tpackages/foo/real.txt").unwrap();
+        assert!(!file.is_symlink());
+        assert_eq!(file.id, "def");
+
         // A regular file whose mode merely starts with the link mode's digits.
-        assert_eq!(symlink_record_path("1200001 blob abc\tx"), None);
-        assert_eq!(symlink_record_path("120000 blob abc packages/foo"), None);
+        assert!(
+            !TreeEntry::parse("1200001 blob abc\tx")
+                .unwrap()
+                .is_symlink()
+        );
+        // Not a record at all: no field separator.
+        assert!(TreeEntry::parse("120000 blob abc packages/foo").is_none());
+        assert!(TreeEntry::parse("120000 blob\tpackages/foo").is_none());
     }
 
     /// A backslash is an ordinary character in a file name on Unix, so only the
@@ -554,8 +594,9 @@ mod tests {
         repo.first_parent_commits("HEAD").unwrap_err();
         repo.ls_files("").unwrap_err();
         repo.ls_untracked("").unwrap_err();
-        repo.ls_tree("HEAD", "").unwrap_err();
+        repo.ls_tree("HEAD", &[""]).unwrap_err();
         repo.ls_tree_manifests("HEAD").unwrap_err();
+        repo.hash_objects(&["Cargo.toml"]).unwrap_err();
         repo.rev_parse("HEAD").unwrap_err();
     }
 
@@ -689,9 +730,36 @@ mod tests {
             repo.ls_files("packages/de[m]o").unwrap(),
             vec!["packages/de[m]o/lib.rs".to_string()]
         );
+        let entries = repo.ls_tree("HEAD", &["packages/de[m]o"]).unwrap();
         assert_eq!(
-            repo.ls_tree("HEAD", "packages/de[m]o").unwrap(),
+            entries
+                .iter()
+                .map(|entry| entry.path.clone())
+                .collect::<Vec<_>>(),
             vec!["packages/de[m]o/lib.rs".to_string()]
         );
+    }
+
+    /// Git converts content on its way into the object database, so the id a
+    /// work-tree file hashes to is the representation both ends of a comparison
+    /// have to be expressed in. It must agree with the id the tree records for
+    /// an unmodified file.
+    #[cfg_attr(miri, ignore)] // Spawns git, which Miri cannot emulate.
+    #[test]
+    fn a_work_tree_file_hashes_to_the_id_its_tree_entry_records() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        std::fs::create_dir_all(root.join("packages/demo")).unwrap();
+        std::fs::write(root.join("packages/demo/lib.rs"), "x").unwrap();
+        std::fs::write(root.join("packages/demo/other.rs"), "y").unwrap();
+        let repo = init_repo(root);
+
+        let entries = repo.ls_tree("HEAD", &["packages/demo"]).unwrap();
+        let recorded: Vec<String> = entries.iter().map(|entry| entry.id.clone()).collect();
+        let hashed = repo
+            .hash_objects(&["packages/demo/lib.rs", "packages/demo/other.rs"])
+            .unwrap();
+
+        assert_eq!(hashed, recorded);
     }
 }

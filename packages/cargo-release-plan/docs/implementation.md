@@ -139,6 +139,16 @@ distinction survives once a blob is read. Both look at the released paths only,
 and the anchor listing covers the manifest resources alongside the package
 directory, so a link that only history holds is caught as well as one on disk.
 
+Content is compared by Git object identity rather than by bytes. Git converts
+content on its way into the object database — line-ending rules and clean
+filters such as Git LFS both apply — so a file on disk and the blob recording it
+routinely hold different bytes even when nothing has changed. The anchor's ids
+come from the tree listing that already establishes released content, and the
+work tree's from hashing the released files, which applies the same conversion
+staging them would. Delegating the question that way means no conversion has to
+be understood, reimplemented, or kept in step with Git. Bytes are then read only
+for the paths whose ids differ, to render the patch.
+
 Historical manifests are read without Cargo's help, so every `.workspace = true`
 key a member declares is resolved against the root manifest of the same commit.
 `version`, `include`, `exclude`, and `publish` all matter to classification: with

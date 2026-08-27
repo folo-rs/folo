@@ -14,7 +14,7 @@ use toml_edit::DocumentMut;
 
 use crate::anchor::{Anchor, TimelineEntry, reintroduction_anchor, resolve_anchor};
 use crate::diff::file_diff;
-use crate::git::{GitRepo, join_git_rel};
+use crate::git::{GitRepo, TreeEntry, join_git_rel};
 use crate::groups::GroupVerdict;
 use crate::inherited::{InheritedChange, inherited_changes};
 use crate::manifest::{
@@ -478,10 +478,23 @@ fn diff_package(
     let resource_paths: Vec<&str> = work.resources.values().map(String::as_str).collect();
     let tracked_resources = git.tracked_paths(&resource_paths)?;
 
-    let anchor_files = released_at_commit(git, anchor_commit, anchor)?;
+    let anchor_tree = anchor_tree_entries(git, anchor_commit, anchor)?;
+    let anchor_files = released_at_commit(&anchor_tree, anchor);
     let work_files = released_in_work_tree(git, work, &tracked_resources)?;
 
-    reject_anchor_symlinks(git, name, anchor_commit, anchor, &anchor_files)?;
+    reject_anchor_symlinks(name, &anchor_tree, &anchor_files)?;
+
+    // Git converts content on its way into the object database, so a file on
+    // disk and the blob recording it need not hold the same bytes. Comparing
+    // content identity rather than raw bytes puts both ends in the one
+    // representation Git itself compares by, which is what keeps an LFS-tracked
+    // asset or a line-ending rule from making an untouched package look
+    // changed. Ref: docs/implementation.md, "Classification".
+    let anchor_ids: HashMap<&str, &str> = anchor_tree
+        .iter()
+        .map(|entry| (entry.path.as_str(), entry.id.as_str()))
+        .collect();
+    let work_ids = work_blob_ids(git, name, &work_files)?;
 
     let rels: BTreeSet<&str> = anchor_files
         .keys()
@@ -495,18 +508,14 @@ fn diff_package(
     let mut deletions = 0_usize;
 
     for rel in rels {
-        let old = match anchor_files.get(rel) {
-            Some(path) => git.show_file_bytes(anchor_commit, path)?,
-            None => None,
-        };
-        let new = match work_files.get(rel) {
-            Some(path) => read_optional_bytes(&git.root().join(path), name, path)?,
-            None => None,
-        };
-        if old.as_deref() == new.as_deref() {
+        let old_id = anchor_files
+            .get(rel)
+            .and_then(|path| anchor_ids.get(path.as_str()).copied());
+        let new_id = work_ids.get(rel).map(String::as_str);
+        if old_id == new_id {
             continue;
         }
-        let kind = match (old.is_some(), new.is_some()) {
+        let kind = match (old_id.is_some(), new_id.is_some()) {
             (false, true) => "added",
             (true, false) => "deleted",
             _ => "modified",
@@ -515,6 +524,16 @@ fn diff_package(
             path: rel.to_string(),
             change: kind.to_string(),
         });
+        // The content itself is only needed to render what changed, so it is
+        // read for the differing paths alone.
+        let old = match anchor_files.get(rel).filter(|_| old_id.is_some()) {
+            Some(path) => git.show_file_bytes(anchor_commit, path)?,
+            None => None,
+        };
+        let new = match work_files.get(rel).filter(|_| new_id.is_some()) {
+            Some(path) => read_optional_bytes(&git.root().join(path), name, path)?,
+            None => None,
+        };
         let file_diff = file_diff(rel, old.as_deref(), new.as_deref());
         insertions = insertions.saturating_add(file_diff.insertions);
         deletions = deletions.saturating_add(file_diff.deletions);
@@ -531,22 +550,52 @@ fn diff_package(
     Ok((changed, patch, stat, untracked))
 }
 
+/// Object ids the released work-tree files would be stored under, by the path
+/// each takes inside the `.crate`.
+///
+/// A tracked path the work tree no longer holds is left out, which is what makes
+/// it read as deleted. A symbolic link stops the run here rather than being
+/// hashed, because Git would hash the file it points at while the tree records
+/// the link itself.
+fn work_blob_ids(
+    git: &GitRepo,
+    name: &str,
+    released: &HashMap<String, String>,
+) -> Result<HashMap<String, String>, AppError> {
+    let mut rels = Vec::new();
+    let mut paths = Vec::new();
+    for (rel, path) in released {
+        match fs::symlink_metadata(git.root().join(path)) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(SymlinkReleasedError::new(name, path).into());
+            }
+            Ok(_) => {}
+            Err(error) if is_not_found(&error) => continue,
+            Err(error) => {
+                return Err(ReadFileError::caused_by(git.root().join(path), error).into());
+            }
+        }
+        rels.push(rel.clone());
+        paths.push(path.as_str());
+    }
+    let ids = git.hash_objects(&paths)?;
+    Ok(rels.into_iter().zip(ids).collect())
+}
+
 /// Stops when the anchor released a symbolic link.
 ///
 /// The tree's modes are the only place the distinction survives, so the paths
-/// released at the anchor are matched against the links the tree records. The
-/// package directory alone does not cover a manifest resource that lives outside
-/// it, so those paths are asked for too, in the same listing.
+/// released at the anchor are matched against the links the tree records.
 fn reject_anchor_symlinks(
-    git: &GitRepo,
     name: &str,
-    commit: &str,
-    side: &PackageSide<'_>,
+    entries: &[TreeEntry],
     released: &HashMap<String, String>,
 ) -> Result<(), AppError> {
-    let mut pathspecs: Vec<&str> = vec![side.dir];
-    pathspecs.extend(side.resources.values().map(String::as_str));
-    let links = git.symlink_paths(commit, &pathspecs)?;
+    let links: HashSet<&str> = entries
+        .iter()
+        .filter(|entry| entry.is_symlink())
+        .map(|entry| entry.path.as_str())
+        .collect();
     if links.is_empty() {
         return Ok(());
     }
@@ -554,7 +603,7 @@ fn reject_anchor_symlinks(
     // to keep the reported one stable across runs.
     let offender = released
         .values()
-        .filter(|path| links.contains(*path))
+        .filter(|path| links.contains(path.as_str()))
         .min()
         .cloned();
     match offender {
@@ -563,18 +612,31 @@ fn reject_anchor_symlinks(
     }
 }
 
-fn released_at_commit(
+/// Lists the tree at `commit` for everything a package could release.
+///
+/// The package directory alone does not cover a manifest resource that lives
+/// outside it, so those paths are asked for in the same listing.
+fn anchor_tree_entries(
     git: &GitRepo,
     commit: &str,
     side: &PackageSide<'_>,
-) -> Result<HashMap<String, String>, AppError> {
-    let paths = git.ls_tree(commit, side.dir)?;
+) -> Result<Vec<TreeEntry>, AppError> {
+    let mut pathspecs: Vec<&str> = vec![side.dir];
+    pathspecs.extend(side.resources.values().map(String::as_str));
+    git.ls_tree(commit, &pathspecs)
+}
+
+fn released_at_commit(entries: &[TreeEntry], side: &PackageSide<'_>) -> HashMap<String, String> {
+    let paths: Vec<String> = entries
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect::<Vec<_>>();
     let mut released = released_from_paths(&paths, &paths, side);
     // Reading a resource back from the commit yields nothing when the commit
     // did not track it, so the tree itself performs the tracked-only filter the
     // work tree needs `tracked_paths` for.
     add_resources(&mut released, side.resources.iter());
-    Ok(released)
+    released
 }
 
 /// Adds the files Cargo packs because a manifest key names them.

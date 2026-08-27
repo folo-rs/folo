@@ -198,6 +198,62 @@ fn a_symbolic_link_released_only_at_the_anchor_stops_the_run() {
     assert!(message.contains("symbolic link"), "{message}");
 }
 
+/// Git converts content on its way into the object database, so a work-tree
+/// file and the blob recording it need not hold the same bytes. Comparing the
+/// two representations directly would report every such file as modified on a
+/// clean checkout, which would mark whole packages `unreleased-changes` forever.
+///
+/// The divergence is provoked here with a line-ending rule, which needs no
+/// external tooling, but it is the same divergence Git LFS produces: this
+/// repository stores `*.png` as pointer blobs while the work tree holds the
+/// image.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn a_file_git_converts_on_the_way_in_is_not_reported_as_changed() {
+    let fixture = converted_content_package();
+    let base = fixture.sha("HEAD");
+
+    let stored = fixture.git(&["show", "HEAD:packages/demo/data.txt"]);
+    assert!(
+        !stored.contains('\r'),
+        "the fixture must actually exercise conversion, got {stored:?}"
+    );
+
+    let (passed, message) = check(&fixture, &base);
+
+    assert!(passed, "{message}");
+}
+
+/// Conversion must not hide a real edit either: the comparison moves to Git's
+/// own representation, it does not stop comparing.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn an_edit_to_a_converted_file_is_still_reported_as_changed() {
+    let fixture = converted_content_package();
+    let base = fixture.sha("HEAD");
+    fixture.write("packages/demo/data.txt", "one\r\nthree\r\n");
+    fixture.commit("edit converted content");
+
+    let (passed, message) = check(&fixture, &base);
+
+    assert!(!passed, "{message}");
+    assert!(message.contains("demo: unreleased-changes"), "{message}");
+}
+
+/// Package whose released content includes a file Git rewrites as it stores it,
+/// so the anchor's blob and the work-tree file hold different bytes from the
+/// creation commit onwards.
+fn converted_content_package() -> Fixture {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "demo", "0.1.0", "");
+    fixture.write(".gitattributes", "*.txt text eol=crlf\n");
+    // Written with the line endings the attribute demands in the work tree; Git
+    // stores the converted form.
+    fixture.write("packages/demo/data.txt", "one\r\ntwo\r\n");
+    fixture.commit("seed");
+    fixture
+}
+
 /// The cross-check compares the tool's released-content set against Cargo's own
 /// list, so it has to account for the resources Cargo copies in from outside the
 /// package directory or every inheriting package looks like a mismatch.
