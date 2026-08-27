@@ -32,6 +32,7 @@ use windows::Win32::System::Threading::{
 };
 use windows::core::{PCWSTR, PWSTR};
 
+use crate::constants::TERMINATE_TIMEOUT;
 use crate::pal::error::{PalError, PalErrorKind};
 use crate::pal::ids::{AppId, JobId};
 use crate::pal::processes::{
@@ -225,8 +226,30 @@ impl Processes for BuildTargetProcesses {
         // SAFETY: `handle` is a process handle opened with PROCESS_TERMINATE
         // and verified to be the recorded process.
         let result = unsafe { TerminateProcess(handle, 1) };
+        let settled = if result.is_ok() {
+            // Termination is asynchronous. Reporting success while the process
+            // still runs would let `kill` delete the record and reuse the id
+            // while the old supervisor can still publish an attached flag and
+            // recreate it, so wait for the process object to signal.
+            // SAFETY: `handle` is a process handle opened with SYNCHRONIZE.
+            let wait = unsafe {
+                WaitForSingleObject(
+                    handle,
+                    u32::try_from(TERMINATE_TIMEOUT.as_millis())
+                        .expect("terminate timeout fits in u32 milliseconds"),
+                )
+            };
+            wait == WAIT_OBJECT_0
+        } else {
+            false
+        };
         close(handle);
-        result.map_err(|_error| PalError::new(PalErrorKind::Other))
+        result.map_err(|_error| PalError::new(PalErrorKind::Other))?;
+        if settled {
+            Ok(())
+        } else {
+            Err(PalError::new(PalErrorKind::Other))
+        }
     }
 
     fn create_lifetime_job(&self) -> Result<JobId, PalError> {

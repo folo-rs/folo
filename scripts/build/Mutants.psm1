@@ -97,11 +97,14 @@ function Get-MutantsExcludeArgument {
         # of code that is only testable in a multi-processor system.
         '-e', (protect 'packages/par_bench/src/resource_usage_ext.rs'),
 
-        # The whole `dure` PAL is the operating-system boundary: every implementation is
-        # `cfg`-gated per platform, so on any one runner half the tree is not even compiled
-        # and its mutants can never be killed, while the compiled half is a thin binding
-        # exercised through integration tests and mocks rather than unit tests.
-        '-e', (protect 'packages/dure/src/pal/**'),
+        # The platform-bound leaves of the `dure` PAL: `windows.rs` and `unsupported.rs` are
+        # `cfg`-gated per platform, so on any one runner half the tree is not even compiled and
+        # its mutants can never be killed, while the compiled half is a thin Win32 binding
+        # exercised through integration tests rather than unit tests. `memory.rs` is a test
+        # fake. The portable PAL logic above them stays in scope.
+        '-e', (protect 'packages/dure/src/pal/*/windows.rs'),
+        '-e', (protect 'packages/dure/src/pal/*/unsupported.rs'),
+        '-e', (protect 'packages/dure/src/pal/*/memory.rs'),
 
         # Integration-test helper binary and in-crate test support are not product code.
         '-e', (protect 'packages/dure/src/bin/dure_test_helper.rs'),

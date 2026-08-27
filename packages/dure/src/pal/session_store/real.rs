@@ -92,12 +92,14 @@ impl SessionStore for FsSessionStore {
                     file.write_all(b"").map_err(PalError::from_io)?;
                     return Ok(id);
                 }
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                Err(error) => {
+                    if !is_id_taken(&error) {
+                        return Err(PalError::from_io(error));
+                    }
                     n = n
                         .checked_add(1)
                         .ok_or_else(|| PalError::new(PalErrorKind::Other))?;
                 }
-                Err(error) => return Err(PalError::from_io(error)),
             }
         }
     }
@@ -177,6 +179,14 @@ impl SessionStore for FsSessionStore {
     }
 }
 
+/// Whether an exclusive-create failure means the id is already reserved.
+///
+/// Any other failure is a filesystem fault: treating it as a taken id would
+/// retry the same fault against every remaining id in turn.
+fn is_id_taken(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::AlreadyExists
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -209,6 +219,14 @@ mod tests {
     }
 
     #[test]
+    fn only_an_already_exists_failure_means_the_id_is_taken() {
+        assert!(is_id_taken(&io::Error::from(io::ErrorKind::AlreadyExists)));
+        assert!(!is_id_taken(&io::Error::from(
+            io::ErrorKind::PermissionDenied
+        )));
+    }
+
+    #[test]
     // Talks to the real operating system: the session store is a real directory.
     #[cfg_attr(miri, ignore)]
     fn allocates_smallest_unused_and_reuses_after_delete() {
@@ -221,6 +239,15 @@ mod tests {
         store.delete(first).unwrap();
         let reused = store.allocate_id().unwrap();
         assert_eq!(reused.get(), 1);
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn a_reserved_but_unpublished_id_reads_as_absent() {
+        let (_dir, store) = store();
+        let id = store.allocate_id().unwrap();
+        assert!(store.read(id).unwrap().is_none());
     }
 
     #[test]

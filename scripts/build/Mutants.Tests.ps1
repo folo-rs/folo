@@ -38,7 +38,9 @@ Describe 'Get-MutantsExcludeArgument' {
         $values | Should -Contain 'packages/cargo-bench-history-figures/**'
         $values | Should -Contain 'packages/cbh_detect/src/detect/examples.rs'
         $values | Should -Contain 'packages/cbh_detect/src/detect/scatter.rs'
-        $values | Should -Contain 'packages/dure/src/pal/**'
+        $values | Should -Contain 'packages/dure/src/pal/*/windows.rs'
+        $values | Should -Contain 'packages/dure/src/pal/*/unsupported.rs'
+        $values | Should -Contain 'packages/dure/src/pal/*/memory.rs'
         $values | Should -Contain 'packages/dure/src/bin/dure_test_helper.rs'
         $values | Should -Contain 'packages/dure/src/test_support.rs'
     }
@@ -72,7 +74,7 @@ Describe 'Get-MutantsExcludeArgument' {
         $values | Should -Contain "'**/*facade.rs'"
         $values | Should -Contain "'packages/testing/**'"
         $values | Should -Contain "'packages/cargo-bench-history-figures/**'"
-        $values | Should -Contain "'packages/dure/src/pal/**'"
+        $values | Should -Contain "'packages/dure/src/pal/*/windows.rs'"
         # Plain package names are still passed literally, without quoting.
         $values | Should -Contain 'many_cpus_benchmarking'
     }

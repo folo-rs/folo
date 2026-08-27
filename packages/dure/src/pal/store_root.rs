@@ -24,6 +24,10 @@ fn default_store_root() -> Result<PathBuf, PalError> {
 }
 
 #[cfg(not(windows))]
+// The Windows counterpart is `cfg`-ed out on non-Windows runners and vice
+// versa, so on any one runner this mutant compiles into nothing and can never
+// be killed.
+#[cfg_attr(test, mutants::skip)]
 fn default_store_root() -> Result<PathBuf, PalError> {
     Err(PalError::new(PalErrorKind::Other))
 }

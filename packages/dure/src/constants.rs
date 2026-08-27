@@ -12,6 +12,18 @@ use std::time::Duration;
 /// "Accept loop and steal".
 pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Bound on how long `terminate` waits for a killed process to become signaled.
+///
+/// `TerminateProcess` only initiates termination; the process object signals
+/// once the kernel has finished tearing it down, which is immediate unless a
+/// driver stalls. The duration is an arbitrary watchdog, chosen to sit well
+/// above that teardown and well below a human "this is stuck" wait.
+#[cfg_attr(
+    not(windows),
+    expect(dead_code, reason = "consumed by the Windows process PAL")
+)]
+pub(crate) const TERMINATE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Upper bound on one framed transport message.
 ///
 /// Ordinary console bursts are kibibytes. This is an arbitrary sanity cap so a
