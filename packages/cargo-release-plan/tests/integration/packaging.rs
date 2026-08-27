@@ -169,3 +169,51 @@ fn a_readme_excluded_by_include_is_still_released_content() {
     assert!(!passed, "{message}");
     assert!(message.contains("demo"), "{message}");
 }
+
+/// Cargo picks a package's README off disk when the manifest names none, and
+/// packs it regardless of `include`, so an allow-list that omits it must not
+/// hide a change to it either.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn a_readme_cargo_detects_itself_is_released_content() {
+    let fixture = Fixture::new("");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "include = [\"src/**\", \"Cargo.toml\"]",
+    );
+    fixture.write("packages/demo/README.md", "docs\n");
+    fixture.commit("seed");
+    let base = fixture.sha("HEAD");
+    fixture.write("packages/demo/README.md", "revised docs\n");
+    fixture.commit("revise the readme");
+
+    let (passed, message) = check(&fixture, &base);
+
+    assert!(!passed, "{message}");
+    assert!(message.contains("demo"), "{message}");
+}
+
+/// `cargo package` stops at a nested package boundary, so nothing beneath a
+/// directory carrying its own manifest belongs to the outer package — including
+/// the untracked files the report advertises.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn an_untracked_file_under_a_nested_package_is_not_advertised_for_the_outer_one() {
+    let fixture = seeded_package();
+    let base = fixture.sha("HEAD");
+    fixture.write(
+        "packages/demo/inner/Cargo.toml",
+        "[package]\nname = \"inner\"\nversion = \"0.1.0\"\nedition = \"2021\"\npublish = false\n",
+    );
+    fixture.write("packages/demo/inner/src/lib.rs", "pub fn g() {}\n");
+    fixture.commit("add a nested crate");
+    fixture.write("packages/demo/inner/src/extra.rs", "pub fn h() {}\n");
+    fixture.write("packages/demo/src/extra.rs", "pub fn i() {}\n");
+
+    let report = report_json(&fixture, &base);
+
+    assert!(report.contains("src/extra.rs"), "{report}");
+    assert!(!report.contains("inner/src/extra.rs"), "{report}");
+}

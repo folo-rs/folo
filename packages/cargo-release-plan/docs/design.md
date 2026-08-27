@@ -67,6 +67,12 @@ The git-tracked rule applies to a resource as it does to anything else: an
 untracked one is reported as an advisory, under the path it would take inside
 the `.crate`, and never counted as a change.
 
+A package that declares no `readme` at all still releases one: Cargo probes the
+package directory for its own default names and packs the first it finds, so
+that file is released content on the same terms as a declared one and an
+`include` that omits it changes nothing. `readme = false` opts out, and
+`readme = true` names Cargo's preferred default.
+
 The change set is a diff from the anchor to the work tree. The package
 directory is resolved independently at each end from that end's workspace
 member list, keyed by package name, so a relocated package is still compared

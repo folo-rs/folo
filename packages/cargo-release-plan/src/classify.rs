@@ -18,8 +18,9 @@ use crate::git::{GitRepo, git_path, join_git_rel};
 use crate::groups::GroupVerdict;
 use crate::inherited::{InheritedChange, inherited_changes};
 use crate::manifest::{
-    PackageManifest, PathCase, WorkspaceInherit, WorkspaceMembers, is_workspace_excluded,
-    is_workspace_member, parse_document, parse_package_manifest, parse_workspace_members,
+    DEFAULT_README_FILES, PackageManifest, PathCase, WorkspaceInherit, WorkspaceMembers,
+    is_workspace_excluded, is_workspace_member, parse_document, parse_package_manifest,
+    parse_workspace_members,
 };
 use crate::metadata::{ReportedDep, WorkPackage, WorkTree, dependents_of, load_work_tree};
 use crate::packaging::{PackagingRules, relativize};
@@ -240,6 +241,7 @@ fn classify_one(
                     dir: &package.manifest.directory,
                     rules: &package.manifest.packaging,
                     resources: &package.resources,
+                    auto_readme: package.manifest.auto_readme,
                 };
                 let resource_paths: Vec<&str> =
                     side.resources.values().map(String::as_str).collect();
@@ -288,11 +290,13 @@ fn classify_one(
             dir: &anchor_pkg.directory,
             rules: &anchor_pkg.packaging,
             resources: &anchor_pkg.resources,
+            auto_readme: anchor_pkg.auto_readme,
         },
         &PackageSide {
             dir: &package.manifest.directory,
             rules: &package.manifest.packaging,
             resources: &package.resources,
+            auto_readme: package.manifest.auto_readme,
         },
     )?;
 
@@ -405,6 +409,8 @@ struct PackageSide<'a> {
     /// Files Cargo packs because a manifest key names them, keyed by the path
     /// each takes inside the `.crate` and valued by its git-root-relative path.
     resources: &'a BTreeMap<String, String>,
+    /// Whether Cargo picks this package's README by probing its directory.
+    auto_readme: bool,
 }
 
 /// Resolves the files Cargo copies into the `.crate` because a manifest key
@@ -564,11 +570,29 @@ fn untracked_released(
     side: &PackageSide<'_>,
     tracked_resources: &HashSet<String>,
 ) -> Result<Vec<String>, AppError> {
-    let mut untracked: Vec<String> = git
+    let listed: Vec<String> = git
         .ls_untracked(side.dir)?
-        .into_iter()
+        .iter()
+        .map(|full| git_path(full))
+        .collect();
+    // The same nested-package boundary the tracked listing observes applies
+    // here, or a file under a nested crate would be advertised as content
+    // Cargo would pack for the outer one. The manifest drawing that boundary
+    // may itself still be untracked, so both listings feed the scan.
+    let tracked: Vec<String> = git
+        .ls_files(side.dir)?
+        .iter()
+        .map(|f| git_path(f))
+        .collect();
+    let mut boundary_paths = listed.clone();
+    boundary_paths.extend_from_slice(&tracked);
+    let nested = nested_package_dirs(&boundary_paths, side.dir);
+
+    let mut untracked: Vec<String> = listed
+        .iter()
+        .filter(|full| !is_inside_any(full, &nested))
         .filter_map(|full| {
-            let rel = relativize(&git_path(&full), side.dir)?.to_string();
+            let rel = relativize(full, side.dir)?.to_string();
             side.rules.is_released(&rel).then_some(rel)
         })
         .collect();
@@ -581,6 +605,18 @@ fn untracked_released(
         let present = git.root().join(path).symlink_metadata().is_ok();
         (present && !tracked_resources.contains(path)).then(|| name.clone())
     }));
+    if side.auto_readme {
+        // A README Cargo would detect is packed whatever the packaging rules
+        // say, so an untracked one is worth mentioning — but only while no
+        // tracked candidate outranks it, since that is the one Cargo picks.
+        let tracked_set: HashSet<&str> = tracked.iter().map(String::as_str).collect();
+        if detected_readme(side.dir, &tracked_set).is_none() {
+            let listed_set: HashSet<&str> = listed.iter().map(String::as_str).collect();
+            if let Some((name, _)) = detected_readme(side.dir, &listed_set) {
+                untracked.push(name);
+            }
+        }
+    }
     untracked.sort_unstable();
     untracked.dedup();
     Ok(untracked)
@@ -609,19 +645,41 @@ fn released_from_paths(paths: &[String], side: &PackageSide<'_>) -> HashMap<Stri
     let paths: Vec<String> = paths.iter().map(|path| git_path(path)).collect();
     let nested = nested_package_dirs(&paths, side.dir);
     let mut map = HashMap::new();
-    for full in paths {
-        if is_inside_any(&full, &nested) {
+    for full in &paths {
+        if is_inside_any(full, &nested) {
             continue;
         }
-        let Some(rel) = relativize(&full, side.dir) else {
+        let Some(rel) = relativize(full, side.dir) else {
             continue;
         };
         if side.rules.is_released(rel) {
-            let rel = rel.to_string();
-            map.insert(rel, full);
+            map.insert(rel.to_string(), full.clone());
+        }
+    }
+    if side.auto_readme {
+        let present: HashSet<&str> = paths.iter().map(String::as_str).collect();
+        if let Some((name, full)) = detected_readme(side.dir, &present) {
+            map.entry(name).or_insert(full);
         }
     }
     map
+}
+
+/// The default README this end holds for `dir`, keyed by its name in the `.crate`.
+///
+/// Cargo probes the package directory for its default names in order and packs
+/// the first that exists without consulting `include` or `exclude`, so a package
+/// that names no README still releases the one beside it. Detection runs over
+/// the same tracked listing the rest of the comparison uses, because released
+/// content is defined from git-tracked files.
+/// Ref: docs/design.md, "Released content".
+fn detected_readme(dir: &str, present: &HashSet<&str>) -> Option<(String, String)> {
+    DEFAULT_README_FILES.iter().find_map(|name| {
+        let full = join_relative(dir, name)?;
+        present
+            .contains(full.as_str())
+            .then(|| ((*name).to_string(), full))
+    })
 }
 
 /// Package directories nested strictly inside `dir`, read off the tracked paths.
@@ -668,6 +726,8 @@ struct HistoricalPackage {
     /// Files Cargo packs because a manifest key names them, keyed by the path
     /// each takes inside the `.crate`.
     resources: BTreeMap<String, String>,
+    /// Whether Cargo picks this package's README by probing its directory.
+    auto_readme: bool,
 }
 
 /// Workspace members and root manifest at one commit.
@@ -752,6 +812,7 @@ fn load_snapshot(git: &GitRepo, commit: &str, case: PathCase) -> Result<CommitSn
                 version: parsed.version.clone(),
                 packaging: parsed.packaging.clone(),
                 resources: resolve_resources(parsed, &parsed.directory, workspace_prefix),
+                auto_readme: parsed.auto_readme,
             },
         );
     }
@@ -1110,6 +1171,7 @@ mod tests {
             dir: "packages/a",
             rules: &rules,
             resources: &resources,
+            auto_readme: false,
         };
         // `fixture` is a crate of its own, so Cargo packs none of its files with
         // `packages/a` even though the workspace never lists it as a member.
@@ -1125,6 +1187,44 @@ mod tests {
             BTreeSet::from(["Cargo.toml", "src/lib.rs"])
         );
         assert_eq!(released.get("Cargo.toml").unwrap(), "packages/a/Cargo.toml");
+    }
+
+    /// Cargo packs the README it detects itself even when `include` omits it, and
+    /// prefers the first of its default names that the end being examined holds.
+    #[test]
+    fn a_detected_readme_outranks_the_packaging_rules() {
+        let rules = PackagingRules::new(Some(&["src/**".to_string()]), None).unwrap();
+        let resources = BTreeMap::new();
+        let paths = vec![
+            "packages/a/src/lib.rs".to_string(),
+            "packages/a/README.md".to_string(),
+            "packages/a/README.txt".to_string(),
+        ];
+        let side = PackageSide {
+            dir: "packages/a",
+            rules: &rules,
+            resources: &resources,
+            auto_readme: true,
+        };
+
+        let released = released_from_paths(&paths, &side);
+        assert_eq!(
+            released.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from(["src/lib.rs", "README.md"])
+        );
+
+        // A package that names its README, or disables the key, gets no detection.
+        let declared = PackageSide {
+            auto_readme: false,
+            ..side
+        };
+        assert_eq!(
+            released_from_paths(&paths, &declared)
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["src/lib.rs"])
+        );
     }
 
     /// A resource outside the package directory is released content under the
@@ -1191,6 +1291,7 @@ mod tests {
             inherited_path_dependencies: Vec::new(),
             resource_paths: local.iter().map(|path| (*path).to_string()).collect(),
             inherited_resource_paths: inherited.iter().map(|path| (*path).to_string()).collect(),
+            auto_readme: false,
         }
     }
 

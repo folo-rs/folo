@@ -42,6 +42,13 @@ pub(crate) struct PackageManifest {
     /// so a shared README several members inherit is released content for each of
     /// them without living in any of their directories.
     pub(crate) inherited_resource_paths: Vec<String>,
+    /// Whether Cargo picks this package's README by probing its directory.
+    ///
+    /// A manifest that declares no `readme` still releases the README beside it,
+    /// because Cargo probes the package directory for its default names and packs
+    /// the first that exists. Which name that is depends on what the end being
+    /// examined holds, so only the choice to probe is recorded here.
+    pub(crate) auto_readme: bool,
 }
 
 /// Workspace member patterns from the root manifest, compiled for repeated queries.
@@ -165,7 +172,8 @@ pub(crate) fn parse_package_manifest(
         .parse::<Version>()
         .map_err(|error| InvalidVersionError::caused_by(name, version, error))?;
     let directory = directory_of(manifest_path);
-    let (resource_paths, inherited_resource_paths) = resource_paths(package, workspace);
+    let (resource_paths, inherited_resource_paths, auto_readme) =
+        resource_paths(package, workspace);
     Ok(Some(PackageManifest {
         name: name.to_string(),
         version,
@@ -177,6 +185,7 @@ pub(crate) fn parse_package_manifest(
         inherited_path_dependencies: inherited_path_dependencies(&doc, workspace),
         resource_paths,
         inherited_resource_paths,
+        auto_readme,
     }))
 }
 
@@ -186,31 +195,64 @@ pub(crate) fn parse_package_manifest(
 /// packaging, and packs the named file regardless of `include` and `exclude`.
 const RESOURCE_KEYS: &[&str] = &["readme", "license-file"];
 
+/// The `[package]` key naming the README.
+///
+/// Singled out among [`RESOURCE_KEYS`] because Cargo also accepts a boolean
+/// there and derives the value from the package directory when it is absent.
+const README_KEY: &str = "readme";
+
+/// The name Cargo prefers when it picks a README itself.
+const PRIMARY_README: &str = "README.md";
+
+/// The names Cargo probes for, in order, when a manifest declares no `readme`.
+///
+/// Ref: Cargo's `default_readme_from_package_root`.
+pub(crate) const DEFAULT_README_FILES: &[&str] = &[PRIMARY_README, "README.txt", "README"];
+
 /// Collects the files Cargo packs because a `[package]` key names them.
 ///
 /// A locally declared value is relative to the package directory while an
 /// inherited one is relative to the workspace root, so the two are returned
-/// separately for the caller to resolve against the right base. A non-string
-/// value such as `readme = false` names no file and is skipped.
+/// separately for the caller to resolve against the right base. The third
+/// element reports whether Cargo picks the README by probing the package
+/// directory, which it does only when the key is absent altogether: `readme =
+/// false` deliberately names no file.
 fn resource_paths(
     package: &dyn TableLike,
     workspace: &WorkspaceInherit<'_>,
-) -> (Vec<String>, Vec<String>) {
+) -> (Vec<String>, Vec<String>, bool) {
     let mut local = Vec::new();
     let mut inherited = Vec::new();
+    let mut auto_readme = false;
     for key in RESOURCE_KEYS {
         let Some(item) = package.get(key) else {
+            auto_readme |= *key == README_KEY;
             continue;
         };
-        if is_workspace_inherit(item) {
-            if let Some(path) = workspace.package_key(key).and_then(Item::as_str) {
-                inherited.push(path.to_string());
+        let (value, destination) = if is_workspace_inherit(item) {
+            match workspace.package_key(key) {
+                Some(value) => (value, &mut inherited),
+                None => continue,
             }
-        } else if let Some(path) = item.as_str() {
-            local.push(path.to_string());
+        } else {
+            (item, &mut local)
+        };
+        if let Some(path) = resource_value(key, value) {
+            destination.push(path.to_string());
         }
     }
-    (local, inherited)
+    (local, inherited, auto_readme)
+}
+
+/// The file name a resource key's value names, if any.
+///
+/// `readme = true` selects Cargo's preferred default name and `readme = false`
+/// names no file, so a boolean there is not merely a value of the wrong type.
+fn resource_value<'a>(key: &str, item: &'a Item) -> Option<&'a str> {
+    if let Some(enabled) = item.as_bool().filter(|_| key == README_KEY) {
+        return enabled.then_some(PRIMARY_README);
+    }
+    item.as_str()
 }
 
 /// The `[workspace.package]` and `[workspace.dependencies]` tables a member inherits from.
@@ -981,6 +1023,7 @@ license-file = "../../LICENSE"
         .unwrap();
         assert_eq!(parsed.resource_paths, vec!["../../LICENSE"]);
         assert_eq!(parsed.inherited_resource_paths, vec!["README.md"]);
+        assert!(!parsed.auto_readme);
     }
 
     /// `readme = false` disables the key rather than naming a file, and an
@@ -1002,6 +1045,32 @@ license-file.workspace = true
         .unwrap();
         assert!(parsed.resource_paths.is_empty());
         assert!(parsed.inherited_resource_paths.is_empty());
+        assert!(!parsed.auto_readme);
+    }
+
+    /// Cargo probes the package directory only when the key is absent, and reads
+    /// `readme = true` as naming its preferred default.
+    #[test]
+    fn an_undeclared_readme_is_left_for_cargo_to_detect() {
+        let detected = parse_package_manifest(
+            "[package]\nname = \"foo\"\nversion = \"0.1.0\"\n",
+            "packages/foo/Cargo.toml",
+            &WorkspaceInherit::default(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(detected.auto_readme);
+        assert!(detected.resource_paths.is_empty());
+
+        let enabled = parse_package_manifest(
+            "[package]\nname = \"foo\"\nversion = \"0.1.0\"\nreadme = true\n",
+            "packages/foo/Cargo.toml",
+            &WorkspaceInherit::default(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(!enabled.auto_readme);
+        assert_eq!(enabled.resource_paths, vec!["README.md"]);
     }
 
     #[test]

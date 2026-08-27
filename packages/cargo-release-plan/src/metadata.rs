@@ -438,6 +438,7 @@ mod tests {
                     inherited_path_dependencies: Vec::new(),
                     resource_paths: Vec::new(),
                     inherited_resource_paths: Vec::new(),
+                    auto_readme: false,
                 },
                 manifest_path: PathBuf::from(format!("packages/{name}/Cargo.toml")),
                 dependencies,
