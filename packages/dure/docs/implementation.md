@@ -10,8 +10,114 @@ The same binary implements both roles. `dure run` spawns `dure` again in
 supervisor mode (a hidden subcommand or equivalent), then the original process
 stays the client and attaches. Windows has no `exec`.
 
-Windows APIs sit behind a PAL so tests can mock process creation, console
-relaying, and the session registry without talking to a real console host.
+Windows APIs sit behind a PAL so logic does not depend on a real console host,
+named pipe, or job object. The PAL is the only place that talks to the operating
+system. Logic consumes it through facades that select the real implementation, or
+a mock implementation in test builds, matching the workspace
+[PAL](../../../docs/pal.md) pattern.
+
+The PAL is sliced by responsibility, at a grain that tests can drive, not as a
+1:1 wrap of each Win32 call:
+
+* **Session store** — create, read, list, and delete session records; allocate
+  ids; provide the registry root. The real implementation uses
+  `%LOCALAPPDATA%\dure\`. The root is supplied by the PAL so tests never touch
+  the user's real AppData.
+* **Processes** — spawn a supervisor with job breakaway, spawn the app attached
+  to a pseudoconsole, probe liveness by pid, terminate by pid, wait for an exit
+  status. Failure to break away is a PAL error that `run` surfaces rather than
+  ignoring.
+* **Transport** — listen, accept, connect, read and write console bytes and
+  window-size messages, disconnect. Steal is "accept a new connection while an
+  old one still exists."
+* **Local console** — detect whether the client has a console, switch it to a raw
+  relay, read input, write output, read window size.
+* **Pseudoconsole** — create, resize, close, and the byte handles the supervisor
+  relays. Whether a child *sees* a console is not mocked; that is an integration
+  concern.
+
+Time used for the bounded connect wait is a clock the PAL (or a `tick` clock)
+injects, so unit tests do not wait on real time.
+
+## Testing
+
+Workspace testing rules in [docs/testing.md](../../../docs/testing.md) apply:
+no real-time delays, no hung tests, watchdogs on waits, Miri-clean runs, and
+production behavior that does not change under `cfg(test)` except by swapping
+PAL implementations.
+
+### Unit tests
+
+Everything above the PAL is unit-tested against mocks. Those tests do not create
+windows, pipes, jobs, or child processes, and they remain Miri-compatible.
+
+Covered here:
+
+* **CLI** — parse `run`, `resume`, `resume --id`, `list`, `kill --id`; reject
+  `kill` without `--id`; treat the command after `--` as a direct exec.
+* **Auto-detect** — no sessions fails; exactly one launch-directory match
+  attaches; several matches or a single session in a different directory fall
+  through to list-and-prompt; non-terminal stdin without `--id` fails;
+  canonicalization and case folding are whatever the PAL's canonicalize returns.
+* **Id allocation** — smallest unused positive integer; reuse after a session
+  ends; two concurrent allocations cannot receive the same id (the store's
+  coordination is part of the PAL contract and is mocked as exclusive).
+* **Stale records** — a listed pid that the process PAL reports dead is deleted
+  and not shown; `resume` and `kill` of that id fail after cleanup.
+* **Supervisor loop** — first attach relays bytes both ways; a second attach
+  disconnects the first; resize is applied on attach; app exit ends the
+  supervisor and delivers the status to an attached client; a connect that never
+  completes within the injected clock is treated as a dead supervisor.
+* **Detach** — dropping the client does not close the app's input (no EOF);
+  output from the app is still drained so a mock that keeps writing cannot block
+  the session.
+* **Steal under load** — accept remains possible while the current client's
+  relay is stuck. This is a real multithreaded test against mock transport, not
+  an OS test, so Miri can check it.
+* **Kill** — terminate-by-pid is invoked; a missing id fails; auto-detect is not
+  consulted.
+* **Non-Windows entry** — the binary/library refuses to run.
+
+The real PAL and the facade pass-throughs are not unit-tested (workspace
+facade/mutants skip). A helper child process is not used here.
+
+### Integration tests
+
+Integration tests use the real PAL and a small helper executable that is not
+part of the published product. They run on Windows, are ignored under Miri, and
+use a temporary registry root. They wait on process and pipe events, never on
+sleep. Any wait is wrapped in the workspace watchdog.
+
+The helper reports whether it has a console, echoes input, records window size,
+exits with a requested status, and stays alive until an explicit quit (so an
+accidental EOF on stdin is visible as an unexpected exit).
+
+Covered here:
+
+* **Console, not pipes** — the helper reports that it is attached to a console.
+* **Exit status** — `run` of a helper that exits delivers that status to the
+  client.
+* **Detach and resume** — start, kill the client, the helper is still running,
+  `resume` attaches, input reaches the helper.
+* **Steal** — a second client attaches; the first client ends with failure; the
+  helper keeps running and talks to the second client.
+* **Resize on attach** — after resume, the helper observes a window-size change.
+* **List and GC** — a live session appears in `list`; after the helper exits it
+  does not.
+* **Auto-detect** — unique launch directory resumes; two sessions in the same
+  directory do not pick arbitrarily.
+* **Kill while detached** — `kill --id` ends the helper; a missing id fails.
+* **Job breakaway** — the supervisor is started from a process in a kill-on-close
+  job; destroying that job leaves the supervisor and helper running. This is the
+  test that a killed parent job does not end the session.
+* **Launch directory** — a relative helper path is resolved against the launch
+  directory, not a later working directory.
+
+Integration tests do not try to prove Copilot UI fidelity, nested-pseudoconsole
+cosmetics, or behavior when Windows logs the user off.
+
+Non-Windows CI still runs the unit tests and the refuse-to-run check. It does
+not run the Windows integration set.
 
 ## SSH survival
 
@@ -46,11 +152,11 @@ waitable handle (`WaitForSingleObject`), which is not an IOCP completion source.
 
 ## Session registry
 
-Per-session files under `%LOCALAPPDATA%\dure\` record id, supervisor pid, pipe
-name, launch directory, command, and start time. `list` / `resume` probe
-liveness (pid plus pipe) and delete stale files. Id allocation is
-filesystem-coordinated so two concurrent `run` invocations cannot take the same
-id.
+Per-session files under the PAL registry root (by default
+`%LOCALAPPDATA%\dure\`) record id, supervisor pid, pipe name, launch directory,
+command, and start time. `list` / `resume` probe liveness (pid plus pipe) and
+delete stale files. Id allocation is filesystem-coordinated so two concurrent
+`run` invocations cannot take the same id.
 
 ## Pseudoconsole
 
