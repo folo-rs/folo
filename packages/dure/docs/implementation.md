@@ -36,8 +36,8 @@ The PAL is sliced by responsibility, at a grain that tests can drive, not as a
   relays. Whether a child *sees* a console is not mocked; that is an integration
   concern.
 
-Time used for the bounded connect wait is a clock the PAL (or a `tick` clock)
-injects, so unit tests do not wait on real time.
+The bounded connect wait reads time through an injected `tick` clock, so unit
+tests do not wait on real time.
 
 ## Testing
 

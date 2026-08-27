@@ -11,7 +11,6 @@ cfgs
 clippy
 cloneable
 constness
-ConPTY
 cpulist
 cpus
 cpuset
@@ -32,7 +31,6 @@ heapless
 HWND
 Initializable
 IOCP
-isatty
 itertools
 JOBOBJECT
 justfiles
@@ -64,7 +62,6 @@ rustdoc
 Saares
 sched
 scopeguard
-sixel
 supertrait
 Symcrypt
 taskset

@@ -150,8 +150,8 @@ protocols, console font and selection chrome) stays unavailable.
 
 `dure` writes diagnostics to stderr only while it is not attached. Before
 attach, `run` and `resume` print the session id so the user can `kill` or
-`resume --id` later. After attach, the funnel is exclusive. When a client is
-displaced, it may write one diagnostic and then exit with a failure status.
+`resume --id` later. After attach, the funnel is exclusive. A displaced client
+writes one diagnostic once its relay has ended and exits with a failure status.
 When the app exits, an attached client exits with the app's status.
 
 Attaching (`run`, `resume`) requires a console. `list` and `kill` do not. The
