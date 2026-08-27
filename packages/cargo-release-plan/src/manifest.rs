@@ -223,16 +223,19 @@ pub(crate) fn parse_workspace_members(
 pub(crate) fn is_workspace_member(dir: &str, members: &WorkspaceMembers) -> bool {
     let dir = dir.replace('\\', "/");
     let dir = dir.trim_end_matches('/');
+    // A non-virtual root's own package is a member whatever the lists say, so it
+    // is decided before them. This is only ever asked about a directory that
+    // holds a package manifest, so a virtual root cannot reach it.
+    if dir.is_empty() {
+        return true;
+    }
     if members.exclude.iter().any(|pattern| pattern.matches(dir)) {
         return false;
     }
-    if members.members.is_empty() {
-        // A manifest without a `members` list defines a workspace whose only
-        // member is the root package itself. Treating an absent list as "every
-        // manifest in the repository" would pull unrelated packages into a
-        // historical snapshot.
-        return dir.is_empty();
-    }
+    // A manifest without a `members` list defines a workspace whose only member
+    // is the root package, already handled above. Treating an absent list as
+    // "every manifest in the repository" would pull unrelated packages into a
+    // historical snapshot.
     members.members.iter().any(|pattern| pattern.matches(dir))
 }
 
@@ -464,6 +467,9 @@ exclude = ["packages/skip"]
         assert!(is_workspace_member("packages/foo", &declared));
         assert!(!is_workspace_member("packages/skip", &declared));
         assert!(!is_workspace_member("examples/foo", &declared));
+        // A non-virtual root's own package is a member even though no pattern
+        // names it.
+        assert!(is_workspace_member("", &declared));
         // Without a `members` list the only member is the root package, matching
         // Cargo rather than treating every manifest in the tree as a member.
         let empty = parse_workspace_members(

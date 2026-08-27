@@ -64,6 +64,17 @@ workspace directory actually applies. Those rules are probed once per run by
 re-opening an existing entry under a case-flipped spelling; an inconclusive
 probe yields case-sensitive matching, which never widens membership.
 
+A non-virtual root's own package is a member whatever `members` and `exclude`
+say, so that case is decided before the patterns are consulted.
+
+## Diagnostics
+
+`--format github` renders each diagnostic as a workflow command in addition to
+the plain line. Package names, paths, and version strings all reach those
+commands from the repository, so message bodies are escaped for `%` and line
+breaks and property values additionally for `:` and `,` — otherwise a legal but
+awkward path could truncate an annotation or begin a second command.
+
 ## Plan application
 
 Plan application rewrites manifests structurally so comments and layout

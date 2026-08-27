@@ -92,7 +92,9 @@ fn render_diagnostics(classification: &Classification, format: CheckFormat) -> S
         if format == CheckFormat::Github {
             let file = package.manifest_path.to_string_lossy().replace('\\', "/");
             lines.push(format!(
-                "::error file={file},title=unreleased-changes::{text}"
+                "::error file={},title=unreleased-changes::{}",
+                escape_property(&file),
+                escape_data(&text)
             ));
         }
         lines.push(text);
@@ -118,12 +120,36 @@ fn render_diagnostics(classification: &Classification, format: CheckFormat) -> S
             remedy()
         );
         if format == CheckFormat::Github {
-            lines.push(format!("::error title=inconsistent-group::{text}"));
+            lines.push(format!(
+                "::error title=inconsistent-group::{}",
+                escape_data(&text)
+            ));
         }
         lines.push(text);
     }
 
     lines.join("\n")
+}
+
+/// Escapes the message body of a GitHub workflow command.
+///
+/// A workflow command ends at the first newline and treats `%` as the escape
+/// introducer, so a message carrying either would be truncated or would let
+/// repository-controlled text start a second command. GitHub's own toolkit
+/// applies exactly these three replacements.
+fn escape_data(value: &str) -> String {
+    value
+        .replace('%', "%25")
+        .replace('\r', "%0D")
+        .replace('\n', "%0A")
+}
+
+/// Escapes a property value of a GitHub workflow command.
+///
+/// Property values are additionally delimited by `:` and `,`, so a path
+/// containing either would otherwise split into further properties.
+fn escape_property(value: &str) -> String {
+    escape_data(value).replace(':', "%3A").replace(',', "%2C")
 }
 
 /// The remediation sentence appended to every gating diagnostic.
@@ -272,5 +298,21 @@ mod tests {
         assert!(is_packaging_artifact(".cargo_vcs_info.json"));
         assert!(is_packaging_artifact("Cargo.toml.orig"));
         assert!(!is_packaging_artifact("src/lib.rs"));
+    }
+
+    #[test]
+    fn workflow_command_data_is_escaped() {
+        assert_eq!(escape_data("100% done"), "100%25 done");
+        assert_eq!(escape_data("a\r\nb"), "a%0D%0Ab");
+        // A colon or comma is only a delimiter in a property, not in the body.
+        assert_eq!(escape_data("a:b,c"), "a:b,c");
+    }
+
+    #[test]
+    fn workflow_command_properties_escape_their_delimiters() {
+        assert_eq!(
+            escape_property("odd,name/100%/a:b/Cargo.toml"),
+            "odd%2Cname/100%25/a%3Ab/Cargo.toml"
+        );
     }
 }
