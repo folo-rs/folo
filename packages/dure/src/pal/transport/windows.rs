@@ -6,8 +6,9 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use windows::Win32::Foundation::{
-    CloseHandle, ERROR_IO_PENDING, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, GetLastError, HANDLE,
-    WAIT_OBJECT_0, WAIT_TIMEOUT,
+    CloseHandle, ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_NO_DATA, ERROR_PIPE_BUSY,
+    ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, GetLastError, HANDLE, WAIT_OBJECT_0,
+    WAIT_TIMEOUT, WIN32_ERROR,
 };
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, FILE_FLAGS_AND_ATTRIBUTES,
@@ -53,6 +54,14 @@ fn next_id() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
+fn io_error_kind(err: WIN32_ERROR) -> PalErrorKind {
+    if err == ERROR_BROKEN_PIPE || err == ERROR_NO_DATA || err == ERROR_PIPE_NOT_CONNECTED {
+        PalErrorKind::Disconnected
+    } else {
+        PalErrorKind::Other
+    }
+}
+
 fn close(handle: HANDLE) {
     if handle.is_invalid() {
         return;
@@ -64,6 +73,10 @@ fn close(handle: HANDLE) {
 fn wide_z(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
+
+// Kernel buffer for each direction. Sized for a typical console burst so a
+// slow client does not immediately stall ConPTY output. Not a protocol bound.
+const PIPE_BUFFER: u32 = 65_536;
 
 fn create_instance(name: &[u16], first: bool) -> Result<HANDLE, PalError> {
     let mut open_mode = PIPE_ACCESS_DUPLEX.0 | FILE_FLAG_OVERLAPPED.0;
@@ -78,8 +91,8 @@ fn create_instance(name: &[u16], first: bool) -> Result<HANDLE, PalError> {
             FILE_FLAGS_AND_ATTRIBUTES(open_mode),
             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
             PIPE_UNLIMITED_INSTANCES,
-            65_536,
-            65_536,
+            PIPE_BUFFER,
+            PIPE_BUFFER,
             0,
             None,
         )
@@ -167,7 +180,7 @@ fn read_exact(handle: HANDLE, buf: &mut [u8]) -> Result<(), PalError> {
             };
             if err != ERROR_IO_PENDING {
                 close(event);
-                return Err(PalError::new(PalErrorKind::Other));
+                return Err(PalError::new(io_error_kind(err)));
             }
             if let Err(error) = wait_event(event, INFINITE) {
                 // SAFETY: cancel the pending read so the OVERLAPPED can drop.
@@ -187,7 +200,7 @@ fn read_exact(handle: HANDLE, buf: &mut [u8]) -> Result<(), PalError> {
         }
         close(event);
         if transferred == 0 {
-            return Err(PalError::new(PalErrorKind::Other));
+            return Err(PalError::new(PalErrorKind::Disconnected));
         }
         filled = filled
             .checked_add(transferred as usize)

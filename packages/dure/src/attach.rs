@@ -8,13 +8,14 @@ use ohno::AppError;
 
 use crate::pal::error::PalErrorKind;
 use crate::pal::ids::ConnId;
-use crate::pal::local_console::LocalConsole;
+use crate::pal::local_console::{ConsoleInput, LocalConsole};
 use crate::pal::transport::Transport;
 use crate::protocol::Message;
 use crate::session_id::SessionId;
 use crate::types::Outcome;
 use crate::{
-    DisplacedError, NoConsoleError, PalFailedError, ResumeTimeoutError, StartupFailedError,
+    DisplacedError, NoConsoleError, PalFailedError, RelayFailedError, ResumeTimeoutError,
+    StartupFailedError,
 };
 
 /// Connect to a live supervisor and funnel console I/O until the relay ends.
@@ -37,6 +38,9 @@ where
     console
         .enter_raw_relay()
         .map_err(|_error| PalFailedError::new())?;
+    let _raw_guard = RawRelayGuard {
+        console: console.clone(),
+    };
     let size = console
         .window_size()
         .map_err(|_error| PalFailedError::new())?;
@@ -75,40 +79,71 @@ where
     relay(transport, console, conn)
 }
 
+/// Restores cooked console modes when attach ends, including on error paths.
+struct RawRelayGuard<C: LocalConsole> {
+    console: C,
+}
+
+impl<C: LocalConsole> Drop for RawRelayGuard<C> {
+    fn drop(&mut self) {
+        _ = self.console.leave_raw_relay();
+    }
+}
+
 fn relay<T, C>(transport: &T, console: &C, conn: ConnId) -> Result<Outcome, AppError>
 where
     T: Transport + Clone + Send + Sync + 'static,
     C: LocalConsole + Clone + Send + Sync + 'static,
 {
     let done = Arc::new(AtomicBool::new(false));
-    let outcome = Arc::new(std::sync::Mutex::new(None::<Result<Outcome, AppError>>));
+    let input_failed = Arc::new(AtomicBool::new(false));
 
     thread::spawn({
         let transport = transport.clone();
         let console = console.clone();
         let done = Arc::clone(&done);
-        let outcome = Arc::clone(&outcome);
+        let input_failed = Arc::clone(&input_failed);
         move || {
             while !done.load(Ordering::SeqCst) {
-                let Ok(bytes) = console.read_input() else {
-                    break;
-                };
-                if transport.send(conn, &Message::Input(bytes)).is_err() {
-                    break;
+                match console.read_input() {
+                    Ok(ConsoleInput::Bytes(bytes)) => {
+                        if transport.send(conn, &Message::Input(bytes)).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(ConsoleInput::Resize(size)) => {
+                        if transport
+                            .send(
+                                conn,
+                                &Message::Resize {
+                                    cols: size.cols,
+                                    rows: size.rows,
+                                },
+                            )
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(_) => {
+                        input_failed.store(true, Ordering::SeqCst);
+                        transport.disconnect(conn);
+                        break;
+                    }
                 }
             }
             done.store(true, Ordering::SeqCst);
-            let mut slot = outcome.lock().expect("outcome slot");
-            if slot.is_none() {
-                *slot = Some(Ok(Outcome::Success));
-            }
         }
     });
 
     loop {
         match transport.recv(conn) {
             Ok(Message::Output(bytes)) => {
-                _ = console.write_output(&bytes);
+                if console.write_output(&bytes).is_err() {
+                    done.store(true, Ordering::SeqCst);
+                    transport.disconnect(conn);
+                    return Err(RelayFailedError::new().into());
+                }
             }
             Ok(Message::AppExited { status }) => {
                 done.store(true, Ordering::SeqCst);
@@ -120,10 +155,18 @@ where
                 transport.disconnect(conn);
                 return Err(DisplacedError::new().into());
             }
-            _ => {
+            Err(error) if error.kind() == PalErrorKind::Disconnected => {
                 done.store(true, Ordering::SeqCst);
                 transport.disconnect(conn);
+                if input_failed.load(Ordering::SeqCst) {
+                    return Err(RelayFailedError::new().into());
+                }
                 return Ok(Outcome::Success);
+            }
+            Ok(_) | Err(_) => {
+                done.store(true, Ordering::SeqCst);
+                transport.disconnect(conn);
+                return Err(RelayFailedError::new().into());
             }
         }
     }
@@ -145,6 +188,7 @@ mod tests {
         console.expect_has_console().return_const(true);
         console.expect_disable_ctrl_c_handler().returning(|| Ok(()));
         console.expect_enter_raw_relay().returning(|| Ok(()));
+        console.expect_leave_raw_relay().returning(|| Ok(()));
         console
             .expect_window_size()
             .returning(|| Ok(WindowSize { cols: 80, rows: 24 }));

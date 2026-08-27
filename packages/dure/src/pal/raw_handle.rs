@@ -6,7 +6,8 @@ use windows::Win32::Foundation::HANDLE;
 ///
 /// `HANDLE` is a raw pointer and therefore `!Send`. Windows handles are
 /// pointer-sized integers; storing that integer lets a mutex table be shared
-/// across the supervisor's relay threads.
+/// across the supervisor's relay threads. Closing remains the table owner's
+/// job; this type does not take ownership on `Drop`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RawHandle(isize);
 

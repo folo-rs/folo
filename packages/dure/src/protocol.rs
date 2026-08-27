@@ -2,6 +2,8 @@
 //!
 //! The named pipe carries these messages (implementation.md, "Transport").
 
+use std::mem::size_of;
+
 use crate::constants::MAX_FRAME_LEN;
 use crate::session_id::SessionId;
 
@@ -48,6 +50,8 @@ pub(crate) enum Message {
     StartupErr,
 }
 
+// Kind bytes are stable assigned integers. New kinds take the next unused
+// value. Retired kinds are never reused.
 const KIND_ATTACH: u8 = 1;
 const KIND_INPUT: u8 = 2;
 const KIND_RESIZE: u8 = 3;

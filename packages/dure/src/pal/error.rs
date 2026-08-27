@@ -24,6 +24,8 @@ pub(crate) enum PalErrorKind {
     InspectFailed,
     /// The requested object does not exist.
     NotFound,
+    /// The peer closed the connection.
+    Disconnected,
     /// Any other platform failure.
     Other,
 }
@@ -45,7 +47,13 @@ impl PalError {
     }
 
     pub(crate) fn from_io(error: std::io::Error) -> Self {
-        Self::with_source(PalErrorKind::Other, error)
+        let kind = match error.kind() {
+            std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::UnexpectedEof => PalErrorKind::Disconnected,
+            _ => PalErrorKind::Other,
+        };
+        Self::with_source(kind, error)
     }
 }
 
@@ -54,8 +62,9 @@ impl fmt::Display for PalError {
         let label = match self.kind {
             PalErrorKind::Timeout => "timed out",
             PalErrorKind::BreakawayDenied => "breakaway denied",
-            PalErrorKind::InspectFailed => "process inspect failed",
+            PalErrorKind::InspectFailed => "failed to inspect the process",
             PalErrorKind::NotFound => "not found",
+            PalErrorKind::Disconnected => "disconnected",
             PalErrorKind::Other => "platform error",
         };
         f.write_str(label)

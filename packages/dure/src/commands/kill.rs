@@ -2,11 +2,11 @@
 
 use ohno::AppError;
 
-use crate::gc::live_sessions;
-use crate::pal::processes::{ProcessLiveness, Processes};
+use crate::KillFailedError;
+use crate::gc::require_live_session;
+use crate::pal::processes::Processes;
 use crate::pal::session_store::SessionStore;
 use crate::session_id::SessionId;
-use crate::{InspectProcessError, KillFailedError, SessionNotFoundError};
 
 /// Abruptly terminate the recorded supervisor process.
 pub(crate) fn execute(
@@ -14,24 +14,10 @@ pub(crate) fn execute(
     processes: &impl Processes,
     id: SessionId,
 ) -> Result<(), AppError> {
-    let live = live_sessions(store, processes)?;
-    let Some(record) = live.iter().find(|record| record.session_id() == id) else {
-        return Err(SessionNotFoundError::for_id(id).into());
-    };
-    match processes.probe(&record.identity()) {
-        ProcessLiveness::Live => processes
-            .terminate(&record.identity())
-            .map_err(|_error| KillFailedError::for_id(id))?,
-        ProcessLiveness::Dead => {
-            store
-                .delete(id)
-                .map_err(|_error| crate::StoreError::new())?;
-            return Err(SessionNotFoundError::for_id(id).into());
-        }
-        ProcessLiveness::InspectFailed => {
-            return Err(InspectProcessError::for_pid(record.supervisor_pid).into());
-        }
-    }
+    let record = require_live_session(store, processes, id)?;
+    processes
+        .terminate(&record.identity())
+        .map_err(|_error| KillFailedError::for_id(id))?;
     store
         .delete(id)
         .map_err(|_error| crate::StoreError::new())?;

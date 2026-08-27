@@ -176,7 +176,7 @@ impl Transport for MemoryTransport {
                 return Ok(message);
             }
             if state.closed {
-                return Err(PalError::new(PalErrorKind::NotFound));
+                return Err(PalError::new(PalErrorKind::Disconnected));
             }
             conns = self.inner.cond.wait(conns).expect("conn condvar");
         }

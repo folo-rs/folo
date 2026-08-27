@@ -1,6 +1,7 @@
 //! Process PAL.
 
 mod abstractions;
+mod command_line;
 mod facade;
 #[cfg(not(windows))]
 mod unsupported;
@@ -8,6 +9,7 @@ mod unsupported;
 mod windows;
 
 pub(crate) use abstractions::*;
+pub(crate) use command_line::*;
 pub(crate) use facade::*;
 #[cfg(not(windows))]
 pub(crate) use unsupported::BuildTargetProcesses;

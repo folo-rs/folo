@@ -18,13 +18,13 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[cfg_attr(test, mutants::skip)]
 fn main() -> ExitCode {
-    let env_args: Vec<String> = std::env::args().collect();
+    let env_args: Vec<String> = std::env::args_os()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
     let str_args: Vec<&str> = env_args.iter().map(String::as_str).collect();
-    let program_name = str_args
-        .first()
-        .expect("std::env::args() always provides at least the program name");
+    let program_name = str_args.first().map_or("dure", |name| *name);
 
-    let cli = match Cli::from_args(&[*program_name], str_args.get(1..).unwrap_or(&[])) {
+    let cli = match Cli::from_args(&[program_name], str_args.get(1..).unwrap_or(&[])) {
         Ok(cli) => cli,
         Err(early_exit) => {
             return match early_exit.status {

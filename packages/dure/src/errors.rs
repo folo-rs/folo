@@ -7,6 +7,8 @@ use std::path::PathBuf;
 
 use crate::session_id::SessionId;
 
+// `ohno::error` leaves hold no shared mutable state. Empty impls match the
+// workspace unwind-safety contract (docs/unwind-safety.md).
 macro_rules! unwind_safe {
     ($($t:ty),+ $(,)?) => {
         $(
@@ -124,6 +126,11 @@ pub(crate) struct InspectProcessError {
 #[display("Platform operation failed")]
 pub(crate) struct PalFailedError;
 
+/// The attached console relay failed for a reason other than a normal detach.
+#[ohno::error]
+#[display("Console relay failed")]
+pub(crate) struct RelayFailedError;
+
 /// The user entered a session id that is not a positive integer.
 #[ohno::error]
 #[display("Invalid session id")]
@@ -146,6 +153,7 @@ unwind_safe!(
     DisplacedError,
     InspectProcessError,
     PalFailedError,
+    RelayFailedError,
     InvalidSessionIdError,
 );
 
@@ -157,11 +165,11 @@ impl InspectProcessError {
 
 /// Parses a decimal session id from a prompt line.
 pub(crate) fn parse_prompted_id(line: &str) -> Result<SessionId, InvalidSessionIdError> {
-    let trimmed = line.trim();
-    let raw: u32 = trimmed
+    let line = line.trim();
+    let id: u32 = line
         .parse()
         .map_err(|_error| InvalidSessionIdError::new())?;
-    SessionId::from_u32(raw).ok_or_else(InvalidSessionIdError::new)
+    SessionId::from_u32(id).ok_or_else(InvalidSessionIdError::new)
 }
 
 #[cfg(test)]

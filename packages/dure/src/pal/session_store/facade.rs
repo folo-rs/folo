@@ -27,9 +27,9 @@ pub(crate) enum SessionStoreFacade {
 impl fmt::Debug for SessionStoreFacade {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Target(_) => f.debug_struct("SessionStoreFacade::Target").finish(),
+            Self::Target(_) => f.debug_tuple(stringify!(Target)).finish(),
             #[cfg(test)]
-            Self::Mock(_) => f.debug_struct("SessionStoreFacade::Mock").finish(),
+            Self::Mock(_) => f.debug_tuple(stringify!(Mock)).finish(),
         }
     }
 }

@@ -1,6 +1,7 @@
 //! `dure run`.
 
 use std::path::PathBuf;
+use std::thread;
 
 use ohno::AppError;
 
@@ -76,6 +77,14 @@ where
             PalErrorKind::BreakawayDenied => AppError::from(BreakawayDeniedError::new()),
             _ => AppError::from(StartupFailedError::new()),
         })?;
+
+    thread::spawn({
+        let transport = transport.clone();
+        move || {
+            thread::sleep(crate::constants::CONNECT_TIMEOUT);
+            transport.close_listener(listener);
+        }
+    });
 
     let conn = transport
         .accept(listener)

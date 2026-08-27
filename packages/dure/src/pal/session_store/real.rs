@@ -18,6 +18,19 @@ pub(crate) struct FsSessionStore {
     root: PathBuf,
 }
 
+fn parse_record(bytes: &[u8]) -> Result<Option<SessionRecord>, PalError> {
+    let record: SessionRecord = serde_json::from_slice(bytes).map_err(|error| {
+        PalError::with_source(
+            PalErrorKind::Other,
+            io::Error::new(io::ErrorKind::InvalidData, error),
+        )
+    })?;
+    if SessionId::from_u32(record.id).is_none() {
+        return Err(PalError::new(PalErrorKind::Other));
+    }
+    Ok(Some(record))
+}
+
 impl FsSessionStore {
     pub(crate) fn new(root: PathBuf) -> Self {
         Self { root }
@@ -73,15 +86,7 @@ impl SessionStore for FsSessionStore {
         let path = self.record_path(id);
         match fs::read(&path) {
             Ok(bytes) if bytes.is_empty() => Ok(None),
-            Ok(bytes) => {
-                let record = serde_json::from_slice(&bytes).map_err(|error| {
-                    PalError::with_source(
-                        PalErrorKind::Other,
-                        io::Error::new(io::ErrorKind::InvalidData, error),
-                    )
-                })?;
-                Ok(Some(record))
-            }
+            Ok(bytes) => parse_record(&bytes),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(PalError::from_io(error)),
         }
@@ -109,7 +114,7 @@ impl SessionStore for FsSessionStore {
             let Some(id) = SessionId::from_u32(raw) else {
                 continue;
             };
-            if let Some(record) = self.read(id)? {
+            if let Ok(Some(record)) = self.read(id) {
                 records.push(record);
             }
         }
@@ -211,5 +216,16 @@ mod tests {
         store.delete(id).unwrap();
         assert!(store.read(id).unwrap().is_none());
         assert!(store.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_skips_corrupt_and_zero_id_records() {
+        let (dir, store) = store();
+        fs::write(dir.path().join("0.json"), b"{\"id\":0}").unwrap();
+        fs::write(dir.path().join("not-json.json"), b"nope").unwrap();
+        let id = store.allocate_id().unwrap();
+        let rec = record(id, dir.path());
+        store.publish(&rec).unwrap();
+        assert_eq!(store.list().unwrap(), vec![rec]);
     }
 }

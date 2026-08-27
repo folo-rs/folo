@@ -5,7 +5,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::pal::error::PalError;
-use crate::pal::local_console::{BuildTargetConsole, LocalConsole};
+use crate::pal::local_console::{BuildTargetConsole, ConsoleInput, LocalConsole};
 use crate::pal::pseudoconsole::WindowSize;
 
 #[cfg(test)]
@@ -28,9 +28,9 @@ static TARGET: BuildTargetConsole = BuildTargetConsole;
 impl fmt::Debug for LocalConsoleFacade {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Target(_) => f.debug_struct("LocalConsoleFacade::Target").finish(),
+            Self::Target(_) => f.debug_tuple(stringify!(Target)).finish(),
             #[cfg(test)]
-            Self::Mock(_) => f.debug_struct("LocalConsoleFacade::Mock").finish(),
+            Self::Mock(_) => f.debug_tuple(stringify!(Mock)).finish(),
         }
     }
 }
@@ -83,6 +83,14 @@ impl LocalConsole for LocalConsoleFacade {
         }
     }
 
+    fn leave_raw_relay(&self) -> Result<(), PalError> {
+        match self {
+            Self::Target(inner) => inner.leave_raw_relay(),
+            #[cfg(test)]
+            Self::Mock(inner) => inner.leave_raw_relay(),
+        }
+    }
+
     fn window_size(&self) -> Result<WindowSize, PalError> {
         match self {
             Self::Target(inner) => inner.window_size(),
@@ -91,7 +99,7 @@ impl LocalConsole for LocalConsoleFacade {
         }
     }
 
-    fn read_input(&self) -> Result<Vec<u8>, PalError> {
+    fn read_input(&self) -> Result<ConsoleInput, PalError> {
         match self {
             Self::Target(inner) => inner.read_input(),
             #[cfg(test)]

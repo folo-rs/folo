@@ -12,7 +12,11 @@ use crate::constants::SUPERVISOR_COMMAND;
 use crate::session_id::SessionId;
 use crate::types::{Command, RunInput};
 
-/// Detachable Windows console sessions that survive SSH disconnect.
+/// Clap-facing parser for the `dure` binary.
+///
+/// Translates argv into [`RunInput`] so [`crate::run`] does not depend on clap.
+/// Version is omitted because this crate is unpublished; `--version` would
+/// report a workspace placeholder rather than a released artifact.
 #[derive(Debug, Parser)]
 #[command(
     name = "dure",
@@ -24,8 +28,9 @@ pub struct Cli {
     #[arg(long, global = true)]
     verbose: bool,
 
-    /// Override the session store root. Hidden; integration tests use this so
-    /// they never touch the user's `LocalAppData` store.
+    /// Override the session store root.
+    ///
+    /// Hidden; integration tests use this so they never touch `LocalAppData`.
     #[arg(long, global = true, hide = true)]
     store_root: Option<PathBuf>,
 
@@ -79,7 +84,11 @@ enum CliCommand {
 pub struct EarlyExit {
     /// The rendered message (help text or error) to print.
     pub output: String,
-    /// `Ok` for a help/usage request (exit success), `Err` for a parse error.
+    /// `Ok` for help or usage text, `Err` for a parse error.
+    ///
+    /// Missing subcommand or argument is success because clap's implicit help
+    /// for that case is the usage text the user asked to see, not a failed
+    /// command.
     pub status: Result<(), ()>,
 }
 

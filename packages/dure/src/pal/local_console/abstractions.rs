@@ -3,6 +3,15 @@
 use crate::pal::error::PalError;
 use crate::pal::pseudoconsole::WindowSize;
 
+/// One blocking read from the local console during attach.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ConsoleInput {
+    /// VT or key bytes to forward as [`crate::protocol::Message::Input`].
+    Bytes(Vec<u8>),
+    /// Window size changed; forward as [`crate::protocol::Message::Resize`].
+    Resize(WindowSize),
+}
+
 /// Detect a console, switch it to a raw relay, and exchange bytes.
 ///
 /// Ref: docs/implementation.md, PAL slicing.
@@ -20,11 +29,14 @@ pub(crate) trait LocalConsole: Send + Sync + std::fmt::Debug + 'static {
     /// Put the console into a raw VT relay.
     fn enter_raw_relay(&self) -> Result<(), PalError>;
 
+    /// Restore console modes saved by [`LocalConsole::enter_raw_relay`].
+    fn leave_raw_relay(&self) -> Result<(), PalError>;
+
     /// Current console size.
     fn window_size(&self) -> Result<WindowSize, PalError>;
 
-    /// Blocking read of console input bytes.
-    fn read_input(&self) -> Result<Vec<u8>, PalError>;
+    /// Blocking read of console input bytes or a window-size change.
+    fn read_input(&self) -> Result<ConsoleInput, PalError>;
 
     /// Write console output bytes.
     fn write_output(&self, data: &[u8]) -> Result<(), PalError>;

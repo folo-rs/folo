@@ -47,7 +47,9 @@ impl SessionRecord {
     /// Session id newtype.
     #[must_use]
     pub(crate) fn session_id(&self) -> SessionId {
-        SessionId::from_u32(self.id).expect("session records are only published with a positive id")
+        SessionId::from_u32(self.id).expect(
+            "records are published from allocate_id and rejected on read unless the id is positive",
+        )
     }
 
     /// Supervisor process identity used for liveness and kill.

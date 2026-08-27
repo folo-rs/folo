@@ -33,15 +33,17 @@ where
     T: Transport + Clone + Send + Sync + 'static,
     C: LocalConsole + Clone + Send + Sync + 'static,
 {
-    let live = live_sessions(store, processes)?;
-    let id = match id {
-        Some(id) => id,
-        None => resolve_auto(store, console, &live, verbose)?,
+    let record = match id {
+        Some(id) => crate::gc::require_live_session(store, processes, id)?,
+        None => {
+            let live = live_sessions(store, processes)?;
+            let id = resolve_auto(store, console, &live, verbose)?;
+            live.into_iter()
+                .find(|record| record.session_id() == id)
+                .ok_or_else(|| AppError::from(SessionNotFoundError::for_id(id)))?
+        }
     };
-    let Some(record) = live.iter().find(|record| record.session_id() == id) else {
-        return Err(SessionNotFoundError::for_id(id).into());
-    };
-    attach(transport, console, &record.pipe_name, id)
+    attach(transport, console, &record.pipe_name, record.session_id())
 }
 
 fn resolve_auto<S, C>(

@@ -4,8 +4,8 @@
 that started it disconnects, and reattaches a later SSH session to that same
 process. It is a per-app supervisor, not a multiplexed server.
 
-Install with `cargo binstall dure`, matching the other published binaries in this
-repository.
+The crate is unpublished. Install from this workspace with
+`cargo install --path packages/dure`.
 
 ## Tenets
 
@@ -19,8 +19,7 @@ repository.
   or otherwise killing the foreground `dure` process leaves the supervisor and
   app running.
 * **Resume is not a replay.** Attach does not reconstruct prior screen contents.
-  The attach path allows a snapshot burst from the supervisor before live bytes;
-  this design uses an empty snapshot plus a window-size update.
+  The new client sees an empty screen, then live bytes.
 * **Latest client wins.** A new successful attach becomes the sole live console
   and disconnects any older client. That is how a wedged SSH session is
   displaced. There is no separate `--force` flag.
@@ -161,6 +160,11 @@ Attaching (`run`, `resume`) requires a console. `list` and `kill` do not. The
 resume id prompt additionally requires a terminal stdin; without one, `resume`
 without `--id` fails.
 
+A console is the Windows console-host API: handles, modes, and window size. A
+terminal is the visible emulator (Windows Terminal, the SSH client) that
+renders VT. `dure` attaches to a console and relays bytes to whatever terminal
+the SSH session already uses.
+
 ## Lifetime
 
 | Event | App | Supervisor | Client |
@@ -194,9 +198,10 @@ Command lines appear in `list` output. Secrets do not belong on the app argv.
 
 ## Distribution
 
-Published crate and binary name: `dure`. The crate carries the same
-`cargo binstall` URL contract as the other published binaries in this
-repository.
+Published crate and binary name: `dure`. Publication is currently disabled;
+once the crate is published it is intended to use the same `cargo binstall`
+URL contract as the other published binaries in this repository. Until then,
+install from this workspace with `cargo install --path packages/dure`.
 
 Runtime support is Windows only. The crate still compiles on the rest of the
 workspace target matrix so CI stays unified; a non-Windows binary exits with an
@@ -204,11 +209,8 @@ error.
 
 ## Screen contents
 
-Attach does not replay prior output. The supervisor may later keep a terminal
-grid and, on attach, write that snapshot to the new client before live bytes.
-This design is that sequence with an empty snapshot plus a resize. Clients treat
-any output that appears immediately after attach as the live console; they do
-not need a distinct replay mode.
+Attach does not replay prior output. The new client sees an empty screen, then
+live bytes. The supervisor applies the attaching client's window size.
 
 ## Diagnostics
 

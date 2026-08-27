@@ -19,10 +19,11 @@ use crate::session_id::SessionId;
 use crate::session_record::SessionRecord;
 use crate::{BreakawayDeniedError, PalFailedError, StartupFailedError, StoreError};
 
-/// Historical default console size used until the first client attaches.
+/// Size used until the first client attaches.
 ///
-/// The first attach always sends a resize with the client's real size
-/// (design.md, "Attach, detach, steal").
+/// Matches the historical Windows default console size. The first attach
+/// always sends a resize with the client's real size (design.md, "Attach,
+/// detach, steal").
 const DEFAULT_PTY_SIZE: WindowSize = WindowSize { cols: 80, rows: 24 };
 
 /// Resources that must be torn down if initialization fails.
@@ -260,7 +261,12 @@ where
     transport.close_listener(listener);
     shared.stopping.store(true, Ordering::SeqCst);
 
-    if let Some(client) = shared.client.lock().expect("client slot").take() {
+    if let Some(client) = shared
+        .client
+        .lock()
+        .expect("client slot is only copied or replaced, never held across a panic")
+        .take()
+    {
         _ = shared
             .transport
             .send(client, &Message::AppExited { status });
@@ -302,7 +308,10 @@ fn accept_loop<T, C>(
             break;
         };
         let previous = {
-            let mut slot = shared.client.lock().expect("client slot");
+            let mut slot = shared
+                .client
+                .lock()
+                .expect("client slot is only copied or replaced, never held across a panic");
             slot.replace(conn)
         };
         if let Some(old) = previous {
@@ -359,7 +368,10 @@ where
             }
             Ok(_) | Err(_) => break,
         }
-        let current = shared.client.lock().expect("client slot");
+        let current = shared
+            .client
+            .lock()
+            .expect("client slot is only copied or replaced, never held across a panic");
         if current.as_ref() != Some(&conn) {
             break;
         }
@@ -376,14 +388,22 @@ where
         let Ok(bytes) = shared.pty_host.read_output(shared.pty) else {
             break;
         };
-        let client = shared.client.lock().expect("client slot").as_ref().copied();
+        let client = shared
+            .client
+            .lock()
+            .expect("client slot is only copied or replaced, never held across a panic")
+            .as_ref()
+            .copied();
         if let Some(conn) = client
             && shared
                 .transport
                 .send(conn, &Message::Output(bytes))
                 .is_err()
         {
-            let mut slot = shared.client.lock().expect("client slot");
+            let mut slot = shared
+                .client
+                .lock()
+                .expect("client slot is only copied or replaced, never held across a panic");
             if slot.as_ref() == Some(&conn) {
                 *slot = None;
             }

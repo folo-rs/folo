@@ -35,6 +35,7 @@ use crate::pal::error::{PalError, PalErrorKind};
 use crate::pal::ids::{AppId, JobId};
 use crate::pal::processes::{
     AppSpawn, ProcessLiveness, Processes, SupervisorSpawn, resolve_command_path,
+    windows_command_line,
 };
 use crate::pal::pseudoconsole::hpcon_for;
 use crate::pal::raw_handle::RawHandle;
@@ -63,6 +64,9 @@ fn next_id() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
+
+/// Pseudoconsole plus lifetime job, both applied at `CreateProcessW`.
+const APP_SPAWN_ATTRIBUTE_COUNT: u32 = 2;
 
 fn filetime_u64(time: FILETIME) -> u64 {
     let high = u64::from(time.dwHighDateTime);
@@ -140,14 +144,10 @@ impl Processes for BuildTargetProcesses {
     }
 
     fn spawn_supervisor(&self, request: &SupervisorSpawn) -> Result<ProcessIdentity, PalError> {
-        let mut cmd = format!("\"{}\"", request.exe.display());
-        for arg in &request.args {
-            cmd.push(' ');
-            cmd.push('"');
-            cmd.push_str(arg);
-            cmd.push('"');
-        }
-        let mut cmd_wide = wide(&cmd);
+        let mut cmd_wide = wide(&windows_command_line(
+            &request.exe.to_string_lossy(),
+            &request.args,
+        ));
         let mut exe_wide = wide(&request.exe.to_string_lossy());
         let si = STARTUPINFOW {
             cb: u32::try_from(size_of::<STARTUPINFOW>()).expect("STARTUPINFOW fits in u32"),
@@ -254,16 +254,8 @@ impl Processes for BuildTargetProcesses {
                 .ok_or_else(|| PalError::new(PalErrorKind::Other))?,
             &request.launch_directory,
         );
-        let mut cmd = String::new();
-        for (index, arg) in request.command.iter().enumerate() {
-            if index > 0 {
-                cmd.push(' ');
-            }
-            cmd.push('"');
-            cmd.push_str(arg);
-            cmd.push('"');
-        }
-        let mut cmd_wide = wide(&cmd);
+        let rest = request.command.get(1..).unwrap_or(&[]);
+        let mut cmd_wide = wide(&windows_command_line(&exe.to_string_lossy(), rest));
         let mut exe_wide = wide(&exe.to_string_lossy());
         let mut dir_wide = wide(&request.launch_directory.to_string_lossy());
 
@@ -276,11 +268,11 @@ impl Processes for BuildTargetProcesses {
             .ok_or_else(|| PalError::new(PalErrorKind::NotFound))?
             .as_handle();
 
-        // Two attributes: the pseudoconsole and the lifetime job. The job is
-        // applied at creation so the app cannot run outside it. CREATE_SUSPENDED
-        // plus a later AssignProcessToJobObject delays console initialization
-        // and can leave the child with pipes instead of a console.
-        let attribute_count = 2;
+        // Pseudoconsole and lifetime job, both applied at CreateProcessW so the
+        // app cannot run outside the job. CREATE_SUSPENDED plus a later
+        // AssignProcessToJobObject delays console initialization and can leave
+        // the child with pipes instead of a console.
+        let attribute_count = APP_SPAWN_ATTRIBUTE_COUNT;
         let mut attr_size: usize = 0;
         // SAFETY: querying the required size; the null list pointer is allowed
         // when discovering the buffer length.
@@ -422,6 +414,9 @@ impl Processes for BuildTargetProcesses {
     }
 
     fn random_nonce(&self) -> String {
+        // 128 bits of CSPRNG output, encoded as hex. This only has to be unique
+        // among concurrent sessions for this user, not unguessable to other
+        // users (the pipe ACL already restricts the creating user).
         let bytes: [u8; 16] = rand::rng().random();
         let mut nonce = String::with_capacity(32);
         for byte in bytes {

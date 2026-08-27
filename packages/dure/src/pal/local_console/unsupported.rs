@@ -1,7 +1,7 @@
 //! Local console PAL used on non-Windows builds.
 
 use crate::pal::error::{PalError, PalErrorKind};
-use crate::pal::local_console::LocalConsole;
+use crate::pal::local_console::{ConsoleInput, LocalConsole};
 use crate::pal::pseudoconsole::WindowSize;
 
 /// Stub console. The platform gate refuses to run before this is used.
@@ -31,11 +31,15 @@ impl LocalConsole for BuildTargetConsole {
         unsupported()
     }
 
+    fn leave_raw_relay(&self) -> Result<(), PalError> {
+        unsupported()
+    }
+
     fn window_size(&self) -> Result<WindowSize, PalError> {
         unsupported()
     }
 
-    fn read_input(&self) -> Result<Vec<u8>, PalError> {
+    fn read_input(&self) -> Result<ConsoleInput, PalError> {
         unsupported()
     }
 

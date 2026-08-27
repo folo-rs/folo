@@ -4,8 +4,8 @@ Detachable Windows console sessions that survive SSH disconnect.
 
 `dure` starts an interactive console process under a per-app supervisor so the
 process keeps running after the SSH session that launched it ends. A later SSH
-session can attach to the same process. Install with
-[`cargo binstall dure`](https://github.com/cargo-bins/cargo-binstall).
+session can attach to the same process. The crate is unpublished; install from
+this workspace with `cargo install --path packages/dure`.
 
 Runtime support is Windows only. The crate still compiles on other targets; the
 binary exits with an error there.
