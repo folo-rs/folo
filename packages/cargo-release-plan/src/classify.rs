@@ -230,6 +230,14 @@ fn classify_one(
                      first-parent history, so creation on this branch counts as a version \
                      increase and the status is releasing"
                 ));
+                let untracked = untracked_released(
+                    git,
+                    &PackageSide {
+                        dir: &package.manifest.directory,
+                        rules: &package.manifest.packaging,
+                    },
+                )?;
+                log_untracked(verbose, name, untracked.len());
                 return Ok(PackageClass {
                     name: name.clone(),
                     declared_version: package.manifest.version.clone(),
@@ -243,7 +251,7 @@ fn classify_one(
                         deletions: 0,
                     },
                     patch: String::new(),
-                    untracked: Vec::new(),
+                    untracked,
                     dependencies: package.dependencies.clone(),
                     dependents,
                     manifest_path: package.manifest_path.clone(),
@@ -433,14 +441,7 @@ fn diff_package(
         patch.push_str(&file_diff.text);
     }
 
-    let untracked = git
-        .ls_untracked(work.dir)?
-        .into_iter()
-        .filter_map(|full| {
-            let rel = relativize(&git_path(&full), work.dir)?.to_string();
-            work.rules.is_released(&rel).then_some(rel)
-        })
-        .collect();
+    let untracked = untracked_released(git, work)?;
 
     let stat = DiffStat {
         files: changed.len(),
@@ -456,6 +457,23 @@ fn released_at_commit(
     side: &PackageSide<'_>,
 ) -> Result<HashMap<String, String>, AppError> {
     Ok(released_from_paths(&git.ls_tree(commit, side.dir)?, side))
+}
+
+/// Lists the untracked paths beneath a package that its packaging rules would
+/// release, package-relative.
+///
+/// These are advisory only: released content is defined from git-tracked files,
+/// so an untracked path is never a change. Ref: docs/design.md, "Released
+/// content".
+fn untracked_released(git: &GitRepo, side: &PackageSide<'_>) -> Result<Vec<String>, AppError> {
+    Ok(git
+        .ls_untracked(side.dir)?
+        .into_iter()
+        .filter_map(|full| {
+            let rel = relativize(&git_path(&full), side.dir)?.to_string();
+            side.rules.is_released(&rel).then_some(rel)
+        })
+        .collect())
 }
 
 fn released_in_work_tree(

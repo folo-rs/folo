@@ -433,6 +433,19 @@ fn new_package_on_the_branch_is_releasing() {
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
+fn a_new_package_still_reports_its_untracked_paths() {
+    let fixture = seeded_package();
+    let base = fixture.sha("HEAD");
+    write_package(&fixture, "fresh", "0.1.0", "");
+    fixture.commit("add package");
+    fixture.write("packages/fresh/src/extra.rs", "pub fn extra() {}\n");
+
+    let report = report_json(&fixture, &base);
+    assert!(report.contains("src/extra.rs"), "{report}");
+}
+
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
 fn apply_replaces_workspace_inherited_version() {
     let fixture = Fixture::new(
         r#"
