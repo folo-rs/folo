@@ -42,6 +42,7 @@ impl FsSessionStore {
 }
 
 impl SessionStore for FsSessionStore {
+    #[cfg(test)]
     fn root(&self) -> PathBuf {
         self.root.clone()
     }
@@ -54,6 +55,10 @@ impl SessionStore for FsSessionStore {
                 return Err(PalError::new(PalErrorKind::Other));
             };
             let path = self.record_path(id);
+            // Exclusive create of `{id}.json` is the reservation. The empty
+            // file occupies the id until `publish` overwrites it. `list` and
+            // `read` skip empty files, so a crash before publish leaves an id
+            // that is not listed as live and is not reused until deleted.
             match OpenOptions::new().write(true).create_new(true).open(&path) {
                 Ok(mut file) => {
                     file.write_all(b"").map_err(PalError::from_io)?;

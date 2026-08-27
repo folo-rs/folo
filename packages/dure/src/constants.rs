@@ -36,3 +36,15 @@ pub(crate) const STORE_SUBDIR: &str = "dure";
 /// Windows has no `exec`; the same binary implements both roles.
 /// Ref: docs/implementation.md, "Process split".
 pub(crate) const SUPERVISOR_COMMAND: &str = "__supervisor";
+
+/// Columns used until the first client attach reports a real size.
+///
+/// VGA text-mode geometry, the historical Windows console default.
+/// Ref: docs/design.md, "Attach, detach, steal".
+pub(crate) const DEFAULT_PTY_COLS: u16 = 80;
+
+/// Rows used until the first client attach reports a real size.
+///
+/// VGA text-mode geometry, the historical Windows console default.
+/// Ref: docs/design.md, "Attach, detach, steal".
+pub(crate) const DEFAULT_PTY_ROWS: u16 = 24;

@@ -6,7 +6,7 @@ use crate::pal::error::PalError;
 use crate::pal::ids::{ConnId, ListenerId};
 use crate::protocol::Message;
 
-/// Listen, accept, connect, and exchange framed messages.
+/// Byte-stream between one supervisor and its attaching clients.
 ///
 /// Steal is "accept a new connection while an old one still exists."
 /// Ref: docs/implementation.md, PAL slicing and "Transport".

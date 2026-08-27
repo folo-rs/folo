@@ -13,19 +13,32 @@ fn dure_exe() -> PathBuf {
 }
 
 fn helper_exe() -> PathBuf {
+    // Cargo writes every binary from this package next to `CARGO_BIN_EXE_dure`.
+    // The helper is a second `[[bin]]` in the same package, so replacing the
+    // file name is the path Cargo emits.
     let mut path = PathBuf::from(env!("CARGO_BIN_EXE_dure"));
     path.set_file_name("dure-test-helper.exe");
     path
 }
 
-/// Drop CSI/OSC sequences so tests can match app text that `ConPTY` emits with
-/// intervening cursor commands (for example `session` then the id).
+/// Introducer for CSI, OSC, and other ECMA-48 sequences.
+const ESC: char = '\u{1b}';
+/// OSC terminator used by `ConPTY` window-title sequences.
+const BEL: char = '\u{7}';
+
+/// Strip the control sequences `ConPTY` typically injects around app text.
+///
+/// ESC introduces a sequence. CSI (`ESC [`) runs until an ASCII letter, the
+/// ECMA-48 final byte for SGR and cursor commands. OSC (`ESC ]`) runs until
+/// BEL, the terminator `ConPTY` uses for window-title sequences. Any other ESC
+/// form consumes one following character. This recovers app text from `ConPTY`
+/// cursor noise; it is not a full VT parser.
 fn visible_text(bytes: &[u8]) -> String {
     let raw = String::from_utf8_lossy(bytes);
     let mut chars = raw.chars();
     let mut text = String::new();
     while let Some(ch) = chars.next() {
-        if ch != '\u{1b}' {
+        if ch != ESC {
             text.push(ch);
             continue;
         }
@@ -39,7 +52,7 @@ fn visible_text(bytes: &[u8]) -> String {
             }
             Some(']') => {
                 for next in chars.by_ref() {
-                    if next == '\u{7}' {
+                    if next == BEL {
                         break;
                     }
                 }
@@ -56,10 +69,10 @@ fn visible_text(bytes: &[u8]) -> String {
 /// testing.
 const RECORD_GC_SPIN_LIMIT: u32 = 1_000_000;
 
-fn collect_until(client: &ConsoleProcess, needle: &str) -> String {
+fn collect_until(console: &ConsoleProcess, needle: &str) -> String {
     let mut collected = Vec::new();
     loop {
-        collected.extend(client.read_output());
+        collected.extend(console.read_output());
         let text = visible_text(&collected);
         if text.contains(needle) {
             return text;
@@ -67,15 +80,18 @@ fn collect_until(client: &ConsoleProcess, needle: &str) -> String {
     }
 }
 
+/// Arbitrary nonzero status used to prove forwarding, not a special value.
+const SAMPLE_NONZERO_EXIT: i32 = 7;
+
 #[cfg_attr(miri, ignore)]
 #[test]
 fn helper_exit_via_conpty() {
     with_watchdog(|| {
         let dir = TempDir::new().unwrap();
-        let args = vec!["exit".to_string(), "7".to_string()];
-        let client = ConsoleProcess::spawn(&helper_exe(), &args, dir.path());
-        let status = client.wait();
-        assert_eq!(status, 7);
+        let args = vec!["exit".to_string(), SAMPLE_NONZERO_EXIT.to_string()];
+        let helper = ConsoleProcess::spawn(&helper_exe(), &args, dir.path());
+        let status = helper.wait();
+        assert_eq!(status, SAMPLE_NONZERO_EXIT);
     });
 }
 
@@ -85,9 +101,9 @@ fn helper_has_console_via_conpty() {
     with_watchdog(|| {
         let dir = TempDir::new().unwrap();
         let args = vec!["has-console".to_string()];
-        let client = ConsoleProcess::spawn(&helper_exe(), &args, dir.path());
-        let output = collect_until(&client, "console");
-        let status = client.wait();
+        let helper = ConsoleProcess::spawn(&helper_exe(), &args, dir.path());
+        let output = collect_until(&helper, "console");
+        let status = helper.wait();
         assert_eq!(status, 0);
         assert!(
             output.contains("console"),
@@ -109,13 +125,15 @@ fn run_helper_exit_status() {
             "--".to_string(),
             helper.display().to_string(),
             "wait-exit".to_string(),
-            "7".to_string(),
+            SAMPLE_NONZERO_EXIT.to_string(),
         ];
         let client = ConsoleProcess::spawn(&dure_exe(), &args, dir.path());
         let attached = collect_until(&client, "session");
+        // The helper's console is in line-input mode, so a lone character is
+        // not delivered to `stdin.read` until a newline arrives.
         client.write_input(b"x\r\n");
         let status = client.wait();
-        assert_eq!(status, 7, "client output: {attached:?}");
+        assert_eq!(status, SAMPLE_NONZERO_EXIT, "client output: {attached:?}");
         // The client process can exit as soon as it receives `AppExited`, while
         // the supervisor still deletes the record.
         let mut gone = false;
@@ -135,10 +153,10 @@ fn helper_echo_via_conpty() {
     with_watchdog(|| {
         let dir = TempDir::new().unwrap();
         let args = vec!["echo-line".to_string()];
-        let client = ConsoleProcess::spawn(&helper_exe(), &args, dir.path());
-        client.write_input(b"hello\r\n");
-        let output = collect_until(&client, "hello");
-        let status = client.wait();
+        let helper = ConsoleProcess::spawn(&helper_exe(), &args, dir.path());
+        helper.write_input(b"hello\r\n");
+        let output = collect_until(&helper, "hello");
+        let status = helper.wait();
         assert_eq!(status, 0, "helper output: {output:?}");
     });
 }

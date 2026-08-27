@@ -21,10 +21,13 @@ use crate::{BreakawayDeniedError, PalFailedError, StartupFailedError, StoreError
 
 /// Size used until the first client attaches.
 ///
-/// Matches the historical Windows default console size. The first attach
-/// always sends a resize with the client's real size (design.md, "Attach,
-/// detach, steal").
-const DEFAULT_PTY_SIZE: WindowSize = WindowSize { cols: 80, rows: 24 };
+/// VGA text-mode geometry (`DEFAULT_PTY_COLS` by `DEFAULT_PTY_ROWS`). The first
+/// attach always resizes to the client's real size (design.md, "Attach, detach,
+/// steal").
+const DEFAULT_PTY_SIZE: WindowSize = WindowSize {
+    cols: crate::constants::DEFAULT_PTY_COLS,
+    rows: crate::constants::DEFAULT_PTY_ROWS,
+};
 
 /// Resources that must be torn down if initialization fails.
 struct InitGuard<'a, P: Processes, S: SessionStore, C: Pseudoconsole> {
@@ -103,6 +106,8 @@ where
         }
     };
 
+    // The client may already have dropped the startup pipe. The session is
+    // live either way; resume attaches independently of this acknowledgement.
     _ = transport.send(
         startup,
         &Message::StartupOk {
@@ -293,11 +298,16 @@ fn store_attached_flag<S: SessionStore + Clone>(
     move |attached: bool| {
         if let Ok(Some(mut record)) = store.read(id) {
             record.attached = attached;
+            // A failed write leaves a stale attached flag. The flag is
+            // advisory; liveness is the supervisor process.
             _ = store.publish(&record);
         }
     }
 }
 
+// Blocking accept. A mutation that drops the stop check or the accept error
+// path hangs unit tests because watchdogs are disabled under cargo-mutants.
+#[cfg_attr(test, mutants::skip)]
 fn accept_loop<T, C>(
     shared: &Arc<Shared<T, C>>,
     transport: &T,
@@ -319,6 +329,8 @@ fn accept_loop<T, C>(
             slot.replace(conn)
         };
         if let Some(old) = previous {
+            // The displaced client may already have disconnected. Steal still
+            // proceeds; last-connect-wins does not depend on this notice.
             _ = transport.send(old, &Message::Displaced);
             transport.disconnect(old);
         }
@@ -330,6 +342,9 @@ fn accept_loop<T, C>(
     }
 }
 
+// Blocking recv. A mutation that drops the disconnect path hangs unit tests
+// because watchdogs are disabled under cargo-mutants.
+#[cfg_attr(test, mutants::skip)]
 fn client_loop<T, C>(shared: &Shared<T, C>, conn: ConnId, set_attached: &impl Fn(bool))
 where
     T: Transport,
@@ -337,6 +352,8 @@ where
 {
     match shared.transport.recv(conn) {
         Ok(Message::Attach { cols, rows }) => {
+            // Resize failure means the pty is already gone; wait_app and
+            // read_output observe that and stop the relay.
             _ = shared
                 .pty_host
                 .resize(shared.pty, WindowSize { cols, rows });
@@ -363,6 +380,8 @@ where
     loop {
         match shared.transport.recv(conn) {
             Ok(Message::Input(data)) => {
+                // Input after the app has exited is dropped. wait_app publishes
+                // AppExited to the live client.
                 _ = shared.pty_host.write_input(shared.pty, &data);
             }
             Ok(Message::Resize { cols, rows }) => {

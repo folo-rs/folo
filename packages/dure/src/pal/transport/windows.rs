@@ -305,6 +305,10 @@ impl Transport for BuildTargetTransport {
             (listener.pending, listener.name.clone())
         };
         connect_instance(pending.as_handle())?;
+        // After each accept, create the next server instance so another client
+        // can connect while this connection is still live (steal). If
+        // close_listener already removed the listener, drop that unused
+        // instance; the accepted connection is still returned.
         let next = create_instance(&name, false)?;
         let mut table = table().lock().expect("pipe table");
         if let Some(listener) = table.listeners.get_mut(&listener.0) {

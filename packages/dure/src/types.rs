@@ -25,7 +25,8 @@ pub enum Command {
         /// Session id to kill. Required by the CLI.
         id: SessionId,
     },
-    /// Hidden supervisor role spawned by `run`.
+    /// Supervisor process spawned by `run`. Not a user-facing subcommand.
+    #[doc(hidden)]
     Supervisor {
         /// One-shot startup pipe name created by the client.
         startup_pipe: String,
@@ -47,7 +48,8 @@ pub enum Command {
 pub struct RunInput {
     /// Whether auto-detect should explain its decisions on stderr.
     pub verbose: bool,
-    /// Optional store-root override so tests never touch `LocalAppData`.
+    /// Store-root override. Hidden; tests use it so they never touch `LocalAppData`.
+    #[doc(hidden)]
     pub store_root: Option<PathBuf>,
     /// Subcommand to execute.
     pub command: Command,

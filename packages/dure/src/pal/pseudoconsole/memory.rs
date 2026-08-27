@@ -111,6 +111,9 @@ impl Pseudoconsole for MemoryPseudoconsole {
         Ok(())
     }
 
+    // Blocking condvar wait. A mutation that drops the closed check or the
+    // wake hangs tests because watchdogs are disabled under cargo-mutants.
+    #[cfg_attr(test, mutants::skip)]
     fn read_output(&self, pty: PtyId) -> Result<Vec<u8>, PalError> {
         let mut ptys = self.inner.ptys.lock().expect("pty map lock");
         loop {

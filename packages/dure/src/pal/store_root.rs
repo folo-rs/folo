@@ -37,7 +37,7 @@ fn windows_local_app_data() -> Result<PathBuf, PalError> {
     let path = {
         // SAFETY: `pwstr` is the unique owner of a valid NUL-terminated path
         // string returned by SHGetKnownFolderPath. Creating a temporary `&[u16]`
-        // via `PWSTR::as_wide` does not create a conflicting mutable borrow;
+        // via `PWSTR::as_wide` does not create a conflicting exclusive borrow;
         // we copy into a PathBuf before freeing.
         let wide = unsafe { pwstr.as_wide() };
         String::from_utf16(wide)

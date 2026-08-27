@@ -49,10 +49,10 @@ impl SessionStoreFacade {
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg_attr(test, mutants::skip)]
 impl SessionStore for SessionStoreFacade {
+    #[cfg(test)]
     fn root(&self) -> PathBuf {
         match self {
             Self::Target(store) => store.root(),
-            #[cfg(test)]
             Self::Mock(store) => store.root(),
         }
     }

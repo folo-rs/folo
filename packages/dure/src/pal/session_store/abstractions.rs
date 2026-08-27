@@ -6,18 +6,15 @@ use crate::pal::error::PalError;
 use crate::session_id::SessionId;
 use crate::session_record::SessionRecord;
 
-/// Create, read, list, and delete session records, and allocate ids.
+/// Per-user filesystem of live-session records.
 ///
 /// The real implementation uses per-user `LocalAppData`, subdirectory `dure`.
-/// The root is supplied so tests never touch the user's real store.
+/// Tests supply an isolated root instead of the user's store.
 /// Ref: docs/implementation.md, PAL slicing and "Session store".
 #[cfg_attr(test, mockall::automock)]
 pub(crate) trait SessionStore: Send + Sync + std::fmt::Debug + 'static {
     /// Directory that holds session record files.
-    #[allow(
-        dead_code,
-        reason = "PAL surface for tests; production never reads the root back"
-    )]
+    #[cfg(test)]
     fn root(&self) -> PathBuf;
 
     /// Smallest unused positive integer, filesystem-coordinated.

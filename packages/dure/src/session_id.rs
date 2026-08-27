@@ -20,14 +20,14 @@ impl SessionId {
         Self(id)
     }
 
-    /// Parses a positive integer, rejecting zero.
+    /// Converts a raw integer, rejecting zero.
     #[inline]
     #[must_use]
     pub fn from_u32(id: u32) -> Option<Self> {
         NonZero::new(id).map(Self)
     }
 
-    /// Numeric value of this session id.
+    /// Inner positive integer.
     #[inline]
     #[must_use]
     pub const fn get(self) -> u32 {
