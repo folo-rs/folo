@@ -20,7 +20,8 @@ cargo release-plan check [--base <rev>] [--manifest-path <path>] [--format text|
 cargo release-plan apply --plan <plan.json> [--dry-run] [--manifest-path <path>] [--verbose]
 ```
 
-`--base` defaults to `origin/main`. `--manifest-path` defaults to `Cargo.toml` in
+`--base` defaults to `origin/main`. CI should pass an explicit SHA of the
+merge-base or target-branch tip. `--manifest-path` defaults to `Cargo.toml` in
 the current directory.
 
 ### `report`
@@ -53,7 +54,8 @@ Reads an approved plan and:
 * refreshes the workspace lockfile so `--locked` builds keep working
 
 Manifests are edited with `toml_edit` (comments and layout preserved). Every
-edit is computed before any file is written.
+edit is computed before any file is written. `--dry-run` lists the manifests
+that would change.
 
 The plan schema is:
 

@@ -97,7 +97,7 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
     let workspace_root = PathBuf::from(&json.workspace_root);
     let member_ids: HashSet<&str> = json.workspace_members.iter().map(String::as_str).collect();
 
-    let groups = groups_from_metadata(&json.metadata);
+    let groups = groups_from_metadata(&json.metadata)?;
     let mut packages = Vec::new();
 
     for package in &json.packages {
@@ -110,7 +110,12 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
         let path = PathBuf::from(&package.manifest_path);
         let content = std::fs::read_to_string(&path)
             .map_err(|error| crate::ReadFileError::caused_by(&path, error))?;
-        let Some(mut parsed) = parse_package_manifest(&content, &path.to_string_lossy())? else {
+        let Some(mut parsed) = parse_package_manifest(
+            &content,
+            &path.to_string_lossy(),
+            Some(package.version.as_str()),
+        )?
+        else {
             continue;
         };
         if !parsed.publish {
@@ -151,13 +156,13 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
     })
 }
 
-fn groups_from_metadata(metadata: &serde_json::Value) -> Groups {
+fn groups_from_metadata(metadata: &serde_json::Value) -> Result<Groups, AppError> {
     let Some(groups) = metadata
         .get("release-plan")
         .and_then(|plan| plan.get("groups"))
         .and_then(serde_json::Value::as_object)
     else {
-        return Groups::default();
+        return Ok(Groups::default());
     };
     let mut map = BTreeMap::new();
     for (name, members) in groups {
@@ -201,7 +206,7 @@ mod tests {
                 }
             }
         });
-        let groups = groups_from_metadata(&json);
+        let groups = groups_from_metadata(&json).unwrap();
         assert_eq!(groups.group_of("nm_impl"), Some("nm"));
     }
 

@@ -18,8 +18,9 @@ commits never become anchors. Comparison uses the parsed version, so
 reformatting a manifest without changing the version is not an increment. A
 package's creation (absent to present) counts as a version change.
 
-The base revision defaults to `origin/main`. A stale base can only move the
-anchor further back, which reports more, never less.
+The base revision defaults to `origin/main`. CI should pass an explicit SHA of
+the merge-base or target-branch tip. A stale default can both add and hide
+differences, so it is not a conservative fallback.
 
 A truncated history that never reveals a version change (including creation) is
 an error, not a pass.
@@ -87,8 +88,8 @@ warnings without failing the check.
 expands groups, rewrites package versions and intra-workspace requirements that
 must follow (including `=` pins), and refreshes the workspace lockfile.
 Manifests are edited structurally so comments and layout survive. The complete
-edit set is computed before any write, so a failure does not leave a
-half-updated workspace. `--dry-run` prints the edits without writing.
+edit set is computed before any write. `--dry-run` lists the manifests that
+would change, without writing.
 
 ## Offline and deterministic
 

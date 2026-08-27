@@ -15,6 +15,7 @@ use crate::groups::Groups;
 use crate::{
     ConflictingPlanVersionError, InvalidVersionError, PlanIncrementSpecError, SCHEMA_VERSION,
     UnknownIncrementLevelError, UnknownPlanTargetError, UnsupportedPlanSchemaError,
+    VersionOverflowError,
 };
 
 /// Requested bump relative to the highest declared member version.
@@ -138,7 +139,7 @@ pub(crate) fn expand_plan(
             else {
                 continue;
             };
-            bump(&max, level)
+            bump(&max, level)?
         } else {
             continue;
         };
@@ -205,15 +206,29 @@ fn members_for_key(
     }
 }
 
-pub(crate) fn bump(version: &Version, level: IncrementLevel) -> Version {
+pub(crate) fn bump(version: &Version, level: IncrementLevel) -> Result<Version, AppError> {
     match level {
-        IncrementLevel::Major => Version::new(version.major.saturating_add(1), 0, 0),
-        IncrementLevel::Minor => Version::new(version.major, version.minor.saturating_add(1), 0),
-        IncrementLevel::Patch => Version::new(
-            version.major,
-            version.minor,
-            version.patch.saturating_add(1),
-        ),
+        IncrementLevel::Major => {
+            let major = version
+                .major
+                .checked_add(1)
+                .ok_or_else(|| VersionOverflowError::new(version.clone()))?;
+            Ok(Version::new(major, 0, 0))
+        }
+        IncrementLevel::Minor => {
+            let minor = version
+                .minor
+                .checked_add(1)
+                .ok_or_else(|| VersionOverflowError::new(version.clone()))?;
+            Ok(Version::new(version.major, minor, 0))
+        }
+        IncrementLevel::Patch => {
+            let patch = version
+                .patch
+                .checked_add(1)
+                .ok_or_else(|| VersionOverflowError::new(version.clone()))?;
+            Ok(Version::new(version.major, version.minor, patch))
+        }
     }
 }
 
@@ -231,6 +246,7 @@ mod tests {
             "nm".to_string(),
             vec!["nm".to_string(), "nm_impl".to_string()],
         )]))
+        .unwrap()
     }
 
     fn current() -> BTreeMap<String, Version> {
@@ -397,5 +413,12 @@ mod tests {
         };
         let expanded = expand_plan(&plan, &nm_groups(), &current(), &current()).unwrap();
         assert_eq!(expanded.packages.get("events"), Some(&v("1.0.0")));
+    }
+
+    #[test]
+    fn bump_errors_when_a_component_overflows() {
+        let max = Version::new(0, 0, u64::MAX);
+        let error = bump(&max, IncrementLevel::Patch).unwrap_err();
+        assert!(error.find_source::<VersionOverflowError>().is_some());
     }
 }

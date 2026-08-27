@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use ohno::AppError;
 
 use crate::UnresolvedBaseError;
-use crate::command::{run_capture, run_capture_ok};
+use crate::command::{run_capture, run_capture_ok, run_capture_ok_bytes};
 
 /// A Git repository rooted at `root`.
 #[derive(Clone, Debug)]
@@ -83,8 +83,20 @@ impl GitRepo {
         commit: &str,
         rel_path: &str,
     ) -> Result<Option<String>, AppError> {
+        match self.show_file_bytes(commit, rel_path)? {
+            Some(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
+            None => Ok(None),
+        }
+    }
+
+    /// Raw bytes at `commit:rel_path`, or `None` if the path is absent.
+    pub(crate) fn show_file_bytes(
+        &self,
+        commit: &str,
+        rel_path: &str,
+    ) -> Result<Option<Vec<u8>>, AppError> {
         let spec = format!("{}:{}", commit, git_path(rel_path));
-        run_capture_ok("git", &["show", &spec], &self.root)
+        run_capture_ok_bytes("git", &["show", &spec], &self.root)
     }
 
     /// Git-tracked paths under `pathspec` in the work tree / index.
@@ -150,6 +162,27 @@ pub(crate) fn git_path(path: &str) -> String {
     path.replace('\\', "/")
 }
 
+/// Joins a workspace-root-relative path onto the git-root-relative workspace
+/// prefix so `git ls-files` / `git show` pathspecs match the repository.
+pub(crate) fn join_git_rel(git_root: &Path, workspace_root: &Path, workspace_rel: &str) -> String {
+    let prefix = git_path(
+        &workspace_root
+            .strip_prefix(git_root)
+            .unwrap_or_else(|_| Path::new(""))
+            .to_string_lossy(),
+    );
+    let prefix = prefix.trim_end_matches('/');
+    let rel = git_path(workspace_rel);
+    let rel = rel.trim_end_matches('/');
+    if prefix.is_empty() || prefix == "." {
+        rel.to_string()
+    } else if rel.is_empty() || rel == "." {
+        prefix.to_string()
+    } else {
+        format!("{prefix}/{rel}")
+    }
+}
+
 fn split_z(stdout: &str) -> Vec<String> {
     stdout
         .split('\0')
@@ -170,6 +203,22 @@ mod tests {
             git_path(r"packages\foo\Cargo.toml"),
             "packages/foo/Cargo.toml"
         );
+    }
+
+    #[test]
+    fn join_git_rel_prefixes_when_workspace_is_nested() {
+        let git_root = Path::new("/repo");
+        let workspace = Path::new("/repo/inner");
+        assert_eq!(
+            join_git_rel(git_root, workspace, "packages/foo"),
+            "inner/packages/foo"
+        );
+        assert_eq!(
+            join_git_rel(git_root, git_root, "packages/foo"),
+            "packages/foo"
+        );
+        assert_eq!(join_git_rel(git_root, workspace, ""), "inner");
+        assert_eq!(join_git_rel(git_root, workspace, "."), "inner");
     }
 
     #[test]

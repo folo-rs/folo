@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use ignore::overrides::OverrideBuilder;
 use ohno::AppError;
 use semver::Version;
 use toml_edit::{DocumentMut, Item, TableLike, Value};
@@ -37,6 +38,7 @@ pub(crate) fn parse_document(path: &Path, content: &str) -> Result<DocumentMut, 
 pub(crate) fn parse_package_manifest(
     content: &str,
     manifest_path: &str,
+    workspace_version: Option<&str>,
 ) -> Result<Option<PackageManifest>, AppError> {
     let path = Path::new(manifest_path);
     let doc = parse_document(path, content)?;
@@ -49,11 +51,16 @@ pub(crate) fn parse_package_manifest(
     let Some(version_item) = package.get("version") else {
         return Ok(None);
     };
-    if crate::inherited::is_workspace_inherit(version_item) {
-        return Ok(None);
-    }
-    let Some(version_str) = version_item.as_str() else {
-        return Ok(None);
+    let version_str = if crate::inherited::is_workspace_inherit(version_item) {
+        let Some(version_str) = workspace_version else {
+            return Ok(None);
+        };
+        version_str
+    } else {
+        let Some(version_str) = version_item.as_str() else {
+            return Ok(None);
+        };
+        version_str
     };
     let version = version_str
         .parse::<Version>()
@@ -105,24 +112,24 @@ pub(crate) fn is_workspace_member(dir: &str, members: &WorkspaceMembers) -> bool
 
 fn glob_member(pattern: &str, dir: &str) -> bool {
     let pattern = pattern.replace('\\', "/");
+    let dir = dir.replace('\\', "/");
     if pattern == dir {
         return true;
     }
-    if let Some(prefix) = pattern.strip_suffix("/*") {
-        return dir.strip_prefix(prefix).is_some_and(|rest| {
-            let rest = rest.trim_start_matches('/');
-            !rest.is_empty() && !rest.contains('/')
-        });
+    // `foo/**` in Cargo member lists includes the `foo` directory itself.
+    if let Some(prefix) = pattern.strip_suffix("/**")
+        && dir == prefix
+    {
+        return true;
     }
-    if let Some(prefix) = pattern.strip_suffix("/**") {
-        if dir == prefix {
-            return true;
-        }
-        return dir
-            .strip_prefix(prefix)
-            .is_some_and(|rest| rest.starts_with('/'));
+    let mut builder = OverrideBuilder::new("");
+    if builder.add(&pattern).is_err() {
+        return false;
     }
-    false
+    let Ok(over) = builder.build() else {
+        return false;
+    };
+    over.matched(dir, true).is_whitelist()
 }
 
 fn packaging_from_package(package: &dyn TableLike) -> PackagingRules {
@@ -187,6 +194,8 @@ mod tests {
         assert!(glob_member("packages/*", "packages/foo"));
         assert!(!glob_member("packages/*", "packages/foo/bar"));
         assert!(!glob_member("packages/*", "other/foo"));
+        assert!(glob_member("crates/foo-*", "crates/foo-bar"));
+        assert!(!glob_member("crates/foo-*", "crates/foo-bar/nested"));
     }
 
     #[test]
@@ -199,6 +208,7 @@ version = "0.1.0"
 publish = false
 "#,
             "packages/priv/Cargo.toml",
+            None,
         )
         .unwrap()
         .unwrap();
@@ -241,6 +251,7 @@ version = "0.1.0"
 publish = ["crates-io"]
 "#,
             "packages/pub/Cargo.toml",
+            None,
         )
         .unwrap()
         .unwrap();
@@ -253,6 +264,7 @@ version = "0.1.0"
 publish = []
 "#,
             "packages/nopub/Cargo.toml",
+            None,
         )
         .unwrap()
         .unwrap();
@@ -269,10 +281,40 @@ version = "0.1.0"
 include = ["src/**", "README.md"]
 "#,
             "packages/foo/Cargo.toml",
+            None,
         )
         .unwrap()
         .unwrap();
         assert!(parsed.packaging.is_released("src/lib.rs"));
         assert!(!parsed.packaging.is_released("tests/x.rs"));
+    }
+
+    #[test]
+    fn inherited_workspace_version_is_parsed() {
+        let parsed = parse_package_manifest(
+            r#"
+[package]
+name = "foo"
+version.workspace = true
+"#,
+            "packages/foo/Cargo.toml",
+            Some("0.4.0"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(parsed.version.to_string(), "0.4.0");
+        assert!(
+            parse_package_manifest(
+                r#"
+[package]
+name = "foo"
+version.workspace = true
+"#,
+                "packages/foo/Cargo.toml",
+                None,
+            )
+            .unwrap()
+            .is_none()
+        );
     }
 }

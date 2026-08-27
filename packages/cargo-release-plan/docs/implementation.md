@@ -19,11 +19,12 @@ of each package manifest and compares the corresponding tables in the root
 manifest at the anchor and in the work tree.
 
 Plan application is a `toml_edit` rewrite: every affected manifest is parsed
-and patched in memory, then written only after the full edit set succeeds. Exact
-`=` pins and any intra-workspace requirement that would no longer match the new
-version are updated in package tables and in `[workspace.dependencies]`. The
-lockfile refresh is a subsequent `cargo update --offline -p …` of the rewritten
-packages.
+and patched in memory before writes begin. A later write can still fail after
+earlier files have been updated. Exact `=` pins and any intra-workspace
+requirement that would no longer match the new version are updated in package
+tables and in `[workspace.dependencies]`. The lockfile refresh is a subsequent
+`cargo update --offline -p …` of the rewritten packages, skipped when the plan
+expands to no packages.
 
 Operational conditions are private leaves that flow into `ohno::AppError`.
 Command, parse, and filesystem causes remain attached. The package exports

@@ -52,9 +52,22 @@ pub(crate) fn run_capture_ok(
     args: &[&str],
     cwd: &Path,
 ) -> Result<Option<String>, AppError> {
+    match run_capture_ok_bytes(program, args, cwd)? {
+        Some(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
+        None => Ok(None),
+    }
+}
+
+/// Like [`run_capture_ok`], keeping stdout as raw bytes so binary files can be
+/// compared without UTF-8 replacement.
+pub(crate) fn run_capture_ok_bytes(
+    program: &str,
+    args: &[&str],
+    cwd: &Path,
+) -> Result<Option<Vec<u8>>, AppError> {
     let output = spawn(program, args.iter().map(OsStr::new), cwd)?;
     if output.status.success() {
-        Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()))
+        Ok(Some(output.stdout))
     } else {
         Ok(None)
     }
@@ -81,6 +94,30 @@ fn spawn(
 mod tests {
     use super::*;
     use crate::CommandSpawnError;
+
+    #[cfg_attr(miri, ignore)] // Process spawn uses host APIs Miri cannot emulate.
+    #[test]
+    fn run_capture_ok_returns_stdout_on_success() {
+        let stdout = run_capture_ok(
+            "git",
+            &["rev-parse", "--is-inside-work-tree"],
+            Path::new("."),
+        )
+        .unwrap();
+        assert_eq!(stdout.as_deref().map(str::trim), Some("true"));
+    }
+
+    #[cfg_attr(miri, ignore)] // Process spawn uses host APIs Miri cannot emulate.
+    #[test]
+    fn run_capture_ok_none_on_nonzero_exit() {
+        let stdout = run_capture_ok(
+            "git",
+            &["rev-parse", "--verify", "cargo-release-plan-no-such-rev"],
+            Path::new("."),
+        )
+        .unwrap();
+        assert!(stdout.is_none());
+    }
 
     #[cfg_attr(miri, ignore)] // Process spawn uses host APIs Miri cannot emulate.
     #[test]

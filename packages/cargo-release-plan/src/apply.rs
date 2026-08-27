@@ -1,6 +1,7 @@
 // `apply` command: rewrite versions, expand groups, refresh the lockfile.
 
 use std::collections::{BTreeMap, HashSet};
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -58,10 +59,7 @@ pub(crate) fn run_apply(
     let changed = changed_edit_count(&edits);
 
     if dry_run {
-        return Ok(format!(
-            "Dry run: {changed} manifest(s) would change; lockfile would be refreshed for {} package(s)",
-            expanded.packages.len()
-        ));
+        return Ok(dry_run_summary(&edits, expanded.packages.len()));
     }
 
     for edit in &edits {
@@ -71,8 +69,7 @@ pub(crate) fn run_apply(
         fs::write(&edit.path, edit.updated.as_bytes())
             .map_err(|error| WriteFileError::caused_by(&edit.path, error))?;
         verbose.note(format!(
-            "wrote {} after computing every edit in memory so a mid-apply failure cannot leave \
-             a half-updated workspace",
+            "wrote {} after computing the full edit set in memory; remaining writes can still fail",
             edit.path.display()
         ));
     }
@@ -94,6 +91,7 @@ fn compute_edits(
     edits.push(edit_path(&root, |doc| {
         rewrite_workspace_dependencies(doc, expanded, verbose);
         rewrite_package_version(doc, expanded, verbose);
+        rewrite_dependency_tables(doc, expanded, verbose);
     })?);
 
     let mut seen = HashSet::new();
@@ -108,6 +106,22 @@ fn compute_edits(
         })?);
     }
     Ok(edits)
+}
+
+fn dry_run_summary(edits: &[ManifestEdit], package_count: usize) -> String {
+    let changed = changed_edit_count(edits);
+    let mut message = format!("Dry run: {changed} manifest(s) would change");
+    for edit in edits {
+        if edit.original != edit.updated {
+            write!(message, "\n  {}", edit.path.display()).expect("writing to String");
+        }
+    }
+    write!(
+        message,
+        "; lockfile would be refreshed for {package_count} package(s)"
+    )
+    .expect("writing to String");
+    message
 }
 
 fn changed_edit_count(edits: &[ManifestEdit]) -> usize {
@@ -214,7 +228,11 @@ fn rewrite_dep_table(
 ) {
     let names: Vec<String> = table.iter().map(|(key, _)| key.to_string()).collect();
     for name in names {
-        let Some(new_version) = expanded.packages.get(&name).cloned() else {
+        let Some(entry) = table.get(&name) else {
+            continue;
+        };
+        let crate_name = dep_crate_name(entry, &name);
+        let Some(new_version) = expanded.packages.get(&crate_name).cloned() else {
             continue;
         };
         let Some(entry) = table.get_mut(&name) else {
@@ -222,12 +240,27 @@ fn rewrite_dep_table(
         };
         if rewrite_dep_entry(entry, &new_version) {
             verbose.note(format!(
-                "{where_}.{name}: rewrote the version requirement to follow {name} {new_version} \
+                "{where_}.{name}: rewrote the version requirement to follow {crate_name} {new_version} \
                  (exact `=` pins keep the equals sign; other intra-workspace requirements are \
                  rewritten because they must follow the new version)"
             ));
         }
     }
+}
+
+fn dep_crate_name(entry: &Item, table_key: &str) -> String {
+    let package = match entry {
+        Item::Value(Value::InlineTable(table)) => table
+            .get("package")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        Item::Table(table) => table
+            .get("package")
+            .and_then(Item::as_str)
+            .map(str::to_owned),
+        _ => None,
+    };
+    package.unwrap_or_else(|| table_key.to_string())
 }
 
 fn rewrite_dep_entry(entry: &mut Item, new_version: &Version) -> bool {
@@ -282,6 +315,13 @@ fn refresh_lockfile(
     verbose: Verbose,
 ) -> Result<(), AppError> {
     let lockfile = work_tree.workspace_root.join("Cargo.lock");
+    if expanded.packages.is_empty() {
+        verbose.note(
+            "plan expands to no packages, so apply skips the lockfile refresh rather than \
+             running a workspace-wide cargo update",
+        );
+        return Ok(());
+    }
     if !lockfile.exists() {
         verbose.note(
             "no Cargo.lock present, so apply skips the lockfile refresh; the lockfile is not \
@@ -349,6 +389,9 @@ mod tests {
         ];
         assert_eq!(changed_edit_count(&edits), 1);
         assert_eq!(changed_edit_count(&edits[..1]), 0);
+        let summary = dry_run_summary(&edits, 2);
+        assert!(summary.contains("changed.toml"));
+        assert!(!summary.contains("unchanged.toml"));
     }
 
     #[test]
@@ -373,5 +416,37 @@ version = \"0.1.0\"
         );
         assert!(rewrite_dep_entry(first_dep(&mut doc), &v("0.3.0")));
         assert!(doc.to_string().contains("0.3.0"));
+    }
+
+    #[test]
+    fn dep_crate_name_reads_package_alias() {
+        let doc =
+            dep_item("[dependencies]\nfoo-alias = { package = \"foo\", version = \"0.1.0\" }\n");
+        let entry = doc
+            .get("dependencies")
+            .and_then(Item::as_table_like)
+            .and_then(|table| table.get("foo-alias"))
+            .unwrap();
+        assert_eq!(dep_crate_name(entry, "foo-alias"), "foo");
+        let doc = dep_item("[dependencies]\nfoo = \"0.1.0\"\n");
+        let entry = doc
+            .get("dependencies")
+            .and_then(Item::as_table_like)
+            .and_then(|table| table.get("foo"))
+            .unwrap();
+        assert_eq!(dep_crate_name(entry, "foo"), "foo");
+        let doc = dep_item(
+            "
+[dependencies.foo-alias]
+package = \"foo\"
+version = \"0.1.0\"
+",
+        );
+        let entry = doc
+            .get("dependencies")
+            .and_then(Item::as_table_like)
+            .and_then(|table| table.get("foo-alias"))
+            .unwrap();
+        assert_eq!(dep_crate_name(entry, "foo-alias"), "foo");
     }
 }

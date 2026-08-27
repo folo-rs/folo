@@ -85,8 +85,15 @@ pub(crate) fn classify(
     base: &str,
     verbose: Verbose,
 ) -> Result<Classification, AppError> {
-    let work_tree = crate::metadata::load_work_tree(manifest_path)?;
+    let mut work_tree = crate::metadata::load_work_tree(manifest_path)?;
     let git = GitRepo::discover(&work_tree.workspace_root)?;
+    for package in &mut work_tree.packages {
+        package.manifest.directory = crate::git::join_git_rel(
+            git.root(),
+            &work_tree.workspace_root,
+            &package.manifest.directory,
+        );
+    }
     let head = git.head()?;
     let base_sha = git.rev_parse(base)?;
     verbose.note(format!(
@@ -242,7 +249,6 @@ fn classify_one(
         &anchor_pkg.packaging,
         &package.manifest.directory,
         &package.manifest.packaging,
-        &work_tree.workspace_root,
     )?;
 
     let inherited: Vec<InheritedChange> = inherited_changes(
@@ -340,7 +346,6 @@ fn diff_package(
     anchor_rules: &PackagingRules,
     work_dir: &str,
     work_rules: &PackagingRules,
-    workspace_root: &Path,
 ) -> Result<(Vec<ChangedItem>, String, DiffStat, Vec<String>), AppError> {
     let anchor_files = released_at_commit(git, anchor, anchor_dir, anchor_rules)?;
     let work_files = released_in_work_tree(git, work_dir, work_rules)?;
@@ -361,11 +366,11 @@ fn diff_package(
 
     for rel in &rels {
         let old = match anchor_files.get(rel) {
-            Some(path) => git.show_file(anchor, path)?,
+            Some(path) => git.show_file_bytes(anchor, path)?,
             None => None,
         };
         let new = match work_files.get(rel) {
-            Some(path) => read_optional_text(&workspace_root.join(path))?,
+            Some(path) => read_optional_bytes(&git.root().join(path))?,
             None => None,
         };
         if old.as_deref() == new.as_deref() {
@@ -382,11 +387,10 @@ fn diff_package(
             field: None,
             source: "package".to_string(),
         });
-        let old_text = old.as_deref().unwrap_or("");
-        let new_text = new.as_deref().unwrap_or("");
-        deletions = deletions.saturating_add(old_text.lines().count());
-        insertions = insertions.saturating_add(new_text.lines().count());
-        patch.push_str(&naive_patch(rel, old_text, new_text));
+        let (file_patch, ins, del) = file_diff(rel, old.as_deref(), new.as_deref());
+        insertions = insertions.saturating_add(ins);
+        deletions = deletions.saturating_add(del);
+        patch.push_str(&file_patch);
     }
 
     let untracked = git
@@ -410,19 +414,79 @@ fn short_sha(commit: &str) -> &str {
     commit.get(..commit.len().min(12)).unwrap_or(commit)
 }
 
-fn naive_patch(path: &str, old: &str, new: &str) -> String {
-    let mut out = format!("--- a/{path}\n+++ b/{path}\n");
-    for line in old.lines() {
+fn file_diff(path: &str, old: Option<&[u8]>, new: Option<&[u8]>) -> (String, usize, usize) {
+    if old.is_some_and(is_non_text) || new.is_some_and(is_non_text) {
+        return (format!("Binary files a/{path} and b/{path} differ\n"), 0, 0);
+    }
+    let old_text = old.map_or(String::new(), |bytes| {
+        String::from_utf8_lossy(bytes).into_owned()
+    });
+    let new_text = new.map_or(String::new(), |bytes| {
+        String::from_utf8_lossy(bytes).into_owned()
+    });
+    unified_diff(path, &old_text, &new_text)
+}
+
+fn is_non_text(bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes).is_err()
+}
+
+fn unified_diff(path: &str, old: &str, new: &str) -> (String, usize, usize) {
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+    let mut prefix = 0_usize;
+    while let (Some(old_line), Some(new_line)) = (old_lines.get(prefix), new_lines.get(prefix)) {
+        if old_line != new_line {
+            break;
+        }
+        prefix = prefix.saturating_add(1);
+    }
+    let mut old_end = old_lines.len();
+    let mut new_end = new_lines.len();
+    while old_end > prefix && new_end > prefix {
+        let Some(old_line) = old_lines.get(old_end.saturating_sub(1)) else {
+            break;
+        };
+        let Some(new_line) = new_lines.get(new_end.saturating_sub(1)) else {
+            break;
+        };
+        if old_line != new_line {
+            break;
+        }
+        old_end = old_end.saturating_sub(1);
+        new_end = new_end.saturating_sub(1);
+    }
+    let old_mid = old_lines.get(prefix..old_end).unwrap_or(&[]);
+    let new_mid = new_lines.get(prefix..new_end).unwrap_or(&[]);
+    let deletions = old_mid.len();
+    let insertions = new_mid.len();
+    if deletions == 0 && insertions == 0 {
+        return (String::new(), 0, 0);
+    }
+    let old_start = if deletions == 0 {
+        0
+    } else {
+        prefix.saturating_add(1)
+    };
+    let new_start = if insertions == 0 {
+        0
+    } else {
+        prefix.saturating_add(1)
+    };
+    let mut out = format!(
+        "--- a/{path}\n+++ b/{path}\n@@ -{old_start},{deletions} +{new_start},{insertions} @@\n"
+    );
+    for line in old_mid {
         out.push('-');
         out.push_str(line);
         out.push('\n');
     }
-    for line in new.lines() {
+    for line in new_mid {
         out.push('+');
         out.push_str(line);
         out.push('\n');
     }
-    out
+    (out, insertions, deletions)
 }
 
 fn released_at_commit(
@@ -532,7 +596,8 @@ fn load_snapshot(
         let Some(content) = git.show_file(commit, &path)? else {
             continue;
         };
-        let Some(parsed) = parse_package_manifest(&content, &path)? else {
+        let workspace_version = crate::inherited::workspace_package_version(&root_doc);
+        let Some(parsed) = parse_package_manifest(&content, &path, workspace_version)? else {
             continue;
         };
         if !parsed.publish {
@@ -573,9 +638,9 @@ fn can_stop_timeline(timeline: &[TimelineEntry]) -> bool {
     last != first
 }
 
-fn read_optional_text(path: &Path) -> Result<Option<String>, AppError> {
+fn read_optional_bytes(path: &Path) -> Result<Option<Vec<u8>>, AppError> {
     match fs::read(path) {
-        Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
+        Ok(bytes) => Ok(Some(bytes)),
         Err(error) if is_not_found(&error) => Ok(None),
         Err(error) => Err(crate::ReadFileError::caused_by(path, error).into()),
     }
@@ -623,34 +688,74 @@ mod tests {
 
     #[cfg_attr(miri, ignore)] // tempfile::tempdir is host filesystem, which Miri cannot emulate.
     #[test]
-    fn read_optional_text_missing_is_none() {
+    fn read_optional_bytes_missing_is_none() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gone.txt");
-        assert_eq!(read_optional_text(&path).unwrap(), None);
+        assert_eq!(read_optional_bytes(&path).unwrap(), None);
     }
 
     #[cfg_attr(miri, ignore)] // tempfile::tempdir is host filesystem, which Miri cannot emulate.
     #[test]
-    fn read_optional_text_reads_file() {
+    fn read_optional_bytes_reads_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("here.txt");
         fs::write(&path, "hi").unwrap();
-        assert_eq!(read_optional_text(&path).unwrap().as_deref(), Some("hi"));
+        assert_eq!(
+            read_optional_bytes(&path).unwrap().as_deref(),
+            Some(b"hi".as_slice())
+        );
     }
 
     #[cfg_attr(miri, ignore)] // tempfile::tempdir is host filesystem, which Miri cannot emulate.
     #[test]
-    fn read_optional_text_rejects_non_not_found_errors() {
+    fn read_optional_bytes_rejects_non_not_found_errors() {
         let dir = tempfile::tempdir().unwrap();
-        let _ = read_optional_text(dir.path()).unwrap_err();
+        let _ = read_optional_bytes(dir.path()).unwrap_err();
     }
 
     #[test]
-    fn naive_patch_marks_removed_and_added_lines() {
-        let patch = naive_patch("src/lib.rs", "old\n", "new\n");
-        assert!(patch.contains("--- a/src/lib.rs"));
-        assert!(patch.contains("+++ b/src/lib.rs"));
+    fn unified_diff_hunks_changed_middle_only() {
+        let (patch, insertions, deletions) =
+            unified_diff("src/lib.rs", "keep\nold\nend\n", "keep\nnew\nend\n");
+        assert!(patch.contains("@@ -2,1 +2,1 @@"));
         assert!(patch.contains("-old"));
         assert!(patch.contains("+new"));
+        assert!(!patch.contains("-keep"));
+        assert_eq!((insertions, deletions), (1, 1));
+    }
+
+    #[test]
+    fn unified_diff_delete_only_keeps_the_shared_prefix_line() {
+        let (patch, insertions, deletions) = unified_diff("f.rs", "z\nz\n", "z\n");
+        assert_eq!((insertions, deletions), (0, 1));
+        assert!(patch.contains("-z"));
+        let (patch, insertions, deletions) = unified_diff("f.rs", "z\n", "z\nz\n");
+        assert_eq!((insertions, deletions), (1, 0));
+        assert!(patch.contains("+z"));
+    }
+
+    #[test]
+    fn file_diff_text_is_not_binary() {
+        let (patch, insertions, deletions) =
+            file_diff("src/lib.rs", Some(b"old\n"), Some(b"new\n"));
+        assert!(!patch.contains("Binary files"));
+        assert!(patch.contains("-old"));
+        assert_eq!((insertions, deletions), (1, 1));
+    }
+
+    #[test]
+    fn file_diff_one_sided_binary_is_binary() {
+        let (patch, _, _) = file_diff("x.bin", Some(&[0xff]), Some(b"hello"));
+        assert!(patch.contains("Binary files"));
+        let (patch, _, _) = file_diff("x.bin", Some(b"hello"), Some(&[0xff]));
+        assert!(patch.contains("Binary files"));
+    }
+
+    #[test]
+    fn file_diff_reports_binary_without_utf8_replacement() {
+        let (patch, insertions, deletions) =
+            file_diff("icon.bin", Some(&[0xff, 0x00]), Some(&[0xfe, 0x00]));
+        assert!(patch.contains("Binary files"));
+        assert_eq!((insertions, deletions), (0, 0));
     }
 }

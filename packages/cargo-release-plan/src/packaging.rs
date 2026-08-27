@@ -32,14 +32,10 @@ impl PackagingRules {
             return true;
         }
         if let Some(include) = &self.include {
-            return include
-                .iter()
-                .any(|pattern| matches_pattern(pattern, &path));
+            return matches_gitignore(include, &path);
         }
         if let Some(exclude) = &self.exclude {
-            return !exclude
-                .iter()
-                .any(|pattern| matches_pattern(pattern, &path));
+            return !matches_gitignore(exclude, &path);
         }
         true
     }
@@ -53,10 +49,12 @@ fn normalize_rel(path: &str) -> String {
     path.replace('\\', "/").trim_start_matches("./").to_string()
 }
 
-fn matches_pattern(pattern: &str, path: &str) -> bool {
+fn matches_gitignore(patterns: &[String], path: &str) -> bool {
     let mut builder = GitignoreBuilder::new("");
-    if builder.add_line(None, pattern).is_err() {
-        return false;
+    for pattern in patterns {
+        if builder.add_line(None, pattern).is_err() {
+            continue;
+        }
     }
     let Ok(gitignore) = builder.build() else {
         return false;
@@ -105,6 +103,16 @@ mod tests {
         assert!(rules.is_released("README.md"));
         assert!(!rules.is_released("tests/foo.rs"));
         assert!(!rules.is_released("benches/foo.rs"));
+    }
+
+    #[test]
+    fn include_later_negation_drops_a_subset() {
+        let rules = PackagingRules::new(
+            Some(vec!["src/**".to_string(), "!src/private/**".to_string()]),
+            None,
+        );
+        assert!(rules.is_released("src/lib.rs"));
+        assert!(!rules.is_released("src/private/x.rs"));
     }
 
     #[test]

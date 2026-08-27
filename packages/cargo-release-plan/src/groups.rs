@@ -7,7 +7,10 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+use ohno::AppError;
 use semver::Version;
+
+use crate::DuplicateGroupMemberError;
 
 /// Version groups keyed by group name and by package name.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -17,17 +20,24 @@ pub(crate) struct Groups {
 }
 
 impl Groups {
-    pub(crate) fn from_members(map: BTreeMap<String, Vec<String>>) -> Self {
+    pub(crate) fn from_members(map: BTreeMap<String, Vec<String>>) -> Result<Self, AppError> {
         let mut by_package = BTreeMap::new();
         for (group, members) in &map {
+            let mut seen_in_group = HashSet::new();
             for member in members {
+                if !seen_in_group.insert(member) {
+                    return Err(DuplicateGroupMemberError::new(member, group, group).into());
+                }
+                if let Some(first) = by_package.get(member) {
+                    return Err(DuplicateGroupMemberError::new(member, first, group).into());
+                }
                 by_package.insert(member.clone(), group.clone());
             }
         }
-        Self {
+        Ok(Self {
             by_name: map,
             by_package,
-        }
+        })
     }
 
     pub(crate) fn group_of(&self, package: &str) -> Option<&str> {
@@ -119,6 +129,27 @@ mod tests {
             "nm".to_string(),
             vec!["nm".to_string(), "nm_impl".to_string()],
         )]))
+        .unwrap()
+    }
+
+    #[test]
+    fn duplicate_member_across_groups_is_rejected() {
+        let error = Groups::from_members(BTreeMap::from([
+            ("a".to_string(), vec!["shared".to_string()]),
+            ("b".to_string(), vec!["shared".to_string()]),
+        ]))
+        .unwrap_err();
+        assert!(error.find_source::<DuplicateGroupMemberError>().is_some());
+    }
+
+    #[test]
+    fn duplicate_member_inside_one_group_is_rejected() {
+        let error = Groups::from_members(BTreeMap::from([(
+            "nm".to_string(),
+            vec!["nm".to_string(), "nm".to_string()],
+        )]))
+        .unwrap_err();
+        assert!(error.find_source::<DuplicateGroupMemberError>().is_some());
     }
 
     #[test]

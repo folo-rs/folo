@@ -157,7 +157,7 @@ fn verify_packaging_rules(classification: &Classification) -> String {
             .collect();
         let cargo: BTreeSet<String> = listed
             .into_iter()
-            .filter(|path| path != "Cargo.lock" && !path.ends_with("/Cargo.lock"))
+            .filter(|path| !is_packaging_artifact(path))
             .collect();
         if tool == cargo {
             continue;
@@ -170,6 +170,13 @@ fn verify_packaging_rules(classification: &Classification) -> String {
         .expect("writing to String");
     }
     warnings
+}
+
+fn is_packaging_artifact(path: &str) -> bool {
+    path == "Cargo.lock"
+        || path.ends_with("/Cargo.lock")
+        || path == ".cargo_vcs_info.json"
+        || path == "Cargo.toml.orig"
 }
 
 // Spawns `cargo package --list`; catching mutations would compile every fixture.
@@ -212,5 +219,14 @@ mod tests {
         assert!(default_success_message(true, "warning").is_none());
         assert!(default_success_message(false, "").is_none());
         assert!(default_success_message(false, "fail").is_none());
+    }
+
+    #[test]
+    fn packaging_artifacts_are_ignored_in_verify() {
+        assert!(is_packaging_artifact("Cargo.lock"));
+        assert!(is_packaging_artifact("nested/Cargo.lock"));
+        assert!(is_packaging_artifact(".cargo_vcs_info.json"));
+        assert!(is_packaging_artifact("Cargo.toml.orig"));
+        assert!(!is_packaging_artifact("src/lib.rs"));
     }
 }

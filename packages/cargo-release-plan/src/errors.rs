@@ -194,6 +194,50 @@ pub(crate) struct ConflictingPlanVersionError {
 impl UnwindSafe for ConflictingPlanVersionError {}
 impl RefUnwindSafe for ConflictingPlanVersionError {}
 
+/// A package is listed in more than one version group, or twice in one group.
+#[ohno::error]
+#[display("Package '{package}' is listed in version groups '{first_group}' and '{second_group}'")]
+pub(crate) struct DuplicateGroupMemberError {
+    package: String,
+    first_group: String,
+    second_group: String,
+}
+
+impl UnwindSafe for DuplicateGroupMemberError {}
+impl RefUnwindSafe for DuplicateGroupMemberError {}
+
+#[cfg(test)]
+impl DuplicateGroupMemberError {
+    pub(crate) fn package(&self) -> &str {
+        &self.package
+    }
+
+    pub(crate) fn first_group(&self) -> &str {
+        &self.first_group
+    }
+
+    pub(crate) fn second_group(&self) -> &str {
+        &self.second_group
+    }
+}
+
+/// Incrementing a semantic-version component overflows `u64`.
+#[ohno::error]
+#[display("Incrementing version '{version}' overflows a SemVer component")]
+pub(crate) struct VersionOverflowError {
+    version: semver::Version,
+}
+
+impl UnwindSafe for VersionOverflowError {}
+impl RefUnwindSafe for VersionOverflowError {}
+
+#[cfg(test)]
+impl VersionOverflowError {
+    pub(crate) fn version(&self) -> &semver::Version {
+        &self.version
+    }
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -326,6 +370,22 @@ mod tests {
         UnwindSafe,
         RefUnwindSafe
     );
+    assert_impl_all!(
+        DuplicateGroupMemberError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
+    assert_impl_all!(
+        VersionOverflowError: Send,
+        Sync,
+        Debug,
+        error::Error,
+        UnwindSafe,
+        RefUnwindSafe
+    );
 
     #[test]
     fn command_spawn_error_retains_source() {
@@ -356,5 +416,20 @@ mod tests {
     fn unknown_plan_target_error_names_target() {
         let error = UnknownPlanTargetError::new("ghost");
         assert_eq!(error.name(), "ghost");
+    }
+
+    #[test]
+    fn duplicate_group_member_error_names_package_and_groups() {
+        let error = DuplicateGroupMemberError::new("nm", "a", "b");
+        assert_eq!(error.package(), "nm");
+        assert_eq!(error.first_group(), "a");
+        assert_eq!(error.second_group(), "b");
+    }
+
+    #[test]
+    fn version_overflow_error_carries_version() {
+        let version: semver::Version = "1.2.3".parse().unwrap();
+        let error = VersionOverflowError::new(version.clone());
+        assert_eq!(error.version(), &version);
     }
 }

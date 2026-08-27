@@ -94,9 +94,9 @@ pub enum RunOutcome {
 
 /// Default base revision when the caller does not pass `--base`.
 ///
-/// CI passes an explicit SHA. A local run compares against the default remote
-/// mainline. A stale base can only move anchors further back, which reports
-/// more, never less.
+/// CI should pass an explicit SHA of the merge-base or target-branch tip. A
+/// local run compares against the default remote mainline. A stale default can
+/// both add and hide differences, so it is not a conservative fallback.
 pub(crate) const DEFAULT_BASE: &str = "origin/main";
 
 /// Plan / report schema version this tool reads and writes.

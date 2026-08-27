@@ -68,6 +68,10 @@ pub(crate) fn write_report(
 ) -> Result<String, AppError> {
     fs::create_dir_all(out_dir).map_err(|error| WriteFileError::caused_by(out_dir, error))?;
     let diffs_dir = out_dir.join("diffs");
+    if diffs_dir.exists() {
+        fs::remove_dir_all(&diffs_dir)
+            .map_err(|error| WriteFileError::caused_by(&diffs_dir, error))?;
+    }
     fs::create_dir_all(&diffs_dir).map_err(|error| WriteFileError::caused_by(&diffs_dir, error))?;
 
     let mut packages = Vec::new();

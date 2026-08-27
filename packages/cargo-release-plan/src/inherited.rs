@@ -108,6 +108,15 @@ fn collect_inherited_deps(table: &dyn TableLike, out: &mut Vec<String>) {
     }
 }
 
+pub(crate) fn workspace_package_version(doc: &DocumentMut) -> Option<&str> {
+    doc.get("workspace")
+        .and_then(Item::as_table_like)
+        .and_then(|workspace| workspace.get("package"))
+        .and_then(Item::as_table_like)
+        .and_then(|package| package.get("version"))
+        .and_then(Item::as_str)
+}
+
 pub(crate) fn is_workspace_inherit(item: &Item) -> bool {
     match item {
         Item::Value(Value::InlineTable(table)) => table
@@ -225,6 +234,14 @@ mod tests {
 
     fn doc(text: &str) -> DocumentMut {
         text.parse().unwrap()
+    }
+
+    #[test]
+    fn workspace_package_version_reads_workspace_package_table() {
+        let with_version = doc("[workspace.package]\nversion = \"1.2.3\"\n");
+        assert_eq!(workspace_package_version(&with_version), Some("1.2.3"));
+        let missing = doc("[workspace]\n");
+        assert_eq!(workspace_package_version(&missing), None);
     }
 
     #[test]
