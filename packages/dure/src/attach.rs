@@ -178,10 +178,13 @@ where
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::sync::Mutex;
     use std::sync::atomic::AtomicUsize;
     use std::thread;
     use std::time::Duration;
+    use std::vec;
 
     use super::*;
     use crate::pal::error::{PalError, PalErrorKind};
@@ -192,30 +195,83 @@ mod tests {
     use crate::protocol::Message;
     use crate::session_id::SessionId;
 
-    fn attach_console() -> LocalConsoleFacade {
-        attach_console_counting_leaves(Arc::new(AtomicUsize::new(0)))
+    const SAMPLE_SIZE: WindowSize = WindowSize { cols: 80, rows: 24 };
+
+    /// Assembles the `LocalConsole` an attach test needs: the happy path by
+    /// default, with individual operations overridden to fail and with console
+    /// input supplied as a script.
+    struct TestConsole {
+        has_console: bool,
+        disable_ctrl_c_handler: Result<(), PalErrorKind>,
+        enter_raw_relay: Result<(), PalErrorKind>,
+        window_size: Result<(), PalErrorKind>,
+        write_output: Result<(), PalErrorKind>,
+        input: Vec<Result<ConsoleInput, PalErrorKind>>,
+        leaves: Arc<AtomicUsize>,
     }
 
-    fn attach_console_counting_leaves(leaves: Arc<AtomicUsize>) -> LocalConsoleFacade {
-        let mut console = MockLocalConsole::new();
-        console.expect_has_console().return_const(true);
-        console.expect_disable_ctrl_c_handler().returning(|| Ok(()));
-        console.expect_enter_raw_relay().returning(|| Ok(()));
-        console.expect_leave_raw_relay().returning(move || {
-            leaves.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        });
-        console
-            .expect_window_size()
-            .returning(|| Ok(WindowSize { cols: 80, rows: 24 }));
-        console.expect_read_input().returning(|| {
-            thread::park();
-            Err(PalError::new(PalErrorKind::Disconnected))
-        });
-        console.expect_write_output().returning(|_| Ok(()));
-        LocalConsoleFacade::from_mock(console)
+    impl TestConsole {
+        fn new() -> Self {
+            Self {
+                has_console: true,
+                disable_ctrl_c_handler: Ok(()),
+                enter_raw_relay: Ok(()),
+                window_size: Ok(()),
+                write_output: Ok(()),
+                input: Vec::new(),
+                leaves: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn build(self) -> LocalConsoleFacade {
+            let Self {
+                has_console,
+                disable_ctrl_c_handler,
+                enter_raw_relay,
+                window_size,
+                write_output,
+                input,
+                leaves,
+            } = self;
+
+            let mut console = MockLocalConsole::new();
+            console.expect_has_console().return_const(has_console);
+            console
+                .expect_disable_ctrl_c_handler()
+                .returning(move || disable_ctrl_c_handler.map_err(PalError::new));
+            console
+                .expect_enter_raw_relay()
+                .returning(move || enter_raw_relay.map_err(PalError::new));
+            console.expect_leave_raw_relay().returning(move || {
+                leaves.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            });
+            console
+                .expect_window_size()
+                .returning(move || window_size.map(|()| SAMPLE_SIZE).map_err(PalError::new));
+            console
+                .expect_write_output()
+                .returning(move |_| write_output.map_err(PalError::new));
+
+            let input = Mutex::new(input.into_iter());
+            console.expect_read_input().returning(move || {
+                match input.lock().expect("input script lock").next() {
+                    Some(result) => result.map_err(PalError::new),
+                    // A real console blocks while the user is idle; parking keeps the
+                    // relay's input thread out of the way without spinning.
+                    None => loop {
+                        thread::park();
+                    },
+                }
+            });
+
+            LocalConsoleFacade::from_mock(console)
+        }
     }
 
+    /// Transport whose every operation fails, with a configurable `connect` kind.
+    ///
+    /// Exercises the attach paths that precede a working connection.
     #[derive(Clone, Debug)]
     struct ConnectFails(PalErrorKind);
 
@@ -249,7 +305,142 @@ mod tests {
         }
     }
 
+    /// Transport that connects but cannot send, so the handshake fails on the
+    /// `Attach` message rather than on the connection itself.
+    #[derive(Clone, Debug)]
+    struct SendFails;
+
+    impl Transport for SendFails {
+        fn listen(&self, _name: &str) -> Result<ListenerId, PalError> {
+            Err(PalError::new(PalErrorKind::Other))
+        }
+
+        fn accept(&self, _listener: ListenerId) -> Result<ConnId, PalError> {
+            Err(PalError::new(PalErrorKind::Other))
+        }
+
+        fn connect(&self, _name: &str, _timeout: Duration) -> Result<ConnId, PalError> {
+            Ok(ConnId(1))
+        }
+
+        fn send(&self, _conn: ConnId, _message: &Message) -> Result<(), PalError> {
+            Err(PalError::new(PalErrorKind::Other))
+        }
+
+        fn recv(&self, _conn: ConnId) -> Result<Message, PalError> {
+            Err(PalError::new(PalErrorKind::Other))
+        }
+
+        fn disconnect(&self, _conn: ConnId) {}
+
+        fn close_listener(&self, _listener: ListenerId) {}
+
+        fn pipe_name(&self, nonce: &str) -> String {
+            nonce.to_string()
+        }
+    }
+
+    /// Runs `attach` against a supervisor stand-in that completes the handshake
+    /// and then hands the live connection to `serve`.
+    fn attach_to_scripted_supervisor<F>(console: TestConsole, serve: F) -> Result<Outcome, AppError>
+    where
+        F: FnOnce(&MemoryTransport, ConnId) + Send + 'static,
+    {
+        let transport = MemoryTransport::new();
+        let listener = transport.listen("pipe").expect("listen");
+        let id = SessionId::MIN;
+        thread::spawn({
+            let transport = transport.clone();
+            move || {
+                let conn = transport.accept(listener).expect("accept");
+                _ = transport.recv(conn);
+                _ = transport.send(conn, &Message::Attached { session_id: id });
+                serve(&transport, conn);
+            }
+        });
+        attach(&transport, &console.build(), "pipe", id)
+    }
+
     #[test]
+    fn without_a_console_attach_is_refused() {
+        let error = attach(
+            &ConnectFails(PalErrorKind::Other),
+            &TestConsole {
+                has_console: false,
+                ..TestConsole::new()
+            }
+            .build(),
+            "pipe",
+            SessionId::MIN,
+        )
+        .unwrap_err();
+        assert!(error.find_source::<NoConsoleError>().is_some());
+    }
+
+    #[test]
+    fn ctrl_c_handler_failure_is_pal_failure() {
+        let error = attach(
+            &ConnectFails(PalErrorKind::Other),
+            &TestConsole {
+                disable_ctrl_c_handler: Err(PalErrorKind::Other),
+                ..TestConsole::new()
+            }
+            .build(),
+            "pipe",
+            SessionId::MIN,
+        )
+        .unwrap_err();
+        assert!(error.find_source::<PalFailedError>().is_some());
+    }
+
+    #[test]
+    fn raw_relay_failure_is_pal_failure() {
+        let error = attach(
+            &ConnectFails(PalErrorKind::Other),
+            &TestConsole {
+                enter_raw_relay: Err(PalErrorKind::Other),
+                ..TestConsole::new()
+            }
+            .build(),
+            "pipe",
+            SessionId::MIN,
+        )
+        .unwrap_err();
+        assert!(error.find_source::<PalFailedError>().is_some());
+    }
+
+    #[test]
+    fn window_size_failure_is_pal_failure() {
+        let error = attach(
+            &ConnectFails(PalErrorKind::Other),
+            &TestConsole {
+                window_size: Err(PalErrorKind::Other),
+                ..TestConsole::new()
+            }
+            .build(),
+            "pipe",
+            SessionId::MIN,
+        )
+        .unwrap_err();
+        assert!(error.find_source::<PalFailedError>().is_some());
+    }
+
+    #[test]
+    fn handshake_send_failure_is_startup_failure() {
+        let error = attach(
+            &SendFails,
+            &TestConsole::new().build(),
+            "pipe",
+            SessionId::MIN,
+        )
+        .unwrap_err();
+        assert!(error.find_source::<StartupFailedError>().is_some());
+    }
+
+    #[test]
+    // Spawns threads that outlive the assertion: the relay's console-input
+    // thread blocks until the process exits, which Miri reports as a leak.
+    #[cfg_attr(miri, ignore)]
     fn attached_id_mismatch_is_startup_failure() {
         testing::with_watchdog(|| {
             let transport = MemoryTransport::new();
@@ -266,32 +457,35 @@ mod tests {
                     transport.disconnect(conn);
                 }
             });
-            let error = attach(&transport, &attach_console(), "pipe", SessionId::MIN).unwrap_err();
+            let error = attach(
+                &transport,
+                &TestConsole::new().build(),
+                "pipe",
+                SessionId::MIN,
+            )
+            .unwrap_err();
             assert!(error.find_source::<StartupFailedError>().is_some());
         });
     }
 
     #[test]
+    // Spawns threads that outlive the assertion: the relay's console-input
+    // thread blocks until the process exits, which Miri reports as a leak.
+    #[cfg_attr(miri, ignore)]
     fn matching_attached_then_app_exit_is_success() {
         testing::with_watchdog(|| {
-            let transport = MemoryTransport::new();
-            let listener = transport.listen("pipe").unwrap();
-            let id = SessionId::MIN;
-            thread::spawn({
-                let transport = transport.clone();
-                move || {
-                    let conn = transport.accept(listener).unwrap();
-                    _ = transport.recv(conn);
-                    _ = transport.send(conn, &Message::Attached { session_id: id });
-                    _ = transport.send(conn, &Message::AppExited { status: 3 });
-                }
-            });
-            let outcome = attach(&transport, &attach_console(), "pipe", id).unwrap();
+            let outcome = attach_to_scripted_supervisor(TestConsole::new(), |transport, conn| {
+                _ = transport.send(conn, &Message::AppExited { status: 3 });
+            })
+            .unwrap();
             assert!(matches!(outcome, Outcome::AppExit(3)));
         });
     }
 
     #[test]
+    // Spawns threads that outlive the assertion: the relay's console-input
+    // thread blocks until the process exits, which Miri reports as a leak.
+    #[cfg_attr(miri, ignore)]
     fn displaced_handshake_is_displaced() {
         testing::with_watchdog(|| {
             let transport = MemoryTransport::new();
@@ -305,7 +499,13 @@ mod tests {
                     transport.disconnect(conn);
                 }
             });
-            let error = attach(&transport, &attach_console(), "pipe", SessionId::MIN).unwrap_err();
+            let error = attach(
+                &transport,
+                &TestConsole::new().build(),
+                "pipe",
+                SessionId::MIN,
+            )
+            .unwrap_err();
             assert!(error.find_source::<DisplacedError>().is_some());
         });
     }
@@ -314,7 +514,7 @@ mod tests {
     fn connect_timeout_is_resume_timeout() {
         let error = attach(
             &ConnectFails(PalErrorKind::Timeout),
-            &attach_console(),
+            &TestConsole::new().build(),
             "missing",
             SessionId::MIN,
         )
@@ -326,7 +526,7 @@ mod tests {
     fn connect_other_is_startup_failure() {
         let error = attach(
             &ConnectFails(PalErrorKind::Other),
-            &attach_console(),
+            &TestConsole::new().build(),
             "missing",
             SessionId::MIN,
         )
@@ -339,11 +539,128 @@ mod tests {
         let leaves = Arc::new(AtomicUsize::new(0));
         attach(
             &ConnectFails(PalErrorKind::Other),
-            &attach_console_counting_leaves(Arc::clone(&leaves)),
+            &TestConsole {
+                leaves: Arc::clone(&leaves),
+                ..TestConsole::new()
+            }
+            .build(),
             "missing",
             SessionId::MIN,
         )
         .unwrap_err();
         assert_eq!(leaves.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    // Spawns threads that outlive the assertion: the relay's console-input
+    // thread blocks until the process exits, which Miri reports as a leak.
+    #[cfg_attr(miri, ignore)]
+    fn console_input_is_forwarded_to_the_supervisor() {
+        testing::with_watchdog(|| {
+            let resize = WindowSize { cols: 10, rows: 20 };
+            let console = TestConsole {
+                input: vec![
+                    Ok(ConsoleInput::Bytes(b"hi".to_vec())),
+                    Ok(ConsoleInput::Resize(resize)),
+                ],
+                ..TestConsole::new()
+            };
+            let outcome = attach_to_scripted_supervisor(console, move |transport, conn| {
+                assert!(matches!(
+                    transport.recv(conn),
+                    Ok(Message::Input(bytes)) if bytes == b"hi"
+                ));
+                assert!(matches!(
+                    transport.recv(conn),
+                    Ok(Message::Resize { cols, rows }) if cols == resize.cols && rows == resize.rows
+                ));
+                _ = transport.send(conn, &Message::AppExited { status: 0 });
+            })
+            .unwrap();
+            assert!(matches!(outcome, Outcome::AppExit(0)));
+        });
+    }
+
+    #[test]
+    // Spawns threads that outlive the assertion: the relay's console-input
+    // thread blocks until the process exits, which Miri reports as a leak.
+    #[cfg_attr(miri, ignore)]
+    fn console_input_failure_makes_the_relay_fail() {
+        testing::with_watchdog(|| {
+            let console = TestConsole {
+                input: vec![Err(PalErrorKind::Other)],
+                ..TestConsole::new()
+            };
+            // The input thread disconnects, so the output loop sees the peer close
+            // without an `AppExited` and must not report success.
+            let error = attach_to_scripted_supervisor(console, |_transport, _conn| {}).unwrap_err();
+            assert!(error.find_source::<RelayFailedError>().is_some());
+        });
+    }
+
+    #[test]
+    // Spawns threads that outlive the assertion: the relay's console-input
+    // thread blocks until the process exits, which Miri reports as a leak.
+    #[cfg_attr(miri, ignore)]
+    fn output_write_failure_is_relay_failure() {
+        testing::with_watchdog(|| {
+            let console = TestConsole {
+                write_output: Err(PalErrorKind::Other),
+                ..TestConsole::new()
+            };
+            let error = attach_to_scripted_supervisor(console, |transport, conn| {
+                _ = transport.send(conn, &Message::Output(b"out".to_vec()));
+            })
+            .unwrap_err();
+            assert!(error.find_source::<RelayFailedError>().is_some());
+        });
+    }
+
+    #[test]
+    // Spawns threads that outlive the assertion: the relay's console-input
+    // thread blocks until the process exits, which Miri reports as a leak.
+    #[cfg_attr(miri, ignore)]
+    fn output_is_written_until_the_supervisor_disconnects() {
+        testing::with_watchdog(|| {
+            let outcome = attach_to_scripted_supervisor(TestConsole::new(), |transport, conn| {
+                _ = transport.send(conn, &Message::Output(b"out".to_vec()));
+                transport.disconnect(conn);
+            })
+            .unwrap();
+            assert!(matches!(outcome, Outcome::Success));
+        });
+    }
+
+    #[test]
+    // Spawns threads that outlive the assertion: the relay's console-input
+    // thread blocks until the process exits, which Miri reports as a leak.
+    #[cfg_attr(miri, ignore)]
+    fn displacement_during_relay_is_displaced() {
+        testing::with_watchdog(|| {
+            let error = attach_to_scripted_supervisor(TestConsole::new(), |transport, conn| {
+                _ = transport.send(conn, &Message::Displaced);
+            })
+            .unwrap_err();
+            assert!(error.find_source::<DisplacedError>().is_some());
+        });
+    }
+
+    #[test]
+    // Spawns threads that outlive the assertion: the relay's console-input
+    // thread blocks until the process exits, which Miri reports as a leak.
+    #[cfg_attr(miri, ignore)]
+    fn unexpected_relay_message_is_relay_failure() {
+        testing::with_watchdog(|| {
+            let error = attach_to_scripted_supervisor(TestConsole::new(), |transport, conn| {
+                _ = transport.send(
+                    conn,
+                    &Message::StartupOk {
+                        session_id: SessionId::MIN,
+                    },
+                );
+            })
+            .unwrap_err();
+            assert!(error.find_source::<RelayFailedError>().is_some());
+        });
     }
 }

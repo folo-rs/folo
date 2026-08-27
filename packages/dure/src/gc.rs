@@ -56,6 +56,7 @@ pub(crate) fn require_live_session(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::path::PathBuf;
 
@@ -147,5 +148,43 @@ mod tests {
         let found = require_live_session(&store, &processes, live_id).unwrap();
         assert_eq!(found.id, live_id.get());
         assert!(store.read(dead_id).unwrap().is_some());
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn require_live_session_reaps_a_dead_record() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let id = store.allocate_id().unwrap();
+        store.publish(&record(id.get(), 11, 101)).unwrap();
+
+        let mut processes = MockProcesses::new();
+        processes
+            .expect_probe()
+            .returning(|_| ProcessLiveness::Dead);
+
+        let error = require_live_session(&store, &processes, id).unwrap_err();
+        assert!(error.find_source::<SessionNotFoundError>().is_some());
+        assert!(store.read(id).unwrap().is_none());
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn require_live_session_reports_an_inspect_failure() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let id = store.allocate_id().unwrap();
+        store.publish(&record(id.get(), 11, 101)).unwrap();
+
+        let mut processes = MockProcesses::new();
+        processes
+            .expect_probe()
+            .returning(|_| ProcessLiveness::InspectFailed);
+
+        let error = require_live_session(&store, &processes, id).unwrap_err();
+        assert!(error.find_source::<InspectProcessError>().is_some());
+        assert!(store.read(id).unwrap().is_some());
     }
 }

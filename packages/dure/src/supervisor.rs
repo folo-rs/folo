@@ -482,6 +482,7 @@ where
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::path::PathBuf;
     use std::sync::{Arc, Condvar, Mutex};
@@ -490,7 +491,7 @@ mod tests {
     use testing::with_watchdog;
 
     use super::*;
-    use crate::pal::ids::{AppId, JobId};
+    use crate::pal::ids::{AppId, ConnId, JobId};
     use crate::pal::processes::MockProcesses;
     use crate::pal::pseudoconsole::MemoryPseudoconsole;
     use crate::pal::session_store::FsSessionStore;
@@ -651,6 +652,220 @@ mod tests {
         assert!(denied.find_source::<BreakawayDeniedError>().is_some());
         let other = map_startup(&PalError::new(PalErrorKind::Other));
         assert!(other.find_source::<StartupFailedError>().is_some());
+    }
+
+    /// Session with a live pty, no client attached.
+    fn shared_session(
+        transport: &MemoryTransport,
+        pty_host: &MemoryPseudoconsole,
+    ) -> Shared<MemoryTransport, MemoryPseudoconsole> {
+        Shared {
+            transport: transport.clone(),
+            pty_host: pty_host.clone(),
+            pty: pty_host.create(DEFAULT_PTY_SIZE).unwrap(),
+            session_id: SessionId::from_u32(1).unwrap(),
+            client: Mutex::new(None),
+            stopping: AtomicBool::new(false),
+        }
+    }
+
+    /// Connected pair as `(supervisor side, client side)`.
+    fn connected_pair(transport: &MemoryTransport, name: &str) -> (ConnId, ConnId) {
+        let listener = transport.listen(name).unwrap();
+        let client = transport
+            .connect(name, crate::constants::CONNECT_TIMEOUT)
+            .unwrap();
+        let supervisor = transport.accept(listener).unwrap();
+        (supervisor, client)
+    }
+
+    /// Records every attached-flag publication in order.
+    fn attach_recorder() -> (Arc<Mutex<Vec<bool>>>, impl Fn(bool)) {
+        let flags = Arc::new(Mutex::new(Vec::new()));
+        let recorder = {
+            let flags = Arc::clone(&flags);
+            move |attached: bool| flags.lock().expect("flag lock").push(attached)
+        };
+        (flags, recorder)
+    }
+
+    #[test]
+    fn acknowledgement_failure_leaves_the_slot_empty() {
+        let transport = MemoryTransport::new();
+        let pty_host = MemoryPseudoconsole::new();
+        let shared = shared_session(&transport, &pty_host);
+        let (supervisor, client) = connected_pair(&transport, "pipe");
+
+        transport
+            .send(client, &Message::Attach { cols: 80, rows: 24 })
+            .unwrap();
+        transport.disconnect(client);
+
+        let (flags, recorder) = attach_recorder();
+        client_loop(&shared, supervisor, &recorder);
+
+        assert!(shared.client.lock().unwrap().is_none());
+        assert!(flags.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_client_that_does_not_attach_first_is_dropped() {
+        let transport = MemoryTransport::new();
+        let pty_host = MemoryPseudoconsole::new();
+        let shared = shared_session(&transport, &pty_host);
+        let (supervisor, client) = connected_pair(&transport, "pipe");
+
+        transport
+            .send(client, &Message::Input(b"x".to_vec()))
+            .unwrap();
+
+        let (flags, recorder) = attach_recorder();
+        client_loop(&shared, supervisor, &recorder);
+
+        assert!(shared.client.lock().unwrap().is_none());
+        assert!(flags.lock().unwrap().is_empty());
+        assert!(pty_host.take_input(shared.pty).is_empty());
+        transport.recv(client).unwrap_err();
+    }
+
+    #[test]
+    fn the_relay_forwards_input_and_resize_until_the_client_stops() {
+        let transport = MemoryTransport::new();
+        let pty_host = MemoryPseudoconsole::new();
+        let shared = shared_session(&transport, &pty_host);
+        let (supervisor, client) = connected_pair(&transport, "pipe");
+
+        transport
+            .send(client, &Message::Attach { cols: 80, rows: 24 })
+            .unwrap();
+        transport
+            .send(
+                client,
+                &Message::Resize {
+                    cols: 120,
+                    rows: 40,
+                },
+            )
+            .unwrap();
+        transport
+            .send(client, &Message::Input(b"hi".to_vec()))
+            .unwrap();
+        // Anything the supervisor does not relay ends the client loop.
+        transport.send(client, &Message::StartupErr).unwrap();
+
+        let (flags, recorder) = attach_recorder();
+        client_loop(&shared, supervisor, &recorder);
+
+        assert_eq!(
+            pty_host.size(shared.pty),
+            Some(WindowSize {
+                cols: 120,
+                rows: 40
+            })
+        );
+        assert_eq!(pty_host.take_input(shared.pty), b"hi");
+        assert!(shared.client.lock().unwrap().is_none());
+        assert_eq!(*flags.lock().unwrap(), vec![true, false]);
+    }
+
+    #[test]
+    fn a_displaced_relay_leaves_the_new_client_installed() {
+        let transport = MemoryTransport::new();
+        let pty_host = MemoryPseudoconsole::new();
+        let shared = Arc::new(shared_session(&transport, &pty_host));
+        let (supervisor, client) = connected_pair(&transport, "pipe");
+        // Stands in for a steal that lands between the acknowledgement and the
+        // first relayed message, which the loop can only observe on its own
+        // next pass over the client slot.
+        let successor = ConnId(u64::MAX);
+        let steal = {
+            let shared = Arc::clone(&shared);
+            move |attached: bool| {
+                if attached {
+                    *shared.client.lock().expect("client lock") = Some(successor);
+                }
+            }
+        };
+
+        transport
+            .send(client, &Message::Attach { cols: 80, rows: 24 })
+            .unwrap();
+        transport
+            .send(client, &Message::Input(b"x".to_vec()))
+            .unwrap();
+
+        client_loop(&shared, supervisor, &steal);
+
+        assert_eq!(pty_host.take_input(shared.pty), b"x");
+        assert_eq!(*shared.client.lock().unwrap(), Some(successor));
+    }
+
+    #[test]
+    fn output_that_cannot_be_delivered_drops_the_client() {
+        let transport = MemoryTransport::new();
+        let pty_host = MemoryPseudoconsole::new();
+        let shared = shared_session(&transport, &pty_host);
+        let (supervisor, client) = connected_pair(&transport, "pipe");
+        *shared.client.lock().unwrap() = Some(supervisor);
+        transport.disconnect(client);
+
+        pty_host.push_output(shared.pty, b"out");
+        // Ends the loop once the undeliverable output has been drained.
+        pty_host.close(shared.pty);
+
+        let (flags, recorder) = attach_recorder();
+        pty_output_loop(&shared, recorder);
+
+        assert!(shared.client.lock().unwrap().is_none());
+        assert_eq!(*flags.lock().unwrap(), vec![false]);
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn a_failure_after_id_allocation_releases_the_id() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let transport = MemoryTransport::new();
+        let pty = MemoryPseudoconsole::new();
+        let mut processes = MockProcesses::new();
+        processes
+            .expect_create_lifetime_job()
+            .returning(|| Ok(JobId(1)));
+        processes.expect_spawn_app().returning(|_| Ok(AppId(1)));
+        processes
+            .expect_random_nonce()
+            .returning(|| "nonce".to_string());
+        processes
+            .expect_current_identity()
+            .returning(|| Err(PalError::new(PalErrorKind::Other)));
+        processes.expect_close_job().returning(|_| ());
+
+        {
+            let mut guard = InitGuard {
+                processes: &processes,
+                store: &store,
+                pty_host: &pty,
+                job: None,
+                pty: None,
+                session_id: None,
+                committed: false,
+            };
+            let error = initialize(
+                &mut guard,
+                &processes,
+                &store,
+                &transport,
+                &pty,
+                PathBuf::from("/work"),
+                vec!["app.exe".to_string()],
+            )
+            .err()
+            .expect("identity lookup fails");
+            assert!(error.find_source::<StartupFailedError>().is_some());
+        }
+
+        assert!(!dir.path().join("1.json").exists());
     }
 
     #[test]

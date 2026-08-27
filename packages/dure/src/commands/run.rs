@@ -103,6 +103,7 @@ where
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::pal::error::PalError;
@@ -110,6 +111,7 @@ mod tests {
     use crate::pal::processes::MockProcesses;
     use crate::pal::session_store::FsSessionStore;
     use crate::pal::transport::MemoryTransport;
+    use crate::session_record::ProcessIdentity;
 
     #[test]
     // Talks to the real operating system: the session store is a real directory.
@@ -197,6 +199,50 @@ mod tests {
         let mut console = MockLocalConsole::new();
         console.expect_has_console().return_const(true);
         let console = LocalConsoleFacade::from_mock(console);
+        let error = execute(
+            &store,
+            &processes,
+            &transport,
+            &console,
+            vec!["app.exe".to_string()],
+            None,
+        )
+        .unwrap_err();
+        assert!(error.find_source::<StartupFailedError>().is_some());
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn a_supervisor_that_reports_failure_is_a_startup_error() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let transport = MemoryTransport::new();
+        let mut processes = MockProcesses::new();
+        processes
+            .expect_random_nonce()
+            .returning(|| "nonce".to_string());
+        processes
+            .expect_current_exe()
+            .returning(|| Ok(PathBuf::from("dure.exe")));
+        processes.expect_spawn_supervisor().returning({
+            let transport = transport.clone();
+            move |_| {
+                let pipe = transport.pipe_name("startup-nonce");
+                let conn = transport
+                    .connect(&pipe, crate::constants::CONNECT_TIMEOUT)
+                    .unwrap();
+                transport.send(conn, &Message::StartupErr).unwrap();
+                Ok(ProcessIdentity {
+                    pid: 10,
+                    creation_time: 100,
+                })
+            }
+        });
+        let mut console = MockLocalConsole::new();
+        console.expect_has_console().return_const(true);
+        let console = LocalConsoleFacade::from_mock(console);
+
         let error = execute(
             &store,
             &processes,

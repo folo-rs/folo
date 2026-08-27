@@ -90,6 +90,7 @@ fn verbose_note(verbose: bool, message: &str) {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::path::PathBuf;
 
@@ -131,6 +132,23 @@ mod tests {
         assert_eq!(
             auto_detect(&live, Path::new("/work"), true),
             DetectOutcome::Unique(SessionId::from_u32(1).unwrap())
+        );
+    }
+
+    #[test]
+    fn verbose_reports_sessions_from_other_directories() {
+        let live = [record(1, "/other"), record(2, "/work")];
+        assert_eq!(
+            auto_detect(&live, Path::new("/work"), true),
+            DetectOutcome::Unique(SessionId::from_u32(2).unwrap())
+        );
+    }
+
+    #[test]
+    fn verbose_reports_an_empty_store() {
+        assert_eq!(
+            auto_detect(&[], Path::new("/work"), true),
+            DetectOutcome::None
         );
     }
 

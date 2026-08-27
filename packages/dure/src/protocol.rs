@@ -194,6 +194,7 @@ fn decode_i32(rest: &[u8]) -> Result<i32, DecodeError> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 
@@ -257,5 +258,19 @@ mod tests {
             decode_payload(&[KIND_STARTUP_ERR, 1]).unwrap_err(),
             DecodeError::Invalid
         );
+    }
+
+    #[test]
+    fn sized_and_numeric_payloads_reject_trailing_bytes() {
+        let mut attach = vec![KIND_ATTACH];
+        attach.extend_from_slice(&80_u16.to_le_bytes());
+        attach.extend_from_slice(&24_u16.to_le_bytes());
+        attach.push(0);
+        assert_eq!(decode_payload(&attach).unwrap_err(), DecodeError::Invalid);
+
+        let mut attached = vec![KIND_ATTACHED];
+        attached.extend_from_slice(&1_u32.to_le_bytes());
+        attached.push(0);
+        assert_eq!(decode_payload(&attached).unwrap_err(), DecodeError::Invalid);
     }
 }

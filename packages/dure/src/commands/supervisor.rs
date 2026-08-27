@@ -38,3 +38,31 @@ where
     )?;
     Ok(Outcome::AppExit(status))
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+    use crate::StartupFailedError;
+    use crate::pal::processes::MockProcesses;
+    use crate::pal::pseudoconsole::MemoryPseudoconsole;
+    use crate::pal::session_store::{MockSessionStore, SessionStoreFacade};
+    use crate::pal::transport::MemoryTransport;
+
+    #[test]
+    fn a_supervisor_that_cannot_report_in_fails() {
+        // Nothing is listening on the startup pipe, so the supervisor never
+        // reaches the point of owning an app whose status it could forward.
+        let error = execute(
+            &SessionStoreFacade::from_mock(MockSessionStore::new()),
+            &MockProcesses::new(),
+            &MemoryTransport::new(),
+            &MemoryPseudoconsole::new(),
+            "missing",
+            PathBuf::from("/work"),
+            vec!["app.exe".to_string()],
+        )
+        .unwrap_err();
+        assert!(error.find_source::<StartupFailedError>().is_some());
+    }
+}

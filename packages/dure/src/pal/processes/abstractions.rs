@@ -110,6 +110,7 @@ pub(crate) fn resolve_command_path(command: &str, launch_directory: &Path) -> Pa
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

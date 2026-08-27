@@ -28,6 +28,9 @@ pub use run::run;
 pub use session_id::SessionId;
 pub use types::{Command, Outcome, RunInput};
 
+// Helpers that exist only so integration tests can drive the Windows PAL, so
+// they are test infrastructure rather than product code.
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(all(feature = "private-test-util", windows))]
 pub mod test_support;
 

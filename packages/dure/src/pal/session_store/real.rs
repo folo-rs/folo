@@ -178,6 +178,7 @@ impl SessionStore for FsSessionStore {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::collections::HashSet;
     use std::path::Path;
@@ -268,10 +269,51 @@ mod tests {
         let (dir, store) = store();
         fs::write(dir.path().join("0.json"), b"{\"id\":0}").unwrap();
         fs::write(dir.path().join("not-json.json"), b"nope").unwrap();
+        fs::write(dir.path().join("readme.txt"), b"not a record").unwrap();
         let id = store.allocate_id().unwrap();
         let rec = record(id, dir.path());
         store.publish(&rec).unwrap();
         assert_eq!(store.list().unwrap(), vec![rec]);
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn read_reports_a_corrupt_record() {
+        let (dir, store) = store();
+        let id = store.allocate_id().unwrap();
+        fs::write(dir.path().join(format!("{}.json", id.get())), b"nope").unwrap();
+        assert_eq!(store.read(id).unwrap_err().kind(), PalErrorKind::Other);
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn a_record_path_that_is_not_a_file_is_an_error() {
+        let (dir, store) = store();
+        let id = SessionId::MIN;
+        fs::create_dir_all(dir.path().join(format!("{}.json", id.get()))).unwrap();
+        store.read(id).unwrap_err();
+        store.delete(id).unwrap_err();
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn a_root_that_is_not_a_directory_is_an_error() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("store");
+        fs::write(&root, b"not a directory").unwrap();
+        let store = FsSessionStore::new(root);
+        store.list().unwrap_err();
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn deleting_an_absent_record_succeeds() {
+        let (_dir, store) = store();
+        store.delete(SessionId::MIN).unwrap();
     }
 
     #[test]

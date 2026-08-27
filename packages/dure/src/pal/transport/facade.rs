@@ -116,6 +116,7 @@ impl Transport for TransportFacade {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

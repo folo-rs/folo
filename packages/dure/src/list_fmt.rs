@@ -21,6 +21,7 @@ pub(crate) fn format_list(sessions: &[SessionRecord]) -> String {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::path::PathBuf;
 

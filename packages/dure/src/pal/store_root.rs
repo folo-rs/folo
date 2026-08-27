@@ -15,6 +15,10 @@ pub(crate) fn resolve_store_root(override_root: Option<PathBuf>) -> Result<PathB
 }
 
 #[cfg(windows)]
+// Thin Win32 known-folder binding: it reads a machine-specific path from the
+// shell API, so there is no outcome a test could assert on.
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(test, mutants::skip)]
 fn default_store_root() -> Result<PathBuf, PalError> {
     windows_local_app_data().map(|root| root.join(STORE_SUBDIR))
 }
@@ -25,6 +29,9 @@ fn default_store_root() -> Result<PathBuf, PalError> {
 }
 
 #[cfg(windows)]
+// Thin Win32 known-folder binding; see `default_store_root`.
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg_attr(test, mutants::skip)]
 fn windows_local_app_data() -> Result<PathBuf, PalError> {
     use windows::Win32::System::Com::CoTaskMemFree;
     use windows::Win32::UI::Shell::{FOLDERID_LocalAppData, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
@@ -53,6 +60,7 @@ fn windows_local_app_data() -> Result<PathBuf, PalError> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 
@@ -60,5 +68,20 @@ mod tests {
     fn override_root_is_used_verbatim() {
         let root = PathBuf::from("/tmp/dure-store");
         assert_eq!(resolve_store_root(Some(root.clone())).unwrap(), root);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    // Talks to the real operating system: reads the per-user known folder.
+    #[cfg_attr(miri, ignore)]
+    fn without_an_override_the_default_root_is_used() {
+        let root = resolve_store_root(None).unwrap();
+        assert!(root.ends_with(STORE_SUBDIR));
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn without_an_override_there_is_no_root_off_windows() {
+        resolve_store_root(None).unwrap_err();
     }
 }

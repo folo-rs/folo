@@ -65,6 +65,7 @@ pub(crate) fn quote_windows_arg(arg: &str) -> String {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

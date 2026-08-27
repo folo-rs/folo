@@ -173,6 +173,7 @@ pub(crate) fn parse_prompted_id(line: &str) -> Result<SessionId, InvalidSessionI
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::fmt::Debug;
 

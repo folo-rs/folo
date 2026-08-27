@@ -70,6 +70,7 @@ impl PalError {
 }
 
 // Error text is not an API contract.
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg_attr(test, mutants::skip)]
 impl fmt::Display for PalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -86,6 +87,7 @@ impl fmt::Display for PalError {
 }
 
 // Source chaining is not an API contract.
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg_attr(test, mutants::skip)]
 impl std::error::Error for PalError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
@@ -97,6 +99,7 @@ impl std::error::Error for PalError {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

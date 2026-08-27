@@ -45,6 +45,7 @@ impl std::fmt::Display for SessionId {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

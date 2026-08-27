@@ -37,6 +37,7 @@ fn ensure_supported(supported: bool) -> Result<(), AppError> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 
