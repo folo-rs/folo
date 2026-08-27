@@ -239,6 +239,7 @@ where
         app,
     } = *initialized;
 
+    let record_live = Arc::new(Mutex::new(true));
     let shared = Arc::new(Shared {
         transport: transport.clone(),
         pty_host: pty_host.clone(),
@@ -251,7 +252,7 @@ where
     thread::spawn({
         let shared = Arc::clone(&shared);
         let transport = transport.clone();
-        let store_flag = store_attached_flag(store, session_id);
+        let store_flag = store_attached_flag(store, session_id, Arc::clone(&record_live));
         move || accept_loop(&shared, &transport, listener, store_flag)
     });
 
@@ -282,9 +283,18 @@ where
         shared.transport.disconnect(client);
     }
 
-    store
-        .delete(session_id)
-        .map_err(|_error| StoreError::new())?;
+    {
+        // Client threads take this lock before publishing an attached-flag
+        // update. Clearing it first prevents a late publish from recreating
+        // the record after delete, including over a reused session id.
+        let mut live = record_live
+            .lock()
+            .expect("record_live is only set false here, never held across a panic");
+        *live = false;
+        store
+            .delete(session_id)
+            .map_err(|_error| StoreError::new())?;
+    }
     pty_host.close(pty);
     processes.close_job(job);
     Ok(status)
@@ -293,9 +303,16 @@ where
 fn store_attached_flag<S: SessionStore + Clone>(
     store: &S,
     id: SessionId,
+    record_live: Arc<Mutex<bool>>,
 ) -> impl Fn(bool) + Clone + Send + 'static {
     let store = store.clone();
     move |attached: bool| {
+        let live = record_live
+            .lock()
+            .expect("record_live is only set false at delete, never held across a panic");
+        if !*live {
+            return;
+        }
         if let Ok(Some(mut record)) = store.read(id) {
             record.attached = attached;
             // A failed write leaves a stale attached flag. The flag is
@@ -404,7 +421,18 @@ where
             break;
         }
     }
-    set_attached(false);
+    {
+        let mut slot = shared
+            .client
+            .lock()
+            .expect("client slot is only copied or replaced, never held across a panic");
+        if slot.as_ref() == Some(&conn) {
+            *slot = None;
+            // Holding the slot so a replacement cannot publish attached=true
+            // before this disconnect publishes attached=false.
+            set_attached(false);
+        }
+    }
 }
 
 fn pty_output_loop<T, C>(shared: &Shared<T, C>)
@@ -551,6 +579,8 @@ mod tests {
                 cvar.notify_all();
             }
             assert_eq!(supervisor.join().unwrap().unwrap(), 7);
+            let leftover = FsSessionStore::new(dir.path().to_path_buf());
+            assert!(leftover.list().unwrap().is_empty());
         });
     }
 

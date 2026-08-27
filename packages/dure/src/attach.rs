@@ -64,7 +64,9 @@ where
         .map_err(|_error| StartupFailedError::new())?;
 
     match transport.recv(conn) {
-        Ok(Message::Attached { .. }) => {}
+        Ok(Message::Attached {
+            session_id: attached_id,
+        }) if attached_id == session_id => {}
         Ok(Message::Displaced) => {
             transport.disconnect(conn);
             return Err(DisplacedError::new().into());
@@ -174,11 +176,41 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::thread;
+
     use super::*;
     use crate::pal::local_console::{LocalConsoleFacade, MockLocalConsole};
     use crate::pal::pseudoconsole::WindowSize;
     use crate::pal::transport::MemoryTransport;
+    use crate::protocol::Message;
     use crate::session_id::SessionId;
+
+    #[test]
+    fn attached_id_mismatch_is_startup_failure() {
+        testing::with_watchdog(|| {
+            let transport = MemoryTransport::new();
+            let listener = transport.listen("pipe").unwrap();
+            thread::spawn({
+                let transport = transport.clone();
+                move || {
+                    let conn = transport.accept(listener).unwrap();
+                    _ = transport.recv(conn);
+                    let other = SessionId::from_u32(2).expect("positive id");
+                    _ = transport.send(conn, &Message::Attached { session_id: other });
+                }
+            });
+            let mut console = MockLocalConsole::new();
+            console.expect_has_console().return_const(true);
+            console.expect_disable_ctrl_c_handler().returning(|| Ok(()));
+            console.expect_enter_raw_relay().returning(|| Ok(()));
+            console.expect_leave_raw_relay().returning(|| Ok(()));
+            console
+                .expect_window_size()
+                .returning(|| Ok(WindowSize { cols: 80, rows: 24 }));
+            let console = LocalConsoleFacade::from_mock(console);
+            attach(&transport, &console, "pipe", SessionId::MIN).unwrap_err();
+        });
+    }
 
     #[test]
     fn connect_timeout_is_resume_timeout() {
