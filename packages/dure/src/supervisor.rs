@@ -58,6 +58,10 @@ impl<P: Processes, S: SessionStore, C: Pseudoconsole> Drop for InitGuard<'_, P, 
 }
 
 /// Initialize the session, publish the record, then relay until the app exits.
+// Blocking supervisor entry point. A mutation that returns before serving leaves
+// the test's client waiting on a session that never appears, and watchdogs are
+// disabled under cargo-mutants.
+#[cfg_attr(test, mutants::skip)]
 pub(crate) fn run_supervisor<P, S, T, C>(
     processes: &P,
     store: &S,
@@ -218,6 +222,10 @@ struct Shared<T, C> {
     stopping: AtomicBool,
 }
 
+// Blocking serve loop. A mutation that returns before the accept and PTY threads
+// are wired up leaves the test's client waiting forever, and watchdogs are
+// disabled under cargo-mutants.
+#[cfg_attr(test, mutants::skip)]
 fn serve<P, S, T, C>(
     processes: &P,
     store: &S,
@@ -518,6 +526,8 @@ mod tests {
     }
 
     #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
     fn steal_displaces_first_client() {
         with_watchdog(|| {
             let transport = MemoryTransport::new();
@@ -591,6 +601,8 @@ mod tests {
     }
 
     #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
     fn init_failure_sends_startup_err_and_closes_job() {
         with_watchdog(|| {
             let transport = MemoryTransport::new();
@@ -631,5 +643,43 @@ mod tests {
             supervisor.join().unwrap().unwrap_err();
             assert!(store.list().unwrap().is_empty());
         });
+    }
+
+    #[test]
+    fn breakaway_denial_keeps_its_identity() {
+        let denied = map_startup(&PalError::new(PalErrorKind::BreakawayDenied));
+        assert!(denied.find_source::<BreakawayDeniedError>().is_some());
+        let other = map_startup(&PalError::new(PalErrorKind::Other));
+        assert!(other.find_source::<StartupFailedError>().is_some());
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn attached_flag_publishes_only_while_the_record_lives() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let id = store.allocate_id().unwrap();
+        store
+            .publish(&SessionRecord {
+                id: id.get(),
+                supervisor_pid: 10,
+                supervisor_creation_time: 100,
+                pipe_name: "pipe".to_string(),
+                launch_directory: PathBuf::from("/work"),
+                command: vec!["app.exe".to_string()],
+                started_at_unix_ms: 1,
+                attached: false,
+            })
+            .unwrap();
+
+        let record_live = Arc::new(Mutex::new(true));
+        let set_attached = store_attached_flag(&store, id, Arc::clone(&record_live));
+        set_attached(true);
+        assert!(store.read(id).unwrap().unwrap().attached);
+
+        *record_live.lock().expect("record_live lock") = false;
+        set_attached(false);
+        assert!(store.read(id).unwrap().unwrap().attached);
     }
 }

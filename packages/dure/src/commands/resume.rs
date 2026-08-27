@@ -80,6 +80,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use std::thread;
 
     use super::*;
@@ -91,8 +92,31 @@ mod tests {
     use crate::pal::transport::MemoryTransport;
     use crate::protocol::Message;
     use crate::session_id::SessionId;
+    use crate::{InvalidSessionIdError, PromptFailedError};
+
+    /// Publishes two sessions whose launch directories never match the current
+    /// directory, so auto-detect reports an ambiguous result.
+    fn publish_ambiguous_sessions(store: &FsSessionStore) {
+        for name in ["one", "two"] {
+            let id = store.allocate_id().unwrap();
+            store
+                .publish(&SessionRecord {
+                    id: id.get(),
+                    supervisor_pid: 10,
+                    supervisor_creation_time: 100,
+                    pipe_name: name.to_string(),
+                    launch_directory: PathBuf::from(format!("/nowhere/{name}")),
+                    command: vec!["app.exe".to_string()],
+                    started_at_unix_ms: 1,
+                    attached: false,
+                })
+                .unwrap();
+        }
+    }
 
     #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
     fn no_live_sessions_fails() {
         let dir = tempfile::TempDir::new().unwrap();
         let store = FsSessionStore::new(dir.path().to_path_buf());
@@ -103,6 +127,8 @@ mod tests {
     }
 
     #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
     fn missing_explicit_id_fails() {
         let dir = tempfile::TempDir::new().unwrap();
         let store = FsSessionStore::new(dir.path().to_path_buf());
@@ -114,6 +140,9 @@ mod tests {
     }
 
     #[test]
+    // Talks to the real operating system: the session store is a real directory and
+    // the relay threads' blocking recv is guarded by a watchdog thread.
+    #[cfg_attr(miri, ignore)]
     fn unique_launch_directory_attaches() {
         testing::with_watchdog(|| {
             let dir = tempfile::TempDir::new().unwrap();
@@ -166,5 +195,46 @@ mod tests {
             let outcome = execute(&store, &processes, &transport, &console, None, false).unwrap();
             assert!(matches!(outcome, Outcome::AppExit(0)));
         });
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn ambiguous_without_terminal_does_not_prompt() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = FsSessionStore::new(dir.path().to_path_buf());
+        publish_ambiguous_sessions(&store);
+        let mut processes = MockProcesses::new();
+        processes
+            .expect_probe()
+            .returning(|_| ProcessLiveness::Live);
+        let transport = MemoryTransport::new();
+        let mut console = MockLocalConsole::new();
+        console.expect_stdin_is_terminal().return_const(false);
+        let console = LocalConsoleFacade::from_mock(console);
+        let error = execute(&store, &processes, &transport, &console, None, false).unwrap_err();
+        assert!(error.find_source::<PromptFailedError>().is_some());
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn ambiguous_with_terminal_reads_selection() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = FsSessionStore::new(dir.path().to_path_buf());
+        publish_ambiguous_sessions(&store);
+        let mut processes = MockProcesses::new();
+        processes
+            .expect_probe()
+            .returning(|_| ProcessLiveness::Live);
+        let transport = MemoryTransport::new();
+        let mut console = MockLocalConsole::new();
+        console.expect_stdin_is_terminal().return_const(true);
+        console
+            .expect_read_prompt_line()
+            .returning(|| Ok("not a number".to_string()));
+        let console = LocalConsoleFacade::from_mock(console);
+        let error = execute(&store, &processes, &transport, &console, None, false).unwrap_err();
+        assert!(error.find_source::<InvalidSessionIdError>().is_some());
     }
 }

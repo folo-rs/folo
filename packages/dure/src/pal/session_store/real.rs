@@ -208,6 +208,8 @@ mod tests {
     }
 
     #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
     fn allocates_smallest_unused_and_reuses_after_delete() {
         let (dir, store) = store();
         assert_eq!(store.root(), dir.path());
@@ -221,6 +223,8 @@ mod tests {
     }
 
     #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
     fn concurrent_allocations_are_unique() {
         with_watchdog(|| {
             let dir = TempDir::new().unwrap();
@@ -243,6 +247,8 @@ mod tests {
     }
 
     #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
     fn publish_read_list_delete() {
         let (dir, store) = store();
         let id = store.allocate_id().unwrap();
@@ -256,6 +262,8 @@ mod tests {
     }
 
     #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
     fn list_skips_corrupt_and_zero_id_records() {
         let (dir, store) = store();
         fs::write(dir.path().join("0.json"), b"{\"id\":0}").unwrap();
@@ -267,6 +275,8 @@ mod tests {
     }
 
     #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
     fn read_rejects_filename_id_mismatch() {
         let (dir, store) = store();
         let first = store.allocate_id().unwrap();
@@ -285,6 +295,8 @@ mod tests {
     }
 
     #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
     fn missing_root_lists_and_reads_empty() {
         let dir = TempDir::new().unwrap();
         let missing = dir.path().join("no-such-store");

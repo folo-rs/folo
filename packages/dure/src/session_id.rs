@@ -59,4 +59,10 @@ mod tests {
         assert_eq!(id.get(), 1);
         assert_eq!(id, SessionId::MIN);
     }
+
+    #[test]
+    fn displays_decimal_value() {
+        let id = SessionId::from_u32(42).unwrap();
+        assert_eq!(id.to_string(), "42");
+    }
 }

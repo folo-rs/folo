@@ -43,11 +43,7 @@ pub(crate) fn auto_detect(live: &[SessionRecord], cwd: &Path, verbose: bool) -> 
             match_noun(matches.len()),
         );
         for session in live {
-            let mark = if session.launch_directory == cwd {
-                "match"
-            } else {
-                "different directory"
-            };
+            let mark = match_mark(&session.launch_directory, cwd);
             eprintln!(
                 "auto-detect: session {} dir {} ({mark})",
                 session.id,
@@ -66,6 +62,17 @@ pub(crate) fn auto_detect(live: &[SessionRecord], cwd: &Path, verbose: bool) -> 
 #[cfg_attr(test, mutants::skip)]
 fn session_noun(count: usize) -> &'static str {
     if count == 1 { "session" } else { "sessions" }
+}
+
+// Per-session annotation in the verbose trace. The selection itself is the
+// behavioral contract; the wording that explains it is not.
+#[cfg_attr(test, mutants::skip)]
+fn match_mark(launch_directory: &Path, cwd: &Path) -> &'static str {
+    if launch_directory == cwd {
+        "match"
+    } else {
+        "different directory"
+    }
 }
 
 // English pluralization is not a behavioral contract.

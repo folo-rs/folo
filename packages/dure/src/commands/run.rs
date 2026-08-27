@@ -112,6 +112,8 @@ mod tests {
     use crate::pal::transport::MemoryTransport;
 
     #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
     fn empty_command_fails() {
         let dir = tempfile::TempDir::new().unwrap();
         let store = FsSessionStore::new(dir.path().to_path_buf());
@@ -122,6 +124,8 @@ mod tests {
     }
 
     #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
     fn no_console_fails() {
         let dir = tempfile::TempDir::new().unwrap();
         let store = FsSessionStore::new(dir.path().to_path_buf());
@@ -142,6 +146,8 @@ mod tests {
     }
 
     #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
     fn breakaway_denied_is_breakaway_error() {
         let dir = tempfile::TempDir::new().unwrap();
         let store = FsSessionStore::new(dir.path().to_path_buf());
@@ -159,7 +165,7 @@ mod tests {
         let mut console = MockLocalConsole::new();
         console.expect_has_console().return_const(true);
         let console = LocalConsoleFacade::from_mock(console);
-        execute(
+        let error = execute(
             &store,
             &processes,
             &transport,
@@ -168,5 +174,38 @@ mod tests {
             None,
         )
         .unwrap_err();
+        assert!(error.find_source::<BreakawayDeniedError>().is_some());
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn spawn_failure_is_startup_error() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = FsSessionStore::new(dir.path().to_path_buf());
+        let mut processes = MockProcesses::new();
+        processes
+            .expect_random_nonce()
+            .returning(|| "nonce".to_string());
+        processes
+            .expect_current_exe()
+            .returning(|| Ok(PathBuf::from("dure.exe")));
+        processes
+            .expect_spawn_supervisor()
+            .returning(|_| Err(PalError::new(PalErrorKind::Other)));
+        let transport = MemoryTransport::new();
+        let mut console = MockLocalConsole::new();
+        console.expect_has_console().return_const(true);
+        let console = LocalConsoleFacade::from_mock(console);
+        let error = execute(
+            &store,
+            &processes,
+            &transport,
+            &console,
+            vec!["app.exe".to_string()],
+            None,
+        )
+        .unwrap_err();
+        assert!(error.find_source::<StartupFailedError>().is_some());
     }
 }

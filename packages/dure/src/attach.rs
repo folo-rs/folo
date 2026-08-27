@@ -179,6 +179,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicUsize;
     use std::thread;
     use std::time::Duration;
 
@@ -192,11 +193,18 @@ mod tests {
     use crate::session_id::SessionId;
 
     fn attach_console() -> LocalConsoleFacade {
+        attach_console_counting_leaves(Arc::new(AtomicUsize::new(0)))
+    }
+
+    fn attach_console_counting_leaves(leaves: Arc<AtomicUsize>) -> LocalConsoleFacade {
         let mut console = MockLocalConsole::new();
         console.expect_has_console().return_const(true);
         console.expect_disable_ctrl_c_handler().returning(|| Ok(()));
         console.expect_enter_raw_relay().returning(|| Ok(()));
-        console.expect_leave_raw_relay().returning(|| Ok(()));
+        console.expect_leave_raw_relay().returning(move || {
+            leaves.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        });
         console
             .expect_window_size()
             .returning(|| Ok(WindowSize { cols: 80, rows: 24 }));
@@ -246,17 +254,20 @@ mod tests {
         testing::with_watchdog(|| {
             let transport = MemoryTransport::new();
             let listener = transport.listen("pipe").unwrap();
+            // Built here rather than inside the thread: a panic in a spawned
+            // thread would leave `attach` blocked in `recv` forever.
+            let other = SessionId::from_u32(2).expect("positive id");
             thread::spawn({
                 let transport = transport.clone();
                 move || {
                     let conn = transport.accept(listener).unwrap();
                     _ = transport.recv(conn);
-                    let other = SessionId::from_u32(2).expect("positive id");
                     _ = transport.send(conn, &Message::Attached { session_id: other });
                     transport.disconnect(conn);
                 }
             });
-            attach(&transport, &attach_console(), "pipe", SessionId::MIN).unwrap_err();
+            let error = attach(&transport, &attach_console(), "pipe", SessionId::MIN).unwrap_err();
+            assert!(error.find_source::<StartupFailedError>().is_some());
         });
     }
 
@@ -294,29 +305,45 @@ mod tests {
                     transport.disconnect(conn);
                 }
             });
-            attach(&transport, &attach_console(), "pipe", SessionId::MIN).unwrap_err();
+            let error = attach(&transport, &attach_console(), "pipe", SessionId::MIN).unwrap_err();
+            assert!(error.find_source::<DisplacedError>().is_some());
         });
     }
 
     #[test]
     fn connect_timeout_is_resume_timeout() {
-        attach(
+        let error = attach(
             &ConnectFails(PalErrorKind::Timeout),
             &attach_console(),
             "missing",
             SessionId::MIN,
         )
         .unwrap_err();
+        assert!(error.find_source::<ResumeTimeoutError>().is_some());
     }
 
     #[test]
     fn connect_other_is_startup_failure() {
-        attach(
+        let error = attach(
             &ConnectFails(PalErrorKind::Other),
             &attach_console(),
             "missing",
             SessionId::MIN,
         )
         .unwrap_err();
+        assert!(error.find_source::<StartupFailedError>().is_some());
+    }
+
+    #[test]
+    fn raw_relay_is_left_when_attach_fails() {
+        let leaves = Arc::new(AtomicUsize::new(0));
+        attach(
+            &ConnectFails(PalErrorKind::Other),
+            &attach_console_counting_leaves(Arc::clone(&leaves)),
+            "missing",
+            SessionId::MIN,
+        )
+        .unwrap_err();
+        assert_eq!(leaves.load(Ordering::SeqCst), 1);
     }
 }

@@ -8,6 +8,8 @@ fn dure() -> Command {
     Command::new(env!("CARGO_BIN_EXE_dure"))
 }
 
+// Talks to the real operating system: runs the built binary as a child process.
+#[cfg_attr(miri, ignore)]
 #[test]
 fn help_succeeds_on_every_platform() {
     let output = dure().arg("--help").output().unwrap();
@@ -16,6 +18,8 @@ fn help_succeeds_on_every_platform() {
     assert!(stdout.contains("dure"));
 }
 
+// Talks to the real operating system: runs the built binary as a child process.
+#[cfg_attr(miri, ignore)]
 #[test]
 fn list_empty_store() {
     let dir = TempDir::new().unwrap();
@@ -39,6 +43,8 @@ fn list_empty_store() {
     }
 }
 
+// Talks to the real operating system: runs the built binary as a child process.
+#[cfg_attr(miri, ignore)]
 #[test]
 fn kill_missing_id_fails() {
     let dir = TempDir::new().unwrap();
@@ -55,6 +61,8 @@ fn kill_missing_id_fails() {
     assert!(!output.status.success());
 }
 
+// Talks to the real operating system: runs the built binary as a child process.
+#[cfg_attr(miri, ignore)]
 #[test]
 fn kill_without_id_is_a_parse_error() {
     let output = dure().args(["kill"]).output().unwrap();
