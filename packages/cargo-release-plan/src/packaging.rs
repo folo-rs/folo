@@ -37,6 +37,10 @@ impl PackagingRules {
     ///
     /// `include` is an allow-list (and `exclude` is then ignored, matching Cargo).
     /// `Cargo.toml` is always released. `Cargo.lock` is never released.
+    ///
+    /// Matching consults each parent directory as well as the path itself, so a
+    /// directory pattern such as `src/` covers everything beneath it the way it
+    /// does in Cargo and in `.gitignore`.
     pub(crate) fn is_released(&self, package_relative_path: &str) -> bool {
         let path = normalize_rel(package_relative_path);
         let path = path.as_ref();
@@ -47,10 +51,10 @@ impl PackagingRules {
             return true;
         }
         if let Some(include) = &self.include {
-            return include.matched(path, false).is_ignore();
+            return include.matched_path_or_any_parents(path, false).is_ignore();
         }
         if let Some(exclude) = &self.exclude {
-            return !exclude.matched(path, false).is_ignore();
+            return !exclude.matched_path_or_any_parents(path, false).is_ignore();
         }
         true
     }

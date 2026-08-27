@@ -43,7 +43,11 @@ target already declares is rejected.
 
 Released content is the git-tracked files Cargo would put in the `.crate`: the
 `git ls-files` set filtered by the package's `include` / `exclude` using
-gitignore-style matching. `Cargo.lock` is never released content. Untracked
+gitignore-style matching, so a directory pattern covers everything beneath it.
+Those keys are honoured whether the package declares them itself or inherits
+them from `[workspace.package]`, as is `publish`: an inherited `publish = false`
+excludes a package from classification exactly as a locally declared one does.
+`Cargo.lock` is never released content. Untracked
 files are reported as an advisory and never counted as changes. A package that
 contains another workspace member releases nothing from inside it, matching the
 package boundary Cargo itself stops at.
@@ -122,7 +126,8 @@ it is investigated and fixed in the rules, not tolerated.
 
 `apply` reads a plan (`schema_version` 1 with per-target `level` or `version`),
 expands groups, rewrites package versions and intra-workspace requirements that
-must follow (including `=` pins), and refreshes the workspace lockfile.
+must follow (including `=` pins in non-publishable members), and refreshes the
+workspace lockfile.
 Manifests are edited structurally so comments and layout survive. The complete
 edit set is computed before any write. `--dry-run` lists the manifests that
 would change, without writing.

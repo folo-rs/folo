@@ -16,7 +16,9 @@ use crate::command::run_capture;
 use crate::groups::Groups;
 #[cfg(test)]
 use crate::inherited::InheritedKeys;
-use crate::manifest::{PackageManifest, parse_package_manifest, repo_relative_dir};
+use crate::manifest::{
+    PackageManifest, WorkspaceInherit, parse_document, parse_package_manifest, repo_relative_dir,
+};
 #[cfg(test)]
 use crate::packaging::PackagingRules;
 use crate::{
@@ -84,6 +86,11 @@ pub(crate) struct WorkTree {
     /// `cargo package` stops at a nested package boundary, so released-content
     /// discovery needs the boundaries of members it will never classify.
     pub(crate) member_dirs: Vec<String>,
+    /// Manifest paths of every member, publishable or not.
+    ///
+    /// `apply` rewrites dependency requirements in all of them, because a
+    /// non-publishable member can still pin a package the plan increments.
+    pub(crate) member_manifests: Vec<PathBuf>,
     pub(crate) groups: Groups,
 }
 
@@ -137,6 +144,11 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
         })
         .collect();
     let groups = groups_from_metadata(&metadata.metadata, &workspace_names)?;
+    let root_manifest_path = workspace_root.join("Cargo.toml");
+    let root_content = fs::read_to_string(&root_manifest_path)
+        .map_err(|error| ReadFileError::caused_by(&root_manifest_path, error))?;
+    let root_doc = parse_document(&root_manifest_path, &root_content)?;
+    let workspace = WorkspaceInherit::from_root(&root_doc);
     let mut packages = Vec::new();
 
     for package in &metadata.packages {
@@ -149,11 +161,8 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
         let path = PathBuf::from(&package.manifest_path);
         let manifest =
             fs::read_to_string(&path).map_err(|error| ReadFileError::caused_by(&path, error))?;
-        let Some(mut manifest) = parse_package_manifest(
-            &manifest,
-            &path.to_string_lossy(),
-            Some(package.version.as_str()),
-        )?
+        let Some(mut manifest) =
+            parse_package_manifest(&manifest, &path.to_string_lossy(), &workspace)?
         else {
             continue;
         };
@@ -192,10 +201,17 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
         .collect();
     member_directories.sort_unstable();
 
+    let mut member_manifests: Vec<PathBuf> = member_dirs
+        .iter()
+        .map(|dir| dir.join("Cargo.toml"))
+        .collect();
+    member_manifests.sort();
+
     Ok(WorkTree {
         workspace_root,
         packages,
         member_dirs: member_directories,
+        member_manifests,
         groups,
     })
 }
@@ -356,6 +372,7 @@ mod tests {
                 inherited: InheritedKeys::default(),
                 publish: true,
                 path_dependencies: Vec::new(),
+                inherited_path_dependencies: Vec::new(),
             },
             manifest_path: PathBuf::from("packages/bar/Cargo.toml"),
             dependencies: vec![ReportedDep {
@@ -373,6 +390,7 @@ mod tests {
                 inherited: InheritedKeys::default(),
                 publish: true,
                 path_dependencies: Vec::new(),
+                inherited_path_dependencies: Vec::new(),
             },
             manifest_path: PathBuf::from("packages/foo/Cargo.toml"),
             dependencies: vec![],

@@ -105,11 +105,14 @@ fn compute_edits(
 
     let mut seen = HashSet::new();
     seen.insert(root);
-    for package in &work_tree.packages {
-        if !seen.insert(package.manifest_path.clone()) {
+    // Every member is rewritten, not just the publishable ones: a `publish = false`
+    // member can still carry an `=` pin on a package the plan increments, and
+    // leaving it stale would break the workspace lockfile refresh below.
+    for manifest_path in &work_tree.member_manifests {
+        if !seen.insert(manifest_path.clone()) {
             continue;
         }
-        edits.push(edit_path(&package.manifest_path, |doc| {
+        edits.push(edit_path(manifest_path, |doc| {
             rewrite_package_version(doc, expanded, verbose);
             rewrite_dependency_tables(doc, expanded, verbose);
         })?);

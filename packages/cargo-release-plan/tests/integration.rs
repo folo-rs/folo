@@ -608,6 +608,59 @@ fn nested_package_boundary_holds_when_the_workspace_is_below_the_repository_root
     assert!(message.contains("inner: unreleased-changes"), "{message}");
     assert!(!message.contains("outer: unreleased-changes"), "{message}");
 }
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn apply_rewrites_pins_declared_by_a_non_publishable_member() {
+    let fixture = Fixture::new("");
+    write_package(&fixture, "demo", "0.1.0", "");
+    write_package(
+        &fixture,
+        "tool",
+        "0.1.0",
+        concat!(
+            "publish = false\n\n",
+            "[dependencies]\ndemo = { version = \"=0.1.0\", path = \"../demo\" }\n"
+        ),
+    );
+    fixture.commit("seed");
+
+    let plan_path = fixture.path().join("plan.json");
+    fs::write(
+        &plan_path,
+        r#"{ "schema_version": 1, "increments": [{ "name": "demo", "level": "minor" }] }"#,
+    )
+    .unwrap();
+
+    run(&RunInput::Apply {
+        plan: plan_path,
+        dry_run: false,
+        manifest_path: fixture.manifest(),
+        verbose: false,
+    })
+    .unwrap();
+
+    // 	ool is never released, but its pin still has to follow demo or the
+    // workspace lockfile can no longer be resolved.
+    let tool = fs::read_to_string(fixture.path().join("packages/tool/Cargo.toml")).unwrap();
+    assert!(tool.contains("version = \"=0.2.0\""), "{tool}");
+}
+
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn inherited_publish_false_excludes_a_package_from_classification() {
+    let fixture = Fixture::new("[workspace.package]\npublish = false\n");
+    write_package(&fixture, "demo", "0.1.0", "publish.workspace = true");
+    write_package(&fixture, "keeper", "0.1.0", "");
+    fixture.commit("seed");
+    let base = fixture.sha("HEAD");
+
+    fixture.write("packages/demo/src/lib.rs", "pub fn f() { let _ = 8; }\n");
+    fixture.commit("change the unpublished package");
+
+    let (passed, message) = check(&fixture, &base);
+    assert!(passed, "{message}");
+    assert!(!message.contains("demo"), "{message}");
+}
 fn check(fixture: &Fixture, base: &str) -> (bool, String) {
     check_workspace(base, fixture.manifest())
 }

@@ -16,10 +16,10 @@ use crate::anchor::{Anchor, TimelineEntry, reintroduction_anchor, resolve_anchor
 use crate::diff::file_diff;
 use crate::git::{GitRepo, git_path, join_git_rel};
 use crate::groups::GroupVerdict;
-use crate::inherited::{InheritedChange, inherited_changes, workspace_package_version};
+use crate::inherited::{InheritedChange, inherited_changes};
 use crate::manifest::{
-    PackageManifest, PathCase, WorkspaceMembers, is_workspace_excluded, is_workspace_member,
-    parse_document, parse_package_manifest, parse_workspace_members,
+    PackageManifest, PathCase, WorkspaceInherit, WorkspaceMembers, is_workspace_excluded,
+    is_workspace_member, parse_document, parse_package_manifest, parse_workspace_members,
 };
 use crate::metadata::{ReportedDep, WorkPackage, WorkTree, dependents_of, load_work_tree};
 use crate::packaging::{PackagingRules, relativize};
@@ -622,7 +622,7 @@ fn load_snapshot(
     // before matching, or a nested workspace would find no members and silently
     // classify every package as absent from the base revision.
     let workspace_prefix = root_rel.strip_suffix("Cargo.toml").unwrap_or("");
-    let workspace_version = workspace_package_version(&root_doc);
+    let workspace = WorkspaceInherit::from_root(&root_doc);
 
     let mut candidates: BTreeMap<String, PackageManifest> = BTreeMap::new();
     for path in git.ls_tree_manifests(commit)? {
@@ -634,7 +634,7 @@ fn load_snapshot(
         let Some(content) = git.show_file(commit, &path)? else {
             continue;
         };
-        let Some(parsed) = parse_package_manifest(&content, &path, workspace_version)? else {
+        let Some(parsed) = parse_package_manifest(&content, &path, &workspace)? else {
             continue;
         };
         candidates.insert(member_dir.to_string(), parsed);
@@ -690,8 +690,21 @@ fn resolve_members(
         let Some(parsed) = candidates.get(&dir) else {
             continue;
         };
-        for relative in &parsed.path_dependencies {
-            let Some(target) = join_relative(&dir, relative) else {
+        // Locally declared paths resolve against the member's own directory;
+        // inherited ones are declared in `[workspace.dependencies]` and so
+        // resolve against the workspace root.
+        let edges = parsed
+            .path_dependencies
+            .iter()
+            .map(|relative| (dir.as_str(), relative))
+            .chain(
+                parsed
+                    .inherited_path_dependencies
+                    .iter()
+                    .map(|relative| ("", relative)),
+            );
+        for (base, relative) in edges {
+            let Some(target) = join_relative(base, relative) else {
                 continue;
             };
             if !candidates.contains_key(&target) || is_workspace_excluded(&target, members) {
@@ -924,7 +937,7 @@ mod tests {
             parse_package_manifest(
                 "[package]\nname = \"a\"\nversion = \"0.1.0\"\n\n[dependencies]\nb = { path = \"../b\" }\n\n[dev-dependencies]\nc = { path = \"../c\" }\n",
                 "packages/a/Cargo.toml",
-                None,
+                &WorkspaceInherit::default(),
             )
             .unwrap()
             .unwrap(),
@@ -934,7 +947,7 @@ mod tests {
             parse_package_manifest(
                 "[package]\nname = \"b\"\nversion = \"0.1.0\"\n",
                 "packages/b/Cargo.toml",
-                None,
+                &WorkspaceInherit::default(),
             )
             .unwrap()
             .unwrap(),
@@ -944,7 +957,7 @@ mod tests {
             parse_package_manifest(
                 "[package]\nname = \"c\"\nversion = \"0.1.0\"\n",
                 "packages/c/Cargo.toml",
-                None,
+                &WorkspaceInherit::default(),
             )
             .unwrap()
             .unwrap(),

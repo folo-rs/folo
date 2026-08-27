@@ -22,7 +22,14 @@ pub(crate) struct PackageManifest {
     pub(crate) packaging: PackagingRules,
     pub(crate) inherited: InheritedKeys,
     pub(crate) publish: bool,
+    /// Dependency paths declared by this package, relative to its own directory.
     pub(crate) path_dependencies: Vec<String>,
+    /// Dependency paths this package inherits, relative to the workspace root.
+    ///
+    /// `[workspace.dependencies]` declares its paths relative to the workspace
+    /// root, so these cannot be joined onto the member directory the way a
+    /// locally declared path is.
+    pub(crate) inherited_path_dependencies: Vec<String>,
 }
 
 /// Workspace member patterns from the root manifest, compiled for repeated queries.
@@ -113,7 +120,7 @@ pub(crate) fn parse_document(path: &Path, content: &str) -> Result<DocumentMut, 
 pub(crate) fn parse_package_manifest(
     content: &str,
     manifest_path: &str,
-    workspace_version: Option<&str>,
+    workspace: &WorkspaceInherit<'_>,
 ) -> Result<Option<PackageManifest>, AppError> {
     let path = Path::new(manifest_path);
     let doc = parse_document(path, content)?;
@@ -132,7 +139,7 @@ pub(crate) fn parse_package_manifest(
         return Ok(None);
     };
     let version = if is_workspace_inherit(version_item) {
-        let Some(version) = workspace_version else {
+        let Some(version) = workspace.package_version() else {
             return Ok(None);
         };
         version
@@ -150,11 +157,95 @@ pub(crate) fn parse_package_manifest(
         name: name.to_string(),
         version,
         directory,
-        packaging: packaging_from_package(package)?,
+        packaging: packaging_from_package(package, workspace)?,
         inherited: collect_inherited_keys(&doc),
-        publish: publish_allowed(package),
+        publish: publish_allowed(package, workspace),
         path_dependencies: path_dependencies(&doc),
+        inherited_path_dependencies: inherited_path_dependencies(&doc, workspace),
     }))
+}
+
+/// The `[workspace.package]` and `[workspace.dependencies]` tables a member inherits from.
+///
+/// Historical snapshots parse member manifests without Cargo's help, so every
+/// `.workspace = true` key has to be resolved against the root manifest of the
+/// same commit or the member would be read with Cargo's defaults instead of the
+/// values it actually declares.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct WorkspaceInherit<'a> {
+    package: Option<&'a dyn TableLike>,
+    dependencies: Option<&'a dyn TableLike>,
+}
+
+impl<'a> WorkspaceInherit<'a> {
+    pub(crate) fn from_root(root: &'a DocumentMut) -> Self {
+        let workspace = root.get("workspace").and_then(Item::as_table_like);
+        Self {
+            package: workspace
+                .and_then(|workspace| workspace.get("package"))
+                .and_then(Item::as_table_like),
+            dependencies: workspace
+                .and_then(|workspace| workspace.get("dependencies"))
+                .and_then(Item::as_table_like),
+        }
+    }
+
+    fn package_version(&self) -> Option<&'a str> {
+        self.package_key("version").and_then(Item::as_str)
+    }
+
+    fn package_key(&self, key: &str) -> Option<&'a Item> {
+        let package = self.package?;
+        package.get(key)
+    }
+
+    fn dependency(&self, name: &str) -> Option<&'a dyn TableLike> {
+        let dependencies = self.dependencies?;
+        dependencies.get(name).and_then(Item::as_table_like)
+    }
+}
+
+/// Collects every `path` a package reaches through `[workspace.dependencies]`.
+///
+/// Cargo makes an inherited path dependency a member exactly as it does a
+/// locally declared one, so historical membership only matches Cargo once these
+/// edges are followed as well.
+fn inherited_path_dependencies(doc: &DocumentMut, workspace: &WorkspaceInherit<'_>) -> Vec<String> {
+    let mut names = Vec::new();
+    collect_inherited_dependency_names(doc.as_table(), &mut names, 0);
+    names
+        .iter()
+        .filter_map(|name| {
+            workspace
+                .dependency(name)
+                .and_then(|dependency| dependency.get("path"))
+                .and_then(Item::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .collect()
+}
+
+fn collect_inherited_dependency_names(
+    table: &dyn TableLike,
+    names: &mut Vec<String>,
+    depth: usize,
+) {
+    for (key, item) in table.iter() {
+        let Some(child) = item.as_table_like() else {
+            continue;
+        };
+        if is_dependency_table(key) {
+            for (name, dependency) in child.iter() {
+                if is_workspace_inherit(dependency) {
+                    names.push(name.to_string());
+                }
+            }
+            continue;
+        }
+        if depth < MAX_DEPENDENCY_TABLE_DEPTH {
+            collect_inherited_dependency_names(child, names, depth.saturating_add(1));
+        }
+    }
 }
 
 /// Collects every `path` value declared by a dependency of this package.
@@ -320,24 +411,50 @@ impl fmt::Debug for MemberPattern {
     }
 }
 
-fn packaging_from_package(package: &dyn TableLike) -> Result<PackagingRules, AppError> {
-    let include = opt_string_array(package.get("include"));
-    let exclude = opt_string_array(package.get("exclude"));
+fn packaging_from_package(
+    package: &dyn TableLike,
+    workspace: &WorkspaceInherit<'_>,
+) -> Result<PackagingRules, AppError> {
+    let include = inherited_string_array(package, workspace, "include");
+    let exclude = inherited_string_array(package, workspace, "exclude");
     PackagingRules::new(include.as_deref(), exclude.as_deref())
 }
 
-fn publish_allowed(package: &dyn TableLike) -> bool {
-    match package.get("publish") {
-        None => true,
-        Some(item) => match item {
-            Item::Value(Value::Boolean(b)) => *b.value(),
-            Item::Value(Value::Array(array)) => !array.is_empty(),
-            // Cargo accepts only a boolean or a registry array here, so any other
-            // shape is a manifest Cargo itself rejects. Treating it as publishable
-            // keeps the package under the release gate; the opposite default would
-            // silently exempt a package from classification.
-            _ => true,
-        },
+/// Reads a `[package]` string array, following `.workspace = true` to the root.
+fn inherited_string_array(
+    package: &dyn TableLike,
+    workspace: &WorkspaceInherit<'_>,
+    key: &str,
+) -> Option<Vec<String>> {
+    let item = package.get(key)?;
+    if is_workspace_inherit(item) {
+        return opt_string_array(workspace.package_key(key));
+    }
+    opt_string_array(Some(item))
+}
+
+fn publish_allowed(package: &dyn TableLike, workspace: &WorkspaceInherit<'_>) -> bool {
+    let Some(item) = package.get("publish") else {
+        return true;
+    };
+    let item = if is_workspace_inherit(item) {
+        // An inherited key whose root value is absent is a manifest Cargo
+        // rejects, so the publishable default keeps it under the release gate.
+        let Some(item) = workspace.package_key("publish") else {
+            return true;
+        };
+        item
+    } else {
+        item
+    };
+    match item {
+        Item::Value(Value::Boolean(b)) => *b.value(),
+        Item::Value(Value::Array(array)) => !array.is_empty(),
+        // Cargo accepts only a boolean or a registry array here, so any other
+        // shape is a manifest Cargo itself rejects. Treating it as publishable
+        // keeps the package under the release gate; the opposite default would
+        // silently exempt a package from classification.
+        _ => true,
     }
 }
 
@@ -419,7 +536,7 @@ version = "0.1.0"
 publish = false
 "#,
             "packages/priv/Cargo.toml",
-            None,
+            &WorkspaceInherit::default(),
         )
         .unwrap()
         .unwrap();
@@ -517,7 +634,7 @@ d = { path = "../d" }
 e = { path = "../e" }
 "#,
             "packages/a/Cargo.toml",
-            None,
+            &WorkspaceInherit::default(),
         )
         .unwrap()
         .unwrap();
@@ -583,7 +700,7 @@ version = "0.1.0"
 publish = ["crates-io"]
 "#,
             "packages/pub/Cargo.toml",
-            None,
+            &WorkspaceInherit::default(),
         )
         .unwrap()
         .unwrap();
@@ -596,7 +713,7 @@ version = "0.1.0"
 publish = []
 "#,
             "packages/nopub/Cargo.toml",
-            None,
+            &WorkspaceInherit::default(),
         )
         .unwrap()
         .unwrap();
@@ -613,7 +730,7 @@ version = "0.1.0"
 include = ["src/**", "README.md"]
 "#,
             "packages/foo/Cargo.toml",
-            None,
+            &WorkspaceInherit::default(),
         )
         .unwrap()
         .unwrap();
@@ -623,6 +740,7 @@ include = ["src/**", "README.md"]
 
     #[test]
     fn inherited_workspace_version_is_parsed() {
+        let root = root_doc("[workspace.package]\nversion = \"0.4.0\"\n");
         let parsed = parse_package_manifest(
             r#"
 [package]
@@ -630,7 +748,7 @@ name = "foo"
 version.workspace = true
 "#,
             "packages/foo/Cargo.toml",
-            Some("0.4.0"),
+            &WorkspaceInherit::from_root(&root),
         )
         .unwrap()
         .unwrap();
@@ -643,10 +761,63 @@ name = "foo"
 version.workspace = true
 "#,
                 "packages/foo/Cargo.toml",
-                None,
+                &WorkspaceInherit::default(),
             )
             .unwrap()
             .is_none()
         );
+    }
+
+    #[test]
+    fn inherited_packaging_and_publish_are_resolved_from_the_root() {
+        let root = root_doc(
+            "[workspace.package]\ninclude = [\"src/\"]\nexclude = [\"tests/\"]\npublish = false\n",
+        );
+        let parsed = parse_package_manifest(
+            r#"
+[package]
+name = "foo"
+version = "0.1.0"
+include.workspace = true
+publish.workspace = true
+"#,
+            "packages/foo/Cargo.toml",
+            &WorkspaceInherit::from_root(&root),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(!parsed.publish);
+        assert!(parsed.packaging.is_released("src/lib.rs"));
+        assert!(!parsed.packaging.is_released("README.md"));
+    }
+
+    #[test]
+    fn inherited_path_dependencies_resolve_against_the_workspace_root() {
+        let root = root_doc(
+            "[workspace.dependencies]\nb = { path = \"packages/b\", version = \"0.1.0\" }\n",
+        );
+        let parsed = parse_package_manifest(
+            r#"
+[package]
+name = "a"
+version = "0.1.0"
+
+[dependencies]
+b.workspace = true
+
+[dev-dependencies]
+c = { path = "../c" }
+"#,
+            "packages/a/Cargo.toml",
+            &WorkspaceInherit::from_root(&root),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(parsed.inherited_path_dependencies, vec!["packages/b"]);
+        assert_eq!(parsed.path_dependencies, vec!["../c"]);
+    }
+
+    fn root_doc(content: &str) -> DocumentMut {
+        content.parse().unwrap()
     }
 }

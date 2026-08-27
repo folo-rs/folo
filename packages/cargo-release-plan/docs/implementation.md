@@ -53,10 +53,19 @@ values never collapse into the same representation.
 Historical workspace membership is reconstructed from the root manifest at each
 commit. Beyond the declared `members` patterns, Cargo makes every path
 dependency of a member that lives inside the workspace a member as well, so that
-closure is followed to a fixed point and still honours `exclude`. Membership is
-tracked for non-publishable members too: `cargo package` stops at a nested
-package boundary, so a package that contains another member must not claim the
-inner member's files as its own released content.
+closure is followed to a fixed point and still honours `exclude`. A path
+dependency inherited through `[workspace.dependencies]` is followed too, resolved
+against the workspace root rather than the member directory, because that is
+where the root manifest declares it. Membership is tracked for non-publishable
+members too: `cargo package` stops at a nested package boundary, so a package
+that contains another member must not claim the inner member's files as its own
+released content.
+
+Historical manifests are read without Cargo's help, so every `.workspace = true`
+key a member declares is resolved against the root manifest of the same commit.
+`version`, `include`, `exclude`, and `publish` all matter to classification: with
+them unresolved a member would be read with Cargo's defaults and get the wrong
+anchor, the wrong released-file set, or no exclusion at all.
 
 Because Cargo opens member directories through the filesystem while Git reports
 the spelling recorded in the tree, member matching follows the case rules the
@@ -97,7 +106,10 @@ Plan application rewrites manifests structurally so comments and layout
 survive: every affected manifest is parsed and patched in memory before writes
 begin. A later write can still fail after earlier files have been updated.
 Exact `=` pins are rewritten; other path-dependency requirements are rewritten
-only when they would no longer match the new version. Registry dependencies
+only when they would no longer match the new version. Every workspace member's
+manifest is visited, not just the publishable ones: a `publish = false` member
+can pin a package the plan increments, and a stale pin left behind would break
+the lockfile refresh. Registry dependencies
 that happen to share a crate name are left unchanged. A `version.workspace =
 true` package version is replaced with a literal version string. The lockfile
 refresh is a subsequent `cargo update --offline -p …` of the rewritten
