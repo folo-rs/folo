@@ -34,24 +34,9 @@ fn parse_record(bytes: &[u8], expected: SessionId) -> Result<Option<SessionRecor
 fn replace_file(tmp: &Path, dest: &Path) -> io::Result<()> {
     #[cfg(windows)]
     {
-        use std::os::windows::ffi::OsStrExt;
+        use crate::pal::session_store::windows::move_file_replace;
 
-        use windows::Win32::Storage::FileSystem::{
-            MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
-        };
-        use windows::core::PCWSTR;
-
-        let src: Vec<u16> = tmp.as_os_str().encode_wide().chain([0]).collect();
-        let dst: Vec<u16> = dest.as_os_str().encode_wide().chain([0]).collect();
-        // SAFETY: `src` and `dst` are NUL-terminated paths in the same directory.
-        unsafe {
-            MoveFileExW(
-                PCWSTR(src.as_ptr()),
-                PCWSTR(dst.as_ptr()),
-                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-            )
-        }
-        .map_err(|error| io::Error::other(error.message()))
+        move_file_replace(tmp, dest)
     }
     #[cfg(not(windows))]
     {
@@ -341,6 +326,17 @@ mod tests {
     fn deleting_an_absent_record_succeeds() {
         let (_dir, store) = store();
         store.delete(SessionId::MIN).unwrap();
+    }
+
+    #[test]
+    // Talks to the real operating system: the session store is a real directory.
+    #[cfg_attr(miri, ignore)]
+    fn canonicalize_resolves_an_existing_path_and_rejects_a_missing_one() {
+        let (dir, store) = store();
+        let resolved = store.canonicalize(dir.path()).unwrap();
+        assert!(resolved.is_absolute());
+        assert_eq!(resolved, fs::canonicalize(dir.path()).unwrap());
+        store.canonicalize(&dir.path().join("absent")).unwrap_err();
     }
 
     #[test]
