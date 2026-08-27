@@ -12,8 +12,8 @@ use crate::command::run_capture;
 use crate::git::git_path;
 use crate::groups::GroupVerdict;
 use crate::packaging::relativize;
-use crate::short_commit;
 use crate::verbose::Verbose;
+use crate::{quote_path, short_commit};
 
 /// Output format for `cargo release-plan check`.
 #[doc(hidden)]
@@ -96,16 +96,16 @@ fn render_diagnostics(
                 let members = groups
                     .get(group)
                     .map_or_else(|| group.clone(), |verdict| verdict.members.join(", "));
-                format!(" Group {group} also includes {members}.")
+                format!(" Group {} also includes {members}.", quote_path(group))
             }
             None => String::new(),
         };
         let changed = match package.changed.first() {
             Some(ChangedItem::Package { path, .. }) => {
-                format!("{path} (and related paths) changed")
+                format!("{} (and related paths) changed", quote_path(path))
             }
             Some(ChangedItem::Inherited { field }) => {
-                format!("{field} (and related paths) changed")
+                format!("{} (and related paths) changed", quote_path(field))
             }
             None => "released content changed".to_string(),
         };
@@ -141,7 +141,8 @@ fn render_diagnostics(
             .collect::<Vec<_>>()
             .join(", ");
         let text = format!(
-            "group {name}: members declare different versions ({listed}). {}",
+            "group {}: members declare different versions ({listed}). {}",
+            quote_path(name),
             remedy()
         );
         if format == CheckFormat::Github {
@@ -295,7 +296,10 @@ fn verify_packaging_rules(classification: &Classification) -> String {
 
 /// Renders the paths in `left` that `right` does not have.
 fn difference_text(left: &BTreeSet<String>, right: &BTreeSet<String>) -> String {
-    let paths: Vec<&str> = left.difference(right).map(String::as_str).collect();
+    let paths: Vec<String> = left
+        .difference(right)
+        .map(|path| quote_path(path))
+        .collect();
     if paths.is_empty() {
         "nothing".to_string()
     } else {
@@ -551,6 +555,31 @@ mod tests {
         assert_eq!(difference_text(&tool, &cargo), "src/lib.rs");
         assert_eq!(difference_text(&cargo, &tool), "src/extra.rs");
         assert_eq!(difference_text(&tool, &tool), "nothing");
+    }
+
+    /// Diagnostics are read from a CI log, where a name carrying a newline would
+    /// let the tail of a repository-controlled path pose as a fresh workflow
+    /// command and a terminal escape could rewrite what a reader sees.
+    #[test]
+    fn a_repository_controlled_name_cannot_break_out_of_a_diagnostic() {
+        let package = failing(
+            "demo",
+            vec![ChangedItem::Package {
+                path: "src/\n::error::spoofed".to_string(),
+                change: "modified".to_string(),
+            }],
+        );
+
+        let text = render_diagnostics(&[package], &BTreeMap::new(), CheckFormat::Github);
+
+        assert_eq!(text.lines().count(), 2, "{text}");
+        assert!(text.contains(r#""src/\n::error::spoofed""#), "{text}");
+
+        let odd = BTreeSet::from(["src/\u{1b}[2Kgone.rs".to_string()]);
+        assert_eq!(
+            difference_text(&odd, &BTreeSet::new()),
+            r#""src/\033[2Kgone.rs""#
+        );
     }
 
     #[test]

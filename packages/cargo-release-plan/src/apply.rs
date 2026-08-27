@@ -16,7 +16,7 @@ use crate::metadata::{WorkTree, load_work_tree};
 use crate::plan::{ExpandedPlan, PlanFile, expand_plan};
 use crate::text::plural;
 use crate::verbose::Verbose;
-use crate::{ParsePlanError, ReadFileError, WriteFileError};
+use crate::{ParsePlanError, ReadFileError, WriteFileError, quote_path};
 
 /// One on-disk manifest after an in-memory rewrite, waiting to be written.
 struct ManifestEdit {
@@ -117,7 +117,7 @@ pub(crate) fn run_apply(
             .map_err(|error| WriteFileError::caused_by(&edit.path, error))?;
         verbose.note(format!(
             "wrote {} after computing the full edit set in memory; remaining writes can still fail",
-            edit.path.display()
+            quote_path(&edit.path.to_string_lossy())
         ));
     }
 
@@ -180,7 +180,8 @@ fn dry_run_summary(edits: &[ManifestEdit], package_count: usize, would_refresh: 
     let mut message = format!("Dry run: {} would change", plural(changed, "manifest"));
     for edit in edits {
         if edit.original != edit.updated {
-            write!(message, "\n  {}", edit.path.display()).expect("writing to String");
+            write!(message, "\n  {}", quote_path(&edit.path.to_string_lossy()))
+                .expect("writing to String");
         }
     }
     if would_refresh {

@@ -2,6 +2,8 @@
 
 use std::fmt::Write as _;
 
+use crate::quote_path;
+
 /// One file's rendered change together with its line statistics.
 ///
 /// `report` writes the rendered text into a package's `.patch` artifact and
@@ -348,48 +350,11 @@ fn hunk_start(zero_based: usize, len: usize) -> usize {
 fn side_label(present: bool, prefix: &str, path: &str) -> String {
     if present {
         // Git quotes the prefixed name as a unit, so `a/` sits inside the quotes.
-        quote_path(format!("{prefix}/{path}"))
+        quote_path(&format!("{prefix}/{path}"))
     } else {
         // The unified-diff placeholder for the absent side of an add or delete.
         "/dev/null".to_string()
     }
-}
-
-/// Renders a diff-header path the way Git does.
-///
-/// Git tracks names containing quotes, backslashes, tabs, and newlines, and the
-/// Git wrapper deliberately preserves them. Emitting such a name verbatim would
-/// terminate the header early or split it across lines, so a name that needs it
-/// is wrapped in the C-style quoting `git apply` and `patch` already understand.
-fn quote_path(label: String) -> String {
-    if !label.chars().any(needs_quoting) {
-        return label;
-    }
-    let mut quoted = String::with_capacity(label.len().saturating_add(2));
-    quoted.push('"');
-    for character in label.chars() {
-        match character {
-            '"' => quoted.push_str("\\\""),
-            '\\' => quoted.push_str("\\\\"),
-            '\n' => quoted.push_str("\\n"),
-            '\r' => quoted.push_str("\\r"),
-            '\t' => quoted.push_str("\\t"),
-            control if control.is_ascii_control() => {
-                write!(quoted, "\\{:03o}", u32::from(control)).expect("writing to String");
-            }
-            other => quoted.push(other),
-        }
-    }
-    quoted.push('"');
-    quoted
-}
-
-/// Whether a character forces the whole header path into quoted form.
-///
-/// Non-ASCII characters are left alone: the artifacts are UTF-8 and escaping
-/// them would only make an ordinary accented file name unreadable.
-fn needs_quoting(character: char) -> bool {
-    character == '"' || character == '\\' || character.is_ascii_control()
 }
 
 fn push_diff_line(out: &mut String, marker: char, line: &str) {
@@ -419,25 +384,6 @@ mod tests {
         assert!(diff.text.starts_with("--- /dev/null\n+++ b/src/lib.rs\n"));
         assert!(diff.text.contains("@@ -0,0 +1,1 @@\n+a\n"));
         assert_eq!((diff.insertions, diff.deletions), (1, 0));
-    }
-
-    #[test]
-    fn an_ordinary_path_is_not_quoted() {
-        assert_eq!(quote_path("a/src/lib.rs".to_string()), "a/src/lib.rs");
-        // Non-ASCII is ordinary here even though Git would escape it by default.
-        assert_eq!(quote_path("a/src/lïb.rs".to_string()), "a/src/lïb.rs");
-    }
-
-    #[test]
-    fn an_unusual_path_is_quoted_including_its_prefix() {
-        assert_eq!(
-            quote_path("a/od\"d\\name".to_string()),
-            r#""a/od\"d\\name""#
-        );
-        assert_eq!(quote_path("a/tab\there".to_string()), r#""a/tab\there""#);
-        assert_eq!(quote_path("a/nl\nhere".to_string()), r#""a/nl\nhere""#);
-        assert_eq!(quote_path("a/cr\rhere".to_string()), r#""a/cr\rhere""#);
-        assert_eq!(quote_path("a/bell\u{7}".to_string()), r#""a/bell\007""#);
     }
 
     #[test]

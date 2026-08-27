@@ -135,11 +135,18 @@ that is already on crates.io.
 
 ## Diagnostics
 
+Every repository-controlled name a diagnostic prints — a path, an inherited
+field, a group name, a manifest a plan writes — goes through one shared quoting
+helper that borrows Git's `core.quotePath` rendering: a name carrying a quote,
+backslash, or control character is wrapped in quotes with those bytes escaped.
+Plain lines are read from a CI log or a terminal, so an unescaped newline could
+let the tail of a name pose as a fresh workflow command and an unescaped escape
+sequence could rewrite what a reader sees.
+
 `--format github` renders each diagnostic as a workflow command in addition to
-the plain line. Package names, paths, and version strings all reach those
-commands from the repository, so message bodies are escaped for `%` and line
-breaks and property values additionally for `:` and `,` — otherwise a legal but
-awkward path could truncate an annotation or begin a second command.
+the plain line. The message body is additionally escaped for `%` and line breaks
+and property values for `:` and `,`, because those delimit the command itself
+rather than the name inside it.
 
 ## Plan application
 

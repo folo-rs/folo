@@ -1,6 +1,48 @@
 // Shared message formatting helpers.
 
 use std::fmt;
+use std::fmt::Write as _;
+
+/// Renders a repository-controlled path the way Git does.
+///
+/// Names containing quotes, backslashes, tabs, newlines, and other control
+/// characters are all legal in Git and in a Cargo workspace, and the Git wrapper
+/// deliberately preserves them. Emitting one verbatim would end a diff header
+/// early, split a diagnostic across lines so the tail reads as a fresh GitHub
+/// workflow command, or hand a terminal an escape sequence, so a name that needs
+/// it is wrapped in the C-style quoting `git apply` and `patch` already
+/// understand. Every rendering of a path a repository controls goes through
+/// this.
+pub(crate) fn quote_path(label: &str) -> String {
+    if !label.chars().any(needs_quoting) {
+        return label.to_string();
+    }
+    let mut quoted = String::with_capacity(label.len().saturating_add(2));
+    quoted.push('"');
+    for character in label.chars() {
+        match character {
+            '"' => quoted.push_str("\\\""),
+            '\\' => quoted.push_str("\\\\"),
+            '\n' => quoted.push_str("\\n"),
+            '\r' => quoted.push_str("\\r"),
+            '\t' => quoted.push_str("\\t"),
+            control if control.is_ascii_control() => {
+                write!(quoted, "\\{:03o}", u32::from(control)).expect("writing to String");
+            }
+            other => quoted.push(other),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
+/// Whether a character forces the whole path into quoted form.
+///
+/// Non-ASCII characters are left alone: the artifacts are UTF-8 and escaping
+/// them would only make an ordinary accented file name unreadable.
+fn needs_quoting(character: char) -> bool {
+    character == '"' || character == '\\' || character.is_ascii_control()
+}
 
 /// Renders a count with a noun that agrees with it.
 ///
@@ -57,5 +99,21 @@ mod tests {
     fn short_commit_truncates_long_revisions() {
         assert_eq!(short_commit("abcdefghijklmnop"), "abcdefghijkl");
         assert_eq!(short_commit("abc"), "abc");
+    }
+
+    #[test]
+    fn an_ordinary_path_is_not_quoted() {
+        assert_eq!(quote_path("a/src/lib.rs"), "a/src/lib.rs");
+        // Non-ASCII is ordinary here even though Git would escape it by default.
+        assert_eq!(quote_path("a/src/lïb.rs"), "a/src/lïb.rs");
+    }
+
+    #[test]
+    fn an_unusual_path_is_quoted_including_its_prefix() {
+        assert_eq!(quote_path("a/od\"d\\name"), r#""a/od\"d\\name""#);
+        assert_eq!(quote_path("a/tab\there"), r#""a/tab\there""#);
+        assert_eq!(quote_path("a/nl\nhere"), r#""a/nl\nhere""#);
+        assert_eq!(quote_path("a/cr\rhere"), r#""a/cr\rhere""#);
+        assert_eq!(quote_path("a/bell\u{7}"), r#""a/bell\007""#);
     }
 }

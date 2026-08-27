@@ -7,7 +7,7 @@ pub use check::CheckFormat;
 pub use cli::{Cli, EarlyExit};
 pub(crate) use errors::*;
 pub use run::{RunInput, RunOutcome, run};
-pub(crate) use text::short_commit;
+pub(crate) use text::{quote_path, short_commit};
 
 mod anchor;
 mod apply;
