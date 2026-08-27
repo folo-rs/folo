@@ -234,6 +234,16 @@ pub(crate) struct VersionOverflowError {
     version: semver::Version,
 }
 
+impl UnwindSafe for VersionOverflowError {}
+impl RefUnwindSafe for VersionOverflowError {}
+
+#[cfg(test)]
+impl VersionOverflowError {
+    pub(crate) fn version(&self) -> &semver::Version {
+        &self.version
+    }
+}
+
 /// An `include` / `exclude` pattern is not a valid gitignore rule.
 #[ohno::error]
 #[display("Invalid packaging pattern '{pattern}'")]
@@ -287,16 +297,6 @@ impl UnknownGroupMemberError {
 
     pub(crate) fn package(&self) -> &str {
         &self.package
-    }
-}
-
-impl UnwindSafe for VersionOverflowError {}
-impl RefUnwindSafe for VersionOverflowError {}
-
-#[cfg(test)]
-impl VersionOverflowError {
-    pub(crate) fn version(&self) -> &semver::Version {
-        &self.version
     }
 }
 

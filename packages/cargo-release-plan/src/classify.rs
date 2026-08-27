@@ -603,6 +603,12 @@ fn load_snapshot(
         .unwrap_or_else(|| "[workspace]\n".to_string());
     let root_doc = parse_document(Path::new(&root_rel), &root_content)?;
     let members = parse_workspace_members(&root_content, Path::new(&root_rel))?;
+    // `members` globs are written relative to the workspace root, which need not be
+    // the git root, while `ls_tree_all` yields git-root-relative paths. Rebase before
+    // matching, or a nested workspace would find no members and silently classify
+    // every package as absent from the base revision.
+    let workspace_prefix = root_rel.strip_suffix("Cargo.toml").unwrap_or("");
+    let workspace_version = crate::inherited::workspace_package_version(&root_doc);
     let mut packages = BTreeMap::new();
     for path in git.ls_tree_all(commit)? {
         let path = git_path(&path);
@@ -610,13 +616,15 @@ fn load_snapshot(
             continue;
         }
         let dir = path.rsplit_once('/').map_or("", |(d, _)| d);
-        if !is_workspace_member(dir, &members) {
+        let Some(member_dir) = workspace_relative_dir(dir, workspace_prefix) else {
+            continue;
+        };
+        if !is_workspace_member(member_dir, &members) {
             continue;
         }
         let Some(content) = git.show_file(commit, &path)? else {
             continue;
         };
-        let workspace_version = crate::inherited::workspace_package_version(&root_doc);
         let Some(parsed) = parse_package_manifest(&content, &path, workspace_version)? else {
             continue;
         };
@@ -670,7 +678,7 @@ fn is_not_found(error: &std::io::Error) -> bool {
     error.kind() == std::io::ErrorKind::NotFound
 }
 
-// Workspace-root-relative Cargo.toml path; only used to load historical root manifests.
+// Git-root-relative Cargo.toml path; only used to load historical root manifests.
 #[cfg_attr(test, mutants::skip)]
 fn root_manifest_rel(git: &GitRepo, workspace_root: &Path) -> String {
     let rel = workspace_root
@@ -681,6 +689,21 @@ fn root_manifest_rel(git: &GitRepo, workspace_root: &Path) -> String {
         .replace('\\', "/")
         .trim_start_matches("./")
         .to_string()
+}
+
+/// Rebases a git-root-relative directory onto the workspace root.
+///
+/// `workspace_prefix` is the git-root-relative workspace directory with a trailing
+/// separator, or empty when the workspace root is the git root. Returns `None` for
+/// paths outside the workspace root, which belong to no member of this workspace.
+fn workspace_relative_dir<'a>(dir: &'a str, workspace_prefix: &str) -> Option<&'a str> {
+    if workspace_prefix.is_empty() {
+        return Some(dir);
+    }
+    if dir == workspace_prefix.trim_end_matches('/') {
+        return Some("");
+    }
+    dir.strip_prefix(workspace_prefix)
 }
 
 #[cfg(test)]
@@ -695,6 +718,24 @@ mod tests {
         }]);
         assert!(patch.contains("workspace.package.license"));
         assert!(inherited_patch(&[]).is_empty());
+    }
+
+    #[test]
+    fn workspace_relative_dir_rebases_onto_the_workspace_root() {
+        // Workspace root is the git root: paths pass through unchanged.
+        assert_eq!(workspace_relative_dir("packages/a", ""), Some("packages/a"));
+        assert_eq!(workspace_relative_dir("", ""), Some(""));
+
+        // Workspace root is nested: the prefix is stripped so member globs match.
+        assert_eq!(
+            workspace_relative_dir("rust/packages/a", "rust/"),
+            Some("packages/a")
+        );
+        assert_eq!(workspace_relative_dir("rust", "rust/"), Some(""));
+
+        // Outside the nested workspace root, so not a member of this workspace.
+        assert_eq!(workspace_relative_dir("dotnet/packages/a", "rust/"), None);
+        assert_eq!(workspace_relative_dir("", "rust/"), None);
     }
 
     #[test]

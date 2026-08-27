@@ -82,10 +82,14 @@ impl Groups {
                 .filter_map(|member| versions.get(*member))
                 .collect();
             let consistent = compared_versions.len() <= 1;
+            // The group version is the highest declared by any member, matching
+            // the increment base `expand_plan` uses. An inconsistent group has
+            // more than one candidate, and the highest is the only one every
+            // member can be raised to without moving a version backwards.
             let version = compared_versions
                 .iter()
-                .next()
                 .copied()
+                .max()
                 .cloned()
                 .or_else(|| {
                     present
@@ -172,6 +176,12 @@ mod tests {
         ]);
         let verdicts = groups().verdicts(&versions, &HashSet::new());
         assert!(!verdicts.get("nm").unwrap().consistent);
+        // The reported version is the highest declared by any compared member,
+        // so it can serve as the increment base for the whole group.
+        assert_eq!(
+            verdicts.get("nm").unwrap().version.as_ref().unwrap(),
+            &v("0.1.1")
+        );
     }
 
     #[test]
