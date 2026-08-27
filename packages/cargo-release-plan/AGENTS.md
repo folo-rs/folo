@@ -24,6 +24,12 @@ The integration suite is one test binary, `tests/integration/`, split into a
 topic module per area of behavior over the shared `harness`. Add a new case to
 the module that matches its subject rather than growing a single file.
 
+## Modules own subjects, not categories
+
+Put a new type, constant, or helper in the module that owns its subject, and
+re-export it from `lib.rs` if it is public. Do not add a shared module for
+"types", "constants", or "utilities"; there is deliberately none to add to.
+
 ## Miri
 
 Tests that spawn `git` or `cargo`, or that touch the real filesystem beyond

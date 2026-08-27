@@ -2,12 +2,11 @@
 //! line, truncated clones, and packages that leave and return.
 
 use std::fs;
-use std::process::Command;
 
 use cargo_release_plan::{CheckFormat, RunInput, run};
 use tempfile::TempDir;
 
-use crate::fixture::{Fixture, write_package};
+use crate::fixture::{Fixture, hermetic_git, write_package};
 use crate::harness::{check, seeded_package};
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
@@ -37,10 +36,8 @@ fn shallow_history_without_a_version_change_is_an_error() {
     // cannot see the creation commit, so classification must error rather than
     // pass.
     let clone = TempDir::new().unwrap();
-    let mut command = Command::new("git");
+    let mut command = hermetic_git();
     command.args([
-        "-c",
-        "gc.auto=0",
         "clone",
         // The source is a local path, for which Git's default local-clone
         // optimization copies the whole object store and ignores the requested

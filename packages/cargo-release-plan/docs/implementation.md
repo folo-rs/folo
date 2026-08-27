@@ -9,6 +9,13 @@ the integration tests share. Command-line parsing lives beside that entry so
 help text and parse errors can be exercised without spawning a process. The
 compiled binary is also covered by a subprocess test.
 
+Every module owns a subject rather than a category, so the crate has no shared
+bag of types or constants: the run input and outcome sit with `run()`, the check
+format and the skill named in failure text sit with the check command, the schema
+revision sits with plan parsing, and the default base revision sits with argument
+parsing. The public surface is re-exported from the crate root, so where an item
+is defined is free to follow its subject.
+
 ## Subprocess boundaries
 
 Every Git operation spawns the `git` executable; no in-process Git library is
@@ -67,6 +74,17 @@ package and produce unreleased-change verdicts for content that is never
 released. Each side of the comparison reads its own boundaries from its own file
 listing, so a crate that appears or disappears between the anchor and the work
 tree moves the boundary with it.
+
+Released content also reaches outside the package directory, because Cargo copies
+the files named by `readme` and `license-file` into the crate root wherever they
+live. Those are located by manifest key rather than by pattern, so they are
+resolved in classification rather than in the packaging rules, and they bypass
+`include` / `exclude` because Cargo copies them regardless. A locally declared
+value resolves against the package directory and an inherited one against the
+workspace root, matching where each manifest declares it; a value naming a file
+inside the package directory adds nothing, since the ordinary file listing
+already covers it. Keying the resolved set by the file's name reproduces the flat
+crate root Cargo produces, and a real package file of that name always wins.
 
 Historical manifests are read without Cargo's help, so every `.workspace = true`
 key a member declares is resolved against the root manifest of the same commit.

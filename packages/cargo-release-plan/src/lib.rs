@@ -3,10 +3,11 @@
 
 //! Classifies publishable packages against version anchors and applies plans.
 
+pub use check::CheckFormat;
 pub use cli::{Cli, EarlyExit};
 pub(crate) use errors::*;
-pub use run::run;
-pub use types::*;
+pub use run::{RunInput, RunOutcome, run};
+pub(crate) use text::short_commit;
 
 mod anchor;
 mod apply;
@@ -26,5 +27,4 @@ mod plan;
 mod report;
 mod run;
 mod text;
-mod types;
 mod verbose;

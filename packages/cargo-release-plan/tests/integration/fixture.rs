@@ -14,6 +14,33 @@ pub(crate) struct Fixture {
     dir: TempDir,
 }
 
+/// Git settings pinned for every invocation, so no test inherits host or user
+/// configuration: an unset identity, a signing key, or a background `gc` would
+/// all make a test depend on the machine it runs on.
+const HERMETIC_CONFIG: &[&str] = &[
+    "-c",
+    "user.email=release-plan@example.invalid",
+    "-c",
+    "user.name=Release Plan Test",
+    "-c",
+    "commit.gpgsign=false",
+    "-c",
+    "gc.auto=0",
+    "-c",
+    "core.autocrlf=false",
+];
+
+/// A `git` command carrying the pinned configuration and no working directory.
+///
+/// `Fixture::git` runs inside an existing fixture; a test that creates a
+/// repository somewhere else, such as a clone, needs the same settings without
+/// one.
+pub(crate) fn hermetic_git() -> Command {
+    let mut command = Command::new("git");
+    command.args(HERMETIC_CONFIG);
+    command
+}
+
 impl Fixture {
     /// Creates the repository and writes the workspace manifest.
     ///
@@ -60,20 +87,8 @@ resolver = "2"
     }
 
     pub(crate) fn git(&self, args: &[&str]) -> String {
-        let mut command = Command::new("git");
-        command.args([
-            "-c",
-            "user.email=release-plan@example.invalid",
-            "-c",
-            "user.name=Release Plan Test",
-            "-c",
-            "commit.gpgsign=false",
-            "-c",
-            "gc.auto=0",
-            "-c",
-            "core.autocrlf=false",
-            "-C",
-        ]);
+        let mut command = hermetic_git();
+        command.arg("-C");
         command.arg(self.path());
         command.args(args);
         let output = command.output().unwrap();

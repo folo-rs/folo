@@ -12,8 +12,25 @@ use crate::command::run_capture;
 use crate::git::git_path;
 use crate::groups::GroupVerdict;
 use crate::packaging::relativize;
+use crate::short_commit;
 use crate::verbose::Verbose;
-use crate::{CheckFormat, INCREMENT_VERSIONS_SKILL, short_commit};
+
+/// Output format for `cargo release-plan check`.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "Hidden enum for internal/test use only"
+)]
+pub enum CheckFormat {
+    /// Human-readable lines on stderr when the check fails.
+    Text,
+    /// GitHub Actions workflow annotations in addition to the text lines.
+    Github,
+}
+
+/// Skill named in check failure text so a failing job is a sufficient prompt.
+const INCREMENT_VERSIONS_SKILL: &str = "increment-versions";
 
 pub(crate) fn run_check(
     base: &str,
@@ -304,11 +321,16 @@ fn cargo_package_list(workspace_root: &Path, package: &str) -> Result<Vec<String
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::path::PathBuf;
+
+    use static_assertions::assert_impl_all;
 
     use super::*;
     use crate::anchor::Anchor;
     use crate::classify::DiffStat;
+
+    assert_impl_all!(CheckFormat: UnwindSafe, RefUnwindSafe);
 
     #[test]
     fn default_success_message_only_when_passed_and_empty() {

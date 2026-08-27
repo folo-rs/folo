@@ -125,6 +125,8 @@ pub(crate) fn classify(
     let git = GitRepo::discover(&work_tree.workspace_root)?;
     for package in &mut work_tree.packages {
         package.manifest.directory = join_git_rel(git.prefix(), &package.manifest.directory);
+        package.resources =
+            resolve_resources(&package.manifest, &package.manifest.directory, git.prefix());
     }
     let head = git.head()?;
     let base_sha = git.rev_parse(base)?;
@@ -165,7 +167,11 @@ pub(crate) fn classify(
             &mut cache,
             verbose,
         )?;
-        if class.anchor.is_none() {
+        // The exemption is base membership, not anchor presence: a reintroduced
+        // package is absent from the base yet still resolves an older anchor, and
+        // the documented rule exempts every member that does not exist on the base
+        // revision from matching its group's declared version.
+        if !base_snapshot.packages.contains_key(&package.manifest.name) {
             exempt.insert(package.manifest.name.clone());
         }
         classes.push(class);
@@ -235,6 +241,7 @@ fn classify_one(
                     &PackageSide {
                         dir: &package.manifest.directory,
                         rules: &package.manifest.packaging,
+                        resources: &package.resources,
                     },
                 )?;
                 log_untracked(verbose, name, untracked.len());
@@ -279,10 +286,12 @@ fn classify_one(
         &PackageSide {
             dir: &anchor_pkg.directory,
             rules: &anchor_pkg.packaging,
+            resources: &anchor_pkg.resources,
         },
         &PackageSide {
             dir: &package.manifest.directory,
             rules: &package.manifest.packaging,
+            resources: &package.resources,
         },
     )?;
 
@@ -392,6 +401,52 @@ fn build_timeline(
 struct PackageSide<'a> {
     dir: &'a str,
     rules: &'a PackagingRules,
+    /// Files Cargo copies into the `.crate` from outside `dir`, keyed by the path
+    /// each takes at the crate root and valued by its git-root-relative path.
+    resources: &'a BTreeMap<String, String>,
+}
+
+/// Resolves the files Cargo copies into the `.crate` from outside `package_dir`.
+///
+/// Cargo copies the file named by `readme` or `license-file` into the crate
+/// root, so a package's released content is not confined to its own directory: a
+/// workspace-level README that several members inherit is released content for
+/// every one of them, and editing it in place is drift a directory-only listing
+/// would miss. Ref: docs/design.md, "Released content".
+///
+/// A resource that already lives inside the package directory is left out,
+/// because the directory listing covers it under its real path. `package_dir`,
+/// `workspace_prefix`, and the resolved values are all git-root-relative.
+fn resolve_resources(
+    manifest: &PackageManifest,
+    package_dir: &str,
+    workspace_prefix: &str,
+) -> BTreeMap<String, String> {
+    let workspace_prefix = workspace_prefix.trim_end_matches('/');
+    let mut resolved = BTreeMap::new();
+    let declared = manifest
+        .resource_paths
+        .iter()
+        .map(|relative| (package_dir, relative))
+        .chain(
+            manifest
+                .inherited_resource_paths
+                .iter()
+                .map(|relative| (workspace_prefix, relative)),
+        );
+    for (base, relative) in declared {
+        let Some(full) = join_relative(base, relative) else {
+            continue;
+        };
+        if relativize(&full, package_dir).is_some() {
+            continue;
+        }
+        let Some(name) = full.rsplit('/').next() else {
+            continue;
+        };
+        resolved.insert(name.to_string(), full);
+    }
+    resolved
 }
 
 fn diff_package(
@@ -456,7 +511,20 @@ fn released_at_commit(
     commit: &str,
     side: &PackageSide<'_>,
 ) -> Result<HashMap<String, String>, AppError> {
-    Ok(released_from_paths(&git.ls_tree(commit, side.dir)?, side))
+    let mut released = released_from_paths(&git.ls_tree(commit, side.dir)?, side);
+    add_resources(&mut released, side);
+    Ok(released)
+}
+
+/// Adds the manifest resources Cargo copies in from outside the package directory.
+///
+/// The packaging rules are not consulted: Cargo copies these regardless of
+/// `include` and `exclude`. An entry never displaces a real package file of the
+/// same name, because that file is what a reader would see at that path.
+fn add_resources(released: &mut HashMap<String, String>, side: &PackageSide<'_>) {
+    for (name, path) in side.resources {
+        released.entry(name.clone()).or_insert_with(|| path.clone());
+    }
 }
 
 /// Lists the untracked paths beneath a package that its packaging rules would
@@ -480,7 +548,9 @@ fn released_in_work_tree(
     git: &GitRepo,
     side: &PackageSide<'_>,
 ) -> Result<HashMap<String, String>, AppError> {
-    Ok(released_from_paths(&git.ls_files(side.dir)?, side))
+    let mut released = released_from_paths(&git.ls_files(side.dir)?, side);
+    add_resources(&mut released, side);
+    Ok(released)
 }
 
 /// Selects one package's released content from the tracked paths beneath it.
@@ -542,10 +612,14 @@ fn is_inside_any(path: &str, dirs: &[String]) -> bool {
 
 /// Package facts reconstructed from a historical tree, keyed by package name.
 #[derive(Clone, Debug)]
+/// One publishable member as it existed at a historical commit.
 struct HistoricalPackage {
     directory: String,
     version: Version,
     packaging: PackagingRules,
+    /// Files Cargo copies into the `.crate` from outside `directory`, keyed by the
+    /// path each takes at the crate root.
+    resources: BTreeMap<String, String>,
 }
 
 /// Workspace members and root manifest at one commit.
@@ -597,26 +671,27 @@ fn load_snapshot(git: &GitRepo, commit: &str, case: PathCase) -> Result<CommitSn
     let workspace_prefix = root_rel.strip_suffix("Cargo.toml").unwrap_or("");
     let workspace = WorkspaceInherit::from_root(&root_doc);
 
-    let mut candidates: BTreeMap<String, PackageManifest> = BTreeMap::new();
+    let mut manifest_paths: BTreeMap<String, String> = BTreeMap::new();
     for path in git.ls_tree_manifests(commit)? {
         let path = git_path(&path);
         let dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);
         let Some(member_dir) = workspace_relative_dir(dir, workspace_prefix) else {
             continue;
         };
-        let Some(content) = git.show_file(commit, &path)? else {
-            continue;
-        };
-        let Some(parsed) = parse_package_manifest(&content, &path, &workspace)? else {
-            continue;
-        };
-        candidates.insert(member_dir.to_string(), parsed);
+        manifest_paths.insert(member_dir.to_string(), path);
     }
 
-    let member_dirs = resolve_members(&candidates, &members);
+    let mut manifests = GitManifestSource {
+        git,
+        commit,
+        workspace,
+        paths: manifest_paths,
+        parsed: BTreeMap::new(),
+    };
+    let member_dirs = resolve_members(&mut manifests, &members)?;
     let mut packages = BTreeMap::new();
     for member_dir in &member_dirs {
-        let Some(parsed) = candidates.get(member_dir) else {
+        let Some(parsed) = manifests.manifest(member_dir)? else {
             continue;
         };
         if !parsed.publish {
@@ -628,10 +703,82 @@ fn load_snapshot(git: &GitRepo, commit: &str, case: PathCase) -> Result<CommitSn
                 directory: parsed.directory.clone(),
                 version: parsed.version.clone(),
                 packaging: parsed.packaging.clone(),
+                resources: resolve_resources(parsed, &parsed.directory, workspace_prefix),
             },
         );
     }
     Ok(CommitSnapshot { packages, root_doc })
+}
+
+/// Supplies historical member manifests to membership resolution.
+///
+/// Cargo loads only the manifests that can become members of the selected
+/// workspace, so resolution pulls manifests through this abstraction instead of
+/// parsing every `Cargo.toml` in the tree up front. An unrelated or excluded
+/// nested workspace holding a manifest Cargo would never read must not be able
+/// to fail classification. Ref: docs/implementation.md, "Classification".
+trait ManifestSource {
+    /// Workspace-relative directories that hold a manifest, none of them parsed yet.
+    fn candidate_dirs(&self) -> Vec<String>;
+
+    /// The parsed manifest in `dir`, or `None` when `dir` holds no package.
+    fn manifest(&mut self, dir: &str) -> Result<Option<&PackageManifest>, AppError>;
+
+    /// Directories the path dependencies of the manifest in `dir` point at.
+    ///
+    /// Locally declared paths resolve against the member's own directory;
+    /// inherited ones are declared in `[workspace.dependencies]` and so resolve
+    /// against the workspace root. A path climbing above the workspace root
+    /// names nothing inside it and is dropped. The result is owned rather than
+    /// borrowed because following an edge parses further manifests through this
+    /// same source.
+    fn path_edges(&mut self, dir: &str) -> Result<Vec<String>, AppError> {
+        let Some(parsed) = self.manifest(dir)? else {
+            return Ok(Vec::new());
+        };
+        Ok(parsed
+            .path_dependencies
+            .iter()
+            .map(|relative| join_relative(dir, relative))
+            .chain(
+                parsed
+                    .inherited_path_dependencies
+                    .iter()
+                    .map(|relative| join_relative("", relative)),
+            )
+            .flatten()
+            .collect())
+    }
+}
+
+/// Reads member manifests out of one commit, parsing each at most once.
+struct GitManifestSource<'a> {
+    git: &'a GitRepo,
+    commit: &'a str,
+    workspace: WorkspaceInherit<'a>,
+    /// Git-root-relative manifest path of every candidate directory.
+    paths: BTreeMap<String, String>,
+    parsed: BTreeMap<String, Option<PackageManifest>>,
+}
+
+impl ManifestSource for GitManifestSource<'_> {
+    fn candidate_dirs(&self) -> Vec<String> {
+        self.paths.keys().cloned().collect()
+    }
+
+    fn manifest(&mut self, dir: &str) -> Result<Option<&PackageManifest>, AppError> {
+        if !self.parsed.contains_key(dir) {
+            let parsed = match self.paths.get(dir) {
+                Some(path) => match self.git.show_file(self.commit, path)? {
+                    Some(content) => parse_package_manifest(&content, path, &self.workspace)?,
+                    None => None,
+                },
+                None => None,
+            };
+            self.parsed.insert(dir.to_string(), parsed);
+        }
+        Ok(self.parsed.get(dir).and_then(Option::as_ref))
+    }
 }
 
 /// Reconstructs the workspace-relative directories Cargo would treat as members.
@@ -641,37 +788,21 @@ fn load_snapshot(git: &GitRepo, commit: &str, case: PathCase) -> Result<CommitSn
 /// followed until it stops growing. Membership derived this way still honours
 /// `exclude`.
 fn resolve_members(
-    candidates: &BTreeMap<String, PackageManifest>,
+    manifests: &mut dyn ManifestSource,
     members: &WorkspaceMembers,
-) -> BTreeSet<String> {
-    let mut resolved: BTreeSet<String> = candidates
-        .keys()
+) -> Result<BTreeSet<String>, AppError> {
+    let mut resolved: BTreeSet<String> = manifests
+        .candidate_dirs()
+        .into_iter()
         .filter(|dir| is_workspace_member(dir, members))
-        .cloned()
         .collect();
     let mut pending: Vec<String> = resolved.iter().cloned().collect();
     while let Some(dir) = pending.pop() {
-        let Some(parsed) = candidates.get(&dir) else {
-            continue;
-        };
-        // Locally declared paths resolve against the member's own directory;
-        // inherited ones are declared in `[workspace.dependencies]` and so
-        // resolve against the workspace root.
-        let edges = parsed
-            .path_dependencies
-            .iter()
-            .map(|relative| (dir.as_str(), relative))
-            .chain(
-                parsed
-                    .inherited_path_dependencies
-                    .iter()
-                    .map(|relative| ("", relative)),
-            );
-        for (base, relative) in edges {
-            let Some(target) = join_relative(base, relative) else {
+        for target in manifests.path_edges(&dir)? {
+            if is_workspace_excluded(&target, members) {
                 continue;
-            };
-            if !candidates.contains_key(&target) || is_workspace_excluded(&target, members) {
+            }
+            if manifests.manifest(&target)?.is_none() {
                 continue;
             }
             if resolved.insert(target.clone()) {
@@ -679,7 +810,7 @@ fn resolve_members(
             }
         }
     }
-    resolved
+    Ok(resolved)
 }
 
 /// Resolves a manifest-relative path against a workspace-relative directory.
@@ -736,7 +867,27 @@ fn can_stop_timeline(timeline: &[TimelineEntry]) -> bool {
     last.version.as_ref() != Some(reference)
 }
 
+/// Reads a tracked work-tree path the way Git stores its blob.
+///
+/// A symbolic link yields its target path rather than the content it points at,
+/// because Git records a link as a blob holding the target. Dereferencing would
+/// disagree with the anchor side, which is read out of the object database, and
+/// would let a link committed under a package copy an arbitrary host file into
+/// the generated patch.
 fn read_optional_bytes(path: &Path) -> Result<Option<Vec<u8>>, AppError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let target =
+                fs::read_link(path).map_err(|error| ReadFileError::caused_by(path, error))?;
+            // Git spells link targets with forward slashes regardless of platform.
+            return Ok(Some(
+                target.to_string_lossy().replace('\\', "/").into_bytes(),
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if is_not_found(&error) => return Ok(None),
+        Err(error) => return Err(ReadFileError::caused_by(path, error).into()),
+    }
     match fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(error) if is_not_found(&error) => Ok(None),
@@ -783,6 +934,7 @@ fn workspace_relative_dir<'a>(dir: &'a str, workspace_prefix: &str) -> Option<&'
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+    use crate::inherited::InheritedKeys;
 
     #[test]
     fn workspace_relative_dir_rebases_onto_the_workspace_root() {
@@ -905,9 +1057,11 @@ mod tests {
     #[test]
     fn released_from_paths_stops_at_a_nested_manifest() {
         let rules = PackagingRules::default();
+        let resources = BTreeMap::new();
         let side = PackageSide {
             dir: "packages/a",
             rules: &rules,
+            resources: &resources,
         };
         // `fixture` is a crate of its own, so Cargo packs none of its files with
         // `packages/a` even though the workspace never lists it as a member.
@@ -923,6 +1077,70 @@ mod tests {
             BTreeSet::from(["Cargo.toml", "src/lib.rs"])
         );
         assert_eq!(released.get("Cargo.toml").unwrap(), "packages/a/Cargo.toml");
+    }
+
+    /// A resource outside the package directory is released content under the
+    /// name it takes at the crate root; one already inside is left to the
+    /// ordinary directory listing.
+    #[test]
+    fn resources_resolve_against_the_end_that_declared_them() {
+        let manifest = manifest_with_resources(
+            "packages/a",
+            &["../../LICENSE", "docs/GUIDE.md"],
+            &["README.md"],
+        );
+
+        let resolved = resolve_resources(&manifest, "packages/a", "");
+
+        assert_eq!(
+            resolved,
+            BTreeMap::from([
+                ("LICENSE".to_string(), "LICENSE".to_string()),
+                ("README.md".to_string(), "README.md".to_string()),
+            ])
+        );
+    }
+
+    /// A nested workspace declares inherited resources relative to its own root,
+    /// not to the git root.
+    #[test]
+    fn inherited_resources_resolve_against_the_workspace_prefix() {
+        let manifest = manifest_with_resources("inner/packages/a", &[], &["README.md"]);
+
+        let resolved = resolve_resources(&manifest, "inner/packages/a", "inner/");
+
+        assert_eq!(
+            resolved,
+            BTreeMap::from([("README.md".to_string(), "inner/README.md".to_string())])
+        );
+    }
+
+    /// A path climbing above the git root names no file in the repository, so it
+    /// contributes no released content rather than failing classification.
+    #[test]
+    fn a_resource_outside_the_repository_is_dropped() {
+        let manifest = manifest_with_resources("packages/a", &["../../../elsewhere/LICENSE"], &[]);
+
+        assert!(resolve_resources(&manifest, "packages/a", "").is_empty());
+    }
+
+    fn manifest_with_resources(
+        directory: &str,
+        local: &[&str],
+        inherited: &[&str],
+    ) -> PackageManifest {
+        PackageManifest {
+            name: "a".to_string(),
+            version: "0.1.0".parse().unwrap(),
+            directory: directory.to_string(),
+            packaging: PackagingRules::default(),
+            inherited: InheritedKeys::default(),
+            publish: true,
+            path_dependencies: Vec::new(),
+            inherited_path_dependencies: Vec::new(),
+            resource_paths: local.iter().map(|path| (*path).to_string()).collect(),
+            inherited_resource_paths: inherited.iter().map(|path| (*path).to_string()).collect(),
+        }
     }
 
     #[test]
@@ -969,6 +1187,47 @@ mod tests {
         assert!(!is_inside_any("packages/ab/src/lib.rs", &dirs));
     }
 
+    /// Serves pre-parsed manifests so membership resolution can be exercised
+    /// without a repository.
+    struct FakeManifests {
+        manifests: BTreeMap<String, PackageManifest>,
+        /// Directories whose manifest was actually read, in order of first read.
+        read: Vec<String>,
+    }
+
+    impl FakeManifests {
+        fn new(entries: &[(&str, &str)]) -> Self {
+            let manifests = entries
+                .iter()
+                .map(|(dir, content)| {
+                    let path = format!("{dir}/Cargo.toml");
+                    let parsed =
+                        parse_package_manifest(content, &path, &WorkspaceInherit::default())
+                            .unwrap()
+                            .unwrap();
+                    ((*dir).to_string(), parsed)
+                })
+                .collect();
+            Self {
+                manifests,
+                read: Vec::new(),
+            }
+        }
+    }
+
+    impl ManifestSource for FakeManifests {
+        fn candidate_dirs(&self) -> Vec<String> {
+            self.manifests.keys().cloned().collect()
+        }
+
+        fn manifest(&mut self, dir: &str) -> Result<Option<&PackageManifest>, AppError> {
+            if !self.read.iter().any(|seen| seen == dir) {
+                self.read.push(dir.to_string());
+            }
+            Ok(self.manifests.get(dir))
+        }
+    }
+
     #[test]
     fn resolve_members_follows_path_dependencies() {
         let root = Path::new("Cargo.toml");
@@ -978,44 +1237,58 @@ mod tests {
             PathCase::Sensitive,
         )
         .unwrap();
-        let mut candidates = BTreeMap::new();
-        candidates.insert(
-            "packages/a".to_string(),
-            parse_package_manifest(
+        let mut manifests = FakeManifests::new(&[
+            (
+                "packages/a",
                 "[package]\nname = \"a\"\nversion = \"0.1.0\"\n\n[dependencies]\nb = { path = \"../b\" }\n\n[dev-dependencies]\nc = { path = \"../c\" }\n",
-                "packages/a/Cargo.toml",
-                &WorkspaceInherit::default(),
-            )
-            .unwrap()
-            .unwrap(),
-        );
-        candidates.insert(
-            "packages/b".to_string(),
-            parse_package_manifest(
+            ),
+            (
+                "packages/b",
                 "[package]\nname = \"b\"\nversion = \"0.1.0\"\n",
-                "packages/b/Cargo.toml",
-                &WorkspaceInherit::default(),
-            )
-            .unwrap()
-            .unwrap(),
-        );
-        candidates.insert(
-            "packages/c".to_string(),
-            parse_package_manifest(
+            ),
+            (
+                "packages/c",
                 "[package]\nname = \"c\"\nversion = \"0.1.0\"\n",
-                "packages/c/Cargo.toml",
-                &WorkspaceInherit::default(),
-            )
-            .unwrap()
-            .unwrap(),
-        );
-        let resolved = resolve_members(&candidates, &members);
+            ),
+        ]);
+        let resolved = resolve_members(&mut manifests, &members).unwrap();
         // `b` is reachable only as a path dependency; `c` is excluded even though
         // a member depends on it.
         assert_eq!(
             resolved.into_iter().collect::<Vec<_>>(),
             vec!["packages/a".to_string(), "packages/b".to_string()]
         );
+    }
+
+    /// A manifest Cargo would never load for this workspace is never parsed, so
+    /// an unrelated nested workspace cannot fail classification.
+    #[test]
+    fn resolve_members_does_not_read_unreachable_manifests() {
+        let root = Path::new("Cargo.toml");
+        let members = parse_workspace_members(
+            "[workspace]\nmembers = [\"packages/a\"]\n",
+            root,
+            PathCase::Sensitive,
+        )
+        .unwrap();
+        let mut manifests = FakeManifests::new(&[
+            (
+                "packages/a",
+                "[package]\nname = \"a\"\nversion = \"0.1.0\"\n",
+            ),
+            (
+                "vendor/unrelated",
+                "[package]\nname = \"unrelated\"\nversion = \"0.1.0\"\n",
+            ),
+        ]);
+
+        let resolved = resolve_members(&mut manifests, &members).unwrap();
+
+        assert_eq!(
+            resolved.into_iter().collect::<Vec<_>>(),
+            vec!["packages/a".to_string()]
+        );
+        assert_eq!(manifests.read, vec!["packages/a".to_string()]);
     }
 
     /// A path dependency that climbs out of the repository is not a workspace
@@ -1029,19 +1302,12 @@ mod tests {
             PathCase::Sensitive,
         )
         .unwrap();
-        let mut candidates = BTreeMap::new();
-        candidates.insert(
-            "packages/a".to_string(),
-            parse_package_manifest(
-                "[package]\nname = \"a\"\nversion = \"0.1.0\"\n\n[dependencies]\nout = { path = \"../../../outside\" }\n",
-                "packages/a/Cargo.toml",
-                &WorkspaceInherit::default(),
-            )
-            .unwrap()
-            .unwrap(),
-        );
+        let mut manifests = FakeManifests::new(&[(
+            "packages/a",
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\n\n[dependencies]\nout = { path = \"../../../outside\" }\n",
+        )]);
 
-        let resolved = resolve_members(&candidates, &members);
+        let resolved = resolve_members(&mut manifests, &members).unwrap();
 
         assert_eq!(
             resolved.into_iter().collect::<Vec<_>>(),

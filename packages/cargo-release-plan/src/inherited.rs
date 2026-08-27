@@ -135,11 +135,17 @@ fn workspace_dependency_fields(doc: &DocumentMut, name: &str) -> BTreeMap<String
         }
         Item::Value(Value::InlineTable(table)) => {
             for (key, value) in table {
+                if is_unpublished_dependency_key(key) {
+                    continue;
+                }
                 fields.insert(key.to_string(), canonical_value(value));
             }
         }
         Item::Table(table) => {
             for (key, value) in table {
+                if is_unpublished_dependency_key(key) {
+                    continue;
+                }
                 fields.insert(key.to_string(), canonical_item(value));
             }
         }
@@ -148,6 +154,17 @@ fn workspace_dependency_fields(doc: &DocumentMut, name: &str) -> BTreeMap<String
         }
     }
     fields
+}
+
+/// Whether a `[workspace.dependencies]` key is stripped from published manifests.
+///
+/// Cargo removes `path` when it normalises a member's manifest for packaging,
+/// and the root manifest is not shipped at all, so a root edit that only moves a
+/// path leaves every inheriting package's released content byte-identical.
+/// Attributing it would be a false `unreleased-changes` verdict. Ref:
+/// docs/design.md, "Inherited values".
+fn is_unpublished_dependency_key(key: &str) -> bool {
+    key == "path"
 }
 
 /// A TOML value reduced to the structure that matters for change detection.

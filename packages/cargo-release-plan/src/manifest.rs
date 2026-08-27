@@ -30,6 +30,18 @@ pub(crate) struct PackageManifest {
     /// root, so these cannot be joined onto the member directory the way a
     /// locally declared path is.
     pub(crate) inherited_path_dependencies: Vec<String>,
+    /// Files Cargo copies into the `.crate`, relative to this package's directory.
+    ///
+    /// Cargo packs the file named by `readme` or `license-file` into the crate
+    /// root, so released content is not confined to the tree beneath the package.
+    pub(crate) resource_paths: Vec<String>,
+    /// Files Cargo copies into the `.crate` that this package inherits, relative
+    /// to the workspace root.
+    ///
+    /// `[workspace.package]` declares its paths relative to the workspace root,
+    /// so a shared README several members inherit is released content for each of
+    /// them without living in any of their directories.
+    pub(crate) inherited_resource_paths: Vec<String>,
 }
 
 /// Workspace member patterns from the root manifest, compiled for repeated queries.
@@ -153,6 +165,7 @@ pub(crate) fn parse_package_manifest(
         .parse::<Version>()
         .map_err(|error| InvalidVersionError::caused_by(name, version, error))?;
     let directory = directory_of(manifest_path);
+    let (resource_paths, inherited_resource_paths) = resource_paths(package, workspace);
     Ok(Some(PackageManifest {
         name: name.to_string(),
         version,
@@ -162,7 +175,42 @@ pub(crate) fn parse_package_manifest(
         publish: publish_allowed(package, workspace),
         path_dependencies: path_dependencies(&doc),
         inherited_path_dependencies: inherited_path_dependencies(&doc, workspace),
+        resource_paths,
+        inherited_resource_paths,
     }))
+}
+
+/// `[package]` keys naming a file Cargo copies into the packaged crate.
+///
+/// Cargo rewrites both to a bare file name at the crate root when it normalises
+/// a manifest for packaging, and copies the named file in alongside the sources.
+const RESOURCE_KEYS: &[&str] = &["readme", "license-file"];
+
+/// Collects the files Cargo copies into the `.crate` alongside the sources.
+///
+/// A locally declared value is relative to the package directory while an
+/// inherited one is relative to the workspace root, so the two are returned
+/// separately for the caller to resolve against the right base. A non-string
+/// value such as `readme = false` names no file and is skipped.
+fn resource_paths(
+    package: &dyn TableLike,
+    workspace: &WorkspaceInherit<'_>,
+) -> (Vec<String>, Vec<String>) {
+    let mut local = Vec::new();
+    let mut inherited = Vec::new();
+    for key in RESOURCE_KEYS {
+        let Some(item) = package.get(key) else {
+            continue;
+        };
+        if is_workspace_inherit(item) {
+            if let Some(path) = workspace.package_key(key).and_then(Item::as_str) {
+                inherited.push(path.to_string());
+            }
+        } else if let Some(path) = item.as_str() {
+            local.push(path.to_string());
+        }
+    }
+    (local, inherited)
 }
 
 /// The `[workspace.package]` and `[workspace.dependencies]` tables a member inherits from.
@@ -910,6 +958,50 @@ publish.workspace = true
         assert!(!parsed.publish);
         assert!(parsed.packaging.is_released("src/lib.rs"));
         assert!(!parsed.packaging.is_released("README.md"));
+    }
+
+    /// Cargo copies `readme` and `license-file` into the crate root, so both are
+    /// released content, and an inherited value names a path relative to the
+    /// workspace root rather than to the package.
+    #[test]
+    fn manifest_resources_are_split_by_where_they_are_declared() {
+        let root = root_doc("[workspace.package]\nreadme = \"README.md\"\n");
+        let parsed = parse_package_manifest(
+            r#"
+[package]
+name = "foo"
+version = "0.1.0"
+readme.workspace = true
+license-file = "../../LICENSE"
+"#,
+            "packages/foo/Cargo.toml",
+            &WorkspaceInherit::from_root(&root),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(parsed.resource_paths, vec!["../../LICENSE"]);
+        assert_eq!(parsed.inherited_resource_paths, vec!["README.md"]);
+    }
+
+    /// `readme = false` disables the key rather than naming a file, and an
+    /// inherited key with no root value names nothing either.
+    #[test]
+    fn a_manifest_resource_that_names_no_file_is_skipped() {
+        let parsed = parse_package_manifest(
+            r#"
+[package]
+name = "foo"
+version = "0.1.0"
+readme = false
+license-file.workspace = true
+"#,
+            "packages/foo/Cargo.toml",
+            &WorkspaceInherit::default(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(parsed.resource_paths.is_empty());
+        assert!(parsed.inherited_resource_paths.is_empty());
     }
 
     #[test]

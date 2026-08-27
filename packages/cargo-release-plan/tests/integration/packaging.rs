@@ -1,7 +1,8 @@
-//! The non-gating packaging cross-check against what Cargo would pack.
+//! The non-gating packaging cross-check against what Cargo would pack, and the
+//! manifest resources Cargo packs from outside the package directory.
 
 use crate::fixture::{Fixture, write_package};
-use crate::harness::{check_verifying_packaging, seeded_package};
+use crate::harness::{check, check_verifying_packaging, seeded_package};
 
 #[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
 #[test]
@@ -57,4 +58,51 @@ fn verify_packaging_warns_when_cargo_cannot_enumerate_a_package() {
 
     assert!(passed, "{message}");
     assert!(message.contains("packaging probe failed"), "{message}");
+}
+
+/// Cargo copies the file named by `readme` into the crate root even when it
+/// lives outside the package directory, so editing a shared README republishes
+/// every package that names it.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn an_inherited_readme_is_released_content_for_every_inheriting_package() {
+    let fixture = Fixture::new("[workspace.package]\nreadme = \"README.md\"\n");
+    fixture.write("README.md", "shared\n");
+    write_package(&fixture, "demo", "0.1.0", "readme.workspace = true");
+    write_package(&fixture, "other", "0.1.0", "");
+    fixture.commit("seed");
+    let base = fixture.sha("HEAD");
+    fixture.write("README.md", "shared, revised\n");
+    fixture.commit("revise the shared readme");
+
+    let (passed, message) = check(&fixture, &base);
+
+    assert!(!passed, "{message}");
+    assert!(message.contains("demo"), "{message}");
+    // `other` names no readme, so the same edit is not its released content.
+    assert!(!message.contains("other"), "{message}");
+}
+
+/// A locally declared resource resolves against the package directory, so a
+/// license file shared from a sibling directory is released content too.
+#[cfg_attr(miri, ignore)] // Spawns git and cargo, which Miri cannot emulate.
+#[test]
+fn a_license_file_outside_the_package_directory_is_released_content() {
+    let fixture = Fixture::new("");
+    fixture.write("LICENSE", "terms\n");
+    write_package(
+        &fixture,
+        "demo",
+        "0.1.0",
+        "license-file = \"../../LICENSE\"",
+    );
+    fixture.commit("seed");
+    let base = fixture.sha("HEAD");
+    fixture.write("LICENSE", "revised terms\n");
+    fixture.commit("revise the license");
+
+    let (passed, message) = check(&fixture, &base);
+
+    assert!(!passed, "{message}");
+    assert!(message.contains("demo"), "{message}");
 }

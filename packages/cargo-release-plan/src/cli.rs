@@ -10,7 +10,15 @@ use std::path::PathBuf;
 use clap::error::ErrorKind;
 use clap::{Error as ClapError, Parser, Subcommand, ValueEnum};
 
-use crate::{CheckFormat, DEFAULT_BASE, RunInput};
+use crate::check::CheckFormat;
+use crate::run::RunInput;
+
+/// Default base revision when the caller does not pass `--base`.
+///
+/// CI should pass an explicit SHA of the merge-base or target-branch tip. A
+/// local run compares against the default remote mainline. A stale default can
+/// both add and hide differences, so it is not a conservative fallback.
+const DEFAULT_BASE: &str = "origin/main";
 
 /// Classifies publishable packages against version anchors and applies plans.
 #[derive(Debug, Parser)]

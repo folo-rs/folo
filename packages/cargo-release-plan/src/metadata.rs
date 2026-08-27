@@ -66,6 +66,12 @@ pub(crate) struct WorkPackage {
     pub(crate) manifest: PackageManifest,
     pub(crate) manifest_path: PathBuf,
     pub(crate) dependencies: Vec<ReportedDep>,
+    /// Files Cargo copies into the `.crate` from outside the package directory,
+    /// keyed by the path each takes at the crate root.
+    ///
+    /// Resolution needs the repository layout, which `cargo metadata` does not
+    /// describe, so classification fills this in once the repository is known.
+    pub(crate) resources: BTreeMap<String, String>,
 }
 
 /// Intra-workspace dependency as exposed in `report.json`.
@@ -191,6 +197,7 @@ pub(crate) fn load_work_tree(manifest_path: &Path) -> Result<WorkTree, AppError>
             manifest,
             manifest_path: path,
             dependencies,
+            resources: BTreeMap::new(),
         });
     }
 
@@ -245,14 +252,16 @@ fn groups_from_metadata(
 /// Reports whether a dependency edge is published and points at a workspace member.
 ///
 /// Normal and build dependencies are recorded in the published manifest, so a
-/// version decision on the target cascades to this package. Dev dependencies are
-/// stripped from the published manifest and cannot cascade.
+/// version decision on the target cascades to this package. A dev dependency
+/// survives packaging only when it declares a version requirement; Cargo strips
+/// the path-only ones, whose requirement `cargo metadata` reports as the `*`
+/// default, and those cannot cascade.
 fn is_intra_workspace_released(
     dep: &MetadataDep,
     members_by_dir: &BTreeMap<PathBuf, String>,
 ) -> bool {
     let kind = dep.kind.as_deref().unwrap_or("normal");
-    if kind == "dev" {
+    if kind == "dev" && dep.req == "*" {
         return false;
     }
     let Some(path) = &dep.path else {
@@ -357,7 +366,23 @@ mod tests {
             path: Some("/ws/packages/bar".to_string()),
             kind: Some("dev".to_string()),
         };
-        assert!(!is_intra_workspace_released(&dev, &dirs));
+        assert!(is_intra_workspace_released(&dev, &dirs));
+        let path_only_dev = MetadataDep {
+            name: "bar".to_string(),
+            req: "*".to_string(),
+            path: Some("/ws/packages/bar".to_string()),
+            kind: Some("dev".to_string()),
+        };
+        assert!(!is_intra_workspace_released(&path_only_dev, &dirs));
+        // A normal dependency without a version requirement still survives
+        // packaging, because Cargo strips only path-only dev dependencies.
+        let path_only_normal = MetadataDep {
+            name: "bar".to_string(),
+            req: "*".to_string(),
+            path: Some("/ws/packages/bar".to_string()),
+            kind: None,
+        };
+        assert!(is_intra_workspace_released(&path_only_normal, &dirs));
         let foreign = MetadataDep {
             name: "serde".to_string(),
             req: "1.0.0".to_string(),
@@ -369,38 +394,35 @@ mod tests {
 
     #[test]
     fn dependents_of_lists_packages_that_depend_on_the_name() {
-        let bar = WorkPackage {
-            manifest: PackageManifest {
-                name: "bar".to_string(),
-                version: "0.1.0".parse().unwrap(),
-                directory: "packages/bar".to_string(),
-                packaging: PackagingRules::default(),
-                inherited: InheritedKeys::default(),
-                publish: true,
-                path_dependencies: Vec::new(),
-                inherited_path_dependencies: Vec::new(),
-            },
-            manifest_path: PathBuf::from("packages/bar/Cargo.toml"),
-            dependencies: vec![ReportedDep {
+        fn package(name: &str, dependencies: Vec<ReportedDep>) -> WorkPackage {
+            WorkPackage {
+                manifest: PackageManifest {
+                    name: name.to_string(),
+                    version: "0.1.0".parse().unwrap(),
+                    directory: format!("packages/{name}"),
+                    packaging: PackagingRules::default(),
+                    inherited: InheritedKeys::default(),
+                    publish: true,
+                    path_dependencies: Vec::new(),
+                    inherited_path_dependencies: Vec::new(),
+                    resource_paths: Vec::new(),
+                    inherited_resource_paths: Vec::new(),
+                },
+                manifest_path: PathBuf::from(format!("packages/{name}/Cargo.toml")),
+                dependencies,
+                resources: BTreeMap::new(),
+            }
+        }
+
+        let bar = package(
+            "bar",
+            vec![ReportedDep {
                 name: "foo".to_string(),
                 req: "0.1.0".to_string(),
                 exact_pin: false,
             }],
-        };
-        let foo = WorkPackage {
-            manifest: PackageManifest {
-                name: "foo".to_string(),
-                version: "0.1.0".parse().unwrap(),
-                directory: "packages/foo".to_string(),
-                packaging: PackagingRules::default(),
-                inherited: InheritedKeys::default(),
-                publish: true,
-                path_dependencies: Vec::new(),
-                inherited_path_dependencies: Vec::new(),
-            },
-            manifest_path: PathBuf::from("packages/foo/Cargo.toml"),
-            dependencies: vec![],
-        };
+        );
+        let foo = package("foo", Vec::new());
         assert_eq!(dependents_of(&[foo, bar], "foo"), vec!["bar".to_string()]);
     }
 }

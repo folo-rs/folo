@@ -5,6 +5,11 @@
 // `ignore` crate). The package's own `Cargo.lock` is never released content: the
 // published lockfile is derived per-crate at pack time and is not a function of
 // the package source. A lockfile nested deeper in the package is ordinary source.
+//
+// The files named by `readme` and `license-file` are released content wherever
+// they live, because Cargo copies each into the crate root regardless of
+// `include` and `exclude`. Those are resolved in `classify` rather than here,
+// since they are located by manifest key rather than by pattern.
 
 use std::borrow::Cow;
 

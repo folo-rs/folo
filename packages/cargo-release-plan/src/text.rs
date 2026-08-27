@@ -14,6 +14,17 @@ pub(crate) fn plural(count: usize, singular: &str) -> impl fmt::Display {
     }
 }
 
+/// Matches the user-facing short-commit convention in `cbh_detect`.
+///
+/// Ref: `packages/cbh_detect/src/detect/findings.rs`, `short_commit`.
+const SHORT_COMMIT_LEN: usize = 12;
+
+pub(crate) fn short_commit(commit: &str) -> &str {
+    commit
+        .get(..commit.len().min(SHORT_COMMIT_LEN))
+        .unwrap_or(commit)
+}
+
 struct Plural {
     count: usize,
     singular: String,
@@ -40,5 +51,11 @@ mod tests {
         assert_eq!(plural(0, "package").to_string(), "0 packages");
         assert_eq!(plural(1, "package").to_string(), "1 package");
         assert_eq!(plural(2, "manifest").to_string(), "2 manifests");
+    }
+
+    #[test]
+    fn short_commit_truncates_long_revisions() {
+        assert_eq!(short_commit("abcdefghijklmnop"), "abcdefghijkl");
+        assert_eq!(short_commit("abc"), "abc");
     }
 }

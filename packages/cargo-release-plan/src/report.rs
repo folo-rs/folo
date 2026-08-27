@@ -7,12 +7,13 @@ use std::path::Path;
 use ohno::AppError;
 use serde::Serialize;
 
+use crate::WriteFileError;
 use crate::classify::{
     AnchorJson, ChangedItem, Classification, DiffStat, PackageClass, PackageStatus, classify,
 };
 use crate::metadata::ReportedDep;
+use crate::plan::SCHEMA_VERSION;
 use crate::verbose::Verbose;
-use crate::{SCHEMA_VERSION, WriteFileError};
 
 /// On-disk `report.json` body.
 #[derive(Serialize)]

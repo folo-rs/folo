@@ -56,6 +56,13 @@ releases nothing from inside a directory that carries its own `Cargo.toml`,
 whether or not that crate belongs to the workspace, matching the package
 boundary Cargo itself stops at.
 
+The files named by `readme` and `license-file` are released content wherever
+they live, because Cargo copies each into the crate root regardless of `include`
+and `exclude`. A workspace-level README that several packages inherit is
+therefore released content for every one of them, and editing it in place is a
+change to each. A resource that already lives inside the package directory is
+just an ordinary file there.
+
 The change set is a diff from the anchor to the work tree. The package
 directory is resolved independently at each end from that end's workspace
 member list, keyed by package name, so a relocated package is still compared
@@ -111,8 +118,9 @@ root manifest.
 `report` writes `report.json` and per-package unified diffs for unreleased
 changes. The report includes intra-workspace dependencies and dependents so
 version decisions can cascade. Only edges that survive into the published
-manifest are reported: normal and build dependencies cascade, dev dependencies
-do not.
+manifest are reported: normal and build dependencies cascade, as do dev
+dependencies that declare a version requirement. A path-only dev dependency does
+not, because Cargo strips it when it normalises the manifest for packaging.
 
 `check` exits non-zero on unreleased changes or an inconsistent group, with one
 actionable diagnostic line that names the `increment-versions` skill.

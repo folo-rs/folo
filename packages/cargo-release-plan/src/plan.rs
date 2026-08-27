@@ -14,9 +14,16 @@ use serde::Deserialize;
 use crate::groups::Groups;
 use crate::{
     ConflictingPlanVersionError, InvalidVersionError, PlanIncrementSpecError,
-    PlanVersionRegressionError, SCHEMA_VERSION, UnknownIncrementLevelError, UnknownPlanTargetError,
+    PlanVersionRegressionError, UnknownIncrementLevelError, UnknownPlanTargetError,
     UnsupportedPlanSchemaError, VersionOverflowError,
 };
+
+/// Shared plan and report schema revision.
+///
+/// Plan and report formats advance together. Incompatible field, enum, or
+/// path-layout changes increment this constant. Contract: package README
+/// "Plan and report schema".
+pub(crate) const SCHEMA_VERSION: u32 = 1;
 
 /// Requested version increment relative to the highest declared member version.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
