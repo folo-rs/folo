@@ -86,14 +86,21 @@ pub(crate) fn resolve_anchor(
 /// before the deletion must not be absorbed into the anchor and thereby become
 /// invisible when the package comes back at the same version.
 ///
-/// Returns `Ok(None)` when no sampled commit carried the package, which is the
-/// genuine creation case.
+/// Returns `Ok(None)` when the walk reached a true root without the package ever
+/// appearing, which is the genuine creation case. Exhausting a truncated history
+/// instead proves nothing about whether the package once existed, so that is an
+/// error.
 pub(crate) fn reintroduction_anchor(
     package: &str,
     timeline: &[TimelineEntry],
 ) -> Result<Option<Anchor>, AppError> {
     let Some(present) = timeline.iter().position(|entry| entry.version.is_some()) else {
-        return Ok(None);
+        // Absent everywhere. Only a walk that ran out of history at a root can
+        // rule out an earlier, already-published incarnation of this package.
+        return match timeline.last() {
+            Some(last) if !last.has_parent => Ok(None),
+            _ => Err(ShallowHistoryError::new(package).into()),
+        };
     };
     let remainder = timeline
         .get(present..)
@@ -222,6 +229,22 @@ mod tests {
     fn reintroduction_anchor_is_absent_for_a_genuinely_new_package() {
         let timeline = vec![entry("c2", None, true), entry("c1", None, false)];
         assert!(reintroduction_anchor("foo", &timeline).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_package_absent_from_every_sampled_commit_is_truncated_history() {
+        // No sampled commit carried the package, but the oldest still has a
+        // parent, so an earlier already-published incarnation cannot be ruled
+        // out and creation must not be assumed.
+        let timeline = vec![entry("c2", None, true), entry("c1", None, true)];
+        let error = reintroduction_anchor("foo", &timeline).unwrap_err();
+        assert!(error.find_source::<ShallowHistoryError>().is_some());
+    }
+
+    #[test]
+    fn reintroduction_anchor_rejects_an_empty_timeline() {
+        let error = reintroduction_anchor("foo", &[]).unwrap_err();
+        assert!(error.find_source::<ShallowHistoryError>().is_some());
     }
 
     #[test]

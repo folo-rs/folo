@@ -98,7 +98,15 @@ pub(crate) fn run_apply(
     let changed = changed_edit_count(&edits);
 
     if dry_run {
-        return Ok(dry_run_summary(&edits, expanded.packages.len()));
+        let skip = lockfile_refresh_skip_reason(&work_tree.workspace_root, &expanded);
+        if let Some(reason) = skip {
+            verbose.note(reason);
+        }
+        return Ok(dry_run_summary(
+            &edits,
+            expanded.packages.len(),
+            skip.is_none(),
+        ));
     }
 
     for edit in &edits {
@@ -167,7 +175,7 @@ fn compute_edits(
     Ok(edits)
 }
 
-fn dry_run_summary(edits: &[ManifestEdit], package_count: usize) -> String {
+fn dry_run_summary(edits: &[ManifestEdit], package_count: usize, would_refresh: bool) -> String {
     let changed = changed_edit_count(edits);
     let mut message = format!("Dry run: {} would change", plural(changed, "manifest"));
     for edit in edits {
@@ -175,12 +183,16 @@ fn dry_run_summary(edits: &[ManifestEdit], package_count: usize) -> String {
             write!(message, "\n  {}", edit.path.display()).expect("writing to String");
         }
     }
-    write!(
-        message,
-        "; lockfile would be refreshed for {}",
-        plural(package_count, "package")
-    )
-    .expect("writing to String");
+    if would_refresh {
+        write!(
+            message,
+            "; lockfile would be refreshed for {}",
+            plural(package_count, "package")
+        )
+        .expect("writing to String");
+    } else {
+        message.push_str("; the workspace lockfile would be left untouched");
+    }
     message
 }
 
@@ -408,24 +420,36 @@ fn rewrite_req(old: &str, new_version: &Version) -> String {
 
 // Spawns `cargo update --offline`; lockfile is not released content.
 #[cfg_attr(test, mutants::skip)]
+/// Explains why a lockfile refresh would be skipped, or `None` when it would run.
+///
+/// The dry run and the real apply both consult this, so the summary a dry run
+/// prints never claims an operation the subsequent apply would decline.
+fn lockfile_refresh_skip_reason(
+    workspace_root: &Path,
+    expanded: &ExpandedPlan,
+) -> Option<&'static str> {
+    if expanded.packages.is_empty() {
+        return Some(
+            "plan expands to no packages, so apply skips the lockfile refresh rather than \
+             running a workspace-wide cargo update",
+        );
+    }
+    if !workspace_root.join("Cargo.lock").exists() {
+        return Some(
+            "no Cargo.lock present, so apply skips the lockfile refresh; the lockfile is not \
+             released content",
+        );
+    }
+    None
+}
+
 fn refresh_lockfile(
     work_tree: &WorkTree,
     expanded: &ExpandedPlan,
     verbose: Verbose,
 ) -> Result<bool, AppError> {
-    let lockfile = work_tree.workspace_root.join("Cargo.lock");
-    if expanded.packages.is_empty() {
-        verbose.note(
-            "plan expands to no packages, so apply skips the lockfile refresh rather than \
-             running a workspace-wide cargo update",
-        );
-        return Ok(false);
-    }
-    if !lockfile.exists() {
-        verbose.note(
-            "no Cargo.lock present, so apply skips the lockfile refresh; the lockfile is not \
-             released content",
-        );
+    if let Some(reason) = lockfile_refresh_skip_reason(&work_tree.workspace_root, expanded) {
+        verbose.note(reason);
         return Ok(false);
     }
     let mut args = vec![
@@ -455,6 +479,8 @@ fn refresh_lockfile(
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use tempfile::TempDir;
+
     use super::*;
 
     fn v(text: &str) -> Version {
@@ -488,9 +514,41 @@ mod tests {
         ];
         assert_eq!(changed_edit_count(&edits), 1);
         assert_eq!(changed_edit_count(&edits[..1]), 0);
-        let summary = dry_run_summary(&edits, 2);
+        let summary = dry_run_summary(&edits, 2, true);
         assert!(summary.contains("changed.toml"));
         assert!(!summary.contains("unchanged.toml"));
+        assert!(summary.contains("lockfile would be refreshed for 2 packages"));
+    }
+
+    #[test]
+    fn a_dry_run_that_would_not_refresh_the_lockfile_says_so() {
+        let summary = dry_run_summary(&[], 0, false);
+        assert!(
+            summary.contains("lockfile would be left untouched"),
+            "{summary}"
+        );
+        assert!(!summary.contains("would be refreshed"), "{summary}");
+    }
+
+    #[test]
+    fn an_empty_plan_skips_the_lockfile_refresh() {
+        let expanded = ExpandedPlan {
+            packages: BTreeMap::new(),
+        };
+        assert!(lockfile_refresh_skip_reason(Path::new("/ws"), &expanded).is_some());
+    }
+
+    #[cfg_attr(miri, ignore)] // Creates a temporary directory, which Miri cannot do.
+    #[test]
+    fn a_missing_lockfile_skips_the_lockfile_refresh() {
+        let dir = TempDir::new().unwrap();
+        let mut packages = BTreeMap::new();
+        packages.insert("demo".to_string(), v("0.2.0"));
+        let expanded = ExpandedPlan { packages };
+        assert!(lockfile_refresh_skip_reason(dir.path(), &expanded).is_some());
+
+        fs::write(dir.path().join("Cargo.lock"), "").unwrap();
+        assert!(lockfile_refresh_skip_reason(dir.path(), &expanded).is_none());
     }
 
     #[test]

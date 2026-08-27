@@ -65,7 +65,7 @@ fn unified_diff(
     // removes a trailing newline is still visible as a differing line.
     let old_lines: Vec<&str> = old.split_inclusive('\n').collect();
     let new_lines: Vec<&str> = new.split_inclusive('\n').collect();
-    let regions = changed_regions(&old_lines, &new_lines);
+    let regions = changed_regions(&old_lines, &new_lines, MAX_EDIT_DISTANCE);
 
     let mut hunks = String::new();
     let mut insertions = 0_usize;
@@ -127,8 +127,12 @@ struct ChangedRegion {
 /// Splitting on unchanged lines is what turns separated edits into separate
 /// hunks; treating the whole span between the first and last difference as one
 /// region would report unchanged lines as deleted and reinserted.
-fn changed_regions<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<ChangedRegion> {
-    let script = edit_script(old, new);
+fn changed_regions<'a>(
+    old: &[&'a str],
+    new: &[&'a str],
+    max_distance: usize,
+) -> Vec<ChangedRegion> {
+    let script = edit_script(old, new, max_distance);
     let mut regions: Vec<ChangedRegion> = Vec::new();
     let mut old_index = 0_usize;
     let mut new_index = 0_usize;
@@ -165,7 +169,7 @@ fn changed_regions<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<ChangedRegion> {
 }
 
 /// One step of a line-level edit script.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Edit {
     Keep,
     Delete,
@@ -185,12 +189,12 @@ const MAX_EDIT_DISTANCE: usize = 1024;
 /// Computes a minimal line-level edit script with Myers' algorithm.
 ///
 /// Falls back to replacing the whole file when the sides differ by more than
-/// `MAX_EDIT_DISTANCE` edits; the result is still a valid unified diff, just a
+/// `max_distance` edits; the result is still a valid unified diff, just a
 /// coarser one.
-fn edit_script(old: &[&str], new: &[&str]) -> Vec<Edit> {
+fn edit_script(old: &[&str], new: &[&str], max_distance: usize) -> Vec<Edit> {
     // Deleting every old line and inserting every new one is always an edit
     // script, so the distance never exceeds that; searching further is wasted.
-    let budget = old.len().saturating_add(new.len()).min(MAX_EDIT_DISTANCE);
+    let budget = old.len().saturating_add(new.len()).min(max_distance);
     let Some(trace) = myers_trace(old, new, budget) else {
         return whole_file_script(old.len(), new.len());
     };
@@ -367,6 +371,10 @@ mod tests {
         file_diff("src/lib.rs", old.map(str::as_bytes), new.map(str::as_bytes))
     }
 
+    fn count(script: &[Edit], wanted: Edit) -> usize {
+        script.iter().filter(|edit| **edit == wanted).count()
+    }
+
     #[test]
     fn an_addition_reports_the_absent_side_as_dev_null() {
         let diff = render(None, Some("a\n"));
@@ -458,25 +466,35 @@ mod tests {
     /// renderer stops refining and replaces one side with the other.
     #[test]
     fn exceeding_the_edit_distance_budget_falls_back_to_a_whole_file_replacement() {
-        let lines = MAX_EDIT_DISTANCE;
-        let old = "a\n".repeat(lines);
-        let new = "b\n".repeat(lines);
-        let diff = render(Some(&old), Some(&new));
-        assert_eq!((diff.insertions, diff.deletions), (lines, lines));
+        // Disjoint sides of four lines each need eight edits, which the budget
+        // used here forbids.
+        let old = ["a\n", "a\n", "a\n", "a\n"];
+        let new = ["b\n", "b\n", "b\n", "b\n"];
+        let script = edit_script(&old, &new, 4);
+        assert_eq!(count(&script, Edit::Delete), old.len());
+        assert_eq!(count(&script, Edit::Insert), new.len());
+        assert_eq!(count(&script, Edit::Keep), 0);
     }
 
-    /// A large file with a single changed line has a tiny edit distance, so it
-    /// is rendered as one small hunk rather than as a whole-file replacement.
+    /// A file far larger than the budget but differing in a single line has a
+    /// tiny edit distance, so it is still rendered as one small hunk. The budget
+    /// bounds the distance, not the input size.
     #[test]
-    fn a_large_file_with_one_changed_line_stays_a_small_hunk() {
-        // Well past the budget in line count while staying far below it in
-        // edit distance, which is what the budget actually bounds.
-        let lines = MAX_EDIT_DISTANCE * 3;
-        let old = "a\n".repeat(lines);
-        let mut new = old.clone();
-        new.push_str("tail\n");
-        let diff = render(Some(&old), Some(&new));
-        assert_eq!((diff.insertions, diff.deletions), (1, 0));
+    fn a_file_much_larger_than_the_budget_with_one_changed_line_stays_a_small_hunk() {
+        let old = ["a\n"; 40];
+        let mut new = old.to_vec();
+        new.push("tail\n");
+        let script = edit_script(&old, &new, 4);
+        assert_eq!(count(&script, Edit::Keep), old.len());
+        assert_eq!(count(&script, Edit::Insert), 1);
+        assert_eq!(count(&script, Edit::Delete), 0);
+    }
+
+    /// The production budget renders an ordinary single-line change as one hunk.
+    #[test]
+    fn the_production_budget_renders_a_single_line_change_as_one_hunk() {
+        let diff = render(Some("one\ntwo\n"), Some("one\ntoo\n"));
+        assert_eq!((diff.insertions, diff.deletions), (1, 1));
     }
 
     #[test]
